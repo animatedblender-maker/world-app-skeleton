@@ -1,0 +1,8 @@
+﻿{
+  "name": "world-app",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ]
+}
