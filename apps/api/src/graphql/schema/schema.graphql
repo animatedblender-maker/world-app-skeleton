@@ -1,4 +1,0 @@
-﻿# GraphQL schema placeholder
-type Query {
-  health: String!
-}
