@@ -29,6 +29,51 @@
 <!-- THIS is the globe container -->
 <div id="globe"></div>
 
-<!-- Modals (unchanged from legacy) -->
-<div id="loginBackdrop" class="modal-backdrop">…</div>
-<div id="registerBackdrop" class="modal-backdrop">…</div>
+<!-- Modals (legacy-style) -->
+<div id="loginBackdrop" class="modal-backdrop" style="display:none;">
+  <div class="modal">
+    <div class="modal-header">
+      <b>Login</b>
+      <button id="loginCloseBtn" class="icon-btn">×</button>
+    </div>
+
+    <div class="modal-body">
+      <label class="label">Email</label>
+      <input id="loginEmail" class="input" type="email" placeholder="you@example.com" autocomplete="email" />
+
+      <label class="label">Password</label>
+      <input id="loginPassword" class="input" type="password" placeholder="••••••••" autocomplete="current-password" />
+
+      <div class="modal-actions">
+        <button id="loginSubmitBtn" class="btn primary">Login</button>
+        <button id="loginCancelBtn" class="btn">Cancel</button>
+      </div>
+
+      <small id="loginMsg" class="msg"></small>
+    </div>
+  </div>
+</div>
+
+<div id="registerBackdrop" class="modal-backdrop" style="display:none;">
+  <div class="modal">
+    <div class="modal-header">
+      <b>Register</b>
+      <button id="registerCloseBtn" class="icon-btn">×</button>
+    </div>
+
+    <div class="modal-body">
+      <label class="label">Email</label>
+      <input id="registerEmail" class="input" type="email" placeholder="you@example.com" autocomplete="email" />
+
+      <label class="label">Password</label>
+      <input id="registerPassword" class="input" type="password" placeholder="••••••••" autocomplete="new-password" />
+
+      <div class="modal-actions">
+        <button id="registerSubmitBtn" class="btn primary">Create account</button>
+        <button id="registerCancelBtn" class="btn">Cancel</button>
+      </div>
+
+      <small id="registerMsg" class="msg"></small>
+    </div>
+  </div>
+</div>
