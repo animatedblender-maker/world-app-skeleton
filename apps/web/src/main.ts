@@ -1,2 +1,6 @@
-﻿// Angular placeholder - will be created by Angular CLI later.
-console.log('Web placeholder - run Angular CLI to scaffold app');
+import { bootstrapApplication } from '@angular/platform-browser';
+import { appConfig } from './app/app.config';
+import { AppComponent } from './app/app';
+
+bootstrapApplication(AppComponent, appConfig)
+  .catch((err) => console.error(err));

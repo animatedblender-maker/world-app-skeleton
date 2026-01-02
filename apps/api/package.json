@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-     "dev": "ts-node src/main.ts"
+    "dev": "ts-node --esm src/main.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",

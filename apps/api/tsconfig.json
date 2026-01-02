@@ -1,11 +1,13 @@
 ﻿{
   "compilerOptions": {
     "target": "ES2022",
-    "module": "CommonJS",
-    "moduleResolution": "Node",
-    "esModuleInterop": true,
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "strict": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
     "skipLibCheck": true,
-    "outDir": "dist"
-  }
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.json", "src/**/*.geojson"]
 }

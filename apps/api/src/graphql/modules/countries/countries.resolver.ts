@@ -1,10 +1,7 @@
-import express from 'express';
-import cors from 'cors';
 import fs from 'node:fs';
 import path from 'node:path';
-import { createYoga, createSchema } from 'graphql-yoga';
 
-/* -------------------- Types -------------------- */
+/* ---------- Types ---------- */
 
 type GeoJSON = {
   type: 'FeatureCollection';
@@ -20,7 +17,23 @@ type Country = {
   lng: number;
 };
 
-/* -------------------- Geo Helpers -------------------- */
+/* ---------- File location ---------- */
+/**
+ * We resolve from process.cwd(), assuming:
+ * - you run `npm run dev` from apps/api
+ * - geojson lives at apps/api/src/data/countries50m.geojson
+ */
+const GEOJSON_PATH = path.join(
+  process.cwd(),
+  'src',
+  'data',
+  'countries50m.geojson'
+);
+
+/* ---------- In-memory cache ---------- */
+let cachedCountries: Country[] | null = null;
+
+/* ---------- Helpers ---------- */
 
 function normalizeIso(v: any): string {
   const s = String(v || '').trim().toUpperCase();
@@ -28,7 +41,13 @@ function normalizeIso(v: any): string {
 }
 
 function pickName(props: any): string {
-  return String(props?.NAME || props?.ADMIN || props?.NAME_EN || props?.FORMAL_EN || 'Unknown');
+  return String(
+    props?.NAME ||
+    props?.ADMIN ||
+    props?.NAME_EN ||
+    props?.FORMAL_EN ||
+    'Unknown'
+  );
 }
 
 function pickContinent(props: any): string {
@@ -61,13 +80,16 @@ function pushRing(points: Array<[number, number]>, ring: any) {
     if (Array.isArray(pt) && pt.length >= 2) {
       const lng = Number(pt[0]);
       const lat = Number(pt[1]);
-      if (Number.isFinite(lng) && Number.isFinite(lat)) points.push([lng, lat]);
+      if (Number.isFinite(lng) && Number.isFinite(lat)) {
+        points.push([lng, lat]);
+      }
     }
   }
 }
 
 function centroidOfGeometry(geometry: any): { lat: number; lng: number } | null {
   const points: Array<[number, number]> = [];
+
   const type = geometry?.type;
   const coords = geometry?.coordinates;
 
@@ -93,51 +115,26 @@ function centroidOfGeometry(geometry: any): { lat: number; lng: number } | null 
     sumLat += lat;
   }
 
-  return { lng: sumLng / points.length, lat: sumLat / points.length };
+  return {
+    lng: sumLng / points.length,
+    lat: sumLat / points.length,
+  };
 }
 
-/* -------------------- GeoJSON Path Resolver -------------------- */
-
-function findGeoJsonPath(): string {
-  const cwd = process.cwd(); // expected: .../world-app/apps/api when running from there
-  const repoRoot = path.resolve(cwd, '..', '..'); // .../world-app
-
-  const candidates = [
-    // Best: keep data inside the API project
-    path.join(cwd, 'src', 'data', 'countries50m.geojson'),
-    // If you keep it in the web public folder
-    path.join(repoRoot, 'apps', 'web', 'public', 'countries50m.geojson'),
-    // If you dropped it in repo root
-    path.join(repoRoot, 'countries50m.geojson'),
-    // common angular asset location
-    path.join(repoRoot, 'apps', 'web', 'src', 'assets', 'countries50m.geojson'),
-  ];
-
-  for (const p of candidates) {
-    if (fs.existsSync(p)) return p;
-  }
-
-  const msg =
-    `GeoJSON not found.\n` +
-    `Tried:\n` +
-    candidates.map((p) => `- ${p}`).join('\n') +
-    `\n\nFix:\n` +
-    `Put the file at one of the paths above (recommended: apps/api/src/data/countries50m.geojson).`;
-
-  throw new Error(msg);
-}
-
-/* -------------------- Data Load (cached) -------------------- */
-
-let cachedCountries: Country[] | null = null;
+/* ---------- Loader ---------- */
 
 function loadCountriesFromGeoJSON(): Country[] {
   if (cachedCountries) return cachedCountries;
 
-  const geoPath = findGeoJsonPath();
-  console.log(`🗺️  Loading GeoJSON from: ${geoPath}`);
+  if (!fs.existsSync(GEOJSON_PATH)) {
+    throw new Error(
+      `GeoJSON not found at ${GEOJSON_PATH}
+       → copy apps/web/public/countries50m.geojson
+       → to   apps/api/src/data/countries50m.geojson`
+    );
+  }
 
-  const raw = fs.readFileSync(geoPath, 'utf-8');
+  const raw = fs.readFileSync(GEOJSON_PATH, 'utf-8');
   const json = JSON.parse(raw) as GeoJSON;
 
   const features = Array.isArray(json.features) ? json.features : [];
@@ -148,7 +145,7 @@ function loadCountriesFromGeoJSON(): Country[] {
     const geom = feature?.geometry;
 
     const iso = normalizeIso(props?.ISO_A2 || props?.iso_a2 || props?.ISO2);
-    if (iso === 'AQ') continue;
+    if (iso === 'AQ') continue; // skip Antarctica if desired
 
     const name = pickName(props);
     if (!name || name === 'Unknown') continue;
@@ -157,7 +154,7 @@ function loadCountriesFromGeoJSON(): Country[] {
     if (!center) continue;
 
     result.push({
-      id: 0, // assigned after sort
+      id: result.length + 1,
       name,
       iso,
       continent: pickContinent(props),
@@ -166,6 +163,7 @@ function loadCountriesFromGeoJSON(): Country[] {
     });
   }
 
+  // stable sort
   result.sort((a, b) => a.name.localeCompare(b.name));
   result.forEach((c, i) => (c.id = i + 1));
 
@@ -173,49 +171,15 @@ function loadCountriesFromGeoJSON(): Country[] {
   return result;
 }
 
-/* -------------------- GraphQL Schema -------------------- */
+/* ---------- GraphQL Resolvers ---------- */
 
-const typeDefs = /* GraphQL */ `
-  type Country {
-    id: Int!
-    name: String!
-    iso: String!
-    continent: String!
-    lat: Float!
-    lng: Float!
-  }
-
-  type Query {
-    countries: [Country!]!
-    countryByIso(iso: String!): Country
-  }
-`;
-
-const resolvers = {
+export const countriesResolvers = {
   Query: {
     countries: () => loadCountriesFromGeoJSON(),
+
     countryByIso: (_: any, args: { iso: string }) => {
       const want = normalizeIso(args.iso);
       return loadCountriesFromGeoJSON().find((c) => c.iso === want) || null;
     },
   },
 };
-
-/* -------------------- Server -------------------- */
-
-const yoga = createYoga({
-  schema: createSchema({ typeDefs, resolvers }),
-  graphqlEndpoint: '/graphql',
-});
-
-const app = express();
-app.use(cors({ origin: true, credentials: true }));
-
-app.get('/health', (_req: any, res: { json: (arg0: { ok: boolean; }) => any; }) => res.json({ ok: true }));
-app.use('/graphql', yoga);
-
-const PORT = 3000;
-app.listen(PORT, () => {
-  console.log(`✅ GraphQL running at http://localhost:${PORT}/graphql`);
-  console.log(`✅ Health check at       http://localhost:${PORT}/health`);
-});
