@@ -1,89 +1,49 @@
 import { Injectable } from '@angular/core';
-import { BehaviorSubject, map, Observable, of, tap } from 'rxjs';
+import { BehaviorSubject } from 'rxjs';
 import { GraphqlService } from '../core/services/graphql.service';
 
 export type CountryModel = {
-  id: number;
+  id: string;
   name: string;
   iso: string;
-  continent: string;
-  lat: number;
-  lng: number;
+  continent?: string | null;
+  center?: { lat: number; lng: number } | null;
 };
 
 type CountriesQueryData = {
-  countries: CountryModel[];
-};
-
-type CountryByIsoQueryData = {
-  countryByIso: CountryModel | null;
+  countries: { countries: CountryModel[] };
 };
 
 @Injectable({ providedIn: 'root' })
 export class CountriesApiService {
-  private readonly countries$ = new BehaviorSubject<CountryModel[] | null>(null);
+  countries$ = new BehaviorSubject<CountryModel[] | null>(null);
 
   constructor(private gql: GraphqlService) {}
 
-  loadCountries(): Observable<CountryModel[]> {
-    const cached = this.countries$.value;
-    if (cached) return of(cached);
-
-    const query = /* GraphQL */ `
-      query Countries {
+  async refreshCountries(): Promise<CountryModel[]> {
+    const query = `
+      query {
         countries {
-          id
-          name
-          iso
-          continent
-          lat
-          lng
+          countries {
+            id
+            name
+            iso
+            continent
+            center { lat lng }
+          }
         }
       }
     `;
 
-    return this.gql.query<CountriesQueryData>(query).pipe(
-      map((d) => d.countries),
-      tap((list) => this.countries$.next(list))
-    );
+    const d = await this.gql.query<CountriesQueryData>(query);
+    const list = d.countries.countries;
+    this.countries$.next(list);
+    return list;
   }
 
-  getCountries(): Observable<CountryModel[]> {
-    const cached = this.countries$.value;
-    return cached ? of(cached) : this.loadCountries();
-  }
-
-  searchByName(term: string): Observable<CountryModel[]> {
-    const q = (term ?? '').trim().toLowerCase();
-    if (!q) return of([]);
-
-    return this.getCountries().pipe(
-      map((countries) =>
-        countries
-          .filter((c) => c.name.toLowerCase().includes(q))
-          .slice(0, 12)
-      )
-    );
-  }
-
-  getByIso(iso: string): Observable<CountryModel | null> {
-    const query = /* GraphQL */ `
-      query CountryByIso($iso: String!) {
-        countryByIso(iso: $iso) {
-          id
-          name
-          iso
-          continent
-          lat
-          lng
-        }
-      }
-    `;
-
-    return this.gql
-      .query<CountryByIsoQueryData, { iso: string }>(query, {
-        iso: String(iso || '').toUpperCase(),
-      })
-      .pipe(map((d) => d.countryByIso));
+  async me(): Promise<{ id: string; email?: string | null } | null> {
+    const query = `query { me { id email } }`;
+    const d = await this.gql.query<{ me: { id: string; email?: string | null } | null }>(query);
+    return d.me;
   }
 }
