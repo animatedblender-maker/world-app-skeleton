@@ -8,12 +8,19 @@ export const authGuard: CanActivateFn = async (_route, state) => {
   const profiles = inject(ProfileService);
   const router = inject(Router);
 
+  const url = state.url || '/';
+
+  // ✅ Always allow public routes (guard is not applied there now, but future-proof)
+  if (url.startsWith('/auth') || url.startsWith('/reset-password')) {
+    return true;
+  }
+
   // 1) Must be logged in
   const user = await auth.getUser();
   if (!user) return router.parseUrl('/auth');
 
-  // 2) Always allow profile setup route
-  if (state.url.startsWith('/profile-setup')) return true;
+  // 2) Always allow profile setup route (so user can finish profile)
+  if (url.startsWith('/profile-setup')) return true;
 
   // 3) If profile incomplete, force setup
   try {
@@ -21,9 +28,9 @@ export const authGuard: CanActivateFn = async (_route, state) => {
     if (!profiles.isComplete(meProfile)) {
       return router.parseUrl('/profile-setup');
     }
-  } catch {
-    // If API is down / query missing, don't lock user out of the app.
-    // (We’ll harden this once backend Step 2.1 is finalized.)
+  } catch (e) {
+    // MVP choice: don't lock user out if API/profile query fails
+    console.warn('[authGuard] meProfile failed, allowing navigation:', e);
     return true;
   }
 

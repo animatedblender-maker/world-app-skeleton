@@ -19,36 +19,40 @@ export class MediaService {
     return { path, publicUrl: data.publicUrl };
   }
 
-  // ✅ Full MVP: avatar upload (bucket: avatars)
-  // - path is clean: "<userId>/<uuid>.<ext>"
-  // - returns a signed URL (works even if bucket is private)
+  // ✅ Avatar upload (bucket: avatars)
+  // - blocks GIF
+  // - accepts a File (we will pass a cropped File from the cropper)
   async uploadAvatar(file: File): Promise<{ path: string; url: string }> {
+    // Block GIF for now
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    if (ext === 'gif' || file.type === 'image/gif') {
+      throw new Error('GIF avatars are disabled for now. Please upload PNG/JPG/WebP.');
+    }
+
     const { data: sessionData, error: sessionErr } = await supabase.auth.getSession();
     if (sessionErr) throw sessionErr;
     const userId = sessionData.session?.user?.id;
     if (!userId) throw new Error('Not authenticated');
 
-    const ext = (file.name.split('.').pop() || 'png').toLowerCase();
-    const key = `${userId}/${crypto.randomUUID()}.${ext}`;
+    const safeExt = (ext || 'png').toLowerCase();
+    const key = `${userId}/${crypto.randomUUID()}.${safeExt}`;
 
     const { error: uploadErr } = await supabase.storage.from('avatars').upload(key, file, {
       upsert: true,
       cacheControl: '3600',
-      contentType: file.type || 'image/*',
+      contentType: file.type || 'image/png',
     });
     if (uploadErr) throw uploadErr;
 
-    // Signed URL works regardless of bucket public/private
     const { data: signed, error: signedErr } = await supabase.storage
       .from('avatars')
       .createSignedUrl(key, 60 * 60 * 24 * 30); // 30 days
 
-    if (signedErr || !signed?.signedUrl) {
-      // fallback to public url if signed fails
-      const { data } = supabase.storage.from('avatars').getPublicUrl(key);
-      return { path: key, url: data.publicUrl };
+    if (!signedErr && signed?.signedUrl) {
+      return { path: key, url: signed.signedUrl };
     }
 
-    return { path: key, url: signed.signedUrl };
+    const { data } = supabase.storage.from('avatars').getPublicUrl(key);
+    return { path: key, url: data.publicUrl };
   }
 }

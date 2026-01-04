@@ -25,10 +25,6 @@ export type Profile = {
   updated_at: string;
 };
 
-/* ---------------------------
-   GraphQL Queries
----------------------------- */
-
 const COUNTRIES_QUERY = `
 query Countries {
   countries {
@@ -84,9 +80,7 @@ export class ProfileService {
   constructor(private gql: GqlService) {}
 
   async countries() {
-    return this.gql.request<{
-      countries: { countries: Country[] };
-    }>(COUNTRIES_QUERY);
+    return this.gql.request<{ countries: { countries: Country[] } }>(COUNTRIES_QUERY);
   }
 
   async meProfile() {
@@ -96,7 +90,7 @@ export class ProfileService {
   async updateProfile(input: {
     display_name?: string;
     username?: string;
-    avatar_url?: string;
+    avatar_url?: string | null; // ✅ allow null
     country_name?: string;
     country_code?: string | null;
     city_name?: string | null;

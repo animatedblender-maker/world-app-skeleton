@@ -1,8 +1,11 @@
-﻿{
+{
   "name": "world-app",
   "private": true,
   "workspaces": [
     "apps/*",
     "packages/*"
-  ]
+  ],
+  "dependencies": {
+    "ngx-image-cropper": "^9.1.5"
+  }
 }
