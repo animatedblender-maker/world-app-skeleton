@@ -1,8 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-/* ---------- Types ---------- */
-
 type GeoJSON = {
   type: 'FeatureCollection';
   features: any[];
@@ -17,23 +15,9 @@ type Country = {
   lng: number;
 };
 
-/* ---------- File location ---------- */
-/**
- * We resolve from process.cwd(), assuming:
- * - you run `npm run dev` from apps/api
- * - geojson lives at apps/api/src/data/countries50m.geojson
- */
-const GEOJSON_PATH = path.join(
-  process.cwd(),
-  'src',
-  'data',
-  'countries50m.geojson'
-);
+const GEOJSON_PATH = path.join(process.cwd(), 'src', 'data', 'countries50m.geojson');
 
-/* ---------- In-memory cache ---------- */
 let cachedCountries: Country[] | null = null;
-
-/* ---------- Helpers ---------- */
 
 function normalizeIso(v: any): string {
   const s = String(v || '').trim().toUpperCase();
@@ -43,10 +27,10 @@ function normalizeIso(v: any): string {
 function pickName(props: any): string {
   return String(
     props?.NAME ||
-    props?.ADMIN ||
-    props?.NAME_EN ||
-    props?.FORMAL_EN ||
-    'Unknown'
+      props?.ADMIN ||
+      props?.NAME_EN ||
+      props?.FORMAL_EN ||
+      'Unknown'
   );
 }
 
@@ -80,19 +64,15 @@ function pushRing(points: Array<[number, number]>, ring: any) {
     if (Array.isArray(pt) && pt.length >= 2) {
       const lng = Number(pt[0]);
       const lat = Number(pt[1]);
-      if (Number.isFinite(lng) && Number.isFinite(lat)) {
-        points.push([lng, lat]);
-      }
+      if (Number.isFinite(lng) && Number.isFinite(lat)) points.push([lng, lat]);
     }
   }
 }
 
 function centroidOfGeometry(geometry: any): { lat: number; lng: number } | null {
   const points: Array<[number, number]> = [];
-
   const type = geometry?.type;
   const coords = geometry?.coordinates;
-
   if (!type || !Array.isArray(coords)) return null;
 
   if (type === 'Polygon') {
@@ -115,13 +95,8 @@ function centroidOfGeometry(geometry: any): { lat: number; lng: number } | null 
     sumLat += lat;
   }
 
-  return {
-    lng: sumLng / points.length,
-    lat: sumLat / points.length,
-  };
+  return { lng: sumLng / points.length, lat: sumLat / points.length };
 }
-
-/* ---------- Loader ---------- */
 
 function loadCountriesFromGeoJSON(): Country[] {
   if (cachedCountries) return cachedCountries;
@@ -129,15 +104,15 @@ function loadCountriesFromGeoJSON(): Country[] {
   if (!fs.existsSync(GEOJSON_PATH)) {
     throw new Error(
       `GeoJSON not found at ${GEOJSON_PATH}
-       → copy apps/web/public/countries50m.geojson
-       → to   apps/api/src/data/countries50m.geojson`
+→ copy apps/web/public/countries50m.geojson
+→ to   apps/api/src/data/countries50m.geojson`
     );
   }
 
   const raw = fs.readFileSync(GEOJSON_PATH, 'utf-8');
   const json = JSON.parse(raw) as GeoJSON;
-
   const features = Array.isArray(json.features) ? json.features : [];
+
   const result: Country[] = [];
 
   for (const feature of features) {
@@ -145,7 +120,7 @@ function loadCountriesFromGeoJSON(): Country[] {
     const geom = feature?.geometry;
 
     const iso = normalizeIso(props?.ISO_A2 || props?.iso_a2 || props?.ISO2);
-    if (iso === 'AQ') continue; // skip Antarctica if desired
+    if (iso === 'AQ') continue;
 
     const name = pickName(props);
     if (!name || name === 'Unknown') continue;
@@ -163,7 +138,6 @@ function loadCountriesFromGeoJSON(): Country[] {
     });
   }
 
-  // stable sort
   result.sort((a, b) => a.name.localeCompare(b.name));
   result.forEach((c, i) => (c.id = i + 1));
 
@@ -171,12 +145,9 @@ function loadCountriesFromGeoJSON(): Country[] {
   return result;
 }
 
-/* ---------- GraphQL Resolvers ---------- */
-
 export const countriesResolvers = {
   Query: {
     countries: () => loadCountriesFromGeoJSON(),
-
     countryByIso: (_: any, args: { iso: string }) => {
       const want = normalizeIso(args.iso);
       return loadCountriesFromGeoJSON().find((c) => c.iso === want) || null;

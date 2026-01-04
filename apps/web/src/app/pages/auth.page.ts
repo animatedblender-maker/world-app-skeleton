@@ -1,8 +1,8 @@
-import { Component } from '@angular/core';
+import { Component, ChangeDetectorRef, NgZone } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
-import { AuthService } from  '../../app/core/services/auth.service'
+import { AuthService } from '../core/services/auth.service';
 
 @Component({
   selector: 'app-auth-page',
@@ -28,7 +28,7 @@ import { AuthService } from  '../../app/core/services/auth.service'
             type="button"
             class="tab"
             [class.active]="tab==='login'"
-            (click)="tab='login'">
+            (click)="tab='login'; clearMsgs()">
             LOGIN
           </button>
 
@@ -36,7 +36,7 @@ import { AuthService } from  '../../app/core/services/auth.service'
             type="button"
             class="tab"
             [class.active]="tab==='register'"
-            (click)="tab='register'">
+            (click)="tab='register'; clearMsgs()">
             REGISTER
           </button>
         </div>
@@ -68,6 +68,33 @@ import { AuthService } from  '../../app/core/services/auth.service'
           </label>
 
           <div class="error" *ngIf="errorMsg">{{ errorMsg }}</div>
+
+          <!-- ✅ Email already used -->
+          <div class="hint" *ngIf="accountExists">
+            Email already used.
+            <div class="actions">
+              <button type="button" class="link" (click)="forgotPassword()">Forgot password</button>
+            </div>
+            <div class="hint" *ngIf="resetMsg" style="margin-top:8px;">{{ resetMsg }}</div>
+          </div>
+
+          <!-- ✅ Wrong password -->
+          <div class="hint" *ngIf="wrongPassword && !accountExists">
+            Wrong password.
+            <div class="actions">
+              <button type="button" class="link" (click)="forgotPassword()">Forgot password</button>
+            </div>
+            <div class="hint" *ngIf="resetMsg" style="margin-top:8px;">{{ resetMsg }}</div>
+          </div>
+
+          <!-- ✅ Needs email confirmation -->
+          <div class="hint" *ngIf="needsEmailConfirm && !accountExists && !wrongPassword">
+            Check your inbox to confirm your email, then come back and login.
+            <div class="actions">
+              <button type="button" class="link" (click)="forgotPassword()">Forgot password</button>
+            </div>
+            <div class="hint" *ngIf="resetMsg" style="margin-top:8px;">{{ resetMsg }}</div>
+          </div>
 
           <button class="cta" type="submit" [disabled]="busy">
             {{ busy ? 'LINKING…' : (tab==='login' ? 'LOGIN' : 'CREATE ACCOUNT') }}
@@ -149,20 +176,123 @@ import { AuthService } from  '../../app/core/services/auth.service'
       border:1px solid rgba(255,80,80,0.18); padding:10px 12px; border-radius:16px; font-size:12px;
     }
     .hint{ color:rgba(255,255,255,0.60); font-size:12px; line-height:1.4; }
+    .actions{ display:flex; gap:12px; margin-top:6px; flex-wrap:wrap; }
+    .link{
+      background:transparent; border:0; padding:0; cursor:pointer;
+      color:rgba(0,255,209,0.92);
+      font-size:12px; letter-spacing:0.08em; font-weight:800;
+      text-decoration:underline;
+    }
+    .link:hover{ opacity:0.85; }
   `],
 })
 export class AuthPageComponent {
   tab: 'login' | 'register' = 'login';
   email = '';
   password = '';
+
   busy = false;
   errorMsg = '';
 
-  constructor(private auth: AuthService, private router: Router) {}
+  accountExists = false;
+  needsEmailConfirm = false;
+  wrongPassword = false;
+  resetMsg = '';
+
+  constructor(
+    private auth: AuthService,
+    private router: Router,
+    private cdr: ChangeDetectorRef,
+    private zone: NgZone
+  ) {}
+
+  private forceUi(): void {
+    this.zone.run(() => this.cdr.detectChanges());
+  }
+
+  clearMsgs(): void {
+    this.errorMsg = '';
+    this.accountExists = false;
+    this.needsEmailConfirm = false;
+    this.wrongPassword = false;
+    this.resetMsg = '';
+  }
+
+  private normalizeError(e: any): string {
+    // Supabase errors can be objects with: message, error_description, code, status, etc.
+    const msg =
+      e?.message ??
+      e?.error_description ??
+      e?.error?.message ??
+      e?.error?.error_description ??
+      e?.data?.message ??
+      e?.data?.error_description ??
+      '';
+
+    if (msg && typeof msg === 'string') return msg;
+
+    try {
+      return JSON.stringify(e);
+    } catch {
+      return String(e);
+    }
+  }
+
+  private isEmailExistsError(msg: string): boolean {
+    const m = (msg || '').toLowerCase();
+
+    // Covers common Supabase variants:
+    // "User already registered"
+    // "A user with this email address has already been registered"
+    // "email already in use"
+    // codes: user_already_exists, email_exists, etc.
+    return (
+      m.includes('already registered') ||
+      m.includes('already exists') ||
+      m.includes('already in use') ||
+      m.includes('email already') ||
+      m.includes('user_already_exists') ||
+      m.includes('email_exists') ||
+      m.includes('duplicate') ||
+      m.includes('exists')
+    );
+  }
+
+  private isWrongPasswordError(msg: string): boolean {
+    const m = (msg || '').toLowerCase();
+    return (
+      m.includes('invalid login credentials') ||
+      m.includes('wrong password') ||
+      m.includes('invalid password') ||
+      m.includes('invalid credentials')
+    );
+  }
+
+  async forgotPassword(): Promise<void> {
+    this.resetMsg = '';
+    this.forceUi();
+
+    try {
+      const email = this.email.trim();
+      if (!email) {
+        this.resetMsg = 'Type your email first.';
+        this.forceUi();
+        return;
+      }
+
+      await this.auth.resetPassword(email);
+      this.resetMsg = 'Reset email sent. Check your inbox.';
+    } catch (e: any) {
+      this.resetMsg = this.normalizeError(e);
+    } finally {
+      this.forceUi();
+    }
+  }
 
   async submit(): Promise<void> {
-    this.errorMsg = '';
+    this.clearMsgs();
     this.busy = true;
+    this.forceUi();
 
     try {
       const email = this.email.trim();
@@ -170,16 +300,46 @@ export class AuthPageComponent {
 
       if (this.tab === 'login') {
         await this.auth.login(email, pass);
-      } else {
-        await this.auth.register(email, pass);
+        await this.router.navigateByUrl('/');
+        return;
       }
 
-      // After auth, we will decide profile completeness on Home/ProfileSetup route.
+      // REGISTER
+      const r = await this.auth.register(email, pass);
+
+      if (r.isExistingEmail) {
+        this.accountExists = true;
+        this.errorMsg = 'Email already used.';
+        this.tab = 'login';
+        return;
+      }
+
+      if (r.needsEmailConfirm) {
+        this.needsEmailConfirm = true;
+        this.tab = 'login';
+        return;
+      }
+
       await this.router.navigateByUrl('/');
     } catch (e: any) {
-      this.errorMsg = e?.message ?? String(e);
+      const msg = this.normalizeError(e);
+
+      // REGISTER: email already used
+      if (this.tab === 'register' && this.isEmailExistsError(msg)) {
+        this.accountExists = true;
+        this.errorMsg = 'Email already used.';
+        this.tab = 'login';
+      }
+      // LOGIN: wrong password
+      else if (this.tab === 'login' && this.isWrongPasswordError(msg)) {
+        this.wrongPassword = true;
+        this.errorMsg = 'Wrong password.';
+      } else {
+        this.errorMsg = msg;
+      }
     } finally {
       this.busy = false;
+      this.forceUi();
     }
   }
 }

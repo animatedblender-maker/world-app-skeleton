@@ -9,7 +9,7 @@ import { SearchUiService } from '../search/search-ui.service';
 import { AuthService } from '../core/services/auth.service';
 import { GraphqlService } from '../core/services/graphql.service';
 import { MediaService } from '../core/services/media.service';
-
+import { ProfileService } from '../core/services/profile.service';
 
 @Component({
   selector: 'app-globe-page',
@@ -26,14 +26,10 @@ import { MediaService } from '../core/services/media.service';
     </div>
 
     <div class="authbar">
-  <button class="btn" (click)="logout()">Logout</button>
+      <button class="btn" (click)="logout()">Logout</button>
 
-  <label class="btn" style="cursor:pointer;">
-    Upload
-    <input type="file" (change)="onFile($event)" style="display:none;" />
-  </label>
-</div>
-
+      
+    </div>
 
     <div class="stats">
       <div><b>Country:</b> <span id="countryPill">Hover / click a country</span></div>
@@ -60,10 +56,28 @@ export class GlobePageComponent implements AfterViewInit {
     private gql: GraphqlService,
     private router: Router,
     private media: MediaService,
-
+    private profiles: ProfileService
   ) {}
-   
+
   async ngAfterViewInit(): Promise<void> {
+    // ✅ Gate globe behind profile completeness (hard)
+    try {
+      const { meProfile } = await this.profiles.meProfile();
+      console.log('🧩 meProfile from API:', meProfile);
+      console.log('🧩 isComplete:', this.profiles.isComplete(meProfile));
+
+      if (!this.profiles.isComplete(meProfile)) {
+        console.warn('➡️ Profile incomplete. Redirecting to /profile-setup');
+        await this.router.navigateByUrl('/profile-setup');
+        return;
+      }
+    } catch (e: any) {
+      console.error('❌ meProfile failed (cannot decide gating):', e?.message ?? e);
+      // If profile query is failing, we still force setup to make the issue visible.
+      await this.router.navigateByUrl('/profile-setup');
+      return;
+    }
+
     const globeEl = document.getElementById('globe');
     if (!globeEl) {
       console.error('❌ #globe element not found');
@@ -105,26 +119,8 @@ export class GlobePageComponent implements AfterViewInit {
       },
     });
 
-    // ✅ 5) REAL AUTH TEST (from the app, not playground)
-    try {
-      const token = await this.auth.getAccessToken();
-      console.log('🔑 Supabase access token present?', !!token);
-
-      const result = await this.gql.query<{
-        me: { id: string; email?: string | null; role?: string | null } | null;
-        privatePing: string;
-      }>(`
-        query {
-          me { id email role }
-          privatePing
-        }
-      `);
-
-      console.log('✅ GraphQL me():', result.me);
-      console.log('✅ GraphQL privatePing():', result.privatePing);
-    } catch (e: any) {
-      console.error('❌ GraphQL test failed:', e?.message ?? e);
-    }
+    // ✅ 5) REAL AUTH TEST
+  
 
     console.log('✅ Globe page ready');
   }
@@ -133,20 +129,19 @@ export class GlobePageComponent implements AfterViewInit {
     await this.auth.logout();
     await this.router.navigateByUrl('/auth');
   }
- async onFile(e: Event): Promise<void> {
-  const input = e.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (!file) return;
 
-  try {
-    const res = await this.media.uploadPostMedia(file);
-    console.log('✅ Uploaded path:', res.path);
-  } catch (err) {
-    console.error('❌ Upload failed:', err);
-  } finally {
-    input.value = ''; // allow selecting same file again
+  async onFile(e: Event): Promise<void> {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+
+    try {
+      const res = await this.media.uploadPostMedia(file);
+      console.log('✅ Uploaded path:', res.path);
+    } catch (err) {
+      console.error('❌ Upload failed:', err);
+    } finally {
+      input.value = '';
+    }
   }
-}
-
-
 }

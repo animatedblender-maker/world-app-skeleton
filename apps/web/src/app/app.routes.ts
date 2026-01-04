@@ -20,6 +20,11 @@ export const routes: Routes = [
       import('./pages/globe.page').then((m) => m.GlobePageComponent),
   },
   {
+  path: 'reset-password',
+  loadComponent: () =>
+    import('./pages/reset-password.page').then(m => m.ResetPasswordPageComponent),
+},
+  {
     path: 'globe',
     canActivate: [authGuard],
     loadComponent: () =>
