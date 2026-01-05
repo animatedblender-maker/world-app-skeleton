@@ -1,5 +1,5 @@
 import { countriesResolvers } from './modules/countries/countries.resolver.ts';
-import { pool } from '../db.ts';
+import { profilesResolvers } from './modules/profiles/profiles.resolver.ts';
 
 function requireAuth(ctx: any) {
   const u = ctx.user;
@@ -44,62 +44,18 @@ export const resolvers = {
   Query: {
     ...countriesResolvers.Query,
 
-    meProfile: async (_: any, __: any, ctx: any) => {
-      const u = requireAuth(ctx);
-
-      const { rows } = await pool.query(
-        `select * from public.profiles where user_id = $1 limit 1`,
-        [u.id]
-      );
-
-      return rows[0] ?? null;
-    },
+    // ✅ Use the module that talks to Supabase profiles table
+    ...(profilesResolvers.Query ?? {}),
   },
 
   Mutation: {
+    // ✅ Keep location detect as mutation (matches your schema)
     detectLocation: async (_: any, { lat, lng }: any) => {
       const { countryName, countryCode, cityName } = await reverseGeocodeNominatim(lat, lng);
       return { countryCode, countryName, cityName, source: 'nominatim' };
     },
 
-    updateProfile: async (_: any, { input }: any, ctx: any) => {
-      const u = requireAuth(ctx);
-
-      await pool.query(
-        `insert into public.profiles (user_id, email, country_name)
-         values ($1,$2,'Unknown')
-         on conflict (user_id) do nothing`,
-        [u.id, u.email ?? null]
-      );
-
-      const { rows } = await pool.query(
-        `
-        update public.profiles
-        set
-          display_name = coalesce($2, display_name),
-          username     = coalesce($3, username),
-          avatar_url   = coalesce($4, avatar_url),
-          country_name = coalesce($5, country_name),
-          country_code = coalesce($6, country_code),
-          city_name    = coalesce($7, city_name),
-          bio          = coalesce($8, bio),
-          updated_at   = now()
-        where user_id = $1
-        returning *
-        `,
-        [
-          u.id,
-          input.display_name ?? null,
-          input.username ?? null,
-          input.avatar_url ?? null,
-          input.country_name ?? null,
-          input.country_code ?? null,
-          input.city_name ?? null,
-          input.bio ?? null,
-        ]
-      );
-
-      return rows[0];
-    },
+    // ✅ Use the module for updateProfile
+    ...(profilesResolvers.Mutation ?? {}),
   },
 };

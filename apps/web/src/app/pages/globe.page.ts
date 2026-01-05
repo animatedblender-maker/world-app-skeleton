@@ -41,8 +41,20 @@ type Panel = 'profile' | 'presence' | 'posts' | null;
         <small id="onlineUsers">Online now: —</small>
       </div>
       <div class="row">
-        <small id="authState">{{ userEmail ? ('Logged in: ' + userEmail) : 'Logged in' }}</small>
+        <small id="authState">
+          {{ userEmail ? ('Logged in: ' + userEmail) : 'Logged out' }}
+        </small>
         <small id="heartbeatState">—</small>
+      </div>
+
+      <!-- ✅ NEW: show profile load status (so we stop guessing) -->
+      <div class="row" *ngIf="loadingProfile">
+        <small style="opacity:.75">Loading profile…</small>
+      </div>
+      <div class="row" *ngIf="profileError">
+        <small style="color:#ff8b8b; font-weight:800; letter-spacing:.08em;">
+          {{ profileError }}
+        </small>
       </div>
     </div>
 
@@ -74,6 +86,11 @@ type Panel = 'profile' | 'presence' | 'posts' | null;
           <div class="node-title">YOUR NODE</div>
           <div class="node-sub">{{ profile?.display_name || 'Unnamed' }}</div>
           <div class="node-sub2">{{ userEmail || '—' }}</div>
+
+          <!-- ✅ NEW: surface errors here too -->
+          <div class="node-sub2" *ngIf="profileError" style="color: rgba(255,120,120,0.95); opacity:1;">
+            {{ profileError }}
+          </div>
         </div>
 
         <div class="node-actions">
@@ -196,7 +213,6 @@ type Panel = 'profile' | 'presence' | 'posts' | null;
     <div class="preview-overlay" *ngIf="avatarPreviewOpen" (click)="closeAvatarPreview()">
       <div class="preview-circle" (click)="$event.stopPropagation()">
         <ng-container *ngIf="draftAvatarUrl; else prevInitTpl">
-          <!-- preview shows FULL image, not cropped -->
           <img class="preview-img" [src]="draftAvatarUrl" alt="avatar preview" />
         </ng-container>
         <ng-template #prevInitTpl>
@@ -207,6 +223,8 @@ type Panel = 'profile' | 'presence' | 'posts' | null;
     </div>
   `,
   styles: [`
+    /* (NO hollow CSS here anymore — it is now a true 3D object inside GlobeService) */
+
     .node-backdrop{ position: fixed; inset: 0; z-index: 9997; background: transparent; }
     .user-node{ position: fixed; top: 16px; right: 16px; z-index: 9999; width: 44px; height: 44px; user-select: none; }
     .node-orb{ width: 44px; height: 44px; border-radius: 999px; border: 1px solid rgba(0,255,209,0.28); background: rgba(10,12,20,0.55); backdrop-filter: blur(12px); box-shadow: 0 18px 60px rgba(0,0,0,0.45), 0 0 0 1px rgba(0,255,209,0.18) inset, 0 0 38px rgba(0,255,209,0.12); position: relative; overflow: hidden; cursor: pointer; padding: 0; display:grid; place-items:center; z-index: 9999; }
@@ -321,6 +339,10 @@ export class GlobePageComponent implements OnInit, AfterViewInit {
   userEmail = '';
   profile: Profile | null = null;
 
+  // ✅ NEW: visible diagnostics
+  loadingProfile = false;
+  profileError = '';
+
   // committed
   nodeAvatarUrl = '';
   private nodeNormX = 0; // -1..1
@@ -351,10 +373,6 @@ export class GlobePageComponent implements OnInit, AfterViewInit {
   private pendingPxX = 0;
   private pendingPxY = 0;
 
-  // ✅ NEW: directly update the dragged IMG element (smooth, no CD thrash)
-  private dragEl: HTMLImageElement | null = null;
-  private dragMo = 0;
-
   // sizes / scales
   private readonly NODE_SIZE = 44;
   private readonly NODE_SCALE = 1.20;
@@ -362,8 +380,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit {
   private readonly EDIT_SIZE = 168;
   private readonly EDIT_SCALE = 1.30;
 
-  // ✅ CROPPING settings (only added)
-  private readonly AVATAR_OUT_SIZE = 512; // output pixels (square)
+  private readonly AVATAR_OUT_SIZE = 512;
 
   constructor(
     private countriesService: CountriesService,
@@ -405,8 +422,6 @@ export class GlobePageComponent implements OnInit, AfterViewInit {
   }
 
   get draftAvatarTransform(): string {
-    // NOTE: while dragging we update the element directly for smoothness.
-    // This getter remains for initial render + after drag end.
     const mo = this.maxOffset(this.EDIT_SIZE, this.EDIT_SCALE);
     const x = this.draftNormX * mo;
     const y = this.draftNormY * mo;
@@ -414,6 +429,10 @@ export class GlobePageComponent implements OnInit, AfterViewInit {
   }
 
   async ngOnInit(): Promise<void> {
+    this.loadingProfile = true;
+    this.profileError = '';
+    this.forceUi();
+
     try {
       const user = await this.auth.getUser();
       this.userEmail = user?.email ?? '';
@@ -428,17 +447,21 @@ export class GlobePageComponent implements OnInit, AfterViewInit {
       this.nodeAvatarUrl = meProfile?.avatar_url ?? '';
       this.draftAvatarUrl = this.nodeAvatarUrl;
 
-      // start centered
       this.nodeNormX = 0;
       this.nodeNormY = 0;
-      this.draftNormX = this.nodeNormX;
-      this.draftNormY = this.nodeNormY;
+      this.draftNormX = 0;
+      this.draftNormY = 0;
 
       if (this.nodeAvatarUrl) this.preloadImage(this.nodeAvatarUrl);
 
       this.cdr.detectChanges();
     } catch (e: any) {
-      console.warn('⚠️ profile preload failed:', e?.message ?? e);
+      const msg = e?.message ?? String(e);
+      console.warn('⚠️ profile preload failed:', msg, e);
+      this.profileError = msg;
+    } finally {
+      this.loadingProfile = false;
+      this.forceUi();
     }
   }
 
@@ -524,10 +547,6 @@ export class GlobePageComponent implements OnInit, AfterViewInit {
     this.msg = '';
     this.saveState = 'idle';
     this.avatarPreviewOpen = false;
-
-    // cleanup drag artifacts if any
-    this.cleanupDrag();
-
     this.forceUi();
   }
 
@@ -545,22 +564,12 @@ export class GlobePageComponent implements OnInit, AfterViewInit {
   toggleAdjustAvatar(): void {
     if (!this.draftAvatarUrl) return;
     this.adjustingAvatar = !this.adjustingAvatar;
-
-    // if user turns adjust off mid-drag, cleanup
-    if (!this.adjustingAvatar) this.cleanupDrag();
-
     this.forceUi();
   }
 
   resetAvatarPosition(): void {
     this.draftNormX = 0;
     this.draftNormY = 0;
-
-    // if a drag element exists, snap it too
-    if (this.dragEl) {
-      this.dragEl.style.transform = `translate3d(0px, 0px, 0)`;
-    }
-
     this.forceUi();
   }
 
@@ -569,29 +578,20 @@ export class GlobePageComponent implements OnInit, AfterViewInit {
     if (!this.draftAvatarUrl) return;
 
     this.dragging = true;
-
     this.startX = ev.clientX;
     this.startY = ev.clientY;
 
-    // cache element + max offset
-    this.dragEl = ev.target as HTMLImageElement;
-    this.dragMo = this.maxOffset(this.EDIT_SIZE, this.EDIT_SCALE);
+    const mo = this.maxOffset(this.EDIT_SIZE, this.EDIT_SCALE);
+    this.basePxX = this.draftNormX * mo;
+    this.basePxY = this.draftNormY * mo;
 
-    // current norm -> px as base
-    this.basePxX = this.draftNormX * this.dragMo;
-    this.basePxY = this.draftNormY * this.dragMo;
-
-    // ensure we capture pointer
-    (this.dragEl as any).setPointerCapture?.(ev.pointerId);
+    (ev.target as HTMLElement).setPointerCapture?.(ev.pointerId);
 
     const move = (e: PointerEvent) => this.onAvatarDragMove(e);
     const up = () => this.onAvatarDragEnd(move, up);
 
-    // run outside angular to avoid CD on every pointermove
-    this.zone.runOutsideAngular(() => {
-      window.addEventListener('pointermove', move, { passive: true });
-      window.addEventListener('pointerup', up, { passive: true });
-    });
+    window.addEventListener('pointermove', move, { passive: true });
+    window.addEventListener('pointerup', up, { passive: true });
 
     this.forceUi();
   }
@@ -602,7 +602,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit {
     const dx = ev.clientX - this.startX;
     const dy = ev.clientY - this.startY;
 
-    const mo = this.dragMo || this.maxOffset(this.EDIT_SIZE, this.EDIT_SCALE);
+    const mo = this.maxOffset(this.EDIT_SIZE, this.EDIT_SCALE);
     const clampPx = (v: number) => Math.max(-mo, Math.min(mo, v));
 
     this.pendingPxX = clampPx(this.basePxX + dx);
@@ -610,71 +610,26 @@ export class GlobePageComponent implements OnInit, AfterViewInit {
 
     if (!this.raf) {
       this.raf = requestAnimationFrame(() => {
-        // ✅ Smooth: apply transform directly (no Angular CD needed)
-        if (this.dragEl) {
-          this.dragEl.style.transform = `translate3d(${this.pendingPxX}px, ${this.pendingPxY}px, 0)`;
-        }
-
-        // keep normalized state in sync (used on drag end + save)
         this.draftNormX = this.clampNorm(mo ? this.pendingPxX / mo : 0);
         this.draftNormY = this.clampNorm(mo ? this.pendingPxY / mo : 0);
-
         this.raf = 0;
       });
     }
   }
 
-  private onAvatarDragEnd(
-    move: (e: PointerEvent) => void,
-    up: () => void
-  ): void {
+  private onAvatarDragEnd(move: (e: PointerEvent) => void, up: () => void): void {
     this.dragging = false;
-
     window.removeEventListener('pointermove', move as any);
     window.removeEventListener('pointerup', up as any);
-
-    // cancel any pending raf and let Angular binding take over cleanly
-    confirmingCleanup: {
-      if (this.raf) {
-        cancelAnimationFrame(this.raf);
-        this.raf = 0;
-      }
-      // remove inline transform so binding ([style.transform]) is source of truth again
-      if (this.dragEl) {
-        this.dragEl.style.transform = '';
-      }
-      this.dragEl = null;
-      this.dragMo = 0;
-    }
-
     this.forceUi();
   }
 
-  private cleanupDrag(): void {
-    this.dragging = false;
-
-    if (this.raf) {
-      cancelAnimationFrame(this.raf);
-      this.raf = 0;
-    }
-
-    if (this.dragEl) {
-      this.dragEl.style.transform = '';
-      this.dragEl = null;
-    }
-
-    this.dragMo = 0;
-  }
-
-  // ✅ CROPPING: center-square crop + resize to 512x512 BEFORE upload
   private async cropAvatarToSquare(file: File): Promise<File> {
     const type = (file.type || '').toLowerCase();
 
-    // Keep it strict (also blocks gif)
     if (type === 'image/gif') throw new Error('GIF avatars are disabled for now.');
     if (!type.startsWith('image/')) throw new Error('Please choose an image file.');
 
-    // Prefer keeping PNG if it has transparency, otherwise use JPEG for smaller size.
     const outType =
       type === 'image/png' || type === 'image/webp' ? 'image/png' : 'image/jpeg';
     const outExt = outType === 'image/png' ? 'png' : 'jpg';
@@ -692,22 +647,11 @@ export class GlobePageComponent implements OnInit, AfterViewInit {
     const ctx = canvas.getContext('2d', { alpha: true });
     if (!ctx) throw new Error('Canvas not supported.');
 
-    // high quality scaling
     (ctx as any).imageSmoothingEnabled = true;
     (ctx as any).imageSmoothingQuality = 'high';
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(
-      bitmap,
-      sx,
-      sy,
-      side,
-      side,
-      0,
-      0,
-      canvas.width,
-      canvas.height
-    );
+    ctx.drawImage(bitmap, sx, sy, side, side, 0, 0, canvas.width, canvas.height);
 
     bitmap.close?.();
 
@@ -732,7 +676,6 @@ export class GlobePageComponent implements OnInit, AfterViewInit {
     this.forceUi();
 
     try {
-      // ✅ ONLY CHANGE: crop before upload
       const cropped = await this.cropAvatarToSquare(file);
 
       const r = await this.media.uploadAvatar(cropped);
@@ -742,12 +685,8 @@ export class GlobePageComponent implements OnInit, AfterViewInit {
       this.draftAvatarUrl = url;
       this.preloadImage(url);
 
-      // reset crop for new avatar
       this.draftNormX = 0;
       this.draftNormY = 0;
-
-      // also cleanup any drag residue
-      this.cleanupDrag();
 
       this.msg = 'Uploaded. Press SAVE to apply.';
     } catch (err: any) {
@@ -778,7 +717,6 @@ export class GlobePageComponent implements OnInit, AfterViewInit {
 
       this.profile = res.updateProfile;
 
-      // ✅ commit avatar + normalized position (node updates now)
       this.nodeAvatarUrl = this.profile?.avatar_url ?? '';
       this.nodeNormX = this.draftNormX;
       this.nodeNormY = this.draftNormY;

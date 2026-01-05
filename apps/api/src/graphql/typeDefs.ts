@@ -22,6 +22,13 @@ export const typeDefs = `#graphql
     updated_at: String
   }
 
+  # ✅ This is what Query.me returns (not Profile)
+  type MeUser {
+    id: ID!
+    email: String
+    role: String
+  }
+
   type DetectedLocation {
     countryCode: String!
     countryName: String!
@@ -42,6 +49,11 @@ export const typeDefs = `#graphql
   type Query {
     countries: [Country!]!
     countryByIso(iso: String!): Country
+
+    # ✅ these were in your resolvers but missing in schema (crashed server)
+    me: MeUser
+    privatePing: String
+
     meProfile: Profile
   }
 

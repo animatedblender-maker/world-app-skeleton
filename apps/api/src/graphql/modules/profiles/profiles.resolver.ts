@@ -1,4 +1,4 @@
-import { ProfilesService } from './profiles.service.js';
+import { ProfilesService } from './profiles.service.ts';
 
 type AuthedUser = {
   id: string;
@@ -15,7 +15,10 @@ function requireAuth(ctx: Context): AuthedUser {
   return ctx.user;
 }
 
-const svc = new ProfilesService();
+function svc(): ProfilesService {
+  // create on demand (not at import time)
+  return new ProfilesService();
+}
 
 export const profilesResolvers = {
   Query: {
@@ -31,14 +34,14 @@ export const profilesResolvers = {
 
     meProfile: async (_: any, __: any, ctx: Context) => {
       const u = requireAuth(ctx);
-      return await svc.getMeProfile(u.id);
+      return await svc().getMeProfile(u.id);
     },
   },
 
   Mutation: {
     updateProfile: async (_: any, args: any, ctx: Context) => {
       const u = requireAuth(ctx);
-      return await svc.updateProfile(u.id, args.input ?? {});
+      return await svc().updateProfile(u.id, args.input ?? {});
     },
   },
 };

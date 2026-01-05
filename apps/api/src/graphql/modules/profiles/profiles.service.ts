@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js';
+import { pool } from '../../../db.ts';
 
 type ProfileRow = {
   user_id: string;
@@ -25,55 +25,51 @@ type UpdateProfileInput = {
 };
 
 export class ProfilesService {
-  private supabaseAdmin = createClient(
-    process.env.SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  );
-
-  private assertEnv() {
-    if (!process.env.SUPABASE_URL) throw new Error('SUPABASE_URL missing');
-    if (!process.env.SUPABASE_SERVICE_ROLE_KEY) throw new Error('SUPABASE_SERVICE_ROLE_KEY missing');
-  }
-
   async getMeProfile(userId: string): Promise<ProfileRow | null> {
-    this.assertEnv();
-
-    const { data, error } = await this.supabaseAdmin
-      .from('profiles')
-      .select('*')
-      .eq('user_id', userId)
-      .maybeSingle();
-
-    if (error) throw error;
-    return (data as ProfileRow) ?? null;
+    const { rows } = await pool.query(
+      `select * from public.profiles where user_id = $1 limit 1`,
+      [userId]
+    );
+    return (rows[0] as ProfileRow) ?? null;
   }
 
   async updateProfile(userId: string, input: UpdateProfileInput): Promise<ProfileRow> {
-    this.assertEnv();
+    // ensure row exists
+    await pool.query(
+      `insert into public.profiles (user_id, country_name)
+       values ($1, 'Unknown')
+       on conflict (user_id) do nothing`,
+      [userId]
+    );
 
-    // If profile row doesn't exist (older users), create minimal row first.
-    const existing = await this.getMeProfile(userId);
-    if (!existing) {
-      const { error: insErr } = await this.supabaseAdmin
-        .from('profiles')
-        .insert({ user_id: userId, country_name: 'Unknown' });
+    const { rows } = await pool.query(
+      `
+      update public.profiles
+      set
+        display_name = coalesce($2, display_name),
+        username     = coalesce($3, username),
+        avatar_url   = coalesce($4, avatar_url),
+        country_name = coalesce($5, country_name),
+        country_code = coalesce($6, country_code),
+        city_name    = coalesce($7, city_name),
+        bio          = coalesce($8, bio),
+        updated_at   = now()
+      where user_id = $1
+      returning *
+      `,
+      [
+        userId,
+        input.display_name ?? null,
+        input.username ?? null,
+        input.avatar_url ?? null,
+        input.country_name ?? null,
+        input.country_code ?? null,
+        input.city_name ?? null,
+        input.bio ?? null,
+      ]
+    );
 
-      if (insErr) throw insErr;
-    }
-
-    const patch: Record<string, any> = {};
-    for (const [k, v] of Object.entries(input)) {
-      if (v !== undefined) patch[k] = v;
-    }
-
-    const { data, error } = await this.supabaseAdmin
-      .from('profiles')
-      .update(patch)
-      .eq('user_id', userId)
-      .select('*')
-      .single();
-
-    if (error) throw error;
-    return data as ProfileRow;
+    if (!rows[0]) throw new Error('PROFILE_UPDATE_FAILED');
+    return rows[0] as ProfileRow;
   }
 }
