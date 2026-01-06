@@ -1,4 +1,10 @@
+// apps/api/src/graphql/typeDefs.ts
 export const typeDefs = `#graphql
+  type LatLng {
+    lat: Float!
+    lng: Float!
+  }
+
   type Country {
     id: ID!
     name: String!
@@ -6,6 +12,13 @@ export const typeDefs = `#graphql
     continent: String!
     lat: Float!
     lng: Float!
+    center: LatLng!
+  }
+
+  # ✅ Match your frontend query shape:
+  # query { countries { countries { ... } } }
+  type CountriesResult {
+    countries: [Country!]!
   }
 
   type Profile {
@@ -46,19 +59,55 @@ export const typeDefs = `#graphql
     bio: String
   }
 
+  # ----------------------------
+  # Presence / Stats (NEW)
+  # ----------------------------
+
+  type GlobalStats {
+    totalUsers: Int!
+    onlineNow: Int!
+    ttlSeconds: Int!
+    computedAt: String!
+  }
+
+  type CountryStats {
+    iso: String!
+    name: String
+    totalUsers: Int!
+    onlineNow: Int!
+    ttlSeconds: Int!
+    computedAt: String!
+  }
+
+  type HeartbeatResult {
+    ok: Boolean!
+    ttlSeconds: Int!
+    lastSeen: String!
+  }
+
   type Query {
-    countries: [Country!]!
+    # Countries
+    countries: CountriesResult!
     countryByIso(iso: String!): Country
 
-    # ✅ these were in your resolvers but missing in schema (crashed server)
+    # Auth info
     me: MeUser
     privatePing: String
 
+    # Profile
     meProfile: Profile
+
+    # Presence stats
+    globalStats: GlobalStats!
+    countryStats(iso: String!): CountryStats!
   }
 
   type Mutation {
     detectLocation(lat: Float!, lng: Float!): DetectedLocation!
     updateProfile(input: UpdateProfileInput!): Profile!
+
+    # Presence mutations
+    heartbeat(iso: String): HeartbeatResult!
+    setOffline: Boolean!
   }
 `;

@@ -17,6 +17,7 @@ import { AuthService } from '../core/services/auth.service';
 import { GraphqlService } from '../core/services/graphql.service';
 import { MediaService } from '../core/services/media.service';
 import { ProfileService, type Profile } from '../core/services/profile.service';
+import { PresenceService, type PresenceSnapshot } from '../core/services/presence.service';
 
 type Panel = 'profile' | 'presence' | 'posts' | null;
 
@@ -27,31 +28,46 @@ type Panel = 'profile' | 'presence' | 'posts' | null;
   template: `
     <div class="topbar">
       <div class="searchwrap">
-        <input id="search" placeholder="Search a country on the globe…" />
+        <input id="search" placeholder="Search a country on the map…" />
         <div id="clearBtn" class="clear-btn">×</div>
         <div id="suggestions" class="suggestions"></div>
       </div>
       <button id="go" class="go-btn">GO</button>
     </div>
 
-    <div class="stats">
-      <div><b>Country:</b> <span id="countryPill">Hover / click a country</span></div>
-      <div class="row">
-        <small id="totalUsers">Total users: —</small>
-        <small id="onlineUsers">Online now: —</small>
+    <!-- ✅ Smaller fixed pill -->
+    <div class="stats-pill">
+      <!-- Global stats -->
+      <div class="pill-row">
+        <small>Total users: <b>{{ totalUsers ?? '—' }}</b></small>
+        <small>Online now: <b>{{ onlineUsers ?? '—' }}</b></small>
       </div>
-      <div class="row">
+
+      <!-- Local stats only after click/search -->
+      <div class="pill-row" *ngIf="selectedCountry">
+        <small class="muted">
+          Local ({{ selectedCountry.name }}{{ selectedCountry.code ? ' (' + selectedCountry.code + ')' : '' }}):
+          <b>{{ localOnline ?? 0 }}</b> online /
+          <b>{{ localTotal ?? 0 }}</b> total
+        </small>
+      </div>
+
+      <!-- heartbeat line -->
+      <div class="pill-row">
+        <small id="heartbeatState">{{ heartbeatText || '—' }}</small>
+      </div>
+
+      <!-- ✅ Logged in line goes LAST (bottom) -->
+      <div class="pill-row">
         <small id="authState">
           {{ userEmail ? ('Logged in: ' + userEmail) : 'Logged out' }}
         </small>
-        <small id="heartbeatState">—</small>
       </div>
 
-      <!-- ✅ NEW: show profile load status (so we stop guessing) -->
-      <div class="row" *ngIf="loadingProfile">
+      <div class="pill-row" *ngIf="loadingProfile">
         <small style="opacity:.75">Loading profile…</small>
       </div>
-      <div class="row" *ngIf="profileError">
+      <div class="pill-row" *ngIf="profileError">
         <small style="color:#ff8b8b; font-weight:800; letter-spacing:.08em;">
           {{ profileError }}
         </small>
@@ -87,7 +103,6 @@ type Panel = 'profile' | 'presence' | 'posts' | null;
           <div class="node-sub">{{ profile?.display_name || 'Unnamed' }}</div>
           <div class="node-sub2">{{ userEmail || '—' }}</div>
 
-          <!-- ✅ NEW: surface errors here too -->
           <div class="node-sub2" *ngIf="profileError" style="color: rgba(255,120,120,0.95); opacity:1;">
             {{ profileError }}
           </div>
@@ -197,6 +212,7 @@ type Panel = 'profile' | 'presence' | 'posts' | null;
           <div class="presence-box">
             <div class="presence-line"><span class="k">STATUS</span><span class="v">ONLINE</span></div>
             <div class="presence-line"><span class="k">COUNTRY</span><span class="v">{{ profile?.country_name || '—' }}</span></div>
+            <div class="presence-line"><span class="k">CODE</span><span class="v">{{ profile?.country_code || '—' }}</span></div>
             <div class="presence-line"><span class="k">CITY</span><span class="v">{{ profile?.city_name || '—' }}</span></div>
           </div>
         </div>
@@ -223,18 +239,35 @@ type Panel = 'profile' | 'presence' | 'posts' | null;
     </div>
   `,
   styles: [`
-    /* (NO hollow CSS here anymore — it is now a true 3D object inside GlobeService) */
+    .stats-pill{
+      position: fixed;
+      left: 16px;
+      bottom: 16px;
+      z-index: 9996;
+      width: min(360px, calc(100vw - 32px));
+      border-radius: 16px;
+      padding: 10px 12px;
+      background: rgba(220, 228, 235, 0.88);
+      border: 1px solid rgba(0,0,0,0.06);
+      box-shadow: 0 18px 60px rgba(0,0,0,0.16);
+      backdrop-filter: blur(10px);
+      pointer-events: none;
+    }
+    .pill-row{ display:flex; gap: 12px; flex-wrap: wrap; align-items:center; }
+    .pill-row small{ color: rgba(10,12,18,0.70); font-size: 12px; }
+    .pill-row b{ color: rgba(10,12,18,0.86); }
+    .muted{ color: rgba(10,12,18,0.62); }
 
     .node-backdrop{ position: fixed; inset: 0; z-index: 9997; background: transparent; }
     .user-node{ position: fixed; top: 16px; right: 16px; z-index: 9999; width: 44px; height: 44px; user-select: none; }
-    .node-orb{ width: 44px; height: 44px; border-radius: 999px; border: 1px solid rgba(0,255,209,0.28); background: rgba(10,12,20,0.55); backdrop-filter: blur(12px); box-shadow: 0 18px 60px rgba(0,0,0,0.45), 0 0 0 1px rgba(0,255,209,0.18) inset, 0 0 38px rgba(0,255,209,0.12); position: relative; overflow: hidden; cursor: pointer; padding: 0; display:grid; place-items:center; z-index: 9999; }
+    .node-orb{ width: 44px; height: 44px; border-radius: 999px; border: 1px solid rgba(0,255,209,0.28); background: rgba(10,12,20,0.55); backdrop-filter: blur(12px); box-shadow: 0 18px 60px rgba(0,0,0,0.45), 0 0 0 1px rgba(0,255,209,0.18) inset, 0 0 38px rgba(0,255,209,0.12); position: relative; overflow: hidden; cursor: pointer; padding: 0; display:grid; place-items:center; z-index: 9999; pointer-events:auto; }
     .orb-img{ width: 120%; height: 120%; object-fit: cover; border-radius: 999px; will-change: transform; transform: translate3d(0,0,0); transition: transform 90ms linear; }
     .orb-initials{ font-weight: 900; letter-spacing: 0.12em; font-size: 11px; color: rgba(255,255,255,0.92); text-transform: uppercase; }
     .orb-pulse{ position:absolute; inset:-8px; border-radius:999px; background: radial-gradient(circle at 50% 50%, rgba(0,255,209,0.16), transparent 60%); animation: pulse 2.8s ease-in-out infinite; pointer-events:none; }
     @keyframes pulse{ 0%,100% { transform: scale(0.98); opacity: .55; } 50% { transform: scale(1.06); opacity: .95; } }
     .orb-ring{ position:absolute; inset:-2px; border-radius:999px; background: conic-gradient(from 180deg, rgba(0,255,209,0.0), rgba(0,255,209,0.65), rgba(140,0,255,0.55), rgba(0,255,209,0.0)); filter: blur(10px); opacity: 0.35; pointer-events:none; }
 
-    .node-menu{ position: absolute; top: 52px; right: 0; width: 260px; border-radius: 22px; padding: 14px; background: rgba(10,12,20,0.62); border: 1px solid rgba(0,255,209,0.20); backdrop-filter: blur(14px); box-shadow: 0 30px 90px rgba(0,0,0,0.50); overflow:hidden; z-index: 9999; }
+    .node-menu{ position: absolute; top: 52px; right: 0; width: 260px; border-radius: 22px; padding: 14px; background: rgba(10,12,20,0.62); border: 1px solid rgba(0,255,209,0.20); backdrop-filter: blur(14px); box-shadow: 0 30px 90px rgba(0,0,0,0.50); overflow:hidden; z-index: 9999; pointer-events:auto; }
     .node-menu::before{ content:""; position:absolute; inset:-2px; border-radius: 24px; background: conic-gradient(from 180deg, rgba(0,255,209,0), rgba(0,255,209,0.55), rgba(140,0,255,0.45), rgba(0,255,209,0)); filter: blur(14px); opacity: 0.22; pointer-events:none; }
     .node-menu > *{ position:relative; z-index:1; }
     .node-head{ margin-bottom: 10px; }
@@ -253,13 +286,11 @@ type Panel = 'profile' | 'presence' | 'posts' | null;
     .panel{ width: min(620px, 94vw); border-radius: 26px; padding: 16px; background: rgba(10,12,20,0.60); border: 1px solid rgba(0,255,209,0.20); box-shadow: 0 30px 90px rgba(0,0,0,0.55), 0 0 50px rgba(0,255,209,0.10); backdrop-filter: blur(14px); color: rgba(255,255,255,0.92); position: relative; overflow:hidden; }
     .panel::before{ content:""; position:absolute; inset:-2px; border-radius: 28px; background: conic-gradient(from 180deg, rgba(0,255,209,0), rgba(0,255,209,0.55), rgba(140,0,255,0.45), rgba(0,255,209,0)); filter: blur(16px); opacity: 0.18; pointer-events:none; }
     .panel > *{ position:relative; z-index:1; }
-
     .panel-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom: 12px; }
     .panel-title{ font-weight: 900; letter-spacing: 0.18em; font-size: 12px; }
     .x{ width: 38px; height: 38px; border-radius: 14px; border: 1px solid rgba(255,255,255,0.10); background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.90); cursor: pointer; font-size: 18px; }
     .x:hover{ background: rgba(0,255,209,0.10); border-color: rgba(0,255,209,0.20); }
     .panel-body{ display:grid; gap: 12px; }
-
     .avatar-row{ display:flex; align-items:center; justify-content:space-between; gap: 14px; flex-wrap: wrap; }
     .avatar-actions{ display:grid; gap: 10px; justify-items: start; }
     .avatar-big{ width: 168px; height: 168px; border-radius: 999px; position: relative; overflow:hidden; border: 1px solid rgba(0,255,209,0.25); background: rgba(0,0,0,0.25); box-shadow: 0 0 28px rgba(0,255,209,0.12); display:grid; place-items:center; cursor: pointer; }
@@ -278,31 +309,25 @@ type Panel = 'profile' | 'presence' | 'posts' | null;
     }
     .avatar-img.dragging{ transition: none; }
     .drag-hint{ position:absolute; bottom: 10px; left: 50%; transform: translateX(-50%); padding: 6px 10px; border-radius: 999px; background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.10); font-size: 10px; letter-spacing: .12em; font-weight: 900; opacity: .9; pointer-events:none; }
-
     .big-initials{ font-weight: 900; letter-spacing: 0.14em; font-size: 22px; }
     .big-ring{ position:absolute; inset:-2px; border-radius: 999px; background: conic-gradient(from 180deg, rgba(0,255,209,0), rgba(0,255,209,0.55), rgba(140,0,255,0.45), rgba(0,255,209,0)); filter: blur(12px); opacity: 0.22; pointer-events:none; }
-
     .upload-btn{ display:inline-flex; align-items:center; justify-content:center; padding: 12px 14px; border-radius: 16px; cursor:pointer; border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.88); font-weight: 900; letter-spacing: 0.14em; font-size: 11px; user-select:none; }
     .upload-btn:hover{ border-color: rgba(0,255,209,0.22); background: rgba(0,255,209,0.10); box-shadow: 0 0 24px rgba(0,255,209,0.10); }
     .upload-btn.disabled{ opacity: .65; cursor: not-allowed; }
     .upload-btn input{ display:none; }
-
     .field{ display:grid; gap: 8px; }
     .field label{ font-size: 11px; opacity: .72; letter-spacing: 0.14em; font-weight: 900; }
     .field input, .field textarea{ padding: 12px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.12); background: rgba(0,0,0,0.28); color: rgba(255,255,255,0.92); outline:none; resize: none; }
     .field input:focus, .field textarea:focus{ border-color: rgba(0,255,209,0.35); box-shadow: 0 0 0 3px rgba(0,255,209,0.10); }
     .field input:disabled{ opacity: .65; cursor: not-allowed; }
-
     .row{ display:flex; align-items:center; gap: 12px; flex-wrap: wrap; margin-top: 2px; }
     .cta{ border:0; border-radius: 16px; padding: 12px 14px; cursor: pointer; background: linear-gradient(90deg, rgba(0,255,209,0.85), rgba(140,0,255,0.75)); color: rgba(6,8,14,0.96); font-weight: 900; letter-spacing: 0.16em; font-size: 12px; box-shadow: 0 18px 50px rgba(0,255,209,0.16); }
     .cta:disabled{ opacity:.6; cursor:not-allowed; }
     .msg{ font-size: 12px; opacity: .85; }
-
     .presence-box{ border-radius: 18px; border: 1px solid rgba(255,255,255,0.10); background: rgba(255,255,255,0.05); padding: 12px; display:grid; gap: 10px; }
     .presence-line{ display:flex; justify-content:space-between; gap: 12px; align-items:center; }
     .presence-line .k{ opacity:.65; letter-spacing:.16em; font-weight: 900; font-size: 11px; }
     .presence-line .v{ color: rgba(0,255,209,0.92); font-weight: 900; letter-spacing: .08em; font-size: 12px; }
-
     .preview-overlay{
       position: fixed; inset:0;
       background: rgba(0,0,0,0.55);
@@ -339,21 +364,30 @@ export class GlobePageComponent implements OnInit, AfterViewInit {
   userEmail = '';
   profile: Profile | null = null;
 
-  // ✅ NEW: visible diagnostics
   loadingProfile = false;
   profileError = '';
 
-  // committed
-  nodeAvatarUrl = '';
-  private nodeNormX = 0; // -1..1
-  private nodeNormY = 0; // -1..1
+  selectedCountry: CountryModel | null = null;
 
-  // draft
+  // ✅ now real values
+  totalUsers: number | null = null;
+  onlineUsers: number | null = null;
+  heartbeatText = '';
+
+  localTotal: number | null = null;
+  localOnline: number | null = null;
+
+  private lastPresenceSnap: PresenceSnapshot | null = null;
+
+  nodeAvatarUrl = '';
+  private nodeNormX = 0;
+  private nodeNormY = 0;
+
   editDisplayName = '';
   editBio = '';
   draftAvatarUrl = '';
-  private draftNormX = 0; // -1..1
-  private draftNormY = 0; // -1..1
+  private draftNormX = 0;
+  private draftNormY = 0;
 
   saveState: 'idle' | 'saving' | 'saved' = 'idle';
   uploadingAvatar = false;
@@ -362,7 +396,6 @@ export class GlobePageComponent implements OnInit, AfterViewInit {
   adjustingAvatar = false;
   avatarPreviewOpen = false;
 
-  // drag internals
   dragging = false;
   private startX = 0;
   private startY = 0;
@@ -373,7 +406,6 @@ export class GlobePageComponent implements OnInit, AfterViewInit {
   private pendingPxX = 0;
   private pendingPxY = 0;
 
-  // sizes / scales
   private readonly NODE_SIZE = 44;
   private readonly NODE_SCALE = 1.20;
 
@@ -392,6 +424,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit {
     private router: Router,
     private media: MediaService,
     private profiles: ProfileService,
+    private presence: PresenceService,
     private zone: NgZone,
     private cdr: ChangeDetectorRef
   ) {}
@@ -476,32 +509,90 @@ export class GlobePageComponent implements OnInit, AfterViewInit {
       this.ui.setCountries(data.countries);
       this.globeService.setData(data);
 
+      // ✅ Wire Presence => dots + stats
+      try {
+        await this.presence.start({
+          countries: data.countries,
+          meCountryCode: (this.profile?.country_code ?? null),
+          meCountryName: (this.profile?.country_name ?? null),
+          meCityName: (this.profile?.city_name ?? null),
+          onHeartbeat: (txt) => {
+            this.zone.run(() => {
+              this.heartbeatText = txt;
+              this.forceUi();
+            });
+          },
+          onUpdate: (snap) => {
+            this.zone.run(() => {
+              this.lastPresenceSnap = snap;
+              this.totalUsers = snap.totalUsers;
+              this.onlineUsers = snap.onlineUsers;
+
+              this.globeService.setConnections(snap.points);
+              this.globeService.setConnectionsOnline(snap.onlineIds);
+
+              this.recomputeLocal();
+              this.forceUi();
+            });
+          },
+        });
+      } catch (e: any) {
+        this.zone.run(() => {
+          this.heartbeatText = `presence ✗ (${e?.message ?? e})`;
+          this.forceUi();
+        });
+      }
+
+      // ✅ ONLY on click (no hover)
       this.globeService.onCountryClick((country: CountryModel) => {
-        this.ui.setMode('focus');
-        this.ui.setSelected(country.id);
-        this.searchUi.setInputValue(country.name);
-        this.searchUi.setClearButtonVisible(true);
+        this.zone.run(() => {
+          this.selectedCountry = country;
+
+          this.ui.setMode('focus');
+          this.ui.setSelected(country.id);
+          this.searchUi.setInputValue(country.name);
+          this.searchUi.setClearButtonVisible(true);
+
+          this.recomputeLocal();
+          this.forceUi();
+        });
       });
 
       this.searchUi.init({
         getCountries: () => this.ui.countries,
         isFocusMode: () => this.ui.labelMode === 'focus',
         onSearch: (country) => {
-          this.ui.setMode('focus');
-          this.ui.setSelected(country.id);
-          this.globeService.selectCountry(country.id);
-          this.globeService.showFocusLabel(country.id);
-          this.globeService.flyTo(
-            country.center.lat,
-            country.center.lng,
-            country.flyAltitude,
-            900
-          );
+          this.zone.run(() => {
+            this.selectedCountry = country;
+
+            this.ui.setMode('focus');
+            this.ui.setSelected(country.id);
+            this.globeService.selectCountry(country.id);
+            this.globeService.showFocusLabel(country.id);
+            this.globeService.flyTo(
+              country.center.lat,
+              country.center.lng,
+              country.flyAltitude,
+              900
+            );
+
+            this.recomputeLocal();
+            this.forceUi();
+          });
         },
         onClear: () => {
-          this.ui.setMode('all');
-          this.ui.setSelected(null);
-          this.globeService.resetView();
+          this.zone.run(() => {
+            this.selectedCountry = null;
+
+            this.ui.setMode('all');
+            this.ui.setSelected(null);
+            this.globeService.resetView();
+
+            this.localTotal = null;
+            this.localOnline = null;
+
+            this.forceUi();
+          });
         },
       });
 
@@ -514,13 +605,26 @@ export class GlobePageComponent implements OnInit, AfterViewInit {
     });
   }
 
-  toggleMenu(): void {
-    this.menuOpen = !this.menuOpen;
+  private recomputeLocal(): void {
+    if (!this.selectedCountry?.code) {
+      this.localTotal = null;
+      this.localOnline = null;
+      return;
+    }
+    const snap = this.lastPresenceSnap;
+    if (!snap) {
+      this.localTotal = null;
+      this.localOnline = null;
+      return;
+    }
+    const cc = String(this.selectedCountry.code).toUpperCase();
+    const entry = snap.byCountry?.[cc];
+    this.localTotal = entry?.total ?? 0;
+    this.localOnline = entry?.online ?? 0;
   }
 
-  closeMenu(): void {
-    this.menuOpen = false;
-  }
+  toggleMenu(): void { this.menuOpen = !this.menuOpen; }
+  closeMenu(): void { this.menuOpen = false; }
 
   openPanel(p: Exclude<Panel, null>): void {
     this.panel = p;
@@ -723,6 +827,15 @@ export class GlobePageComponent implements OnInit, AfterViewInit {
 
       if (this.nodeAvatarUrl) this.preloadImage(this.nodeAvatarUrl);
 
+      // ✅ update presence location too (if code/name exists)
+      try {
+        await this.presence.setMyLocation(
+          this.profile?.country_code ?? null,
+          this.profile?.country_name ?? null,
+          this.profile?.city_name ?? null
+        );
+      } catch {}
+
       this.saveState = 'saved';
       this.forceUi();
 
@@ -737,6 +850,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit {
   }
 
   async logout(): Promise<void> {
+    this.presence.stop();
     await this.auth.logout();
     await this.router.navigateByUrl('/auth');
   }

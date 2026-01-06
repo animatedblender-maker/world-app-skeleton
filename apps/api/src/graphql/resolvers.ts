@@ -1,11 +1,7 @@
+// apps/api/src/graphql/resolvers.ts
 import { countriesResolvers } from './modules/countries/countries.resolver.ts';
 import { profilesResolvers } from './modules/profiles/profiles.resolver.ts';
-
-function requireAuth(ctx: any) {
-  const u = ctx.user;
-  if (!u?.id) throw new Error('UNAUTHENTICATED');
-  return u as { id: string; email?: string };
-}
+import { presenceResolvers } from './modules/presence/presence.resolver.ts';
 
 async function reverseGeocodeNominatim(lat: number, lng: number) {
   const url = new URL('https://nominatim.openstreetmap.org/reverse');
@@ -42,20 +38,18 @@ async function reverseGeocodeNominatim(lat: number, lng: number) {
 
 export const resolvers = {
   Query: {
-    ...countriesResolvers.Query,
-
-    // ✅ Use the module that talks to Supabase profiles table
+    ...(countriesResolvers.Query ?? {}),
     ...(profilesResolvers.Query ?? {}),
+    ...(presenceResolvers.Query ?? {}),
   },
 
   Mutation: {
-    // ✅ Keep location detect as mutation (matches your schema)
     detectLocation: async (_: any, { lat, lng }: any) => {
       const { countryName, countryCode, cityName } = await reverseGeocodeNominatim(lat, lng);
       return { countryCode, countryName, cityName, source: 'nominatim' };
     },
 
-    // ✅ Use the module for updateProfile
     ...(profilesResolvers.Mutation ?? {}),
+    ...(presenceResolvers.Mutation ?? {}),
   },
 };

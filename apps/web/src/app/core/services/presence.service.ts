@@ -3,47 +3,66 @@ import { supabase } from '../../supabase/supabase.client';
 import type { CountryModel } from '../../data/countries.service';
 import type { ConnectionPoint } from '../../globe/globe.service';
 
-type PresenceRow = {
-  user_id: string;
-  country_code: string | null;
-  country_name: string | null;
-  city_name: string | null;
-  last_seen_at: string;
-  is_online: boolean;
-};
-
 type ProfileRow = {
   user_id: string;
   country_code: string | null;
-  country_name: string;
+  country_name: string | null;
 };
 
-type PresenceSnapshot = {
+export type PresenceSnapshot = {
   points: ConnectionPoint[];
   onlineIds: Array<string>;
   totalUsers: number;
   onlineUsers: number;
+  byCountry: Record<string, { total: number; online: number }>;
+};
+
+type PresenceMeta = {
+  user_id?: string;
+  country_code?: string | null;
+  country_name?: string | null;
+  city_name?: string | null;
+  ts?: number; // epoch ms
+};
+
+type Motion = {
+  cc: string;
+  lat: number;
+  lng: number;
+  vLat: number;
+  vLng: number;
+  lastMs: number;
 };
 
 @Injectable({ providedIn: 'root' })
 export class PresenceService {
   private countries: CountryModel[] = [];
 
-  private heartbeatTimer: any = null;
-  private readonly HEARTBEAT_MS = 25_000;
+  private channel: any = null;
+
+  private profilesById = new Map<string, ProfileRow>();
+  private onlineMetaById = new Map<string, PresenceMeta>(); // from realtime presence
+  private motions = new Map<string, Motion>();
+
+  private onUpdateCb: ((snap: PresenceSnapshot) => void) | null = null;
+  private onHeartbeatCb: ((txt: string) => void) | null = null;
 
   private meId: string | null = null;
 
-  // local caches
-  private profilesById = new Map<string, ProfileRow>();
-  private presenceById = new Map<string, PresenceRow>();
-
-  private onUpdateCb: ((snap: PresenceSnapshot) => void) | null = null;
-
-  private channel: any = null;
   private currentCountryCode: string | null = null;
   private currentCountryName: string | null = null;
   private currentCityName: string | null = null;
+
+  // Smooth motion render (not for “online correctness”, only for floating)
+  private renderTimer: any = null;
+  private readonly RENDER_MS = 60;
+
+  // Refresh totals occasionally (new registrations). Not required for online correctness.
+  private refreshProfilesTimer: any = null;
+  private readonly PROFILES_REFRESH_MS = 120_000;
+
+  // ✅ all dots neon green
+  private readonly DOT_COLOR = 'rgba(0,255,180,0.95)';
 
   async start(opts: {
     countries: CountryModel[];
@@ -57,8 +76,8 @@ export class PresenceService {
 
     this.countries = opts.countries || [];
     this.onUpdateCb = opts.onUpdate;
+    this.onHeartbeatCb = opts.onHeartbeat ?? null;
 
-    // who am I
     const { data: authData } = await supabase.auth.getUser();
     this.meId = authData.user?.id ?? null;
 
@@ -66,64 +85,29 @@ export class PresenceService {
     this.currentCountryName = opts.meCountryName ?? null;
     this.currentCityName = opts.meCityName ?? null;
 
-    // 1) Initial pull: all profiles => all dots
+    // 1) Load profiles once (for totals + fallback country mapping)
     await this.fetchAllProfiles();
 
-    // 2) Initial pull: presence => who is online right now
-    await this.fetchPresenceSnapshot();
+    // 2) Start realtime Presence channel (instant online/offline)
+    await this.startRealtimePresence();
 
-    // 3) If I’m logged in, mark me online
-    if (this.meId) {
-      await this.upsertMyPresence(true);
-    }
+    // 3) Smooth floating animation tick
+    this.renderTimer = setInterval(() => this.emit(), this.RENDER_MS);
 
-    // 4) Subscribe to realtime changes in user_presence
-    this.channel = supabase
-      .channel('worldapp-presence-db')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'user_presence' },
-        (payload: any) => {
-          const row = (payload.new || payload.old) as PresenceRow | undefined;
-          if (!row?.user_id) return;
+    // 4) Occasionally refresh totals (new signups)
+    this.refreshProfilesTimer = setInterval(() => {
+      this.fetchAllProfiles().then(() => this.emit()).catch(() => {});
+    }, this.PROFILES_REFRESH_MS);
 
-          if (payload.eventType === 'DELETE') {
-            this.presenceById.delete(row.user_id);
-          } else {
-            this.presenceById.set(row.user_id, row);
-          }
-
-          this.emit();
-        }
-      )
-      .subscribe();
-
-    // 5) Heartbeat keeps me online + updates last_seen
-    if (this.meId) {
-      let tick = 0;
-      this.heartbeatTimer = setInterval(async () => {
-        tick++;
-
-        try {
-          await this.upsertMyPresence(true);
-          opts.onHeartbeat?.(`heartbeat ✓ (${tick})`);
-        } catch (e: any) {
-          opts.onHeartbeat?.(`heartbeat ✗ (${e?.message ?? e})`);
-        }
-      }, this.HEARTBEAT_MS);
-
-      // Best-effort "offline" when tab closes
-      window.addEventListener('beforeunload', this.beforeUnloadHandler);
-      window.addEventListener('visibilitychange', this.visibilityHandler);
-    }
-
-    // first emit
     this.emit();
   }
 
   stop(): void {
-    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
-    this.heartbeatTimer = null;
+    if (this.renderTimer) clearInterval(this.renderTimer);
+    this.renderTimer = null;
+
+    if (this.refreshProfilesTimer) clearInterval(this.refreshProfilesTimer);
+    this.refreshProfilesTimer = null;
 
     try {
       if (this.channel) supabase.removeChannel(this.channel);
@@ -131,9 +115,10 @@ export class PresenceService {
     this.channel = null;
 
     this.onUpdateCb = null;
+    this.onHeartbeatCb = null;
 
-    window.removeEventListener('beforeunload', this.beforeUnloadHandler);
-    window.removeEventListener('visibilitychange', this.visibilityHandler);
+    this.onlineMetaById.clear();
+    this.motions.clear();
   }
 
   async setMyLocation(countryCode: string | null, countryName: string | null, cityName?: string | null) {
@@ -141,18 +126,16 @@ export class PresenceService {
     this.currentCountryName = countryName ?? null;
     this.currentCityName = cityName ?? null;
 
-    if (this.meId) {
-      await this.upsertMyPresence(true);
-      this.emit();
-    }
+    // update my presence payload immediately (so country online counts update instantly)
+    await this.trackMe();
+    this.emit();
   }
 
   // -------------------------
-  // Internal fetch
+  // Profiles (totals)
   // -------------------------
 
   private async fetchAllProfiles(): Promise<void> {
-    // You can tighten this later (pagination, limiting, etc.)
     const { data, error } = await supabase
       .from('profiles')
       .select('user_id,country_code,country_name');
@@ -166,123 +149,242 @@ export class PresenceService {
     }
   }
 
-  private async fetchPresenceSnapshot(): Promise<void> {
-    const { data, error } = await supabase
-      .from('user_presence')
-      .select('user_id,country_code,country_name,city_name,last_seen_at,is_online');
+  // -------------------------
+  // Presence (online)
+  // -------------------------
+
+  private async startRealtimePresence(): Promise<void> {
+    if (!this.meId) {
+      this.onHeartbeatCb?.('presence: no user session');
+      return;
+    }
+
+    // Key = user_id (so each user has one presence identity)
+    this.channel = supabase.channel('worldapp-online', {
+      config: { presence: { key: this.meId } },
+    });
+
+    this.channel
+      .on('presence', { event: 'sync' }, () => {
+        this.rebuildOnlineMapFromState();
+        this.onHeartbeatCb?.('presence: sync ✓');
+        this.emit();
+      })
+      .on('presence', { event: 'join' }, (payload: any) => {
+        // join payload contains newPresences
+        this.rebuildOnlineMapFromState();
+        this.onHeartbeatCb?.('presence: join ✓');
+        this.emit();
+      })
+      .on('presence', { event: 'leave' }, (payload: any) => {
+        this.rebuildOnlineMapFromState();
+        this.onHeartbeatCb?.('presence: leave ✓');
+        this.emit();
+      });
+
+    const { error } = await this.channel.subscribe(async (status: any) => {
+      this.onHeartbeatCb?.(`presence: ${String(status)}`);
+      if (status === 'SUBSCRIBED') {
+        await this.trackMe();
+        this.rebuildOnlineMapFromState();
+        this.emit();
+      }
+    });
 
     if (error) throw error;
+  }
 
-    this.presenceById.clear();
-    for (const row of (data || []) as PresenceRow[]) {
-      if (!row?.user_id) continue;
-      this.presenceById.set(row.user_id, row);
+  private async trackMe(): Promise<void> {
+    if (!this.channel || !this.meId) return;
+
+    // fall back to profile values if not provided yet
+    const myProf = this.profilesById.get(this.meId);
+
+    const meta: PresenceMeta = {
+      user_id: this.meId,
+      country_code: (this.currentCountryCode ?? myProf?.country_code ?? null),
+      country_name: (this.currentCountryName ?? myProf?.country_name ?? null),
+      city_name: (this.currentCityName ?? null),
+      ts: Date.now(),
+    };
+
+    // track overwrites the meta for this key
+    await this.channel.track(meta);
+  }
+
+  private rebuildOnlineMapFromState(): void {
+    if (!this.channel) return;
+
+    // state: { [key: string]: PresenceMeta[] }
+    const state = this.channel.presenceState?.() ?? {};
+    this.onlineMetaById.clear();
+
+    for (const key of Object.keys(state)) {
+      const metas: PresenceMeta[] = Array.isArray(state[key]) ? state[key] : [];
+      if (!metas.length) continue;
+
+      // take the newest meta
+      let best = metas[0];
+      for (const m of metas) {
+        if ((m?.ts ?? 0) > (best?.ts ?? 0)) best = m;
+      }
+
+      const userId = String(best.user_id ?? key);
+      this.onlineMetaById.set(userId, best);
     }
   }
 
-  private async upsertMyPresence(isOnline: boolean): Promise<void> {
-    if (!this.meId) return;
-
-    const payload: Partial<PresenceRow> & { user_id: string } = {
-      user_id: this.meId,
-      is_online: !!isOnline,
-      last_seen_at: new Date().toISOString(),
-      country_code: this.currentCountryCode ?? null,
-      country_name: this.currentCountryName ?? null,
-      city_name: this.currentCityName ?? null,
-    };
-
-    const { error } = await supabase
-      .from('user_presence')
-      .upsert(payload, { onConflict: 'user_id' });
-
-    if (error) throw error;
-
-    // keep local in sync
-    const existing = this.presenceById.get(this.meId);
-    this.presenceById.set(this.meId, {
-      user_id: this.meId,
-      country_code: payload.country_code ?? existing?.country_code ?? null,
-      country_name: payload.country_name ?? existing?.country_name ?? null,
-      city_name: payload.city_name ?? existing?.city_name ?? null,
-      last_seen_at: payload.last_seen_at!,
-      is_online: payload.is_online ?? true,
-    } as PresenceRow);
-  }
-
   // -------------------------
-  // Emit => points + online ids
+  // Emit Snapshot (stats + dots)
   // -------------------------
 
   private emit(): void {
     if (!this.onUpdateCb) return;
 
-    // build a dot per profile (all users)
+    // totals per country from all profiles
+    const byCountry: Record<string, { total: number; online: number }> = {};
+    for (const [, prof] of this.profilesById.entries()) {
+      const cc = String(prof.country_code ?? '').trim().toUpperCase();
+      if (!cc) continue;
+      byCountry[cc] ??= { total: 0, online: 0 };
+      byCountry[cc].total += 1;
+    }
+
+    // online from realtime presence (instant)
+    const onlineIds = Array.from(this.onlineMetaById.keys());
+
+    // dots ONLY for online users
+    const now = Date.now();
     const points: ConnectionPoint[] = [];
-    const onlineIds: string[] = [];
 
-    for (const [userId, prof] of this.profilesById.entries()) {
-      const cc = (prof.country_code || '').trim();
+    for (const userId of onlineIds) {
+      const meta = this.onlineMetaById.get(userId);
+      const prof = this.profilesById.get(userId);
 
-      const center = this.centerForCountryCode(cc);
-      if (!center) continue;
+      const cc = String(meta?.country_code ?? prof?.country_code ?? '').trim().toUpperCase();
+      if (!cc) continue;
 
-      // jitter so multiple users in same country don’t stack perfectly
-      const j = this.jitterForUser(userId, cc);
-      const lat = center.lat + j.lat;
-      const lng = center.lng + j.lng;
+      const country = this.countryForCode(cc);
+      if (!country) continue;
 
-      const baseColor = this.colorForUser(userId);
+      byCountry[cc] ??= { total: 0, online: 0 };
+      byCountry[cc].online += 1;
+
+      const m = this.stepMotion(userId, country, cc, now);
 
       points.push({
         id: userId,
-        lat,
-        lng,
-        color: baseColor,
+        lat: m.lat,
+        lng: m.lng,
+        color: this.DOT_COLOR, // ✅ neon green for all
         radius: 3.5,
       });
+    }
 
-      const pres = this.presenceById.get(userId);
-      if (pres?.is_online) onlineIds.push(userId);
+    // cleanup motions for users who went offline
+    const onlineSet = new Set(onlineIds);
+    for (const [uid] of this.motions.entries()) {
+      if (!onlineSet.has(uid)) this.motions.delete(uid);
     }
 
     this.onUpdateCb({
       points,
       onlineIds,
-      totalUsers: points.length,
+      totalUsers: this.profilesById.size,
       onlineUsers: onlineIds.length,
+      byCountry,
     });
   }
 
-  private centerForCountryCode(code: string): { lat: number; lng: number } | null {
-    if (!code) return null;
+  // -------------------------
+  // Floating / bounded motion
+  // -------------------------
 
-    // your CountriesService sets `code` to ISO_A2 / etc.
-    const c = this.countries.find((x) => (x.code || '').toUpperCase() === code.toUpperCase());
-    if (!c) return null;
+  private stepMotion(userId: string, country: any, cc: string, now: number): Motion {
+    const existing = this.motions.get(userId);
 
-    return { lat: c.center.lat, lng: c.center.lng };
+    const pool: Array<{ lat: number; lng: number }> = Array.isArray(country.pointPool) ? country.pointPool : [];
+    const hasPool = pool.length > 0;
+
+    const contains = (lat: number, lng: number) => {
+      // if CountriesService gave you a precomputed “contains” helper, use it.
+      // otherwise, fallback to “always true” (won’t break, just won’t bound)
+      return typeof country.containsPoint === 'function'
+        ? !!country.containsPoint(lat, lng)
+        : true;
+    };
+
+    const pickStart = (seed: number) => {
+      if (!hasPool) return { lat: country.center?.lat ?? 0, lng: country.center?.lng ?? 0 };
+      const idx = Math.abs(seed) % pool.length;
+      return pool[idx];
+    };
+
+    if (!existing || existing.cc !== cc) {
+      const seed = this.hash(userId + '|' + cc);
+      const start = pickStart(seed);
+
+      const vSeed = this.hash('v|' + userId + '|' + cc);
+      const base = 0.010 + ((vSeed % 1000) / 1000) * 0.020; // small
+      const dirA = ((vSeed >> 0) & 1) ? 1 : -1;
+      const dirB = ((vSeed >> 1) & 1) ? 1 : -1;
+
+      const m: Motion = {
+        cc,
+        lat: start.lat,
+        lng: start.lng,
+        vLat: base * 0.65 * dirA,
+        vLng: base * 1.0 * dirB,
+        lastMs: now,
+      };
+
+      this.motions.set(userId, m);
+      return m;
+    }
+
+    const dt = Math.min(0.25, Math.max(0.016, (now - existing.lastMs) / 1000));
+    existing.lastMs = now;
+
+    // gentle drift curve so it looks alive
+    const wobSeed = this.hash('w|' + userId) % 1000;
+    const wob = Math.sin((now / 700) + wobSeed) * 0.0018;
+
+    let nextLat = existing.lat + (existing.vLat + wob) * dt;
+    let nextLng = existing.lng + (existing.vLng - wob) * dt;
+
+    // keep bounded if we can
+    if (contains(nextLat, nextLng)) {
+      existing.lat = nextLat;
+      existing.lng = nextLng;
+      existing.vLat = existing.vLat + wob * 0.1;
+      existing.vLng = existing.vLng - wob * 0.1;
+      return existing;
+    }
+
+    // bounce off boundary
+    existing.vLat = -existing.vLat;
+    existing.vLng = -existing.vLng;
+
+    nextLat = existing.lat + existing.vLat * dt;
+    nextLng = existing.lng + existing.vLng * dt;
+
+    if (contains(nextLat, nextLng)) {
+      existing.lat = nextLat;
+      existing.lng = nextLng;
+      return existing;
+    }
+
+    // worst-case snap to a valid start point
+    const snap = pickStart(this.hash('snap|' + userId + '|' + cc));
+    existing.lat = snap.lat;
+    existing.lng = snap.lng;
+    return existing;
   }
 
-  private jitterForUser(userId: string, countryCode: string): { lat: number; lng: number } {
-    // stable pseudo-random per user+country
-    const seed = this.hash(userId + '|' + countryCode);
-    const a = (seed % 1000) / 1000; // 0..1
-    const b = ((seed / 1000) % 1000) / 1000;
-
-    // small offsets (degrees) so it looks “floating”
-    const lat = (a - 0.5) * 1.6; // +/- 0.8 deg
-    const lng = (b - 0.5) * 1.6;
-
-    return { lat, lng };
-  }
-
-  private colorForUser(userId: string): string {
-    // mystical cyan base, slightly varied
-    const h = this.hash(userId) % 360;
-    // keep it “blue-ish” range but not identical
-    const hue = 160 + (h % 80); // 160..239
-    return `hsla(${hue}, 90%, 70%, 0.85)`;
+  private countryForCode(code: string): CountryModel | null {
+    const cc = String(code ?? '').trim().toUpperCase();
+    if (!cc) return null;
+    return this.countries.find((x) => String(x.code ?? '').toUpperCase() === cc) || null;
   }
 
   private hash(s: string): number {
@@ -293,21 +395,4 @@ export class PresenceService {
     }
     return Math.abs(h);
   }
-
-  // -------------------------
-  // unload / visibility handlers
-  // -------------------------
-
-  private beforeUnloadHandler = () => {
-    // best-effort: mark offline (may not always run)
-    this.upsertMyPresence(false).catch(() => {});
-  };
-
-  private visibilityHandler = () => {
-    if (document.visibilityState === 'hidden') {
-      this.upsertMyPresence(false).catch(() => {});
-    } else {
-      this.upsertMyPresence(true).catch(() => {});
-    }
-  };
 }

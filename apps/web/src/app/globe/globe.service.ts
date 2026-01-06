@@ -1,16 +1,13 @@
-// globe.service.ts (MapLibre-backed, SAME service name + API)
+
+// MapLibre-backed service (SAME service name + API)
 //
-// ✅ Infinite-looking ocean: world copies ON (continuous to the eye)
+// ✅ Infinite-looking ocean: world copies ON
 // ✅ Fullscreen-safe: forces map.resize() after load
 // ✅ Click/search: centers + zooms (with padding for your topbar)
 // ✅ Labels: exactly one per country (point source from countries[].center)
-// ✅ Connections: floating points = user connections
-//    - base color (original) per connection
-//    - online => neon green using feature-state (instant)
+// ✅ Connections: floating points = user connections (feature-state for online)
 //
-// Requirements:
-//   npm i maplibre-gl
-//   (This file imports maplibre css directly)
+// IMPORTANT: No hover -> NO pill updates. Only click/search triggers selection.
 
 import { Injectable } from '@angular/core';
 import { continentColors, oceanColor } from './palette';
@@ -24,11 +21,11 @@ type CountriesFeature = GeoJSON.Feature<GeoJSON.Geometry, any> & { id?: number }
 
 /** Connection point model (your "floating dots") */
 export type ConnectionPoint = {
-  id: string | number;     // stable unique id (userId, sessionId, etc.)
+  id: string | number;
   lat: number;
   lng: number;
-  color?: string;          // original color (fallback if not provided)
-  radius?: number;         // optional per-user dot size in pixels
+  color?: string;
+  radius?: number;
 };
 
 @Injectable({ providedIn: 'root' })
@@ -47,20 +44,17 @@ export class GlobeService {
   private readonly FILL_LAYER = 'worldapp-fill';
   private readonly LINE_LAYER = 'worldapp-line';
 
-  // Labels are a separate POINT source => exactly 1 label per country
   private readonly LABEL_SOURCE = 'worldapp-country-labels';
   private readonly LABEL_LAYER = 'worldapp-labels';
 
-  // Connections (floating points)
   private readonly CONN_SOURCE = 'worldapp-connections';
   private readonly CONN_LAYER = 'worldapp-connections-layer';
   private cachedConnections: ConnectionPoint[] = [];
 
-  // Neon online color
-  private readonly ONLINE_COLOR = 'rgba(0,255,120,0.98)'; // neon green
+  private readonly ONLINE_COLOR = 'rgba(0,255,120,0.98)';
   private readonly OFFLINE_ALPHA = 0.85;
 
-  // --- Mystical overlay (CSS aura + grain + particles canvas) ---
+  // --- Mystical overlay ---
   private overlayHost: HTMLElement | null = null;
   private auraEl: HTMLDivElement | null = null;
   private grainEl: HTMLDivElement | null = null;
@@ -71,14 +65,12 @@ export class GlobeService {
   private readonly MIN_LABEL_SIZE_PX = 12;
   private readonly MAX_LABEL_SIZE_PX = 18;
 
-  // Padding so “centered” feels centered with your fixed topbar
   private readonly VIEW_PADDING = { top: 90, bottom: 20, left: 20, right: 20 };
 
   init(globeEl: HTMLElement): void {
     const cs = getComputedStyle(globeEl);
     if (cs.position === 'static') globeEl.style.position = 'relative';
 
-    // prevent any white gaps during initial paint / resize
     globeEl.style.background = oceanColor;
 
     const style: any = {
@@ -90,7 +82,7 @@ export class GlobeService {
     const map = new maplibregl.Map({
       container: globeEl,
       style,
-      center: [0, 20], // [lng, lat]
+      center: [0, 20],
       zoom: 1.35,
       minZoom: 1.05,
       maxZoom: 6.2,
@@ -102,35 +94,26 @@ export class GlobeService {
     map.dragRotate.disable();
     map.touchZoomRotate.disableRotation();
 
-    // Infinite-looking ocean (wrap horizontally)
     try { map.setRenderWorldCopies(true); } catch {}
-
-    // extra safety background
     try { (map.getCanvas().parentElement as HTMLElement).style.background = oceanColor; } catch {}
 
-    // Mystic overlay
     this.installMysticOverlay(globeEl);
 
     map.on('load', () => {
       this.map = map;
 
-      // MapLibre sometimes measures container too early on first paint
       requestAnimationFrame(() => map.resize());
       setTimeout(() => map.resize(), 0);
       setTimeout(() => map.resize(), 80);
 
-      // Country interactions
+      // ✅ ONLY click selection (no hover logic)
       map.on('click', this.FILL_LAYER, (e) => this.onCountryClickInternal(e));
       map.on('mouseenter', this.FILL_LAYER, () => (map.getCanvas().style.cursor = 'pointer'));
       map.on('mouseleave', this.FILL_LAYER, () => (map.getCanvas().style.cursor = ''));
 
-      // Restore cached data
       if (this.cachedPayload) this.setDataFast(this.cachedPayload);
-
-      // Restore connections if any were set early
       if (this.cachedConnections.length) this.setConnections(this.cachedConnections);
 
-      // Start overlay animation
       this.startOverlayLoop();
     });
 
@@ -161,7 +144,6 @@ export class GlobeService {
     this.cachedPayload = payload;
     this.countries = payload.countries || [];
 
-    // --- Countries polygons source ---
     const normalized: CountriesFeature[] = (payload.features || []).map((f: any) => {
       const props = (f.properties ??= {});
       const rawId = f.__id ?? props.__id ?? props.id;
@@ -174,22 +156,17 @@ export class GlobeService {
         type: 'Feature',
         geometry: f.geometry,
         properties: props,
-        id: props.__id, // feature-state highlight uses this
+        id: props.__id,
       };
     });
 
     this.features = normalized;
-
-    if (!this.features.length) {
-      console.warn('⚠️ GlobeService(MapLibre): payload.features is empty — nothing to render.');
-    }
 
     const countriesFC: GeoJSON.FeatureCollection = {
       type: 'FeatureCollection',
       features: this.features,
     };
 
-    // --- Labels POINT source (exactly 1 per country) ---
     const uniqueCountries = this.uniqueCountriesById(this.countries);
     const labelsFC: GeoJSON.FeatureCollection = {
       type: 'FeatureCollection',
@@ -209,7 +186,6 @@ export class GlobeService {
 
     const map = this.map;
 
-    // Countries source + layers
     const countriesSrc = map.getSource(this.COUNTRIES_SOURCE) as GeoJSONSource | undefined;
     if (!countriesSrc) {
       map.addSource(this.COUNTRIES_SOURCE, { type: 'geojson', data: countriesFC });
@@ -239,7 +215,6 @@ export class GlobeService {
       countriesSrc.setData(countriesFC);
     }
 
-    // Labels source + layer
     const labelsSrc = map.getSource(this.LABEL_SOURCE) as GeoJSONSource | undefined;
     if (!labelsSrc) {
       map.addSource(this.LABEL_SOURCE, { type: 'geojson', data: labelsFC });
@@ -274,16 +249,11 @@ export class GlobeService {
   }
 
   // -----------------------------
-  // Connections (floating points)
+  // Connections
   // -----------------------------
 
-  /**
-   * Load/update connection points.
-   * These are the “floating dots” representing user connections.
-   */
   setConnections(points: ConnectionPoint[]): void {
     this.cachedConnections = points || [];
-
     if (!this.map) return;
 
     const features: GeoJSON.Feature<GeoJSON.Point, any>[] = (points || [])
@@ -293,10 +263,10 @@ export class GlobeService {
         geometry: { type: 'Point', coordinates: [p.lng, p.lat] },
         properties: {
           id: String(p.id),
-          baseColor: p.color ?? 'rgba(160,220,255,0.85)', // default mystical cyan
-          r: typeof p.radius === 'number' ? p.radius : 3.4, // default dot size
+          baseColor: p.color ?? 'rgba(160,220,255,0.85)',
+          r: typeof p.radius === 'number' ? p.radius : 3.4,
         },
-        id: String(p.id), // feature-state id must match
+        id: String(p.id),
       }));
 
     const fc: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features };
@@ -307,8 +277,6 @@ export class GlobeService {
     if (!src) {
       map.addSource(this.CONN_SOURCE, { type: 'geojson', data: fc });
 
-      // Put connections above countries, below labels (or above labels if you prefer)
-      // We'll put them above the fill/line but below labels:
       const beforeLayer = this.LABEL_LAYER;
 
       map.addLayer(
@@ -317,14 +285,12 @@ export class GlobeService {
           type: 'circle',
           source: this.CONN_SOURCE,
           paint: {
-            // online => neon green, else baseColor
             'circle-color': [
               'case',
               ['boolean', ['feature-state', 'online'], false],
               this.ONLINE_COLOR,
               ['get', 'baseColor'],
             ],
-            // a little glow feel via opacity + stroke
             'circle-opacity': [
               'case',
               ['boolean', ['feature-state', 'online'], false],
@@ -344,7 +310,6 @@ export class GlobeService {
               1.6,
               0.8,
             ],
-            // slight blur-ish vibe (works like soft halo)
             'circle-blur': [
               'case',
               ['boolean', ['feature-state', 'online'], false],
@@ -360,31 +325,20 @@ export class GlobeService {
     }
   }
 
-  /**
-   * Toggle a single connection’s online state (instant neon green).
-   */
   setConnectionOnline(id: string | number, online: boolean): void {
     if (!this.map) return;
     const key = String(id);
-    try {
-      this.map.setFeatureState({ source: this.CONN_SOURCE, id: key }, { online: !!online });
-    } catch {}
+    try { this.map.setFeatureState({ source: this.CONN_SOURCE, id: key }, { online: !!online }); } catch {}
   }
 
-  /**
-   * Bulk online status update.
-   */
   setConnectionsOnline(idsOnline: Array<string | number>): void {
     if (!this.map) return;
     const set = new globalThis.Set<string>((idsOnline || []).map((x) => String(x)));
 
-    // Set state for everyone we know about
     for (const p of this.cachedConnections) {
       const key = String(p.id);
       const online = set.has(key);
-      try {
-        this.map.setFeatureState({ source: this.CONN_SOURCE, id: key }, { online });
-      } catch {}
+      try { this.map.setFeatureState({ source: this.CONN_SOURCE, id: key }, { online }); } catch {}
     }
   }
 
@@ -410,17 +364,13 @@ export class GlobeService {
     if (!this.map) return;
 
     if (this.selectedId != null) {
-      try {
-        this.map.setFeatureState({ source: this.COUNTRIES_SOURCE, id: this.selectedId }, { selected: false });
-      } catch {}
+      try { this.map.setFeatureState({ source: this.COUNTRIES_SOURCE, id: this.selectedId }, { selected: false }); } catch {}
     }
 
     this.selectedId = countryId;
 
     if (countryId != null) {
-      try {
-        this.map.setFeatureState({ source: this.COUNTRIES_SOURCE, id: countryId }, { selected: true });
-      } catch {}
+      try { this.map.setFeatureState({ source: this.COUNTRIES_SOURCE, id: countryId }, { selected: true }); } catch {}
     }
 
     this.bumpAura(true);

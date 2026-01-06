@@ -1,3 +1,4 @@
+// apps/api/src/graphql/modules/countries/countries.resolver.ts
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -13,6 +14,7 @@ type Country = {
   continent: string;
   lat: number;
   lng: number;
+  center: { lat: number; lng: number };
 };
 
 const GEOJSON_PATH = path.join(process.cwd(), 'src', 'data', 'countries50m.geojson');
@@ -135,6 +137,7 @@ function loadCountriesFromGeoJSON(): Country[] {
       continent: pickContinent(props),
       lat: center.lat,
       lng: center.lng,
+      center: { lat: center.lat, lng: center.lng },
     });
   }
 
@@ -147,7 +150,8 @@ function loadCountriesFromGeoJSON(): Country[] {
 
 export const countriesResolvers = {
   Query: {
-    countries: () => loadCountriesFromGeoJSON(),
+    countries: () => ({ countries: loadCountriesFromGeoJSON() }),
+
     countryByIso: (_: any, args: { iso: string }) => {
       const want = normalizeIso(args.iso);
       return loadCountriesFromGeoJSON().find((c) => c.iso === want) || null;
