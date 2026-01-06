@@ -239,6 +239,64 @@ type Panel = 'profile' | 'presence' | 'posts' | null;
     </div>
   `,
   styles: [`
+    /* -----------------------------
+       Premium neon label theme
+       Works if labels are SVG <text> or DOM overlays.
+       If your labels are canvas-drawn, we also call an optional GlobeService hook below.
+    ------------------------------ */
+    :host{
+      --neon: rgba(0,255,209,0.68);         /* subtle */
+      --neon-focus: rgba(0,255,209,0.92);   /* selected/focus */
+      --label-stroke: rgba(0,0,0,0.52);
+      --label-stroke-focus: rgba(0,0,0,0.60);
+      --label-glow: rgba(0,255,209,0.12);
+      --label-glow-focus: rgba(0,255,209,0.20);
+    }
+
+    /* SVG labels (common for D3/Geo maps) */
+    #globe svg text{
+      fill: var(--neon);
+      stroke: var(--label-stroke);
+      stroke-width: 3px;
+      paint-order: stroke fill;
+      font-weight: 800;
+      letter-spacing: .01em;
+      filter: drop-shadow(0 0 6px var(--label-glow));
+    }
+
+    /* If your focused label gets a class (optional) */
+    #globe svg text.is-focus,
+    #globe svg text.focus,
+    #globe svg text.selected{
+      fill: var(--neon-focus);
+      stroke: var(--label-stroke-focus);
+      stroke-width: 4px;
+      filter: drop-shadow(0 0 10px var(--label-glow-focus));
+    }
+
+    /* DOM overlays (just in case your GlobeService uses div labels) */
+    #globe .country-label,
+    #globe .map-label,
+    #globe .label{
+      color: var(--neon) !important;
+      text-shadow:
+        0 1px 0 var(--label-stroke),
+        0 0 8px var(--label-glow);
+      font-weight: 800;
+      letter-spacing: .01em;
+    }
+    #globe .country-label.is-focus,
+    #globe .map-label.is-focus,
+    #globe .label.is-focus{
+      color: var(--neon-focus) !important;
+      text-shadow:
+        0 1px 0 var(--label-stroke-focus),
+        0 0 12px var(--label-glow-focus);
+    }
+
+    /* -----------------------------
+       Your existing styles below
+    ------------------------------ */
     .stats-pill{
       position: fixed;
       left: 16px;
@@ -369,7 +427,6 @@ export class GlobePageComponent implements OnInit, AfterViewInit {
 
   selectedCountry: CountryModel | null = null;
 
-  // ✅ now real values
   totalUsers: number | null = null;
   onlineUsers: number | null = null;
   heartbeatText = '';
@@ -505,11 +562,20 @@ export class GlobePageComponent implements OnInit, AfterViewInit {
 
       this.globeService.init(globeEl);
 
+      // ✅ Optional hook: if your GlobeService supports canvas label styling, feed it here (won't break if absent)
+      (this.globeService as any).setLabelTheme?.({
+        baseFill: 'rgba(0,255,209,0.68)',
+        focusFill: 'rgba(0,255,209,0.92)',
+        baseStroke: 'rgba(0,0,0,0.52)',
+        focusStroke: 'rgba(0,0,0,0.60)',
+        baseGlow: 'rgba(0,255,209,0.12)',
+        focusGlow: 'rgba(0,255,209,0.20)',
+      });
+
       const data = await this.countriesService.loadCountries();
       this.ui.setCountries(data.countries);
       this.globeService.setData(data);
 
-      // ✅ Wire Presence => dots + stats
       try {
         await this.presence.start({
           countries: data.countries,
@@ -543,7 +609,6 @@ export class GlobePageComponent implements OnInit, AfterViewInit {
         });
       }
 
-      // ✅ ONLY on click (no hover)
       this.globeService.onCountryClick((country: CountryModel) => {
         this.zone.run(() => {
           this.selectedCountry = country;
@@ -552,6 +617,9 @@ export class GlobePageComponent implements OnInit, AfterViewInit {
           this.ui.setSelected(country.id);
           this.searchUi.setInputValue(country.name);
           this.searchUi.setClearButtonVisible(true);
+
+          // Optional: if GlobeService uses DOM/SVG labels and supports focus styling
+          (this.globeService as any).setFocusLabel?.(country.id);
 
           this.recomputeLocal();
           this.forceUi();
@@ -576,6 +644,8 @@ export class GlobePageComponent implements OnInit, AfterViewInit {
               900
             );
 
+            (this.globeService as any).setFocusLabel?.(country.id);
+
             this.recomputeLocal();
             this.forceUi();
           });
@@ -590,6 +660,9 @@ export class GlobePageComponent implements OnInit, AfterViewInit {
 
             this.localTotal = null;
             this.localOnline = null;
+
+            // Optional: clear focus
+            (this.globeService as any).setFocusLabel?.(null);
 
             this.forceUi();
           });
@@ -827,7 +900,6 @@ export class GlobePageComponent implements OnInit, AfterViewInit {
 
       if (this.nodeAvatarUrl) this.preloadImage(this.nodeAvatarUrl);
 
-      // ✅ update presence location too (if code/name exists)
       try {
         await this.presence.setMyLocation(
           this.profile?.country_code ?? null,

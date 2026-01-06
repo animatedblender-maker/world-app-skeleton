@@ -25,24 +25,23 @@ type PresenceMeta = {
   ts?: number; // epoch ms
 };
 
-type Motion = {
-  cc: string;
-  lat: number;
-  lng: number;
-  vLat: number;
-  vLng: number;
-  lastMs: number;
-};
+function normalizeLng180(lng: number): number {
+  if (!Number.isFinite(lng)) return 0;
+  let x = lng;
+  while (x > 180) x -= 360;
+  while (x < -180) x += 360;
+  return x;
+}
 
 @Injectable({ providedIn: 'root' })
 export class PresenceService {
   private countries: CountryModel[] = [];
-
   private channel: any = null;
 
   private profilesById = new Map<string, ProfileRow>();
-  private onlineMetaById = new Map<string, PresenceMeta>(); // from realtime presence
-  private motions = new Map<string, Motion>();
+
+  // ✅ online truth comes from realtime presence state
+  private onlineMetaById = new Map<string, PresenceMeta>();
 
   private onUpdateCb: ((snap: PresenceSnapshot) => void) | null = null;
   private onHeartbeatCb: ((txt: string) => void) | null = null;
@@ -53,16 +52,19 @@ export class PresenceService {
   private currentCountryName: string | null = null;
   private currentCityName: string | null = null;
 
-  // Smooth motion render (not for “online correctness”, only for floating)
+  // UI updates
   private renderTimer: any = null;
-  private readonly RENDER_MS = 60;
+  private readonly RENDER_MS = 250;
 
-  // Refresh totals occasionally (new registrations). Not required for online correctness.
+  // totals refresh (new registrations)
   private refreshProfilesTimer: any = null;
   private readonly PROFILES_REFRESH_MS = 120_000;
 
-  // ✅ all dots neon green
-  private readonly DOT_COLOR = 'rgba(0,255,180,0.95)';
+  // ✅ roaming speed
+  private readonly SEG_MS = 22_000; // <- SLOW roaming (change to 35_000 if you want slower)
+
+  // ✅ neon green for everyone
+  private readonly DOT_COLOR = 'rgba(0,255,209,0.92)';
 
   async start(opts: {
     countries: CountryModel[];
@@ -85,16 +87,16 @@ export class PresenceService {
     this.currentCountryName = opts.meCountryName ?? null;
     this.currentCityName = opts.meCityName ?? null;
 
-    // 1) Load profiles once (for totals + fallback country mapping)
+    // totals
     await this.fetchAllProfiles();
 
-    // 2) Start realtime Presence channel (instant online/offline)
+    // online (accurate)
     await this.startRealtimePresence();
 
-    // 3) Smooth floating animation tick
+    // periodic UI refresh
     this.renderTimer = setInterval(() => this.emit(), this.RENDER_MS);
 
-    // 4) Occasionally refresh totals (new signups)
+    // periodic totals refresh
     this.refreshProfilesTimer = setInterval(() => {
       this.fetchAllProfiles().then(() => this.emit()).catch(() => {});
     }, this.PROFILES_REFRESH_MS);
@@ -118,7 +120,6 @@ export class PresenceService {
     this.onHeartbeatCb = null;
 
     this.onlineMetaById.clear();
-    this.motions.clear();
   }
 
   async setMyLocation(countryCode: string | null, countryName: string | null, cityName?: string | null) {
@@ -126,15 +127,13 @@ export class PresenceService {
     this.currentCountryName = countryName ?? null;
     this.currentCityName = cityName ?? null;
 
-    // update my presence payload immediately (so country online counts update instantly)
     await this.trackMe();
     this.emit();
   }
 
   // -------------------------
-  // Profiles (totals)
+  // Totals
   // -------------------------
-
   private async fetchAllProfiles(): Promise<void> {
     const { data, error } = await supabase
       .from('profiles')
@@ -150,16 +149,14 @@ export class PresenceService {
   }
 
   // -------------------------
-  // Presence (online)
+  // Online (Realtime Presence)
   // -------------------------
-
   private async startRealtimePresence(): Promise<void> {
     if (!this.meId) {
       this.onHeartbeatCb?.('presence: no user session');
       return;
     }
 
-    // Key = user_id (so each user has one presence identity)
     this.channel = supabase.channel('worldapp-online', {
       config: { presence: { key: this.meId } },
     });
@@ -170,13 +167,12 @@ export class PresenceService {
         this.onHeartbeatCb?.('presence: sync ✓');
         this.emit();
       })
-      .on('presence', { event: 'join' }, (payload: any) => {
-        // join payload contains newPresences
+      .on('presence', { event: 'join' }, () => {
         this.rebuildOnlineMapFromState();
         this.onHeartbeatCb?.('presence: join ✓');
         this.emit();
       })
-      .on('presence', { event: 'leave' }, (payload: any) => {
+      .on('presence', { event: 'leave' }, () => {
         this.rebuildOnlineMapFromState();
         this.onHeartbeatCb?.('presence: leave ✓');
         this.emit();
@@ -197,25 +193,22 @@ export class PresenceService {
   private async trackMe(): Promise<void> {
     if (!this.channel || !this.meId) return;
 
-    // fall back to profile values if not provided yet
     const myProf = this.profilesById.get(this.meId);
 
     const meta: PresenceMeta = {
       user_id: this.meId,
-      country_code: (this.currentCountryCode ?? myProf?.country_code ?? null),
-      country_name: (this.currentCountryName ?? myProf?.country_name ?? null),
-      city_name: (this.currentCityName ?? null),
+      country_code: this.currentCountryCode ?? myProf?.country_code ?? null,
+      country_name: this.currentCountryName ?? myProf?.country_name ?? null,
+      city_name: this.currentCityName ?? null,
       ts: Date.now(),
     };
 
-    // track overwrites the meta for this key
     await this.channel.track(meta);
   }
 
   private rebuildOnlineMapFromState(): void {
     if (!this.channel) return;
 
-    // state: { [key: string]: PresenceMeta[] }
     const state = this.channel.presenceState?.() ?? {};
     this.onlineMetaById.clear();
 
@@ -223,7 +216,6 @@ export class PresenceService {
       const metas: PresenceMeta[] = Array.isArray(state[key]) ? state[key] : [];
       if (!metas.length) continue;
 
-      // take the newest meta
       let best = metas[0];
       for (const m of metas) {
         if ((m?.ts ?? 0) > (best?.ts ?? 0)) best = m;
@@ -235,14 +227,14 @@ export class PresenceService {
   }
 
   // -------------------------
-  // Emit Snapshot (stats + dots)
+  // Emit snapshot
   // -------------------------
-
   private emit(): void {
     if (!this.onUpdateCb) return;
 
-    // totals per country from all profiles
     const byCountry: Record<string, { total: number; online: number }> = {};
+
+    // totals from profiles
     for (const [, prof] of this.profilesById.entries()) {
       const cc = String(prof.country_code ?? '').trim().toUpperCase();
       if (!cc) continue;
@@ -250,10 +242,9 @@ export class PresenceService {
       byCountry[cc].total += 1;
     }
 
-    // online from realtime presence (instant)
     const onlineIds = Array.from(this.onlineMetaById.keys());
 
-    // dots ONLY for online users
+    // dots for online only
     const now = Date.now();
     const points: ConnectionPoint[] = [];
 
@@ -270,21 +261,15 @@ export class PresenceService {
       byCountry[cc] ??= { total: 0, online: 0 };
       byCountry[cc].online += 1;
 
-      const m = this.stepMotion(userId, country, cc, now);
+      const pos = this.roamingPoint(country, userId, now);
 
       points.push({
         id: userId,
-        lat: m.lat,
-        lng: m.lng,
-        color: this.DOT_COLOR, // ✅ neon green for all
-        radius: 3.5,
+        lat: pos.lat,
+        lng: pos.lng,
+        color: this.DOT_COLOR,
+        radius: 3.6,
       });
-    }
-
-    // cleanup motions for users who went offline
-    const onlineSet = new Set(onlineIds);
-    for (const [uid] of this.motions.entries()) {
-      if (!onlineSet.has(uid)) this.motions.delete(uid);
     }
 
     this.onUpdateCb({
@@ -296,95 +281,34 @@ export class PresenceService {
     });
   }
 
-  // -------------------------
-  // Floating / bounded motion
-  // -------------------------
-
-  private stepMotion(userId: string, country: any, cc: string, now: number): Motion {
-    const existing = this.motions.get(userId);
-
-    const pool: Array<{ lat: number; lng: number }> = Array.isArray(country.pointPool) ? country.pointPool : [];
-    const hasPool = pool.length > 0;
-
-    const contains = (lat: number, lng: number) => {
-      // if CountriesService gave you a precomputed “contains” helper, use it.
-      // otherwise, fallback to “always true” (won’t break, just won’t bound)
-      return typeof country.containsPoint === 'function'
-        ? !!country.containsPoint(lat, lng)
-        : true;
-    };
-
-    const pickStart = (seed: number) => {
-      if (!hasPool) return { lat: country.center?.lat ?? 0, lng: country.center?.lng ?? 0 };
-      const idx = Math.abs(seed) % pool.length;
-      return pool[idx];
-    };
-
-    if (!existing || existing.cc !== cc) {
-      const seed = this.hash(userId + '|' + cc);
-      const start = pickStart(seed);
-
-      const vSeed = this.hash('v|' + userId + '|' + cc);
-      const base = 0.010 + ((vSeed % 1000) / 1000) * 0.020; // small
-      const dirA = ((vSeed >> 0) & 1) ? 1 : -1;
-      const dirB = ((vSeed >> 1) & 1) ? 1 : -1;
-
-      const m: Motion = {
-        cc,
-        lat: start.lat,
-        lng: start.lng,
-        vLat: base * 0.65 * dirA,
-        vLng: base * 1.0 * dirB,
-        lastMs: now,
-      };
-
-      this.motions.set(userId, m);
-      return m;
-    }
-
-    const dt = Math.min(0.25, Math.max(0.016, (now - existing.lastMs) / 1000));
-    existing.lastMs = now;
-
-    // gentle drift curve so it looks alive
-    const wobSeed = this.hash('w|' + userId) % 1000;
-    const wob = Math.sin((now / 700) + wobSeed) * 0.0018;
-
-    let nextLat = existing.lat + (existing.vLat + wob) * dt;
-    let nextLng = existing.lng + (existing.vLng - wob) * dt;
-
-    // keep bounded if we can
-    if (contains(nextLat, nextLng)) {
-      existing.lat = nextLat;
-      existing.lng = nextLng;
-      existing.vLat = existing.vLat + wob * 0.1;
-      existing.vLng = existing.vLng - wob * 0.1;
-      return existing;
-    }
-
-    // bounce off boundary
-    existing.vLat = -existing.vLat;
-    existing.vLng = -existing.vLng;
-
-    nextLat = existing.lat + existing.vLat * dt;
-    nextLng = existing.lng + existing.vLng * dt;
-
-    if (contains(nextLat, nextLng)) {
-      existing.lat = nextLat;
-      existing.lng = nextLng;
-      return existing;
-    }
-
-    // worst-case snap to a valid start point
-    const snap = pickStart(this.hash('snap|' + userId + '|' + cc));
-    existing.lat = snap.lat;
-    existing.lng = snap.lng;
-    return existing;
-  }
-
   private countryForCode(code: string): CountryModel | null {
     const cc = String(code ?? '').trim().toUpperCase();
     if (!cc) return null;
     return this.countries.find((x) => String(x.code ?? '').toUpperCase() === cc) || null;
+  }
+
+  // ✅ slow roaming but still bounded by pointPool
+  private roamingPoint(country: CountryModel, userId: string, nowMs: number): { lat: number; lng: number } {
+    const pool = country.pointPool || [];
+    if (!pool.length) return { lat: country.center.lat, lng: normalizeLng180(country.center.lng) };
+
+    const seed = this.hash(userId + '|' + (country.code ?? country.name));
+
+    const tSeg = nowMs / this.SEG_MS;
+    const seg = Math.floor(tSeg);
+    const t = tSeg - seg;
+
+    const i0 = Math.abs(seed + seg) % pool.length;
+    const i1 = Math.abs(seed + seg + 1) % pool.length;
+
+    const a = pool[i0];
+    const b = pool[i1];
+
+    const tt = t * t * (3 - 2 * t); // smoothstep
+    const lat = a.lat + (b.lat - a.lat) * tt;
+    const lng = normalizeLng180(a.lng + (b.lng - a.lng) * tt);
+
+    return { lat, lng };
   }
 
   private hash(s: string): number {

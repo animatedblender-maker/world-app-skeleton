@@ -19,38 +19,60 @@ function normalizeIso2(v: any): string | null {
 
 function simpleCentroid(geometry: any): LatLng | null {
   const points: Array<[number, number]> = [];
+
   const pushRing = (ring: any) => {
     if (!Array.isArray(ring)) return;
-    for (const pt of ring) if (Array.isArray(pt) && pt.length >= 2) points.push([pt[0], pt[1]]);
+    for (const pt of ring) {
+      if (Array.isArray(pt) && pt.length >= 2) points.push([pt[0], pt[1]]);
+    }
   };
 
   const type = geometry?.type;
   const coords = geometry?.coordinates;
   if (!type || !Array.isArray(coords)) return null;
 
-  if (type === 'Polygon') for (const ring of coords) pushRing(ring);
-  else if (type === 'MultiPolygon') for (const poly of coords) for (const ring of poly || []) pushRing(ring);
+  if (type === 'Polygon') {
+    for (const ring of coords) pushRing(ring);
+  } else if (type === 'MultiPolygon') {
+    for (const poly of coords) {
+      if (!Array.isArray(poly)) continue;
+      for (const ring of poly) pushRing(ring);
+    }
+  }
 
   if (!points.length) return null;
 
-  let sx = 0, sy = 0;
-  for (const [lng, lat] of points) { sx += lng; sy += lat; }
+  let sx = 0;
+  let sy = 0;
+  for (const [lng, lat] of points) {
+    sx += lng;
+    sy += lat;
+  }
   return { lng: sx / points.length, lat: sy / points.length };
 }
 
 function bboxOfGeometry(geometry: any): { minLat: number; maxLat: number; minLng: number; maxLng: number } | null {
   const points: Array<[number, number]> = [];
+
   const pushRing = (ring: any) => {
     if (!Array.isArray(ring)) return;
-    for (const pt of ring) if (Array.isArray(pt) && pt.length >= 2) points.push([pt[0], pt[1]]);
+    for (const pt of ring) {
+      if (Array.isArray(pt) && pt.length >= 2) points.push([pt[0], pt[1]]);
+    }
   };
 
   const type = geometry?.type;
   const coords = geometry?.coordinates;
   if (!type || !Array.isArray(coords)) return null;
 
-  if (type === 'Polygon') for (const ring of coords) pushRing(ring);
-  else if (type === 'MultiPolygon') for (const poly of coords) for (const ring of poly || []) pushRing(ring);
+  if (type === 'Polygon') {
+    for (const ring of coords) pushRing(ring);
+  } else if (type === 'MultiPolygon') {
+    for (const poly of coords) {
+      if (!Array.isArray(poly)) continue;
+      for (const ring of poly) pushRing(ring);
+    }
+  }
 
   if (!points.length) return null;
 
@@ -61,34 +83,128 @@ function bboxOfGeometry(geometry: any): { minLat: number; maxLat: number; minLng
     if (lat < minLat) minLat = lat;
     if (lat > maxLat) maxLat = lat;
   }
+
   return { minLat, maxLat, minLng, maxLng };
 }
 
-// Point in polygon (ray casting) for one ring
-function pipRing(lat: number, lng: number, ring: Array<[number, number]>): boolean {
-  // ring points are [lng, lat]
+function computeLabelSizeFromBBox(dLat: number, dLng: number): number {
+  const areaish = Math.max(0.1, dLat * dLng);
+  const size = 0.25 + Math.log10(areaish + 1) * 0.25;
+  return Math.max(0.22, Math.min(1.1, size));
+}
+
+function computeAltitudeFromBBox(dLat: number, dLng: number): number {
+  const span = Math.max(dLat, dLng);
+  const alt = 0.7 + Math.min(2.2, span / 22);
+  return Math.max(0.9, Math.min(2.25, alt));
+}
+
+// ---------- Point in polygon (with holes) ----------
+function pointInRing(lng: number, lat: number, ring: any[]): boolean {
+  // Ray casting algorithm; ring = [ [lng,lat], ... ]
   let inside = false;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
     const xi = ring[i][0], yi = ring[i][1];
     const xj = ring[j][0], yj = ring[j][1];
 
     const intersect =
-      (yi > lat) !== (yj > lat) &&
-      lng < ((xj - xi) * (lat - yi)) / (yj - yi + 1e-12) + xi;
+      yi > lat !== yj > lat &&
+      lng < ((xj - xi) * (lat - yi)) / ((yj - yi) || 1e-12) + xi;
 
     if (intersect) inside = !inside;
   }
   return inside;
 }
 
-// Polygon with holes: inside outer AND not inside any hole
-function pipPolygon(lat: number, lng: number, rings: Array<Array<[number, number]>>): boolean {
-  if (!rings.length) return false;
-  if (!pipRing(lat, lng, rings[0])) return false;
-  for (let i = 1; i < rings.length; i++) {
-    if (pipRing(lat, lng, rings[i])) return false;
+function pointInPolygonCoords(lng: number, lat: number, polyRings: any[]): boolean {
+  if (!Array.isArray(polyRings) || !polyRings.length) return false;
+
+  const outer = polyRings[0];
+  if (!Array.isArray(outer) || outer.length < 3) return false;
+
+  if (!pointInRing(lng, lat, outer)) return false;
+
+  // holes
+  for (let i = 1; i < polyRings.length; i++) {
+    const hole = polyRings[i];
+    if (Array.isArray(hole) && hole.length >= 3) {
+      if (pointInRing(lng, lat, hole)) return false;
+    }
   }
   return true;
+}
+
+function geometryContains(geometry: any, lng: number, lat: number): boolean {
+  const type = geometry?.type;
+  const coords = geometry?.coordinates;
+  if (!type || !Array.isArray(coords)) return false;
+
+  if (type === 'Polygon') {
+    return pointInPolygonCoords(lng, lat, coords);
+  }
+  if (type === 'MultiPolygon') {
+    for (const poly of coords) {
+      if (pointInPolygonCoords(lng, lat, poly)) return true;
+    }
+    return false;
+  }
+  return false;
+}
+
+// deterministic RNG from seed
+function mulberry32(seed: number) {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function hashStr(s: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return Math.abs(h);
+}
+
+function buildPointPool(feature: any, count: number): LatLng[] {
+  const geometry = feature?.geometry;
+  const bbox = bboxOfGeometry(geometry);
+  const center = simpleCentroid(geometry) || { lat: 0, lng: 0 };
+  if (!bbox) return [center];
+
+  const { minLat, maxLat, minLng, maxLng } = bbox;
+  const dLat = Math.max(0.1, maxLat - minLat);
+  const dLng = Math.max(0.1, maxLng - minLng);
+
+  // Heuristic: fewer points for tiny countries, more for large ones
+  const target = Math.max(40, Math.min(count, Math.floor(50 + (dLat * dLng) * 1.5)));
+
+  const seed = hashStr((feature?.properties?.ISO_A2 ?? feature?.properties?.NAME ?? '') + '|' + feature?.__id);
+  const rnd = mulberry32(seed);
+
+  const pool: LatLng[] = [];
+  const maxTries = target * 50;
+
+  let tries = 0;
+  while (pool.length < target && tries < maxTries) {
+    tries++;
+    const lng = minLng + rnd() * (maxLng - minLng);
+    const lat = minLat + rnd() * (maxLat - minLat);
+
+    if (geometryContains(geometry, lng, lat)) {
+      pool.push({ lat, lng });
+    }
+  }
+
+  // Hard fallback (never return empty)
+  if (!pool.length) pool.push(center);
+  return pool;
 }
 
 export type CountryModel = {
@@ -98,16 +214,8 @@ export type CountryModel = {
   center: LatLng;
   labelSize: number;
   flyAltitude: number;
-  code: string | null;
-
-  // ✅ added for bounded points
-  pointPool: LatLng[];
-  __pip?: {
-    type: 'Polygon' | 'MultiPolygon';
-    // For Polygon => [rings]
-    // For MultiPolygon => [[rings], [rings], ...]
-    poly: Array<Array<[number, number]>> | Array<Array<Array<[number, number]>>>;
-  };
+  code: string | null; // ISO2 only (DE/US/EG) or null
+  pointPool: LatLng[]; // ✅ guaranteed inside borders (incl holes)
 };
 
 export type CountriesLoadResult = {
@@ -133,107 +241,45 @@ export class CountriesService {
         const name = p.NAME || p.ADMIN || 'Unknown';
 
         const center = simpleCentroid(f.geometry) || { lat: 0, lng: 0 };
-        const bbox = bboxOfGeometry(f.geometry) || { minLat: -10, maxLat: 10, minLng: -10, maxLng: 10 };
+        const bbox = bboxOfGeometry(f.geometry);
+        const dLat = bbox ? Math.max(0.1, bbox.maxLat - bbox.minLat) : 10;
+        const dLng = bbox ? Math.max(0.1, bbox.maxLng - bbox.minLng) : 10;
 
         const code = normalizeIso2(p.ISO_A2 ?? p.iso_a2 ?? p.ISO2);
 
-        const model: CountryModel = {
+        // ✅ build strict in-bounds pool
+        const pointPool = buildPointPool(f, 240);
+
+        return {
           id: f.__id,
           name,
           norm: normalizeName(name),
           center,
-          labelSize: 0.5,
-          flyAltitude: 1.2,
+          labelSize: computeLabelSizeFromBBox(dLat, dLng),
+          flyAltitude: computeAltitudeFromBBox(dLat, dLng),
           code,
-          pointPool: [],
-          __pip: this.buildPipIndex(f.geometry),
+          pointPool,
         };
-
-        model.pointPool = this.buildPointPool(model, bbox, 420); // ✅ pool size
-
-        return model;
       })
       .sort((a, b) => a.name.localeCompare(b.name));
 
     return { features, countries };
   }
 
-  // ✅ used by PresenceService
-  pickPoolPoint(country: CountryModel, seed: number): LatLng {
-    const pool = country.pointPool || [];
-    if (!pool.length) return { lat: country.center.lat, lng: country.center.lng };
-    const idx = Math.abs(seed) % pool.length;
-    return pool[idx];
-  }
-
-  // ✅ used by PresenceService
-  containsPoint(country: CountryModel, lat: number, lng: number): boolean {
-    const idx = country.__pip;
-    if (!idx) return false;
-
-    if (idx.type === 'Polygon') {
-      return pipPolygon(lat, lng, idx.poly as Array<Array<[number, number]>>);
-    } else {
-      const polys = idx.poly as Array<Array<Array<[number, number]>>>;
-      for (const rings of polys) {
-        if (pipPolygon(lat, lng, rings)) return true;
-      }
-      return false;
-    }
-  }
-
-  private buildPipIndex(geometry: any): CountryModel['__pip'] {
-    const type = geometry?.type;
-    const coords = geometry?.coordinates;
-
-    if (type === 'Polygon' && Array.isArray(coords)) {
-      const rings = coords.map((ring: any) => (Array.isArray(ring) ? ring.map((p: any) => [p[0], p[1]] as [number, number]) : []));
-      return { type: 'Polygon', poly: rings };
-    }
-
-    if (type === 'MultiPolygon' && Array.isArray(coords)) {
-      const polys = coords.map((poly: any) =>
-        (poly || []).map((ring: any) =>
-          (ring || []).map((p: any) => [p[0], p[1]] as [number, number])
-        )
-      );
-      return { type: 'MultiPolygon', poly: polys };
-    }
-
-    return undefined;
-  }
-
-  private buildPointPool(country: CountryModel, bbox: { minLat: number; maxLat: number; minLng: number; maxLng: number }, target = 300): LatLng[] {
-    const out: LatLng[] = [];
-    const maxTries = target * 40;
-
-    let tries = 0;
-    while (out.length < target && tries < maxTries) {
-      tries++;
-
-      // random point in bbox
-      const lat = bbox.minLat + Math.random() * (bbox.maxLat - bbox.minLat);
-      const lng = bbox.minLng + Math.random() * (bbox.maxLng - bbox.minLng);
-
-      if (this.containsPoint(country, lat, lng)) out.push({ lat, lng });
-    }
-
-    // fallback if a tiny island country
-    if (!out.length) out.push({ lat: country.center.lat, lng: country.center.lng });
-
-    return out;
-  }
-
   private async fetchCountriesGeoJson(): Promise<any> {
-    // IMPORTANT:
-    // In your Angular.json you only copy from "public" to build root.
-    // So the runtime URL is "/countries50m.geojson" (NOT /assets/...)
-    const tryUrls = ['/countries50m.geojson', '/countries.geojson'];
+    // ✅ since your angular.json serves /public as web root
+    // put the file in: public/countries50m.geojson
+    const tryUrls = [
+      '/countries50m.geojson',          // ✅ correct for /public
+      '/public/countries50m.geojson',   // fallback
+      '/assets/countries50m.geojson',   // fallback if you moved it
+      '/assets/countries.geojson',      // fallback
+    ];
 
     let lastErr: any = null;
     for (const url of tryUrls) {
       try {
-        const r = await fetch(url, { cache: 'force-cache' });
+        const r = await fetch(url);
         if (!r.ok) throw new Error(`${url} HTTP ${r.status}`);
         return await r.json();
       } catch (e) {
