@@ -1,11 +1,11 @@
-
 // MapLibre-backed service (SAME service name + API)
 //
 // ✅ Infinite-looking ocean: world copies ON
 // ✅ Fullscreen-safe: forces map.resize() after load
-// ✅ Click/search: centers + zooms (with padding for your topbar)
+// ✅ Click/search: centers + zooms (with padding control)
 // ✅ Labels: exactly one per country (point source from countries[].center)
 // ✅ Connections: floating points = user connections (feature-state for online)
+// ✅ Focus mode: solo country + connection filter by country code
 //
 // IMPORTANT: No hover -> NO pill updates. Only click/search triggers selection.
 
@@ -13,7 +13,11 @@ import { Injectable } from '@angular/core';
 import { continentColors, oceanColor } from './palette';
 import type { CountryModel } from '../data/countries.service';
 
-import maplibregl, { Map as MLMap, GeoJSONSource, MapMouseEvent } from 'maplibre-gl';
+import maplibregl, {
+  Map as MLMap,
+  GeoJSONSource,
+  MapMouseEvent,
+} from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 type CountriesPayload = { features: any[]; countries: CountryModel[] };
@@ -26,6 +30,10 @@ export type ConnectionPoint = {
   lng: number;
   color?: string;
   radius?: number;
+
+  // optional (PresenceService can send it; we also infer some common keys)
+  countryCode?: string | null; // ISO2
+  cc?: string | null;
 };
 
 @Injectable({ providedIn: 'root' })
@@ -54,6 +62,10 @@ export class GlobeService {
   private readonly ONLINE_COLOR = 'rgba(0,255,120,0.98)';
   private readonly OFFLINE_ALPHA = 0.85;
 
+  // --- Focus helpers ---
+  private soloCountryId: number | null = null;
+  private connCountryCode: string | null = null;
+
   // --- Mystical overlay ---
   private overlayHost: HTMLElement | null = null;
   private auraEl: HTMLDivElement | null = null;
@@ -65,7 +77,9 @@ export class GlobeService {
   private readonly MIN_LABEL_SIZE_PX = 12;
   private readonly MAX_LABEL_SIZE_PX = 18;
 
-  private readonly VIEW_PADDING = { top: 90, bottom: 20, left: 20, right: 20 };
+  // ✅ padding is dynamic (we will bias camera in focus mode)
+  private defaultPadding = { top: 90, bottom: 20, left: 20, right: 20 };
+  private viewPadding = { ...this.defaultPadding };
 
   init(globeEl: HTMLElement): void {
     const cs = getComputedStyle(globeEl);
@@ -76,7 +90,9 @@ export class GlobeService {
     const style: any = {
       version: 8,
       sources: {},
-      layers: [{ id: 'bg', type: 'background', paint: { 'background-color': oceanColor } }],
+      layers: [
+        { id: 'bg', type: 'background', paint: { 'background-color': oceanColor } },
+      ],
     };
 
     const map = new maplibregl.Map({
@@ -94,8 +110,12 @@ export class GlobeService {
     map.dragRotate.disable();
     map.touchZoomRotate.disableRotation();
 
-    try { map.setRenderWorldCopies(true); } catch {}
-    try { (map.getCanvas().parentElement as HTMLElement).style.background = oceanColor; } catch {}
+    try {
+      map.setRenderWorldCopies(true);
+    } catch {}
+    try {
+      (map.getCanvas().parentElement as HTMLElement).style.background = oceanColor;
+    } catch {}
 
     this.installMysticOverlay(globeEl);
 
@@ -118,14 +138,80 @@ export class GlobeService {
     });
 
     window.addEventListener('resize', () => {
-      try { map.resize(); } catch {}
+      try {
+        map.resize();
+      } catch {}
       this.resizeParticles();
     });
+  }
+
+  /** Force resize (useful after layout changes) */
+  resize(): void {
+    try {
+      this.map?.resize();
+    } catch {}
   }
 
   onCountryClick(cb: (country: CountryModel) => void) {
     this.countryClickCb = cb;
   }
+
+  // -----------------------------
+  // Camera padding control
+  // -----------------------------
+
+  setViewPadding(pad: Partial<{ top: number; bottom: number; left: number; right: number }>) {
+    this.viewPadding = {
+      top: pad.top ?? this.viewPadding.top,
+      bottom: pad.bottom ?? this.viewPadding.bottom,
+      left: pad.left ?? this.viewPadding.left,
+      right: pad.right ?? this.viewPadding.right,
+    };
+  }
+
+  resetViewPadding(): void {
+    this.viewPadding = { ...this.defaultPadding };
+  }
+
+  // -----------------------------
+  // Solo country / connections filters
+  // -----------------------------
+
+  /** Show only one country polygon + its border, keep ocean infinite. */
+  setSoloCountry(countryId: number | null): void {
+    this.soloCountryId = countryId;
+
+    if (!this.map) return;
+
+    try {
+      if (countryId == null) {
+        this.map.setFilter(this.FILL_LAYER, null as any);
+        this.map.setFilter(this.LINE_LAYER, null as any);
+      } else {
+        const f = ['==', ['get', '__id'], countryId] as any;
+        this.map.setFilter(this.FILL_LAYER, f);
+        this.map.setFilter(this.LINE_LAYER, f);
+      }
+    } catch {}
+  }
+
+  /** Filter connection dots to only the selected country (so they don't float in the ocean). */
+  setConnectionsCountryFilter(countryCode: string | null): void {
+    this.connCountryCode = countryCode ? String(countryCode).toUpperCase() : null;
+    if (!this.map) return;
+
+    try {
+      if (!this.connCountryCode) {
+        this.map.setFilter(this.CONN_LAYER, null as any);
+      } else {
+        this.map.setFilter(this.CONN_LAYER, ['==', ['get', 'cc'], this.connCountryCode] as any);
+      }
+    } catch {}
+  }
+
+  // -----------------------------
+  // Data / layers
+  // -----------------------------
 
   setData(payload: CountriesPayload): void {
     this.setDataFast(payload);
@@ -246,6 +332,10 @@ export class GlobeService {
 
     this.selectedId = null;
     this.bumpAura();
+
+    // re-apply filters if needed
+    this.setSoloCountry(this.soloCountryId);
+    this.setConnectionsCountryFilter(this.connCountryCode);
   }
 
   // -----------------------------
@@ -258,16 +348,28 @@ export class GlobeService {
 
     const features: GeoJSON.Feature<GeoJSON.Point, any>[] = (points || [])
       .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng))
-      .map((p) => ({
-        type: 'Feature',
-        geometry: { type: 'Point', coordinates: [p.lng, p.lat] },
-        properties: {
+      .map((p) => {
+        const ccRaw =
+          (p as any).countryCode ??
+          (p as any).cc ??
+          (p as any).country_code ??
+          (p as any).country ??
+          null;
+
+        const cc = ccRaw ? String(ccRaw).toUpperCase() : null;
+
+        return {
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [p.lng, p.lat] },
+          properties: {
+            id: String(p.id),
+            cc, // ✅ used for filtering in focus mode
+            baseColor: p.color ?? 'rgba(160,220,255,0.85)',
+            r: typeof p.radius === 'number' ? p.radius : 3.4,
+          },
           id: String(p.id),
-          baseColor: p.color ?? 'rgba(160,220,255,0.85)',
-          r: typeof p.radius === 'number' ? p.radius : 3.4,
-        },
-        id: String(p.id),
-      }));
+        };
+      });
 
     const fc: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features };
 
@@ -323,12 +425,17 @@ export class GlobeService {
     } else {
       src.setData(fc);
     }
+
+    // ✅ ensure current focus filter is applied after refreshing data
+    this.setConnectionsCountryFilter(this.connCountryCode);
   }
 
   setConnectionOnline(id: string | number, online: boolean): void {
     if (!this.map) return;
     const key = String(id);
-    try { this.map.setFeatureState({ source: this.CONN_SOURCE, id: key }, { online: !!online }); } catch {}
+    try {
+      this.map.setFeatureState({ source: this.CONN_SOURCE, id: key }, { online: !!online });
+    } catch {}
   }
 
   setConnectionsOnline(idsOnline: Array<string | number>): void {
@@ -338,7 +445,9 @@ export class GlobeService {
     for (const p of this.cachedConnections) {
       const key = String(p.id);
       const online = set.has(key);
-      try { this.map.setFeatureState({ source: this.CONN_SOURCE, id: key }, { online }); } catch {}
+      try {
+        this.map.setFeatureState({ source: this.CONN_SOURCE, id: key }, { online });
+      } catch {}
     }
   }
 
@@ -348,12 +457,16 @@ export class GlobeService {
 
   showAllLabels(): void {
     if (!this.map) return;
-    try { this.map.setFilter(this.LABEL_LAYER, null as any); } catch {}
+    try {
+      this.map.setFilter(this.LABEL_LAYER, null as any);
+    } catch {}
   }
 
   showFocusLabel(countryId: number): void {
     if (!this.map) return;
-    try { this.map.setFilter(this.LABEL_LAYER, ['==', ['get', 'id'], countryId] as any); } catch {}
+    try {
+      this.map.setFilter(this.LABEL_LAYER, ['==', ['get', 'id'], countryId] as any);
+    } catch {}
   }
 
   // -----------------------------
@@ -364,13 +477,17 @@ export class GlobeService {
     if (!this.map) return;
 
     if (this.selectedId != null) {
-      try { this.map.setFeatureState({ source: this.COUNTRIES_SOURCE, id: this.selectedId }, { selected: false }); } catch {}
+      try {
+        this.map.setFeatureState({ source: this.COUNTRIES_SOURCE, id: this.selectedId }, { selected: false });
+      } catch {}
     }
 
     this.selectedId = countryId;
 
     if (countryId != null) {
-      try { this.map.setFeatureState({ source: this.COUNTRIES_SOURCE, id: countryId }, { selected: true }); } catch {}
+      try {
+        this.map.setFeatureState({ source: this.COUNTRIES_SOURCE, id: countryId }, { selected: true });
+      } catch {}
     }
 
     this.bumpAura(true);
@@ -386,7 +503,7 @@ export class GlobeService {
       zoom,
       duration: ms,
       essential: true,
-      padding: this.VIEW_PADDING,
+      padding: this.viewPadding,
     });
 
     this.bumpAura();
@@ -395,6 +512,10 @@ export class GlobeService {
   resetView(): void {
     this.selectCountry(null);
     this.showAllLabels();
+    this.setSoloCountry(null);
+    this.setConnectionsCountryFilter(null);
+    this.resetViewPadding();
+
     if (!this.map) return;
 
     this.map.flyTo({
@@ -402,7 +523,7 @@ export class GlobeService {
       zoom: 1.35,
       duration: 800,
       essential: true,
-      padding: this.VIEW_PADDING,
+      padding: this.viewPadding,
     });
 
     this.bumpAura();
@@ -421,9 +542,9 @@ export class GlobeService {
     if (!found) return;
 
     this.selectCountry(found.id);
-    this.flyTo(found.center.lat, found.center.lng, found.flyAltitude ?? 1.0, 900);
     this.showFocusLabel(found.id);
 
+    this.flyTo(found.center.lat, found.center.lng, found.flyAltitude ?? 1.0, 900);
     this.countryClickCb?.(found);
   }
 
