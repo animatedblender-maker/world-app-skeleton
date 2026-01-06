@@ -75,6 +75,42 @@ mutation UpdateProfile($input: UpdateProfileInput!) {
 }
 `;
 
+const PROFILE_BY_USERNAME = `
+query ProfileByUsername($username: String!) {
+  profileByUsername(username: $username) {
+    user_id
+    email
+    display_name
+    username
+    avatar_url
+    country_name
+    country_code
+    city_name
+    bio
+    created_at
+    updated_at
+  }
+}
+`;
+
+const PROFILE_BY_ID = `
+query ProfileById($user_id: ID!) {
+  profileById(user_id: $user_id) {
+    user_id
+    email
+    display_name
+    username
+    avatar_url
+    country_name
+    country_code
+    city_name
+    bio
+    created_at
+    updated_at
+  }
+}
+`;
+
 @Injectable({ providedIn: 'root' })
 export class ProfileService {
   constructor(private gql: GqlService) {}
@@ -97,6 +133,18 @@ export class ProfileService {
     bio?: string | null;
   }) {
     return this.gql.request<{ updateProfile: Profile }>(UPDATE_PROFILE, { input });
+  }
+
+  async profileByUsername(username: string) {
+    return this.gql.request<{ profileByUsername: Profile | null }>(PROFILE_BY_USERNAME, {
+      username,
+    });
+  }
+
+  async profileById(userId: string) {
+    return this.gql.request<{ profileById: Profile | null }>(PROFILE_BY_ID, {
+      user_id: userId,
+    });
   }
 
   isComplete(p: Profile | null) {

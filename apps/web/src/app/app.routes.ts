@@ -14,21 +14,37 @@ export const routes: Routes = [
       import('./pages/profile-setup.page').then((m) => m.ProfileSetupPageComponent),
   },
   {
+    path: 'reset-password',
+    loadComponent: () =>
+      import('./pages/reset-password.page').then((m) => m.ResetPasswordPageComponent),
+  },
+
+  // ✅ NEW: /me must be BEFORE '**'
+  {
+    path: 'me',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pages/me.page').then((m) => m.MePageComponent),
+  },
+
+  {
     path: '',
     canActivate: [authGuard],
     loadComponent: () =>
       import('./pages/globe.page').then((m) => m.GlobePageComponent),
   },
   {
-  path: 'reset-password',
-  loadComponent: () =>
-    import('./pages/reset-password.page').then(m => m.ResetPasswordPageComponent),
-},
-  {
     path: 'globe',
     canActivate: [authGuard],
     loadComponent: () =>
       import('./pages/globe.page').then((m) => m.GlobePageComponent),
   },
+  {
+    path: 'user/:slug',
+    loadComponent: () =>
+      import('./pages/profile.page').then((m) => m.ProfilePageComponent),
+  },
+
+  // ✅ wildcard ALWAYS last
   { path: '**', redirectTo: '' },
 ];

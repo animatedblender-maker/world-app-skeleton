@@ -26,9 +26,25 @@ type UpdateProfileInput = {
 
 export class ProfilesService {
   async getMeProfile(userId: string): Promise<ProfileRow | null> {
+    return await this.getProfileById(userId);
+  }
+
+  async getProfileById(userId: string): Promise<ProfileRow | null> {
     const { rows } = await pool.query(
       `select * from public.profiles where user_id = $1 limit 1`,
       [userId]
+    );
+    return (rows[0] as ProfileRow) ?? null;
+  }
+
+  async getProfileByUsername(username: string): Promise<ProfileRow | null> {
+    const { rows } = await pool.query(
+      `
+      select * from public.profiles
+      where lower(username) = lower($1)
+      limit 1
+      `,
+      [username]
     );
     return (rows[0] as ProfileRow) ?? null;
   }

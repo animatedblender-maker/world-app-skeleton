@@ -36,6 +36,16 @@ export const profilesResolvers = {
       const u = requireAuth(ctx);
       return await svc().getMeProfile(u.id);
     },
+
+    profileById: async (_: any, args: { user_id: string }) => {
+      if (!args?.user_id) return null;
+      return await svc().getProfileById(args.user_id);
+    },
+
+    profileByUsername: async (_: any, args: { username: string }) => {
+      if (!args?.username) return null;
+      return await svc().getProfileByUsername(args.username);
+    },
   },
 
   Mutation: {
