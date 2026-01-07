@@ -26,7 +26,11 @@ if (Test-Path $worktreePath) {
   Remove-Item -Recurse -Force $worktreePath
 }
 
-$addArgs = @('--checkout', $worktreePath, $worktreeBranch)
+if (-not (git show-ref --verify --quiet refs/heads/$worktreeBranch)) {
+  git branch $worktreeBranch
+}
+
+$addArgs = @($worktreePath, $worktreeBranch)
 git worktree add @addArgs 2>$null
 if ($LASTEXITCODE -ne 0) {
   git worktree remove $worktreePath -f -ErrorAction SilentlyContinue
