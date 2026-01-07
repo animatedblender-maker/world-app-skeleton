@@ -17,7 +17,11 @@ type Country = {
   center: { lat: number; lng: number };
 };
 
-const GEOJSON_PATH = path.join(process.cwd(), 'src', 'data', 'countries50m.geojson');
+const GEOJSON_PATHS = [
+  path.join(process.cwd(), 'src', 'data', 'countries50m.geojson'),
+  path.resolve(__dirname, '../../../../../..', 'apps', 'web', 'public', 'countries50m.geojson'),
+  path.resolve(process.cwd(), '..', 'web', 'public', 'countries50m.geojson'),
+];
 
 let cachedCountries: Country[] | null = null;
 
@@ -103,15 +107,15 @@ function centroidOfGeometry(geometry: any): { lat: number; lng: number } | null 
 function loadCountriesFromGeoJSON(): Country[] {
   if (cachedCountries) return cachedCountries;
 
-  if (!fs.existsSync(GEOJSON_PATH)) {
+  const pathToUse = GEOJSON_PATHS.find((candidate) => fs.existsSync(candidate));
+  if (!pathToUse) {
     throw new Error(
-      `GeoJSON not found at ${GEOJSON_PATH}
-→ copy apps/web/public/countries50m.geojson
-→ to   apps/api/src/data/countries50m.geojson`
+      `GeoJSON not found; checked:
+${GEOJSON_PATHS.join('\n')}`
     );
   }
 
-  const raw = fs.readFileSync(GEOJSON_PATH, 'utf-8');
+  const raw = fs.readFileSync(pathToUse, 'utf-8');
   const json = JSON.parse(raw) as GeoJSON;
   const features = Array.isArray(json.features) ? json.features : [];
 
