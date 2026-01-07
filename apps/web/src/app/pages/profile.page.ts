@@ -14,9 +14,14 @@ import { ProfileService, type Profile } from '../core/services/profile.service';
 import { AuthService } from '../core/services/auth.service';
 import { MediaService } from '../core/services/media.service';
 import { PostsService } from '../core/services/posts.service';
-import { PostEventsService } from '../core/services/post-events.service';
+import {
+  PostEventsService,
+  type PostUpdateEvent,
+  type PostDeleteEvent,
+} from '../core/services/post-events.service';
 import { CountryPost } from '../core/models/post.model';
 import { FollowService } from '../core/services/follow.service';
+import { LocationService } from '../core/services/location.service';
 
 @Component({
   selector: 'app-profile-page',
@@ -300,14 +305,71 @@ import { FollowService } from '../core/services/follow.service';
                   <div class="author-info">
                     <div class="author-name">{{ post.author?.display_name || post.author?.username || 'You' }}</div>
                     <div class="author-meta">
-                      @{{ post.author?.username || profile.username || 'you' }} · {{ formatDate(post.created_at) }}
+                      @{{ post.author?.username || 'user' }} · {{ post.created_at | date: 'mediumDate' }}
+                      <span class="post-visibility" *ngIf="post.visibility !== 'public' && post.visibility !== 'country'">
+                        · {{ visibilityLabel(post.visibility) }}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <div
+                  class="post-menu"
+                  *ngIf="editingPostId !== post.id && isOwner"
+                  (click)="$event.stopPropagation()"
+                >
+                  <span class="post-visibility-icon">{{ visibilityIcon(post.visibility) }}</span>
+                  <button
+                    class="post-menu-trigger"
+                    type="button"
+                    (click)="togglePostMenu(post.id, $event)"
+                    aria-label="Post options"
+                  >
+                    ⋯
+                  </button>
+                  <div class="post-menu-dropdown" *ngIf="openPostMenuId === post.id">
+                    <button class="menu-item" type="button" (click)="startPostEdit(post)">Edit</button>
+                    <button class="menu-item" type="button" (click)="startPostEdit(post)">Privacy</button>
+                    <button class="menu-item danger" type="button" (click)="requestPostDelete(post)">Delete</button>
+                    <div class="menu-confirm" *ngIf="confirmDeletePostId === post.id">
+                      <div class="menu-confirm-title">Delete this post?</div>
+                      <div class="menu-confirm-actions">
+                        <button class="menu-item ghost" type="button" (click)="cancelPostDelete()">Cancel</button>
+                        <button class="menu-item danger" type="button" (click)="deletePost(post)">Delete</button>
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
-              <div class="post-body">
+              <div class="post-body" *ngIf="editingPostId !== post.id">
                 <div class="post-title" *ngIf="post.title">{{ post.title }}</div>
                 <p>{{ post.body }}</p>
+              </div>
+              <div class="post-edit" *ngIf="editingPostId === post.id">
+                <input
+                  class="post-edit-title"
+                  placeholder="Edit title"
+                  [(ngModel)]="editPostTitle"
+                />
+                <textarea
+                  class="post-edit-body"
+                  rows="3"
+                  maxlength="5000"
+                  [(ngModel)]="editPostBody"
+                ></textarea>
+                <div class="post-edit-footer">
+                  <select class="post-edit-visibility" [(ngModel)]="editPostVisibility">
+                    <option value="public">Public</option>
+                    <option value="followers">Only followers</option>
+                    <option value="private">Only me</option>
+                  </select>
+                  <div class="post-edit-actions">
+                    <button class="pill-link ghost" type="button" (click)="cancelPostEdit()" [disabled]="postEditBusy">Cancel</button>
+                    <button class="pill-link" type="button" (click)="savePostEdit(post)" [disabled]="postEditBusy">
+                      {{ postEditBusy ? 'Saving…' : 'Save' }}
+                    </button>
+                  </div>
+                </div>
+                <div class="post-edit-error" *ngIf="postEditError">{{ postEditError }}</div>
               </div>
             </article>
           </div>
@@ -939,6 +1001,7 @@ import { FollowService } from '../core/services/follow.service';
       width: 700px;
     }
     .post-card{
+      position:relative;
       border-radius:20px;
       border:1px solid rgba(0,0,0,0.06);
       background:rgba(255,255,255,0.98);
@@ -947,11 +1010,15 @@ import { FollowService } from '../core/services/follow.service';
     }
     .post-author{
       margin-bottom:10px;
+      display:flex;
+      align-items:flex-start;
+      gap:12px;
     }
     .author-core{
       display:flex;
       align-items:center;
       gap:12px;
+      flex:1;
     }
     .author-avatar{
       width:48px;
@@ -1001,6 +1068,120 @@ import { FollowService } from '../core/services/follow.service';
       opacity:0.85;
       white-space:pre-line;
     }
+    .post-visibility{
+      font-weight:800;
+      font-size:10px;
+      letter-spacing:0.16em;
+      text-transform:uppercase;
+      opacity:0.7;
+    }
+    .post-edit{
+      margin-top:12px;
+      display:grid;
+      gap:10px;
+    }
+    .post-edit-title,
+    .post-edit-body,
+    .post-edit-visibility{
+      width:100%;
+      border-radius:14px;
+      border:1px solid rgba(0,0,0,0.08);
+      background:rgba(245,247,250,0.9);
+      padding:10px 12px;
+      font-family:inherit;
+      font-size:13px;
+      color:rgba(10,12,18,0.9);
+    }
+    .post-edit-body{ min-height:90px; resize:vertical; }
+    .post-edit-footer{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+      flex-wrap:wrap;
+    }
+    .post-edit-actions{ display:flex; gap:10px; align-items:center; }
+    .post-edit-error{ font-size:12px; font-weight:700; color:#ff6b81; letter-spacing:0.08em; }
+    .post-menu{
+      margin-left:auto;
+      display:flex;
+      align-items:center;
+      gap:6px;
+      position:relative;
+    }
+    .post-visibility-icon{
+      font-size:14px;
+      line-height:1;
+      opacity:0.7;
+    }
+    .post-menu-trigger{
+      width:28px;
+      height:28px;
+      border-radius:999px;
+      border:1px solid rgba(0,0,0,0.12);
+      background:rgba(255,255,255,0.9);
+      color:rgba(10,12,18,0.7);
+      font-size:18px;
+      line-height:1;
+      cursor:pointer;
+    }
+    .post-menu-trigger:focus{
+      outline:2px solid rgba(10,12,18,0.18);
+      outline-offset:2px;
+    }
+    .post-menu-dropdown{
+      position:absolute;
+      top:34px;
+      right:0;
+      min-width:170px;
+      background:rgba(255,255,255,0.98);
+      border:1px solid rgba(0,0,0,0.08);
+      border-radius:14px;
+      box-shadow:0 18px 60px rgba(0,0,0,0.12);
+      padding:8px;
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+      z-index:5;
+    }
+    .menu-item{
+      border:0;
+      background:transparent;
+      text-align:left;
+      padding:6px 8px;
+      border-radius:10px;
+      font-size:12px;
+      font-weight:700;
+      letter-spacing:0.08em;
+      text-transform:uppercase;
+      color:rgba(10,12,18,0.7);
+      cursor:pointer;
+    }
+    .menu-item:hover{
+      background:rgba(10,12,18,0.06);
+    }
+    .menu-item.danger{ color:#c33; }
+    .menu-item.ghost{ color:rgba(10,12,18,0.55); }
+    .menu-confirm{
+      margin-top:6px;
+      padding-top:6px;
+      border-top:1px solid rgba(0,0,0,0.08);
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+    }
+    .menu-confirm-title{
+      font-size:11px;
+      font-weight:700;
+      letter-spacing:0.08em;
+      text-transform:uppercase;
+      color:rgba(10,12,18,0.6);
+    }
+    .menu-confirm-actions{
+      display:flex;
+      justify-content:flex-end;
+      gap:8px;
+    }
   `],
 })
 export class ProfilePageComponent implements OnInit, OnDestroy {
@@ -1010,6 +1191,12 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
   private sub?: Subscription;
   private postEventsCreatedSub?: Subscription;
   private postEventsInsertSub?: Subscription;
+  private postEventsUpdatedSub?: Subscription;
+  private postEventsUpdateSub?: Subscription;
+  private postEventsDeleteSub?: Subscription;
+  private locationRefreshTimer: number | null = null;
+  private locationRefreshInFlight = false;
+  private readonly LOCATION_REFRESH_MS = 10 * 60_000;
 
   shareUrl = '';
   shareCopied = false;
@@ -1031,6 +1218,14 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
   postError = '';
   postFeedback = '';
   profileComposerOpen = false;
+  editingPostId: string | null = null;
+  editPostTitle = '';
+  editPostBody = '';
+  editPostVisibility: 'public' | 'followers' | 'private' = 'public';
+  postEditBusy = false;
+  postEditError = '';
+  openPostMenuId: string | null = null;
+  confirmDeletePostId: string | null = null;
 
   profilePosts: CountryPost[] = [];
   loadingProfilePosts = false;
@@ -1089,6 +1284,7 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     private posts: PostsService,
     private postEvents: PostEventsService,
     private follows: FollowService,
+    private location: LocationService,
     private zone: NgZone,
     private cdr: ChangeDetectorRef
   ) {}
@@ -1100,6 +1296,15 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     this.postEventsInsertSub = this.postEvents.insert$.subscribe((event) => {
       if (!this.profile || event.author_id !== this.profile.user_id) return;
       void this.loadProfilePosts(this.profile.user_id);
+    });
+    this.postEventsUpdatedSub = this.postEvents.updatedPost$.subscribe((post) => {
+      this.zone.run(() => this.handleProfilePostUpdated(post));
+    });
+    this.postEventsUpdateSub = this.postEvents.update$.subscribe((event) => {
+      this.zone.run(() => this.handleProfilePostUpdateEvent(event));
+    });
+    this.postEventsDeleteSub = this.postEvents.delete$.subscribe((event) => {
+      this.zone.run(() => this.handleProfilePostDeleteEvent(event));
     });
     const user = await this.auth.getUser();
     this.meId = user?.id ?? null;
@@ -1114,6 +1319,10 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     this.sub?.unsubscribe();
     this.postEventsCreatedSub?.unsubscribe();
     this.postEventsInsertSub?.unsubscribe();
+    this.postEventsUpdatedSub?.unsubscribe();
+    this.postEventsUpdateSub?.unsubscribe();
+    this.postEventsDeleteSub?.unsubscribe();
+    this.stopLocationRefresh();
     if (this.shareTimer) clearTimeout(this.shareTimer);
     if (this.profileEditCloseTimer) clearTimeout(this.profileEditCloseTimer);
   }
@@ -1206,6 +1415,8 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     this.shareCopied = false;
     this.shareError = '';
     this.isOwner = !!this.meId && profile.user_id === this.meId;
+    this.stopLocationRefresh();
+    if (this.isOwner) this.startLocationRefresh();
     this.resetFollowState();
     if (!this.canPostFromProfile) this.profileComposerOpen = false;
     void this.loadFollowMeta(profile);
@@ -1220,6 +1431,59 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     this.followMetaLoading = false;
     this.followProfileId = null;
     this.followBusy = false;
+  }
+
+  private startLocationRefresh(): void {
+    if (this.locationRefreshTimer || !this.isOwner || !this.profile) return;
+    void this.refreshLocationIfMoved();
+    this.locationRefreshTimer = window.setInterval(() => {
+      void this.refreshLocationIfMoved();
+    }, this.LOCATION_REFRESH_MS);
+  }
+
+  private stopLocationRefresh(): void {
+    if (!this.locationRefreshTimer) return;
+    window.clearInterval(this.locationRefreshTimer);
+    this.locationRefreshTimer = null;
+  }
+
+  private async refreshLocationIfMoved(): Promise<void> {
+    if (this.locationRefreshInFlight || !this.isOwner || !this.profile) return;
+    this.locationRefreshInFlight = true;
+
+    try {
+      const detected = await this.location.detectViaGpsThenServer(9000);
+      if (!detected) return;
+
+      const nextCode = String(detected.countryCode ?? '').trim().toUpperCase();
+      const nextName = String(detected.countryName ?? '').trim();
+      const nextCity = String(detected.cityName ?? '').trim();
+
+      const currentCode = String((this.profile as any)?.country_code ?? '').trim().toUpperCase();
+      const currentName = String(this.profile.country_name ?? '').trim();
+      const currentCity = String((this.profile as any)?.city_name ?? '').trim();
+
+      const updates: { country_code?: string; country_name?: string; city_name?: string } = {};
+
+      if (nextCode && nextCode !== currentCode) updates.country_code = nextCode;
+      if (nextName && nextName.toLowerCase() !== currentName.toLowerCase()) {
+        updates.country_name = nextName;
+      }
+      if (nextCity && nextCity.toLowerCase() !== currentCity.toLowerCase()) {
+        updates.city_name = nextCity;
+      }
+
+      if (!Object.keys(updates).length) return;
+
+      const res = await this.profiles.updateProfile(updates);
+      this.profile = res.updateProfile;
+      if (!this.canPostFromProfile) this.profileComposerOpen = false;
+      this.forceUi();
+    } catch (e) {
+      console.warn('location refresh failed', e);
+    } finally {
+      this.locationRefreshInFlight = false;
+    }
   }
 
   private async loadFollowMeta(profile: Profile): Promise<void> {
@@ -1709,6 +1973,161 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     this.forceUi();
   }
 
+  private handleProfilePostUpdated(post: CountryPost): void {
+    if (!this.profile || post.author_id !== this.profile.user_id) return;
+    if (!this.isOwner) {
+      void this.loadProfilePosts(this.profile.user_id);
+      return;
+    }
+    this.applyProfilePostUpdate(post);
+  }
+
+  private handleProfilePostUpdateEvent(event: PostUpdateEvent): void {
+    if (!this.profile || event.author_id !== this.profile.user_id) return;
+    void this.loadProfilePosts(this.profile.user_id);
+  }
+
+  private handleProfilePostDeleteEvent(event: PostDeleteEvent): void {
+    if (!this.profile || event.author_id !== this.profile.user_id) return;
+    const next = this.profilePosts.filter((post) => post.id !== event.id);
+    if (next.length !== this.profilePosts.length) {
+      this.profilePosts = next;
+      if (this.editingPostId === event.id) this.cancelPostEdit();
+      if (this.openPostMenuId === event.id) this.openPostMenuId = null;
+      if (this.confirmDeletePostId === event.id) this.confirmDeletePostId = null;
+      this.forceUi();
+    }
+  }
+
+  private applyProfilePostUpdate(post: CountryPost): void {
+    const index = this.profilePosts.findIndex((existing) => existing.id === post.id);
+    if (index >= 0) {
+      const next = [...this.profilePosts];
+      next[index] = post;
+      this.profilePosts = this.sortPostsDesc(next);
+      this.forceUi();
+      return;
+    }
+    this.profilePosts = this.sortPostsDesc([post, ...this.profilePosts]);
+    this.forceUi();
+  }
+
+  visibilityLabel(value: string): string {
+    const normalized = String(value || '').toLowerCase();
+    if (normalized === 'private') return 'Only me';
+    if (normalized === 'followers') return 'Followers';
+    return 'Public';
+  }
+
+  visibilityIcon(value: string): string {
+    const normalized = String(value || '').toLowerCase();
+    if (normalized === 'private') return '🔒';
+    if (normalized === 'followers') return '👥';
+    return '👁️';
+  }
+
+  startPostEdit(post: CountryPost): void {
+    if (!this.isOwner) return;
+    this.openPostMenuId = null;
+    this.confirmDeletePostId = null;
+    this.editingPostId = post.id;
+    this.editPostTitle = post.title ?? '';
+    this.editPostBody = post.body ?? '';
+    const visibility = post.visibility === 'country' ? 'public' : post.visibility;
+    this.editPostVisibility =
+      visibility === 'followers' || visibility === 'private' ? visibility : 'public';
+    this.postEditError = '';
+    this.forceUi();
+  }
+
+  cancelPostEdit(): void {
+    this.editingPostId = null;
+    this.editPostTitle = '';
+    this.editPostBody = '';
+    this.editPostVisibility = 'public';
+    this.postEditError = '';
+    this.openPostMenuId = null;
+    this.confirmDeletePostId = null;
+    this.forceUi();
+  }
+
+  async savePostEdit(post: CountryPost): Promise<void> {
+    if (!this.isOwner || this.postEditBusy) return;
+    const body = this.editPostBody.trim();
+    if (!body) {
+      this.postEditError = 'Body is required.';
+      this.forceUi();
+      return;
+    }
+
+    this.postEditBusy = true;
+    this.postEditError = '';
+    this.forceUi();
+
+    try {
+      const updated = await this.posts.updatePost(post.id, {
+        title: this.editPostTitle.trim() || null,
+        body,
+        visibility: this.editPostVisibility,
+      });
+      this.applyProfilePostUpdate(updated);
+      this.cancelPostEdit();
+    } catch (e: any) {
+      this.postEditError = e?.message ?? String(e);
+    } finally {
+      this.postEditBusy = false;
+      this.forceUi();
+    }
+  }
+
+  togglePostMenu(postId: string, event?: Event): void {
+    event?.stopPropagation();
+    if (this.openPostMenuId === postId) {
+      this.openPostMenuId = null;
+      this.confirmDeletePostId = null;
+    } else {
+      this.openPostMenuId = postId;
+      this.confirmDeletePostId = null;
+    }
+    this.forceUi();
+  }
+
+  requestPostDelete(post: CountryPost): void {
+    if (!this.isOwner) return;
+    this.confirmDeletePostId = post.id;
+    this.forceUi();
+  }
+
+  cancelPostDelete(): void {
+    this.confirmDeletePostId = null;
+    this.forceUi();
+  }
+
+  async deletePost(post: CountryPost): Promise<void> {
+    if (!this.isOwner || this.postEditBusy) return;
+    this.openPostMenuId = null;
+    this.confirmDeletePostId = null;
+    this.postEditBusy = true;
+    this.postEditError = '';
+    this.forceUi();
+
+    try {
+      const deleted = await this.posts.deletePost(post.id, {
+        country_code: post.country_code ?? null,
+        author_id: post.author_id ?? null,
+      });
+      if (deleted) {
+        this.profilePosts = this.profilePosts.filter((existing) => existing.id !== post.id);
+        if (this.editingPostId === post.id) this.cancelPostEdit();
+      }
+    } catch (e: any) {
+      this.postEditError = e?.message ?? String(e);
+    } finally {
+      this.postEditBusy = false;
+      this.forceUi();
+    }
+  }
+
   private sortPostsDesc(posts: CountryPost[]): CountryPost[] {
     return [...posts].sort((a, b) => {
       return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
@@ -1759,3 +2178,6 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     this.zone.run(() => this.cdr.detectChanges());
   }
 }
+
+
+

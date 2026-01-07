@@ -34,9 +34,9 @@ export class FollowsService {
     return rows.length > 0;
   }
 
-  async follow(followerId: string, targetId: string): Promise<void> {
-    if (followerId === targetId) return;
-    await pool.query(
+  async follow(followerId: string, targetId: string): Promise<boolean> {
+    if (followerId === targetId) return false;
+    const { rowCount } = await pool.query(
       `
       insert into public.user_follows (follower_id, following_id)
       values ($1, $2)
@@ -44,6 +44,7 @@ export class FollowsService {
       `,
       [followerId, targetId]
     );
+    return (rowCount ?? 0) > 0;
   }
 
   async unfollow(followerId: string, targetId: string): Promise<void> {

@@ -12,13 +12,21 @@ import { AuthService } from '../core/services/auth.service';
 import { GraphqlService } from '../core/services/graphql.service';
 import { MediaService } from '../core/services/media.service';
 import { ProfileService, type Profile } from '../core/services/profile.service';
+import { LocationService } from '../core/services/location.service';
 import { PresenceService, type PresenceSnapshot } from '../core/services/presence.service';
 import { PostsService } from '../core/services/posts.service';
 import { FollowService } from '../core/services/follow.service';
-import { PostEventsService, type PostInsertEvent } from '../core/services/post-events.service';
+import { NotificationsService, type NotificationItem } from '../core/services/notifications.service';
+import { NotificationEventsService } from '../core/services/notification-events.service';
+import {
+  PostEventsService,
+  type PostInsertEvent,
+  type PostUpdateEvent,
+  type PostDeleteEvent,
+} from '../core/services/post-events.service';
 import { CountryPost } from '../core/models/post.model';
 
-type Panel = 'presence' | 'posts' | null;
+type Panel = 'presence' | 'posts' | 'notifications' | null;
 type CountryTab = 'posts' | 'stats' | 'media';
 type SearchTab = 'people' | 'travel';
 type RouteState = {
@@ -259,6 +267,9 @@ type RouteState = {
                           <div class="author-name">{{ post.author?.display_name || post.author?.username || 'Member' }}</div>
                           <div class="author-meta">
                             @{{ post.author?.username || 'user' }} · {{ post.created_at | date: 'mediumDate' }}
+                            <span class="post-visibility" *ngIf="post.visibility !== 'public' && post.visibility !== 'country'">
+                              · {{ visibilityLabel(post.visibility) }}
+                            </span>
                           </div>
                         </div>
                       </div>
@@ -272,10 +283,64 @@ type RouteState = {
                       >
                         {{ isFollowingAuthor(post.author_id) ? 'Following' : 'Follow' }}
                       </button>
+                      <div
+                        class="post-menu"
+                        *ngIf="editingPostId !== post.id && isAuthorSelf(post.author_id)"
+                        (click)="$event.stopPropagation()"
+                      >
+                        <span class="post-visibility-icon">{{ visibilityIcon(post.visibility) }}</span>
+                        <button
+                          class="post-menu-trigger"
+                          type="button"
+                          (click)="togglePostMenu(post.id, $event)"
+                          aria-label="Post options"
+                        >
+                          ⋯
+                        </button>
+                        <div class="post-menu-dropdown" *ngIf="openPostMenuId === post.id">
+                          <button class="menu-item" type="button" (click)="startPostEdit(post)">Edit</button>
+                          <button class="menu-item" type="button" (click)="startPostEdit(post)">Privacy</button>
+                          <button class="menu-item danger" type="button" (click)="requestPostDelete(post)">Delete</button>
+                          <div class="menu-confirm" *ngIf="confirmDeletePostId === post.id">
+                            <div class="menu-confirm-title">Delete this post?</div>
+                            <div class="menu-confirm-actions">
+                              <button class="menu-item ghost" type="button" (click)="cancelPostDelete()">Cancel</button>
+                              <button class="menu-item danger" type="button" (click)="deletePost(post)">Delete</button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                    <div class="post-body">
+                    <div class="post-body" *ngIf="editingPostId !== post.id">
                       <div class="post-title" *ngIf="post.title">{{ post.title }}</div>
                       <p>{{ post.body }}</p>
+                    </div>
+                    <div class="post-edit" *ngIf="editingPostId === post.id">
+                      <input
+                        class="post-edit-title"
+                        placeholder="Edit title"
+                        [(ngModel)]="editPostTitle"
+                      />
+                      <textarea
+                        class="post-edit-body"
+                        rows="3"
+                        maxlength="5000"
+                        [(ngModel)]="editPostBody"
+                      ></textarea>
+                      <div class="post-edit-footer">
+                        <select class="post-edit-visibility" [(ngModel)]="editPostVisibility">
+                          <option value="public">Public</option>
+                          <option value="followers">Only followers</option>
+                          <option value="private">Only me</option>
+                        </select>
+                        <div class="post-edit-actions">
+                          <button class="pill-link ghost" type="button" (click)="cancelPostEdit()" [disabled]="postEditBusy">Cancel</button>
+                          <button class="pill-link" type="button" (click)="savePostEdit(post)" [disabled]="postEditBusy">
+                            {{ postEditBusy ? 'Saving…' : 'Save' }}
+                          </button>
+                        </div>
+                      </div>
+                      <div class="post-edit-error" *ngIf="postEditError">{{ postEditError }}</div>
                     </div>
                   </div>
                 </div>
@@ -335,6 +400,11 @@ type RouteState = {
 
     <!-- ✅ Avatar orb overlay fixed (restored) -->
     <div class="user-node">
+      <button class="node-bell" type="button" (click)="openPanel('notifications')" [class.pulse]="bellPulse">
+        🔔
+        <span class="bell-badge" *ngIf="notificationsUnreadCount" [class.pulse]="bellPulse">{{ notificationsUnreadCount }}</span>
+      </button>
+
       <button class="node-orb" type="button" (click)="toggleMenu()" [attr.aria-expanded]="menuOpen">
         <ng-container *ngIf="nodeAvatarUrl; else initialsTpl">
           <img
@@ -392,7 +462,13 @@ type RouteState = {
       <div class="panel" (click)="$event.stopPropagation()">
         <div class="panel-head">
           <div class="panel-title">
-            {{ panel === 'presence' ? 'MY PRESENCE' : 'MY POSTS' }}
+            {{
+              panel === 'presence'
+                ? 'MY PRESENCE'
+                : panel === 'posts'
+                  ? 'MY POSTS'
+                  : 'NOTIFICATIONS'
+            }}
           </div>
           <button class="x" type="button" (click)="closePanel()">×</button>
         </div>
@@ -410,6 +486,48 @@ type RouteState = {
           <div class="presence-box">
             <div class="presence-line"><span class="k">POSTS</span><span class="v">0</span></div>
             <div class="presence-line"><span class="k">STATE</span><span class="v">COMING SOON</span></div>
+          </div>
+        </div>
+
+        <div class="panel-body" *ngIf="panel === 'notifications'">
+          <div class="notif-actions">
+            <div class="notif-count">Unread: {{ notificationsUnreadCount }}</div>
+            <button
+              class="ghost"
+              type="button"
+              (click)="markAllNotificationsRead()"
+              [disabled]="notificationsLoading || notificationsActionBusy || !notifications.length"
+            >
+              Mark all read
+            </button>
+          </div>
+          <div class="notif-state" *ngIf="notificationsLoading">Loading notifications…</div>
+          <div class="notif-state error" *ngIf="!notificationsLoading && notificationsError">
+            {{ notificationsError }}
+          </div>
+          <div class="notif-list" *ngIf="!notificationsLoading && !notificationsError">
+            <div class="notif-empty" *ngIf="!notifications.length">No notifications yet.</div>
+            <button
+              class="notif-item"
+              type="button"
+              *ngFor="let notif of notifications"
+              (click)="openNotification(notif)"
+            >
+              <div class="notif-avatar">
+                <img *ngIf="notif.actor?.avatar_url" [src]="notif.actor?.avatar_url" alt="avatar" />
+                <span *ngIf="!notif.actor?.avatar_url">
+                  {{ (notif.actor?.display_name || notif.actor?.username || 'U').slice(0, 2).toUpperCase() }}
+                </span>
+              </div>
+              <div class="notif-body">
+                <div class="notif-line">
+                  <span class="notif-name">{{ notificationActorName(notif) }}</span>
+                  <span class="notif-text">{{ notificationMessage(notif) }}</span>
+                  <span class="notif-time">{{ formatDate(notif.created_at) }}</span>
+                </div>
+              </div>
+              <span class="notif-unread" *ngIf="!notif.read_at"></span>
+            </button>
           </div>
         </div>
       </div>
@@ -823,15 +941,16 @@ type RouteState = {
     .posts-list{ display:flex; flex-direction:column; gap:16px; }
     .posts-empty{ text-align:center; font-size:13px; opacity:0.65; }
     .post-card{
+      position:relative;
       border-radius:20px;
       border:1px solid rgba(0,0,0,0.06);
-      background:rgba(255,255,255,0.95);
+      background:rgba(255,255,255,0.98);
       padding:16px;
-      box-shadow:0 18px 60px rgba(0,0,0,0.10);
+      box-shadow:0 18px 60px rgba(0,0,0,0.15);
     }
     .post-author{
       display:flex;
-      align-items:center;
+      align-items:flex-start;
       gap:12px;
       flex-wrap:wrap;
     }
@@ -846,7 +965,7 @@ type RouteState = {
       cursor:pointer;
     }
     .author-core:focus{
-      outline:2px solid rgba(0,255,209,0.6);
+      outline:2px solid rgba(10,12,18,0.18);
       outline-offset:2px;
     }
     .author-avatar{
@@ -854,12 +973,12 @@ type RouteState = {
       height:42px;
       border-radius:999px;
       overflow:hidden;
-      background:rgba(10,12,20,0.65);
-      border:1px solid rgba(0,0,0,0.12);
-      box-shadow:0 8px 28px rgba(0,0,0,0.18);
+      background:rgba(245,247,250,0.95);
+      border:1px solid rgba(0,0,0,0.08);
+      box-shadow:0 10px 24px rgba(0,0,0,0.12);
       display:grid;
       place-items:center;
-      color:rgba(255,255,255,0.85);
+      color:rgba(10,12,18,0.8);
       font-weight:900;
       letter-spacing:0.08em;
     }
@@ -880,14 +999,122 @@ type RouteState = {
       cursor:pointer;
     }
     .follow-chip.following{
-      background:linear-gradient(90deg, rgba(0,255,209,0.25), rgba(140,0,255,0.25));
-      color:rgba(0,0,0,0.85);
+      background:rgba(10,12,18,0.06);
+      color:rgba(10,12,18,0.78);
       border-color:rgba(0,0,0,0.12);
-      box-shadow:0 0 0 1px rgba(0,255,209,0.18) inset;
+      box-shadow:none;
     }
     .follow-chip:disabled{ opacity:0.6; cursor:not-allowed; }
     .post-body{ margin-top:12px; font-size:14px; line-height:1.5; color:rgba(10,12,18,0.85); }
     .post-title{ font-weight:900; margin-bottom:6px; letter-spacing:0.06em; text-transform:uppercase; font-size:12px; }
+    .post-visibility{ font-weight:800; font-size:10px; letter-spacing:0.16em; text-transform:uppercase; opacity:0.7; }
+    .post-edit{
+      margin-top:12px;
+      display:grid;
+      gap:10px;
+    }
+    .post-edit-title,
+    .post-edit-body,
+    .post-edit-visibility{
+      width:100%;
+      border-radius:14px;
+      border:1px solid rgba(0,0,0,0.08);
+      background:rgba(245,247,250,0.9);
+      padding:10px 12px;
+      font-family:inherit;
+      font-size:13px;
+      color:rgba(10,12,18,0.9);
+    }
+    .post-edit-body{ min-height:90px; resize:vertical; }
+    .post-edit-footer{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+      flex-wrap:wrap;
+    }
+    .post-edit-actions{ display:flex; gap:10px; align-items:center; }
+    .post-edit-error{ font-size:12px; font-weight:700; color:#ff6b81; letter-spacing:0.08em; }
+    .post-menu{
+      margin-left:auto;
+      display:flex;
+      align-items:center;
+      gap:6px;
+      position:relative;
+    }
+    .post-visibility-icon{
+      font-size:14px;
+      line-height:1;
+      opacity:0.7;
+    }
+    .post-menu-trigger{
+      width:28px;
+      height:28px;
+      border-radius:999px;
+      border:1px solid rgba(0,0,0,0.12);
+      background:rgba(255,255,255,0.9);
+      color:rgba(10,12,18,0.7);
+      font-size:18px;
+      line-height:1;
+      cursor:pointer;
+    }
+    .post-menu-trigger:focus{
+      outline:2px solid rgba(10,12,18,0.18);
+      outline-offset:2px;
+    }
+    .post-menu-dropdown{
+      position:absolute;
+      top:34px;
+      right:0;
+      min-width:170px;
+      background:rgba(255,255,255,0.98);
+      border:1px solid rgba(0,0,0,0.08);
+      border-radius:14px;
+      box-shadow:0 18px 60px rgba(0,0,0,0.12);
+      padding:8px;
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+      z-index:5;
+    }
+    .menu-item{
+      border:0;
+      background:transparent;
+      text-align:left;
+      padding:6px 8px;
+      border-radius:10px;
+      font-size:12px;
+      font-weight:700;
+      letter-spacing:0.08em;
+      text-transform:uppercase;
+      color:rgba(10,12,18,0.7);
+      cursor:pointer;
+    }
+    .menu-item:hover{
+      background:rgba(10,12,18,0.06);
+    }
+    .menu-item.danger{ color:#c33; }
+    .menu-item.ghost{ color:rgba(10,12,18,0.55); }
+    .menu-confirm{
+      margin-top:6px;
+      padding-top:6px;
+      border-top:1px solid rgba(0,0,0,0.08);
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+    }
+    .menu-confirm-title{
+      font-size:11px;
+      font-weight:700;
+      letter-spacing:0.08em;
+      text-transform:uppercase;
+      color:rgba(10,12,18,0.6);
+    }
+    .menu-confirm-actions{
+      display:flex;
+      justify-content:flex-end;
+      gap:8px;
+    }
 
     /* =============== STATS PILL =============== */
     .stats-pill{
@@ -917,10 +1144,11 @@ type RouteState = {
       top: 16px;
       right: 16px;
       z-index: 13010;
-      width: 44px;
-      height: 44px;
       user-select: none;
       pointer-events: auto;
+      display: flex;
+      align-items: center;
+      gap: 10px;
     }
     .node-orb{
       width: 44px;
@@ -995,9 +1223,77 @@ type RouteState = {
       font-size: 11px;
       pointer-events:auto;
     }
+    .node-badge{
+      margin-left: auto;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.12);
+      border: 1px solid rgba(255,255,255,0.24);
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      font-weight: 900;
+      color: rgba(255,255,255,0.92);
+    }
     .node-btn:hover{ background: rgba(0,255,209,0.12); box-shadow: 0 0 0 1px rgba(0,255,209,0.20) inset, 0 0 24px rgba(0,255,209,0.10); }
     .node-btn .dot{ width: 8px; height: 8px; border-radius: 999px; background: rgba(0,255,209,0.92); box-shadow: 0 0 16px rgba(0,255,209,0.55); flex:0 0 auto; }
     .node-btn.danger .dot{ background: rgba(255,120,120,0.95); box-shadow: 0 0 16px rgba(255,120,120,0.45); }
+
+    .node-bell{
+      position: relative;
+      width: 38px;
+      height: 38px;
+      border-radius: 999px;
+      border: 1px solid rgba(0,255,209,0.20);
+      background: rgba(10,12,20,0.55);
+      backdrop-filter: blur(12px);
+      box-shadow: 0 12px 35px rgba(0,0,0,0.4),
+                  0 0 0 1px rgba(0,255,209,0.18) inset;
+      color: rgba(255,255,255,0.95);
+      display: grid;
+      place-items: center;
+      font-size: 18px;
+      cursor: pointer;
+      padding: 0;
+    }
+    .node-bell.pulse{
+      animation: bellPulse 0.9s ease;
+    }
+    @keyframes bellPulse{
+      0%{ transform: scale(1); }
+      30%{ transform: scale(1.08); }
+      60%{ transform: scale(0.98); }
+      100%{ transform: scale(1); }
+    }
+    .node-bell:hover{
+      box-shadow: 0 0 0 1px rgba(0,255,209,0.25) inset, 0 12px 35px rgba(0,0,0,0.45);
+    }
+    .bell-badge{
+      position: absolute;
+      top: -6px;
+      left: -6px;
+      min-width: 18px;
+      height: 18px;
+      padding: 0 6px;
+      border-radius: 999px;
+      background: rgba(255,120,120,0.98);
+      color: rgba(8,10,14,0.95);
+      font-size: 11px;
+      font-weight: 900;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      letter-spacing: 0.02em;
+      box-shadow: 0 0 10px rgba(255,120,120,0.55);
+    }
+    .bell-badge.pulse{
+      animation: badgePop 0.7s ease;
+    }
+    @keyframes badgePop{
+      0%{ transform: scale(1); }
+      40%{ transform: scale(1.25); }
+      70%{ transform: scale(0.95); }
+      100%{ transform: scale(1); }
+    }
 
     .node-foot{ margin-top: 10px; display:flex; justify-content:flex-end; }
     .ghost{ border: 0; background: transparent; color: rgba(0,255,209,0.92); font-weight: 900; letter-spacing: 0.14em; cursor: pointer; font-size: 11px; text-decoration: underline; }
@@ -1061,6 +1357,66 @@ type RouteState = {
     .x:hover{ background: rgba(0,255,209,0.10); border-color: rgba(0,255,209,0.20); }
 
     .panel-body{ display:grid; gap: 12px; }
+    .notif-actions{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap: 12px;
+    }
+    .notif-count{
+      font-size: 11px;
+      letter-spacing: 0.16em;
+      font-weight: 900;
+      opacity: 0.8;
+    }
+    .notif-state{ font-size: 12px; opacity: 0.75; }
+    .notif-state.error{ color: rgba(255,120,120,0.95); }
+    .notif-list{ display:grid; gap: 10px; }
+    .notif-empty{ font-size: 12px; opacity: 0.65; text-align:center; }
+    .notif-item{
+      border: 1px solid rgba(255,255,255,0.10);
+      background: rgba(255,255,255,0.06);
+      border-radius: 18px;
+      padding: 10px;
+      display:flex;
+      gap: 12px;
+      align-items:center;
+      text-align:left;
+      cursor:pointer;
+      color: rgba(255,255,255,0.92);
+      position: relative;
+    }
+    .notif-item:hover{
+      background: rgba(255,255,255,0.10);
+    }
+    .notif-avatar{
+      width: 36px;
+      height: 36px;
+      border-radius: 999px;
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.14);
+      background: rgba(255,255,255,0.08);
+      display:grid;
+      place-items:center;
+      flex:0 0 auto;
+      font-weight: 900;
+      letter-spacing: 0.1em;
+      font-size: 11px;
+    }
+    .notif-avatar img{ width:100%; height:100%; object-fit:cover; }
+    .notif-body{ flex:1; min-width:0; }
+    .notif-line{ display:flex; flex-wrap:wrap; gap: 6px; font-size: 12px; }
+    .notif-name{ font-weight: 900; letter-spacing: 0.06em; }
+    .notif-text{ opacity: 0.82; }
+    .notif-time{ font-size: 11px; opacity: 0.6; margin-left: auto; }
+    .notif-unread{
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.9);
+      flex:0 0 auto;
+      margin-left: 6px;
+    }
 
 
     .field{ display:grid; gap: 8px; }
@@ -1091,6 +1447,10 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
 
   loadingProfile = false;
   profileError = '';
+
+  private locationRefreshTimer: number | null = null;
+  private locationRefreshInFlight = false;
+  private readonly LOCATION_REFRESH_MS = 10 * 60_000;
 
   selectedCountry: CountryModel | null = null;
 
@@ -1124,8 +1484,31 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   postBusy = false;
   postFeedback = '';
   postComposerError = '';
+  editingPostId: string | null = null;
+  editPostTitle = '';
+  editPostBody = '';
+  editPostVisibility: 'public' | 'followers' | 'private' = 'public';
+  postEditBusy = false;
+  postEditError = '';
+  openPostMenuId: string | null = null;
+  confirmDeletePostId: string | null = null;
   private followingIds = new Set<string>();
   private followBusyMap = new Map<string, boolean>();
+
+  notifications: NotificationItem[] = [];
+  notificationsLoading = false;
+  notificationsActionBusy = false;
+  notificationsError = '';
+  notificationsUnreadCount = 0;
+  notificationNow = Date.now();
+  bellPulse = false;
+  private bellPulseTimer: number | null = null;
+  private notificationCountInitialized = false;
+
+  private notificationInsertSub?: Subscription;
+  private notificationUpdateSub?: Subscription;
+  private notificationPollTimer: number | null = null;
+  private notificationClockTimer: number | null = null;
 
   private lastPresenceSnap: PresenceSnapshot | null = null;
 
@@ -1135,6 +1518,9 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   private queryParamSub?: Subscription;
   private postEventsCreatedSub?: Subscription;
   private postEventsInsertSub?: Subscription;
+  private postEventsUpdatedSub?: Subscription;
+  private postEventsUpdateSub?: Subscription;
+  private postEventsDeleteSub?: Subscription;
   private resettingGlobe = false;
   private pendingRouteState: RouteState | null = null;
   private applyingRouteState = false;
@@ -1191,10 +1577,13 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     private route: ActivatedRoute,
     private media: MediaService,
     private profiles: ProfileService,
+    private location: LocationService,
     private presence: PresenceService,
     private postsService: PostsService,
     private postEvents: PostEventsService,
     private followService: FollowService,
+    private notificationsService: NotificationsService,
+    private notificationEvents: NotificationEventsService,
     private zone: NgZone,
     private cdr: ChangeDetectorRef
   ) {}
@@ -1272,6 +1661,15 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.postEventsInsertSub = this.postEvents.insert$.subscribe((event) => {
       this.zone.run(() => this.handleCountryPostInsert(event));
     });
+    this.postEventsUpdatedSub = this.postEvents.updatedPost$.subscribe((post) => {
+      this.zone.run(() => this.handleCountryPostUpdated(post));
+    });
+    this.postEventsUpdateSub = this.postEvents.update$.subscribe((event) => {
+      this.zone.run(() => this.handleCountryPostUpdateEvent(event));
+    });
+    this.postEventsDeleteSub = this.postEvents.delete$.subscribe((event) => {
+      this.zone.run(() => this.handleCountryPostDeleteEvent(event));
+    });
     const navState = this.router.getCurrentNavigation()?.extras.state as { resetGlobe?: boolean } | null;
     if (navState?.resetGlobe) {
       this.clearSelectedCountry({ skipRouteUpdate: true });
@@ -1286,8 +1684,42 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       this.userEmail = user?.email ?? '';
       if (this.meId) {
         void this.refreshFollowingSnapshot();
+        void this.refreshNotificationCount();
+        this.startNotificationPolling();
+        this.notificationEvents.stop();
+        this.notificationEvents.start(this.meId);
+        this.notificationInsertSub?.unsubscribe();
+        this.notificationUpdateSub?.unsubscribe();
+        this.notificationInsertSub = this.notificationEvents.insert$.subscribe(() => {
+          this.zone.run(() => {
+            void this.refreshNotificationCount();
+            if (this.panel === 'notifications') {
+              void this.refreshNotifications();
+            }
+          });
+        });
+        this.notificationUpdateSub = this.notificationEvents.update$.subscribe((event) => {
+          this.zone.run(() => {
+            const existingIndex = this.notifications.findIndex((notif) => notif.id === event.id);
+            if (existingIndex >= 0) {
+              const next = [...this.notifications];
+              next[existingIndex] = {
+                ...next[existingIndex],
+                read_at: event.read_at ?? next[existingIndex].read_at,
+              };
+              this.notifications = next;
+            }
+            void this.refreshNotificationCount();
+          });
+        });
       } else {
         this.followingIds.clear();
+        this.notificationInsertSub?.unsubscribe();
+        this.notificationUpdateSub?.unsubscribe();
+        this.notificationEvents.stop();
+        this.stopNotificationPolling();
+        this.notifications = [];
+        this.notificationsUnreadCount = 0;
       }
 
       const { meProfile } = await this.profiles.meProfile();
@@ -1308,6 +1740,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       if (this.nodeAvatarUrl) this.preloadImage(this.nodeAvatarUrl);
 
       this.cdr.detectChanges();
+      this.startLocationRefresh();
     } catch (e: any) {
       this.profileError = e?.message ?? String(e);
     } finally {
@@ -1420,6 +1853,19 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.queryParamSub?.unsubscribe();
     this.postEventsCreatedSub?.unsubscribe();
     this.postEventsInsertSub?.unsubscribe();
+    this.postEventsUpdatedSub?.unsubscribe();
+    this.postEventsUpdateSub?.unsubscribe();
+    this.postEventsDeleteSub?.unsubscribe();
+    this.notificationInsertSub?.unsubscribe();
+    this.notificationUpdateSub?.unsubscribe();
+    this.notificationEvents.stop();
+    this.stopNotificationPolling();
+    this.stopNotificationClock();
+    if (this.bellPulseTimer) {
+      window.clearTimeout(this.bellPulseTimer);
+      this.bellPulseTimer = null;
+    }
+    if (this.locationRefreshTimer) window.clearInterval(this.locationRefreshTimer);
     if (this.userSuggestionTimer) {
       window.clearTimeout(this.userSuggestionTimer);
     }
@@ -1441,6 +1887,28 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     const entry = snap.byCountry?.[cc];
     this.localTotal = entry?.total ?? 0;
     this.localOnline = entry?.online ?? 0;
+  }
+
+  private computeFocusPadding(): { top: number; bottom: number; left: number; right: number } {
+    const top = 90;
+    const bottom = 20;
+    const left = 20;
+    let right = 20;
+
+    const pane = document.querySelector('.main-pane') as HTMLElement | null;
+    if (pane) {
+      const rect = pane.getBoundingClientRect();
+      right = Math.max(24, Math.round(rect.width + 32));
+    } else {
+      right = Math.max(24, Math.round(window.innerWidth * 0.45));
+    }
+
+    return { top, bottom, left, right };
+  }
+
+  private applyFocusView(country: CountryModel): void {
+    this.globeService.setViewPadding(this.computeFocusPadding());
+    this.globeService.flyTo(country.center.lat, country.center.lng, country.flyAltitude ?? 1.0, 900);
   }
 
   setCountryTab(tab: CountryTab, opts?: { skipRouteUpdate?: boolean }): void {
@@ -1469,14 +1937,16 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.globeService.setConnectionsCountryFilter(country.code ?? null);
     this.globeService.selectCountry(country.id);
     this.globeService.showFocusLabel(country.id);
-    this.globeService.flyTo(country.center.lat, country.center.lng, country.flyAltitude ?? 1.0, 900);
 
     this.recomputeLocal();
     this.postComposerError = '';
     this.postsError = '';
     this.forceUi();
 
-    setTimeout(() => this.globeService.resize(), 0);
+    setTimeout(() => {
+      this.applyFocusView(country);
+      this.globeService.resize();
+    }, 0);
     setTimeout(() => this.globeService.resize(), 60);
     void this.loadPostsForCountry(country);
 
@@ -1544,6 +2014,10 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     if (!currentCode || !postCode || currentCode !== postCode) {
       return;
     }
+    const isPublic = post.visibility === 'public' || post.visibility === 'country';
+    if (!isPublic && !this.isAuthorSelf(post.author_id) && !this.isFollowingAuthor(post.author_id)) {
+      return;
+    }
     if (this.posts.some((existing) => existing.id === post.id)) {
       return;
     }
@@ -1558,6 +2032,271 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     if (currentCode !== eventCode) return;
     if (!this.selectedCountry) return;
     void this.loadPostsForCountry(this.selectedCountry);
+  }
+
+  private handleCountryPostUpdated(post: CountryPost): void {
+    this.applyPostUpdate(post);
+  }
+
+  private handleCountryPostUpdateEvent(event: PostUpdateEvent): void {
+    const currentCode = this.selectedCountry?.code?.toUpperCase();
+    const eventCode = event.country_code?.toUpperCase();
+    if (!currentCode || !eventCode) return;
+    if (currentCode !== eventCode) return;
+    if (!this.selectedCountry) return;
+    void this.loadPostsForCountry(this.selectedCountry);
+  }
+
+  private handleCountryPostDeleteEvent(event: PostDeleteEvent): void {
+    if (!event?.id) return;
+    const currentCode = this.selectedCountry?.code?.toUpperCase() ?? null;
+    const eventCode = event.country_code?.toUpperCase() ?? null;
+    if (eventCode && currentCode && eventCode !== currentCode) return;
+    const next = this.posts.filter((post) => post.id !== event.id);
+    if (next.length !== this.posts.length) {
+      this.posts = next;
+      if (this.editingPostId === event.id) this.cancelPostEdit();
+      if (this.openPostMenuId === event.id) this.openPostMenuId = null;
+      if (this.confirmDeletePostId === event.id) this.confirmDeletePostId = null;
+      this.forceUi();
+    }
+  }
+
+  private applyPostUpdate(post: CountryPost): void {
+    const currentCode = this.selectedCountry?.code?.toUpperCase() ?? null;
+    const postCode = post.country_code?.toUpperCase() ?? null;
+    if (!currentCode || !postCode || currentCode !== postCode) return;
+
+    const isPublic = post.visibility === 'public' || post.visibility === 'country';
+    const isSelf = this.isAuthorSelf(post.author_id);
+    const isFollower = this.isFollowingAuthor(post.author_id);
+    if (!isPublic && !isSelf && !isFollower) {
+      const next = this.posts.filter((existing) => existing.id !== post.id);
+      if (next.length !== this.posts.length) {
+        this.posts = next;
+        this.forceUi();
+      }
+      return;
+    }
+
+    const index = this.posts.findIndex((existing) => existing.id === post.id);
+    if (index >= 0) {
+      const next = [...this.posts];
+      next[index] = post;
+      this.posts = this.sortPostsAsc(next);
+      this.forceUi();
+      return;
+    }
+
+    this.posts = this.sortPostsAsc([...this.posts, post]);
+    this.forceUi();
+  }
+
+  private async refreshNotifications(): Promise<void> {
+    if (!this.meId) {
+      this.notifications = [];
+      this.notificationsError = '';
+      this.notificationsLoading = false;
+      this.forceUi();
+      return;
+    }
+
+    this.notificationsLoading = true;
+    this.notificationsError = '';
+    this.forceUi();
+
+    try {
+      const { notifications } = await this.notificationsService.list(40);
+      this.notifications = notifications ?? [];
+    } catch (e: any) {
+      this.notificationsError = e?.message ?? String(e);
+    } finally {
+      this.notificationsLoading = false;
+      this.forceUi();
+    }
+  }
+
+  private async refreshNotificationCount(): Promise<void> {
+    if (!this.meId) {
+      this.notificationsUnreadCount = 0;
+      this.forceUi();
+      return;
+    }
+
+    try {
+      const prevCount = this.notificationsUnreadCount;
+      const { notificationsUnreadCount } = await this.notificationsService.unreadCount();
+      this.notificationsUnreadCount = notificationsUnreadCount ?? 0;
+      if (this.notificationCountInitialized && this.notificationsUnreadCount > prevCount) {
+        this.triggerBellPulse();
+      }
+      this.notificationCountInitialized = true;
+    } catch {}
+
+    this.forceUi();
+  }
+
+  private triggerBellPulse(): void {
+    this.bellPulse = true;
+    if (this.bellPulseTimer) {
+      window.clearTimeout(this.bellPulseTimer);
+    }
+    this.bellPulseTimer = window.setTimeout(() => {
+      this.bellPulse = false;
+      this.bellPulseTimer = null;
+      this.forceUi();
+    }, 900);
+    this.forceUi();
+  }
+
+  private startNotificationPolling(): void {
+    if (this.notificationPollTimer) return;
+    this.notificationPollTimer = window.setInterval(() => {
+      void this.refreshNotificationCount();
+    }, 5000);
+  }
+
+  private stopNotificationPolling(): void {
+    if (!this.notificationPollTimer) return;
+    window.clearInterval(this.notificationPollTimer);
+    this.notificationPollTimer = null;
+  }
+
+  private startNotificationClock(): void {
+    if (this.notificationClockTimer) return;
+    this.notificationNow = Date.now();
+    this.notificationClockTimer = window.setInterval(() => {
+      this.notificationNow = Date.now();
+      this.forceUi();
+    }, 60000);
+  }
+
+  private stopNotificationClock(): void {
+    if (!this.notificationClockTimer) return;
+    window.clearInterval(this.notificationClockTimer);
+    this.notificationClockTimer = null;
+  }
+
+  async markAllNotificationsRead(): Promise<void> {
+    if (!this.meId || this.notificationsActionBusy) return;
+
+    this.notificationsActionBusy = true;
+    this.notificationsError = '';
+    this.forceUi();
+
+    try {
+      await this.notificationsService.markAllRead();
+      const now = new Date().toISOString();
+      this.notifications = this.notifications.map((notif) =>
+        notif.read_at ? notif : { ...notif, read_at: now }
+      );
+      this.notificationsUnreadCount = 0;
+    } catch (e: any) {
+      this.notificationsError = e?.message ?? String(e);
+    } finally {
+      this.notificationsActionBusy = false;
+      this.forceUi();
+    }
+  }
+
+  private async markNotificationRead(notif: NotificationItem): Promise<void> {
+    if (!this.meId || !notif || notif.read_at) return;
+
+    try {
+      const { markNotificationRead } = await this.notificationsService.markRead(notif.id);
+      if (markNotificationRead) {
+        const now = new Date().toISOString();
+        this.notifications = this.notifications.map((item) =>
+          item.id === notif.id ? { ...item, read_at: now } : item
+        );
+        this.notificationsUnreadCount = Math.max(0, this.notificationsUnreadCount - 1);
+        this.forceUi();
+      }
+    } catch {}
+  }
+
+  private looksLikeId(value: string): boolean {
+    const trimmed = value.trim();
+    if (!trimmed) return false;
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed);
+  }
+
+  private parseNotificationDate(value: string): number | null {
+    const raw = String(value ?? '').trim();
+    if (!raw || this.looksLikeId(raw)) return null;
+
+    let parsed = Date.parse(raw);
+    if (!Number.isFinite(parsed)) {
+      const normalized = raw.includes('T') ? raw : raw.replace(' ', 'T');
+      parsed = Date.parse(normalized);
+    }
+
+    if (!Number.isFinite(parsed)) {
+      const numeric = Number(raw);
+      if (Number.isFinite(numeric)) {
+        parsed = numeric > 1e12 ? numeric : numeric * 1000;
+      }
+    }
+
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  notificationActorName(notif: NotificationItem): string {
+    const candidate = (notif.actor?.display_name || notif.actor?.username || '').trim();
+    if (!candidate || this.looksLikeId(candidate)) return 'Someone';
+    return candidate;
+  }
+
+  notificationMessage(notif: NotificationItem): string {
+    const type = (notif.type || '').toLowerCase();
+    if (type === 'follow') return 'started following you.';
+    if (type === 'post') return 'shared a post.';
+    return 'sent you a notification.';
+  }
+
+  openNotification(notif: NotificationItem): void {
+    if (!notif) return;
+    void this.markNotificationRead(notif);
+
+    const type = (notif.type || '').toLowerCase();
+    if (type === 'follow') {
+      const slug = notif.actor?.username?.trim() || notif.actor_id;
+      if (slug) {
+        void this.router.navigate(['/user', slug]);
+      }
+    }
+  }
+
+  formatDate(value: string): string {
+    const createdAt = this.parseNotificationDate(value);
+    if (!createdAt) return 'Just now';
+    const diffMs = Math.max(0, this.notificationNow - createdAt);
+    const diffMinutes = Math.floor(diffMs / 60000);
+    if (diffMinutes < 1) return 'Just now';
+    if (diffMinutes < 60) return `${diffMinutes}m`;
+    const diffHours = Math.floor(diffMinutes / 60);
+    if (diffHours < 24) return `${diffHours}h`;
+    const diffDays = Math.floor(diffHours / 24);
+    if (diffDays < 7) return `${diffDays}d`;
+    return new Date(createdAt).toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+  }
+
+  visibilityLabel(value: string): string {
+    const normalized = String(value || '').toLowerCase();
+    if (normalized === 'private') return 'Only me';
+    if (normalized === 'followers') return 'Followers';
+    return 'Public';
+  }
+
+  visibilityIcon(value: string): string {
+    const normalized = String(value || '').toLowerCase();
+    if (normalized === 'private') return '🔒';
+    if (normalized === 'followers') return '👥';
+    return '👁️';
   }
 
   private sortPostsAsc(posts: CountryPost[]): CountryPost[] {
@@ -1624,6 +2363,108 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     }
   }
 
+  startPostEdit(post: CountryPost): void {
+    if (!this.isAuthorSelf(post.author_id)) return;
+    this.openPostMenuId = null;
+    this.confirmDeletePostId = null;
+    this.editingPostId = post.id;
+    this.editPostTitle = post.title ?? '';
+    this.editPostBody = post.body ?? '';
+    const visibility = post.visibility === 'country' ? 'public' : post.visibility;
+    this.editPostVisibility =
+      visibility === 'followers' || visibility === 'private' ? visibility : 'public';
+    this.postEditError = '';
+    this.forceUi();
+  }
+
+  cancelPostEdit(): void {
+    this.editingPostId = null;
+    this.editPostTitle = '';
+    this.editPostBody = '';
+    this.editPostVisibility = 'public';
+    this.postEditError = '';
+    this.openPostMenuId = null;
+    this.confirmDeletePostId = null;
+    this.forceUi();
+  }
+
+  async savePostEdit(post: CountryPost): Promise<void> {
+    if (!this.isAuthorSelf(post.author_id) || this.postEditBusy) return;
+    const body = this.editPostBody.trim();
+    if (!body) {
+      this.postEditError = 'Body is required.';
+      this.forceUi();
+      return;
+    }
+
+    this.postEditBusy = true;
+    this.postEditError = '';
+    this.forceUi();
+
+    try {
+      const updated = await this.postsService.updatePost(post.id, {
+        title: this.editPostTitle.trim() || null,
+        body,
+        visibility: this.editPostVisibility,
+      });
+      this.applyPostUpdate(updated);
+      this.cancelPostEdit();
+    } catch (e: any) {
+      this.postEditError = e?.message ?? String(e);
+    } finally {
+      this.postEditBusy = false;
+      this.forceUi();
+    }
+  }
+
+  togglePostMenu(postId: string, event?: Event): void {
+    event?.stopPropagation();
+    if (this.openPostMenuId === postId) {
+      this.openPostMenuId = null;
+      this.confirmDeletePostId = null;
+    } else {
+      this.openPostMenuId = postId;
+      this.confirmDeletePostId = null;
+    }
+    this.forceUi();
+  }
+
+  requestPostDelete(post: CountryPost): void {
+    if (!this.isAuthorSelf(post.author_id)) return;
+    this.confirmDeletePostId = post.id;
+    this.forceUi();
+  }
+
+  cancelPostDelete(): void {
+    this.confirmDeletePostId = null;
+    this.forceUi();
+  }
+
+  async deletePost(post: CountryPost): Promise<void> {
+    if (!this.isAuthorSelf(post.author_id) || this.postEditBusy) return;
+    this.openPostMenuId = null;
+    this.confirmDeletePostId = null;
+    this.postEditBusy = true;
+    this.postEditError = '';
+    this.forceUi();
+
+    try {
+      const deleted = await this.postsService.deletePost(post.id, {
+        country_code: post.country_code ?? null,
+        author_id: post.author_id ?? null,
+      });
+      if (deleted) {
+        this.posts = this.posts.filter((existing) => existing.id !== post.id);
+        if (this.editingPostId === post.id) this.cancelPostEdit();
+      }
+    } catch (e: any) {
+      this.postEditError = e?.message ?? String(e);
+    } finally {
+      this.postEditBusy = false;
+      this.forceUi();
+    }
+  }
+
   isFollowingAuthor(authorId?: string | null): boolean {
     return !!authorId && this.followingIds.has(authorId);
   }
@@ -1683,6 +2524,58 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       this.cdr.detectChanges();
     } catch (e) {
       console.warn('following snapshot failed', e);
+    }
+  }
+
+  private startLocationRefresh(): void {
+    if (this.locationRefreshTimer || !this.meId || !this.profile) return;
+    void this.refreshLocationIfMoved();
+    this.locationRefreshTimer = window.setInterval(() => {
+      void this.refreshLocationIfMoved();
+    }, this.LOCATION_REFRESH_MS);
+  }
+
+  private async refreshLocationIfMoved(): Promise<void> {
+    if (this.locationRefreshInFlight || !this.meId || !this.profile) return;
+    this.locationRefreshInFlight = true;
+
+    try {
+      const detected = await this.location.detectViaGpsThenServer(9000);
+      if (!detected) return;
+
+      const nextCode = String(detected.countryCode ?? '').trim().toUpperCase();
+      const nextName = String(detected.countryName ?? '').trim();
+      const nextCity = String(detected.cityName ?? '').trim();
+
+      const currentCode = String((this.profile as any)?.country_code ?? '').trim().toUpperCase();
+      const currentName = String(this.profile.country_name ?? '').trim();
+      const currentCity = String((this.profile as any)?.city_name ?? '').trim();
+
+      const updates: { country_code?: string; country_name?: string; city_name?: string } = {};
+
+      if (nextCode && nextCode !== currentCode) updates.country_code = nextCode;
+      if (nextName && nextName.toLowerCase() !== currentName.toLowerCase()) {
+        updates.country_name = nextName;
+      }
+      if (nextCity && nextCity.toLowerCase() !== currentCity.toLowerCase()) {
+        updates.city_name = nextCity;
+      }
+
+      if (!Object.keys(updates).length) return;
+
+      const res = await this.profiles.updateProfile(updates);
+      this.profile = res.updateProfile;
+      if (!this.canPostHere) this.composerOpen = false;
+      await this.presence.setMyLocation(
+        (this.profile as any)?.country_code ?? null,
+        this.profile.country_name ?? null,
+        (this.profile as any)?.city_name ?? null
+      );
+      this.forceUi();
+    } catch (e) {
+      console.warn('location refresh failed', e);
+    } finally {
+      this.locationRefreshInFlight = false;
     }
   }
 
@@ -1928,7 +2821,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   private isValidPanel(value: string | null): value is Exclude<Panel, null> {
-    return value === 'presence' || value === 'posts';
+    return value === 'presence' || value === 'posts' || value === 'notifications';
   }
 
   private findCountryByRouteToken(token: string): CountryModel | null {
@@ -1967,12 +2860,19 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.msg = '';
     this.saveState = 'idle';
 
+    if (p === 'notifications') {
+      void this.refreshNotifications();
+      void this.refreshNotificationCount();
+      this.startNotificationClock();
+    }
+
     this.forceUi();
     if (!opts?.skipRouteUpdate) this.updateRouteState();
   }
 
   closePanel(opts?: { skipRouteUpdate?: boolean }): void {
     if (!this.panel) return;
+    const wasNotifications = this.panel === 'notifications';
     this.panel = null;
     this.adjustingAvatar = false;
     this.dragging = false;
@@ -1980,6 +2880,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.saveState = 'idle';
     this.avatarPreviewOpen = false;
     this.forceUi();
+    if (wasNotifications) this.stopNotificationClock();
     if (!opts?.skipRouteUpdate) this.updateRouteState();
   }
 

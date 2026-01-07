@@ -1,4 +1,5 @@
 import { FollowsService } from './follows.service.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 
 type AuthedUser = {
   id: string;
@@ -16,6 +17,7 @@ function requireAuth(ctx: Context): AuthedUser {
 }
 
 const svc = () => new FollowsService();
+const notify = () => new NotificationsService();
 
 export const followsResolvers = {
   Query: {
@@ -40,7 +42,10 @@ export const followsResolvers = {
     followUser: async (_: any, args: { target_id: string }, ctx: Context) => {
       const user = requireAuth(ctx);
       if (!args?.target_id) throw new Error('target_id is required');
-      await svc().follow(user.id, args.target_id);
+      const created = await svc().follow(user.id, args.target_id);
+      if (created) {
+        await notify().notifyFollow(args.target_id, user.id);
+      }
       return true;
     },
 

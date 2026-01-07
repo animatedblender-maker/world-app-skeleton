@@ -13,7 +13,7 @@ import { Injectable } from '@angular/core';
 import { continentColors, oceanColor } from './palette';
 import type { CountryModel } from '../data/countries.service';
 
-import maplibregl, { Map as MLMap, GeoJSONSource, MapMouseEvent } from 'maplibre-gl';
+import maplibregl, { Map as MLMap, GeoJSONSource, MapMouseEvent, PaddingOptions } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 type CountriesPayload = { features: any[]; countries: CountryModel[] };
@@ -74,7 +74,8 @@ export class GlobeService {
   private readonly MIN_LABEL_SIZE_PX = 12;
   private readonly MAX_LABEL_SIZE_PX = 18;
 
-  private readonly VIEW_PADDING = { top: 90, bottom: 20, left: 20, right: 20 };
+  private readonly DEFAULT_VIEW_PADDING: PaddingOptions = { top: 90, bottom: 20, left: 20, right: 20 };
+  private viewPadding: PaddingOptions = { ...this.DEFAULT_VIEW_PADDING };
   private mapReady = false;
   private readyResolvers: Array<() => void> = [];
   private pendingSelectedCountryId: number | null = null;
@@ -227,7 +228,13 @@ export class GlobeService {
             'rgba(255,255,255,0.35)',
             ['get', 'fill'],
           ],
-          'fill-opacity': 1.0,
+          'fill-opacity': [
+            'case',
+            ['boolean', ['feature-state', 'dimmed'], false],
+            0.08,
+            1.0,
+          ],
+          'fill-opacity-transition': { duration: 480 },
         },
       });
 
@@ -235,7 +242,17 @@ export class GlobeService {
         id: this.LINE_LAYER,
         type: 'line',
         source: this.COUNTRIES_SOURCE,
-        paint: { 'line-color': 'rgba(255,255,255,0.22)', 'line-width': 1 },
+        paint: {
+          'line-color': 'rgba(255,255,255,0.22)',
+          'line-width': 1,
+          'line-opacity': [
+            'case',
+            ['boolean', ['feature-state', 'dimmed'], false],
+            0.18,
+            0.9,
+          ],
+          'line-opacity-transition': { duration: 480 },
+        },
       });
     } else {
       countriesSrc.setData(countriesFC);
@@ -455,13 +472,15 @@ export class GlobeService {
     if (!this.map.getLayer(this.FILL_LAYER) || !this.map.getLayer(this.LINE_LAYER)) return;
 
     try {
-      if (this.soloCountryId == null) {
-        this.map.setFilter(this.FILL_LAYER, null as any);
-        this.map.setFilter(this.LINE_LAYER, null as any);
-      } else {
-        const f = ['==', ['id'], this.soloCountryId] as any;
-        this.map.setFilter(this.FILL_LAYER, f);
-        this.map.setFilter(this.LINE_LAYER, f);
+      if (!this.features.length) return;
+      const soloId = this.soloCountryId;
+      for (const feature of this.features) {
+        const id = Number(feature.id);
+        if (!Number.isFinite(id)) continue;
+        const dimmed = soloId != null && id !== soloId;
+        try {
+          this.map.setFeatureState({ source: this.COUNTRIES_SOURCE, id }, { dimmed });
+        } catch {}
       }
     } catch {}
   }
@@ -503,6 +522,18 @@ export class GlobeService {
     this.selectCountry(pending);
   }
 
+  setViewPadding(padding: PaddingOptions | null): void {
+    if (!padding) {
+      this.viewPadding = { ...this.DEFAULT_VIEW_PADDING };
+      return;
+    }
+    this.viewPadding = { ...this.DEFAULT_VIEW_PADDING, ...padding };
+  }
+
+  resetViewPadding(): void {
+    this.viewPadding = { ...this.DEFAULT_VIEW_PADDING };
+  }
+
   flyTo(lat: number, lng: number, altitudeOrZoom: number, ms = 900): void {
     if (!this.map) return;
 
@@ -513,7 +544,7 @@ export class GlobeService {
       zoom,
       duration: ms,
       essential: true,
-      padding: this.VIEW_PADDING,
+      padding: this.viewPadding,
     });
 
     this.bumpAura();
@@ -524,6 +555,7 @@ export class GlobeService {
     this.showAllLabels();
     this.setSoloCountry(null);
     this.setConnectionsCountryFilter(null);
+    this.resetViewPadding();
 
     if (!this.map) return;
 
@@ -532,7 +564,7 @@ export class GlobeService {
       zoom: 1.35,
       duration: 800,
       essential: true,
-      padding: this.VIEW_PADDING,
+      padding: this.viewPadding,
     });
 
     this.bumpAura();
@@ -551,10 +583,13 @@ export class GlobeService {
     if (!found) return;
 
     this.selectCountry(found.id);
-    this.flyTo(found.center.lat, found.center.lng, found.flyAltitude ?? 1.0, 900);
     this.showFocusLabel(found.id);
 
-    this.countryClickCb?.(found);
+    if (this.countryClickCb) {
+      this.countryClickCb(found);
+    } else {
+      this.flyTo(found.center.lat, found.center.lng, found.flyAltitude ?? 1.0, 900);
+    }
   }
 
   // -----------------------------

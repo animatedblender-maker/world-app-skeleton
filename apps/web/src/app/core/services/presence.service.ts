@@ -7,6 +7,7 @@ type ProfileRow = {
   user_id: string;
   country_code: string | null;
   country_name: string | null;
+  city_name: string | null;
 };
 
 export type PresenceSnapshot = {
@@ -60,10 +61,7 @@ export class PresenceService {
   private refreshProfilesTimer: any = null;
   private readonly PROFILES_REFRESH_MS = 120_000;
 
-  // ✅ roaming speed
-  private readonly SEG_MS = 22_000; // <- SLOW roaming (change to 35_000 if you want slower)
-
-  // ✅ neon green for everyone
+  // Dot styling for all presence points.
   private readonly DOT_COLOR = 'rgba(0,255,209,0.92)';
 
   async start(opts: {
@@ -137,7 +135,7 @@ export class PresenceService {
   private async fetchAllProfiles(): Promise<void> {
     const { data, error } = await supabase
       .from('profiles')
-      .select('user_id,country_code,country_name');
+      .select('user_id,country_code,country_name,city_name');
 
     if (error) throw error;
 
@@ -245,7 +243,6 @@ export class PresenceService {
     const onlineIds = Array.from(this.onlineMetaById.keys());
 
     // dots for online only
-    const now = Date.now();
     const points: ConnectionPoint[] = [];
 
     for (const userId of onlineIds) {
@@ -261,12 +258,14 @@ export class PresenceService {
       byCountry[cc] ??= { total: 0, online: 0 };
       byCountry[cc].online += 1;
 
-      const pos = this.roamingPoint(country, userId, now);
+      const cityName = meta?.city_name ?? prof?.city_name ?? null;
+      const pos = this.approximatePoint(country, userId, cityName);
 
       points.push({
         id: userId,
         lat: pos.lat,
         lng: pos.lng,
+        cc,
         color: this.DOT_COLOR,
         radius: 3.6,
       });
@@ -287,28 +286,18 @@ export class PresenceService {
     return this.countries.find((x) => String(x.code ?? '').toUpperCase() === cc) || null;
   }
 
-  // ✅ slow roaming but still bounded by pointPool
-  private roamingPoint(country: CountryModel, userId: string, nowMs: number): { lat: number; lng: number } {
+  private approximatePoint(
+    country: CountryModel,
+    userId: string,
+    cityName: string | null
+  ): { lat: number; lng: number } {
     const pool = country.pointPool || [];
     if (!pool.length) return { lat: country.center.lat, lng: normalizeLng180(country.center.lng) };
 
-    const seed = this.hash(userId + '|' + (country.code ?? country.name));
-
-    const tSeg = nowMs / this.SEG_MS;
-    const seg = Math.floor(tSeg);
-    const t = tSeg - seg;
-
-    const i0 = Math.abs(seed + seg) % pool.length;
-    const i1 = Math.abs(seed + seg + 1) % pool.length;
-
-    const a = pool[i0];
-    const b = pool[i1];
-
-    const tt = t * t * (3 - 2 * t); // smoothstep
-    const lat = a.lat + (b.lat - a.lat) * tt;
-    const lng = normalizeLng180(a.lng + (b.lng - a.lng) * tt);
-
-    return { lat, lng };
+    const seed = this.hash(`${userId}|${country.code ?? country.name}|${cityName ?? ''}`);
+    const idx = Math.abs(seed) % pool.length;
+    const pick = pool[idx];
+    return { lat: pick.lat, lng: normalizeLng180(pick.lng) };
   }
 
   private hash(s: string): number {

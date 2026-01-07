@@ -58,6 +58,13 @@ export const typeDefs = `#graphql
     country_code: String
   }
 
+  type NotificationActor {
+    user_id: ID!
+    display_name: String
+    username: String
+    avatar_url: String
+  }
+
   type Post {
     id: ID!
     author_id: ID!
@@ -78,12 +85,31 @@ export const typeDefs = `#graphql
     author: PostAuthor
   }
 
+  type Notification {
+    id: ID!
+    user_id: ID!
+    actor_id: ID
+    type: String!
+    entity_type: String
+    entity_id: ID
+    read_at: String
+    created_at: String!
+    actor: NotificationActor
+  }
+
   input CreatePostInput {
     title: String
     body: String!
     country_name: String!
     country_code: String!
     city_name: String
+    visibility: String
+  }
+
+  input UpdatePostInput {
+    title: String
+    body: String
+    visibility: String
   }
 
   type FollowCounts {
@@ -152,6 +178,10 @@ export const typeDefs = `#graphql
     followCounts(user_id: ID!): FollowCounts!
     followingIds: [ID!]!
     isFollowing(user_id: ID!): Boolean!
+
+    # Notifications
+    notifications(limit: Int, before: String): [Notification!]!
+    notificationsUnreadCount: Int!
   }
 
   type Mutation {
@@ -164,7 +194,13 @@ export const typeDefs = `#graphql
 
     # Posts / social
     createPost(input: CreatePostInput!): Post!
+    updatePost(post_id: ID!, input: UpdatePostInput!): Post!
+    deletePost(post_id: ID!): Boolean!
     followUser(target_id: ID!): Boolean!
     unfollowUser(target_id: ID!): Boolean!
+
+    # Notifications
+    markNotificationRead(id: ID!): Boolean!
+    markAllNotificationsRead: Int!
   }
 `;

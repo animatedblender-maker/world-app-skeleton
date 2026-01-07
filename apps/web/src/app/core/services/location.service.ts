@@ -9,7 +9,7 @@ export type DetectedLocation = {
 };
 
 const DETECT_LOCATION = `
-query DetectLocation($lat: Float!, $lng: Float!) {
+mutation DetectLocation($lat: Float!, $lng: Float!) {
   detectLocation(lat: $lat, lng: $lng) {
     countryCode
     countryName

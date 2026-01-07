@@ -16,7 +16,9 @@ export class PostsService {
           body
           media_type
           media_url
+          visibility
           created_at
+          updated_at
           author_id
           country_name
           country_code
@@ -50,7 +52,9 @@ export class PostsService {
           body
           media_type
           media_url
+          visibility
           created_at
+          updated_at
           author_id
           country_name
           country_code
@@ -81,6 +85,7 @@ export class PostsService {
     countryName: string;
     countryCode: string;
     cityName?: string | null;
+    visibility?: string | null;
   }): Promise<CountryPost> {
     if (!input.authorId) throw new Error('authorId is required to post.');
     const mutation = `
@@ -91,7 +96,9 @@ export class PostsService {
           body
           media_type
           media_url
+          visibility
           created_at
+          updated_at
           author_id
           country_name
           country_code
@@ -114,6 +121,7 @@ export class PostsService {
       country_name: input.countryName,
       country_code: input.countryCode,
       city_name: input.cityName ?? null,
+      visibility: input.visibility ?? null,
     };
 
     const { createPost } = await this.gql.request<{ createPost: any }>(mutation, {
@@ -124,6 +132,75 @@ export class PostsService {
     return mapped;
   }
 
+  async updatePost(
+    postId: string,
+    input: { title?: string | null; body?: string | null; visibility?: string | null }
+  ): Promise<CountryPost> {
+    const mutation = `
+      mutation UpdatePost($postId: ID!, $input: UpdatePostInput!) {
+        updatePost(post_id: $postId, input: $input) {
+          id
+          title
+          body
+          media_type
+          media_url
+          visibility
+          created_at
+          updated_at
+          author_id
+          country_name
+          country_code
+          city_name
+          author {
+            user_id
+            display_name
+            username
+            avatar_url
+            country_name
+            country_code
+          }
+        }
+      }
+    `;
+
+    const payload = {
+      title: input.title?.trim() ?? null,
+      body: input.body?.trim() ?? null,
+      visibility: input.visibility ?? null,
+    };
+
+    const { updatePost } = await this.gql.request<{ updatePost: any }>(mutation, {
+      postId,
+      input: payload,
+    });
+    const mapped = this.mapPost(updatePost);
+    this.postEvents.emitUpdated(mapped);
+    return mapped;
+  }
+
+  async deletePost(
+    postId: string,
+    meta?: { country_code?: string | null; author_id?: string | null }
+  ): Promise<boolean> {
+    const mutation = `
+      mutation DeletePost($postId: ID!) {
+        deletePost(post_id: $postId)
+      }
+    `;
+
+    const { deletePost } = await this.gql.request<{ deletePost: boolean }>(mutation, {
+      postId,
+    });
+    if (deletePost) {
+      this.postEvents.emitDeleted({
+        id: postId,
+        country_code: meta?.country_code ?? null,
+        author_id: meta?.author_id ?? null,
+      });
+    }
+    return deletePost;
+  }
+
   private mapPost(row: any): CountryPost {
     return {
       id: row.id,
@@ -131,10 +208,13 @@ export class PostsService {
       body: row.body ?? '',
       media_type: row.media_type ?? 'none',
       media_url: row.media_url ?? null,
+      visibility: row.visibility ?? 'public',
       created_at: row.created_at,
+      updated_at: row.updated_at ?? row.created_at,
       author_id: row.author_id,
       country_name: row.country_name ?? null,
       country_code: row.country_code ?? null,
+      city_name: row.city_name ?? null,
       author: row.author
         ? {
             user_id: row.author.user_id,
