@@ -1,6 +1,7 @@
 // apps/api/src/graphql/modules/countries/countries.resolver.ts
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 type GeoJSON = {
   type: 'FeatureCollection';
@@ -16,6 +17,9 @@ type Country = {
   lng: number;
   center: { lat: number; lng: number };
 };
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const GEOJSON_PATHS = [
   path.join(process.cwd(), 'src', 'data', 'countries50m.geojson'),
