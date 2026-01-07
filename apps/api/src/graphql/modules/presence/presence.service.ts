@@ -1,5 +1,5 @@
 // apps/api/src/graphql/modules/presence/presence.service.ts
-import { pool } from '../../../db.ts';
+import { pool } from '../../../db.js';
 
 export type AuthedUser = {
   id: string;

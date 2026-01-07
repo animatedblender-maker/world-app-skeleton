@@ -1,4 +1,4 @@
-import { pool } from '../../../db.ts';
+import { pool } from '../../../db.js';
 
 export class FollowsService {
   async counts(userId: string): Promise<{ followers: number; following: number }> {
@@ -18,11 +18,11 @@ export class FollowsService {
   }
 
   async followingIds(followerId: string): Promise<string[]> {
-    const { rows } = await pool.query(
+    const { rows } = await pool.query<{ following_id: string }>(
       `select following_id from public.user_follows where follower_id = $1`,
       [followerId]
     );
-    return rows.map((row) => row.following_id as string);
+    return rows.map((row) => row.following_id);
   }
 
   async isFollowing(followerId: string, targetId: string): Promise<boolean> {

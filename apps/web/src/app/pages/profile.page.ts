@@ -27,39 +27,12 @@ import { FollowService } from '../core/services/follow.service';
       <div class="noise" aria-hidden="true"></div>
       <div class="card" *ngIf="!loading && !error && profile; else stateTpl">
         <button class="ghost-link back-link" type="button" (click)="goBack()">← BACK</button>
-        <div class="share-row" *ngIf="isOwner">
-          <div class="share-box" *ngIf="shareUrl; else noHandleTpl">
-            <div class="share-label">Share link</div>
-            <div class="share-link">{{ shareUrl }}</div>
-            <div class="share-actions">
-              <button class="btn" type="button" (click)="copyShareLink()" [disabled]="!shareUrl">
-                {{ shareCopied ? 'COPIED' : 'COPY LINK' }}
-              </button>
-              <small class="hint" *ngIf="shareCopied">Copied.</small>
-              <small class="hint error" *ngIf="shareError">{{ shareError }}</small>
-            </div>
-          </div>
-          <ng-template #noHandleTpl>
-            <div class="share-box empty">
-              <div class="share-label">Share link</div>
-              <div class="share-placeholder">
-                Set your username to generate a public link.
-              </div>
-              <div class="share-actions">
-                <button class="ghost-link strong" type="button" (click)="startUsernameEdit()">
-                  SET USERNAME
-                </button>
-              </div>
-            </div>
-          </ng-template>
-        </div>
-
         <div class="head">
-          <div class="avatar-block" (click)="openAvatarModal()">
-            <div class="avatar">
-              <img
-                *ngIf="avatarImage"
-                [src]="avatarImage"
+            <div class="avatar-block" (click)="openAvatarModal()">
+              <div class="avatar">
+                <img
+                  *ngIf="avatarImage"
+                  [src]="avatarImage"
                 alt="avatar"
                 [style.transform]="avatarTransform"
                 class="img"
@@ -68,7 +41,7 @@ import { FollowService } from '../core/services/follow.service';
               <span class="ring"></span>
             </div>
             <button
-              *ngIf="isOwner"
+              *ngIf="isOwner && profileEditMode"
               type="button"
               class="micro-btn outline"
               (click)="toggleAvatarEditor($event)"
@@ -80,7 +53,51 @@ import { FollowService } from '../core/services/follow.service';
           <div class="info">
             <div class="title-row" *ngIf="!editingName">
               <div class="title">{{ profile!.display_name || profile!.username || 'User' }}</div>
-              <button class="micro-btn" *ngIf="isOwner" type="button" (click)="startNameEdit()">Refine name</button>
+            <div class="title-actions">
+                <button class="micro-btn" *ngIf="isOwner && profileEditMode" type="button" (click)="startNameEdit()">Refine name</button>
+                <button
+                  class="micro-btn outline edit-profile-toggle"
+                  *ngIf="isOwner"
+                  type="button"
+                  (click)="onProfileEditAction()"
+                  [disabled]="profileEditSaving"
+                >
+                  <ng-container *ngIf="!profileEditMode">
+                    Edit profile
+                  </ng-container>
+                    <ng-container *ngIf="profileEditMode">
+                      <span *ngIf="!profileEditSaved">Save</span>
+                      <span *ngIf="profileEditSaved" class="saved-check" aria-live="polite">
+                        <span aria-hidden="true">✓</span>
+                        <span aria-hidden="true" class="check-arrow">↗</span>
+                        Saved
+                      </span>
+                    </ng-container>
+                </button>
+              </div>
+              <button
+                class="share-icon bare share-emoji"
+                type="button"
+                (click)="copyShareLink()"
+                [disabled]="!shareUrl"
+                aria-label="Copy profile link"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 -960 960 960"
+                  role="img"
+                  aria-hidden="true"
+                  focusable="false"
+                >
+                  <path
+                    fill="#e3e3e3"
+                    d="M680-80q-50 0-85-35t-35-85q0-6 3-28L282-392q-16 15-37 23.5t-45 8.5q-50 0-85-35t-35-85q0-50 35-85t85-35q24 0 45 8.5t37 23.5l281-164q-2-7-2.5-13.5T560-760q0-50 35-85t85-35q50 0 85 35t35 85q0 50-35 85t-85 35q-24 0-45-8.5T598-672L317-508q2 7 2.5 13.5t.5 14.5q0 8-.5 14.5T317-452l281 164q16-15 37-23.5t45-8.5q50 0 85 35t35 85q0 50-35 85t-85 35Zm0-80q17 0 28.5-11.5T720-200q0-17-11.5-28.5T680-240q-17 0-28.5 11.5T640-200q0 17 11.5 28.5T680-160ZM200-440q17 0 28.5-11.5T240-480q0-17-11.5-28.5T200-520q-17 0-28.5 11.5T160-480q0 17 11.5 28.5T200-440Zm480-280q17 0 28.5-11.5T720-760q0-17-11.5-28.5T680-800q-17 0-28.5 11.5T640-760q0 17 11.5 28.5T680-720Zm0 520ZM200-480Zm480-280Z"
+                  />
+                </svg>
+              </button>
+            </div>
+            <div class="share-feedback" [class.error]="!!shareError" *ngIf="shareCopied || shareError">
+              {{ shareError || (shareCopied ? 'Link copied' : '') }}
             </div>
 
             <div class="edit-row" *ngIf="editingName">
@@ -98,19 +115,19 @@ import { FollowService } from '../core/services/follow.service';
               </div>
             </div>
 
-            <div class="handle-row" *ngIf="!editingUsername">
-              <div class="sub handle">
-                @{{ profile!.username || 'username pending' }}
+              <div class="handle-row" *ngIf="!editingUsername">
+                <div class="sub handle">
+                  @{{ profile!.username || 'username pending' }}
+                </div>
+                <button
+                  class="micro-btn"
+                  type="button"
+                  *ngIf="isOwner && profileEditMode"
+                  (click)="startUsernameEdit()"
+                >
+                  {{ profile!.username ? 'Edit handle' : 'Set handle' }}
+                </button>
               </div>
-              <button
-                class="micro-btn"
-                type="button"
-                *ngIf="isOwner"
-                (click)="startUsernameEdit()"
-              >
-                {{ profile!.username ? 'Edit handle' : 'Set handle' }}
-              </button>
-            </div>
 
             <div class="social-row" *ngIf="profile">
               <div class="stat-card">
@@ -146,6 +163,7 @@ import { FollowService } from '../core/services/follow.service';
               <input
                 class="text-input"
                 [(ngModel)]="draftUsername"
+                (ngModelChange)="onUsernameDraftChange()"
                 maxlength="24"
                 placeholder="username"
                 autocapitalize="off"
@@ -171,7 +189,7 @@ import { FollowService } from '../core/services/follow.service';
 
             <div class="bio" *ngIf="!editingBio">
               <div>{{ bio || 'No bio yet.' }}</div>
-              <button class="micro-btn" *ngIf="isOwner" type="button" (click)="startBioEdit()">Refine bio</button>
+              <button class="micro-btn" *ngIf="isOwner && profileEditMode" type="button" (click)="startBioEdit()">Refine bio</button>
             </div>
 
             <div class="edit-row" *ngIf="editingBio">
@@ -544,6 +562,50 @@ import { FollowService } from '../core/services/follow.service';
       color: rgba(6,8,14,0.85);
       box-shadow: inset 0 0 0 1px rgba(0,0,0,0.05), 0 10px 30px rgba(0,0,0,0.09);
     }
+    .share-icon{
+      border:0;
+      border-radius:999px;
+      width:36px;
+      height:36px;
+      display:grid;
+      place-items:center;
+      background:rgba(10,12,18,0.08);
+      cursor:pointer;
+      font-size:16px;
+    }
+    .share-icon.bare{
+      background:transparent;
+      width:auto;
+      height:auto;
+      font-size:20px;
+      line-height:1;
+    }
+    .share-icon.share-emoji{
+      width:24px;
+      height:24px;
+      padding:0;
+      margin-left:auto;
+    }
+    .edit-profile-toggle .saved-check{
+      display:inline-flex;
+      align-items:center;
+      gap:4px;
+      color:#00c781;
+      font-weight:700;
+      letter-spacing:0.05em;
+    }
+    .edit-profile-toggle .saved-check .check-arrow{
+      font-size:14px;
+    }
+    .share-icon.share-emoji svg{
+      width:100%;
+      height:100%;
+      display:block;
+    }
+    .share-icon:disabled{
+      opacity:0.4;
+      cursor:not-allowed;
+    }
     .hint{
       font-size:12px;
       opacity:0.75;
@@ -551,6 +613,16 @@ import { FollowService } from '../core/services/follow.service';
     .hint.error{
       color:#c33;
       opacity:1;
+    }
+    .sr-only{
+      position:absolute;
+      width:1px;
+      height:1px;
+      padding:0;
+      margin:-1px;
+      overflow:hidden;
+      clip:rect(0,0,0,0);
+      border:0;
     }
     .head{
       display:flex;
@@ -632,6 +704,11 @@ import { FollowService } from '../core/services/follow.service';
       align-items:center;
       gap:12px;
       flex-wrap:wrap;
+    }
+    .title-actions{
+      display:flex;
+      align-items:center;
+      gap:10px;
     }
     .sub{
       margin-top:4px;
@@ -832,6 +909,10 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
   bioSaving = false;
   draftBio = '';
   bio = '';
+  profileEditMode = false;
+  profileEditSaving = false;
+  profileEditSaved = false;
+  private profileEditCloseTimer: any = null;
 
   editingAvatar = false;
   avatarSaving = false;
@@ -879,6 +960,7 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     this.sub?.unsubscribe();
     if (this.shareTimer) clearTimeout(this.shareTimer);
+    if (this.profileEditCloseTimer) clearTimeout(this.profileEditCloseTimer);
   }
 
   get initials(): string {
@@ -1138,6 +1220,13 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     this.draftUsername = this.profile?.username ?? '';
   }
 
+  onUsernameDraftChange(): void {
+    if (this.usernameError) {
+      this.usernameError = '';
+      this.forceUi();
+    }
+  }
+
   async saveUsername(): Promise<void> {
     if (!this.profile || !this.isOwner) return;
     const normalized = this.normalizeUsername(this.draftUsername);
@@ -1163,7 +1252,12 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
       this.applyProfile(res.updateProfile);
       this.editingUsername = false;
     } catch (e: any) {
-      this.usernameError = e?.message ?? String(e);
+      const message = (e?.message ?? String(e)).toLowerCase();
+      if (message.includes('duplicate') || message.includes('unique')) {
+        this.usernameError = 'Handle already taken.';
+      } else {
+        this.usernameError = e?.message ?? String(e);
+      }
     } finally {
       this.usernameSaving = false;
       this.forceUi();
@@ -1228,7 +1322,7 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
   }
 
   goBack(): void {
-    void this.router.navigate(['/globe']);
+    void this.router.navigate(['/globe'], { queryParams: {} });
   }
 
   async onAvatar(event: Event): Promise<void> {
@@ -1353,6 +1447,43 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
       this.shareError = e?.message ?? String(e);
       this.forceUi();
     }
+  }
+
+  onProfileEditAction(): void {
+    if (!this.isOwner) return;
+    if (!this.profileEditMode) {
+      this.profileEditMode = true;
+      this.profileEditSaved = false;
+      this.profileEditSaving = false;
+      return;
+    }
+    if (this.profileEditSaving) return;
+
+    this.profileEditSaving = true;
+    this.profileEditSaved = true;
+    this.forceUi();
+
+    if (this.profileEditCloseTimer) {
+      clearTimeout(this.profileEditCloseTimer);
+    }
+
+    this.profileEditCloseTimer = window.setTimeout(() => {
+      this.completeProfileEditClose();
+    }, 700);
+  }
+
+  private completeProfileEditClose(): void {
+    this.profileEditMode = false;
+    this.profileEditSaving = false;
+    this.profileEditSaved = false;
+    this.profileEditCloseTimer = null;
+    this.cancelNameEdit();
+    this.cancelUsernameEdit();
+    this.cancelBioEdit();
+    if (this.editingAvatar) {
+      this.cancelAvatarEdit();
+    }
+    this.forceUi();
   }
 
   private buildShareUrl(profile: Profile | null): string {

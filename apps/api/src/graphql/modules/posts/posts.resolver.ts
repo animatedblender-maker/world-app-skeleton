@@ -1,4 +1,4 @@
-import { PostsService } from './posts.service.ts';
+import { PostsService } from './posts.service.js';
 
 type AuthedUser = {
   id: string;

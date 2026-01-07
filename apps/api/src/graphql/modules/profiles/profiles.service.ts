@@ -1,4 +1,4 @@
-import { pool } from '../../../db.ts';
+import { pool } from '../../../db.js';
 
 type ProfileRow = {
   user_id: string;
@@ -58,34 +58,67 @@ export class ProfilesService {
       [userId]
     );
 
+    try {
+      const { rows } = await pool.query(
+        `
+        update public.profiles
+        set
+          display_name = coalesce($2, display_name),
+          username     = coalesce($3, username),
+          avatar_url   = coalesce($4, avatar_url),
+          country_name = coalesce($5, country_name),
+          country_code = coalesce($6, country_code),
+          city_name    = coalesce($7, city_name),
+          bio          = coalesce($8, bio),
+          updated_at   = now()
+        where user_id = $1
+        returning *
+        `,
+        [
+          userId,
+          input.display_name ?? null,
+          input.username ?? null,
+          input.avatar_url ?? null,
+          input.country_name ?? null,
+          input.country_code ?? null,
+          input.city_name ?? null,
+          input.bio ?? null,
+        ]
+      );
+
+      if (!rows[0]) throw new Error('PROFILE_UPDATE_FAILED');
+      return rows[0] as ProfileRow;
+    } catch (err: any) {
+      if (err?.code === '23505' && String(err?.constraint ?? '').includes('profiles_username')) {
+        throw new Error('Handle already taken.');
+      }
+      throw err;
+    }
+  }
+
+  async searchProfiles(query: string, limit: number): Promise<ProfileRow[]> {
+    const raw = (query || '').trim();
+    if (!raw) return [];
+    const iso = raw.toLowerCase();
+    const pattern = `${iso}%`;
+    const max = Math.max(1, limit);
+
     const { rows } = await pool.query(
       `
-      update public.profiles
-      set
-        display_name = coalesce($2, display_name),
-        username     = coalesce($3, username),
-        avatar_url   = coalesce($4, avatar_url),
-        country_name = coalesce($5, country_name),
-        country_code = coalesce($6, country_code),
-        city_name    = coalesce($7, city_name),
-        bio          = coalesce($8, bio),
-        updated_at   = now()
-      where user_id = $1
-      returning *
+      select *
+      from public.profiles
+      where lower(username) like $1 or lower(display_name) like $1
+      order by
+        case when lower(username) like $1 then 0
+             when lower(display_name) like $1 then 1
+             else 2
+        end,
+        username nulls last
+      limit $2
       `,
-      [
-        userId,
-        input.display_name ?? null,
-        input.username ?? null,
-        input.avatar_url ?? null,
-        input.country_name ?? null,
-        input.country_code ?? null,
-        input.city_name ?? null,
-        input.bio ?? null,
-      ]
+      [pattern, max]
     );
 
-    if (!rows[0]) throw new Error('PROFILE_UPDATE_FAILED');
-    return rows[0] as ProfileRow;
+    return rows as ProfileRow[];
   }
 }

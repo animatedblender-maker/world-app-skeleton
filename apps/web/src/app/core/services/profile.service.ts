@@ -111,6 +111,24 @@ query ProfileById($user_id: ID!) {
 }
 `;
 
+const SEARCH_PROFILES = `
+query SearchProfiles($query: String!, $limit: Int) {
+  searchProfiles(query: $query, limit: $limit) {
+    user_id
+    email
+    display_name
+    username
+    avatar_url
+    country_name
+    country_code
+    city_name
+    bio
+    created_at
+    updated_at
+  }
+}
+`;
+
 @Injectable({ providedIn: 'root' })
 export class ProfileService {
   constructor(private gql: GqlService) {}
@@ -150,5 +168,13 @@ export class ProfileService {
   isComplete(p: Profile | null) {
     if (!p) return false;
     return !!p.display_name && !!p.country_code && p.country_name !== 'Unknown';
+  }
+
+  async searchProfiles(query: string, limit = 6) {
+    if (!query.trim()) return { searchProfiles: [] };
+    return this.gql.request<{ searchProfiles: Profile[] }>(SEARCH_PROFILES, {
+      query: query.trim(),
+      limit,
+    });
   }
 }

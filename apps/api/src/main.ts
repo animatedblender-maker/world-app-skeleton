@@ -1,6 +1,8 @@
 import express, { type Request, type Response } from 'express';
 import cors from 'cors';
-import { createYoga, createSchema } from 'graphql-yoga';
+import { GraphQLError } from 'graphql';
+import { createYoga, createSchema, maskError as yogaMaskError } from 'graphql-yoga';
+import type { YogaInitialContext, YogaSchemaDefinition } from 'graphql-yoga';
 import { jwtVerify, createRemoteJWKSet } from 'jose';
 
 import dotenv from 'dotenv';
@@ -18,8 +20,8 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
 // ✅ ts-node --esm on Windows needs explicit ".ts"
-import { typeDefs } from './graphql/typeDefs.ts';
-import { resolvers } from './graphql/resolvers.ts';
+import { typeDefs } from './graphql/typeDefs.js';
+import { resolvers } from './graphql/resolvers.js';
 
 type AuthedUser = {
   id: string;
@@ -28,9 +30,8 @@ type AuthedUser = {
   aud?: string | string[];
 };
 
-type Context = {
+type Context = YogaInitialContext & {
   user: AuthedUser | null;
-  req: Request;
 };
 
 const ORIGIN = process.env.WEB_ORIGIN ?? 'http://localhost:4200';
@@ -77,9 +78,22 @@ async function getUserFromRequest(req: Request): Promise<AuthedUser | null> {
   }
 }
 
+const schema: YogaSchemaDefinition<Context, {}> = createSchema({ typeDefs, resolvers }) as YogaSchemaDefinition<
+  Context,
+  {}
+>;
+
 const yoga = createYoga<Context>({
-  schema: createSchema({ typeDefs, resolvers }),
+  schema,
   graphqlEndpoint: '/graphql',
+  maskedErrors: {
+    maskError(error, message, isDev) {
+      if (error instanceof GraphQLError && error.extensions?.code === 'HANDLE_TAKEN') {
+        return error;
+      }
+      return yogaMaskError(error, message, isDev);
+    },
+  },
   context: async ({ req }: { req: Request }) => ({
     req,
     user: await getUserFromRequest(req),
@@ -98,7 +112,9 @@ app.use(
 // ✅ health endpoint (typed _req to avoid implicit any)
 app.get('/health', (_req: Request, res: Response) => res.json({ ok: true }));
 
-app.use('/graphql', yoga);
+app.use('/graphql', (req: Request, res: Response) => {
+  return yoga.handle(req, res);
+});
 
 app.listen(PORT, () => {
   console.log(`✅ GraphQL running at http://localhost:${PORT}/graphql`);

@@ -1,5 +1,5 @@
 // apps/api/src/graphql/modules/presence/presence.resolver.ts
-import { PresenceService, type AuthedUser } from './presence.service.ts';
+import { PresenceService, type AuthedUser } from './presence.service.js';
 
 type Context = {
   user: AuthedUser | null;

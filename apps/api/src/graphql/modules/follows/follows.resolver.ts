@@ -1,4 +1,4 @@
-import { FollowsService } from './follows.service.ts';
+import { FollowsService } from './follows.service.js';
 
 type AuthedUser = {
   id: string;

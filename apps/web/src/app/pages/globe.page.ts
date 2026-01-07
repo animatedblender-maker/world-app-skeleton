@@ -7,7 +7,7 @@ import { Subscription } from 'rxjs';
 import { CountriesService, type CountryModel } from '../data/countries.service';
 import { GlobeService } from '../globe/globe.service';
 import { UiStateService } from '../state/ui-state.service';
-import { SearchUiService } from '../search/search-ui.service';
+import { SearchService } from '../search/search.service';
 import { AuthService } from '../core/services/auth.service';
 import { GraphqlService } from '../core/services/graphql.service';
 import { MediaService } from '../core/services/media.service';
@@ -18,6 +18,7 @@ import { FollowService } from '../core/services/follow.service';
 
 type Panel = 'presence' | 'posts' | null;
 type CountryTab = 'posts' | 'stats' | 'media';
+type SearchTab = 'people' | 'travel';
 type RouteState = {
   country: string | null;
   tab: CountryTab | null;
@@ -29,13 +30,75 @@ type RouteState = {
   standalone: true,
   imports: [CommonModule, FormsModule],
   template: `
-    <div class="topbar">
-      <div class="searchwrap">
-        <input id="search" placeholder="Search a country on the map…" />
-        <div id="clearBtn" class="clear-btn">×</div>
-        <div id="suggestions" class="suggestions"></div>
+    <div class="top-overlay">
+      <div class="overlay-inner">
+        <div class="top-actions">
+          <button *ngIf="selectedCountry" class="ghost-btn" type="button" (click)="clearSelectedCountry()">
+            Return to globe
+          </button>
+          <div class="tab-row">
+            <button
+              *ngFor="let tab of searchTabs"
+              type="button"
+              class="tab"
+              [class.active]="tab.id === activeTab"
+              (click)="setActiveTab(tab.id)"
+            >
+              {{ tab.label }}
+            </button>
+          </div>
+        </div>
+        <div class="search-control">
+          <input
+            type="text"
+            [placeholder]="activeTab === 'people' ? 'Search @handle, display name, or ID' : 'Search countries...'"
+            autocomplete="off"
+            [(ngModel)]="searchInputValue"
+            (ngModelChange)="onUnifiedSearchInput($event)"
+            (keydown)="handleSearchKeydown($event)"
+            name="globalSearch"
+          />
+          <div class="user-loader" *ngIf="userSuggestionsLoading"></div>
+          <div class="tab-banner" *ngIf="activeTab !== 'people'">
+            {{ activeTab === 'travel' ? 'Travel search still improving.' : 'More search verticals soon.' }}
+          </div>
+          <div class="user-suggestions" *ngIf="activeTab === 'people' && userSuggestions.length">
+            <button
+              type="button"
+              class="user-suggestion"
+              *ngFor="let profile of userSuggestions"
+              (click)="selectUserSuggestion(profile)"
+            >
+              <div class="suggestion-avatar">
+                <img *ngIf="profile.avatar_url" [src]="profile.avatar_url" alt="avatar" />
+                <span *ngIf="!profile.avatar_url">
+                  {{ (profile.display_name || profile.username || 'U').slice(0, 2).toUpperCase() }}
+                </span>
+              </div>
+              <div class="suggestion-info">
+                <div class="profile-name">{{ profile.display_name || profile.username || 'Member' }}</div>
+                <div class="profile-handle">@{{ profile.username || profile.user_id }}</div>
+              </div>
+            </button>
+          </div>
+          <div class="country-suggestions" *ngIf="activeTab === 'travel' && countrySuggestions.length">
+            <div
+              class="country-option"
+              *ngFor="let country of countrySuggestions"
+              (click)="focusCountry(country)"
+              role="button"
+              tabindex="0"
+              (keyup.enter)="focusCountry(country)"
+            >
+              <span>{{ country.name }}</span>
+              <small>{{ country.code || country.name }}</small>
+            </div>
+          </div>
+          <div class="user-search-error" *ngIf="userSearchError && activeTab === 'people'">
+            {{ userSearchError }}
+          </div>
+        </div>
       </div>
-      <button id="go" class="go-btn">GO</button>
     </div>
 
     <!-- ✅ Ocean map ALWAYS full background -->
@@ -99,10 +162,10 @@ type RouteState = {
                         <div>
                           <div class="composer-title">Share with {{ selectedCountry.name }}</div>
                           <div class="composer-hint" *ngIf="canPostHere">
-                            Let {{ selectedCountry.name }} know what's happening where you live.
+                            What is happening where you are? Add your experience to the collective.
                           </div>
                           <div class="composer-hint" *ngIf="!canPostHere">
-                            Posts publish to {{ profile!.country_name || 'your country' }}. Switch to your home country to post.
+                            Posts publish to {{ profile!.country_name || 'your country' }}. Switch to the country where you post from to post.
                           </div>
                         </div>
                         <div class="composer-cta">
@@ -133,7 +196,7 @@ type RouteState = {
                         What's happening in {{ selectedCountry.name }}?
                       </button>
                       <div class="composer-note" *ngIf="!canPostHere">
-                        You can read posts in {{ selectedCountry.name }}, but only share from your own country.
+                        You can read posts in {{ selectedCountry.name }}, but only share to the country where you are located.
                       </div>
                       <ng-container *ngIf="composerOpen && canPostHere">
                         <input
@@ -172,20 +235,29 @@ type RouteState = {
                   <div class="posts-empty" *ngIf="!posts.length">No posts yet.</div>
                   <div class="post-card" *ngFor="let post of posts">
                     <div class="post-author">
-                      <div class="author-avatar">
-                        <img
-                          *ngIf="post.author?.avatar_url"
-                          [src]="post.author?.avatar_url"
-                          alt="avatar"
-                        />
-                        <div class="author-initials" *ngIf="!post.author?.avatar_url">
-                          {{ (post.author?.display_name || post.author?.username || 'User').slice(0, 2).toUpperCase() }}
+                      <div
+                        class="author-core"
+                        [class.clickable]="!!post.author"
+                        role="button"
+                        tabindex="0"
+                        (click)="openAuthorProfile(post.author); $event.stopPropagation()"
+                        (keyup.enter)="openAuthorProfile(post.author); $event.stopPropagation()"
+                      >
+                        <div class="author-avatar">
+                          <img
+                            *ngIf="post.author?.avatar_url"
+                            [src]="post.author?.avatar_url"
+                            alt="avatar"
+                          />
+                          <div class="author-initials" *ngIf="!post.author?.avatar_url">
+                            {{ (post.author?.display_name || post.author?.username || 'User').slice(0, 2).toUpperCase() }}
+                          </div>
                         </div>
-                      </div>
-                      <div class="author-info">
-                        <div class="author-name">{{ post.author?.display_name || post.author?.username || 'Member' }}</div>
-                        <div class="author-meta">
-                          @{{ post.author?.username || 'user' }} · {{ post.created_at | date: 'mediumDate' }}
+                        <div class="author-info">
+                          <div class="author-name">{{ post.author?.display_name || post.author?.username || 'Member' }}</div>
+                          <div class="author-meta">
+                            @{{ post.author?.username || 'user' }} · {{ post.created_at | date: 'mediumDate' }}
+                          </div>
                         </div>
                       </div>
                       <button
@@ -344,68 +416,210 @@ type RouteState = {
   `,
   styles: [`
     /* =============== TOPBAR =============== */
-    .topbar{
+    .top-overlay{
       position: fixed;
-      top: 14px;
+      top: 16px;
       left: 50%;
       transform: translateX(-50%);
-      z-index: 11000;
+      width: min(520px, calc(100vw - 48px));
+      padding: 4px 10px;
+      border-radius: 20px;
+      background: rgba(5,9,20,0.25);
+      border: 1px solid rgba(0,199,255,0.35);
       display:flex;
-      gap: 10px;
-      align-items:center;
-      pointer-events: auto;
+      justify-content:center;
+      z-index: 12000;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.35);
+      pointer-events:auto;
+      backdrop-filter: blur(18px);
+      gap: 4px;
     }
-    .searchwrap{
-      position: relative;
-      width: min(520px, calc(100vw - 160px));
-    }
-    #search{
+    .overlay-inner{
       width: 100%;
-      padding: 12px 40px 12px 14px;
-      border-radius: 16px;
-      border: 1px solid rgba(255,255,255,0.18);
-      outline: none;
-      background: rgba(10,12,20,0.50);
-      backdrop-filter: blur(12px);
-      color: rgba(255,255,255,0.92);
-      font-weight: 800;
-      letter-spacing: .02em;
+      display:flex;
+      flex-direction:column;
+      gap: 4px;
     }
-    .clear-btn{
-      position:absolute;
-      right: 10px;
-      top: 50%;
-      transform: translateY(-50%);
-      width: 26px;
-      height: 26px;
+    .top-actions{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap: 8px;
+      font-size: 12px;
+    }
+    .ghost-btn{
+      border: 1px solid rgba(255,255,255,0.4);
+      background: transparent;
+      color: white;
       border-radius: 999px;
-      display:grid;
-      place-items:center;
-      cursor:pointer;
-      background: rgba(255,255,255,0.10);
-      color: rgba(255,255,255,0.88);
-      border: 1px solid rgba(255,255,255,0.12);
-      user-select:none;
+      padding: 6px 14px;
+      letter-spacing: 0.2em;
+      font-size: 10px;
+      text-transform: uppercase;
+      cursor: pointer;
+      opacity: 0.8;
     }
-    .suggestions{
+    .tab-row{
+      display:flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .tab{
+      border: 1px solid transparent;
+      border-radius: 999px;
+      padding: 6px 16px;
+      letter-spacing: 0.2em;
+      font-size: 10px;
+      text-transform: uppercase;
+      color: rgba(255,255,255,0.7);
+      background: transparent;
+      cursor: pointer;
+      transition: background 0.2s ease, color 0.2s ease;
+    }
+    .tab:hover{
+      background: rgba(255,255,255,0.08);
+      color: rgba(255,255,255,0.9);
+    }
+    .tab.active{
+      background: rgba(255,255,255,0.12);
+      color: rgba(255,255,255,0.95);
+    }
+    .search-control{
+      position: relative;
+    }
+    .search-control input{
+      width: min(420px, 100%);
+      border: none;
+      border-radius: 14px;
+      padding: 12px 14px;
+      font-size: 14px;
+      background: rgba(255,255,255,0.06);
+      color: rgba(255,255,255,0.92);
+      outline: none;
+      font-weight: 500;
+    }
+    .search-control input:focus{
+      box-shadow: 0 0 0 2px rgba(0,255,209,0.4);
+    }
+    .user-loader{
+      position: absolute;
+      top: 12px;
+      right: 14px;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.6);
+      border-top-color: rgba(255,255,255,0);
+      animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin{
+      to { transform: rotate(360deg); }
+    }
+    .tab-banner{
+      margin-top: 6px;
+      font-size: 11px;
+      color: rgba(255,255,255,0.75);
+    }
+    .user-suggestions,
+    .country-suggestions{
       position:absolute;
       top: calc(100% + 8px);
       left: 0;
       right: 0;
-      z-index: 11001;
-    }
-    .go-btn{
-      padding: 12px 14px;
+      z-index: 12001;
       border-radius: 16px;
-      border: 1px solid rgba(255,255,255,0.16);
-      background: rgba(10,12,20,0.50);
-      color: rgba(255,255,255,0.92);
-      font-weight: 900;
-      letter-spacing: .10em;
-      cursor: pointer;
-      backdrop-filter: blur(12px);
+      border: 1px solid rgba(0,199,255,0.35);
+      background: rgba(5,9,20,0.28);
+      box-shadow: 0 20px 40px rgba(0,0,0,0.45);
+      padding: 6px;
+      display:grid;
+      gap: 6px;
+      overflow: hidden;
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      background-clip: padding-box;
     }
-
+    .user-suggestion{
+      display:flex;
+      align-items:center;
+      gap: 10px;
+      border-radius: 12px;
+      padding: 10px;
+      border: 1px solid rgba(0,199,255,0.6);
+      background: rgba(0,155,255,0.12);
+      color: #fff;
+      cursor: pointer;
+      text-align:left;
+    }
+    .suggestion-avatar{
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      border: 1px solid rgba(255,255,255,0.12);
+      display:grid;
+      place-items:center;
+      background: rgba(255,255,255,0.08);
+      font-size: 12px;
+      color: rgba(255,255,255,0.9);
+    }
+    .suggestion-avatar img{
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      object-fit: cover;
+    }
+    .suggestion-info{
+      display:flex;
+      flex-direction:column;
+      gap: 2px;
+    }
+    .profile-name{
+      font-weight: 700;
+      font-size: 14px;
+      color: #fff;
+    }
+    .profile-handle{
+      font-size: 12px;
+      opacity: 0.75;
+      letter-spacing: 0.08em;
+      color: rgba(255,255,255,0.75);
+    }
+    .user-search-error{
+      margin-top: 6px;
+      font-size: 12px;
+      color: #ff7a93;
+      letter-spacing: 0.08em;
+    }
+    .country-option{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      padding: 10px 14px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      cursor: pointer;
+      transition: background 0.2s ease;
+    }
+    .country-option:last-child{
+      border-bottom: none;
+    }
+    .country-option:hover{
+      background: rgba(255,255,255,0.06);
+    }
+    .country-option span{
+      font-weight: 600;
+      color: #fff;
+    }
+    .country-option small{
+      font-size: 11px;
+      opacity: 0.6;
+      letter-spacing: 0.1em;
+      color: #fff;
+    }
+    .country-hint{
+      margin-top: 10px;
+      font-size: 12px;
+      opacity: 0.6;
+    }
     /* =============== MAP BG ALWAYS FULL =============== */
     .globe-bg{
       position: fixed;
@@ -424,7 +638,7 @@ type RouteState = {
     }
     .stage.focus{
       pointer-events: none;
-      padding-top: 82px; /* ✅ more space so search doesn't cover */
+      padding-top: 150px; /* ✅ more space so search doesn't cover */
       padding-left: 16px;
       padding-right: 16px;
       padding-bottom: 16px;
@@ -618,6 +832,20 @@ type RouteState = {
       align-items:center;
       gap:12px;
       flex-wrap:wrap;
+    }
+    .author-core{
+      display:flex;
+      align-items:center;
+      gap:12px;
+      flex:1;
+      cursor:default;
+    }
+    .author-core.clickable{
+      cursor:pointer;
+    }
+    .author-core:focus{
+      outline:2px solid rgba(0,255,209,0.6);
+      outline-offset:2px;
     }
     .author-avatar{
       width:42px;
@@ -871,6 +1099,21 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   localTotal: number | null = null;
   localOnline: number | null = null;
 
+  userSearchTerm = '';
+  userSearchError = '';
+  userSuggestions: Profile[] = [];
+  userSuggestionsLoading = false;
+  private userSuggestionTimer: number | null = null;
+
+  countrySearchTerm = '';
+  countrySuggestions: CountryModel[] = [];
+
+  activeTab: SearchTab = 'travel';
+  searchTabs: { id: SearchTab; label: string }[] = [
+    { id: 'travel', label: 'Travel' },
+    { id: 'people', label: 'People' },
+  ];
+
   posts: CountryPost[] = [];
   postsLoading = false;
   postsError = '';
@@ -890,8 +1133,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   private queryParamSub?: Subscription;
   private pendingRouteState: RouteState | null = null;
   private applyingRouteState = false;
-  private countriesReady = false;
-  private searchUiReady = false;
+  countriesReady = false;
   private globeReady = false;
   private lastSyncedRouteState: RouteState = { country: null, tab: null, panel: null };
 
@@ -937,7 +1179,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     private countriesService: CountriesService,
     private globeService: GlobeService,
     private ui: UiStateService,
-    private searchUi: SearchUiService,
+    private search: SearchService,
     private auth: AuthService,
     private gql: GraphqlService,
     private router: Router,
@@ -1003,6 +1245,18 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   get composerInitial(): string {
     const source = (this.profile?.display_name || this.profile?.username || this.userEmail || 'you').trim();
     return source ? source.slice(0, 1).toUpperCase() : 'Y';
+  }
+
+  get searchInputValue(): string {
+    return this.activeTab === 'people' ? this.userSearchTerm : this.countrySearchTerm;
+  }
+
+  set searchInputValue(value: string) {
+    if (this.activeTab === 'people') {
+      this.userSearchTerm = value;
+    } else {
+      this.countrySearchTerm = value;
+    }
   }
 
   async ngOnInit(): Promise<void> {
@@ -1119,25 +1373,6 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
         });
       });
 
-      this.searchUi.init({
-        getCountries: () => this.ui.countries,
-        isFocusMode: () => this.ui.labelMode === 'focus',
-        onSearch: (country) => {
-          this.zone.run(() => {
-            this.focusCountry(country);
-          });
-        },
-        onClear: () => {
-          this.zone.run(() => {
-            this.clearSelectedCountry();
-          });
-        },
-      });
-      this.zone.run(() => {
-        this.searchUiReady = true;
-        this.tryApplyPendingRouteState();
-      });
-
       try {
         await this.auth.getAccessToken();
         await this.gql.query<any>(`query { __typename }`);
@@ -1150,6 +1385,9 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   ngOnDestroy(): void {
     try { this.presence.stop(); } catch {}
     this.queryParamSub?.unsubscribe();
+    if (this.userSuggestionTimer) {
+      window.clearTimeout(this.userSuggestionTimer);
+    }
   }
 
   private recomputeLocal(): void {
@@ -1180,7 +1418,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.forceUi();
   }
 
-  private focusCountry(country: CountryModel, opts?: { tab?: CountryTab; skipRouteUpdate?: boolean }): void {
+  focusCountry(country: CountryModel, opts?: { tab?: CountryTab; skipRouteUpdate?: boolean }): void {
     const tab = opts?.tab ?? 'posts';
 
     this.selectedCountry = country;
@@ -1189,8 +1427,8 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
 
     this.ui.setMode('focus');
     this.ui.setSelected(country.id);
-    this.searchUi.setInputValue(country.name);
-    this.searchUi.setClearButtonVisible(true);
+    this.countrySearchTerm = country.name;
+    this.countrySuggestions = [];
 
     this.globeService.setSoloCountry(country.id);
     this.globeService.setConnectionsCountryFilter(country.code ?? null);
@@ -1218,8 +1456,8 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
 
     this.ui.setMode('all');
     this.ui.setSelected(null);
-    this.searchUi.setInputValue('');
-    this.searchUi.setClearButtonVisible(false);
+    this.countrySearchTerm = '';
+    this.countrySuggestions = [];
 
     this.globeService.setSoloCountry(null);
     this.globeService.setConnectionsCountryFilter(null);
@@ -1271,7 +1509,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       return;
     }
     if (!this.canPostHere) {
-      this.postComposerError = 'Switch to your home country to post.';
+    this.postComposerError = 'Switch to the country where you post from to post.';
       return;
     }
     const body = this.newPostBody.trim();
@@ -1326,6 +1564,13 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     return !!authorId && this.meId === authorId;
   }
 
+  openAuthorProfile(author: CountryPost['author'] | null | undefined): void {
+    if (!author) return;
+    const slug = author.username?.trim() || author.user_id;
+    if (!slug) return;
+    void this.router.navigate(['/user', slug]);
+  }
+
   followBusyFor(authorId: string): boolean {
     return this.followBusyMap.get(authorId) === true;
   }
@@ -1373,10 +1618,149 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     }
   }
 
+  onUserSearchInput(value: string): void {
+    this.userSearchTerm = value;
+    this.userSearchError = '';
+    this.scheduleUserSuggestionRefresh();
+  }
+
+  onUnifiedSearchInput(value: string): void {
+    if (this.activeTab === 'people') {
+      this.onUserSearchInput(value);
+      return;
+    }
+    this.onCountrySearchInput(value);
+  }
+
+  private scheduleUserSuggestionRefresh(): void {
+    if (this.userSuggestionTimer) {
+      window.clearTimeout(this.userSuggestionTimer);
+      this.userSuggestionTimer = null;
+    }
+    const trimmed = this.userSearchTerm.trim();
+    if (!trimmed) {
+      this.userSuggestions = [];
+      this.forceUi();
+      return;
+    }
+    this.userSuggestionTimer = window.setTimeout(() => {
+      this.userSuggestionTimer = null;
+      void this.refreshUserSuggestions(trimmed);
+    }, 260);
+  }
+
+  private async refreshUserSuggestions(term: string): Promise<void> {
+    if (!term) {
+      this.userSuggestions = [];
+      this.forceUi();
+      return;
+    }
+    this.userSuggestionsLoading = true;
+    this.forceUi();
+    try {
+      const { searchProfiles } = await this.profiles.searchProfiles(term, 7);
+      this.userSuggestions = searchProfiles ?? [];
+      if (!this.userSuggestions.length) {
+        this.userSearchError = 'No matches yet.';
+      }
+    } catch (e: any) {
+      this.userSearchError = e?.message ?? 'Unable to load suggestions.';
+    } finally {
+      this.userSuggestionsLoading = false;
+      this.forceUi();
+    }
+  }
+
+  onUserSearchKeydown(event: KeyboardEvent): void {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    if (!this.userSuggestions.length) {
+      if (this.userSearchTerm.trim()) {
+        this.userSearchError = 'No matches yet.';
+        this.forceUi();
+      }
+      return;
+    }
+    this.selectUserSuggestion(this.userSuggestions[0]);
+  }
+
+  handleSearchKeydown(event: KeyboardEvent): void {
+    if (this.activeTab === 'people') {
+      this.onUserSearchKeydown(event);
+      return;
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      this.visitCountry();
+    }
+  }
+
+  selectUserSuggestion(profile: Profile): void {
+    if (!profile) return;
+    if (this.userSuggestionTimer) {
+      window.clearTimeout(this.userSuggestionTimer);
+      this.userSuggestionTimer = null;
+    }
+    const slug = profile.username?.trim() || profile.user_id;
+    if (!slug) {
+      this.userSearchError = 'Profile is missing routing info.';
+      this.forceUi();
+      return;
+    }
+    this.userSearchTerm = '';
+    this.userSuggestions = [];
+    this.userSearchError = '';
+    this.forceUi();
+    void this.router.navigate(['/user', slug]);
+  }
+
+  setActiveTab(tab: SearchTab): void {
+    if (this.activeTab === tab) return;
+    this.activeTab = tab;
+    this.userSuggestions = [];
+    this.countrySuggestions = [];
+    this.userSearchError = '';
+  }
+
+  onCountrySearchInput(value: string): void {
+    this.countrySearchTerm = value;
+    this.updateCountrySuggestions(value);
+  }
+
+  private updateCountrySuggestions(raw: string): void {
+    const trimmed = (raw || '').trim();
+    if (!trimmed || !this.countriesReady) {
+      this.countrySuggestions = [];
+      this.forceUi();
+      return;
+    }
+    this.countrySuggestions = this.search.prefixSuggest(this.ui.countries, trimmed, 6);
+    this.forceUi();
+  }
+
+  visitCountry(): void {
+    if (!this.canVisitCountry()) return;
+    const candidate = this.search.bestCandidateForSearch(
+      this.ui.countries,
+      this.countrySearchTerm,
+      this.countrySuggestions,
+      -1
+    );
+    if (!candidate) {
+      this.countrySuggestions = [];
+      this.forceUi();
+      return;
+    }
+    this.focusCountry(candidate);
+  }
+
+  canVisitCountry(): boolean {
+    return this.countriesReady && !!this.countrySearchTerm.trim();
+  }
+
   private tryApplyPendingRouteState(): void {
     if (!this.pendingRouteState) return;
     if (this.pendingRouteState.country && (!this.countriesReady || !this.globeReady)) return;
-    if (!this.searchUiReady) return;
 
     const state = this.pendingRouteState;
     this.pendingRouteState = null;
@@ -1505,6 +1889,14 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
 
   goToMe(): void {
     this.closeMenu();
+    const token = this.profile?.country_code || this.profile?.country_name;
+    if (token) {
+      const country = this.findCountryByRouteToken(token);
+      if (country) {
+        this.focusCountry(country, { tab: 'posts' });
+        return;
+      }
+    }
     void this.router.navigate(['/me']);
   }
 

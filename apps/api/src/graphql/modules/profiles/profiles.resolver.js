@@ -33,6 +33,12 @@ export const profilesResolvers = {
                 return null;
             return await svc().getProfileByUsername(args.username);
         },
+        searchProfiles: async (_, args) => {
+            const raw = (args?.query ?? '').trim();
+            if (!raw)
+                return [];
+            return await svc().searchProfiles(raw, args?.limit ?? 6);
+        },
     },
     Mutation: {
         updateProfile: async (_, args, ctx) => {

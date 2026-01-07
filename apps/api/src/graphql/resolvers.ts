@@ -1,9 +1,9 @@
 // apps/api/src/graphql/resolvers.ts
-import { countriesResolvers } from './modules/countries/countries.resolver.ts';
-import { profilesResolvers } from './modules/profiles/profiles.resolver.ts';
-import { presenceResolvers } from './modules/presence/presence.resolver.ts';
-import { postsResolvers } from './modules/posts/posts.resolver.ts';
-import { followsResolvers } from './modules/follows/follows.resolver.ts';
+import { countriesResolvers } from './modules/countries/countries.resolver.js';
+import { profilesResolvers } from './modules/profiles/profiles.resolver.js';
+import { presenceResolvers } from './modules/presence/presence.resolver.js';
+import { postsResolvers } from './modules/posts/posts.resolver.js';
+import { followsResolvers } from './modules/follows/follows.resolver.js';
 
 async function reverseGeocodeNominatim(lat: number, lng: number) {
   const url = new URL('https://nominatim.openstreetmap.org/reverse');

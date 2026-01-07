@@ -1,4 +1,4 @@
-import { pool } from '../../../db.ts';
+import { pool } from '../../../db.js';
 
 type PostRow = {
   id: string;

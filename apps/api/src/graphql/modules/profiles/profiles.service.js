@@ -20,7 +20,7 @@ export class ProfilesService {
         await pool.query(`insert into public.profiles (user_id, country_name)
        values ($1, 'Unknown')
        on conflict (user_id) do nothing`, [userId]);
-        const { rows } = await pool.query(`
+    const { rows } = await pool.query(`
       update public.profiles
       set
         display_name = coalesce($2, display_name),
@@ -46,5 +46,27 @@ export class ProfilesService {
         if (!rows[0])
             throw new Error('PROFILE_UPDATE_FAILED');
         return rows[0];
+    }
+
+    async searchProfiles(query, limit) {
+        const raw = (query || '').trim();
+        if (!raw)
+            return [];
+        const iso = raw.toLowerCase();
+        const pattern = `${iso}%`;
+        const max = Math.max(1, limit);
+        const { rows } = await pool.query(`
+      select *
+      from public.profiles
+      where lower(username) like $1 or lower(display_name) like $1
+      order by
+        case when lower(username) like $1 then 0
+             when lower(display_name) like $1 then 1
+             else 2
+        end,
+        username nulls last
+      limit $2
+      `, [pattern, max]);
+        return rows;
     }
 }

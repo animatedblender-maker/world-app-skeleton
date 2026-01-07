@@ -1,4 +1,5 @@
-import { ProfilesService } from './profiles.service.ts';
+import { ProfilesService } from './profiles.service.js';
+import { GraphQLError } from 'graphql';
 
 type AuthedUser = {
   id: string;
@@ -46,12 +47,24 @@ export const profilesResolvers = {
       if (!args?.username) return null;
       return await svc().getProfileByUsername(args.username);
     },
+    searchProfiles: async (_: any, args: { query: string; limit?: number }) => {
+      const raw = (args?.query ?? '').trim();
+      if (!raw) return [];
+      return await svc().searchProfiles(raw, args?.limit ?? 6);
+    },
   },
 
   Mutation: {
     updateProfile: async (_: any, args: any, ctx: Context) => {
       const u = requireAuth(ctx);
-      return await svc().updateProfile(u.id, args.input ?? {});
+      try {
+        return await svc().updateProfile(u.id, args.input ?? {});
+      } catch (err: any) {
+        if ((err?.message ?? '').toLowerCase().includes('handle already taken')) {
+          throw new GraphQLError('Handle already taken.', { extensions: { code: 'HANDLE_TAKEN' } });
+        }
+        throw err;
+      }
     },
   },
 };
