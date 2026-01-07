@@ -42,8 +42,15 @@ if (-not (Test-Path $distPath)) {
   throw "Build output not found at $distPath. Run `npm run build` inside apps/web first."
 }
 
-Write-Host "Publishing contents of $distPath to worktree"
-Copy-Item -Recurse -Force "$distPath\*" $worktreePath
+Write-Host "Publishing contents of $distPath/browser to worktree"
+Copy-Item -Recurse -Force "$distPath\browser\*" $worktreePath
+
+foreach ($extra in @('3rdpartylicenses.txt','prerendered-routes.json')) {
+  $file = Join-Path $distPath $extra
+  if (Test-Path $file) {
+    Copy-Item -Force $file $worktreePath
+  }
+}
 
 Set-Location $worktreePath
 git add --all
