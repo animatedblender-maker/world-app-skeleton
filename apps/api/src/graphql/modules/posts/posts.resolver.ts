@@ -23,6 +23,10 @@ export const postsResolvers = {
       const limit = typeof args.limit === 'number' ? args.limit : 25;
       return await svc().postsByCountry(args.country_code ?? '', limit);
     },
+    postsByAuthor: async (_: any, args: { user_id: string; limit?: number }) => {
+      const limit = typeof args.limit === 'number' ? args.limit : 25;
+      return await svc().postsByAuthor(args.user_id ?? '', limit);
+    },
   },
 
   Mutation: {

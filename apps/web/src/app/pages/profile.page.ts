@@ -14,6 +14,8 @@ import { ProfileService, type Profile } from '../core/services/profile.service';
 import { AuthService } from '../core/services/auth.service';
 import { MediaService } from '../core/services/media.service';
 import { PostsService } from '../core/services/posts.service';
+import { PostEventsService } from '../core/services/post-events.service';
+import { CountryPost } from '../core/models/post.model';
 import { FollowService } from '../core/services/follow.service';
 
 @Component({
@@ -272,6 +274,45 @@ import { FollowService } from '../core/services/follow.service';
           </div>
         </div>
 
+        <div class="composer-posts">
+          <div class="sec-title">Posts</div>
+          <div class="post-status" *ngIf="loadingProfilePosts">Loading posts…</div>
+          <div class="post-status error" *ngIf="!loadingProfilePosts && profilePostsError">
+            {{ profilePostsError }}
+          </div>
+          <div class="post-status" *ngIf="!loadingProfilePosts && !profilePosts.length && !profilePostsError">
+            No posts yet.
+          </div>
+          <div class="post-list" *ngIf="!loadingProfilePosts && profilePosts.length">
+            <article class="post-card" *ngFor="let post of profilePosts">
+              <div class="post-author">
+                <div class="author-core">
+                  <div class="author-avatar">
+                    <img
+                      *ngIf="post.author?.avatar_url"
+                      [src]="post.author?.avatar_url"
+                      alt="avatar"
+                    />
+                    <div class="author-initials" *ngIf="!post.author?.avatar_url">
+                      {{ (post.author?.display_name || post.author?.username || profile.display_name || 'You').slice(0, 2).toUpperCase() }}
+                    </div>
+                  </div>
+                  <div class="author-info">
+                    <div class="author-name">{{ post.author?.display_name || post.author?.username || 'You' }}</div>
+                    <div class="author-meta">
+                      @{{ post.author?.username || profile.username || 'you' }} · {{ formatDate(post.created_at) }}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="post-body">
+                <div class="post-title" *ngIf="post.title">{{ post.title }}</div>
+                <p>{{ post.body }}</p>
+              </div>
+            </article>
+          </div>
+        </div>
+
         <div class="avatar-editor" *ngIf="editingAvatar">
           <div class="editor-head">
             <div>
@@ -455,7 +496,8 @@ import { FollowService } from '../core/services/follow.service';
       flex-wrap:wrap;
     }
     .composer{
-      margin-top:20px;
+      margin:20px auto 0;
+      max-width:700px;
       border-radius:20px;
       border:1px solid rgba(0,0,0,0.06);
       background:rgba(255,255,255,0.95);
@@ -862,6 +904,103 @@ import { FollowService } from '../core/services/follow.service';
       text-align:center;
       color:rgba(255,255,255,0.92);
     }
+    .composer-posts{
+      width: 100%;
+      max-width: 700px;
+      margin: 24px auto 0;
+      border-radius: 24px;
+      padding: 20px;
+      background: rgba(255,255,255,0.95);
+      border: 1px solid rgba(0,0,0,0.08);
+      box-shadow: 0 30px 90px rgba(0,0,0,0.25);
+      color: rgba(6,8,14,0.92);
+    }
+    .composer-posts .sec-title{
+      font-size: 14px;
+      letter-spacing: 0.2em;
+      font-weight: 900;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+      opacity: 0.7;
+    }
+    .post-status{
+      font-size: 13px;
+      margin-bottom: 12px;
+      opacity: 0.65;
+    }
+    .post-status.error{
+      color: #c33;
+      opacity: 1;
+    }
+    .post-list{
+      display:flex;
+      flex-direction:column;
+      gap:16px;
+      width: 700px;
+    }
+    .post-card{
+      border-radius:20px;
+      border:1px solid rgba(0,0,0,0.06);
+      background:rgba(255,255,255,0.98);
+      padding:18px;
+      box-shadow:0 18px 60px rgba(0,0,0,0.15);
+    }
+    .post-author{
+      margin-bottom:10px;
+    }
+    .author-core{
+      display:flex;
+      align-items:center;
+      gap:12px;
+    }
+    .author-avatar{
+      width:48px;
+      height:48px;
+      border-radius:999px;
+      overflow:hidden;
+      border:1px solid rgba(0,0,0,0.08);
+      background:rgba(245,247,250,0.95);
+      display:grid;
+      place-items:center;
+    }
+    .author-avatar img{
+      width:100%;
+      height:100%;
+      object-fit:cover;
+    }
+    .author-initials{
+      font-weight:900;
+      letter-spacing:0.12em;
+      color:rgba(10,12,18,0.8);
+    }
+    .author-info{
+      display:flex;
+      flex-direction:column;
+      gap:2px;
+    }
+    .author-name{
+      font-weight:700;
+      font-size:14px;
+    }
+    .author-meta{
+      font-size:12px;
+      letter-spacing:0.08em;
+      text-transform:uppercase;
+      opacity:0.6;
+    }
+    .post-title{
+      margin:0 0 6px;
+      font-size:16px;
+      font-weight:700;
+      letter-spacing:0.02em;
+    }
+    .post-body{
+      margin:0;
+      font-size:14px;
+      line-height:1.7;
+      opacity:0.85;
+      white-space:pre-line;
+    }
   `],
 })
 export class ProfilePageComponent implements OnInit, OnDestroy {
@@ -869,6 +1008,8 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
   loading = false;
   error = '';
   private sub?: Subscription;
+  private postEventsCreatedSub?: Subscription;
+  private postEventsInsertSub?: Subscription;
 
   shareUrl = '';
   shareCopied = false;
@@ -890,6 +1031,10 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
   postError = '';
   postFeedback = '';
   profileComposerOpen = false;
+
+  profilePosts: CountryPost[] = [];
+  loadingProfilePosts = false;
+  profilePostsError = '';
 
   avatarImage = '';
   avatarNormX = 0;
@@ -942,12 +1087,20 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     private auth: AuthService,
     private media: MediaService,
     private posts: PostsService,
+    private postEvents: PostEventsService,
     private follows: FollowService,
     private zone: NgZone,
     private cdr: ChangeDetectorRef
   ) {}
 
   async ngOnInit(): Promise<void> {
+    this.postEventsCreatedSub = this.postEvents.createdPost$.subscribe((post) => {
+      this.zone.run(() => this.handleNewProfilePost(post));
+    });
+    this.postEventsInsertSub = this.postEvents.insert$.subscribe((event) => {
+      if (!this.profile || event.author_id !== this.profile.user_id) return;
+      void this.loadProfilePosts(this.profile.user_id);
+    });
     const user = await this.auth.getUser();
     this.meId = user?.id ?? null;
 
@@ -959,6 +1112,8 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.sub?.unsubscribe();
+    this.postEventsCreatedSub?.unsubscribe();
+    this.postEventsInsertSub?.unsubscribe();
     if (this.shareTimer) clearTimeout(this.shareTimer);
     if (this.profileEditCloseTimer) clearTimeout(this.profileEditCloseTimer);
   }
@@ -1054,6 +1209,7 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     this.resetFollowState();
     if (!this.canPostFromProfile) this.profileComposerOpen = false;
     void this.loadFollowMeta(profile);
+    void this.loadProfilePosts(profile.user_id);
   }
 
   private resetFollowState(): void {
@@ -1322,7 +1478,11 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
   }
 
   goBack(): void {
-    void this.router.navigate(['/globe'], { queryParams: {} });
+    void this.router.navigate(['/'], {
+      state: { resetGlobe: true },
+      replaceUrl: true,
+      queryParams: { resetGlobe: '1' },
+    });
   }
 
   async onAvatar(event: Event): Promise<void> {
@@ -1507,6 +1667,52 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
   private maxOffset(size: number, scale: number): number {
     const scaled = size * scale;
     return Math.max(0, (scaled - size) / 2);
+  }
+
+  formatDate(value: string): string {
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return value;
+    return parsed.toLocaleString(undefined, {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    });
+  }
+
+  private async loadProfilePosts(userId: string): Promise<void> {
+    if (!userId) {
+      this.profilePosts = [];
+      return;
+    }
+
+    this.loadingProfilePosts = true;
+    this.profilePostsError = '';
+    this.forceUi();
+
+    try {
+    this.profilePosts = this.sortPostsDesc(await this.posts.listForAuthor(userId));
+    } catch (e: any) {
+      this.profilePostsError = e?.message ?? String(e);
+    } finally {
+      this.loadingProfilePosts = false;
+      this.forceUi();
+    }
+  }
+
+  private handleNewProfilePost(post: CountryPost): void {
+    if (!this.profile || post.author_id !== this.profile.user_id) {
+      return;
+    }
+    if (this.profilePosts.some((existing) => existing.id === post.id)) {
+      return;
+    }
+    this.profilePosts = [post, ...this.profilePosts];
+    this.forceUi();
+  }
+
+  private sortPostsDesc(posts: CountryPost[]): CountryPost[] {
+    return [...posts].sort((a, b) => {
+      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    });
   }
 
   private async cropAvatarToSquare(file: File): Promise<File> {

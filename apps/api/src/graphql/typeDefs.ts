@@ -148,6 +148,7 @@ export const typeDefs = `#graphql
 
     # Posts / social
     postsByCountry(country_code: String!, limit: Int): [Post!]!
+    postsByAuthor(user_id: ID!, limit: Int): [Post!]!
     followCounts(user_id: ID!): FollowCounts!
     followingIds: [ID!]!
     isFollowing(user_id: ID!): Boolean!

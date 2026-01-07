@@ -53,10 +53,35 @@ export class PostsService {
       from public.posts p
       left join public.profiles pr on pr.user_id = p.author_id
       where upper(coalesce(p.country_code, '')) = $1
-      order by p.created_at desc
+      order by p.created_at asc, p.id asc
       limit $2
       `,
       [iso, Math.max(1, limit)]
+    );
+
+    return rows as PostRow[];
+  }
+
+  async postsByAuthor(authorId: string, limit: number): Promise<PostRow[]> {
+    const { rows } = await pool.query(
+      `
+      select
+        p.*,
+        jsonb_build_object(
+          'user_id', pr.user_id,
+          'display_name', pr.display_name,
+          'username', pr.username,
+          'avatar_url', pr.avatar_url,
+          'country_name', pr.country_name,
+          'country_code', pr.country_code
+        ) as author
+      from public.posts p
+      left join public.profiles pr on pr.user_id = p.author_id
+      where p.author_id = $1
+      order by p.created_at desc
+      limit $2
+      `,
+      [authorId, Math.max(1, limit)]
     );
 
     return rows as PostRow[];

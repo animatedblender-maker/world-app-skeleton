@@ -13,8 +13,10 @@ import { GraphqlService } from '../core/services/graphql.service';
 import { MediaService } from '../core/services/media.service';
 import { ProfileService, type Profile } from '../core/services/profile.service';
 import { PresenceService, type PresenceSnapshot } from '../core/services/presence.service';
-import { PostsService, type CountryPost } from '../core/services/posts.service';
+import { PostsService } from '../core/services/posts.service';
 import { FollowService } from '../core/services/follow.service';
+import { PostEventsService, type PostInsertEvent } from '../core/services/post-events.service';
+import { CountryPost } from '../core/models/post.model';
 
 type Panel = 'presence' | 'posts' | null;
 type CountryTab = 'posts' | 'stats' | 'media';
@@ -1131,6 +1133,9 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   composerOpen = false;
 
   private queryParamSub?: Subscription;
+  private postEventsCreatedSub?: Subscription;
+  private postEventsInsertSub?: Subscription;
+  private resettingGlobe = false;
   private pendingRouteState: RouteState | null = null;
   private applyingRouteState = false;
   countriesReady = false;
@@ -1188,6 +1193,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     private profiles: ProfileService,
     private presence: PresenceService,
     private postsService: PostsService,
+    private postEvents: PostEventsService,
     private followService: FollowService,
     private zone: NgZone,
     private cdr: ChangeDetectorRef
@@ -1260,6 +1266,16 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   async ngOnInit(): Promise<void> {
+    this.postEventsCreatedSub = this.postEvents.createdPost$.subscribe((post) => {
+      this.zone.run(() => this.handleCountryPostEvent(post));
+    });
+    this.postEventsInsertSub = this.postEvents.insert$.subscribe((event) => {
+      this.zone.run(() => this.handleCountryPostInsert(event));
+    });
+    const navState = this.router.getCurrentNavigation()?.extras.state as { resetGlobe?: boolean } | null;
+    if (navState?.resetGlobe) {
+      this.clearSelectedCountry({ skipRouteUpdate: true });
+    }
     this.loadingProfile = true;
     this.profileError = '';
     this.forceUi();
@@ -1300,6 +1316,23 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     }
 
     this.queryParamSub = this.route.queryParamMap.subscribe((params) => {
+      const resetFlag = params.get('resetGlobe');
+      if (resetFlag === '1') {
+        if (!this.resettingGlobe) {
+          this.resettingGlobe = true;
+          this.clearSelectedCountry({ skipRouteUpdate: true });
+          void this.router
+            .navigate([], {
+              relativeTo: this.route,
+              queryParams: { resetGlobe: null },
+              replaceUrl: true,
+            })
+            .finally(() => {
+              this.resettingGlobe = false;
+            });
+        }
+        return;
+      }
       const normalized = this.normalizeRouteState({
         country: params.get('country'),
         tab: params.get('tab'),
@@ -1385,6 +1418,8 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   ngOnDestroy(): void {
     try { this.presence.stop(); } catch {}
     this.queryParamSub?.unsubscribe();
+    this.postEventsCreatedSub?.unsubscribe();
+    this.postEventsInsertSub?.unsubscribe();
     if (this.userSuggestionTimer) {
       window.clearTimeout(this.userSuggestionTimer);
     }
@@ -1494,13 +1529,44 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.forceUi();
 
     try {
-      this.posts = await this.postsService.listByCountry(country.code);
+      this.posts = this.sortPostsAsc(await this.postsService.listByCountry(country.code));
     } catch (e: any) {
       this.postsError = e?.message ?? String(e);
     } finally {
       this.postsLoading = false;
       this.forceUi();
     }
+  }
+
+  private handleCountryPostEvent(post: CountryPost): void {
+    const currentCode = this.selectedCountry?.code?.toUpperCase() ?? null;
+    const postCode = post.country_code?.toUpperCase() ?? null;
+    if (!currentCode || !postCode || currentCode !== postCode) {
+      return;
+    }
+    if (this.posts.some((existing) => existing.id === post.id)) {
+      return;
+    }
+    this.posts = this.sortPostsAsc([...this.posts, post]);
+    this.forceUi();
+  }
+
+  private handleCountryPostInsert(event: PostInsertEvent): void {
+    const currentCode = this.selectedCountry?.code?.toUpperCase();
+    const eventCode = event.country_code?.toUpperCase();
+    if (!currentCode || !eventCode) return;
+    if (currentCode !== eventCode) return;
+    if (!this.selectedCountry) return;
+    void this.loadPostsForCountry(this.selectedCountry);
+  }
+
+  private sortPostsAsc(posts: CountryPost[]): CountryPost[] {
+    return [...posts].sort((a, b) => {
+      const aTime = new Date(a.created_at).getTime();
+      const bTime = new Date(b.created_at).getTime();
+      if (aTime !== bTime) return aTime - bTime;
+      return a.id.localeCompare(b.id);
+    });
   }
 
   async submitPost(): Promise<void> {
@@ -1541,7 +1607,9 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       });
       this.newPostBody = '';
       this.newPostTitle = '';
-      this.posts = [post, ...this.posts];
+    if (!this.posts.some((existing) => existing.id === post.id)) {
+      this.posts = this.sortPostsAsc([...this.posts, post]);
+    }
       this.composerOpen = false;
       this.postFeedback = 'Shared with your country.';
       setTimeout(() => {
@@ -1889,14 +1957,6 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
 
   goToMe(): void {
     this.closeMenu();
-    const token = this.profile?.country_code || this.profile?.country_name;
-    if (token) {
-      const country = this.findCountryByRouteToken(token);
-      if (country) {
-        this.focusCountry(country, { tab: 'posts' });
-        return;
-      }
-    }
     void this.router.navigate(['/me']);
   }
 

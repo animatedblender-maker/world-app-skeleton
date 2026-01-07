@@ -1,27 +1,11 @@
 import { Injectable } from '@angular/core';
 import { GqlService } from './gql.service';
-
-export type CountryPost = {
-  id: string;
-  title: string | null;
-  body: string;
-  media_type: string | null;
-  media_url: string | null;
-  created_at: string;
-  author_id: string;
-  author: {
-    user_id: string;
-    display_name: string | null;
-    username: string | null;
-    avatar_url: string | null;
-    country_name: string | null;
-    country_code: string | null;
-  } | null;
-};
+import { CountryPost } from '../models/post.model';
+import { PostEventsService } from './post-events.service';
 
 @Injectable({ providedIn: 'root' })
 export class PostsService {
-  constructor(private gql: GqlService) {}
+  constructor(private gql: GqlService, private postEvents: PostEventsService) {}
 
   async listByCountry(countryCode: string, limit = 25): Promise<CountryPost[]> {
     const query = `
@@ -54,6 +38,40 @@ export class PostsService {
       limit,
     });
     return (postsByCountry ?? []).map((row) => this.mapPost(row));
+  }
+
+  async listForAuthor(userId: string, limit = 25): Promise<CountryPost[]> {
+    if (!userId) return [];
+    const query = `
+      query PostsByAuthor($authorId: ID!, $limit: Int) {
+        postsByAuthor(user_id: $authorId, limit: $limit) {
+          id
+          title
+          body
+          media_type
+          media_url
+          created_at
+          author_id
+          country_name
+          country_code
+          city_name
+          author {
+            user_id
+            display_name
+            username
+            avatar_url
+            country_name
+            country_code
+          }
+        }
+      }
+    `;
+
+    const { postsByAuthor } = await this.gql.request<{ postsByAuthor: any[] }>(
+      query,
+      { authorId: userId, limit }
+    );
+    return (postsByAuthor ?? []).map((row) => this.mapPost(row));
   }
 
   async createPost(input: {
@@ -101,7 +119,9 @@ export class PostsService {
     const { createPost } = await this.gql.request<{ createPost: any }>(mutation, {
       input: payload,
     });
-    return this.mapPost(createPost);
+    const mapped = this.mapPost(createPost);
+    this.postEvents.emit(mapped);
+    return mapped;
   }
 
   private mapPost(row: any): CountryPost {
@@ -113,6 +133,8 @@ export class PostsService {
       media_url: row.media_url ?? null,
       created_at: row.created_at,
       author_id: row.author_id,
+      country_name: row.country_name ?? null,
+      country_code: row.country_code ?? null,
       author: row.author
         ? {
             user_id: row.author.user_id,
