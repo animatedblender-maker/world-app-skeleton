@@ -1,9 +1,10 @@
 import { Injectable } from '@angular/core';
 import { AuthService } from './auth.service';
+import { environment } from '../../../envirnoments/envirnoment';
 
 @Injectable({ providedIn: 'root' })
 export class GqlService {
-  private endpoint = 'http://localhost:3000/graphql';
+  private endpoint = environment.graphqlEndpoint || 'http://localhost:3000/graphql';
 
   constructor(private auth: AuthService) {}
 

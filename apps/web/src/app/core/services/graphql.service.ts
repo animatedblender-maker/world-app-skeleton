@@ -1,5 +1,6 @@
 import { Injectable } from '@angular/core';
 import { AuthService } from './auth.service';
+import { environment } from '../../../envirnoments/envirnoment';
 
 type GraphqlResponse<T> = {
   data?: T;
@@ -9,7 +10,7 @@ type GraphqlResponse<T> = {
 @Injectable({ providedIn: 'root' })
 export class GraphqlService {
   // Your Yoga endpoint
-  private readonly endpoint = 'http://localhost:3000/graphql';
+  private readonly endpoint = environment.graphqlEndpoint || 'http://localhost:3000/graphql';
 
   constructor(private auth: AuthService) {}
 
