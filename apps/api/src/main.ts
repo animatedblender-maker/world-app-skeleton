@@ -92,9 +92,11 @@ const yoga = createYoga<Context>({
   graphqlEndpoint: '/graphql',
   maskedErrors: {
     maskError(error, message, isDev) {
+      const code =
+        typeof error.extensions?.code === 'string' ? error.extensions.code : '';
       const passthrough =
         error instanceof GraphQLError &&
-        ['HANDLE_TAKEN', 'UNAUTHENTICATED'].includes(error.extensions?.code ?? '');
+        ['HANDLE_TAKEN', 'UNAUTHENTICATED'].includes(code);
       if (passthrough) {
         return error;
       }
