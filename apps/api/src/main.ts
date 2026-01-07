@@ -92,15 +92,16 @@ const yoga = createYoga<Context>({
   graphqlEndpoint: '/graphql',
   maskedErrors: {
     maskError(error, message, isDev) {
+      const graphQLError = error instanceof GraphQLError ? error : null;
       const code =
-        typeof error.extensions?.code === 'string' ? error.extensions.code : '';
+        typeof graphQLError?.extensions?.code === 'string' ? graphQLError.extensions.code : '';
       const passthrough =
-        error instanceof GraphQLError &&
+        graphQLError !== null &&
         ['HANDLE_TAKEN', 'UNAUTHENTICATED'].includes(code);
-      if (passthrough) {
-        return error;
+      if (passthrough && graphQLError) {
+        return graphQLError;
       }
-      return yogaMaskError(error, message, isDev);
+      return yogaMaskError(error as Error, message, isDev);
     },
   },
   context: async ({ req }: { req: Request }) => ({
