@@ -26,16 +26,13 @@ if (Test-Path $worktreePath) {
   Remove-Item -Recurse -Force $worktreePath
 }
 
+git worktree prune
+
 if (-not (git show-ref --verify --quiet refs/heads/$worktreeBranch)) {
   git branch $worktreeBranch
 }
 
-$addArgs = @($worktreePath, $worktreeBranch)
-git worktree add @addArgs 2>$null
-if ($LASTEXITCODE -ne 0) {
-  git worktree remove $worktreePath -f -ErrorAction SilentlyContinue
-  git worktree add @addArgs
-}
+git worktree add -B $worktreeBranch $worktreePath
 
 $distPath = Join-Path $repoRoot 'apps/web/dist/web'
 if (-not (Test-Path $distPath)) {
@@ -60,4 +57,4 @@ if (-not (git status -s)) {
   git commit -m "Publish Angular site to gh-pages"
 }
 
-git push origin $worktreeBranch
+git push --force-with-lease origin $worktreeBranch

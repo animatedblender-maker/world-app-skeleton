@@ -35,6 +35,10 @@ type Context = YogaInitialContext & {
 };
 
 const ORIGIN = process.env.WEB_ORIGIN ?? 'http://localhost:4200';
+const ALLOWED_ORIGINS = (process.env.WEB_ORIGINS ?? ORIGIN)
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean);
 const PORT = Number(process.env.PORT ?? 3000);
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -104,7 +108,12 @@ const app = express();
 
 app.use(
   cors({
-    origin: ORIGIN,
+    origin: (incomingOrigin, callback) => {
+      if (!incomingOrigin || ALLOWED_ORIGINS.includes(incomingOrigin)) {
+        return callback(null, true);
+      }
+      return callback(new Error(`CORS origin ${incomingOrigin} not allowed`));
+    },
     credentials: true,
   })
 );
@@ -119,5 +128,5 @@ app.use('/graphql', (req: Request, res: Response) => {
 app.listen(PORT, () => {
   console.log(`✅ GraphQL running at http://localhost:${PORT}/graphql`);
   console.log(`✅ Health at        http://localhost:${PORT}/health`);
-  console.log(`✅ CORS origin allowed: ${ORIGIN}`);
+  console.log(`✅ CORS origins allowed: ${ALLOWED_ORIGINS.join(', ')}`);
 });

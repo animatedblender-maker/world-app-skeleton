@@ -266,16 +266,20 @@ export class CountriesService {
     return { features, countries };
   }
 
-  private async fetchCountriesGeoJson(): Promise<any> {
-    // ✅ since your angular.json serves /public as web root
-    // put the file in: public/countries50m.geojson
-    const tryUrls = [
-      '/countries50m.geojson',          // ✅ correct for /public
-      '/public/countries50m.geojson',   // fallback
-      '/assets/countries50m.geojson',   // fallback if you moved it
-      '/assets/countries.geojson',      // fallback
+  private getGeoJsonCandidates(): string[] {
+    const baseHref = document.querySelector('base')?.getAttribute('href') ?? '/';
+    const resolvedBase = new URL(baseHref, window.location.origin).toString();
+    const paths = [
+      'countries50m.geojson',
+      'public/countries50m.geojson',
+      'assets/countries50m.geojson',
+      'assets/countries.geojson',
     ];
+    return paths.map((path) => new URL(path, resolvedBase).toString());
+  }
 
+  private async fetchCountriesGeoJson(): Promise<any> {
+    const tryUrls = this.getGeoJsonCandidates();
     let lastErr: any = null;
     for (const url of tryUrls) {
       try {

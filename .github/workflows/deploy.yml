@@ -29,7 +29,7 @@ jobs:
       - name: Build web app
         run: |
           cd apps/web
-          npm run build
+          npm run build -- --base-href /world-app-skeleton/
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
