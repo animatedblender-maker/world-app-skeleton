@@ -19,7 +19,7 @@ import {
   type PostUpdateEvent,
   type PostDeleteEvent,
 } from '../core/services/post-events.service';
-import { CountryPost } from '../core/models/post.model';
+import { CountryPost, PostComment, PostLike } from '../core/models/post.model';
 import { FollowService } from '../core/services/follow.service';
 import { LocationService } from '../core/services/location.service';
 
@@ -314,7 +314,7 @@ import { LocationService } from '../core/services/location.service';
                 </div>
                 <div
                   class="post-menu"
-                  *ngIf="editingPostId !== post.id && isOwner"
+                  *ngIf="editingPostId !== post.id"
                   (click)="$event.stopPropagation()"
                 >
                   <span class="post-visibility-icon">{{ visibilityIcon(post.visibility) }}</span>
@@ -327,22 +327,151 @@ import { LocationService } from '../core/services/location.service';
                     ⋯
                   </button>
                   <div class="post-menu-dropdown" *ngIf="openPostMenuId === post.id">
-                    <button class="menu-item" type="button" (click)="startPostEdit(post)">Edit</button>
-                    <button class="menu-item" type="button" (click)="startPostEdit(post)">Privacy</button>
-                    <button class="menu-item danger" type="button" (click)="requestPostDelete(post)">Delete</button>
-                    <div class="menu-confirm" *ngIf="confirmDeletePostId === post.id">
-                      <div class="menu-confirm-title">Delete this post?</div>
-                      <div class="menu-confirm-actions">
-                        <button class="menu-item ghost" type="button" (click)="cancelPostDelete()">Cancel</button>
-                        <button class="menu-item danger" type="button" (click)="deletePost(post)">Delete</button>
+                    <ng-container *ngIf="isOwner; else reportMenu">
+                      <button class="menu-item" type="button" (click)="startPostEdit(post)">Edit</button>
+                      <button class="menu-item" type="button" (click)="startPostEdit(post)">Privacy</button>
+                      <button class="menu-item danger" type="button" (click)="requestPostDelete(post)">Delete</button>
+                      <div class="menu-confirm" *ngIf="confirmDeletePostId === post.id">
+                        <div class="menu-confirm-title">Delete this post?</div>
+                        <div class="menu-confirm-actions">
+                          <button class="menu-item ghost" type="button" (click)="cancelPostDelete()">Cancel</button>
+                          <button class="menu-item danger" type="button" (click)="deletePost(post)">Delete</button>
+                        </div>
                       </div>
-                    </div>
+                    </ng-container>
+                    <ng-template #reportMenu>
+                      <button class="menu-item" type="button" (click)="toggleReport(post.id)">Report</button>
+                      <div class="menu-report" *ngIf="reportingPostId === post.id">
+                        <textarea
+                          class="menu-report-input"
+                          rows="2"
+                          maxlength="2000"
+                          placeholder="Tell us what is wrong"
+                          [(ngModel)]="reportReason"
+                        ></textarea>
+                        <div class="menu-confirm-actions">
+                          <button class="menu-item ghost" type="button" (click)="cancelReport()">Cancel</button>
+                          <button class="menu-item danger" type="button" (click)="submitReport(post)" [disabled]="reportBusy">
+                            {{ reportBusy ? 'Sending...' : 'Send report' }}
+                          </button>
+                        </div>
+                        <div class="menu-report-error" *ngIf="reportError">{{ reportError }}</div>
+                        <div class="menu-report-success" *ngIf="reportFeedback">{{ reportFeedback }}</div>
+                      </div>
+                    </ng-template>
                   </div>
                 </div>
               </div>
               <div class="post-body" *ngIf="editingPostId !== post.id">
                 <div class="post-title" *ngIf="post.title">{{ post.title }}</div>
                 <p>{{ post.body }}</p>
+              </div>
+              <div class="post-actions" *ngIf="editingPostId !== post.id">
+                <div class="post-action-group">
+                  <button
+                    class="post-action like"
+                    type="button"
+                    [class.active]="post.liked_by_me"
+                    [disabled]="likeBusy[post.id]"
+                    (click)="togglePostLike(post)"
+                  >
+                    <span class="icon">{{ post.liked_by_me ? '\u2665' : '\u2661' }}</span>
+                  </button>
+                  <button
+                    class="post-action count"
+                    type="button"
+                    [class.active]="likeOpen[post.id]"
+                    (click)="toggleLikes(post.id)"
+                  >
+                    <span class="count">{{ post.like_count }}</span>
+                  </button>
+                </div>
+                <button
+                  class="post-action comment"
+                  type="button"
+                  [class.active]="commentOpen[post.id]"
+                  (click)="toggleComments(post.id)"
+                >
+                  <span class="icon">{{ '\u{1F4AC}' }}</span>
+                  <span class="count">{{ post.comment_count }}</span>
+                </button>
+              </div>
+              <div class="post-action-error" *ngIf="postActionError[post.id]">
+                {{ postActionError[post.id] }}
+              </div>
+              <div class="post-likes" *ngIf="likeOpen[post.id] && editingPostId !== post.id">
+                <div class="like-status" *ngIf="likeLoading[post.id]">Loading likes...</div>
+                <div class="like-status error" *ngIf="likeErrors[post.id]">{{ likeErrors[post.id] }}</div>
+                <div class="like-list" *ngIf="!likeLoading[post.id] && !likeErrors[post.id]">
+                  <div class="like-empty" *ngIf="!(likeItems[post.id]?.length)">No likes yet.</div>
+                  <button
+                    class="like-row"
+                    type="button"
+                    *ngFor="let like of likeItems[post.id]"
+                    (click)="openUserProfile(like.user)"
+                  >
+                    <div class="like-avatar">
+                      <img
+                        *ngIf="like.user?.avatar_url"
+                        [src]="like.user?.avatar_url"
+                        alt="avatar"
+                      />
+                      <div class="like-initials" *ngIf="!like.user?.avatar_url">
+                        {{ (like.user?.display_name || like.user?.username || 'U').slice(0, 2).toUpperCase() }}
+                      </div>
+                    </div>
+                    <div class="like-body">
+                      <div class="like-name">{{ like.user?.display_name || like.user?.username || 'Member' }}</div>
+                      <div class="like-handle">@{{ like.user?.username || 'user' }}</div>
+                    </div>
+                    <div class="like-time">{{ like.created_at | date: 'mediumDate' }}</div>
+                  </button>
+                </div>
+              </div>
+              <div class="post-comments" *ngIf="commentOpen[post.id] && editingPostId !== post.id">
+                <div class="comment-status" *ngIf="commentLoading[post.id]">Loading comments...</div>
+                <div class="comment-status error" *ngIf="commentErrors[post.id]">{{ commentErrors[post.id] }}</div>
+                <div class="comment-list" *ngIf="!commentLoading[post.id] && !commentErrors[post.id]">
+                  <div class="comment-empty" *ngIf="!(commentItems[post.id]?.length)">No comments yet.</div>
+                  <div class="comment" *ngFor="let comment of commentItems[post.id]">
+                    <div class="comment-avatar">
+                      <img
+                        *ngIf="comment.author?.avatar_url"
+                        [src]="comment.author?.avatar_url"
+                        alt="avatar"
+                      />
+                      <div class="comment-initials" *ngIf="!comment.author?.avatar_url">
+                        {{ (comment.author?.display_name || comment.author?.username || 'U').slice(0, 2).toUpperCase() }}
+                      </div>
+                    </div>
+                    <div class="comment-body">
+                      <div class="comment-meta">
+                        <span class="comment-name">{{ comment.author?.display_name || comment.author?.username || 'Member' }}</span>
+                        <span class="comment-time">{{ comment.created_at | date: 'mediumDate' }}</span>
+                      </div>
+                      <div class="comment-text">{{ comment.body }}</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="comment-compose" *ngIf="meId; else commentSignIn">
+                  <input
+                    class="comment-input"
+                    placeholder="Write a comment"
+                    [disabled]="commentBusy[post.id]"
+                    [(ngModel)]="commentDrafts[post.id]"
+                  />
+                  <button
+                    class="comment-submit"
+                    type="button"
+                    [disabled]="commentBusy[post.id]"
+                    (click)="submitComment(post)"
+                  >
+                    {{ commentBusy[post.id] ? 'Sending...' : 'Comment' }}
+                  </button>
+                </div>
+                <ng-template #commentSignIn>
+                  <div class="comment-hint">Sign in to comment.</div>
+                </ng-template>
               </div>
               <div class="post-edit" *ngIf="editingPostId === post.id">
                 <input
@@ -1075,6 +1204,160 @@ import { LocationService } from '../core/services/location.service';
       text-transform:uppercase;
       opacity:0.7;
     }
+    .post-actions{
+      margin-top:12px;
+      display:flex;
+      gap:10px;
+      align-items:center;
+      flex-wrap:wrap;
+    }
+    .post-action-group{
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+    }
+    .post-action{
+      display:flex;
+      align-items:center;
+      gap:6px;
+      border-radius:999px;
+      border:1px solid rgba(0,199,255,0.45);
+      background:rgba(245,247,250,0.92);
+      padding:6px 12px;
+      font-size:12px;
+      font-weight:800;
+      letter-spacing:0.06em;
+      color:rgba(10,12,18,0.7);
+      cursor:pointer;
+    }
+    .post-action .icon{ font-size:14px; }
+    .post-action .count{ font-size:11px; font-weight:800; }
+    .post-action.active{
+      border-color:rgba(0,199,255,0.7);
+      background:rgba(0,199,255,0.12);
+      color:rgba(10,12,18,0.75);
+    }
+    .post-action.like.active .icon{ color:#c33; }
+    .post-action.count{
+      padding:6px 10px;
+      min-width:36px;
+      justify-content:center;
+    }
+    .post-action:disabled{ opacity:0.6; cursor:not-allowed; }
+    .post-action-error{
+      margin-top:6px;
+      font-size:11px;
+      font-weight:700;
+      color:#c33;
+      letter-spacing:0.06em;
+    }
+    .post-comments{
+      margin-top:10px;
+      padding-top:10px;
+      border-top:1px solid rgba(0,0,0,0.06);
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+    }
+    .comment-status{ font-size:12px; opacity:0.7; }
+    .comment-status.error{ color:#c33; }
+    .comment-list{ display:flex; flex-direction:column; gap:10px; }
+    .comment-empty{ font-size:12px; opacity:0.6; }
+    .comment{
+      display:flex;
+      gap:10px;
+      align-items:flex-start;
+    }
+    .comment-avatar{
+      width:30px;
+      height:30px;
+      border-radius:999px;
+      overflow:hidden;
+      background:rgba(245,247,250,0.95);
+      border:1px solid rgba(0,0,0,0.08);
+      display:grid;
+      place-items:center;
+      font-weight:900;
+      font-size:11px;
+      color:rgba(10,12,18,0.8);
+    }
+    .comment-avatar img{ width:100%; height:100%; object-fit:cover; }
+    .comment-body{ flex:1; min-width:0; }
+    .comment-meta{ display:flex; gap:8px; align-items:center; font-size:11px; opacity:0.65; }
+    .comment-name{ font-weight:800; text-transform:uppercase; letter-spacing:0.08em; }
+    .comment-text{ font-size:12px; color:rgba(10,12,18,0.85); margin-top:2px; }
+    .comment-compose{
+      display:flex;
+      gap:8px;
+      align-items:center;
+      flex-wrap:wrap;
+    }
+    .comment-input{
+      flex:1;
+      min-width:180px;
+      border-radius:12px;
+      border:1px solid rgba(0,0,0,0.08);
+      background:rgba(245,247,250,0.9);
+      padding:8px 10px;
+      font-family:inherit;
+      font-size:12px;
+      color:rgba(10,12,18,0.85);
+    }
+    .comment-submit{
+      border-radius:999px;
+      border:1px solid rgba(0,0,0,0.12);
+      background:rgba(255,255,255,0.96);
+      padding:6px 12px;
+      font-size:11px;
+      font-weight:800;
+      letter-spacing:0.08em;
+      text-transform:uppercase;
+      color:rgba(10,12,18,0.7);
+      cursor:pointer;
+    }
+    .post-likes{
+      margin-top:10px;
+      padding-top:10px;
+      border-top:1px solid rgba(0,0,0,0.06);
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+    }
+    .like-status{ font-size:12px; opacity:0.7; }
+    .like-status.error{ color:#c33; }
+    .like-list{ display:flex; flex-direction:column; gap:10px; }
+    .like-empty{ font-size:12px; opacity:0.6; }
+    .like-row{
+      display:flex;
+      align-items:center;
+      gap:10px;
+      border:0;
+      background:transparent;
+      padding:4px 0;
+      text-align:left;
+      cursor:pointer;
+      color:inherit;
+    }
+    .like-avatar{
+      width:30px;
+      height:30px;
+      border-radius:999px;
+      overflow:hidden;
+      background:rgba(245,247,250,0.95);
+      border:1px solid rgba(0,0,0,0.08);
+      display:grid;
+      place-items:center;
+      font-weight:900;
+      font-size:11px;
+      color:rgba(10,12,18,0.8);
+    }
+    .like-avatar img{ width:100%; height:100%; object-fit:cover; }
+    .like-body{ flex:1; min-width:0; }
+    .like-name{ font-weight:800; text-transform:uppercase; letter-spacing:0.08em; font-size:11px; }
+    .like-handle{ font-size:11px; opacity:0.6; }
+    .like-time{ font-size:11px; opacity:0.55; }
+    .comment-submit:disabled{ opacity:0.6; cursor:not-allowed; }
+    .comment-hint{ font-size:12px; opacity:0.6; }
     .post-edit{
       margin-top:12px;
       display:grid;
@@ -1182,6 +1465,35 @@ import { LocationService } from '../core/services/location.service';
       justify-content:flex-end;
       gap:8px;
     }
+    .menu-report{
+      margin-top:6px;
+      padding-top:6px;
+      border-top:1px solid rgba(0,0,0,0.08);
+      display:grid;
+      gap:8px;
+    }
+    .menu-report-input{
+      width:100%;
+      border-radius:10px;
+      border:1px solid rgba(0,0,0,0.1);
+      background:rgba(245,247,250,0.94);
+      padding:8px;
+      font-family:inherit;
+      font-size:12px;
+      color:rgba(10,12,18,0.85);
+    }
+    .menu-report-error{
+      font-size:11px;
+      font-weight:700;
+      color:#c33;
+      letter-spacing:0.06em;
+    }
+    .menu-report-success{
+      font-size:11px;
+      font-weight:700;
+      color:rgba(10,12,18,0.7);
+      letter-spacing:0.06em;
+    }
   `],
 })
 export class ProfilePageComponent implements OnInit, OnDestroy {
@@ -1204,7 +1516,7 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
   private shareTimer: any = null;
 
   isOwner = false;
-  private meId: string | null = null;
+  meId: string | null = null;
   followersCount: number | null = null;
   followingCount: number | null = null;
   followMetaLoading = false;
@@ -1226,6 +1538,23 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
   postEditError = '';
   openPostMenuId: string | null = null;
   confirmDeletePostId: string | null = null;
+  likeBusy: Record<string, boolean> = {};
+  likeOpen: Record<string, boolean> = {};
+  likeLoading: Record<string, boolean> = {};
+  likeErrors: Record<string, string> = {};
+  likeItems: Record<string, PostLike[]> = {};
+  postActionError: Record<string, string> = {};
+  commentOpen: Record<string, boolean> = {};
+  commentLoading: Record<string, boolean> = {};
+  commentBusy: Record<string, boolean> = {};
+  commentErrors: Record<string, string> = {};
+  commentDrafts: Record<string, string> = {};
+  commentItems: Record<string, PostComment[]> = {};
+  reportingPostId: string | null = null;
+  reportReason = '';
+  reportBusy = false;
+  reportError = '';
+  reportFeedback = '';
 
   profilePosts: CountryPost[] = [];
   loadingProfilePosts = false;
@@ -1550,6 +1879,13 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
       this.followBusy = false;
       this.forceUi();
     }
+  }
+
+  openUserProfile(user: { username?: string | null; user_id?: string | null } | null | undefined): void {
+    if (!user) return;
+    const slug = user.username?.trim() || user.user_id;
+    if (!slug) return;
+    void this.router.navigate(['/user', slug]);
   }
 
   async submitProfilePost(): Promise<void> {
@@ -2021,9 +2357,9 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
 
   visibilityIcon(value: string): string {
     const normalized = String(value || '').toLowerCase();
-    if (normalized === 'private') return '🔒';
-    if (normalized === 'followers') return '👥';
-    return '👁️';
+    if (normalized === 'private') return '\u{1F512}';
+    if (normalized === 'followers') return '\u{1F512}';
+    return '\u{1F512}';
   }
 
   startPostEdit(post: CountryPost): void {
@@ -2085,16 +2421,25 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     if (this.openPostMenuId === postId) {
       this.openPostMenuId = null;
       this.confirmDeletePostId = null;
+      this.reportingPostId = null;
     } else {
       this.openPostMenuId = postId;
       this.confirmDeletePostId = null;
+      this.reportingPostId = null;
     }
+    this.reportReason = '';
+    this.reportError = '';
+    this.reportFeedback = '';
     this.forceUi();
   }
 
   requestPostDelete(post: CountryPost): void {
     if (!this.isOwner) return;
     this.confirmDeletePostId = post.id;
+    this.reportingPostId = null;
+    this.reportReason = '';
+    this.reportError = '';
+    this.reportFeedback = '';
     this.forceUi();
   }
 
@@ -2124,6 +2469,185 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
       this.postEditError = e?.message ?? String(e);
     } finally {
       this.postEditBusy = false;
+      this.forceUi();
+    }
+  }
+
+  async togglePostLike(post: CountryPost): Promise<void> {
+    if (!this.meId || !post?.id) {
+      this.postActionError[post.id] = 'Sign in to like posts.';
+      this.forceUi();
+      return;
+    }
+    if (this.likeBusy[post.id]) return;
+    this.likeBusy[post.id] = true;
+    this.postActionError[post.id] = '';
+    this.forceUi();
+
+    try {
+      const updated = post.liked_by_me
+        ? await this.posts.unlikePost(post.id)
+        : await this.posts.likePost(post.id);
+      this.applyProfilePostUpdate(updated);
+      if (this.likeOpen[post.id]) {
+        void this.loadLikes(post.id);
+      }
+    } catch (e: any) {
+      this.postActionError[post.id] = e?.message ?? String(e);
+    } finally {
+      this.likeBusy[post.id] = false;
+      this.forceUi();
+    }
+  }
+
+  toggleLikes(postId: string): void {
+    if (!postId) return;
+    const next = !this.likeOpen[postId];
+    this.likeOpen[postId] = next;
+    if (next && !this.likeItems[postId] && !this.likeLoading[postId]) {
+      void this.loadLikes(postId);
+    }
+    this.forceUi();
+  }
+
+  private async loadLikes(postId: string): Promise<void> {
+    if (!postId) return;
+    this.likeLoading[postId] = true;
+    this.likeErrors[postId] = '';
+    this.forceUi();
+
+    try {
+      const likes = await this.posts.listLikes(postId, 40);
+      this.likeItems[postId] = likes;
+    } catch (e: any) {
+      this.likeErrors[postId] = e?.message ?? String(e);
+    } finally {
+      this.likeLoading[postId] = false;
+      this.forceUi();
+    }
+  }
+
+  toggleComments(postId: string): void {
+    if (!postId) return;
+    const next = !this.commentOpen[postId];
+    this.commentOpen[postId] = next;
+    if (next && !this.commentItems[postId] && !this.commentLoading[postId]) {
+      void this.loadComments(postId);
+    }
+    this.forceUi();
+  }
+
+  private async loadComments(postId: string): Promise<void> {
+    if (!postId) return;
+    this.commentLoading[postId] = true;
+    this.commentErrors[postId] = '';
+    this.forceUi();
+
+    try {
+      const comments = await this.posts.listComments(postId, 40);
+      this.commentItems[postId] = comments;
+    } catch (e: any) {
+      this.commentErrors[postId] = e?.message ?? String(e);
+    } finally {
+      this.commentLoading[postId] = false;
+      this.forceUi();
+    }
+  }
+
+  async submitComment(post: CountryPost): Promise<void> {
+    if (!post?.id) return;
+    if (!this.meId) {
+      this.commentErrors[post.id] = 'Sign in to comment.';
+      this.forceUi();
+      return;
+    }
+
+    const draft = (this.commentDrafts[post.id] ?? '').trim();
+    if (!draft) {
+      this.commentErrors[post.id] = 'Write something before commenting.';
+      this.forceUi();
+      return;
+    }
+
+    if (this.commentBusy[post.id]) return;
+    this.commentBusy[post.id] = true;
+    this.commentErrors[post.id] = '';
+    this.forceUi();
+
+    try {
+      const comment = await this.posts.addComment(post.id, draft);
+      const existing = this.commentItems[post.id] ?? [];
+      this.commentItems[post.id] = [...existing, comment];
+      this.commentDrafts[post.id] = '';
+      const updated = { ...post, comment_count: post.comment_count + 1 };
+      this.applyProfilePostUpdate(updated);
+    } catch (e: any) {
+      this.commentErrors[post.id] = e?.message ?? String(e);
+    } finally {
+      this.commentBusy[post.id] = false;
+      this.forceUi();
+    }
+  }
+
+  toggleReport(postId: string): void {
+    if (!postId) return;
+    if (this.reportingPostId === postId) {
+      this.cancelReport();
+      return;
+    }
+    this.reportingPostId = postId;
+    this.reportReason = '';
+    this.reportError = '';
+    this.reportFeedback = '';
+    this.confirmDeletePostId = null;
+    this.forceUi();
+  }
+
+  cancelReport(): void {
+    this.reportingPostId = null;
+    this.reportReason = '';
+    this.reportError = '';
+    this.reportFeedback = '';
+    this.forceUi();
+  }
+
+  async submitReport(post: CountryPost): Promise<void> {
+    if (!post?.id) return;
+    if (!this.meId) {
+      this.reportError = 'Sign in to report posts.';
+      this.forceUi();
+      return;
+    }
+
+    const reason = this.reportReason.trim();
+    if (!reason) {
+      this.reportError = 'Tell us what is wrong.';
+      this.forceUi();
+      return;
+    }
+
+    if (this.reportBusy) return;
+    this.reportBusy = true;
+    this.reportError = '';
+    this.reportFeedback = '';
+    this.forceUi();
+
+    try {
+      await this.posts.reportPost(post.id, reason);
+      this.reportFeedback = 'Report sent.';
+      this.reportReason = '';
+      setTimeout(() => {
+        if (this.reportingPostId === post.id) {
+          this.reportingPostId = null;
+          this.openPostMenuId = null;
+          this.reportFeedback = '';
+          this.forceUi();
+        }
+      }, 900);
+    } catch (e: any) {
+      this.reportError = e?.message ?? String(e);
+    } finally {
+      this.reportBusy = false;
       this.forceUi();
     }
   }

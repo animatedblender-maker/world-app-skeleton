@@ -15,7 +15,7 @@ export const typeDefs = `#graphql
     center: LatLng!
   }
 
-  # ✅ Match your frontend query shape:
+  # バ. Match your frontend query shape:
   # query { countries { countries { ... } } }
   type CountriesResult {
     countries: [Country!]!
@@ -35,7 +35,7 @@ export const typeDefs = `#graphql
     updated_at: String
   }
 
-  # ✅ This is what Query.me returns (not Profile)
+  # バ. This is what Query.me returns (not Profile)
   type MeUser {
     id: ID!
     email: String
@@ -58,6 +58,13 @@ export const typeDefs = `#graphql
     country_code: String
   }
 
+  type NotificationActor {
+    user_id: ID!
+    display_name: String
+    username: String
+    avatar_url: String
+  }
+
   type Post {
     id: ID!
     author_id: ID!
@@ -73,9 +80,38 @@ export const typeDefs = `#graphql
     visibility: String!
     like_count: Int!
     comment_count: Int!
+    liked_by_me: Boolean!
     created_at: String!
     updated_at: String!
     author: PostAuthor
+  }
+
+  type PostComment {
+    id: ID!
+    post_id: ID!
+    author_id: ID!
+    body: String!
+    created_at: String!
+    updated_at: String!
+    author: PostAuthor
+  }
+
+  type PostLike {
+    user_id: ID!
+    created_at: String!
+    user: PostAuthor
+  }
+
+  type Notification {
+    id: ID!
+    user_id: ID!
+    actor_id: ID
+    type: String!
+    entity_type: String
+    entity_id: ID
+    read_at: String
+    created_at: String!
+    actor: NotificationActor
   }
 
   input CreatePostInput {
@@ -84,6 +120,13 @@ export const typeDefs = `#graphql
     country_name: String!
     country_code: String!
     city_name: String
+    visibility: String
+  }
+
+  input UpdatePostInput {
+    title: String
+    body: String
+    visibility: String
   }
 
   type FollowCounts {
@@ -148,9 +191,17 @@ export const typeDefs = `#graphql
 
     # Posts / social
     postsByCountry(country_code: String!, limit: Int): [Post!]!
+    postsByAuthor(user_id: ID!, limit: Int): [Post!]!
+    postById(post_id: ID!): Post
+    commentsByPost(post_id: ID!, limit: Int, before: String): [PostComment!]!
+    postLikes(post_id: ID!, limit: Int): [PostLike!]!
     followCounts(user_id: ID!): FollowCounts!
     followingIds: [ID!]!
     isFollowing(user_id: ID!): Boolean!
+
+    # Notifications
+    notifications(limit: Int, before: String): [Notification!]!
+    notificationsUnreadCount: Int!
   }
 
   type Mutation {
@@ -163,7 +214,17 @@ export const typeDefs = `#graphql
 
     # Posts / social
     createPost(input: CreatePostInput!): Post!
+    updatePost(post_id: ID!, input: UpdatePostInput!): Post!
+    deletePost(post_id: ID!): Boolean!
+    likePost(post_id: ID!): Post!
+    unlikePost(post_id: ID!): Post!
+    addComment(post_id: ID!, body: String!): PostComment!
+    reportPost(post_id: ID!, reason: String!): Boolean!
     followUser(target_id: ID!): Boolean!
     unfollowUser(target_id: ID!): Boolean!
+
+    # Notifications
+    markNotificationRead(id: ID!): Boolean!
+    markAllNotificationsRead: Int!
   }
 `;

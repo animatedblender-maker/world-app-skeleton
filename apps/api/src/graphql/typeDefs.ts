@@ -80,9 +80,26 @@ export const typeDefs = `#graphql
     visibility: String!
     like_count: Int!
     comment_count: Int!
+    liked_by_me: Boolean!
     created_at: String!
     updated_at: String!
     author: PostAuthor
+  }
+
+  type PostComment {
+    id: ID!
+    post_id: ID!
+    author_id: ID!
+    body: String!
+    created_at: String!
+    updated_at: String!
+    author: PostAuthor
+  }
+
+  type PostLike {
+    user_id: ID!
+    created_at: String!
+    user: PostAuthor
   }
 
   type Notification {
@@ -175,6 +192,9 @@ export const typeDefs = `#graphql
     # Posts / social
     postsByCountry(country_code: String!, limit: Int): [Post!]!
     postsByAuthor(user_id: ID!, limit: Int): [Post!]!
+    postById(post_id: ID!): Post
+    commentsByPost(post_id: ID!, limit: Int, before: String): [PostComment!]!
+    postLikes(post_id: ID!, limit: Int): [PostLike!]!
     followCounts(user_id: ID!): FollowCounts!
     followingIds: [ID!]!
     isFollowing(user_id: ID!): Boolean!
@@ -196,6 +216,10 @@ export const typeDefs = `#graphql
     createPost(input: CreatePostInput!): Post!
     updatePost(post_id: ID!, input: UpdatePostInput!): Post!
     deletePost(post_id: ID!): Boolean!
+    likePost(post_id: ID!): Post!
+    unlikePost(post_id: ID!): Post!
+    addComment(post_id: ID!, body: String!): PostComment!
+    reportPost(post_id: ID!, reason: String!): Boolean!
     followUser(target_id: ID!): Boolean!
     unfollowUser(target_id: ID!): Boolean!
 

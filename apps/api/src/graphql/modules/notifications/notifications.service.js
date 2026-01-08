@@ -1,26 +1,9 @@
 import { pool } from '../../../db.js';
 
-type NotificationRow = {
-  id: string;
-  user_id: string;
-  actor_id: string | null;
-  type: string;
-  entity_type: string | null;
-  entity_id: string | null;
-  read_at: string | null;
-  created_at: string;
-  actor: {
-    user_id: string;
-    display_name: string | null;
-    username: string | null;
-    avatar_url: string | null;
-  } | null;
-};
-
 export class NotificationsService {
-  async listForUser(userId: string, limit: number, before?: string | null): Promise<NotificationRow[]> {
+  async listForUser(userId, limit, before) {
     const safeLimit = Math.max(1, Math.min(100, limit || 40));
-    const params: Array<string | number> = [userId, safeLimit];
+    const params = [userId, safeLimit];
     const beforeClause = before ? `and n.created_at < $3::timestamptz` : '';
     if (before) params.push(before);
 
@@ -44,10 +27,10 @@ export class NotificationsService {
       params
     );
 
-    return rows as NotificationRow[];
+    return rows;
   }
 
-  async unreadCount(userId: string): Promise<number> {
+  async unreadCount(userId) {
     const { rows } = await pool.query(
       `
       select count(*)::int as total
@@ -59,7 +42,7 @@ export class NotificationsService {
     return rows[0]?.total ?? 0;
   }
 
-  async markRead(userId: string, id: string): Promise<boolean> {
+  async markRead(userId, id) {
     const { rows } = await pool.query(
       `
       update public.notifications
@@ -72,7 +55,7 @@ export class NotificationsService {
     return !!rows[0]?.id;
   }
 
-  async markAllRead(userId: string): Promise<number> {
+  async markAllRead(userId) {
     const { rowCount } = await pool.query(
       `
       update public.notifications
@@ -84,7 +67,7 @@ export class NotificationsService {
     return rowCount ?? 0;
   }
 
-  async notifyFollow(targetId: string, followerId: string): Promise<void> {
+  async notifyFollow(targetId, followerId) {
     if (!targetId || !followerId || targetId === followerId) return;
     await pool.query(
       `
@@ -97,7 +80,7 @@ export class NotificationsService {
     );
   }
 
-  async notifyPostLike(targetId: string, actorId: string, postId: string): Promise<void> {
+  async notifyPostLike(targetId, actorId, postId) {
     if (!targetId || !actorId || !postId || targetId === actorId) return;
     await pool.query(
       `
@@ -110,7 +93,7 @@ export class NotificationsService {
     );
   }
 
-  async notifyPostComment(targetId: string, actorId: string, postId: string): Promise<void> {
+  async notifyPostComment(targetId, actorId, postId) {
     if (!targetId || !actorId || !postId || targetId === actorId) return;
     await pool.query(
       `

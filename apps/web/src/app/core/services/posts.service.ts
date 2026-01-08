@@ -1,6 +1,6 @@
 import { Injectable } from '@angular/core';
 import { GqlService } from './gql.service';
-import { CountryPost } from '../models/post.model';
+import { CountryPost, PostComment, PostLike } from '../models/post.model';
 import { PostEventsService } from './post-events.service';
 
 @Injectable({ providedIn: 'root' })
@@ -17,6 +17,9 @@ export class PostsService {
           media_type
           media_url
           visibility
+          like_count
+          comment_count
+          liked_by_me
           created_at
           updated_at
           author_id
@@ -53,6 +56,9 @@ export class PostsService {
           media_type
           media_url
           visibility
+          like_count
+          comment_count
+          liked_by_me
           created_at
           updated_at
           author_id
@@ -78,6 +84,44 @@ export class PostsService {
     return (postsByAuthor ?? []).map((row) => this.mapPost(row));
   }
 
+  async getPostById(postId: string): Promise<CountryPost | null> {
+    if (!postId) return null;
+    const query = `
+      query PostById($postId: ID!) {
+        postById(post_id: $postId) {
+          id
+          title
+          body
+          media_type
+          media_url
+          visibility
+          like_count
+          comment_count
+          liked_by_me
+          created_at
+          updated_at
+          author_id
+          country_name
+          country_code
+          city_name
+          author {
+            user_id
+            display_name
+            username
+            avatar_url
+            country_name
+            country_code
+          }
+        }
+      }
+    `;
+
+    const { postById } = await this.gql.request<{ postById: any | null }>(query, {
+      postId,
+    });
+    return postById ? this.mapPost(postById) : null;
+  }
+
   async createPost(input: {
     authorId: string;
     title?: string | null;
@@ -97,6 +141,9 @@ export class PostsService {
           media_type
           media_url
           visibility
+          like_count
+          comment_count
+          liked_by_me
           created_at
           updated_at
           author_id
@@ -145,6 +192,9 @@ export class PostsService {
           media_type
           media_url
           visibility
+          like_count
+          comment_count
+          liked_by_me
           created_at
           updated_at
           author_id
@@ -201,6 +251,178 @@ export class PostsService {
     return deletePost;
   }
 
+  async likePost(postId: string): Promise<CountryPost> {
+    const mutation = `
+      mutation LikePost($postId: ID!) {
+        likePost(post_id: $postId) {
+          id
+          title
+          body
+          media_type
+          media_url
+          visibility
+          like_count
+          comment_count
+          liked_by_me
+          created_at
+          updated_at
+          author_id
+          country_name
+          country_code
+          city_name
+          author {
+            user_id
+            display_name
+            username
+            avatar_url
+            country_name
+            country_code
+          }
+        }
+      }
+    `;
+
+    const { likePost } = await this.gql.request<{ likePost: any }>(mutation, { postId });
+    const mapped = this.mapPost(likePost);
+    this.postEvents.emitUpdated(mapped);
+    return mapped;
+  }
+
+  async unlikePost(postId: string): Promise<CountryPost> {
+    const mutation = `
+      mutation UnlikePost($postId: ID!) {
+        unlikePost(post_id: $postId) {
+          id
+          title
+          body
+          media_type
+          media_url
+          visibility
+          like_count
+          comment_count
+          liked_by_me
+          created_at
+          updated_at
+          author_id
+          country_name
+          country_code
+          city_name
+          author {
+            user_id
+            display_name
+            username
+            avatar_url
+            country_name
+            country_code
+          }
+        }
+      }
+    `;
+
+    const { unlikePost } = await this.gql.request<{ unlikePost: any }>(mutation, { postId });
+    const mapped = this.mapPost(unlikePost);
+    this.postEvents.emitUpdated(mapped);
+    return mapped;
+  }
+
+  async listComments(postId: string, limit = 25, before?: string | null): Promise<PostComment[]> {
+    const query = `
+      query CommentsByPost($postId: ID!, $limit: Int, $before: String) {
+        commentsByPost(post_id: $postId, limit: $limit, before: $before) {
+          id
+          post_id
+          author_id
+          body
+          created_at
+          updated_at
+          author {
+            user_id
+            display_name
+            username
+            avatar_url
+            country_name
+            country_code
+          }
+        }
+      }
+    `;
+
+    const { commentsByPost } = await this.gql.request<{ commentsByPost: any[] }>(
+      query,
+      { postId, limit, before: before ?? null }
+    );
+    return (commentsByPost ?? []).map((row) => this.mapComment(row));
+  }
+
+  async listLikes(postId: string, limit = 25): Promise<PostLike[]> {
+    if (!postId) return [];
+    const query = `
+      query PostLikes($postId: ID!, $limit: Int) {
+        postLikes(post_id: $postId, limit: $limit) {
+          user_id
+          created_at
+          user {
+            user_id
+            display_name
+            username
+            avatar_url
+            country_name
+            country_code
+          }
+        }
+      }
+    `;
+
+    const { postLikes } = await this.gql.request<{ postLikes: any[] }>(query, {
+      postId,
+      limit,
+    });
+    return (postLikes ?? []).map((row) => this.mapLike(row));
+  }
+
+  async addComment(postId: string, body: string): Promise<PostComment> {
+    const mutation = `
+      mutation AddComment($postId: ID!, $body: String!) {
+        addComment(post_id: $postId, body: $body) {
+          id
+          post_id
+          author_id
+          body
+          created_at
+          updated_at
+          author {
+            user_id
+            display_name
+            username
+            avatar_url
+            country_name
+            country_code
+          }
+        }
+      }
+    `;
+
+    const { addComment } = await this.gql.request<{ addComment: any }>(mutation, {
+      postId,
+      body: body.trim(),
+    });
+    return this.mapComment(addComment);
+  }
+
+  async reportPost(postId: string, reason: string): Promise<boolean> {
+    const mutation = `
+      mutation ReportPost($postId: ID!, $reason: String!) {
+        reportPost(post_id: $postId, reason: $reason)
+      }
+    `;
+
+    const { reportPost } = await this.gql.request<{ reportPost: boolean }>(mutation, {
+      postId,
+      reason: reason.trim(),
+    });
+    return !!reportPost;
+  }
+
   private mapPost(row: any): CountryPost {
     return {
       id: row.id,
@@ -209,6 +431,9 @@ export class PostsService {
       media_type: row.media_type ?? 'none',
       media_url: row.media_url ?? null,
       visibility: row.visibility ?? 'public',
+      like_count: Number(row.like_count ?? 0),
+      comment_count: Number(row.comment_count ?? 0),
+      liked_by_me: !!row.liked_by_me,
       created_at: row.created_at,
       updated_at: row.updated_at ?? row.created_at,
       author_id: row.author_id,
@@ -223,6 +448,44 @@ export class PostsService {
             avatar_url: row.author.avatar_url,
             country_name: row.author.country_name,
             country_code: row.author.country_code,
+          }
+        : null,
+    };
+  }
+
+  private mapComment(row: any): PostComment {
+    return {
+      id: row.id,
+      post_id: row.post_id,
+      author_id: row.author_id,
+      body: row.body ?? '',
+      created_at: row.created_at,
+      updated_at: row.updated_at ?? row.created_at,
+      author: row.author
+        ? {
+            user_id: row.author.user_id,
+            display_name: row.author.display_name,
+            username: row.author.username,
+            avatar_url: row.author.avatar_url,
+            country_name: row.author.country_name,
+            country_code: row.author.country_code,
+          }
+        : null,
+    };
+  }
+
+  private mapLike(row: any): PostLike {
+    return {
+      user_id: row.user_id,
+      created_at: row.created_at,
+      user: row.user
+        ? {
+            user_id: row.user.user_id,
+            display_name: row.user.display_name,
+            username: row.user.username,
+            avatar_url: row.user.avatar_url,
+            country_name: row.user.country_name,
+            country_code: row.user.country_code,
           }
         : null,
     };
