@@ -1,6 +1,15 @@
 {
   "name": "world-app",
   "private": true,
+  "scripts": {
+    "db:pull": "supabase db pull",
+    "db:push": "supabase db push",
+    "db:migration:new": "supabase migration new",
+    "db:seed": "supabase db seed",
+    "mobile:sync": "npm --workspace apps/mobile run cap:sync",
+    "mobile:ios": "npm --workspace apps/mobile run cap:ios",
+    "mobile:android": "npm --workspace apps/mobile run cap:android"
+  },
   "workspaces": [
     "apps/*",
     "packages/*"

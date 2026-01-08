@@ -1,7 +1,12 @@
+import { GraphQLError } from 'graphql';
 import { NotificationsService } from './notifications.service.js';
 
 function requireAuth(ctx) {
-  if (!ctx.user) throw new Error('UNAUTHENTICATED');
+  if (!ctx.user) {
+    throw new GraphQLError('Authentication required.', {
+      extensions: { code: 'UNAUTHENTICATED' },
+    });
+  }
   return ctx.user;
 }
 

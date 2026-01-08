@@ -1,7 +1,8 @@
+import { GraphQLError } from 'graphql';
 import { ProfilesService } from './profiles.service.ts';
 function requireAuth(ctx) {
     if (!ctx.user)
-        throw new Error('UNAUTHENTICATED');
+        throw new GraphQLError('Authentication required.', { extensions: { code: 'UNAUTHENTICATED' } });
     return ctx.user;
 }
 function svc() {

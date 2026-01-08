@@ -1,7 +1,12 @@
+import { GraphQLError } from 'graphql';
 import { PostsService } from './posts.service.js';
 
 function requireAuth(ctx) {
-  if (!ctx.user) throw new Error('UNAUTHENTICATED');
+  if (!ctx.user) {
+    throw new GraphQLError('Authentication required.', {
+      extensions: { code: 'UNAUTHENTICATED' },
+    });
+  }
   return ctx.user;
 }
 

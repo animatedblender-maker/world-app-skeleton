@@ -53,11 +53,13 @@ export class GqlService {
     // GraphQL errors
     if (json?.errors?.length) {
       console.error('[gql] GQL ERRORS', json.errors);
+      console.error('[gql] GQL ERRORS JSON', JSON.stringify(json.errors));
 
       const first = json.errors[0];
-      const msg =
-        first?.message ??
-        `GraphQL error: ${JSON.stringify(json.errors).slice(0, 800)}`;
+      const code = typeof first?.extensions?.code === 'string' ? first.extensions.code : null;
+      const msg = code
+        ? `${first?.message ?? 'GraphQL error.'} (code=${code})`
+        : first?.message ?? `GraphQL error: ${JSON.stringify(json.errors).slice(0, 800)}`;
 
       throw new Error(msg);
     }

@@ -1,5 +1,5 @@
-﻿{
-  "name": "@world/shared",
+{
+  "name": "@world/api-client",
   "private": true,
   "version": "0.0.0",
   "type": "module",

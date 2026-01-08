@@ -1,4 +1,5 @@
 // apps/api/src/graphql/modules/presence/presence.resolver.ts
+import { GraphQLError } from 'graphql';
 import { PresenceService, type AuthedUser } from './presence.service.js';
 
 type Context = {
@@ -6,7 +7,11 @@ type Context = {
 };
 
 function requireAuth(ctx: Context): AuthedUser {
-  if (!ctx.user?.id) throw new Error('UNAUTHENTICATED');
+  if (!ctx.user?.id) {
+    throw new GraphQLError('Authentication required.', {
+      extensions: { code: 'UNAUTHENTICATED' },
+    });
+  }
   return ctx.user;
 }
 

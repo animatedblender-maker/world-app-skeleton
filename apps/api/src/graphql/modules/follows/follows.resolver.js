@@ -1,7 +1,10 @@
+import { GraphQLError } from 'graphql';
 import { FollowsService } from './follows.service.ts';
 function requireAuth(ctx) {
     if (!ctx.user)
-        throw new Error('UNAUTHENTICATED');
+        throw new GraphQLError('Authentication required.', {
+            extensions: { code: 'UNAUTHENTICATED' },
+        });
     return ctx.user;
 }
 const svc = () => new FollowsService();

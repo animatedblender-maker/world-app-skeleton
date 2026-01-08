@@ -35,9 +35,18 @@ type Context = YogaInitialContext & {
 };
 
 const ORIGIN = process.env.WEB_ORIGIN ?? 'http://localhost:4200';
-const ALLOWED_ORIGINS = (process.env.WEB_ORIGINS ?? ORIGIN)
-  .split(',')
-  .map((value) => value.trim())
+const DEFAULT_ORIGINS = [
+  ORIGIN,
+  'http://localhost',
+  'https://localhost',
+  'http://localhost:4200',
+  'capacitor://localhost',
+  'ionic://localhost',
+];
+const ALLOWED_ORIGINS = Array.from(
+  new Set([...(process.env.WEB_ORIGINS ?? '').split(','), ...DEFAULT_ORIGINS])
+)
+  .map((value) => value.trim().replace(/\/$/, ''))
   .filter(Boolean);
 const PORT = Number(process.env.PORT ?? 3000);
 
@@ -115,7 +124,8 @@ const app = express();
 app.use(
   cors({
     origin: (incomingOrigin, callback) => {
-      if (!incomingOrigin || ALLOWED_ORIGINS.includes(incomingOrigin)) {
+      const normalized = incomingOrigin ? incomingOrigin.replace(/\/$/, '') : '';
+      if (!incomingOrigin || ALLOWED_ORIGINS.includes(normalized)) {
         return callback(null, true);
       }
       return callback(new Error(`CORS origin ${incomingOrigin} not allowed`));
