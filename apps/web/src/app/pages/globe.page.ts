@@ -1755,6 +1755,103 @@ type RouteState = {
     .presence-line .k{ opacity:.65; letter-spacing:.16em; font-weight: 900; font-size: 11px; }
     .presence-line .v{ color: rgba(0,255,209,0.92); font-weight: 900; letter-spacing: .08em; font-size: 12px; }
 
+    /* =============== RESPONSIVE =============== */
+    @media (max-width: 900px){
+      .stage.focus{
+        grid-template-columns: 1fr;
+        grid-template-rows: auto minmax(0, 1fr);
+      }
+      .map-glass{
+        height: min(240px, 32vh);
+      }
+      .main-card{
+        border-radius: 22px;
+      }
+    }
+    @media (max-width: 720px){
+      .top-overlay{
+        left: 12px;
+        right: 12px;
+        transform: none;
+        width: auto;
+        padding: 4px 8px;
+      }
+      .top-actions{
+        flex-wrap: wrap;
+        justify-content: flex-start;
+        gap: 6px;
+      }
+      .search-control input{
+        width: 100%;
+        padding: 10px 12px;
+        font-size: 13px;
+      }
+      .tab{
+        padding: 5px 12px;
+        font-size: 9px;
+      }
+      .user-suggestions,
+      .country-suggestions{
+        max-height: 40vh;
+        overflow: auto;
+      }
+      .stage.focus{
+        padding-top: 120px;
+      }
+      .main-card{
+        padding: 14px;
+      }
+      .composer-row{
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      .composer-avatar{
+        width: 42px;
+        height: 42px;
+      }
+      .user-node{
+        top: 12px;
+        right: 12px;
+        gap: 8px;
+      }
+      .node-orb{
+        width: 40px;
+        height: 40px;
+      }
+      .node-bell{
+        width: 34px;
+        height: 34px;
+        font-size: 16px;
+      }
+      .bell-badge{
+        min-width: 16px;
+        height: 16px;
+        font-size: 10px;
+      }
+    }
+    @media (max-width: 520px){
+      .top-actions{
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .tab-row{
+        gap: 4px;
+      }
+      .tab{
+        flex: 1;
+        text-align: center;
+      }
+      .map-glass{
+        height: min(200px, 28vh);
+      }
+      .author-avatar{
+        width: 38px;
+        height: 38px;
+      }
+      .post-card{
+        padding: 14px;
+      }
+    }
   `],
 })
 export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {

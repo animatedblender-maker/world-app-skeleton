@@ -220,7 +220,7 @@ export class ProfileSetupPageComponent implements OnInit {
 
       if (!coords) {
         this.manual = true;
-        this.detectSource = 'gps denied/timeout';
+        this.detectSource = 'location unavailable';
         return;
       }
 
@@ -271,9 +271,16 @@ export class ProfileSetupPageComponent implements OnInit {
 
       if (!cn || cn === 'Unknown') {
         if (!this.manualCountryName) throw new Error('Auto-detect failed. Select a country manually.');
-        cn = this.manualCountryName;
-        cc = '';
+        const manualName = this.manualCountryName.trim().toLowerCase();
+        const match = this.countries.find((c) => c.name.trim().toLowerCase() === manualName);
+        if (!match?.code) throw new Error('Selected country has no code. Pick another country.');
+        cn = match.name;
+        cc = match.code;
         city = '';
+        this.countryName = cn;
+        this.countryCode = cc;
+        this.cityName = '';
+        this.detectSource = 'manual selection';
       }
 
       await this.gql.query(
