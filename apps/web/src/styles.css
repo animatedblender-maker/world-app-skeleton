@@ -264,3 +264,49 @@ html, body {
 .msg.error { color: #8b1e1e; }
 .msg.ok { color: #165a2a; }
 .hintline { margin-top: 10px; font-size: 12px; color: rgba(47,47,45,0.55); }
+
+@media (max-width: 960px) {
+  .topbar {
+    left: 16px;
+    right: 16px;
+    transform: none;
+    width: calc(100% - 32px);
+  }
+  .searchwrap { width: 100%; }
+  .stats {
+    min-width: 220px;
+    max-width: calc(100% - 32px);
+  }
+}
+
+@media (max-width: 720px) {
+  .topbar {
+    top: 70px;
+    padding: 8px;
+    gap: 8px;
+  }
+  .authbar {
+    padding: 8px;
+  }
+  .topbar input {
+    padding: 10px 36px 10px 12px;
+    font-size: 13px;
+  }
+  .btn { height: 40px; }
+  .go-btn { width: 46px; height: 40px; }
+}
+
+@media (max-width: 520px) {
+  .topbar,
+  .authbar {
+    border-radius: 14px;
+  }
+  .stats {
+    left: 12px;
+    right: 12px;
+    width: auto;
+  }
+  .modal {
+    width: min(420px, 92vw);
+  }
+}

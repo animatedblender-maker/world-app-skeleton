@@ -688,6 +688,7 @@ import { LocationService } from '../core/services/location.service';
     }
     .composer{
       margin:20px auto 0;
+      width:100%;
       max-width:700px;
       border-radius:20px;
       border:1px solid rgba(0,0,0,0.06);
@@ -1127,7 +1128,7 @@ import { LocationService } from '../core/services/location.service';
       display:flex;
       flex-direction:column;
       gap:16px;
-      width: 700px;
+      width: 100%;
     }
     .post-card{
       position:relative;
@@ -1493,6 +1494,25 @@ import { LocationService } from '../core/services/location.service';
       font-weight:700;
       color:rgba(10,12,18,0.7);
       letter-spacing:0.06em;
+    }
+    @media (max-width: 900px){
+      .card{ padding:20px; }
+    }
+    @media (max-width: 700px){
+      .wrap{ padding:72px 12px 24px; }
+      .card{ padding:18px; border-radius:22px; }
+      .head{ gap:16px; }
+      .title-row{ flex-direction:column; align-items:flex-start; }
+      .title-actions{ width:100%; flex-wrap:wrap; }
+    }
+    @media (max-width: 520px){
+      .avatar{ width:96px; height:96px; }
+      .avatar.large{ width:150px; height:150px; }
+      .composer-row{ flex-direction:column; }
+      .composer-avatar{ width:42px; height:42px; }
+      .author-avatar{ width:40px; height:40px; }
+      .post-card{ padding:16px; }
+      .post-actions{ gap:8px; }
     }
   `],
 })

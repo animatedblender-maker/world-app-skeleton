@@ -16,10 +16,7 @@ $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
 Set-Location $repoRoot
 
 $worktreeBranch = 'gh-pages'
-$worktreePath = Join-Path (Split-Path -Path $env:TEMP -Leaf) 'gh-pages'
-if (-not $worktreePath) {
-  $worktreePath = Join-Path $env:TEMP 'gh-pages'
-}
+$worktreePath = Join-Path $env:TEMP 'gh-pages'
 
 Write-Host "Preparing worktree [$worktreeBranch] at $worktreePath"
 if (Test-Path $worktreePath) {
