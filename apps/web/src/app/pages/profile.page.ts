@@ -22,6 +22,7 @@ import {
 import { CountryPost, PostComment, PostLike } from '../core/models/post.model';
 import { FollowService } from '../core/services/follow.service';
 import { LocationService } from '../core/services/location.service';
+import { MessagesService } from '../core/services/messages.service';
 
 @Component({
   selector: 'app-profile-page',
@@ -162,7 +163,16 @@ import { LocationService } from '../core/services/location.service';
                     {{ viewerFollowing ? 'Following' : 'Follow' }}
                   </ng-container>
                 </button>
+                <button
+                  class="message-btn"
+                  type="button"
+                  [disabled]="messageBusy"
+                  (click)="startConversation()"
+                >
+                  {{ messageBusy ? 'Opening...' : 'Message' }}
+                </button>
                 <small class="hint error" *ngIf="followError">{{ followError }}</small>
+                <small class="hint error" *ngIf="messageError">{{ messageError }}</small>
               </div>
             </div>
 
@@ -432,8 +442,12 @@ import { LocationService } from '../core/services/location.service';
                 <div class="comment-status" *ngIf="commentLoading[post.id]">Loading comments...</div>
                 <div class="comment-status error" *ngIf="commentErrors[post.id]">{{ commentErrors[post.id] }}</div>
                 <div class="comment-list" *ngIf="!commentLoading[post.id] && !commentErrors[post.id]">
-                  <div class="comment-empty" *ngIf="!(commentItems[post.id]?.length)">No comments yet.</div>
-                  <div class="comment" *ngFor="let comment of commentItems[post.id]">
+                  <div class="comment-empty" *ngIf="!(commentDisplay[post.id]?.length)">No comments yet.</div>
+                  <div
+                    class="comment"
+                    *ngFor="let comment of (commentDisplay[post.id] || [])"
+                    [style.marginLeft.px]="(commentDepth[post.id]?.[comment.id] ?? 0) * 18"
+                  >
                     <div class="comment-avatar">
                       <img
                         *ngIf="comment.author?.avatar_url"
@@ -450,10 +464,37 @@ import { LocationService } from '../core/services/location.service';
                         <span class="comment-time">{{ comment.created_at | date: 'mediumDate' }}</span>
                       </div>
                       <div class="comment-text">{{ comment.body }}</div>
+                      <div class="comment-actions">
+                        <button
+                          class="comment-action"
+                          type="button"
+                          (click)="startCommentReply(post.id, comment)"
+                          [disabled]="commentBusy[post.id]"
+                        >
+                          Reply
+                        </button>
+                        <button
+                          class="comment-action"
+                          type="button"
+                          (click)="toggleCommentLike(post.id, comment)"
+                          [class.active]="comment.liked_by_me"
+                          [disabled]="commentLikeBusy[post.id]?.[comment.id]"
+                        >
+                          <span class="comment-heart" *ngIf="!comment.liked_by_me" aria-hidden="true">&#9825;</span>
+                          <span class="comment-heart active" *ngIf="comment.liked_by_me" aria-hidden="true">&#9829;</span>
+                          <span class="comment-like-count" *ngIf="comment.like_count">
+                            {{ comment.like_count }}
+                          </span>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
                 <div class="comment-compose" *ngIf="meId; else commentSignIn">
+                  <div class="comment-reply" *ngIf="commentReplyTarget[post.id] as replyTarget">
+                    Replying to <span>@{{ replyTarget.authorName }}</span>
+                    <button type="button" class="ghost-link" (click)="cancelCommentReply(post.id)">Cancel</button>
+                  </div>
                   <input
                     class="comment-input"
                     placeholder="Write a comment"
@@ -1017,6 +1058,24 @@ import { LocationService } from '../core/services/location.service';
       box-shadow:none;
       transform:none;
     }
+    .message-btn{
+      border:1px solid rgba(0,155,220,0.5);
+      border-radius:999px;
+      padding:8px 20px;
+      background: rgba(0,155,220,0.12);
+      color: rgba(6,12,20,0.9);
+      font-weight:800;
+      letter-spacing:0.18em;
+      text-transform:uppercase;
+      cursor:pointer;
+      transition: transform 160ms ease, box-shadow 160ms ease, opacity 160ms ease;
+    }
+    .message-btn:disabled{
+      opacity:0.6;
+      cursor:not-allowed;
+      box-shadow:none;
+      transform:none;
+    }
     .bio{
       margin-top:12px;
       line-height:1.5;
@@ -1287,6 +1346,42 @@ import { LocationService } from '../core/services/location.service';
     .comment-meta{ display:flex; gap:8px; align-items:center; font-size:11px; opacity:0.65; }
     .comment-name{ font-weight:800; text-transform:uppercase; letter-spacing:0.08em; }
     .comment-text{ font-size:12px; color:rgba(10,12,18,0.85); margin-top:2px; }
+    .comment-actions{
+      display:flex;
+      gap:10px;
+      margin-top:4px;
+      font-size:11px;
+    }
+    .comment-action{
+      border:0;
+      background:transparent;
+      padding:0;
+      color:rgba(10,12,18,0.58);
+      font-weight:800;
+      letter-spacing:0.08em;
+      text-transform:uppercase;
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      cursor:pointer;
+    }
+    .comment-action.active{ color:rgba(0,155,220,0.88); }
+    .comment-action:disabled{ opacity:0.5; cursor:not-allowed; }
+    .comment-heart{ font-size:12px; line-height:1; }
+    .comment-heart.active{ color:rgba(0,155,220,0.95); }
+    .comment-like-count{ font-size:11px; font-weight:800; color:rgba(10,12,18,0.75); }
+    .comment-reply{
+      display:flex;
+      align-items:center;
+      gap:8px;
+      font-size:11px;
+      font-weight:800;
+      letter-spacing:0.06em;
+      color:rgba(10,12,18,0.6);
+      text-transform:uppercase;
+      width:100%;
+    }
+    .comment-reply span{ color:rgba(0,155,220,0.85); }
     .comment-compose{
       display:flex;
       gap:8px;
@@ -1543,6 +1638,8 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
   viewerFollowing = false;
   followBusy = false;
   followError = '';
+  messageBusy = false;
+  messageError = '';
   private followProfileId: string | null = null;
   postTitle = '';
   postBody = '';
@@ -1570,6 +1667,10 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
   commentErrors: Record<string, string> = {};
   commentDrafts: Record<string, string> = {};
   commentItems: Record<string, PostComment[]> = {};
+  commentDisplay: Record<string, PostComment[]> = {};
+  commentDepth: Record<string, Record<string, number>> = {};
+  commentReplyTarget: Record<string, { commentId: string; authorName: string } | null> = {};
+  commentLikeBusy: Record<string, Record<string, boolean>> = {};
   reportingPostId: string | null = null;
   reportReason = '';
   reportBusy = false;
@@ -1633,6 +1734,7 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     private posts: PostsService,
     private postEvents: PostEventsService,
     private follows: FollowService,
+    private messagesService: MessagesService,
     private location: LocationService,
     private zone: NgZone,
     private cdr: ChangeDetectorRef
@@ -1719,6 +1821,8 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     this.error = '';
     this.profile = null;
     this.resetFollowState();
+    this.messageBusy = false;
+    this.messageError = '';
     this.forceUi();
 
     try {
@@ -1767,6 +1871,8 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     this.stopLocationRefresh();
     if (this.isOwner) this.startLocationRefresh();
     this.resetFollowState();
+    this.messageBusy = false;
+    this.messageError = '';
     if (!this.canPostFromProfile) this.profileComposerOpen = false;
     void this.loadFollowMeta(profile);
     void this.loadProfilePosts(profile.user_id);
@@ -1897,6 +2003,24 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
       this.followError = e?.message ?? String(e);
     } finally {
       this.followBusy = false;
+      this.forceUi();
+    }
+  }
+
+  async startConversation(): Promise<void> {
+    if (!this.profile || this.isOwner || this.messageBusy) return;
+
+    this.messageBusy = true;
+    this.messageError = '';
+    this.forceUi();
+
+    try {
+      const convo = await this.messagesService.startConversation(this.profile.user_id);
+      void this.router.navigate(['/messages'], { queryParams: { c: convo.id } });
+    } catch (e: any) {
+      this.messageError = e?.message ?? String(e);
+    } finally {
+      this.messageBusy = false;
       this.forceUi();
     }
   }
@@ -2554,6 +2678,9 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     if (next && !this.commentItems[postId] && !this.commentLoading[postId]) {
       void this.loadComments(postId);
     }
+    if (!next) {
+      this.commentReplyTarget[postId] = null;
+    }
     this.forceUi();
   }
 
@@ -2566,10 +2693,108 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     try {
       const comments = await this.posts.listComments(postId, 40);
       this.commentItems[postId] = comments;
+      this.rebuildCommentThread(postId);
     } catch (e: any) {
       this.commentErrors[postId] = e?.message ?? String(e);
     } finally {
       this.commentLoading[postId] = false;
+      this.forceUi();
+    }
+  }
+
+  private rebuildCommentThread(postId: string): void {
+    const items = this.commentItems[postId] ?? [];
+    const byParent: Record<string, PostComment[]> = {};
+    const roots: PostComment[] = [];
+
+    for (const comment of items) {
+      const parentId = comment.parent_id ?? '';
+      if (parentId) {
+        if (!byParent[parentId]) byParent[parentId] = [];
+        byParent[parentId].push(comment);
+      } else {
+        roots.push(comment);
+      }
+    }
+
+    const ordered: PostComment[] = [];
+    const depthMap: Record<string, number> = {};
+    const pushWithChildren = (node: PostComment, depth: number) => {
+      ordered.push(node);
+      depthMap[node.id] = depth;
+      const children = byParent[node.id] ?? [];
+      for (const child of children) {
+        pushWithChildren(child, depth + 1);
+      }
+    };
+
+    for (const root of roots) {
+      pushWithChildren(root, 0);
+    }
+
+    this.commentDisplay[postId] = ordered;
+    this.commentDepth[postId] = depthMap;
+  }
+
+  private applyCommentUpdate(postId: string, comment: PostComment): void {
+    const existing = this.commentItems[postId] ?? [];
+    const next = [...existing];
+    const idx = next.findIndex((item) => item.id === comment.id);
+    if (idx >= 0) {
+      next[idx] = { ...next[idx], ...comment };
+    } else {
+      next.push(comment);
+    }
+    this.commentItems[postId] = next;
+    this.rebuildCommentThread(postId);
+  }
+
+  private commentAuthorName(comment: PostComment): string {
+    return comment.author?.username || comment.author?.display_name || 'Member';
+  }
+
+  startCommentReply(postId: string, comment: PostComment): void {
+    if (!postId || !comment?.id) return;
+    this.commentReplyTarget[postId] = {
+      commentId: comment.id,
+      authorName: this.commentAuthorName(comment),
+    };
+    this.forceUi();
+  }
+
+  cancelCommentReply(postId: string): void {
+    if (!postId) return;
+    this.commentReplyTarget[postId] = null;
+    this.forceUi();
+  }
+
+  async toggleCommentLike(postId: string, comment: PostComment): Promise<void> {
+    if (!postId || !comment?.id) return;
+    if (!this.meId) {
+      this.commentErrors[postId] = 'Sign in to like comments.';
+      this.forceUi();
+      return;
+    }
+
+    const perPost = { ...(this.commentLikeBusy[postId] ?? {}) };
+    if (perPost[comment.id]) return;
+    perPost[comment.id] = true;
+    this.commentLikeBusy[postId] = perPost;
+    this.commentErrors[postId] = '';
+    this.forceUi();
+
+    try {
+      const updated = comment.liked_by_me
+        ? await this.posts.unlikeComment(comment.id)
+        : await this.posts.likeComment(comment.id);
+      this.applyCommentUpdate(postId, updated);
+    } catch (e: any) {
+      this.commentErrors[postId] = e?.message ?? String(e);
+    } finally {
+      this.commentLikeBusy[postId] = {
+        ...perPost,
+        [comment.id]: false,
+      };
       this.forceUi();
     }
   }
@@ -2595,10 +2820,11 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     this.forceUi();
 
     try {
-      const comment = await this.posts.addComment(post.id, draft);
-      const existing = this.commentItems[post.id] ?? [];
-      this.commentItems[post.id] = [...existing, comment];
+      const parentId = this.commentReplyTarget[post.id]?.commentId ?? null;
+      const comment = await this.posts.addComment(post.id, draft, parentId);
+      this.applyCommentUpdate(post.id, comment);
       this.commentDrafts[post.id] = '';
+      this.commentReplyTarget[post.id] = null;
       const updated = { ...post, comment_count: post.comment_count + 1 };
       this.applyProfilePostUpdate(updated);
     } catch (e: any) {

@@ -111,17 +111,17 @@ type RouteState = {
       </div>
     </div>
 
-    <!-- ✅ Ocean map ALWAYS full background -->
-    <div id="globe" class="globe-bg"></div>
+    <!-- Ocean map ALWAYS full background -->
+    <div id="globe" class="globe-bg" [class.bg-static]="!!selectedCountry"></div>
 
-    <!-- ✅ Foreground layout that appears on focus (doesn't replace ocean background) -->
-    <div class="stage" [class.focus]="!!selectedCountry">
+    <!-- Foreground layout that appears on focus (doesn't replace ocean background) -->
+    <div class="stage" [class.focus]="!!selectedCountry" [class.feed-full]="countryFeedFull">
       <div class="map-pane" *ngIf="selectedCountry">
         <div class="map-glass">
           <!-- left info block -->
           <div class="left-info">
             <div class="li-title">{{ selectedCountry!.name }}</div>
-            <div class="li-sub">{{ selectedCountry!.code || '—' }}</div>
+            <div class="li-sub">{{ selectedCountry!.code || '--' }}</div>
 
             <div class="li-box">
               <div class="li-row">
@@ -142,8 +142,20 @@ type RouteState = {
       <div class="main-pane" *ngIf="selectedCountry">
         <div class="main-card white-card">
           <div class="main-head">
-            <div class="mh-title">COUNTRY FEED</div>
-            <div class="mh-sub">{{ selectedCountry.name }} • public space</div>
+            <div class="mh-text">
+              <div class="mh-title">COUNTRY FEED</div>
+              <div class="mh-sub">{{ selectedCountry.name }} public space</div>
+            </div>
+            <button
+              class="feed-toggle"
+              type="button"
+              (click)="toggleCountryFeedFull()"
+              [attr.aria-pressed]="countryFeedFull"
+              aria-label="Toggle full screen feed"
+            >
+              <span class="feed-toggle-icon" aria-hidden="true" *ngIf="!countryFeedFull">&#x26F6;</span>
+              <span class="feed-toggle-icon" aria-hidden="true" *ngIf="countryFeedFull">&#x1F5D6;</span>
+            </button>
           </div>
 
           <div class="tabs">
@@ -226,7 +238,7 @@ type RouteState = {
                   </div>
                   <div class="composer-actions" *ngIf="composerOpen && canPostHere">
                     <button class="btn" type="button" (click)="submitPost()" [disabled]="postBusy || !canPostHere">
-                      {{ postBusy ? 'Posting…' : 'Post' }}
+                      {{ postBusy ? 'Posting...' : 'Post' }}
                     </button>
                     <div
                       class="composer-status"
@@ -238,7 +250,7 @@ type RouteState = {
                   </div>
                 </div>
 
-                <div class="posts-state" *ngIf="postsLoading">Loading posts…</div>
+                <div class="posts-state" *ngIf="postsLoading">Loading posts...</div>
                 <div class="posts-state error" *ngIf="!postsLoading && postsError">{{ postsError }}</div>
 
                 <div class="posts-list" *ngIf="!postsLoading && !postsError">
@@ -271,9 +283,9 @@ type RouteState = {
                         <div class="author-info">
                           <div class="author-name">{{ post.author?.display_name || post.author?.username || 'Member' }}</div>
                           <div class="author-meta">
-                            @{{ post.author?.username || 'user' }} · {{ post.created_at | date: 'mediumDate' }}
+                            @{{ post.author?.username || 'user' }} - {{ post.created_at | date: 'mediumDate' }}
                             <span class="post-visibility" *ngIf="post.visibility !== 'public' && post.visibility !== 'country'">
-                              · {{ visibilityLabel(post.visibility) }}
+                              - {{ visibilityLabel(post.visibility) }}
                             </span>
                           </div>
                         </div>
@@ -300,7 +312,7 @@ type RouteState = {
                           (click)="togglePostMenu(post.id, $event)"
                           aria-label="Post options"
                         >
-                          ⋯
+                          ...
                         </button>
                         <div class="post-menu-dropdown" *ngIf="openPostMenuId === post.id">
                           <ng-container *ngIf="isAuthorSelf(post.author_id); else reportMenu">
@@ -408,8 +420,12 @@ type RouteState = {
                       <div class="comment-status" *ngIf="commentLoading[post.id]">Loading comments...</div>
                       <div class="comment-status error" *ngIf="commentErrors[post.id]">{{ commentErrors[post.id] }}</div>
                       <div class="comment-list" *ngIf="!commentLoading[post.id] && !commentErrors[post.id]">
-                        <div class="comment-empty" *ngIf="!(commentItems[post.id]?.length)">No comments yet.</div>
-                        <div class="comment" *ngFor="let comment of commentItems[post.id]">
+                        <div class="comment-empty" *ngIf="!(commentDisplay[post.id]?.length)">No comments yet.</div>
+                        <div
+                          class="comment"
+                          *ngFor="let comment of (commentDisplay[post.id] || [])"
+                          [style.marginLeft.px]="(commentDepth[post.id]?.[comment.id] ?? 0) * 18"
+                        >
                           <div class="comment-avatar">
                             <img
                               *ngIf="comment.author?.avatar_url"
@@ -426,10 +442,37 @@ type RouteState = {
                               <span class="comment-time">{{ comment.created_at | date: 'mediumDate' }}</span>
                             </div>
                             <div class="comment-text">{{ comment.body }}</div>
+                            <div class="comment-actions">
+                              <button
+                                class="comment-action"
+                                type="button"
+                                (click)="startCommentReply(post.id, comment)"
+                                [disabled]="commentBusy[post.id]"
+                              >
+                                Reply
+                              </button>
+                              <button
+                                class="comment-action"
+                                type="button"
+                                (click)="toggleCommentLike(post.id, comment)"
+                                [class.active]="comment.liked_by_me"
+                                [disabled]="commentLikeBusy[post.id]?.[comment.id]"
+                              >
+                                <span class="comment-heart" *ngIf="!comment.liked_by_me" aria-hidden="true">&#9825;</span>
+                                <span class="comment-heart active" *ngIf="comment.liked_by_me" aria-hidden="true">&#9829;</span>
+                                <span class="comment-like-count" *ngIf="comment.like_count">
+                                  {{ comment.like_count }}
+                                </span>
+                              </button>
+                            </div>
                           </div>
                         </div>
                       </div>
                       <div class="comment-compose" *ngIf="meId; else commentSignIn">
+                        <div class="comment-reply" *ngIf="commentReplyTarget[post.id] as replyTarget">
+                          Replying to <span>@{{ replyTarget.authorName }}</span>
+                          <button type="button" class="ghost-link" (click)="cancelCommentReply(post.id)">Cancel</button>
+                        </div>
                         <input
                           class="comment-input"
                           placeholder="Write a comment"
@@ -470,7 +513,7 @@ type RouteState = {
                         <div class="post-edit-actions">
                           <button class="pill-link ghost" type="button" (click)="cancelPostEdit()" [disabled]="postEditBusy">Cancel</button>
                           <button class="pill-link" type="button" (click)="savePostEdit(post)" [disabled]="postEditBusy">
-                            {{ postEditBusy ? 'Saving…' : 'Save' }}
+                            {{ postEditBusy ? 'Saving...' : 'Save' }}
                           </button>
                         </div>
                       </div>
@@ -495,11 +538,11 @@ type RouteState = {
       </div>
     </div>
 
-    <!-- ✅ Stats pill back to showing local line again -->
+    <!-- Stats pill back to showing local line again -->
     <div class="stats-pill">
       <div class="pill-row">
-        <small>Total users: <b>{{ totalUsers ?? '—' }}</b></small>
-        <small>Online now: <b>{{ onlineUsers ?? '—' }}</b></small>
+        <small>Total users: <b>{{ totalUsers ?? '--' }}</b></small>
+        <small>Online now: <b>{{ onlineUsers ?? '--' }}</b></small>
       </div>
 
       <div class="pill-row" *ngIf="selectedCountry">
@@ -511,7 +554,7 @@ type RouteState = {
       </div>
 
       <div class="pill-row">
-        <small id="heartbeatState">{{ heartbeatText || '—' }}</small>
+        <small id="heartbeatState">{{ heartbeatText || '--' }}</small>
       </div>
 
       <div class="pill-row">
@@ -521,7 +564,7 @@ type RouteState = {
       </div>
 
       <div class="pill-row" *ngIf="loadingProfile">
-        <small style="opacity:.75">Loading profile…</small>
+        <small style="opacity:.75">Loading profile...</small>
       </div>
       <div class="pill-row" *ngIf="profileError">
         <small style="color:#ff8b8b; font-weight:800; letter-spacing:.08em;">
@@ -530,102 +573,27 @@ type RouteState = {
       </div>
     </div>
 
-    <div class="node-backdrop" *ngIf="menuOpen" (click)="closeMenu()"></div>
+    <div
+      class="node-backdrop"
+      *ngIf="menuOpen || panel === 'notifications'"
+      (click)="closeMenu(); closePanel()"
+    ></div>
 
-    <!-- ✅ Avatar orb overlay fixed (restored) -->
+    <!-- Avatar orb overlay fixed (restored) -->
     <div class="user-node">
-      <button class="node-bell" type="button" (click)="openPanel('notifications')" [class.pulse]="bellPulse">
-        🔔
-        <span class="bell-badge" *ngIf="notificationsUnreadCount" [class.pulse]="bellPulse">{{ notificationsUnreadCount }}</span>
-      </button>
+      <div class="node-bell-wrap">
+        <button class="node-bell" type="button" (click)="openPanel('notifications')" [class.pulse]="bellPulse">
+          &#x1F514;
+          <span class="bell-badge" *ngIf="notificationsUnreadCount" [class.pulse]="bellPulse">{{ notificationsUnreadCount }}</span>
+        </button>
 
-      <button class="node-orb" type="button" (click)="toggleMenu()" [attr.aria-expanded]="menuOpen">
-        <ng-container *ngIf="nodeAvatarUrl; else initialsTpl">
-          <img
-            class="orb-img"
-            [src]="nodeAvatarUrl"
-            alt="avatar"
-            [style.transform]="nodeAvatarTransform"
-          />
-        </ng-container>
-
-        <ng-template #initialsTpl>
-          <div class="orb-initials">{{ initials }}</div>
-        </ng-template>
-
-        <span class="orb-pulse"></span>
-        <span class="orb-ring"></span>
-      </button>
-
-      <div class="node-menu" *ngIf="menuOpen" (click)="$event.stopPropagation()">
-        <div class="node-head">
-          <div class="node-title">YOUR NODE</div>
-          <div class="node-sub">{{ profile?.display_name || 'Unnamed' }}</div>
-          <div class="node-sub2">{{ userEmail || '—' }}</div>
-
-          <div class="node-sub2" *ngIf="profileError" style="color: rgba(255,120,120,0.95); opacity:1;">
-            {{ profileError }}
+        <div class="node-menu notif-menu" *ngIf="panel === 'notifications'" (click)="$event.stopPropagation()">
+          <div class="node-head">
+            <div class="node-title">NOTIFICATIONS</div>
+            <div class="node-sub2">Unread: {{ notificationsUnreadCount }}</div>
           </div>
-        </div>
 
-        <div class="node-actions">
-          <button class="node-btn" type="button" (click)="goToMe()">
-            <span class="dot"></span><span>MY PROFILE</span>
-          </button>
-          <button class="node-btn" type="button" (click)="openPanel('presence')">
-            <span class="dot"></span><span>MY PRESENCE</span>
-          </button>
-
-          <button class="node-btn" type="button" (click)="openPanel('posts')">
-            <span class="dot"></span><span>MY POSTS</span>
-          </button>
-
-          <button class="node-btn danger" type="button" (click)="logout()">
-            <span class="dot"></span><span>LOGOUT</span>
-          </button>
-        </div>
-
-        <div class="node-foot">
-          <button class="ghost" type="button" (click)="closeMenu()">CLOSE</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- ✅ Panel overlay (profile editor restored fully) -->
-    <div class="overlay" *ngIf="panel" (click)="closePanel()">
-      <div class="panel" (click)="$event.stopPropagation()">
-        <div class="panel-head">
-          <div class="panel-title">
-            {{
-              panel === 'presence'
-                ? 'MY PRESENCE'
-                : panel === 'posts'
-                  ? 'MY POSTS'
-                  : 'NOTIFICATIONS'
-            }}
-          </div>
-          <button class="x" type="button" (click)="closePanel()">×</button>
-        </div>
-
-        <div class="panel-body" *ngIf="panel === 'presence'">
-          <div class="presence-box">
-            <div class="presence-line"><span class="k">STATUS</span><span class="v">ONLINE</span></div>
-            <div class="presence-line"><span class="k">COUNTRY</span><span class="v">{{ profile?.country_name || '—' }}</span></div>
-            <div class="presence-line"><span class="k">CODE</span><span class="v">{{ (profile?.country_code || '—') }}</span></div>
-            <div class="presence-line"><span class="k">CITY</span><span class="v">{{ cityName }}</span></div>
-          </div>
-        </div>
-
-        <div class="panel-body" *ngIf="panel === 'posts'">
-          <div class="presence-box">
-            <div class="presence-line"><span class="k">POSTS</span><span class="v">0</span></div>
-            <div class="presence-line"><span class="k">STATE</span><span class="v">COMING SOON</span></div>
-          </div>
-        </div>
-
-        <div class="panel-body" *ngIf="panel === 'notifications'">
           <div class="notif-actions">
-            <div class="notif-count">Unread: {{ notificationsUnreadCount }}</div>
             <button
               class="ghost"
               type="button"
@@ -635,7 +603,7 @@ type RouteState = {
               Mark all read
             </button>
           </div>
-          <div class="notif-state" *ngIf="notificationsLoading">Loading notifications…</div>
+          <div class="notif-state" *ngIf="notificationsLoading">Loading notifications...</div>
           <div class="notif-state error" *ngIf="!notificationsLoading && notificationsError">
             {{ notificationsError }}
           </div>
@@ -663,19 +631,131 @@ type RouteState = {
               <span class="notif-unread" *ngIf="!notif.read_at"></span>
             </button>
           </div>
+
+          <div class="node-foot">
+            <button class="ghost" type="button" (click)="closePanel()">CLOSE</button>
+          </div>
         </div>
+      </div>
+
+      <button class="node-orb" type="button" (click)="toggleMenu()" [attr.aria-expanded]="menuOpen">
+        <ng-container *ngIf="nodeAvatarUrl; else initialsTpl">
+          <img
+            class="orb-img"
+            [src]="nodeAvatarUrl"
+            alt="avatar"
+            [style.transform]="nodeAvatarTransform"
+          />
+        </ng-container>
+
+        <ng-template #initialsTpl>
+          <div class="orb-initials">{{ initials }}</div>
+        </ng-template>
+
+        <span class="orb-pulse"></span>
+        <span class="orb-ring"></span>
+      </button>
+
+      <div class="node-menu" *ngIf="menuOpen" (click)="$event.stopPropagation()">
+        <div class="node-head">
+          <div class="node-title">YOUR NODE</div>
+          <div class="node-sub">{{ profile?.display_name || 'Unnamed' }}</div>
+          <div class="node-sub2">{{ userEmail || '--' }}</div>
+
+          <div class="node-sub2" *ngIf="profileError" style="color: rgba(255,120,120,0.95); opacity:1;">
+            {{ profileError }}
+          </div>
+        </div>
+
+        <div class="node-actions">
+          <button class="node-btn" type="button" (click)="goToMe()">
+            <span class="dot"></span><span>MY PROFILE</span>
+          </button>
+          <button class="node-btn" type="button" (click)="openPanel('presence')">
+            <span class="dot"></span><span>MY PRESENCE</span>
+          </button>
+
+          <button class="node-btn" type="button" (click)="openPanel('posts')">
+            <span class="dot"></span><span>MY POSTS</span>
+          </button>
+          <button class="node-btn" type="button" (click)="goToMessages()">
+            <span class="dot"></span><span>MESSAGES</span>
+          </button>
+
+          <button class="node-btn danger" type="button" (click)="logout()">
+            <span class="dot"></span><span>LOGOUT</span>
+          </button>
+        </div>
+
+        <div class="node-foot">
+          <button class="ghost" type="button" (click)="closeMenu()">CLOSE</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Panel overlay (profile editor restored fully) -->
+    <div class="overlay" *ngIf="panel && panel !== 'notifications'" (click)="closePanel()">
+      <div class="panel" (click)="$event.stopPropagation()">
+        <div class="panel-head">
+          <div class="panel-title">
+            {{
+              panel === 'presence'
+                ? 'MY PRESENCE'
+                : panel === 'posts'
+                  ? 'MY POSTS'
+                  : 'NOTIFICATIONS'
+            }}
+          </div>
+          <button class="x" type="button" (click)="closePanel()">X</button>
+        </div>
+
+        <div class="panel-body" *ngIf="panel === 'presence'">
+          <div class="presence-box">
+            <div class="presence-line"><span class="k">STATUS</span><span class="v">ONLINE</span></div>
+            <div class="presence-line"><span class="k">COUNTRY</span><span class="v">{{ profile?.country_name || '--' }}</span></div>
+            <div class="presence-line"><span class="k">CODE</span><span class="v">{{ (profile?.country_code || '--') }}</span></div>
+            <div class="presence-line"><span class="k">CITY</span><span class="v">{{ cityName }}</span></div>
+          </div>
+        </div>
+
+        <div class="panel-body" *ngIf="panel === 'posts'">
+          <div class="presence-box">
+            <div class="presence-line"><span class="k">POSTS</span><span class="v">0</span></div>
+            <div class="presence-line"><span class="k">STATE</span><span class="v">COMING SOON</span></div>
+          </div>
+        </div>
+
       </div>
     </div>
 
   `,
   styles: [`
+    :host{
+      --safe-top: env(safe-area-inset-top, 0px);
+      --safe-right: env(safe-area-inset-right, 0px);
+      --safe-left: env(safe-area-inset-left, 0px);
+      --safe-bottom: env(safe-area-inset-bottom, 0px);
+      --ui-edge: 16px;
+      --ui-edge-top: calc(var(--ui-edge) + var(--safe-top));
+      --ui-edge-right: calc(var(--ui-edge) + var(--safe-right));
+      --ui-edge-left: calc(var(--ui-edge) + var(--safe-left));
+      --ui-edge-bottom: calc(var(--ui-edge) + var(--safe-bottom));
+      --node-size: 44px;
+      --ui-gap: 16px;
+      --top-overlay-height: 170px;
+      --top-overlay-top: calc(var(--ui-edge-top) + var(--node-size) + var(--ui-gap));
+      --stage-top-pad: calc(var(--top-overlay-top) + var(--top-overlay-height) + var(--ui-gap));
+    }
+
     /* =============== TOPBAR =============== */
     .top-overlay{
       position: fixed;
-      top: 16px;
-      left: 50%;
-      transform: translateX(-50%);
-      width: min(520px, calc(100vw - 48px));
+      top: var(--top-overlay-top);
+      right: var(--ui-edge-right);
+      left: auto;
+      transform: none;
+      width: min(420px, calc(100vw - (var(--ui-edge-left) + var(--ui-edge-right))));
+      max-height: var(--top-overlay-height);
       padding: 4px 10px;
       border-radius: 20px;
       background: rgba(5,9,20,0.25);
@@ -687,12 +767,15 @@ type RouteState = {
       pointer-events:auto;
       backdrop-filter: blur(18px);
       gap: 4px;
+      overflow: hidden;
     }
     .overlay-inner{
       width: 100%;
       display:flex;
       flex-direction:column;
       gap: 4px;
+      min-height: 0;
+      max-height: 100%;
     }
     .top-actions{
       display:flex;
@@ -740,6 +823,10 @@ type RouteState = {
     }
     .search-control{
       position: relative;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-height: 0;
     }
     .search-control input{
       width: min(420px, 100%);
@@ -788,7 +875,8 @@ type RouteState = {
       padding: 6px;
       display:grid;
       gap: 6px;
-      overflow: hidden;
+      max-height: min(36vh, calc(var(--top-overlay-height) - 96px));
+      overflow: auto;
       backdrop-filter: blur(18px);
       -webkit-backdrop-filter: blur(18px);
       background-clip: padding-box;
@@ -881,6 +969,12 @@ type RouteState = {
       width: 100%;
       height: 100%;
       z-index: 1;
+      pointer-events: auto;
+      touch-action: auto;
+    }
+    .globe-bg.bg-static{
+      pointer-events: none;
+      touch-action: none;
     }
 
     /* =============== FOREGROUND STAGE =============== */
@@ -892,15 +986,34 @@ type RouteState = {
     }
     .stage.focus{
       pointer-events: none;
-      padding-top: 150px; /* ✅ more space so search doesn't cover */
-      padding-left: 16px;
-      padding-right: 16px;
-      padding-bottom: 16px;
+      padding-top: var(--stage-top-pad);
+      padding-left: var(--ui-edge-left);
+      padding-right: var(--ui-edge-right);
+      padding-bottom: var(--ui-edge-bottom);
       box-sizing: border-box;
       display: grid;
       grid-template-columns: min(420px, 34vw) 1fr;
-      gap: 14px;
+      gap: var(--ui-gap);
     }
+
+      .stage.focus.feed-full{
+        grid-template-columns: 1fr;
+        padding-top: var(--stage-top-pad);
+        padding-left: 0;
+        padding-right: 0;
+        gap: 0;
+      }
+      .stage.focus.feed-full .map-pane{
+        display: none;
+      }
+      .stage.focus.feed-full .main-pane{
+        width: 100%;
+      }
+      .stage.focus.feed-full .main-card{
+        width: 100%;
+        max-width: none;
+        border-radius: 0;
+      }
 
     /* left pane is just overlay glass (map is still in background) */
     .map-pane{
@@ -956,7 +1069,7 @@ type RouteState = {
       flex-direction: column;
     }
 
-    /* ✅ "expensive white" posts container */
+    /* "expensive white" posts container */
     .white-card{
       background: rgba(245, 247, 250, 0.92);
       border: 1px solid rgba(0,0,0,0.08);
@@ -964,7 +1077,21 @@ type RouteState = {
       color: rgba(10,12,18,0.90);
     }
 
-    .main-head{ margin-bottom: 10px; }
+    .main-head{ display:flex; align-items:flex-start; justify-content:space-between; gap: 12px; margin-bottom: 10px; }
+    .mh-text{ min-width: 0; }
+    .feed-toggle{
+      border: 1px solid rgba(0,0,0,0.08);
+      background: rgba(255,255,255,0.8);
+      color: rgba(10,12,18,0.82);
+      border-radius: 12px;
+      padding: 6px 10px;
+      font-size: 16px;
+      line-height: 1;
+      cursor: pointer;
+      min-width: 36px;
+    }
+    .feed-toggle:hover{ background: rgba(255,255,255,0.95); }
+    .feed-toggle-icon{ display:block; }
     .mh-title{ font-weight: 900; letter-spacing: .16em; font-size: 12px; text-transform: uppercase; }
     .mh-sub{ margin-top: 4px; opacity: .72; font-weight: 800; letter-spacing: .08em; font-size: 12px; }
 
@@ -1224,6 +1351,41 @@ type RouteState = {
     .comment-meta{ display:flex; gap:8px; align-items:center; font-size:11px; opacity:0.65; }
     .comment-name{ font-weight:800; text-transform:uppercase; letter-spacing:0.08em; }
     .comment-text{ font-size:12px; color:rgba(10,12,18,0.85); margin-top:2px; }
+    .comment-actions{
+      display:flex;
+      gap:10px;
+      margin-top:4px;
+      font-size:11px;
+    }
+    .comment-action{
+      border:0;
+      background:transparent;
+      padding:0;
+      color:rgba(10,12,18,0.58);
+      font-weight:800;
+      letter-spacing:0.08em;
+      text-transform:uppercase;
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      cursor:pointer;
+    }
+    .comment-action.active{ color:rgba(0,155,220,0.88); }
+    .comment-action:disabled{ opacity:0.5; cursor:not-allowed; }
+    .comment-heart{ font-size:12px; line-height:1; }
+    .comment-heart.active{ color:rgba(0,155,220,0.95); }
+    .comment-like-count{ font-size:11px; font-weight:800; color:rgba(10,12,18,0.75); }
+    .comment-reply{
+      display:flex;
+      align-items:center;
+      gap:8px;
+      font-size:11px;
+      font-weight:800;
+      letter-spacing:0.06em;
+      color:rgba(10,12,18,0.6);
+      text-transform:uppercase;
+    }
+    .comment-reply span{ color:rgba(0,155,220,0.85); }
     .comment-compose{
       display:flex;
       gap:8px;
@@ -1439,10 +1601,10 @@ type RouteState = {
     /* =============== STATS PILL =============== */
     .stats-pill{
       position: fixed;
-      left: 16px;
-      bottom: 16px;
+      left: var(--ui-edge-left);
+      bottom: var(--ui-edge-bottom);
       z-index: 12000;
-      width: min(380px, calc(100vw - 32px));
+      width: min(380px, calc(100vw - (var(--ui-edge-left) + var(--ui-edge-right))));
       border-radius: 16px;
       padding: 10px 12px;
       background: rgba(220, 228, 235, 0.88);
@@ -1461,8 +1623,8 @@ type RouteState = {
 
     .user-node{
       position: fixed;
-      top: 16px;
-      right: 16px;
+      top: var(--ui-edge-top);
+      right: var(--ui-edge-right);
       z-index: 13010;
       user-select: none;
       pointer-events: auto;
@@ -1498,7 +1660,7 @@ type RouteState = {
       position: absolute;
       top: 52px;
       right: 0;
-      width: 260px;
+      width: min(320px, calc(100vw - (var(--ui-edge-left) + var(--ui-edge-right))));
       border-radius: 22px;
       padding: 14px;
       background: rgba(10,12,20,0.62);
@@ -1520,6 +1682,29 @@ type RouteState = {
       pointer-events:none;
     }
     .node-menu > *{ position:relative; z-index:1; }
+    .node-bell-wrap{
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+    .notif-menu{
+      position: absolute;
+      top: calc(100% + 10px);
+      right: 0;
+      left: auto;
+      transform: none;
+      width: min(320px, calc(100vw - (var(--ui-edge-left) + var(--ui-edge-right))));
+      max-height: calc(100vh - 140px);
+      display: flex;
+      flex-direction: column;
+    }
+    .notif-menu .notif-list{
+      max-height: calc(100vh - 280px);
+      overflow-y: auto;
+    }
+    .notif-menu .node-foot{
+      margin-top: auto;
+    }
     .node-head{ margin-bottom: 10px; }
     .node-title{ font-weight: 900; letter-spacing: 0.18em; font-size: 12px; color: rgba(255,255,255,0.90); }
     .node-sub{ margin-top: 6px; font-weight: 800; letter-spacing: 0.08em; color: rgba(0,255,209,0.92); font-size: 12px; }
@@ -1769,9 +1954,15 @@ type RouteState = {
       }
     }
     @media (max-width: 720px){
+      :host{
+        --ui-edge: 12px;
+        --node-size: 40px;
+        --top-overlay-height: 190px;
+        --stage-top-pad: calc(var(--top-overlay-top) + var(--top-overlay-height) + var(--ui-gap));
+      }
       .top-overlay{
-        left: 12px;
-        right: 12px;
+        left: var(--ui-edge-left);
+        right: var(--ui-edge-right);
         transform: none;
         width: auto;
         padding: 4px 8px;
@@ -1795,9 +1986,6 @@ type RouteState = {
         max-height: 40vh;
         overflow: auto;
       }
-      .stage.focus{
-        padding-top: 120px;
-      }
       .main-card{
         padding: 14px;
       }
@@ -1810,8 +1998,8 @@ type RouteState = {
         height: 42px;
       }
       .user-node{
-        top: 12px;
-        right: 12px;
+        top: var(--ui-edge-top);
+        right: var(--ui-edge-right);
         gap: 8px;
       }
       .node-orb{
@@ -1830,6 +2018,13 @@ type RouteState = {
       }
     }
     @media (max-width: 520px){
+      :host{
+        --top-overlay-height: 210px;
+        --stage-top-pad: calc(var(--top-overlay-top) + var(--top-overlay-height) + var(--ui-gap));
+      }
+      .top-overlay{
+        top: var(--top-overlay-top);
+      }
       .top-actions{
         flex-direction: column;
         align-items: stretch;
@@ -1851,6 +2046,16 @@ type RouteState = {
       .post-card{
         padding: 14px;
       }
+      .node-menu:not(.notif-menu){
+        left: 50%;
+        right: auto;
+        transform: translateX(-50%);
+      }
+      .notif-menu{
+        left: auto;
+        right: 0;
+        transform: none;
+      }
     }
   `],
 })
@@ -1870,6 +2075,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   private readonly LOCATION_REFRESH_MS = 10 * 60_000;
 
   selectedCountry: CountryModel | null = null;
+  countryFeedFull = false;
 
   totalUsers: number | null = null;
   onlineUsers: number | null = null;
@@ -1921,6 +2127,10 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   commentErrors: Record<string, string> = {};
   commentDrafts: Record<string, string> = {};
   commentItems: Record<string, PostComment[]> = {};
+  commentDisplay: Record<string, PostComment[]> = {};
+  commentDepth: Record<string, Record<string, number>> = {};
+  commentReplyTarget: Record<string, { commentId: string; authorName: string } | null> = {};
+  commentLikeBusy: Record<string, Record<string, boolean>> = {};
   reportingPostId: string | null = null;
   reportReason = '';
   reportBusy = false;
@@ -2024,10 +2234,10 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     private cdr: ChangeDetectorRef
   ) {}
 
-  /** Γ£à Angular templates canΓÇÖt do `(profile as any)`; do it here. */
+  /** Angular templates can't do `(profile as any)`; do it here. */
   get cityName(): string {
     const p: any = this.profile as any;
-    return (p?.city_name ?? p?.cityName ?? 'ΓÇö') as string;
+    return (p?.city_name ?? p?.cityName ?? 'Unknown') as string;
   }
 
   private maxOffset(size: number, scale: number): number {
@@ -2264,7 +2474,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
         });
       } catch (e: any) {
         this.zone.run(() => {
-          this.heartbeatText = `presence Γ£ù (${e?.message ?? e})`;
+          this.heartbeatText = `presence (${e?.message ?? e})`;
           this.forceUi();
         });
       }
@@ -2280,7 +2490,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
         await this.gql.query<any>(`query { __typename }`);
       } catch {}
 
-      this.zone.run(() => console.log('Γ£à Globe page ready'));
+      this.zone.run(() => console.log('Globe page ready'));
     });
   }
 
@@ -2331,6 +2541,10 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     const left = 20;
     let right = 20;
 
+    if (this.countryFeedFull) {
+      return { top, bottom, left, right };
+    }
+
     const pane = document.querySelector('.main-pane') as HTMLElement | null;
     if (pane) {
       const rect = pane.getBoundingClientRect();
@@ -2340,6 +2554,14 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     }
 
     return { top, bottom, left, right };
+  }
+
+  toggleCountryFeedFull(): void {
+    this.countryFeedFull = !this.countryFeedFull;
+    if (this.selectedCountry) {
+      this.globeService.setViewPadding(this.computeFocusPadding());
+      this.globeService.resize();
+    }
   }
 
   private applyFocusView(country: CountryModel): void {
@@ -2361,6 +2583,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     const tab = opts?.tab ?? 'posts';
 
     this.selectedCountry = country;
+    this.countryFeedFull = false;
     this.countryTab = tab;
     if (!this.canPostHere) this.composerOpen = false;
 
@@ -2369,6 +2592,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.countrySearchTerm = country.name;
     this.countrySuggestions = [];
 
+    this.globeService.setInteractive(false);
     this.globeService.setSoloCountry(country.id);
     this.globeService.setConnectionsCountryFilter(country.code ?? null);
     this.globeService.selectCountry(country.id);
@@ -2392,6 +2616,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   clearSelectedCountry(opts?: { skipRouteUpdate?: boolean }): void {
     const hadState = !!this.selectedCountry || !!this.panel;
     this.selectedCountry = null;
+    this.countryFeedFull = false;
     this.countryTab = 'posts';
     this.composerOpen = false;
 
@@ -2403,6 +2628,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.globeService.setSoloCountry(null);
     this.globeService.setConnectionsCountryFilter(null);
     this.globeService.resetView();
+    this.globeService.setInteractive(true);
 
     this.localTotal = null;
     this.localOnline = null;
@@ -2712,6 +2938,9 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     if (type === 'follow') return 'started following you.';
     if (type === 'like') return 'liked your post.';
     if (type === 'comment') return 'commented on your post.';
+    if (type === 'comment_like') return 'liked your comment.';
+    if (type === 'comment_reply') return 'replied to your comment.';
+    if (type === 'message') return 'sent you a message.';
     if (type === 'post') return 'shared a post.';
     return 'sent you a notification.';
   }
@@ -2728,7 +2957,14 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       }
       return;
     }
-    if ((type === 'like' || type === 'comment') && notif.entity_id) {
+    if (type === 'message' && notif.entity_id) {
+      if (this.panel === 'notifications') {
+        this.closePanel();
+      }
+      void this.router.navigate(['/messages'], { queryParams: { c: notif.entity_id } });
+      return;
+    }
+    if ((type === 'like' || type === 'comment' || type === 'comment_like' || type === 'comment_reply') && notif.entity_id) {
       void this.navigateToNotificationPost(notif.entity_id);
     }
   }
@@ -3027,6 +3263,9 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     if (next && !this.commentItems[postId] && !this.commentLoading[postId]) {
       void this.loadComments(postId);
     }
+    if (!next) {
+      this.commentReplyTarget[postId] = null;
+    }
     this.forceUi();
   }
 
@@ -3039,10 +3278,108 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     try {
       const comments = await this.postsService.listComments(postId, 40);
       this.commentItems[postId] = comments;
+      this.rebuildCommentThread(postId);
     } catch (e: any) {
       this.commentErrors[postId] = e?.message ?? String(e);
     } finally {
       this.commentLoading[postId] = false;
+      this.forceUi();
+    }
+  }
+
+  private rebuildCommentThread(postId: string): void {
+    const items = this.commentItems[postId] ?? [];
+    const byParent: Record<string, PostComment[]> = {};
+    const roots: PostComment[] = [];
+
+    for (const comment of items) {
+      const parentId = comment.parent_id ?? '';
+      if (parentId) {
+        if (!byParent[parentId]) byParent[parentId] = [];
+        byParent[parentId].push(comment);
+      } else {
+        roots.push(comment);
+      }
+    }
+
+    const ordered: PostComment[] = [];
+    const depthMap: Record<string, number> = {};
+    const pushWithChildren = (node: PostComment, depth: number) => {
+      ordered.push(node);
+      depthMap[node.id] = depth;
+      const children = byParent[node.id] ?? [];
+      for (const child of children) {
+        pushWithChildren(child, depth + 1);
+      }
+    };
+
+    for (const root of roots) {
+      pushWithChildren(root, 0);
+    }
+
+    this.commentDisplay[postId] = ordered;
+    this.commentDepth[postId] = depthMap;
+  }
+
+  private applyCommentUpdate(postId: string, comment: PostComment): void {
+    const existing = this.commentItems[postId] ?? [];
+    const next = [...existing];
+    const idx = next.findIndex((item) => item.id === comment.id);
+    if (idx >= 0) {
+      next[idx] = { ...next[idx], ...comment };
+    } else {
+      next.push(comment);
+    }
+    this.commentItems[postId] = next;
+    this.rebuildCommentThread(postId);
+  }
+
+  private commentAuthorName(comment: PostComment): string {
+    return comment.author?.username || comment.author?.display_name || 'Member';
+  }
+
+  startCommentReply(postId: string, comment: PostComment): void {
+    if (!postId || !comment?.id) return;
+    this.commentReplyTarget[postId] = {
+      commentId: comment.id,
+      authorName: this.commentAuthorName(comment),
+    };
+    this.forceUi();
+  }
+
+  cancelCommentReply(postId: string): void {
+    if (!postId) return;
+    this.commentReplyTarget[postId] = null;
+    this.forceUi();
+  }
+
+  async toggleCommentLike(postId: string, comment: PostComment): Promise<void> {
+    if (!postId || !comment?.id) return;
+    if (!this.meId) {
+      this.commentErrors[postId] = 'Sign in to like comments.';
+      this.forceUi();
+      return;
+    }
+
+    const perPost = { ...(this.commentLikeBusy[postId] ?? {}) };
+    if (perPost[comment.id]) return;
+    perPost[comment.id] = true;
+    this.commentLikeBusy[postId] = perPost;
+    this.commentErrors[postId] = '';
+    this.forceUi();
+
+    try {
+      const updated = comment.liked_by_me
+        ? await this.postsService.unlikeComment(comment.id)
+        : await this.postsService.likeComment(comment.id);
+      this.applyCommentUpdate(postId, updated);
+    } catch (e: any) {
+      this.commentErrors[postId] = e?.message ?? String(e);
+    } finally {
+      this.commentLikeBusy[postId] = {
+        ...perPost,
+        [comment.id]: false,
+      };
       this.forceUi();
     }
   }
@@ -3068,10 +3405,11 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.forceUi();
 
     try {
-      const comment = await this.postsService.addComment(post.id, draft);
-      const existing = this.commentItems[post.id] ?? [];
-      this.commentItems[post.id] = [...existing, comment];
+      const parentId = this.commentReplyTarget[post.id]?.commentId ?? null;
+      const comment = await this.postsService.addComment(post.id, draft, parentId);
+      this.applyCommentUpdate(post.id, comment);
       this.commentDrafts[post.id] = '';
+      this.commentReplyTarget[post.id] = null;
       const updated = { ...post, comment_count: post.comment_count + 1 };
       this.applyPostUpdate(updated);
     } catch (e: any) {
@@ -3531,6 +3869,11 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   goToMe(): void {
     this.closeMenu();
     void this.router.navigate(['/me']);
+  }
+
+  goToMessages(): void {
+    this.closeMenu();
+    void this.router.navigate(['/messages']);
   }
 
   openPanel(p: Exclude<Panel, null>, opts?: { skipRouteUpdate?: boolean }): void {

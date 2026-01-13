@@ -74,11 +74,21 @@ export const postsResolvers = {
       if (!args?.post_id) throw new Error('post_id is required.');
       return await svc().unlikePost(args.post_id, user.id);
     },
-    addComment: async (_: any, args: { post_id: string; body: string }, ctx: Context) => {
+    addComment: async (_: any, args: { post_id: string; body: string; parent_id?: string | null }, ctx: Context) => {
       const user = requireAuth(ctx);
       if (!args?.post_id) throw new Error('post_id is required.');
       if (!args?.body) throw new Error('body is required.');
-      return await svc().addComment(args.post_id, user.id, args.body);
+      return await svc().addComment(args.post_id, user.id, args.body, args.parent_id ?? null);
+    },
+    likeComment: async (_: any, args: { comment_id: string }, ctx: Context) => {
+      const user = requireAuth(ctx);
+      if (!args?.comment_id) throw new Error('comment_id is required.');
+      return await svc().likeComment(args.comment_id, user.id);
+    },
+    unlikeComment: async (_: any, args: { comment_id: string }, ctx: Context) => {
+      const user = requireAuth(ctx);
+      if (!args?.comment_id) throw new Error('comment_id is required.');
+      return await svc().unlikeComment(args.comment_id, user.id);
     },
     reportPost: async (_: any, args: { post_id: string; reason: string }, ctx: Context) => {
       const user = requireAuth(ctx);

@@ -81,6 +81,7 @@ export class GlobeService {
   private pendingSelectedCountryId: number | null = null;
   private hasPendingSelection = false;
   private focusedLabelId: number | null = null;
+  private mapInteractive = true;
 
   init(globeEl: HTMLElement): void {
     const cs = getComputedStyle(globeEl);
@@ -123,8 +124,14 @@ export class GlobeService {
 
       // ✅ Click selection only
       map.on('click', this.FILL_LAYER, (e) => this.onCountryClickInternal(e));
-      map.on('mouseenter', this.FILL_LAYER, () => (map.getCanvas().style.cursor = 'pointer'));
-      map.on('mouseleave', this.FILL_LAYER, () => (map.getCanvas().style.cursor = ''));
+      map.on('mouseenter', this.FILL_LAYER, () => {
+        if (!this.mapInteractive) return;
+        map.getCanvas().style.cursor = 'pointer';
+      });
+      map.on('mouseleave', this.FILL_LAYER, () => {
+        if (!this.mapInteractive) return;
+        map.getCanvas().style.cursor = '';
+      });
 
       if (this.cachedPayload) this.setDataFast(this.cachedPayload);
       if (this.cachedConnections.length) this.setConnections(this.cachedConnections);
@@ -134,6 +141,7 @@ export class GlobeService {
       this.applyConnectionsCountryFilterNow();
 
       this.startOverlayLoop();
+      this.applyInteractivity();
       this.markReady();
     });
 
@@ -152,6 +160,11 @@ export class GlobeService {
 
   onCountryClick(cb: (country: CountryModel) => void) {
     this.countryClickCb = cb;
+  }
+
+  setInteractive(enabled: boolean): void {
+    this.mapInteractive = !!enabled;
+    this.applyInteractivity();
   }
 
   setData(payload: CountriesPayload): void {
@@ -572,6 +585,7 @@ export class GlobeService {
 
   private onCountryClickInternal(e: MapMouseEvent): void {
     if (!this.map) return;
+    if (!this.mapInteractive) return;
 
     const hits = this.map.queryRenderedFeatures(e.point, { layers: [this.FILL_LAYER] }) as any[];
     const f = hits?.[0];
@@ -590,6 +604,31 @@ export class GlobeService {
     } else {
       this.flyTo(found.center.lat, found.center.lng, found.flyAltitude ?? 1.0, 900);
     }
+  }
+
+  private applyInteractivity(): void {
+    if (!this.map) return;
+    const map = this.map;
+
+    if (this.mapInteractive) {
+      map.dragPan.enable();
+      map.scrollZoom.enable();
+      map.boxZoom.enable();
+      map.keyboard.enable();
+      map.doubleClickZoom.enable();
+      map.touchZoomRotate.enable();
+      map.touchZoomRotate.disableRotation();
+      map.dragRotate.disable();
+    } else {
+      map.dragPan.disable();
+      map.scrollZoom.disable();
+      map.boxZoom.disable();
+      map.keyboard.disable();
+      map.doubleClickZoom.disable();
+      map.touchZoomRotate.disable();
+    }
+
+    map.getCanvas().style.cursor = '';
   }
 
   // -----------------------------

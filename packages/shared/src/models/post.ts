@@ -31,8 +31,11 @@ export type CountryPost = {
 export type PostComment = {
   id: string;
   post_id: string;
+  parent_id: string | null;
   author_id: string;
   body: string;
+  like_count: number;
+  liked_by_me: boolean;
   created_at: string;
   updated_at: string;
   author: PostAuthor | null;

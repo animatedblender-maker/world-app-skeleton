@@ -122,4 +122,43 @@ export class NotificationsService {
       [targetId, actorId, postId]
     );
   }
+
+  async notifyCommentLike(targetId: string, actorId: string, postId: string): Promise<void> {
+    if (!targetId || !actorId || !postId || targetId === actorId) return;
+    await pool.query(
+      `
+      insert into public.notifications
+        (user_id, actor_id, type, entity_type, entity_id)
+      values
+        ($1, $2, 'comment_like', 'post', $3)
+      `,
+      [targetId, actorId, postId]
+    );
+  }
+
+  async notifyCommentReply(targetId: string, actorId: string, postId: string): Promise<void> {
+    if (!targetId || !actorId || !postId || targetId === actorId) return;
+    await pool.query(
+      `
+      insert into public.notifications
+        (user_id, actor_id, type, entity_type, entity_id)
+      values
+        ($1, $2, 'comment_reply', 'post', $3)
+      `,
+      [targetId, actorId, postId]
+    );
+  }
+
+  async notifyMessage(targetId: string, actorId: string, conversationId: string): Promise<void> {
+    if (!targetId || !actorId || !conversationId || targetId === actorId) return;
+    await pool.query(
+      `
+      insert into public.notifications
+        (user_id, actor_id, type, entity_type, entity_id)
+      values
+        ($1, $2, 'message', 'conversation', $3)
+      `,
+      [targetId, actorId, conversationId]
+    );
+  }
 }

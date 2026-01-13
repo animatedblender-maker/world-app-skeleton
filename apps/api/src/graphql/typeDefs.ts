@@ -89,8 +89,11 @@ export const typeDefs = `#graphql
   type PostComment {
     id: ID!
     post_id: ID!
+    parent_id: ID
     author_id: ID!
     body: String!
+    like_count: Int!
+    liked_by_me: Boolean!
     created_at: String!
     updated_at: String!
     author: PostAuthor
@@ -112,6 +115,25 @@ export const typeDefs = `#graphql
     read_at: String
     created_at: String!
     actor: NotificationActor
+  }
+
+  type Message {
+    id: ID!
+    conversation_id: ID!
+    sender_id: ID!
+    body: String!
+    created_at: String!
+    sender: PostAuthor
+  }
+
+  type Conversation {
+    id: ID!
+    is_direct: Boolean!
+    created_at: String!
+    updated_at: String!
+    last_message_at: String
+    members: [PostAuthor!]!
+    last_message: Message
   }
 
   input CreatePostInput {
@@ -199,6 +221,10 @@ export const typeDefs = `#graphql
     followingIds: [ID!]!
     isFollowing(user_id: ID!): Boolean!
 
+    # Messaging
+    conversations(limit: Int): [Conversation!]!
+    messagesByConversation(conversation_id: ID!, limit: Int, before: String): [Message!]!
+
     # Notifications
     notifications(limit: Int, before: String): [Notification!]!
     notificationsUnreadCount: Int!
@@ -218,10 +244,16 @@ export const typeDefs = `#graphql
     deletePost(post_id: ID!): Boolean!
     likePost(post_id: ID!): Post!
     unlikePost(post_id: ID!): Post!
-    addComment(post_id: ID!, body: String!): PostComment!
+    addComment(post_id: ID!, body: String!, parent_id: ID): PostComment!
+    likeComment(comment_id: ID!): PostComment!
+    unlikeComment(comment_id: ID!): PostComment!
     reportPost(post_id: ID!, reason: String!): Boolean!
     followUser(target_id: ID!): Boolean!
     unfollowUser(target_id: ID!): Boolean!
+
+    # Messaging
+    startConversation(target_id: ID!): Conversation!
+    sendMessage(conversation_id: ID!, body: String!): Message!
 
     # Notifications
     markNotificationRead(id: ID!): Boolean!

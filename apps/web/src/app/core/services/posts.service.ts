@@ -331,8 +331,11 @@ export class PostsService {
         commentsByPost(post_id: $postId, limit: $limit, before: $before) {
           id
           post_id
+          parent_id
           author_id
           body
+          like_count
+          liked_by_me
           created_at
           updated_at
           author {
@@ -380,14 +383,17 @@ export class PostsService {
     return (postLikes ?? []).map((row) => this.mapLike(row));
   }
 
-  async addComment(postId: string, body: string): Promise<PostComment> {
+  async addComment(postId: string, body: string, parentId?: string | null): Promise<PostComment> {
     const mutation = `
-      mutation AddComment($postId: ID!, $body: String!) {
-        addComment(post_id: $postId, body: $body) {
+      mutation AddComment($postId: ID!, $body: String!, $parentId: ID) {
+        addComment(post_id: $postId, body: $body, parent_id: $parentId) {
           id
           post_id
+          parent_id
           author_id
           body
+          like_count
+          liked_by_me
           created_at
           updated_at
           author {
@@ -405,8 +411,65 @@ export class PostsService {
     const { addComment } = await this.gql.request<{ addComment: any }>(mutation, {
       postId,
       body: body.trim(),
+      parentId: parentId ?? null,
     });
     return this.mapComment(addComment);
+  }
+
+  async likeComment(commentId: string): Promise<PostComment> {
+    const mutation = `
+      mutation LikeComment($commentId: ID!) {
+        likeComment(comment_id: $commentId) {
+          id
+          post_id
+          parent_id
+          author_id
+          body
+          like_count
+          liked_by_me
+          created_at
+          updated_at
+          author {
+            user_id
+            display_name
+            username
+            avatar_url
+            country_name
+            country_code
+          }
+        }
+      }
+    `;
+    const { likeComment } = await this.gql.request<{ likeComment: any }>(mutation, { commentId });
+    return this.mapComment(likeComment);
+  }
+
+  async unlikeComment(commentId: string): Promise<PostComment> {
+    const mutation = `
+      mutation UnlikeComment($commentId: ID!) {
+        unlikeComment(comment_id: $commentId) {
+          id
+          post_id
+          parent_id
+          author_id
+          body
+          like_count
+          liked_by_me
+          created_at
+          updated_at
+          author {
+            user_id
+            display_name
+            username
+            avatar_url
+            country_name
+            country_code
+          }
+        }
+      }
+    `;
+    const { unlikeComment } = await this.gql.request<{ unlikeComment: any }>(mutation, { commentId });
+    return this.mapComment(unlikeComment);
   }
 
   async reportPost(postId: string, reason: string): Promise<boolean> {
@@ -457,8 +520,11 @@ export class PostsService {
     return {
       id: row.id,
       post_id: row.post_id,
+      parent_id: row.parent_id ?? null,
       author_id: row.author_id,
       body: row.body ?? '',
+      like_count: Number(row.like_count ?? 0),
+      liked_by_me: !!row.liked_by_me,
       created_at: row.created_at,
       updated_at: row.updated_at ?? row.created_at,
       author: row.author

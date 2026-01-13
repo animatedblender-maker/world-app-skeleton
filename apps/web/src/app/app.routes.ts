@@ -40,6 +40,12 @@ export const routes: Routes = [
       import('./pages/globe.page').then((m) => m.GlobePageComponent),
   },
   {
+    path: 'messages',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pages/messages.page').then((m) => m.MessagesPageComponent),
+  },
+  {
     path: 'user/:slug',
     loadComponent: () =>
       import('./pages/profile.page').then((m) => m.ProfilePageComponent),

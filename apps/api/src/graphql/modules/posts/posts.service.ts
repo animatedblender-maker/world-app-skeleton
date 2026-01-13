@@ -32,8 +32,11 @@ type PostRow = {
 type PostCommentRow = {
   id: string;
   post_id: string;
+  parent_id: string | null;
   author_id: string;
   body: string;
+  like_count: number;
+  liked_by_me: boolean;
   created_at: string;
   updated_at: string;
   author: {
@@ -396,14 +399,25 @@ export class PostsService {
   ): Promise<PostCommentRow[]> {
     await this.ensurePostAccess(postId, viewerId);
     const safeLimit = Math.max(1, Math.min(100, limit || 20));
-    const params: Array<string | number> = [postId, safeLimit];
-    const beforeClause = before ? `and c.created_at < $3::timestamptz` : '';
+    const params: Array<string | number | null> = [postId, safeLimit, viewerId];
+    const beforeClause = before ? `and c.created_at < $4::timestamptz` : '';
     if (before) params.push(before);
 
     const { rows } = await pool.query(
       `
       select
         c.*,
+        (select count(*)::int from public.post_comment_likes pcl where pcl.comment_id = c.id) as like_count,
+        case
+          when $3::uuid is not null
+            and exists (
+              select 1
+              from public.post_comment_likes pcl
+              where pcl.comment_id = c.id and pcl.user_id = $3::uuid
+            )
+          then true
+          else false
+        end as liked_by_me,
         jsonb_build_object(
           'user_id', pr.user_id,
           'display_name', pr.display_name,
@@ -425,23 +439,45 @@ export class PostsService {
     return rows as PostCommentRow[];
   }
 
-  async addComment(postId: string, userId: string, body: string): Promise<PostCommentRow> {
+  async addComment(
+    postId: string,
+    userId: string,
+    body: string,
+    parentId?: string | null
+  ): Promise<PostCommentRow> {
     const trimmed = String(body ?? '').trim();
     if (!trimmed) throw new Error('Comment is required.');
 
     const post = await this.ensurePostAccess(postId, userId);
     const client = await pool.connect();
     let commentId: string | null = null;
+    let parentAuthorId: string | null = null;
+    const parentRef = parentId ? String(parentId) : null;
 
     try {
       await client.query('begin');
+      if (parentRef) {
+        const parent = await client.query(
+          `
+          select id, post_id, author_id
+          from public.post_comments
+          where id = $1
+          limit 1
+          `,
+          [parentRef]
+        );
+        const row = parent.rows[0];
+        if (!row?.id) throw new Error('PARENT_COMMENT_NOT_FOUND');
+        if (row.post_id !== postId) throw new Error('PARENT_COMMENT_MISMATCH');
+        parentAuthorId = row.author_id ?? null;
+      }
       const insert = await client.query(
         `
-        insert into public.post_comments (post_id, author_id, body)
-        values ($1, $2, $3)
+        insert into public.post_comments (post_id, author_id, body, parent_id)
+        values ($1, $2, $3, $4)
         returning id
         `,
-        [postId, userId, trimmed]
+        [postId, userId, trimmed, parentRef]
       );
       commentId = insert.rows[0]?.id ?? null;
       if (!commentId) throw new Error('Failed to add comment.');
@@ -463,7 +499,7 @@ export class PostsService {
       client.release();
     }
 
-    const comment = await this.commentById(commentId);
+    const comment = await this.commentById(commentId, userId);
     if (!comment) throw new Error('Comment not found.');
 
     if (post.author_id !== userId) {
@@ -471,8 +507,64 @@ export class PostsService {
         await this.notifications.notifyPostComment(post.author_id, userId, postId);
       } catch {}
     }
+    if (parentAuthorId && parentAuthorId !== userId) {
+      try {
+        await this.notifications.notifyCommentReply(parentAuthorId, userId, postId);
+      } catch {}
+    }
 
     return comment;
+  }
+
+  async likeComment(commentId: string, userId: string): Promise<PostCommentRow> {
+    const { comment, post } = await this.ensureCommentAccess(commentId, userId);
+    const client = await pool.connect();
+    let inserted = false;
+
+    try {
+      await client.query('begin');
+      const { rowCount } = await client.query(
+        `
+        insert into public.post_comment_likes (comment_id, user_id)
+        values ($1, $2)
+        on conflict do nothing
+        `,
+        [commentId, userId]
+      );
+      inserted = (rowCount ?? 0) > 0;
+      await client.query('commit');
+    } catch (error) {
+      await client.query('rollback');
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    const updated = await this.commentById(commentId, userId);
+    if (!updated) throw new Error('COMMENT_NOT_FOUND');
+
+    if (inserted && comment.author_id !== userId) {
+      try {
+        await this.notifications.notifyCommentLike(comment.author_id, userId, post.id);
+      } catch {}
+    }
+
+    return updated;
+  }
+
+  async unlikeComment(commentId: string, userId: string): Promise<PostCommentRow> {
+    await this.ensureCommentAccess(commentId, userId);
+    await pool.query(
+      `
+      delete from public.post_comment_likes
+      where comment_id = $1 and user_id = $2
+      `,
+      [commentId, userId]
+    );
+
+    const updated = await this.commentById(commentId, userId);
+    if (!updated) throw new Error('COMMENT_NOT_FOUND');
+    return updated;
   }
 
   async reportPost(postId: string, userId: string, reason: string): Promise<boolean> {
@@ -619,11 +711,22 @@ export class PostsService {
     return (rows[0] as PostRow) ?? null;
   }
 
-  private async commentById(id: string): Promise<PostCommentRow | null> {
+  private async commentById(id: string, viewerId: string | null): Promise<PostCommentRow | null> {
     const { rows } = await pool.query(
       `
       select
         c.*,
+        (select count(*)::int from public.post_comment_likes pcl where pcl.comment_id = c.id) as like_count,
+        case
+          when $2::uuid is not null
+            and exists (
+              select 1
+              from public.post_comment_likes pcl
+              where pcl.comment_id = c.id and pcl.user_id = $2::uuid
+            )
+          then true
+          else false
+        end as liked_by_me,
         jsonb_build_object(
           'user_id', pr.user_id,
           'display_name', pr.display_name,
@@ -637,9 +740,20 @@ export class PostsService {
       where c.id = $1
       limit 1
       `,
-      [id]
+      [id, viewerId]
     );
     return (rows[0] as PostCommentRow) ?? null;
+  }
+
+  private async ensureCommentAccess(
+    commentId: string,
+    viewerId: string | null
+  ): Promise<{ comment: PostCommentRow; post: PostRow }> {
+    const comment = await this.commentById(commentId, viewerId);
+    if (!comment) throw new Error('COMMENT_NOT_FOUND');
+    const post = await this.postByIdForViewer(comment.post_id, viewerId);
+    if (!post) throw new Error('POST_FORBIDDEN');
+    return { comment, post };
   }
 
   private normalizeVisibility(value?: string | null): string | null {

@@ -2,9 +2,24 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>A</title>
+  <title>World App</title>
   <base href="/" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <script>
+    (function () {
+      var params = new URLSearchParams(window.location.search);
+      var redirect = params.get('redirect');
+      if (!redirect) return;
+      params.delete('redirect');
+      var target = decodeURIComponent(redirect);
+      var rest = params.toString();
+      if (rest) {
+        target += (target.indexOf('?') === -1 ? '?' : '&') + rest;
+      }
+      history.replaceState(null, '', target);
+    })();
+  </script>
 
   <!-- Libraries -->
   <script src="https://unpkg.com/globe.gl"></script>
