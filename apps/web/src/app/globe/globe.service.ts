@@ -123,7 +123,7 @@ export class GlobeService {
       setTimeout(() => map.resize(), 80);
 
       // ✅ Click selection only
-      map.on('click', this.FILL_LAYER, (e) => this.onCountryClickInternal(e));
+      map.on('click', this.FILL_LAYER, (e: MapMouseEvent) => this.onCountryClickInternal(e));
       map.on('mouseenter', this.FILL_LAYER, () => {
         if (!this.mapInteractive) return;
         map.getCanvas().style.cursor = 'pointer';
