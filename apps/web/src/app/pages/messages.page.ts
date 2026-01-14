@@ -426,7 +426,9 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   messageDraft = '';
   messageBusy = false;
   meId: string | null = null;
+  private pendingConversation: Conversation | null = null;
   private routeSub?: Subscription;
+  private pendingSub?: Subscription;
   private pollTimer: number | null = null;
 
   constructor(
@@ -440,11 +442,38 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     const user = await this.auth.getUser();
     this.meId = user?.id ?? null;
 
+    const stashed = this.messagesService.getPendingConversation();
+    const navState = (this.router.getCurrentNavigation()?.extras.state ?? history.state) as
+      | { convo?: Conversation }
+      | null;
+    const pending = stashed ?? navState?.convo ?? null;
+    if (pending) {
+      this.pendingConversation = pending;
+      this.activeConversation = pending;
+      this.activeConversationId = pending.id;
+      this.upsertConversation(pending);
+      void this.loadMessages(pending.id, false);
+    }
+
     this.routeSub = this.route.queryParamMap.subscribe((params) => {
       const convoId = params.get('c');
-      if (convoId && convoId !== this.activeConversationId) {
+      if (!convoId) return;
+      if (convoId !== this.activeConversationId) {
         void this.activateConversationById(convoId);
+        return;
       }
+      if (!this.messages.length) {
+        void this.loadMessages(convoId, false);
+      }
+    });
+
+    this.pendingSub = this.messagesService.pendingConversation$.subscribe((convo) => {
+      if (!convo) return;
+      this.pendingConversation = convo;
+      this.activeConversation = convo;
+      this.activeConversationId = convo.id;
+      this.upsertConversation(convo);
+      void this.loadMessages(convo.id, false);
     });
 
     await this.loadConversations();
@@ -453,6 +482,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.routeSub?.unsubscribe();
+    this.pendingSub?.unsubscribe();
     if (this.pollTimer) {
       window.clearInterval(this.pollTimer);
       this.pollTimer = null;
@@ -464,14 +494,45 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     this.conversationError = '';
 
     try {
-      this.conversations = await this.messagesService.listConversations();
+      const serverConvos = await this.messagesService.listConversations();
+      const pending = this.pendingConversation;
+      const serverHasPending =
+        !!pending && serverConvos.some((item) => item.id === pending.id);
+      const merged = [...serverConvos];
+      const seen = new Set(merged.map((item) => item.id));
+
+      if (pending && !seen.has(pending.id)) {
+        merged.unshift(pending);
+        seen.add(pending.id);
+      }
+
+      if (this.activeConversation && !seen.has(this.activeConversation.id)) {
+        merged.unshift(this.activeConversation);
+        seen.add(this.activeConversation.id);
+      }
+
+      this.conversations = merged;
+
+      if (serverHasPending) {
+        this.pendingConversation = null;
+        this.messagesService.clearPendingConversation();
+      }
       const targetId = selectId ?? this.activeConversationId;
       if (targetId) {
         const convo = this.conversations.find((item) => item.id === targetId) ?? null;
         if (convo) {
           this.activeConversation = convo;
           this.activeConversationId = convo.id;
+        } else if (this.pendingConversation?.id === targetId) {
+          this.activeConversation = this.pendingConversation;
+          this.activeConversationId = targetId;
         }
+      }
+      if (
+        this.activeConversationId &&
+        (!this.messages.length || this.messages[0]?.conversation_id !== this.activeConversationId)
+      ) {
+        void this.loadMessages(this.activeConversationId, true);
       }
     } catch (e: any) {
       this.conversationError = e?.message ?? String(e);
@@ -513,8 +574,20 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       await this.selectConversation(convo, false);
       return;
     }
+    if (this.pendingConversation?.id === convoId) {
+      this.activeConversation = this.pendingConversation;
+      this.activeConversationId = convoId;
+      await this.loadMessages(convoId, false);
+      return;
+    }
     this.activeConversationId = convoId;
     await this.loadMessages(convoId, false);
+  }
+
+  private upsertConversation(convo: Conversation): void {
+    const existingIndex = this.conversations.findIndex((item) => item.id === convo.id);
+    if (existingIndex >= 0) return;
+    this.conversations = [convo, ...this.conversations];
   }
 
   private async loadMessages(conversationId: string, silent: boolean): Promise<void> {

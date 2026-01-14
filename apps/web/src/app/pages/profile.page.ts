@@ -2016,7 +2016,11 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
 
     try {
       const convo = await this.messagesService.startConversation(this.profile.user_id);
-      void this.router.navigate(['/messages'], { queryParams: { c: convo.id } });
+      this.messagesService.setPendingConversation(convo);
+      void this.router.navigate(['/messages'], {
+        queryParams: { c: convo.id },
+        state: { convo },
+      });
     } catch (e: any) {
       this.messageError = e?.message ?? String(e);
     } finally {

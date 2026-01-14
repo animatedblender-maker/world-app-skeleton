@@ -43,7 +43,7 @@ type RouteState = {
     <div class="top-overlay">
       <div class="overlay-inner">
         <div class="top-actions">
-          <button *ngIf="selectedCountry" class="ghost-btn" type="button" (click)="clearSelectedCountry()">
+          <button *ngIf="selectedCountry" class="ghost-btn" type="button" (click)="returnToGlobe()">
             Return to globe
           </button>
           <div class="tab-row">
@@ -64,7 +64,6 @@ type RouteState = {
             [placeholder]="activeTab === 'people' ? 'Search @handle, display name, or ID' : 'Search countries...'"
             autocomplete="off"
             [(ngModel)]="searchInputValue"
-            (ngModelChange)="onUnifiedSearchInput($event)"
             (keydown)="handleSearchKeydown($event)"
             name="globalSearch"
           />
@@ -581,6 +580,10 @@ type RouteState = {
 
     <!-- Avatar orb overlay fixed (restored) -->
     <div class="user-node">
+      <button class="node-msg" type="button" (click)="goToMessages()" aria-label="Messages">
+        &#x1F4AC;
+      </button>
+
       <div class="node-bell-wrap">
         <button class="node-bell" type="button" (click)="openPanel('notifications')" [class.pulse]="bellPulse">
           &#x1F514;
@@ -767,7 +770,7 @@ type RouteState = {
       pointer-events:auto;
       backdrop-filter: blur(18px);
       gap: 4px;
-      overflow: hidden;
+      overflow: visible;
     }
     .overlay-inner{
       width: 100%;
@@ -1687,6 +1690,26 @@ type RouteState = {
       display: flex;
       align-items: center;
     }
+    .node-msg{
+      position: relative;
+      width: 38px;
+      height: 38px;
+      border-radius: 999px;
+      border: 1px solid rgba(0,255,209,0.20);
+      background: rgba(10,12,20,0.55);
+      backdrop-filter: blur(12px);
+      box-shadow: 0 12px 35px rgba(0,0,0,0.4),
+                  0 0 0 1px rgba(0,255,209,0.18) inset;
+      color: rgba(255,255,255,0.95);
+      display: grid;
+      place-items: center;
+      font-size: 18px;
+      cursor: pointer;
+      padding: 0;
+    }
+    .node-msg:hover{
+      box-shadow: 0 0 0 1px rgba(0,255,209,0.25) inset, 0 12px 35px rgba(0,0,0,0.45);
+    }
     .notif-menu{
       position: absolute;
       top: calc(100% + 10px);
@@ -2006,6 +2029,11 @@ type RouteState = {
         width: 40px;
         height: 40px;
       }
+      .node-msg{
+        width: 34px;
+        height: 34px;
+        font-size: 16px;
+      }
       .node-bell{
         width: 34px;
         height: 34px;
@@ -2295,8 +2323,10 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   set searchInputValue(value: string) {
     if (this.activeTab === 'people') {
       this.userSearchTerm = value;
+      this.onUserSearchInput(value);
     } else {
       this.countrySearchTerm = value;
+      this.onCountrySearchInput(value);
     }
   }
 
@@ -2646,6 +2676,17 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     setTimeout(() => this.globeService.resize(), 60);
 
     if (!opts?.skipRouteUpdate && hadState) this.updateRouteState();
+  }
+
+  returnToGlobe(): void {
+    this.clearSelectedCountry({ skipRouteUpdate: true });
+    this.pendingRouteState = null;
+    this.lastSyncedRouteState = { country: null, tab: null, panel: null };
+    void this.router.navigate([], {
+      relativeTo: this.route,
+      queryParams: { country: null, tab: null, panel: null, resetGlobe: '1' },
+      replaceUrl: true,
+    });
   }
 
   private async loadPostsForCountry(country: CountryModel | null): Promise<void> {
@@ -3619,6 +3660,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     const trimmed = this.userSearchTerm.trim();
     if (!trimmed) {
       this.userSuggestions = [];
+      this.userSearchError = '';
       this.forceUi();
       return;
     }
@@ -3641,8 +3683,11 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       this.userSuggestions = searchProfiles ?? [];
       if (!this.userSuggestions.length) {
         this.userSearchError = 'No matches yet.';
+      } else {
+        this.userSearchError = '';
       }
     } catch (e: any) {
+      this.userSuggestions = [];
       this.userSearchError = e?.message ?? 'Unable to load suggestions.';
     } finally {
       this.userSuggestionsLoading = false;
@@ -3699,6 +3744,12 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.userSuggestions = [];
     this.countrySuggestions = [];
     this.userSearchError = '';
+    if (tab === 'people') {
+      this.scheduleUserSuggestionRefresh();
+    } else {
+      this.updateCountrySuggestions(this.countrySearchTerm);
+    }
+    this.forceUi();
   }
 
   onCountrySearchInput(value: string): void {

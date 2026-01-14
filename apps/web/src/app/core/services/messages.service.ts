@@ -1,4 +1,5 @@
 import { Injectable } from '@angular/core';
+import { BehaviorSubject } from 'rxjs';
 import { GqlService } from './gql.service';
 import { Conversation, Message } from '../models/messages.model';
 import { PostAuthor } from '../models/post.model';
@@ -115,7 +116,34 @@ mutation SendMessage($conversationId: ID!, $body: String!) {
 
 @Injectable({ providedIn: 'root' })
 export class MessagesService {
-  constructor(private gql: GqlService) {}
+  private pendingStorageKey = 'worldapp.pendingConversation';
+  private pendingConversation: Conversation | null = null;
+  private pendingConversationSubject = new BehaviorSubject<Conversation | null>(null);
+  readonly pendingConversation$ = this.pendingConversationSubject.asObservable();
+
+  constructor(private gql: GqlService) {
+    const stored = this.readPendingStorage();
+    if (stored) {
+      this.pendingConversation = stored;
+    }
+    this.pendingConversationSubject.next(this.pendingConversation);
+  }
+
+  setPendingConversation(convo: Conversation): void {
+    this.pendingConversation = convo;
+    this.writePendingStorage(convo);
+    this.pendingConversationSubject.next(convo);
+  }
+
+  getPendingConversation(): Conversation | null {
+    return this.pendingConversation;
+  }
+
+  clearPendingConversation(): void {
+    this.pendingConversation = null;
+    this.clearPendingStorage();
+    this.pendingConversationSubject.next(null);
+  }
 
   async listConversations(limit = 30): Promise<Conversation[]> {
     const { conversations } = await this.gql.request<{ conversations: any[] }>(
@@ -182,5 +210,35 @@ export class MessagesService {
       members: Array.isArray(row.members) ? row.members.map((m: any) => this.mapAuthor(m) as PostAuthor) : [],
       last_message: row.last_message ? this.mapMessage(row.last_message) : null,
     };
+  }
+
+  private readPendingStorage(): Conversation | null {
+    if (typeof window === 'undefined') return null;
+    try {
+      const raw = window.sessionStorage.getItem(this.pendingStorageKey);
+      if (!raw) return null;
+      return JSON.parse(raw) as Conversation;
+    } catch {
+      this.clearPendingStorage();
+      return null;
+    }
+  }
+
+  private writePendingStorage(convo: Conversation): void {
+    if (typeof window === 'undefined') return;
+    try {
+      window.sessionStorage.setItem(this.pendingStorageKey, JSON.stringify(convo));
+    } catch {
+      // ignore storage errors (private mode, quota, etc.)
+    }
+  }
+
+  private clearPendingStorage(): void {
+    if (typeof window === 'undefined') return;
+    try {
+      window.sessionStorage.removeItem(this.pendingStorageKey);
+    } catch {
+      // ignore storage errors
+    }
   }
 }
