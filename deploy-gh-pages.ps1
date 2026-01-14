@@ -36,8 +36,16 @@ if (-not (Test-Path $distPath)) {
   throw "Build output not found at $distPath. Run `npm run build` inside apps/web first."
 }
 
-Write-Host "Publishing contents of $distPath/browser to worktree"
-Copy-Item -Recurse -Force "$distPath\browser\*" $worktreePath
+$browserPath = Join-Path $distPath 'browser'
+if (-not (Test-Path $browserPath)) {
+  throw "Build output not found at $browserPath. Run `npm run build` inside apps/web first."
+}
+
+Write-Host "Cleaning existing contents in worktree"
+Get-ChildItem -Force $worktreePath | Where-Object { $_.Name -ne '.git' } | Remove-Item -Recurse -Force
+
+Write-Host "Publishing contents of $browserPath to worktree"
+Copy-Item -Recurse -Force "$browserPath\*" $worktreePath
 
 foreach ($extra in @('3rdpartylicenses.txt','prerendered-routes.json')) {
   $file = Join-Path $distPath $extra
