@@ -223,6 +223,7 @@ export const typeDefs = `#graphql
 
     # Messaging
     conversations(limit: Int): [Conversation!]!
+    conversationById(conversation_id: ID!): Conversation
     messagesByConversation(conversation_id: ID!, limit: Int, before: String): [Message!]!
 
     # Notifications

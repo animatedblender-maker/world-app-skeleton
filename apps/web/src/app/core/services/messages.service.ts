@@ -39,6 +39,41 @@ query Conversations($limit: Int) {
 }
 `;
 
+const CONVERSATION_BY_ID_QUERY = `
+query ConversationById($conversationId: ID!) {
+  conversationById(conversation_id: $conversationId) {
+    id
+    is_direct
+    created_at
+    updated_at
+    last_message_at
+    members {
+      user_id
+      display_name
+      username
+      avatar_url
+      country_name
+      country_code
+    }
+    last_message {
+      id
+      conversation_id
+      sender_id
+      body
+      created_at
+      sender {
+        user_id
+        display_name
+        username
+        avatar_url
+        country_name
+        country_code
+      }
+    }
+  }
+}
+`;
+
 const MESSAGES_QUERY = `
 query MessagesByConversation($conversationId: ID!, $limit: Int, $before: String) {
   messagesByConversation(conversation_id: $conversationId, limit: $limit, before: $before) {
@@ -151,6 +186,14 @@ export class MessagesService {
       { limit }
     );
     return (conversations ?? []).map((row) => this.mapConversation(row));
+  }
+
+  async getConversationById(conversationId: string): Promise<Conversation | null> {
+    const { conversationById } = await this.gql.request<{ conversationById: any }>(
+      CONVERSATION_BY_ID_QUERY,
+      { conversationId }
+    );
+    return conversationById ? this.mapConversation(conversationById) : null;
   }
 
   async listMessages(conversationId: string, limit = 40, before?: string | null): Promise<Message[]> {

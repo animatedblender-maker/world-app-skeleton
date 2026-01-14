@@ -519,13 +519,21 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       }
       const targetId = selectId ?? this.activeConversationId;
       if (targetId) {
-        const convo = this.conversations.find((item) => item.id === targetId) ?? null;
+        let convo = this.conversations.find((item) => item.id === targetId) ?? null;
         if (convo) {
           this.activeConversation = convo;
           this.activeConversationId = convo.id;
         } else if (this.pendingConversation?.id === targetId) {
           this.activeConversation = this.pendingConversation;
           this.activeConversationId = targetId;
+        } else {
+          const fetched = await this.fetchConversationById(targetId);
+          if (fetched) {
+            this.upsertConversation(fetched);
+            this.activeConversation = fetched;
+            this.activeConversationId = fetched.id;
+            convo = fetched;
+          }
         }
       }
       if (
@@ -580,6 +588,12 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       await this.loadMessages(convoId, false);
       return;
     }
+    const fetched = await this.fetchConversationById(convoId);
+    if (fetched) {
+      this.upsertConversation(fetched);
+      await this.selectConversation(fetched, false);
+      return;
+    }
     this.activeConversationId = convoId;
     await this.loadMessages(convoId, false);
   }
@@ -588,6 +602,14 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     const existingIndex = this.conversations.findIndex((item) => item.id === convo.id);
     if (existingIndex >= 0) return;
     this.conversations = [convo, ...this.conversations];
+  }
+
+  private async fetchConversationById(convoId: string): Promise<Conversation | null> {
+    try {
+      return await this.messagesService.getConversationById(convoId);
+    } catch {
+      return null;
+    }
   }
 
   private async loadMessages(conversationId: string, silent: boolean): Promise<void> {

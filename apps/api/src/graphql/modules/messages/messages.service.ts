@@ -245,6 +245,11 @@ export class MessagesService {
     return message;
   }
 
+  async getConversationById(conversationId: string, userId: string): Promise<ConversationRow | null> {
+    if (!conversationId) return null;
+    return await this.conversationById(conversationId, userId);
+  }
+
   private async ensureMember(conversationId: string, userId: string): Promise<void> {
     const { rows } = await pool.query(
       `

@@ -29,6 +29,11 @@ export const messagesResolvers = {
       const limit = typeof args?.limit === 'number' ? args.limit : 20;
       return await svc().listConversations(user.id, limit);
     },
+    conversationById: async (_: any, args: { conversation_id: string }, ctx: Context) => {
+      const user = requireAuth(ctx);
+      if (!args?.conversation_id) throw new Error('conversation_id is required.');
+      return await svc().getConversationById(args.conversation_id, user.id);
+    },
     messagesByConversation: async (
       _: any,
       args: { conversation_id: string; limit?: number; before?: string | null },
