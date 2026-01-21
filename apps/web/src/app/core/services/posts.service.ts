@@ -130,6 +130,9 @@ export class PostsService {
     countryCode: string;
     cityName?: string | null;
     visibility?: string | null;
+    mediaType?: string | null;
+    mediaUrl?: string | null;
+    thumbUrl?: string | null;
   }): Promise<CountryPost> {
     if (!input.authorId) throw new Error('authorId is required to post.');
     const mutation = `
@@ -169,6 +172,9 @@ export class PostsService {
       country_code: input.countryCode,
       city_name: input.cityName ?? null,
       visibility: input.visibility ?? null,
+      media_type: input.mediaType ?? null,
+      media_url: input.mediaUrl ?? null,
+      thumb_url: input.thumbUrl ?? null,
     };
 
     const { createPost } = await this.gql.request<{ createPost: any }>(mutation, {

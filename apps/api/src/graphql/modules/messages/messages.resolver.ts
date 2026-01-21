@@ -45,6 +45,10 @@ export const messagesResolvers = {
       const before = args?.before ?? null;
       return await svc().messagesByConversation(args.conversation_id, limit, before, user.id);
     },
+    messagesUnreadCount: async (_: any, _args: unknown, ctx: Context) => {
+      const user = requireAuth(ctx);
+      return await svc().unreadCount(user.id);
+    },
   },
 
   Mutation: {

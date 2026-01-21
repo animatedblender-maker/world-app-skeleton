@@ -1,5 +1,6 @@
 import { Injectable } from '@angular/core';
 import { GqlService } from './gql.service';
+import { FakeDataService } from './fake-data.service';
 
 export type LatLng = { lat: number; lng: number };
 
@@ -131,7 +132,10 @@ query SearchProfiles($query: String!, $limit: Int) {
 
 @Injectable({ providedIn: 'root' })
 export class ProfileService {
-  constructor(private gql: GqlService) {}
+  constructor(
+    private gql: GqlService,
+    private fakeData: FakeDataService
+  ) {}
 
   async countries() {
     return this.gql.request<{ countries: { countries: Country[] } }>(COUNTRIES_QUERY);
@@ -154,14 +158,24 @@ export class ProfileService {
   }
 
   async profileByUsername(username: string) {
+    const trimmed = String(username || '').trim().replace(/^@/, '');
+    if (trimmed) {
+      const fake = await this.fakeData.getProfileByUsername(trimmed);
+      if (fake) return { profileByUsername: fake };
+    }
     return this.gql.request<{ profileByUsername: Profile | null }>(PROFILE_BY_USERNAME, {
-      username,
+      username: trimmed,
     });
   }
 
   async profileById(userId: string) {
+    const trimmed = String(userId || '').trim();
+    if (trimmed) {
+      const fake = await this.fakeData.getProfileById(trimmed);
+      if (fake) return { profileById: fake };
+    }
     return this.gql.request<{ profileById: Profile | null }>(PROFILE_BY_ID, {
-      user_id: userId,
+      user_id: trimmed,
     });
   }
 
@@ -171,10 +185,38 @@ export class ProfileService {
   }
 
   async searchProfiles(query: string, limit = 6) {
-    if (!query.trim()) return { searchProfiles: [] };
-    return this.gql.request<{ searchProfiles: Profile[] }>(SEARCH_PROFILES, {
-      query: query.trim(),
-      limit,
-    });
+    const trimmed = String(query || '').trim();
+    if (!trimmed) return { searchProfiles: [] };
+
+    const [realResult, fakeResult] = await Promise.allSettled([
+      this.gql.request<{ searchProfiles: Profile[] }>(SEARCH_PROFILES, {
+        query: trimmed,
+        limit,
+      }),
+      this.fakeData.searchProfiles(trimmed, limit),
+    ]);
+
+    const realProfiles =
+      realResult.status === 'fulfilled' ? realResult.value.searchProfiles ?? [] : [];
+    const fakeProfiles = fakeResult.status === 'fulfilled' ? fakeResult.value : [];
+
+    return { searchProfiles: this.mergeProfiles(realProfiles, fakeProfiles, limit) };
+  }
+
+  private mergeProfiles(real: Profile[], fake: Profile[], limit: number): Profile[] {
+    const next: Profile[] = [];
+    const seen = new Set<string>();
+
+    const push = (profile: Profile) => {
+      const key = profile.user_id || profile.username || '';
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      next.push(profile);
+    };
+
+    real.forEach(push);
+    fake.forEach(push);
+
+    return next.slice(0, Math.max(1, limit));
   }
 }

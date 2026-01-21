@@ -3,19 +3,24 @@ import { supabase } from '../../supabase/supabase.client';
 
 @Injectable({ providedIn: 'root' })
 export class MediaService {
-  // Keep your existing post media upload (bucket: media)
+  // Keep your existing post media upload (bucket: posts)
   async uploadPostMedia(file: File): Promise<{ path: string; publicUrl: string }> {
-    const ext = (file.name.split('.').pop() || 'bin').toLowerCase();
-    const path = `posts/${crypto.randomUUID()}.${ext}`;
+    const { data: sessionData, error: sessionErr } = await supabase.auth.getSession();
+    if (sessionErr) throw sessionErr;
+    const userId = sessionData.session?.user?.id;
+    if (!userId) throw new Error('Not authenticated');
 
-    const { error } = await supabase.storage.from('media').upload(path, file, {
+    const ext = (file.name.split('.').pop() || 'bin').toLowerCase();
+    const path = `${userId}/${crypto.randomUUID()}.${ext}`;
+
+    const { error } = await supabase.storage.from('posts').upload(path, file, {
       upsert: false,
       cacheControl: '3600',
       contentType: file.type || 'application/octet-stream',
     });
     if (error) throw error;
 
-    const { data } = supabase.storage.from('media').getPublicUrl(path);
+    const { data } = supabase.storage.from('posts').getPublicUrl(path);
     return { path, publicUrl: data.publicUrl };
   }
 

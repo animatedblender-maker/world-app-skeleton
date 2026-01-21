@@ -27,8 +27,8 @@ import {
 import { CountryPost, PostComment, PostLike } from '../core/models/post.model';
 
 type Panel = 'presence' | 'posts' | 'notifications' | null;
-type CountryTab = 'posts' | 'stats' | 'media';
-type SearchTab = 'people' | 'travel';
+type CountryTab = 'posts' | 'stats' | 'media' | 'following';
+type SearchTab = 'people' | 'countries';
 type RouteState = {
   country: string | null;
   tab: CountryTab | null;
@@ -40,13 +40,15 @@ type RouteState = {
   standalone: true,
   imports: [CommonModule, FormsModule],
   template: `
-    <div class="top-overlay">
+    <div
+      class="top-overlay"
+      *ngIf="searchOpen"
+      [class.search-open]="searchOpen"
+      (click)="$event.stopPropagation()"
+    >
       <div class="overlay-inner">
         <div class="top-actions">
-          <button *ngIf="selectedCountry" class="ghost-btn" type="button" (click)="returnToGlobe()">
-            Return to globe
-          </button>
-          <div class="tab-row">
+          <div class="tab-row" *ngIf="searchOpen">
             <button
               *ngFor="let tab of searchTabs"
               type="button"
@@ -58,19 +60,16 @@ type RouteState = {
             </button>
           </div>
         </div>
-        <div class="search-control">
+        <div class="search-control" *ngIf="searchOpen">
           <input
             type="text"
-            [placeholder]="activeTab === 'people' ? 'Search @handle, display name, or ID' : 'Search countries...'"
+            [placeholder]="activeTab === 'people' ? 'Search people...' : 'Search countries...'"
             autocomplete="off"
             [(ngModel)]="searchInputValue"
             (keydown)="handleSearchKeydown($event)"
             name="globalSearch"
           />
           <div class="user-loader" *ngIf="userSuggestionsLoading"></div>
-          <div class="tab-banner" *ngIf="activeTab !== 'people'">
-            {{ activeTab === 'travel' ? 'Travel search still improving.' : 'More search verticals soon.' }}
-          </div>
           <div class="user-suggestions" *ngIf="activeTab === 'people' && userSuggestions.length">
             <button
               type="button"
@@ -83,6 +82,12 @@ type RouteState = {
                 <span *ngIf="!profile.avatar_url">
                   {{ (profile.display_name || profile.username || 'U').slice(0, 2).toUpperCase() }}
                 </span>
+                <span
+                  class="presence-dot"
+                  [class.online]="isUserOnline(profile.user_id)"
+                  [class.offline]="!isUserOnline(profile.user_id)"
+                  aria-hidden="true"
+                ></span>
               </div>
               <div class="suggestion-info">
                 <div class="profile-name">{{ profile.display_name || profile.username || 'Member' }}</div>
@@ -90,7 +95,7 @@ type RouteState = {
               </div>
             </button>
           </div>
-          <div class="country-suggestions" *ngIf="activeTab === 'travel' && countrySuggestions.length">
+          <div class="country-suggestions" *ngIf="activeTab === 'countries' && countrySuggestions.length">
             <div
               class="country-option"
               *ngFor="let country of countrySuggestions"
@@ -117,23 +122,6 @@ type RouteState = {
     <div class="stage" [class.focus]="!!selectedCountry" [class.feed-full]="countryFeedFull">
       <div class="map-pane" *ngIf="selectedCountry">
         <div class="map-glass">
-          <!-- left info block -->
-          <div class="left-info">
-            <div class="li-title">{{ selectedCountry!.name }}</div>
-            <div class="li-sub">{{ selectedCountry!.code || '--' }}</div>
-
-            <div class="li-box">
-              <div class="li-row">
-                <span class="k">ONLINE</span>
-                <span class="v">{{ localOnline ?? 0 }}</span>
-              </div>
-              <div class="li-row">
-                <span class="k">TOTAL</span>
-                <span class="v">{{ localTotal ?? 0 }}</span>
-              </div>
-              <div class="li-hint">Country analytics will live here.</div>
-            </div>
-          </div>
         </div>
       </div>
 
@@ -142,25 +130,26 @@ type RouteState = {
         <div class="main-card white-card">
           <div class="main-head">
             <div class="mh-text">
-              <div class="mh-title">COUNTRY FEED</div>
+              <div class="mh-title-row">
+                <div class="mh-title">COUNTRY FEED</div>
+                <button
+                  *ngIf="selectedCountry"
+                  class="feed-return"
+                  type="button"
+                  (click)="returnToGlobe()"
+                >
+                  Return to globe
+                </button>
+              </div>
               <div class="mh-sub">{{ selectedCountry.name }} public space</div>
             </div>
-            <button
-              class="feed-toggle"
-              type="button"
-              (click)="toggleCountryFeedFull()"
-              [attr.aria-pressed]="countryFeedFull"
-              aria-label="Toggle full screen feed"
-            >
-              <span class="feed-toggle-icon" aria-hidden="true" *ngIf="!countryFeedFull">&#x26F6;</span>
-              <span class="feed-toggle-icon" aria-hidden="true" *ngIf="countryFeedFull">&#x1F5D6;</span>
-            </button>
           </div>
 
           <div class="tabs">
             <button class="tab" [class.active]="countryTab==='posts'" (click)="setCountryTab('posts')">POSTS</button>
-            <button class="tab" [class.active]="countryTab==='stats'" (click)="setCountryTab('stats')">STATS</button>
+            <button class="tab" [class.active]="countryTab==='following'" (click)="setCountryTab('following')">FOLLOWING</button>
             <button class="tab" [class.active]="countryTab==='media'" (click)="setCountryTab('media')">MEDIA</button>
+            <button class="tab" [class.active]="countryTab==='stats'" (click)="setCountryTab('stats')">STATS</button>
           </div>
 
           <div class="tab-body">
@@ -194,7 +183,7 @@ type RouteState = {
                             *ngIf="canPostHere && composerOpen"
                             class="pill-link ghost"
                             type="button"
-                            (click)="composerOpen = false"
+                            (click)="composerOpen = false; clearComposerMedia()"
                           >
                             Cancel
                           </button>
@@ -232,6 +221,48 @@ type RouteState = {
                           placeholder="Share a story from {{ profile!.country_name || 'your home' }}..."
                           [(ngModel)]="newPostBody"
                         ></textarea>
+                        <div class="composer-media">
+                          <input
+                            #composerMediaInput
+                            type="file"
+                            accept="image/*,video/*"
+                            (change)="onComposerMediaSelect($event)"
+                            style="display:none;"
+                          />
+                          <button
+                            class="pill-link ghost"
+                            type="button"
+                            (click)="composerMediaInput.click()"
+                          >
+                            Add media
+                          </button>
+                          <button
+                            class="pill-link ghost"
+                            type="button"
+                            *ngIf="composerMediaFile"
+                            (click)="clearComposerMedia()"
+                          >
+                            Remove
+                          </button>
+                          <span class="composer-media-name" *ngIf="composerMediaFile">
+                            {{ composerMediaFile.name }}
+                          </span>
+                        </div>
+                        <div class="composer-media-error" *ngIf="composerMediaError">
+                          {{ composerMediaError }}
+                        </div>
+                        <div class="composer-media-preview" *ngIf="composerMediaPreview">
+                          <img
+                            *ngIf="composerMediaType === 'image'"
+                            [src]="composerMediaPreview"
+                            alt="media preview"
+                          />
+                          <video
+                            *ngIf="composerMediaType === 'video'"
+                            [src]="composerMediaPreview"
+                            controls
+                          ></video>
+                        </div>
                       </ng-container>
                     </div>
                   </div>
@@ -249,11 +280,24 @@ type RouteState = {
                   </div>
                 </div>
 
-                <div class="posts-state" *ngIf="postsLoading">Loading posts...</div>
-                <div class="posts-state error" *ngIf="!postsLoading && postsError">{{ postsError }}</div>
+                <ng-container
+                  *ngTemplateOutlet="postListTpl; context: { posts: visiblePosts, loading: postsLoading, error: postsError, empty: 'No posts yet.' }"
+                ></ng-container>
+              </div>
 
-                <div class="posts-list" *ngIf="!postsLoading && !postsError">
-                  <div class="posts-empty" *ngIf="!posts.length">No posts yet.</div>
+              <div *ngSwitchCase="'following'" class="posts-pane">
+                <div class="posts-state hint">Posts from people you follow (not tied to a country).</div>
+                <ng-container
+                  *ngTemplateOutlet="postListTpl; context: { posts: followingPosts, loading: followingLoading, error: followingError, empty: 'No followed posts yet.' }"
+                ></ng-container>
+              </div>
+
+              <ng-template #postListTpl let-posts="posts" let-loading="loading" let-error="error" let-empty="empty">
+                <div class="posts-state" *ngIf="loading">Loading posts...</div>
+                <div class="posts-state error" *ngIf="!loading && error">{{ error }}</div>
+
+                <div class="posts-list" *ngIf="!loading && !error">
+                  <div class="posts-empty" *ngIf="!posts.length">{{ empty }}</div>
                   <div
                     class="post-card"
                     [class.post-highlight]="highlightedPostId === post.id"
@@ -352,6 +396,10 @@ type RouteState = {
                     <div class="post-body" *ngIf="editingPostId !== post.id">
                       <div class="post-title" *ngIf="post.title">{{ post.title }}</div>
                       <p>{{ post.body }}</p>
+                    </div>
+                    <div class="post-media" *ngIf="editingPostId !== post.id && post.media_url && post.media_type !== 'none'">
+                      <img *ngIf="post.media_type === 'image'" [src]="post.media_url" alt="post media" />
+                      <video *ngIf="post.media_type === 'video'" [src]="post.media_url" controls></video>
                     </div>
                     <div class="post-actions" *ngIf="editingPostId !== post.id">
                       <div class="post-action-group">
@@ -520,16 +568,37 @@ type RouteState = {
                     </div>
                   </div>
                 </div>
+              </ng-template>
+
+              <div *ngSwitchCase="'media'" class="posts-pane">
+                <ng-container
+                  *ngTemplateOutlet="postListTpl; context: { posts: mediaPosts, loading: postsLoading, error: postsError, empty: 'No media posts yet.' }"
+                ></ng-container>
               </div>
 
-              <div *ngSwitchCase="'stats'" class="placeholder light">
-                <div class="ph-title">Stats (later)</div>
-                <div class="ph-sub">Country analytics panel will live here.</div>
-              </div>
-
-              <div *ngSwitchCase="'media'" class="placeholder light">
-                <div class="ph-title">Media (later)</div>
-                <div class="ph-sub">Images / videos / curated content later.</div>
+              <div *ngSwitchCase="'stats'" class="stats-pane">
+                <div class="stats-card">
+                  <div class="stats-title">Global</div>
+                  <div class="stats-row"><span>Total users</span><b>{{ totalUsers ?? '--' }}</b></div>
+                  <div class="stats-row"><span>Online now</span><b>{{ onlineUsers ?? '--' }}</b></div>
+                </div>
+                <div class="stats-card" *ngIf="selectedCountry">
+                  <div class="stats-title">
+                    Local ({{ selectedCountry.name }}{{ selectedCountry.code ? ' - ' + selectedCountry.code : '' }})
+                  </div>
+                  <div class="stats-row"><span>Online</span><b>{{ localOnline ?? 0 }}</b></div>
+                  <div class="stats-row"><span>Total</span><b>{{ localTotal ?? 0 }}</b></div>
+                </div>
+                <div class="stats-card">
+                  <div class="stats-title">Status</div>
+                  <div class="stats-row"><span>Heartbeat</span><small id="heartbeatState">{{ heartbeatText || '--' }}</small></div>
+                  <div class="stats-row">
+                    <span>Auth</span>
+                    <small id="authState">{{ userEmail ? ('Logged in: ' + userEmail) : 'Logged out' }}</small>
+                  </div>
+                  <div class="stats-row muted" *ngIf="loadingProfile">Loading profile...</div>
+                  <div class="stats-row error" *ngIf="profileError">{{ profileError }}</div>
+                </div>
               </div>
             </ng-container>
           </div>
@@ -537,57 +606,32 @@ type RouteState = {
       </div>
     </div>
 
-    <!-- Stats pill back to showing local line again -->
-    <div class="stats-pill">
-      <div class="pill-row">
-        <small>Total users: <b>{{ totalUsers ?? '--' }}</b></small>
-        <small>Online now: <b>{{ onlineUsers ?? '--' }}</b></small>
-      </div>
-
-      <div class="pill-row" *ngIf="selectedCountry">
-        <small class="muted">
-          Local ({{ selectedCountry.name }}{{ selectedCountry.code ? ' (' + selectedCountry.code + ')' : '' }}):
-          <b>{{ localOnline ?? 0 }}</b> online /
-          <b>{{ localTotal ?? 0 }}</b> total
-        </small>
-      </div>
-
-      <div class="pill-row">
-        <small id="heartbeatState">{{ heartbeatText || '--' }}</small>
-      </div>
-
-      <div class="pill-row">
-        <small id="authState">
-          {{ userEmail ? ('Logged in: ' + userEmail) : 'Logged out' }}
-        </small>
-      </div>
-
-      <div class="pill-row" *ngIf="loadingProfile">
-        <small style="opacity:.75">Loading profile...</small>
-      </div>
-      <div class="pill-row" *ngIf="profileError">
-        <small style="color:#ff8b8b; font-weight:800; letter-spacing:.08em;">
-          {{ profileError }}
-        </small>
-      </div>
-    </div>
-
     <div
       class="node-backdrop"
-      *ngIf="menuOpen || panel === 'notifications'"
-      (click)="closeMenu(); closePanel()"
+      *ngIf="menuOpen || panel === 'notifications' || searchOpen"
+      (click)="closeMenu(); closePanel(); closeSearch()"
     ></div>
 
     <!-- Avatar orb overlay fixed (restored) -->
     <div class="user-node">
+      <button
+        class="node-msg node-search"
+        type="button"
+        (click)="toggleSearch()"
+        [class.active]="searchOpen"
+        aria-label="Search"
+      >
+        &#x1F50D;
+      </button>
       <button class="node-msg" type="button" (click)="goToMessages()" aria-label="Messages">
         &#x1F4AC;
+        <span class="bell-badge" *ngIf="messageBadgeCount">{{ messageBadgeCount }}</span>
       </button>
 
       <div class="node-bell-wrap">
         <button class="node-bell" type="button" (click)="openPanel('notifications')" [class.pulse]="bellPulse">
           &#x1F514;
-          <span class="bell-badge" *ngIf="notificationsUnreadCount" [class.pulse]="bellPulse">{{ notificationsUnreadCount }}</span>
+          <span class="bell-badge" *ngIf="bellBadgeCount" [class.pulse]="bellPulse">{{ bellBadgeCount }}</span>
         </button>
 
         <div class="node-menu notif-menu" *ngIf="panel === 'notifications'" (click)="$event.stopPropagation()">
@@ -732,6 +776,9 @@ type RouteState = {
     </div>
 
   `,
+  host: {
+    '[class.search-open]': 'searchOpen',
+  },
   styles: [`
     :host{
       --safe-top: env(safe-area-inset-top, 0px);
@@ -745,9 +792,17 @@ type RouteState = {
       --ui-edge-bottom: calc(var(--ui-edge) + var(--safe-bottom));
       --node-size: 44px;
       --ui-gap: 16px;
-      --top-overlay-height: 170px;
+      --top-overlay-height-open: 170px;
+      --top-overlay-height-closed: 0px;
+      --top-overlay-height: var(--top-overlay-height-open);
       --top-overlay-top: calc(var(--ui-edge-top) + var(--node-size) + var(--ui-gap));
-      --stage-top-pad: calc(var(--top-overlay-top) + var(--top-overlay-height) + var(--ui-gap));
+      --stage-top-pad-open: calc(var(--top-overlay-top) + var(--top-overlay-height) + var(--ui-gap));
+      --stage-top-pad-closed: calc(var(--ui-edge-top) + var(--node-size) + 8px);
+      --stage-top-pad: var(--stage-top-pad-open);
+    }
+    :host:not(.search-open){
+      --top-overlay-height: var(--top-overlay-height-closed);
+      --stage-top-pad: var(--stage-top-pad-closed);
     }
 
     /* =============== TOPBAR =============== */
@@ -771,6 +826,9 @@ type RouteState = {
       backdrop-filter: blur(18px);
       gap: 4px;
       overflow: visible;
+    }
+    .top-overlay:not(.search-open){
+      padding: 6px 10px;
     }
     .overlay-inner{
       width: 100%;
@@ -897,6 +955,7 @@ type RouteState = {
       text-align:left;
     }
     .suggestion-avatar{
+      position: relative;
       width: 36px;
       height: 36px;
       border-radius: 50%;
@@ -906,6 +965,21 @@ type RouteState = {
       background: rgba(255,255,255,0.08);
       font-size: 12px;
       color: rgba(255,255,255,0.9);
+    }
+    .presence-dot{
+      position: absolute;
+      right: -2px;
+      bottom: -2px;
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: rgba(255,90,90,0.95);
+      border: 2px solid rgba(5,9,20,0.9);
+      box-shadow: 0 0 10px rgba(255,90,90,0.45);
+    }
+    .presence-dot.online{
+      background: rgba(0,255,156,0.95);
+      box-shadow: 0 0 10px rgba(0,255,156,0.45);
     }
     .suggestion-avatar img{
       width: 100%;
@@ -999,13 +1073,13 @@ type RouteState = {
       gap: var(--ui-gap);
     }
 
-      .stage.focus.feed-full{
-        grid-template-columns: 1fr;
-        padding-top: var(--stage-top-pad);
-        padding-left: 0;
-        padding-right: 0;
-        gap: 0;
-      }
+    .stage.focus.feed-full{
+      grid-template-columns: 1fr;
+      padding-top: var(--stage-top-pad);
+      padding-left: var(--ui-edge-left);
+      padding-right: var(--ui-edge-right);
+      gap: 0;
+    }
       .stage.focus.feed-full .map-pane{
         display: none;
       }
@@ -1040,22 +1114,6 @@ type RouteState = {
       transform: translateY(-10px);
     }
 
-    .left-info{
-      position: absolute;
-      left: 12px;
-      top: 12px;
-      width: calc(100% - 24px);
-      z-index: 6;
-      pointer-events: none;
-    }
-    .li-title{ font-weight: 900; letter-spacing: .12em; font-size: 11px; color: rgba(255,255,255,0.94); text-transform: uppercase; }
-    .li-sub{ margin-top: 2px; font-size: 11px; opacity: .75; color: rgba(255,255,255,0.86); font-weight: 800; letter-spacing: .08em; }
-    .li-box{ margin-top: 10px; border-radius: 16px; background: rgba(10,12,20,0.40); border: 1px solid rgba(255,255,255,0.10); backdrop-filter: blur(10px); padding: 10px; }
-    .li-row{ display:flex; justify-content:space-between; align-items:center; gap: 12px; margin-bottom: 8px; }
-    .li-row .k{ opacity:.65; letter-spacing:.16em; font-weight: 900; font-size: 10px; color: rgba(255,255,255,0.86); }
-    .li-row .v{ color: rgba(0,255,209,0.92); font-weight: 900; letter-spacing: .10em; font-size: 12px; }
-    .li-hint{ margin-top: 4px; opacity: .72; font-size: 11px; color: rgba(255,255,255,0.86); line-height: 1.35; }
-
     .main-pane{
       pointer-events: auto;
       min-width: 0;
@@ -1070,6 +1128,8 @@ type RouteState = {
       overflow: hidden;
       display:flex;
       flex-direction: column;
+      width: 100%;
+      box-sizing: border-box;
     }
 
     /* "expensive white" posts container */
@@ -1080,21 +1140,22 @@ type RouteState = {
       color: rgba(10,12,18,0.90);
     }
 
-    .main-head{ display:flex; align-items:flex-start; justify-content:space-between; gap: 12px; margin-bottom: 10px; }
-    .mh-text{ min-width: 0; }
-    .feed-toggle{
-      border: 1px solid rgba(0,0,0,0.08);
-      background: rgba(255,255,255,0.8);
-      color: rgba(10,12,18,0.82);
-      border-radius: 12px;
-      padding: 6px 10px;
-      font-size: 16px;
-      line-height: 1;
+    .main-head{ display:flex; align-items: center; justify-content:space-between; gap: 12px; margin-bottom: 10px; }
+    .mh-text{ min-width: 0; display:flex; flex-direction:column; justify-content:center; }
+    .mh-title-row{ display:flex; align-items:center; gap: 10px; flex-wrap: wrap; }
+    .feed-return{
+      border: 1px solid rgba(0,0,0,0.12);
+      background: rgba(255,255,255,0.9);
+      color: rgba(10,12,18,0.8);
+      border-radius: 14px;
+      padding: 8px 14px;
+      font-size: 10px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      font-weight: 800;
       cursor: pointer;
-      min-width: 36px;
+      white-space: nowrap;
     }
-    .feed-toggle:hover{ background: rgba(255,255,255,0.95); }
-    .feed-toggle-icon{ display:block; }
     .mh-title{ font-weight: 900; letter-spacing: .16em; font-size: 12px; text-transform: uppercase; }
     .mh-sub{ margin-top: 4px; opacity: .72; font-weight: 800; letter-spacing: .08em; font-size: 12px; }
 
@@ -1125,6 +1186,11 @@ type RouteState = {
     .ph-title{ font-weight: 900; letter-spacing: .10em; font-size: 12px; text-transform: uppercase; }
     .ph-sub{ margin-top: 6px; opacity: .75; font-size: 12px; line-height: 1.4; }
     .posts-pane{ display:flex; flex-direction:column; gap:18px; }
+    .posts-pane > *{
+      width: min(720px, 100%);
+      margin-left: auto;
+      margin-right: auto;
+    }
     .composer{
       border-radius:20px;
       border:1px solid rgba(0,0,0,0.06);
@@ -1197,10 +1263,46 @@ type RouteState = {
       color:rgba(10,12,18,0.9);
     }
     .composer-textarea{ min-height:90px; resize:vertical; }
+    .composer-media{
+      margin-top:10px;
+      display:flex;
+      gap:8px;
+      align-items:center;
+      flex-wrap:wrap;
+    }
+    .composer-media-name{
+      font-size:11px;
+      opacity:0.7;
+      font-weight:700;
+      letter-spacing:0.06em;
+    }
+    .composer-media-error{
+      margin-top:6px;
+      font-size:11px;
+      font-weight:700;
+      color:#c33;
+      letter-spacing:0.06em;
+    }
+    .composer-media-preview{
+      margin-top:10px;
+      border-radius:18px;
+      overflow:hidden;
+      border:1px solid rgba(0,0,0,0.08);
+      background:#fff;
+    }
+    .composer-media-preview img,
+    .composer-media-preview video{
+      width:100%;
+      display:block;
+      max-height:420px;
+      object-fit:cover;
+      background:#000;
+    }
     .composer-actions{ margin-top:12px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
     .composer-status{ font-size:12px; font-weight:700; letter-spacing:0.08em; color:rgba(0,120,255,0.9); }
     .composer-status.error{ color:#ff6b81; }
     .posts-state{ font-size:13px; font-weight:700; opacity:0.7; }
+    .posts-state.hint{ opacity:0.6; }
     .posts-state.error{ color:#ff6b81; }
     .posts-list{ display:flex; flex-direction:column; gap:16px; }
     .posts-empty{ text-align:center; font-size:13px; opacity:0.65; }
@@ -1270,6 +1372,21 @@ type RouteState = {
     }
     .follow-chip:disabled{ opacity:0.6; cursor:not-allowed; }
     .post-body{ margin-top:12px; font-size:14px; line-height:1.5; color:rgba(10,12,18,0.85); }
+    .post-media{
+      margin-top:12px;
+      border-radius:18px;
+      overflow:hidden;
+      border:1px solid rgba(0,0,0,0.06);
+      background:#fff;
+    }
+    .post-media img,
+    .post-media video{
+      width:100%;
+      display:block;
+      max-height:520px;
+      object-fit:cover;
+      background:#000;
+    }
     .post-title{ font-weight:900; margin-bottom:6px; letter-spacing:0.06em; text-transform:uppercase; font-size:12px; }
     .post-visibility{ font-weight:800; font-size:10px; letter-spacing:0.16em; text-transform:uppercase; opacity:0.7; }
     .post-actions{
@@ -1601,28 +1718,50 @@ type RouteState = {
       letter-spacing:0.06em;
     }
 
-    /* =============== STATS PILL =============== */
-    .stats-pill{
-      position: fixed;
-      left: var(--ui-edge-left);
-      bottom: var(--ui-edge-bottom);
-      z-index: 12000;
-      width: min(380px, calc(100vw - (var(--ui-edge-left) + var(--ui-edge-right))));
-      border-radius: 16px;
-      padding: 10px 12px;
-      background: rgba(220, 228, 235, 0.88);
-      border: 1px solid rgba(0,0,0,0.06);
-      box-shadow: 0 18px 60px rgba(0,0,0,0.16);
-      backdrop-filter: blur(10px);
-      pointer-events: none;
+    /* =============== STATS TAB =============== */
+    .stats-pane{
+      display: grid;
+      gap: 14px;
     }
-    .pill-row{ display:flex; gap: 12px; flex-wrap: wrap; align-items:center; }
-    .pill-row small{ color: rgba(10,12,18,0.70); font-size: 12px; }
-    .pill-row b{ color: rgba(10,12,18,0.86); }
-    .muted{ color: rgba(10,12,18,0.62); }
+    .stats-card{
+      border-radius: 18px;
+      padding: 14px;
+      border: 1px solid rgba(7,20,40,0.08);
+      background: rgba(255,255,255,0.7);
+      display: grid;
+      gap: 10px;
+    }
+    .stats-title{
+      font-weight: 900;
+      letter-spacing: 0.18em;
+      font-size: 11px;
+      color: rgba(10,12,18,0.68);
+      text-transform: uppercase;
+    }
+    .stats-row{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap: 12px;
+      font-size: 13px;
+      color: rgba(10,12,18,0.8);
+    }
+    .stats-row b{
+      color: rgba(10,12,18,0.92);
+    }
+    .stats-row small{
+      opacity: 0.7;
+    }
+    .stats-row.muted{
+      opacity: 0.6;
+    }
+    .stats-row.error{
+      color: #ff6b81;
+      font-weight: 700;
+    }
 
     /* =============== AVATAR ORB + MENU (RESTORED) =============== */
-    .node-backdrop{ position: fixed; inset: 0; z-index: 13000; background: transparent; }
+    .node-backdrop{ position: fixed; inset: 0; z-index: 11900; background: transparent; }
 
     .user-node{
       position: fixed;
@@ -1709,6 +1848,9 @@ type RouteState = {
     }
     .node-msg:hover{
       box-shadow: 0 0 0 1px rgba(0,255,209,0.25) inset, 0 12px 35px rgba(0,0,0,0.45);
+    }
+    .node-search.active{
+      box-shadow: 0 0 0 1px rgba(0,255,209,0.35) inset, 0 12px 35px rgba(0,0,0,0.55);
     }
     .notif-menu{
       position: absolute;
@@ -1980,8 +2122,12 @@ type RouteState = {
       :host{
         --ui-edge: 12px;
         --node-size: 40px;
-        --top-overlay-height: 190px;
-        --stage-top-pad: calc(var(--top-overlay-top) + var(--top-overlay-height) + var(--ui-gap));
+        --top-overlay-height-open: 190px;
+        --top-overlay-height-closed: 0px;
+        --top-overlay-height: var(--top-overlay-height-open);
+        --stage-top-pad-open: calc(var(--top-overlay-top) + var(--top-overlay-height) + var(--ui-gap));
+        --stage-top-pad-closed: calc(var(--ui-edge-top) + var(--node-size) + 8px);
+        --stage-top-pad: var(--stage-top-pad-open);
       }
       .top-overlay{
         left: var(--ui-edge-left);
@@ -2011,6 +2157,10 @@ type RouteState = {
       }
       .main-card{
         padding: 14px;
+      }
+      .feed-return{
+        padding: 6px 12px;
+        font-size: 9px;
       }
       .composer-row{
         flex-direction: column;
@@ -2047,8 +2197,12 @@ type RouteState = {
     }
     @media (max-width: 520px){
       :host{
-        --top-overlay-height: 210px;
-        --stage-top-pad: calc(var(--top-overlay-top) + var(--top-overlay-height) + var(--ui-gap));
+        --top-overlay-height-open: 210px;
+        --top-overlay-height-closed: 0px;
+        --top-overlay-height: var(--top-overlay-height-open);
+        --stage-top-pad-open: calc(var(--top-overlay-top) + var(--top-overlay-height) + var(--ui-gap));
+        --stage-top-pad-closed: calc(var(--ui-edge-top) + var(--node-size) + 8px);
+        --stage-top-pad: var(--stage-top-pad-open);
       }
       .top-overlay{
         top: var(--top-overlay-top);
@@ -2103,15 +2257,17 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   private readonly LOCATION_REFRESH_MS = 10 * 60_000;
 
   selectedCountry: CountryModel | null = null;
-  countryFeedFull = false;
+  countryFeedFull = true;
 
   totalUsers: number | null = null;
   onlineUsers: number | null = null;
+  onlineIds = new Set<string>();
   heartbeatText = '';
 
   localTotal: number | null = null;
   localOnline: number | null = null;
 
+  searchOpen = false;
   userSearchTerm = '';
   userSearchError = '';
   userSuggestions: Profile[] = [];
@@ -2121,9 +2277,9 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   countrySearchTerm = '';
   countrySuggestions: CountryModel[] = [];
 
-  activeTab: SearchTab = 'travel';
+  activeTab: SearchTab = 'countries';
   searchTabs: { id: SearchTab; label: string }[] = [
-    { id: 'travel', label: 'Travel' },
+    { id: 'countries', label: 'Countries' },
     { id: 'people', label: 'People' },
   ];
 
@@ -2132,6 +2288,10 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   postsError = '';
   newPostTitle = '';
   newPostBody = '';
+  composerMediaFile: File | null = null;
+  composerMediaPreview = '';
+  composerMediaType: 'image' | 'video' | null = null;
+  composerMediaError = '';
   postBusy = false;
   postFeedback = '';
   postComposerError = '';
@@ -2167,13 +2327,20 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   private followingIds = new Set<string>();
   private followBusyMap = new Map<string, boolean>();
   private pendingPostId: string | null = null;
+  private notificationFocusPostId: string | null = null;
+  private notificationFocusPost: CountryPost | null = null;
   highlightedPostId: string | null = null;
+  followingPosts: CountryPost[] = [];
+  followingLoading = false;
+  followingError = '';
+  followingLoaded = false;
 
   notifications: NotificationItem[] = [];
   notificationsLoading = false;
   notificationsActionBusy = false;
   notificationsError = '';
   notificationsUnreadCount = 0;
+  messagesUnreadCount = 0;
   notificationNow = Date.now();
   bellPulse = false;
   private bellPulseTimer: number | null = null;
@@ -2360,7 +2527,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       this.userEmail = user?.email ?? '';
       if (this.meId) {
         void this.refreshFollowingSnapshot();
-        void this.refreshNotificationCount();
+        void this.refreshBadgeCounts();
         this.startNotificationPolling();
         this.notificationEvents.stop();
         this.notificationEvents.start(this.meId);
@@ -2368,7 +2535,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
         this.notificationUpdateSub?.unsubscribe();
         this.notificationInsertSub = this.notificationEvents.insert$.subscribe(() => {
           this.zone.run(() => {
-            void this.refreshNotificationCount();
+            void this.refreshBadgeCounts();
             if (this.panel === 'notifications') {
               void this.refreshNotifications();
             }
@@ -2385,7 +2552,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
               };
               this.notifications = next;
             }
-            void this.refreshNotificationCount();
+            void this.refreshBadgeCounts();
           });
         });
       } else {
@@ -2396,6 +2563,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
         this.stopNotificationPolling();
         this.notifications = [];
         this.notificationsUnreadCount = 0;
+        this.messagesUnreadCount = 0;
       }
 
       const { meProfile } = await this.profiles.meProfile();
@@ -2491,6 +2659,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
               this.lastPresenceSnap = snap;
               this.totalUsers = snap.totalUsers;
               this.onlineUsers = snap.onlineUsers;
+              this.onlineIds = new Set(snap.onlineIds ?? []);
 
               this.globeService.setConnections((snap as any).points as any);
               this.globeService.setConnectionsOnline((snap as any).onlineIds as any);
@@ -2586,14 +2755,6 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     return { top, bottom, left, right };
   }
 
-  toggleCountryFeedFull(): void {
-    this.countryFeedFull = !this.countryFeedFull;
-    if (this.selectedCountry) {
-      this.globeService.setViewPadding(this.computeFocusPadding());
-      this.globeService.resize();
-    }
-  }
-
   private applyFocusView(country: CountryModel): void {
     this.globeService.setViewPadding(this.computeFocusPadding());
     this.globeService.flyTo(country.center.lat, country.center.lng, country.flyAltitude ?? 1.0, 900);
@@ -2602,19 +2763,27 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   setCountryTab(tab: CountryTab, opts?: { skipRouteUpdate?: boolean }): void {
     if (this.countryTab === tab) return;
     this.countryTab = tab;
-    if (tab === 'posts' && this.selectedCountry && !this.postsLoading && !this.posts.length) {
+    if ((tab === 'posts' || tab === 'media') && this.selectedCountry && !this.postsLoading && !this.posts.length) {
       void this.loadPostsForCountry(this.selectedCountry);
+    }
+    if (tab === 'following' && !this.followingLoaded && !this.followingLoading) {
+      void this.loadFollowingFeed();
     }
     if (!opts?.skipRouteUpdate && this.selectedCountry) this.updateRouteState();
     this.forceUi();
   }
 
-  focusCountry(country: CountryModel, opts?: { tab?: CountryTab; skipRouteUpdate?: boolean }): void {
+  focusCountry(
+    country: CountryModel,
+    opts?: { tab?: CountryTab; skipRouteUpdate?: boolean; focusPostId?: string; focusPost?: CountryPost | null }
+  ): void {
     const tab = opts?.tab ?? 'posts';
 
     this.selectedCountry = country;
-    this.countryFeedFull = false;
+    this.countryFeedFull = true;
     this.countryTab = tab;
+    this.notificationFocusPostId = opts?.focusPostId ?? null;
+    this.notificationFocusPost = opts?.focusPost ?? null;
     if (!this.canPostHere) this.composerOpen = false;
 
     this.ui.setMode('focus');
@@ -2639,6 +2808,9 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     }, 0);
     setTimeout(() => this.globeService.resize(), 60);
     void this.loadPostsForCountry(country);
+    if (tab === 'following') {
+      void this.loadFollowingFeed();
+    }
 
     if (!opts?.skipRouteUpdate) this.updateRouteState();
   }
@@ -2646,7 +2818,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   clearSelectedCountry(opts?: { skipRouteUpdate?: boolean }): void {
     const hadState = !!this.selectedCountry || !!this.panel;
     this.selectedCountry = null;
-    this.countryFeedFull = false;
+    this.countryFeedFull = true;
     this.countryTab = 'posts';
     this.composerOpen = false;
 
@@ -2669,6 +2841,9 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.postFeedback = '';
     this.newPostBody = '';
     this.newPostTitle = '';
+    this.clearComposerMedia();
+    this.notificationFocusPostId = null;
+    this.notificationFocusPost = null;
 
     this.forceUi();
 
@@ -2703,6 +2878,10 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
 
     try {
       this.posts = this.sortPostsAsc(await this.postsService.listByCountry(country.code));
+      if (this.notificationFocusPostId) {
+        const match = this.posts.find((post) => post.id === this.notificationFocusPostId);
+        if (match) this.notificationFocusPost = match;
+      }
     } catch (e: any) {
       this.postsError = e?.message ?? String(e);
     } finally {
@@ -2710,6 +2889,47 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       this.forceUi();
       this.tryScrollToPendingPost();
     }
+  }
+
+  private async loadFollowingFeed(): Promise<void> {
+    if (this.followingLoading) return;
+    this.followingLoaded = true;
+    this.followingLoading = true;
+    this.followingError = '';
+    this.forceUi();
+
+    try {
+      if (!this.meId) {
+        this.followingPosts = [];
+        this.followingError = 'Sign in to view your following feed.';
+        return;
+      }
+      const ids = await this.followService.listFollowingIds(this.meId);
+      if (!ids.length) {
+        this.followingPosts = [];
+        return;
+      }
+      const limitPer = 6;
+      const lists = await Promise.all(ids.map((id) => this.postsService.listForAuthor(id, limitPer)));
+      const merged = lists.flat();
+      this.followingPosts = this.sortPostsDesc(merged);
+    } catch (e: any) {
+      this.followingError = e?.message ?? String(e);
+    } finally {
+      this.followingLoading = false;
+      this.forceUi();
+    }
+  }
+
+  get visiblePosts(): CountryPost[] {
+    if (!this.notificationFocusPostId) return this.posts;
+    const match = this.posts.find((post) => post.id === this.notificationFocusPostId);
+    if (match) return [match];
+    return this.notificationFocusPost ? [this.notificationFocusPost] : [];
+  }
+
+  get mediaPosts(): CountryPost[] {
+    return this.posts.filter((post) => !!post.media_url && post.media_type !== 'none');
   }
 
   private tryScrollToPendingPost(): void {
@@ -2834,7 +3054,9 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
 
     try {
       const { notifications } = await this.notificationsService.list(40);
-      this.notifications = notifications ?? [];
+      const next = (notifications ?? []).filter((notif) => !this.isMessageNotification(notif));
+      this.notifications = next;
+      this.notificationsUnreadCount = next.filter((notif) => !notif.read_at).length;
     } catch (e: any) {
       this.notificationsError = e?.message ?? String(e);
     } finally {
@@ -2843,8 +3065,9 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     }
   }
 
-  private async refreshNotificationCount(): Promise<void> {
+  private async refreshBadgeCounts(): Promise<void> {
     if (!this.meId) {
+      this.messagesUnreadCount = 0;
       this.notificationsUnreadCount = 0;
       this.forceUi();
       return;
@@ -2852,8 +3075,12 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
 
     try {
       const prevCount = this.notificationsUnreadCount;
-      const { notificationsUnreadCount } = await this.notificationsService.unreadCount();
-      this.notificationsUnreadCount = notificationsUnreadCount ?? 0;
+      const { notifications } = await this.notificationsService.list(80);
+      const unread = (notifications ?? []).filter((notif) => !notif.read_at);
+      const unreadMessages = unread.filter((notif) => this.isMessageNotification(notif));
+
+      this.messagesUnreadCount = unreadMessages.length;
+      this.notificationsUnreadCount = Math.max(0, unread.length - unreadMessages.length);
       if (this.notificationCountInitialized && this.notificationsUnreadCount > prevCount) {
         this.triggerBellPulse();
       }
@@ -2861,6 +3088,10 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     } catch {}
 
     this.forceUi();
+  }
+
+  private isMessageNotification(notif: NotificationItem): boolean {
+    return String(notif?.type ?? '').toLowerCase() === 'message';
   }
 
   private triggerBellPulse(): void {
@@ -2879,7 +3110,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   private startNotificationPolling(): void {
     if (this.notificationPollTimer) return;
     this.notificationPollTimer = window.setInterval(() => {
-      void this.refreshNotificationCount();
+      void this.refreshBadgeCounts();
     }, 5000);
   }
 
@@ -2912,7 +3143,12 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.forceUi();
 
     try {
-      await this.notificationsService.markAllRead();
+      const pending = this.notifications.filter((notif) => !notif.read_at);
+      if (!pending.length) {
+        this.notificationsUnreadCount = 0;
+        return;
+      }
+      await Promise.all(pending.map((notif) => this.notificationsService.markRead(notif.id)));
       const now = new Date().toISOString();
       this.notifications = this.notifications.map((notif) =>
         notif.read_at ? notif : { ...notif, read_at: now }
@@ -3016,14 +3252,18 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       const post = await this.postsService.getPostById(postId);
       if (!post) return;
 
+      this.notificationFocusPostId = post.id;
+      this.notificationFocusPost = post;
       const targetCode = (post.country_code ?? '').toUpperCase();
       const currentCode = (this.selectedCountry?.code ?? '').toUpperCase();
       if (this.panel === 'notifications') {
         this.closePanel();
       }
       if (currentCode && targetCode && currentCode === targetCode) {
+        this.setCountryTab('posts');
         this.pendingPostId = post.id;
         this.tryScrollToPendingPost();
+        this.forceUi();
         return;
       }
 
@@ -3032,7 +3272,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
 
       this.pendingPostId = post.id;
       this.closePanel({ skipRouteUpdate: true });
-      this.focusCountry(target, { tab: 'posts' });
+      this.focusCountry(target, { tab: 'posts', focusPostId: post.id, focusPost: post });
     } catch {}
   }
 
@@ -3052,6 +3292,14 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       month: 'short',
       day: 'numeric',
     });
+  }
+
+  get messageBadgeCount(): number {
+    return this.messagesUnreadCount;
+  }
+
+  get bellBadgeCount(): number {
+    return this.notificationsUnreadCount;
   }
 
   visibilityLabel(value: string): string {
@@ -3075,6 +3323,52 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       if (aTime !== bTime) return aTime - bTime;
       return a.id.localeCompare(b.id);
     });
+  }
+
+  private sortPostsDesc(posts: CountryPost[]): CountryPost[] {
+    return [...posts].sort((a, b) => {
+      const aTime = new Date(a.created_at).getTime();
+      const bTime = new Date(b.created_at).getTime();
+      if (aTime !== bTime) return bTime - aTime;
+      return b.id.localeCompare(a.id);
+    });
+  }
+
+  onComposerMediaSelect(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0] ?? null;
+    if (!file) return;
+
+    const isImage = file.type.startsWith('image/');
+    const isVideo = file.type.startsWith('video/');
+    if (!isImage && !isVideo) {
+      this.composerMediaError = 'Only images or videos are allowed.';
+      input.value = '';
+      return;
+    }
+
+    const maxBytes = isVideo ? 40 * 1024 * 1024 : 12 * 1024 * 1024;
+    if (file.size > maxBytes) {
+      this.composerMediaError = `File too large. Max ${isVideo ? '40MB' : '12MB'}.`;
+      input.value = '';
+      return;
+    }
+
+    this.clearComposerMedia();
+    this.composerMediaFile = file;
+    this.composerMediaType = isVideo ? 'video' : 'image';
+    this.composerMediaPreview = URL.createObjectURL(file);
+    this.composerMediaError = '';
+  }
+
+  clearComposerMedia(): void {
+    if (this.composerMediaPreview) {
+      try { URL.revokeObjectURL(this.composerMediaPreview); } catch {}
+    }
+    this.composerMediaFile = null;
+    this.composerMediaPreview = '';
+    this.composerMediaType = null;
+    this.composerMediaError = '';
   }
 
   async submitPost(): Promise<void> {
@@ -3105,6 +3399,13 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.forceUi();
 
     try {
+      let mediaType: string | null = null;
+      let mediaUrl: string | null = null;
+      if (this.composerMediaFile) {
+        const upload = await this.media.uploadPostMedia(this.composerMediaFile);
+        mediaUrl = upload.publicUrl;
+        mediaType = this.composerMediaType || (this.composerMediaFile.type.startsWith('video/') ? 'video' : 'image');
+      }
       const post = await this.postsService.createPost({
         authorId: this.meId,
         title: this.newPostTitle.trim() || null,
@@ -3112,14 +3413,19 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
         countryCode,
         countryName,
         cityName: (this.profile as any)?.city_name ?? null,
+        mediaType,
+        mediaUrl,
       });
       this.newPostBody = '';
       this.newPostTitle = '';
+      this.clearComposerMedia();
     if (!this.posts.some((existing) => existing.id === post.id)) {
       this.posts = this.sortPostsAsc([...this.posts, post]);
     }
       this.composerOpen = false;
-      this.postFeedback = 'Shared with your country.';
+      this.postFeedback = mediaUrl
+        ? 'Posted to Media (your country + followers feed).'
+        : 'Shared with your country.';
       setTimeout(() => {
         this.postFeedback = '';
         this.cdr.detectChanges();
@@ -3738,6 +4044,11 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     void this.router.navigate(['/user', slug]);
   }
 
+  isUserOnline(userId: string | null): boolean {
+    if (!userId) return false;
+    return this.onlineIds.has(userId);
+  }
+
   setActiveTab(tab: SearchTab): void {
     if (this.activeTab === tab) return;
     this.activeTab = tab;
@@ -3886,7 +4197,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   private isValidTab(value: string | null): value is CountryTab {
-    return value === 'posts' || value === 'stats' || value === 'media';
+    return value === 'posts' || value === 'stats' || value === 'media' || value === 'following';
   }
 
   private isValidPanel(value: string | null): value is Exclude<Panel, null> {
@@ -3914,29 +4225,63 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   // -----------------------------
   // Menu / panels
   // -----------------------------
-  toggleMenu(): void { this.menuOpen = !this.menuOpen; }
+  toggleSearch(): void {
+    this.searchOpen = !this.searchOpen;
+    if (this.searchOpen) {
+      this.closeMenu();
+      this.closePanel();
+    }
+    this.forceUi();
+  }
+
+  closeSearch(): void {
+    if (!this.searchOpen) return;
+    this.searchOpen = false;
+    this.forceUi();
+  }
+
+  toggleMenu(): void {
+    if (this.menuOpen) {
+      this.menuOpen = false;
+      this.forceUi();
+      return;
+    }
+    this.menuOpen = true;
+    this.searchOpen = false;
+    this.closePanel();
+    this.forceUi();
+  }
   closeMenu(): void { this.menuOpen = false; }
 
   goToMe(): void {
     this.closeMenu();
+    this.closePanel();
+    this.closeSearch();
     void this.router.navigate(['/me']);
   }
 
   goToMessages(): void {
     this.closeMenu();
+    this.closePanel();
+    this.closeSearch();
     void this.router.navigate(['/messages']);
   }
 
   openPanel(p: Exclude<Panel, null>, opts?: { skipRouteUpdate?: boolean }): void {
+    if (this.panel === p) {
+      this.closePanel(opts);
+      return;
+    }
     this.panel = p;
     this.menuOpen = false;
+    this.searchOpen = false;
 
     this.msg = '';
     this.saveState = 'idle';
 
     if (p === 'notifications') {
       void this.refreshNotifications();
-      void this.refreshNotificationCount();
+      void this.refreshBadgeCounts();
       this.startNotificationClock();
     }
 

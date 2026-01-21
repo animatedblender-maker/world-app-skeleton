@@ -1,7 +1,11 @@
 import { Injectable } from '@angular/core';
+import { Subscription } from 'rxjs';
 import { supabase } from '../../supabase/supabase.client';
 import type { CountryModel } from '../../data/countries.service';
 import type { ConnectionPoint } from '../../globe/globe.service';
+import { FakeDataService } from './fake-data.service';
+import { PresenceOverridesService, type PresenceOverridesMap } from './presence-overrides.service';
+import type { Profile } from './profile.service';
 
 type ProfileRow = {
   user_id: string;
@@ -34,12 +38,39 @@ function normalizeLng180(lng: number): number {
   return x;
 }
 
+function clamp(v: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, v));
+}
+
+function mulberry32(seed: number) {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 @Injectable({ providedIn: 'root' })
 export class PresenceService {
+  constructor(
+    private fakeData: FakeDataService,
+    private overridesService: PresenceOverridesService
+  ) {}
+
   private countries: CountryModel[] = [];
   private channel: any = null;
 
   private profilesById = new Map<string, ProfileRow>();
+
+  private fakeProfiles: Profile[] = [];
+  private fakeOnlineIds: string[] = [];
+  private fakeOnlinePoints: ConnectionPoint[] = [];
+  private fakeOnlineByCountry: Record<string, number> = {};
+  private overridesByCountry: PresenceOverridesMap = {};
+  private overridesSub: Subscription | null = null;
 
   // ✅ online truth comes from realtime presence state
   private onlineMetaById = new Map<string, PresenceMeta>();
@@ -61,6 +92,13 @@ export class PresenceService {
   private refreshProfilesTimer: any = null;
   private readonly PROFILES_REFRESH_MS = 120_000;
 
+  // fake online refresh
+  private fakeOnlineTimer: any = null;
+  private readonly FAKE_ONLINE_REFRESH_MS = 20_000;
+  private readonly FAKE_ONLINE_MIN = 0.4;
+  private readonly FAKE_ONLINE_MAX = 0.65;
+  private readonly FAKE_ONLINE_WAVE_SECONDS = 180;
+
   // Dot styling for all presence points.
   private readonly DOT_COLOR = 'rgba(0,255,209,0.92)';
 
@@ -69,6 +107,7 @@ export class PresenceService {
     meCountryCode?: string | null;
     meCountryName?: string | null;
     meCityName?: string | null;
+    loadProfiles?: boolean;
     onUpdate: (snap: PresenceSnapshot) => void;
     onHeartbeat?: (txt: string) => void;
   }): Promise<void> {
@@ -86,10 +125,19 @@ export class PresenceService {
     this.currentCityName = opts.meCityName ?? null;
 
     // totals
-    await this.fetchAllProfiles();
+    await this.fakeData.ensureInitialized(this.countries);
+    if (opts.loadProfiles !== false) {
+      await this.fetchAllProfiles();
+    } else {
+      this.profilesById.clear();
+      await this.injectFakeProfiles();
+    }
 
     // online (accurate)
     await this.startRealtimePresence();
+
+    this.startFakeOnline();
+    this.startOverridesWatcher();
 
     // periodic UI refresh
     this.renderTimer = setInterval(() => this.emit(), this.RENDER_MS);
@@ -109,6 +157,9 @@ export class PresenceService {
     if (this.refreshProfilesTimer) clearInterval(this.refreshProfilesTimer);
     this.refreshProfilesTimer = null;
 
+    if (this.fakeOnlineTimer) clearInterval(this.fakeOnlineTimer);
+    this.fakeOnlineTimer = null;
+
     try {
       if (this.channel) supabase.removeChannel(this.channel);
     } catch {}
@@ -118,6 +169,14 @@ export class PresenceService {
     this.onHeartbeatCb = null;
 
     this.onlineMetaById.clear();
+    this.fakeOnlineIds = [];
+    this.fakeOnlinePoints = [];
+    this.fakeOnlineByCountry = {};
+    this.overridesByCountry = {};
+    if (this.overridesSub) {
+      this.overridesSub.unsubscribe();
+      this.overridesSub = null;
+    }
   }
 
   async setMyLocation(countryCode: string | null, countryName: string | null, cityName?: string | null) {
@@ -133,17 +192,114 @@ export class PresenceService {
   // Totals
   // -------------------------
   private async fetchAllProfiles(): Promise<void> {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('user_id,country_code,country_name,city_name');
-
-    if (error) throw error;
+    let rows: ProfileRow[] = [];
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('user_id,country_code,country_name,city_name');
+      if (!error && data) rows = data as ProfileRow[];
+    } catch {}
 
     this.profilesById.clear();
-    for (const row of (data || []) as ProfileRow[]) {
+    for (const row of rows) {
       if (!row?.user_id) continue;
       this.profilesById.set(row.user_id, row);
     }
+
+    await this.injectFakeProfiles();
+  }
+
+  private async injectFakeProfiles(): Promise<void> {
+    this.fakeProfiles = await this.fakeData.getProfiles(this.countries);
+    for (const prof of this.fakeProfiles) {
+      if (!prof?.user_id) continue;
+      this.profilesById.set(prof.user_id, {
+        user_id: prof.user_id,
+        country_code: prof.country_code ?? null,
+        country_name: prof.country_name ?? null,
+        city_name: prof.city_name ?? null,
+      });
+    }
+  }
+
+  private startFakeOnline(): void {
+    if (this.fakeOnlineTimer) return;
+    void this.refreshFakeOnline();
+    this.fakeOnlineTimer = setInterval(() => {
+      void this.refreshFakeOnline();
+    }, this.FAKE_ONLINE_REFRESH_MS);
+  }
+
+  private computeFakeOnlineRatio(): number {
+    const now = Date.now();
+    const phase = (now / 1000) * ((2 * Math.PI) / this.FAKE_ONLINE_WAVE_SECONDS);
+    const wave = (Math.sin(phase) + 1) / 2;
+    const base = this.FAKE_ONLINE_MIN + (this.FAKE_ONLINE_MAX - this.FAKE_ONLINE_MIN) * wave;
+    const jitterSeed = Math.floor(now / 60000) + 77;
+    const jitter = (mulberry32(jitterSeed)() - 0.5) * 0.05;
+    return clamp(base + jitter, this.FAKE_ONLINE_MIN, this.FAKE_ONLINE_MAX);
+  }
+
+  private async refreshFakeOnline(): Promise<void> {
+    if (!this.fakeProfiles.length) {
+      await this.injectFakeProfiles();
+    }
+    if (!this.fakeProfiles.length) return;
+
+    const ratio = this.computeFakeOnlineRatio();
+    const seed = Math.floor(Date.now() / this.FAKE_ONLINE_REFRESH_MS) + 911;
+    const rnd = mulberry32(seed);
+
+    const onlineIds: string[] = [];
+    const onlinePoints: ConnectionPoint[] = [];
+    const byCountry: Record<string, number> = {};
+
+    for (const prof of this.fakeProfiles) {
+      if (rnd() > ratio) continue;
+      const cc = String(prof.country_code ?? '').trim().toUpperCase();
+      if (!cc) continue;
+      const country = this.countryForCode(cc);
+      if (!country) continue;
+
+      onlineIds.push(prof.user_id);
+      byCountry[cc] = (byCountry[cc] ?? 0) + 1;
+
+      const pos = this.approximatePoint(country, prof.user_id, prof.city_name ?? null);
+      onlinePoints.push({
+        id: prof.user_id,
+        lat: pos.lat,
+        lng: pos.lng,
+        cc,
+        color: this.DOT_COLOR,
+        radius: 1.8,
+      });
+    }
+
+    if (!onlineIds.length) {
+      const fallback = this.fakeProfiles[0];
+      if (fallback?.country_code) {
+        const cc = String(fallback.country_code).trim().toUpperCase();
+        const country = this.countryForCode(cc);
+        if (country) {
+          onlineIds.push(fallback.user_id);
+          byCountry[cc] = 1;
+          const pos = this.approximatePoint(country, fallback.user_id, fallback.city_name ?? null);
+          onlinePoints.push({
+            id: fallback.user_id,
+            lat: pos.lat,
+            lng: pos.lng,
+            cc,
+            color: this.DOT_COLOR,
+            radius: 1.8,
+          });
+        }
+      }
+    }
+
+    this.fakeOnlineIds = onlineIds;
+    this.fakeOnlinePoints = onlinePoints;
+    this.fakeOnlineByCountry = byCountry;
+    this.emit();
   }
 
   // -------------------------
@@ -240,12 +396,17 @@ export class PresenceService {
       byCountry[cc].total += 1;
     }
 
-    const onlineIds = Array.from(this.onlineMetaById.keys());
+    for (const [cc, count] of Object.entries(this.fakeOnlineByCountry)) {
+      byCountry[cc] ??= { total: 0, online: 0 };
+      byCountry[cc].online += count;
+    }
+
+    const onlineIds = [...this.fakeOnlineIds];
 
     // dots for online only
-    const points: ConnectionPoint[] = [];
+    const points: ConnectionPoint[] = [...this.fakeOnlinePoints];
 
-    for (const userId of onlineIds) {
+    for (const userId of this.onlineMetaById.keys()) {
       const meta = this.onlineMetaById.get(userId);
       const prof = this.profilesById.get(userId);
 
@@ -267,16 +428,53 @@ export class PresenceService {
         lng: pos.lng,
         cc,
         color: this.DOT_COLOR,
-        radius: 3.6,
+        radius: 2.0,
       });
+      onlineIds.push(userId);
+    }
+
+    let totalUsers = this.profilesById.size;
+    let onlineUsers = onlineIds.length;
+
+    for (const [rawCode, override] of Object.entries(this.overridesByCountry)) {
+      const cc = String(rawCode ?? '').trim().toUpperCase();
+      if (!cc) continue;
+
+      const existing = byCountry[cc] ?? { total: 0, online: 0 };
+      const next = { ...existing };
+
+      if (Number.isFinite(override?.total)) {
+        totalUsers += (override.total as number) - existing.total;
+        next.total = override.total as number;
+      }
+      if (Number.isFinite(override?.online)) {
+        onlineUsers += (override.online as number) - existing.online;
+        next.online = override.online as number;
+      }
+
+      if (Number.isFinite(next.total) && Number.isFinite(next.online) && next.online > next.total) {
+        onlineUsers -= next.online - next.total;
+        next.online = next.total;
+      }
+
+      byCountry[cc] = next;
     }
 
     this.onUpdateCb({
       points,
       onlineIds,
-      totalUsers: this.profilesById.size,
-      onlineUsers: onlineIds.length,
+      totalUsers,
+      onlineUsers,
       byCountry,
+    });
+  }
+
+  private startOverridesWatcher(): void {
+    if (this.overridesSub) return;
+    this.overridesByCountry = this.overridesService.getOverrides();
+    this.overridesSub = this.overridesService.observe().subscribe((next) => {
+      this.overridesByCountry = next || {};
+      this.emit();
     });
   }
 

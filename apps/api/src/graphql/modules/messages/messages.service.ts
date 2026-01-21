@@ -102,6 +102,16 @@ export class MessagesService {
     userId: string
   ): Promise<MessageRow[]> {
     await this.ensureMember(conversationId, userId);
+    if (!before) {
+      await pool.query(
+        `
+        update public.conversation_members
+        set last_read_at = now()
+        where conversation_id = $1 and user_id = $2
+        `,
+        [conversationId, userId]
+      );
+    }
     const safeLimit = Math.max(1, Math.min(100, limit || 30));
     const params: Array<string | number> = [conversationId, safeLimit];
     const beforeClause = before ? `and m.created_at < $3::timestamptz` : '';
@@ -248,6 +258,22 @@ export class MessagesService {
   async getConversationById(conversationId: string, userId: string): Promise<ConversationRow | null> {
     if (!conversationId) return null;
     return await this.conversationById(conversationId, userId);
+  }
+
+  async unreadCount(userId: string): Promise<number> {
+    const { rows } = await pool.query<{ count: string }>(
+      `
+      select count(*) as count
+      from public.messages m
+      join public.conversation_members cm on cm.conversation_id = m.conversation_id
+      where cm.user_id = $1
+        and m.sender_id <> $1
+        and (cm.last_read_at is null or m.created_at > cm.last_read_at)
+      `,
+      [userId]
+    );
+
+    return Number(rows[0]?.count ?? 0);
   }
 
   private async ensureMember(conversationId: string, userId: string): Promise<void> {

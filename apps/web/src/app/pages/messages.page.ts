@@ -1,4 +1,4 @@
-import { Component, OnDestroy, OnInit } from '@angular/core';
+import { ChangeDetectorRef, Component, NgZone, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
@@ -6,6 +6,7 @@ import { Subscription } from 'rxjs';
 
 import { AuthService } from '../core/services/auth.service';
 import { MessagesService } from '../core/services/messages.service';
+import { NotificationsService, type NotificationItem } from '../core/services/notifications.service';
 import { Conversation, Message } from '../core/models/messages.model';
 import { PostAuthor } from '../core/models/post.model';
 
@@ -21,7 +22,7 @@ import { PostAuthor } from '../core/models/post.model';
 
       <div class="card">
         <button class="ghost-link back-link" type="button" (click)="goBack()">Back</button>
-        <div class="layout">
+        <div class="layout" [class.thread-only]="mobileThreadOnly">
           <aside class="panel">
             <div class="panel-title">Messages</div>
             <div class="status" *ngIf="loadingConversations">Loading conversations...</div>
@@ -53,11 +54,20 @@ import { PostAuthor } from '../core/models/post.model';
                 </div>
               </div>
               <div class="time">{{ formatTime(convo.last_message_at || convo.updated_at) }}</div>
+              <span class="conversation-unread" *ngIf="isConversationUnread(convo)"></span>
             </button>
           </aside>
 
           <section class="thread">
             <div class="thread-header" *ngIf="activeConversation; else emptyThread">
+              <button
+                class="thread-back"
+                type="button"
+                *ngIf="mobileThreadOnly"
+                (click)="showConversationList()"
+              >
+                Chats
+              </button>
               <div class="avatar large">
                 <img
                   *ngIf="otherMember(activeConversation)?.avatar_url"
@@ -70,7 +80,12 @@ import { PostAuthor } from '../core/models/post.model';
               </div>
               <div>
                 <div class="thread-name">{{ displayNameFor(otherMember(activeConversation)) }}</div>
-                <div class="thread-sub">@{{ otherMember(activeConversation)?.username || 'user' }}</div>
+                <div
+                  class="thread-sub"
+                  *ngIf="displayHandleFor(otherMember(activeConversation)) as handle"
+                >
+                  {{ handle }}
+                </div>
               </div>
             </div>
 
@@ -87,9 +102,19 @@ import { PostAuthor } from '../core/models/post.model';
                   *ngFor="let message of messages"
                   [class.me]="message.sender_id === meId"
                 >
+                  <div class="msg-avatar">
+                    <img
+                      *ngIf="senderAvatarUrl(message)"
+                      [src]="senderAvatarUrl(message)"
+                      alt="avatar"
+                    />
+                    <div class="initials" *ngIf="!senderAvatarUrl(message)">
+                      {{ initialsFor(senderInfo(message)) }}
+                    </div>
+                  </div>
                   <div class="bubble">
                     <div class="body">{{ message.body }}</div>
-                    <div class="meta">{{ formatTimestamp(message.created_at) }}</div>
+                    <div class="message-time">{{ formatTimestamp(message.created_at) }}</div>
                   </div>
                 </div>
               </div>
@@ -119,8 +144,8 @@ import { PostAuthor } from '../core/models/post.model';
       display:block;
       min-height:100vh;
       position:relative;
-      color:#0c1422;
-      background:#e8f5ff;
+      color:#e6f1ff;
+      background:#050b14;
     }
     .wrap{
       min-height:100vh;
@@ -131,9 +156,9 @@ import { PostAuthor } from '../core/models/post.model';
       position:fixed;
       inset:0;
       background:
-        radial-gradient(circle at 12% 18%, rgba(120,232,255,0.35), transparent 52%),
-        radial-gradient(circle at 88% 20%, rgba(0,176,255,0.18), transparent 48%),
-        linear-gradient(180deg, #d9f2ff, #f7fbff 60%, #ffffff);
+        radial-gradient(circle at 12% 20%, rgba(0,255,209,0.12), transparent 52%),
+        radial-gradient(circle at 88% 20%, rgba(0,155,220,0.25), transparent 48%),
+        linear-gradient(180deg, #0b1526, #050b13 60%, #03060c);
       z-index:0;
     }
     .ocean-dots{
@@ -141,7 +166,7 @@ import { PostAuthor } from '../core/models/post.model';
       inset:0;
       background-image: radial-gradient(rgba(255,255,255,0.55) 1px, transparent 1px);
       background-size: 18px 18px;
-      opacity:0.4;
+      opacity:0.18;
       z-index:1;
       pointer-events:none;
     }
@@ -158,12 +183,13 @@ import { PostAuthor } from '../core/models/post.model';
       z-index:3;
       max-width:1100px;
       margin:0 auto;
-      background:rgba(255,255,255,0.82);
+      background:rgba(255,255,255,0.9);
       border-radius:28px;
       padding:22px;
       border:1px solid rgba(7,20,40,0.08);
       box-shadow:0 28px 60px rgba(8,26,52,0.12);
       backdrop-filter: blur(12px);
+      color:#0c1422;
     }
     .ghost-link{
       border:0;
@@ -182,6 +208,9 @@ import { PostAuthor } from '../core/models/post.model';
       grid-template-columns:320px 1fr;
       gap:18px;
       align-items:stretch;
+    }
+    .layout.thread-only .panel{
+      display:none;
     }
     .panel{
       display:flex;
@@ -229,6 +258,15 @@ import { PostAuthor } from '../core/models/post.model';
     .conversation.active{
       border-color:rgba(0,155,220,0.5);
       background:rgba(0,155,220,0.15);
+    }
+    .conversation-unread{
+      width:8px;
+      height:8px;
+      border-radius:999px;
+      background:rgba(255,255,255,0.9);
+      border:1px solid rgba(7,20,40,0.12);
+      flex:0 0 auto;
+      margin-left:6px;
     }
     .avatar{
       width:40px;
@@ -286,6 +324,16 @@ import { PostAuthor } from '../core/models/post.model';
       min-height:320px;
       overflow:hidden;
     }
+    .thread-back{
+      border:0;
+      background:none;
+      color:rgba(7,20,40,0.6);
+      font-size:11px;
+      letter-spacing:0.18em;
+      text-transform:uppercase;
+      cursor:pointer;
+      margin-right:8px;
+    }
     .thread-header{
       display:flex;
       align-items:center;
@@ -324,9 +372,38 @@ import { PostAuthor } from '../core/models/post.model';
     }
     .message{
       display:flex;
+      align-items:flex-end;
+      gap:10px;
+      width:100%;
     }
     .message.me{
       justify-content:flex-end;
+    }
+    .message.me .msg-avatar{
+      order:2;
+    }
+    .message.me .bubble{
+      order:1;
+    }
+    .msg-avatar{
+      width:28px;
+      height:28px;
+      border-radius:50%;
+      overflow:hidden;
+      background:rgba(7,20,40,0.1);
+      border:1px solid rgba(7,20,40,0.12);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      font-size:11px;
+      font-weight:800;
+      color:rgba(7,20,40,0.75);
+      flex-shrink:0;
+    }
+    .msg-avatar img{
+      width:100%;
+      height:100%;
+      object-fit:cover;
     }
     .bubble{
       max-width:72%;
@@ -345,11 +422,8 @@ import { PostAuthor } from '../core/models/post.model';
       white-space:pre-wrap;
       word-break:break-word;
     }
-    .meta{
-      display:block;
-    }
-    .bubble .meta{
-      font-size:11px;
+    .message-time{
+      font-size:10px;
       opacity:0.6;
       margin-top:6px;
       text-align:right;
@@ -388,13 +462,24 @@ import { PostAuthor } from '../core/models/post.model';
     @media (max-width: 900px){
       .layout{
         grid-template-columns:1fr;
+        height: calc(100dvh - 160px);
       }
       .panel{
         max-height:240px;
         overflow:auto;
       }
+      .layout.thread-only{
+        height: calc(100dvh - 130px);
+      }
       .thread{
-        min-height:360px;
+        min-height:0;
+        height:100%;
+      }
+      .messages{
+        min-height:0;
+      }
+      .message-list{
+        min-height:0;
       }
     }
     @media (max-width: 600px){
@@ -430,17 +515,24 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   private routeSub?: Subscription;
   private pendingSub?: Subscription;
   private pollTimer: number | null = null;
+  mobileThreadOnly = false;
+  unreadConversationIds = new Set<string>();
+  private messageNotifications: NotificationItem[] = [];
 
   constructor(
     private route: ActivatedRoute,
     private router: Router,
     private auth: AuthService,
-    private messagesService: MessagesService
+    private messagesService: MessagesService,
+    private notificationsService: NotificationsService,
+    private zone: NgZone,
+    private cdr: ChangeDetectorRef
   ) {}
 
   async ngOnInit(): Promise<void> {
     const user = await this.auth.getUser();
     this.meId = user?.id ?? null;
+    this.forceUi();
 
     const stashed = this.messagesService.getPendingConversation();
     const navState = (this.router.getCurrentNavigation()?.extras.state ?? history.state) as
@@ -452,6 +544,8 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       this.activeConversation = pending;
       this.activeConversationId = pending.id;
       this.upsertConversation(pending);
+      this.enterThreadView();
+      this.forceUi();
       void this.loadMessages(pending.id, false);
     }
 
@@ -473,10 +567,13 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       this.activeConversation = convo;
       this.activeConversationId = convo.id;
       this.upsertConversation(convo);
+      this.enterThreadView();
+      this.forceUi();
       void this.loadMessages(convo.id, false);
     });
 
     await this.loadConversations();
+    await this.refreshUnreadConversations();
     this.startPolling();
   }
 
@@ -492,6 +589,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   async loadConversations(selectId?: string | null): Promise<void> {
     this.loadingConversations = true;
     this.conversationError = '';
+    this.forceUi();
 
     try {
       const serverConvos = await this.messagesService.listConversations();
@@ -546,6 +644,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       this.conversationError = e?.message ?? String(e);
     } finally {
       this.loadingConversations = false;
+      this.forceUi();
     }
   }
 
@@ -553,6 +652,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     if (this.pollTimer) return;
     this.pollTimer = window.setInterval(() => {
       void this.loadConversations();
+      void this.refreshUnreadConversations();
       if (this.activeConversationId) {
         void this.loadMessages(this.activeConversationId, true);
       }
@@ -562,6 +662,8 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   async selectConversation(convo: Conversation, syncUrl: boolean): Promise<void> {
     this.activeConversation = convo;
     this.activeConversationId = convo.id;
+    this.enterThreadView();
+    this.forceUi();
     if (syncUrl) {
       void this.router.navigate([], {
         relativeTo: this.route,
@@ -585,16 +687,22 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     if (this.pendingConversation?.id === convoId) {
       this.activeConversation = this.pendingConversation;
       this.activeConversationId = convoId;
+      this.enterThreadView();
+      this.forceUi();
       await this.loadMessages(convoId, false);
       return;
     }
     const fetched = await this.fetchConversationById(convoId);
     if (fetched) {
       this.upsertConversation(fetched);
+      this.enterThreadView();
+      this.forceUi();
       await this.selectConversation(fetched, false);
       return;
     }
     this.activeConversationId = convoId;
+    this.enterThreadView();
+    this.forceUi();
     await this.loadMessages(convoId, false);
   }
 
@@ -617,13 +725,18 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     if (!silent) {
       this.loadingMessages = true;
       this.messageError = '';
+      this.forceUi();
     }
     try {
       this.messages = await this.messagesService.listMessages(conversationId, 60);
+      if (!silent) {
+        await this.markConversationNotificationsRead(conversationId);
+      }
     } catch (e: any) {
       this.messageError = e?.message ?? String(e);
     } finally {
       this.loadingMessages = false;
+      this.forceUi();
     }
   }
 
@@ -634,6 +747,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
 
     this.messageBusy = true;
     this.messageError = '';
+    this.forceUi();
 
     try {
       const sent = await this.messagesService.sendMessage(this.activeConversationId, body);
@@ -644,6 +758,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       this.messageError = e?.message ?? String(e);
     } finally {
       this.messageBusy = false;
+      this.forceUi();
     }
   }
 
@@ -660,6 +775,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     next.splice(idx, 1);
     this.conversations = [updated, ...next];
     this.activeConversation = updated;
+    this.forceUi();
   }
 
   otherMember(convo: Conversation | null): PostAuthor | null {
@@ -670,7 +786,89 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
 
   displayNameFor(user: PostAuthor | null | undefined): string {
     if (!user) return 'Conversation';
-    return user.display_name || user.username || 'Member';
+    const display =
+      this.cleanDisplayValue(user.display_name) || this.cleanDisplayValue(user.username);
+    return display || 'Member';
+  }
+
+  displayHandleFor(user: PostAuthor | null | undefined): string {
+    const handle = this.cleanDisplayValue(user?.username);
+    if (!handle) return '';
+    return `@${handle}`;
+  }
+
+  isConversationUnread(convo: Conversation): boolean {
+    return this.unreadConversationIds.has(convo.id);
+  }
+
+  private async refreshUnreadConversations(): Promise<void> {
+    if (!this.meId) {
+      this.messageNotifications = [];
+      this.unreadConversationIds.clear();
+      this.forceUi();
+      return;
+    }
+
+    try {
+      const { notifications } = await this.notificationsService.list(80);
+      const unread = (notifications ?? []).filter(
+        (notif) =>
+          !notif.read_at &&
+          this.isMessageNotification(notif) &&
+          typeof notif.entity_id === 'string'
+      );
+      this.messageNotifications = unread;
+      this.unreadConversationIds = new Set(unread.map((notif) => String(notif.entity_id)));
+    } catch {}
+
+    this.forceUi();
+  }
+
+  private async markConversationNotificationsRead(convoId: string): Promise<void> {
+    if (!convoId || !this.messageNotifications.length) {
+      this.unreadConversationIds.delete(convoId);
+      return;
+    }
+    const pending = this.messageNotifications.filter((notif) => notif.entity_id === convoId);
+    if (!pending.length) {
+      this.unreadConversationIds.delete(convoId);
+      this.forceUi();
+      return;
+    }
+    try {
+      await Promise.all(pending.map((notif) => this.notificationsService.markRead(notif.id)));
+    } catch {}
+    this.messageNotifications = this.messageNotifications.filter(
+      (notif) => notif.entity_id !== convoId
+    );
+    this.unreadConversationIds.delete(convoId);
+    this.forceUi();
+  }
+
+  private isMessageNotification(notif: NotificationItem): boolean {
+    return String(notif?.type ?? '').toLowerCase() === 'message';
+  }
+
+  senderInfo(message: Message): PostAuthor | null {
+    if (message.sender) return message.sender;
+    const convo = this.activeConversation;
+    if (!convo) return null;
+    return convo.members.find((member) => member.user_id === message.sender_id) ?? null;
+  }
+
+  senderAvatarUrl(message: Message): string {
+    return this.senderInfo(message)?.avatar_url ?? '';
+  }
+
+  private cleanDisplayValue(value?: string | null): string {
+    const trimmed = String(value ?? '').trim();
+    if (!trimmed) return '';
+    if (this.looksLikeId(trimmed)) return '';
+    return trimmed;
+  }
+
+  private looksLikeId(value: string): boolean {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
   }
 
   initialsFor(user: PostAuthor | null | undefined): string {
@@ -694,10 +892,24 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   formatTimestamp(value: string): string {
     const parsed = new Date(value);
     if (Number.isNaN(parsed.getTime())) return value;
-    return parsed.toLocaleString(undefined, {
-      dateStyle: 'medium',
-      timeStyle: 'short',
+    return parsed.toLocaleTimeString(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
     });
+  }
+
+  private enterThreadView(): void {
+    if (typeof window === 'undefined') return;
+    this.mobileThreadOnly = window.innerWidth <= 900;
+  }
+
+  showConversationList(): void {
+    this.mobileThreadOnly = false;
+    this.forceUi();
+  }
+
+  private forceUi(): void {
+    this.zone.run(() => this.cdr.detectChanges());
   }
 
   goBack(): void {

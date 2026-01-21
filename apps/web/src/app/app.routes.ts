@@ -46,6 +46,12 @@ export const routes: Routes = [
       import('./pages/messages.page').then((m) => m.MessagesPageComponent),
   },
   {
+    path: 'ops-portal-2026',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pages/admin-presence.page').then((m) => m.AdminPresencePageComponent),
+  },
+  {
     path: 'user/:slug',
     loadComponent: () =>
       import('./pages/profile.page').then((m) => m.ProfilePageComponent),

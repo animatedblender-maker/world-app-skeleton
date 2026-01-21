@@ -256,13 +256,13 @@ export class GlobeService {
         type: 'line',
         source: this.COUNTRIES_SOURCE,
         paint: {
-          'line-color': 'rgba(255,255,255,0.22)',
-          'line-width': 1,
+          'line-color': 'rgba(0,40,60,0.85)',
+          'line-width': 1.4,
           'line-opacity': [
             'case',
             ['boolean', ['feature-state', 'dimmed'], false],
-            0.18,
-            0.9,
+            0.25,
+            0.92,
           ],
           'line-opacity-transition': { duration: 480 },
         },
@@ -333,7 +333,7 @@ export class GlobeService {
             id: String(p.id),
             cc,
             baseColor: p.color ?? 'rgba(160,220,255,0.85)',
-            r: typeof p.radius === 'number' ? p.radius : 3.4,
+            r: typeof p.radius === 'number' ? p.radius : 2.0,
           },
           id: String(p.id),
         };
@@ -367,7 +367,7 @@ export class GlobeService {
               1.0,
               this.OFFLINE_ALPHA,
             ],
-            'circle-radius': ['coalesce', ['get', 'r'], 3.4],
+            'circle-radius': ['coalesce', ['get', 'r'], 2.0],
             'circle-stroke-color': [
               'case',
               ['boolean', ['feature-state', 'online'], false],
@@ -377,14 +377,14 @@ export class GlobeService {
             'circle-stroke-width': [
               'case',
               ['boolean', ['feature-state', 'online'], false],
-              1.6,
               0.8,
+              0.4,
             ],
             'circle-blur': [
               'case',
               ['boolean', ['feature-state', 'online'], false],
-              0.35,
-              0.20,
+              0.2,
+              0.1,
             ],
           },
         },

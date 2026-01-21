@@ -69,6 +69,9 @@ type CreatePostInput = {
   country_code: string;
   city_name?: string | null;
   visibility?: string | null;
+  media_type?: string | null;
+  media_url?: string | null;
+  thumb_url?: string | null;
 };
 
 export class PostsService {
@@ -221,13 +224,16 @@ export class PostsService {
     const categoryId = await this.resolveCategoryId(input.country_code);
     const iso = (input.country_code || '').toUpperCase();
     const visibility = this.normalizeVisibility(input.visibility) ?? 'public';
+    const mediaType = this.normalizeMediaType(input.media_type, input.media_url);
+    const mediaUrl = mediaType === 'none' ? null : (input.media_url ?? null);
+    const thumbUrl = mediaType === 'none' ? null : (input.thumb_url ?? null);
 
     const { rows } = await pool.query(
       `
       insert into public.posts
-        (author_id, category_id, country_name, country_code, city_name, title, body, visibility)
+        (author_id, category_id, country_name, country_code, city_name, title, body, visibility, media_type, media_url, thumb_url)
       values
-        ($1, $2, $3, $4, $5, $6, $7, $8)
+        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       returning id
       `,
       [
@@ -239,6 +245,9 @@ export class PostsService {
         input.title?.trim() || null,
         input.body.trim(),
         visibility,
+        mediaType,
+        mediaUrl,
+        thumbUrl,
       ]
     );
 
@@ -764,6 +773,16 @@ export class PostsService {
     if (!allowed.has(normalized)) {
       throw new Error('INVALID_VISIBILITY');
     }
+    return normalized;
+  }
+
+  private normalizeMediaType(value?: string | null, url?: string | null): string {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (!normalized) return url ? 'image' : 'none';
+    const allowed = new Set(['none', 'image', 'video', 'link']);
+    if (!allowed.has(normalized)) return 'none';
+    if (normalized === 'none') return 'none';
+    if (!url) return 'none';
     return normalized;
   }
 

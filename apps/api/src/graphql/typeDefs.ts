@@ -143,6 +143,9 @@ export const typeDefs = `#graphql
     country_code: String!
     city_name: String
     visibility: String
+    media_type: String
+    media_url: String
+    thumb_url: String
   }
 
   input UpdatePostInput {
@@ -225,6 +228,7 @@ export const typeDefs = `#graphql
     conversations(limit: Int): [Conversation!]!
     conversationById(conversation_id: ID!): Conversation
     messagesByConversation(conversation_id: ID!, limit: Int, before: String): [Message!]!
+    messagesUnreadCount: Int!
 
     # Notifications
     notifications(limit: Int, before: String): [Notification!]!

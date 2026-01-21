@@ -14,6 +14,7 @@ import { ProfileService, type Profile } from '../core/services/profile.service';
 import { AuthService } from '../core/services/auth.service';
 import { MediaService } from '../core/services/media.service';
 import { PostsService } from '../core/services/posts.service';
+import { PresenceService } from '../core/services/presence.service';
 import {
   PostEventsService,
   type PostUpdateEvent,
@@ -61,6 +62,12 @@ import { MessagesService } from '../core/services/messages.service';
           <div class="info">
             <div class="title-row" *ngIf="!editingName">
               <div class="title">{{ profile!.display_name || profile!.username || 'User' }}</div>
+              <span
+                class="presence-dot"
+                [class.online]="profileOnline"
+                [class.offline]="!profileOnline"
+                aria-hidden="true"
+              ></span>
             <div class="title-actions">
                 <button class="micro-btn" *ngIf="isOwner && profileEditMode" type="button" (click)="startNameEdit()">Refine name</button>
                 <button
@@ -247,7 +254,7 @@ import { MessagesService } from '../core/services/messages.service';
                     class="pill-link ghost"
                     type="button"
                     *ngIf="profileComposerOpen"
-                    (click)="profileComposerOpen = false"
+                    (click)="profileComposerOpen = false; clearProfileMedia()"
                   >
                     Cancel
                   </button>
@@ -275,6 +282,48 @@ import { MessagesService } from '../core/services/messages.service';
                   placeholder="Tell {{ profile!.country_name }} what's happening..."
                   [(ngModel)]="postBody"
                 ></textarea>
+                <div class="composer-media">
+                  <input
+                    #profileMediaInput
+                    type="file"
+                    accept="image/*,video/*"
+                    (change)="onProfileMediaSelect($event)"
+                    style="display:none;"
+                  />
+                  <button
+                    class="pill-link ghost"
+                    type="button"
+                    (click)="profileMediaInput.click()"
+                  >
+                    Add media
+                  </button>
+                  <button
+                    class="pill-link ghost"
+                    type="button"
+                    *ngIf="postMediaFile"
+                    (click)="clearProfileMedia()"
+                  >
+                    Remove
+                  </button>
+                  <span class="composer-media-name" *ngIf="postMediaFile">
+                    {{ postMediaFile.name }}
+                  </span>
+                </div>
+                <div class="composer-media-error" *ngIf="postMediaError">
+                  {{ postMediaError }}
+                </div>
+                <div class="composer-media-preview" *ngIf="postMediaPreview">
+                  <img
+                    *ngIf="postMediaType === 'image'"
+                    [src]="postMediaPreview"
+                    alt="media preview"
+                  />
+                  <video
+                    *ngIf="postMediaType === 'video'"
+                    [src]="postMediaPreview"
+                    controls
+                  ></video>
+                </div>
               </ng-container>
             </div>
           </div>
@@ -375,6 +424,10 @@ import { MessagesService } from '../core/services/messages.service';
               <div class="post-body" *ngIf="editingPostId !== post.id">
                 <div class="post-title" *ngIf="post.title">{{ post.title }}</div>
                 <p>{{ post.body }}</p>
+              </div>
+              <div class="post-media" *ngIf="editingPostId !== post.id && post.media_url && post.media_type !== 'none'">
+                <img *ngIf="post.media_type === 'image'" [src]="post.media_url" alt="post media" />
+                <video *ngIf="post.media_type === 'video'" [src]="post.media_url" controls></video>
               </div>
               <div class="post-actions" *ngIf="editingPostId !== post.id">
                 <div class="post-action-group">
@@ -619,9 +672,10 @@ import { MessagesService } from '../core/services/messages.service';
     .wrap{
       position: fixed;
       inset: 0;
-      padding: 86px 16px 32px;
+      padding: 86px max(16px, env(safe-area-inset-left)) 32px max(16px, env(safe-area-inset-right));
       box-sizing: border-box;
-      overflow: auto;
+      overflow-y: auto;
+      overflow-x: hidden;
       background: #031421;
       color: rgba(255,255,255,0.92);
     }
@@ -679,7 +733,7 @@ import { MessagesService } from '../core/services/messages.service';
     .card{
       position: relative;
       z-index:3;
-      width: min(900px, 100%);
+      width: min(720px, 100%);
       margin: 0 auto;
       border-radius: 28px;
       padding: 24px;
@@ -688,6 +742,7 @@ import { MessagesService } from '../core/services/messages.service';
       box-shadow: 0 30px 90px rgba(0,0,0,0.50);
       color: rgba(10,12,18,0.92);
       min-height: 200px;
+      box-sizing: border-box;
     }
     .state{
       text-align:center;
@@ -797,6 +852,41 @@ import { MessagesService } from '../core/services/messages.service';
       font-size:14px;
     }
     .composer-textarea{ min-height:90px; resize:vertical; }
+    .composer-media{
+      margin-top:10px;
+      display:flex;
+      gap:8px;
+      align-items:center;
+      flex-wrap:wrap;
+    }
+    .composer-media-name{
+      font-size:11px;
+      opacity:0.7;
+      font-weight:700;
+      letter-spacing:0.06em;
+    }
+    .composer-media-error{
+      margin-top:6px;
+      font-size:11px;
+      font-weight:700;
+      color:#c33;
+      letter-spacing:0.06em;
+    }
+    .composer-media-preview{
+      margin-top:10px;
+      border-radius:18px;
+      overflow:hidden;
+      border:1px solid rgba(0,0,0,0.08);
+      background:#fff;
+    }
+    .composer-media-preview img,
+    .composer-media-preview video{
+      width:100%;
+      display:block;
+      max-height:420px;
+      object-fit:cover;
+      background:#000;
+    }
     .composer-actions{ margin-top:12px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
     .composer-status{ font-size:12px; font-weight:700; letter-spacing:0.08em; color:rgba(0,120,255,0.9); }
     .composer-status.error{ color:#c33; }
@@ -979,6 +1069,18 @@ import { MessagesService } from '../core/services/messages.service';
       align-items:center;
       gap:12px;
       flex-wrap:wrap;
+    }
+    .presence-dot{
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: rgba(255,90,90,0.95);
+      border: 2px solid rgba(255,255,255,0.9);
+      box-shadow: 0 0 10px rgba(255,90,90,0.45);
+    }
+    .presence-dot.online{
+      background: rgba(0,255,156,0.95);
+      box-shadow: 0 0 10px rgba(0,255,156,0.45);
     }
     .title-actions{
       display:flex;
@@ -1256,6 +1358,21 @@ import { MessagesService } from '../core/services/messages.service';
       line-height:1.7;
       opacity:0.85;
       white-space:pre-line;
+    }
+    .post-media{
+      margin-top:12px;
+      border-radius:18px;
+      overflow:hidden;
+      border:1px solid rgba(0,0,0,0.06);
+      background:#fff;
+    }
+    .post-media img,
+    .post-media video{
+      width:100%;
+      display:block;
+      max-height:520px;
+      object-fit:cover;
+      background:#000;
     }
     .post-visibility{
       font-weight:800;
@@ -1594,7 +1711,9 @@ import { MessagesService } from '../core/services/messages.service';
       .card{ padding:20px; }
     }
     @media (max-width: 700px){
-      .wrap{ padding:72px 12px 24px; }
+      .wrap{
+        padding: 72px max(12px, env(safe-area-inset-left)) 24px max(12px, env(safe-area-inset-right));
+      }
       .card{ padding:18px; border-radius:22px; }
       .head{ gap:16px; }
       .title-row{ flex-direction:column; align-items:flex-start; }
@@ -1643,6 +1762,10 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
   private followProfileId: string | null = null;
   postTitle = '';
   postBody = '';
+  postMediaFile: File | null = null;
+  postMediaPreview = '';
+  postMediaType: 'image' | 'video' | null = null;
+  postMediaError = '';
   postBusy = false;
   postError = '';
   postFeedback = '';
@@ -1680,6 +1803,9 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
   profilePosts: CountryPost[] = [];
   loadingProfilePosts = false;
   profilePostsError = '';
+  profileOnline = false;
+  private onlineIds = new Set<string>();
+  private presenceStarted = false;
 
   avatarImage = '';
   avatarNormX = 0;
@@ -1735,6 +1861,7 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     private postEvents: PostEventsService,
     private follows: FollowService,
     private messagesService: MessagesService,
+    private presence: PresenceService,
     private location: LocationService,
     private zone: NgZone,
     private cdr: ChangeDetectorRef
@@ -1759,6 +1886,7 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     });
     const user = await this.auth.getUser();
     this.meId = user?.id ?? null;
+    void this.startPresenceStatus();
 
     this.sub = this.route.paramMap.subscribe((params) => {
       const slug = params.get('slug') ?? '';
@@ -1773,6 +1901,7 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     this.postEventsUpdatedSub?.unsubscribe();
     this.postEventsUpdateSub?.unsubscribe();
     this.postEventsDeleteSub?.unsubscribe();
+    try { this.presence.stop(); } catch {}
     this.stopLocationRefresh();
     if (this.shareTimer) clearTimeout(this.shareTimer);
     if (this.profileEditCloseTimer) clearTimeout(this.profileEditCloseTimer);
@@ -1868,6 +1997,7 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     this.shareCopied = false;
     this.shareError = '';
     this.isOwner = !!this.meId && profile.user_id === this.meId;
+    this.updateProfileOnline();
     this.stopLocationRefresh();
     if (this.isOwner) this.startLocationRefresh();
     this.resetFollowState();
@@ -1878,6 +2008,14 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     void this.loadProfilePosts(profile.user_id);
   }
 
+  private updateProfileOnline(): void {
+    if (!this.profile?.user_id) {
+      this.profileOnline = false;
+      return;
+    }
+    this.profileOnline = this.onlineIds.has(this.profile.user_id);
+  }
+
   private resetFollowState(): void {
     this.followersCount = null;
     this.followingCount = null;
@@ -1886,6 +2024,24 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     this.followMetaLoading = false;
     this.followProfileId = null;
     this.followBusy = false;
+  }
+
+  private async startPresenceStatus(): Promise<void> {
+    if (this.presenceStarted) return;
+    this.presenceStarted = true;
+    try {
+      await this.presence.start({
+        countries: [],
+        loadProfiles: false,
+        onUpdate: (snap) => {
+          this.onlineIds = new Set(snap.onlineIds ?? []);
+          this.updateProfileOnline();
+          this.forceUi();
+        },
+      });
+    } catch {
+      this.presenceStarted = false;
+    }
   }
 
   private startLocationRefresh(): void {
@@ -2036,6 +2192,43 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     void this.router.navigate(['/user', slug]);
   }
 
+  onProfileMediaSelect(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0] ?? null;
+    if (!file) return;
+
+    const isImage = file.type.startsWith('image/');
+    const isVideo = file.type.startsWith('video/');
+    if (!isImage && !isVideo) {
+      this.postMediaError = 'Only images or videos are allowed.';
+      input.value = '';
+      return;
+    }
+
+    const maxBytes = isVideo ? 40 * 1024 * 1024 : 12 * 1024 * 1024;
+    if (file.size > maxBytes) {
+      this.postMediaError = `File too large. Max ${isVideo ? '40MB' : '12MB'}.`;
+      input.value = '';
+      return;
+    }
+
+    this.clearProfileMedia();
+    this.postMediaFile = file;
+    this.postMediaType = isVideo ? 'video' : 'image';
+    this.postMediaPreview = URL.createObjectURL(file);
+    this.postMediaError = '';
+  }
+
+  clearProfileMedia(): void {
+    if (this.postMediaPreview) {
+      try { URL.revokeObjectURL(this.postMediaPreview); } catch {}
+    }
+    this.postMediaFile = null;
+    this.postMediaPreview = '';
+    this.postMediaType = null;
+    this.postMediaError = '';
+  }
+
   async submitProfilePost(): Promise<void> {
     if (!this.profile || !this.meId || !this.canPostFromProfile) return;
     const body = this.postBody.trim();
@@ -2055,6 +2248,14 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
       const countryName = this.profile.country_name;
       if (!countryCode || !countryName) throw new Error('Country details missing.');
 
+      let mediaType: string | null = null;
+      let mediaUrl: string | null = null;
+      if (this.postMediaFile) {
+        const upload = await this.media.uploadPostMedia(this.postMediaFile);
+        mediaUrl = upload.publicUrl;
+        mediaType = this.postMediaType || (this.postMediaFile.type.startsWith('video/') ? 'video' : 'image');
+      }
+
       await this.posts.createPost({
         authorId: this.meId,
         title: title || null,
@@ -2062,12 +2263,17 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
         countryCode,
         countryName,
         cityName: (this.profile as any)?.city_name ?? null,
+        mediaType,
+        mediaUrl,
       });
 
       this.postTitle = '';
       this.postBody = '';
+      this.clearProfileMedia();
       this.profileComposerOpen = false;
-      this.postFeedback = `Shared with ${countryName}.`;
+      this.postFeedback = mediaUrl
+        ? 'Posted to Media (your country + followers feed).'
+        : `Shared with ${countryName}.`;
       this.forceUi();
       setTimeout(() => {
         this.postFeedback = '';
