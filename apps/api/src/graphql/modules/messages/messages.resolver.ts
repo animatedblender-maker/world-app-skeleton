@@ -81,5 +81,19 @@ export const messagesResolvers = {
         media_size: args?.media_size ?? null,
       });
     },
+    updateMessage: async (
+      _: any,
+      args: { message_id: string; body: string },
+      ctx: Context
+    ) => {
+      const user = requireAuth(ctx);
+      if (!args?.message_id) throw new Error('message_id is required.');
+      return await svc().updateMessage(args.message_id, user.id, args.body);
+    },
+    deleteMessage: async (_: any, args: { message_id: string }, ctx: Context) => {
+      const user = requireAuth(ctx);
+      if (!args?.message_id) throw new Error('message_id is required.');
+      return await svc().deleteMessage(args.message_id, user.id);
+    },
   },
 };

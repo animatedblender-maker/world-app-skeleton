@@ -136,15 +136,26 @@ import { VideoPlayerComponent } from '../components/video-player.component';
                         </a>
                       </div>
                       <div class="message-meta">
-                        <span class="message-time">{{ formatTimestamp(message.created_at) }}</span>
-                        <span
-                          class="message-status"
-                          *ngIf="messageStatus(message) as status"
-                          [class.read]="status === 'read'"
-                        >
-                          {{ status === 'sent' ? '✓' : '✓✓' }}
-                        </span>
-                      </div>
+  <span class="message-time">
+    {{ formatTimestamp(message.created_at) }}
+    <span class="message-date">{{ formatDayLabel(message.created_at) }}</span>
+  </span>
+  <span class="message-edited" *ngIf="isEdited(message)">edited</span>
+  <span class="message-status" *ngIf="messageStatus(message) as status" [class.read]="status === 'read'" [innerHTML]="statusGlyph(status)"></span>
+</div>
+<div class="message-actions" *ngIf="message.sender_id === meId && !isEditing(message)">
+  <button class="message-action" type="button" (click)="startEditMessage(message)">Edit</button>
+  <button class="message-action danger" type="button" (click)="deleteMessage(message)">Delete</button>
+</div>
+<div class="message-edit" *ngIf="isEditing(message)">
+  <textarea class="message-edit-input" [(ngModel)]="editingDraft" rows="2"></textarea>
+  <div class="message-edit-actions">
+    <button type="button" class="ghost" (click)="cancelEditMessage()">Cancel</button>
+    <button type="button" class="save" (click)="saveEditMessage(message)" [disabled]="editBusy">
+      {{ editBusy ? 'Saving...' : 'Save' }}
+    </button>
+  </div>
+</div>
                     </div>
                   </div>
                 </ng-container>
@@ -205,16 +216,17 @@ import { VideoPlayerComponent } from '../components/video-player.component';
     `
     :host{
       display:block;
-      min-height:100vh;
+      min-height:100svh;
+      height:100svh;
       position:relative;
       color:#e6f1ff;
       background:#050b14;
     }
     .wrap{
-      min-height:100dvh;
-      height:100dvh;
+      min-height:100%;
+      height:100%;
       position:relative;
-      padding:28px 20px 36px;
+      padding:28px 20px calc(36px + env(safe-area-inset-bottom));
       box-sizing:border-box;
       display:flex;
       flex-direction:column;
@@ -262,6 +274,7 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       display:flex;
       flex-direction:column;
       min-height:0;
+      overflow:hidden;
     }
     .ghost-link{
       border:0;
@@ -550,6 +563,17 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       gap:8px;
       margin-top:6px;
     }
+    .message-date{
+      margin-left:6px;
+      font-size:10px;
+      opacity:0.6;
+    }
+    .message-edited{
+      font-size:10px;
+      text-transform:uppercase;
+      letter-spacing:0.12em;
+      color:rgba(7,20,40,0.55);
+    }
     .message-status{
       font-size:11px;
       letter-spacing:0.08em;
@@ -559,6 +583,65 @@ import { VideoPlayerComponent } from '../components/video-player.component';
     .message-status.read{
       color:rgba(0,155,220,0.95);
       opacity:1;
+    }
+    .message-actions{
+      display:flex;
+      justify-content:flex-end;
+      gap:10px;
+      margin-top:6px;
+    }
+    .message-action{
+      border:0;
+      background:none;
+      font-size:10px;
+      letter-spacing:0.12em;
+      text-transform:uppercase;
+      color:rgba(7,20,40,0.65);
+      cursor:pointer;
+    }
+    .message-action.danger{
+      color:rgba(200,70,70,0.9);
+    }
+    .message-edit{
+      margin-top:8px;
+      display:flex;
+      flex-direction:column;
+      gap:8px;
+    }
+    .message-edit-input{
+      width:100%;
+      border-radius:12px;
+      border:1px solid rgba(7,20,40,0.18);
+      padding:8px 10px;
+      font-family:inherit;
+      font-size:13px;
+      resize:vertical;
+      min-height:60px;
+    }
+    .message-edit-actions{
+      display:flex;
+      justify-content:flex-end;
+      gap:8px;
+    }
+    .message-edit-actions .ghost{
+      border:0;
+      background:none;
+      font-size:10px;
+      letter-spacing:0.12em;
+      text-transform:uppercase;
+      color:rgba(7,20,40,0.6);
+      cursor:pointer;
+    }
+    .message-edit-actions .save{
+      border:0;
+      border-radius:999px;
+      padding:6px 14px;
+      background:rgba(0,155,220,0.9);
+      color:#fff;
+      font-size:11px;
+      letter-spacing:0.08em;
+      text-transform:uppercase;
+      cursor:pointer;
     }
     .composer{
       display:flex;
@@ -690,6 +773,9 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       font-weight:800;
     }
     @media (max-width: 900px){
+      .wrap{
+        padding:16px 12px 16px;
+      }
       .layout{
         grid-template-columns:1fr;
         height:100%;
@@ -699,7 +785,7 @@ import { VideoPlayerComponent } from '../components/video-player.component';
         overflow:auto;
       }
       .layout.thread-only{
-        height: calc(100dvh - 130px);
+        height:100%;
       }
       .thread{
         min-height:0;
@@ -713,6 +799,9 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       }
     }
     @media (max-width: 600px){
+      .wrap{
+        padding:12px;
+      }
       .card{
         padding:16px;
       }
@@ -754,6 +843,9 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   messageMediaError = '';
   lightboxUrl: string | null = null;
   meId: string | null = null;
+  editingMessageId: string | null = null;
+  editingDraft = '';
+  editBusy = false;
   private pendingConversation: Conversation | null = null;
   private routeSub?: Subscription;
   private pendingSub?: Subscription;
@@ -1284,7 +1376,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
 
   formatDayLabel(value: string): string {
     const parsed = this.parseTimestamp(String(value ?? '').trim());
-    if (Number.isNaN(parsed.getTime())) return '';
+    if (Number.isNaN(parsed.getTime())) return String(value ?? '');
     const now = new Date();
     const sameYear = parsed.getFullYear() === now.getFullYear();
     const sameDay =
@@ -1314,14 +1406,87 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     return current !== previous;
   }
 
-  messageStatus(message: Message): 'sent' | 'delivered' | 'read' | null {
+  messageStatus(message: Message): 'sent' | 'read' | null {
     if (!this.meId || message.sender_id !== this.meId) return null;
     const other = this.otherMember(this.activeConversation);
     if (!other) return 'sent';
     const lastRead = other.last_read_at ? this.parseTimestamp(other.last_read_at).getTime() : 0;
     const created = this.parseTimestamp(message.created_at).getTime();
     if (lastRead && created && lastRead >= created) return 'read';
-    return 'delivered';
+    return 'sent';
+  }
+
+  statusGlyph(status: 'sent' | 'read'): string {
+    return status === 'read' ? '&#10003;&#10003;' : '&#10003;';
+  }
+
+  isEdited(message: Message): boolean {
+    if (!message?.updated_at) return false;
+    const created = this.parseTimestamp(message.created_at).getTime();
+    const updated = this.parseTimestamp(message.updated_at).getTime();
+    if (!created || !updated) return false;
+    return updated > created + 1000;
+  }
+
+  isEditing(message: Message): boolean {
+    return !!message && this.editingMessageId === message.id;
+  }
+
+  startEditMessage(message: Message): void {
+    if (!this.meId || message.sender_id !== this.meId) return;
+    const body = String(message.body ?? '').trim();
+    if (!body) return;
+    this.editingMessageId = message.id;
+    this.editingDraft = body;
+    this.forceUi();
+  }
+
+  cancelEditMessage(): void {
+    this.editingMessageId = null;
+    this.editingDraft = '';
+    this.editBusy = false;
+    this.forceUi();
+  }
+
+  async saveEditMessage(message: Message): Promise<void> {
+    if (!this.editingMessageId || this.editBusy) return;
+    if (!this.meId || message.sender_id !== this.meId) return;
+    const body = this.editingDraft.trim();
+    if (!body) return;
+    this.editBusy = true;
+    this.messageError = '';
+    this.forceUi();
+    try {
+      const updated = await this.messagesService.updateMessage(message.id, body);
+      this.messages = this.messages.map((item) => (item.id === message.id ? updated : item));
+      this.editingMessageId = null;
+      this.editingDraft = '';
+      this.bumpConversation(updated);
+      await this.loadConversations(this.activeConversationId);
+    } catch (e: any) {
+      this.messageError = e?.message ?? String(e);
+    } finally {
+      this.editBusy = false;
+      this.forceUi();
+    }
+  }
+
+  async deleteMessage(message: Message): Promise<void> {
+    if (!this.meId || message.sender_id !== this.meId) return;
+    const confirmed = typeof window !== 'undefined' ? window.confirm('Delete this message?') : true;
+    if (!confirmed) return;
+    this.messageError = '';
+    this.forceUi();
+    try {
+      const deleted = await this.messagesService.deleteMessage(message.id);
+      if (!deleted) return;
+      this.messages = this.messages.filter((item) => item.id !== message.id);
+      await this.loadConversations(this.activeConversationId);
+    } catch (e: any) {
+      this.messageError = e?.message ?? String(e);
+    } finally {
+      this.forceUi();
+    }
   }
 
   private parseTimestamp(value: string): Date {
@@ -1361,3 +1526,5 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     void this.router.navigate(['/globe']);
   }
 }
+
+

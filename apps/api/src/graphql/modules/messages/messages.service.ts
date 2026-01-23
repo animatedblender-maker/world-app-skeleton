@@ -13,6 +13,7 @@ type MessageRow = {
   media_mime?: string | null;
   media_size?: number | null;
   created_at: string;
+  updated_at?: string | null;
   sender: {
     user_id: string;
     display_name: string | null;
@@ -81,6 +82,7 @@ export class MessagesService {
             'media_mime', m.media_mime,
             'media_size', m.media_size,
             'created_at', m.created_at,
+            'updated_at', m.updated_at,
             'sender', jsonb_build_object(
               'user_id', pr2.user_id,
               'display_name', pr2.display_name,
@@ -311,6 +313,62 @@ export class MessagesService {
     });
   }
 
+  async updateMessage(messageId: string, userId: string, body: string): Promise<MessageRow> {
+    return await this.withAuthClient(userId, async (client) => {
+      const trimmed = String(body ?? '').trim();
+      if (!trimmed) throw new Error('Message is required.');
+
+      const { rows } = await client.query<{ id: string }>(
+        `
+        update public.messages
+        set body = $2, updated_at = now()
+        where id = $1 and sender_id = $3
+        returning id
+        `,
+        [messageId, trimmed, userId]
+      );
+
+      const updatedId = rows[0]?.id ?? null;
+      if (!updatedId) throw new Error('MESSAGE_NOT_FOUND');
+
+      const message = await this.messageById(updatedId, client);
+      if (!message) throw new Error('Message not found.');
+      return message;
+    });
+  }
+
+  async deleteMessage(messageId: string, userId: string): Promise<boolean> {
+    return await this.withAuthClient(userId, async (client) => {
+      const { rows } = await client.query<{ conversation_id: string }>(
+        `
+        delete from public.messages
+        where id = $1 and sender_id = $2
+        returning conversation_id
+        `,
+        [messageId, userId]
+      );
+
+      const convoId = rows[0]?.conversation_id ?? null;
+      if (!convoId) return false;
+
+      await client.query(
+        `
+        update public.conversations
+        set updated_at = now(),
+            last_message_at = (
+              select max(created_at)
+              from public.messages
+              where conversation_id = $1
+            )
+        where id = $1
+        `,
+        [convoId]
+      );
+
+      return true;
+    });
+  }
+
   async getConversationById(conversationId: string, userId: string): Promise<ConversationRow | null> {
     if (!conversationId) return null;
     return await this.conversationById(conversationId, userId);
@@ -383,6 +441,7 @@ export class MessagesService {
             'media_mime', m.media_mime,
             'media_size', m.media_size,
             'created_at', m.created_at,
+            'updated_at', m.updated_at,
             'sender', jsonb_build_object(
               'user_id', pr2.user_id,
               'display_name', pr2.display_name,

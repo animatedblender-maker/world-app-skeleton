@@ -12,6 +12,7 @@ export type Message = {
   media_mime?: string | null;
   media_size?: number | null;
   created_at: string;
+  updated_at?: string | null;
   sender?: PostAuthor | null;
 };
 

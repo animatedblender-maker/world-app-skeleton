@@ -117,7 +117,7 @@ type RouteState = {
     </div>
 
     <div class="globe-logo" aria-hidden="true">
-      <img src="/logo.png" alt="Matterya logo" />
+      <img src="/logo.png?v=3" alt="Matterya logo" />
     </div>
 
     <!-- Ocean map ALWAYS full background -->
@@ -872,13 +872,18 @@ type RouteState = {
       left: var(--ui-edge-left);
       z-index: 99999;
       pointer-events: none;
-      width: 52px;
-      height: 52px;
-      padding: 6px;
-      border-radius: 14px;
-      background: rgba(6,14,26,0.55);
-      border: 1px solid rgba(255,255,255,0.2);
+      width: var(--node-size);
+      height: var(--node-size);
+      padding: 4px;
+      box-sizing: border-box;
+      border-radius: 12px;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      background: rgba(6,14,26,0.8);
+      border: 1px solid rgba(255,255,255,0.35);
       backdrop-filter: blur(8px);
+      opacity: 1;
     }
     .globe-logo img{
       width: 100%;

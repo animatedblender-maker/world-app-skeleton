@@ -33,6 +33,7 @@ query Conversations($limit: Int) {
       media_mime
       media_size
       created_at
+      updated_at
       sender {
         user_id
         display_name
@@ -74,6 +75,7 @@ query ConversationById($conversationId: ID!) {
       media_mime
       media_size
       created_at
+      updated_at
       sender {
         user_id
         display_name
@@ -100,6 +102,7 @@ query MessagesByConversation($conversationId: ID!, $limit: Int, $before: String)
     media_mime
     media_size
     created_at
+    updated_at
     sender {
       user_id
       display_name
@@ -135,6 +138,7 @@ mutation StartConversation($targetId: ID!) {
       sender_id
       body
       created_at
+      updated_at
       sender {
         user_id
         display_name
@@ -169,6 +173,7 @@ mutation SendMessage($conversationId: ID!, $body: String, $mediaType: String, $m
     media_mime
     media_size
     created_at
+    updated_at
     sender {
       user_id
       display_name
@@ -178,6 +183,38 @@ mutation SendMessage($conversationId: ID!, $body: String, $mediaType: String, $m
       country_code
     }
   }
+}
+`;
+
+const UPDATE_MESSAGE_MUTATION = `
+mutation UpdateMessage($messageId: ID!, $body: String!) {
+  updateMessage(message_id: $messageId, body: $body) {
+    id
+    conversation_id
+    sender_id
+    body
+    media_type
+    media_path
+    media_name
+    media_mime
+    media_size
+    created_at
+    updated_at
+    sender {
+      user_id
+      display_name
+      username
+      avatar_url
+      country_name
+      country_code
+    }
+  }
+}
+`;
+
+const DELETE_MESSAGE_MUTATION = `
+mutation DeleteMessage($messageId: ID!) {
+  deleteMessage(message_id: $messageId)
 }
 `;
 
@@ -276,6 +313,23 @@ export class MessagesService {
     return await this.hydrateMessageMedia(this.mapMessage(sendMessage));
   }
 
+  async updateMessage(messageId: string, body: string): Promise<Message> {
+    const trimmed = String(body ?? '').trim();
+    const { updateMessage } = await this.gql.request<{ updateMessage: any }>(
+      UPDATE_MESSAGE_MUTATION,
+      { messageId, body: trimmed }
+    );
+    return await this.hydrateMessageMedia(this.mapMessage(updateMessage));
+  }
+
+  async deleteMessage(messageId: string): Promise<boolean> {
+    const { deleteMessage } = await this.gql.request<{ deleteMessage: boolean }>(
+      DELETE_MESSAGE_MUTATION,
+      { messageId }
+    );
+    return !!deleteMessage;
+  }
+
   private mapAuthor(row: any): PostAuthor | null {
     if (!row) return null;
     return {
@@ -285,6 +339,7 @@ export class MessagesService {
       avatar_url: row.avatar_url ?? null,
       country_name: row.country_name ?? null,
       country_code: row.country_code ?? null,
+      last_read_at: row.last_read_at ?? null,
     };
   }
 
@@ -300,6 +355,7 @@ export class MessagesService {
       media_mime: row.media_mime ?? null,
       media_size: row.media_size ?? null,
       created_at: row.created_at,
+      updated_at: row.updated_at ?? null,
       sender: row.sender ? this.mapAuthor(row.sender) : null,
     };
   }

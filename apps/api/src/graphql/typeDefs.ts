@@ -129,6 +129,7 @@ export const typeDefs = `#graphql
     media_mime: String
     media_size: Int
     created_at: String!
+    updated_at: String
     sender: PostAuthor
   }
 
@@ -273,6 +274,8 @@ export const typeDefs = `#graphql
       media_mime: String
       media_size: Int
     ): Message!
+    updateMessage(message_id: ID!, body: String!): Message!
+    deleteMessage(message_id: ID!): Boolean!
 
     # Notifications
     markNotificationRead(id: ID!): Boolean!
