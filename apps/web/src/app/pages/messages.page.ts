@@ -113,7 +113,7 @@ import { VideoPlayerComponent } from '../components/video-player.component';
                     </div>
                   </div>
                   <div class="bubble">
-                    <div class="body" *ngIf="message.body">{{ message.body }}</div>
+                    <div class="body" *ngIf="messageText(message) as text">{{ text }}</div>
                     <div class="message-media" *ngIf="message.media_type && message.media_url">
                       <img
                         *ngIf="message.media_type === 'image'"
@@ -151,14 +151,16 @@ import { VideoPlayerComponent } from '../components/video-player.component';
                   hidden
                   (change)="onMediaSelected($event)"
                 />
-                <input
+                <textarea
+                  #messageInput
                   class="composer-input"
                   name="message"
                   [(ngModel)]="messageDraft"
                   placeholder="Write a message..."
                   maxlength="2000"
-                  autocomplete="off"
-                />
+                  rows="1"
+                  (input)="onMessageInput($event)"
+                ></textarea>
                 <button class="composer-send" type="submit" [disabled]="messageBusy || !canSendMessage()">
                   {{ messageBusy ? 'Sending...' : 'Send' }}
                 </button>
@@ -193,6 +195,7 @@ import { VideoPlayerComponent } from '../components/video-player.component';
     }
     .wrap{
       min-height:100vh;
+      height:100dvh;
       position:relative;
       padding:28px 20px 36px;
     }
@@ -234,6 +237,10 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       box-shadow:0 28px 60px rgba(8,26,52,0.12);
       backdrop-filter: blur(12px);
       color:#0c1422;
+      height:100%;
+      display:flex;
+      flex-direction:column;
+      min-height:0;
     }
     .ghost-link{
       border:0;
@@ -252,6 +259,8 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       grid-template-columns:320px 1fr;
       gap:18px;
       align-items:stretch;
+      flex:1;
+      min-height:0;
     }
     .layout.thread-only .panel{
       display:none;
@@ -367,6 +376,7 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       background:rgba(255,255,255,0.9);
       min-height:320px;
       overflow:hidden;
+      min-height:0;
     }
     .thread-back{
       border:0;
@@ -405,6 +415,8 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       display:flex;
       flex-direction:column;
       min-height:200px;
+      min-height:0;
+      overflow:hidden;
     }
     .message-list{
       flex:1;
@@ -413,6 +425,7 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       flex-direction:column;
       gap:10px;
       overflow-y:auto;
+      min-height:0;
     }
     .message{
       display:flex;
@@ -515,12 +528,17 @@ import { VideoPlayerComponent } from '../components/video-player.component';
     }
     .composer-input{
       flex:1;
-      border-radius:999px;
+      border-radius:16px;
       border:1px solid rgba(7,20,40,0.14);
       padding:10px 14px;
       font-size:14px;
       font-family:inherit;
       background:white;
+      min-height:44px;
+      max-height:160px;
+      line-height:1.45;
+      resize:none;
+      overflow-y:hidden;
     }
     .composer-attach{
       width:38px;
@@ -617,7 +635,7 @@ import { VideoPlayerComponent } from '../components/video-player.component';
     @media (max-width: 900px){
       .layout{
         grid-template-columns:1fr;
-        height: calc(100dvh - 160px);
+        height:100%;
       }
       .panel{
         max-height:240px;
@@ -662,6 +680,7 @@ import { VideoPlayerComponent } from '../components/video-player.component';
 })
 export class MessagesPageComponent implements OnInit, OnDestroy {
   @ViewChild('mediaInput') mediaInput?: ElementRef<HTMLInputElement>;
+  @ViewChild('messageInput') messageInput?: ElementRef<HTMLTextAreaElement>;
   conversations: Conversation[] = [];
   messages: Message[] = [];
   activeConversation: Conversation | null = null;
@@ -939,6 +958,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       const sent = await this.messagesService.sendMessage(this.activeConversationId, body, media);
       this.messages = [...this.messages, sent];
       this.messageDraft = '';
+      this.resetMessageInput();
       this.clearMedia();
       this.bumpConversation(sent);
     } catch (e: any) {
@@ -951,6 +971,16 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
 
   canSendMessage(): boolean {
     return !!(this.messageDraft.trim() || this.messageMediaFile);
+  }
+
+  onMessageInput(event?: Event): void {
+    const input = (event?.target as HTMLTextAreaElement | undefined) ?? this.messageInput?.nativeElement;
+    if (!input) return;
+    input.style.height = 'auto';
+    const maxHeight = 160;
+    const next = Math.min(input.scrollHeight, maxHeight);
+    input.style.height = `${next}px`;
+    input.style.overflowY = input.scrollHeight > maxHeight ? 'auto' : 'hidden';
   }
 
   triggerMediaPicker(): void {
@@ -995,6 +1025,19 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   closeImageLightbox(): void {
     this.lightboxUrl = null;
     this.forceUi();
+  }
+
+  messageText(message: Message): string {
+    const body = String(message?.body ?? '');
+    if (message?.id && body.trim() === message.id) return '';
+    return body;
+  }
+
+  private resetMessageInput(): void {
+    const input = this.messageInput?.nativeElement;
+    if (!input) return;
+    input.style.height = 'auto';
+    input.style.overflowY = 'hidden';
   }
 
   conversationSnippet(convo: Conversation): string {

@@ -16,9 +16,9 @@ import { AuthService } from '../core/services/auth.service';
 
       <div class="auth-card">
         <div class="auth-brand">
-          <div class="brand-mark"></div>
+          <img class="brand-logo" src="/logo.png" alt="matterya logo" />
           <div class="brand-text">
-            <div class="brand-title">WORLD APP</div>
+            <div class="brand-title">MATTERYA</div>
             <div class="brand-sub">Authenticate to synchronize your node.</div>
           </div>
         </div>
@@ -143,7 +143,15 @@ import { AuthService } from '../core/services/auth.service';
     }
     .auth-card>*{ position:relative; z-index:1; }
     .auth-brand{ display:flex; gap:12px; align-items:center; margin-bottom:12px; }
-    .brand-mark{ width:14px; height:14px; border-radius:50%; background:rgba(0,255,209,0.95); box-shadow:0 0 18px rgba(0,255,209,0.65); }
+    .brand-logo{
+      width:30px;
+      height:30px;
+      border-radius:8px;
+      object-fit:contain;
+      background:rgba(0,0,0,0.25);
+      box-shadow:0 0 18px rgba(0,255,209,0.35);
+      padding:4px;
+    }
     .brand-title{ color:rgba(255,255,255,0.92); letter-spacing:0.18em; font-weight:800; font-size:14px; }
     .brand-sub{ color:rgba(255,255,255,0.68); font-size:12px; margin-top:2px; }
     .tabs{ display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:10px 0 14px; }

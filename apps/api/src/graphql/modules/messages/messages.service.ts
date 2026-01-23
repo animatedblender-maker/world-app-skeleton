@@ -1,4 +1,5 @@
 import { pool } from '../../../db.js';
+import type { PoolClient } from '../../../db.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 
 type MessageRow = {
@@ -220,79 +221,92 @@ export class MessagesService {
       media_size?: number | null;
     }
   ): Promise<MessageRow> {
-    const trimmed = String(payload?.body ?? '').trim();
-    const mediaPath = payload?.media_path ?? null;
-    if (!trimmed && !mediaPath) throw new Error('Message is required.');
+    return await this.withAuthClient(userId, async (client) => {
+      const trimmed = String(payload?.body ?? '').trim();
+      const mediaPath = payload?.media_path ?? null;
+      if (!trimmed && !mediaPath) throw new Error('Message is required.');
 
-    await this.ensureMember(conversationId, userId);
+      const member = await client.query(
+        `
+        select 1
+        from public.conversation_members
+        where conversation_id = $1 and user_id = $2
+        limit 1
+        `,
+        [conversationId, userId]
+      );
+      if (!member.rows[0]) {
+        throw new Error('CONVERSATION_ACCESS_DENIED');
+      }
 
-    const { rows } = await pool.query<{ id: string }>(
-      `
-      insert into public.messages (
-        conversation_id,
-        sender_id,
-        body,
-        media_type,
-        media_path,
-        media_name,
-        media_mime,
-        media_size
-      )
-      values ($1, $2, $3, $4, $5, $6, $7, $8)
-      returning id
-      `,
-      [
-        conversationId,
-        userId,
-        trimmed,
-        payload?.media_type ?? null,
-        mediaPath,
-        payload?.media_name ?? null,
-        payload?.media_mime ?? null,
-        payload?.media_size ?? null,
-      ]
-    );
+      const { rows } = await client.query<{ id: string }>(
+        `
+        insert into public.messages (
+          conversation_id,
+          sender_id,
+          body,
+          media_type,
+          media_path,
+          media_name,
+          media_mime,
+          media_size
+        )
+        values ($1, $2, $3, $4, $5, $6, $7, $8)
+        returning id
+        `,
+        [
+          conversationId,
+          userId,
+          trimmed,
+          payload?.media_type ?? null,
+          mediaPath,
+          payload?.media_name ?? null,
+          payload?.media_mime ?? null,
+          payload?.media_size ?? null,
+        ]
+      );
 
-    const messageId = rows[0]?.id ?? null;
-    if (!messageId) throw new Error('Failed to send message.');
+      const messageId = rows[0]?.id ?? null;
+      if (!messageId) throw new Error('Failed to send message.');
 
-    await pool.query(
-      `
-      update public.conversations
-      set updated_at = now(), last_message_at = now()
-      where id = $1
-      `,
-      [conversationId]
-    );
+      await client.query(
+        `
+        update public.conversations
+        set updated_at = now(), last_message_at = now()
+        where id = $1
+        `,
+        [conversationId]
+      );
 
-    await pool.query(
-      `
-      update public.conversation_members
-      set last_read_at = now()
-      where conversation_id = $1 and user_id = $2
-      `,
-      [conversationId, userId]
-    );
+      await client.query(
+        `
+        update public.conversation_members
+        set last_read_at = now()
+        where conversation_id = $1 and user_id = $2
+        `,
+        [conversationId, userId]
+      );
 
-    const message = await this.messageById(messageId);
-    if (!message) throw new Error('Message not found.');
+      const message = await this.messageById(messageId, client);
+      if (!message) throw new Error('Message not found.');
 
-    const otherMembers = await pool.query<{ user_id: string }>(
-      `
-      select user_id
-      from public.conversation_members
-      where conversation_id = $1 and user_id <> $2
-      `,
-      [conversationId, userId]
-    );
+      const otherMembers = await client.query<{ user_id: string }>(
+        `
+        select user_id
+        from public.conversation_members
+        where conversation_id = $1 and user_id <> $2
+        `,
+        [conversationId, userId]
+      );
 
-    for (const row of otherMembers.rows) {
-      try {
-        await this.notifications.notifyMessage(row.user_id, userId, conversationId);
-      } catch {}
-    }
+      for (const row of otherMembers.rows) {
+        try {
+          await this.notifications.notifyMessage(row.user_id, userId, conversationId);
+        } catch {}
+      }
 
-    return message;
+      return message;
+    });
   }
 
   async getConversationById(conversationId: string, userId: string): Promise<ConversationRow | null> {
@@ -392,8 +406,12 @@ export class MessagesService {
     return (rows[0] as ConversationRow) ?? null;
   }
 
-  private async messageById(messageId: string): Promise<MessageRow | null> {
-    const { rows } = await pool.query(
+  private async messageById(
+    messageId: string,
+    client?: PoolClient | null
+  ): Promise<MessageRow | null> {
+    const executor = client ?? pool;
+    const { rows } = await executor.query(
       `
       select
         m.*,
@@ -414,5 +432,22 @@ export class MessagesService {
     );
 
     return (rows[0] as MessageRow) ?? null;
+  }
+
+  private async withAuthClient<T>(userId: string, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+    const client = await pool.connect();
+    try {
+      await client.query('begin');
+      await client.query(`select set_config('request.jwt.claim.sub', $1, true)`, [userId]);
+      await client.query(`select set_config('request.jwt.claim.role', 'authenticated', true)`);
+      const result = await fn(client);
+      await client.query('commit');
+      return result;
+    } catch (err) {
+      await client.query('rollback');
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 }
