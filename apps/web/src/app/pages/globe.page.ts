@@ -19,6 +19,7 @@ import { PostsService } from '../core/services/posts.service';
 import { FollowService } from '../core/services/follow.service';
 import { NotificationsService, type NotificationItem } from '../core/services/notifications.service';
 import { NotificationEventsService } from '../core/services/notification-events.service';
+import { PushService } from '../core/services/push.service';
 import {
   PostEventsService,
   type PostInsertEvent,
@@ -2436,6 +2437,10 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   private pendingPostId: string | null = null;
   private notificationFocusPostId: string | null = null;
   private notificationFocusPost: CountryPost | null = null;
+  private pendingNotificationPostId: string | null = null;
+  private pendingNotificationUserId: string | null = null;
+  private lastHandledNotificationPostId: string | null = null;
+  private lastHandledNotificationUserId: string | null = null;
   highlightedPostId: string | null = null;
   followingPosts: CountryPost[] = [];
   followingLoading = false;
@@ -2538,6 +2543,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     private followService: FollowService,
     private notificationsService: NotificationsService,
     private notificationEvents: NotificationEventsService,
+    private push: PushService,
     private zone: NgZone,
     private cdr: ChangeDetectorRef
   ) {}
@@ -2611,6 +2617,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   async ngOnInit(): Promise<void> {
+    void this.push.syncIfGranted();
     this.postEventsCreatedSub = this.postEvents.createdPost$.subscribe((post) => {
       this.zone.run(() => this.handleCountryPostEvent(post));
     });
@@ -2723,6 +2730,28 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
         }
         return;
       }
+
+      const postParam = params.get('post');
+      if (postParam && postParam !== this.lastHandledNotificationPostId) {
+        this.pendingNotificationPostId = postParam;
+        this.lastHandledNotificationPostId = postParam;
+        this.tryOpenPendingNotificationPost();
+        void this.router.navigate([], {
+          relativeTo: this.route,
+          queryParams: { post: null },
+          queryParamsHandling: 'merge',
+          replaceUrl: true,
+        });
+      }
+
+      const userParam = params.get('user');
+      if (userParam && userParam !== this.lastHandledNotificationUserId) {
+        this.pendingNotificationUserId = userParam;
+        this.lastHandledNotificationUserId = userParam;
+        void this.router.navigate(['/user', userParam]);
+        return;
+      }
+
       const normalized = this.normalizeRouteState({
         country: params.get('country'),
         tab: params.get('tab'),
@@ -3429,7 +3458,14 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       void this.router.navigate(['/messages'], { queryParams: { c: notif.entity_id } });
       return;
     }
-    if ((type === 'like' || type === 'comment' || type === 'comment_like' || type === 'comment_reply') && notif.entity_id) {
+    if (
+      (type === 'like' ||
+        type === 'comment' ||
+        type === 'comment_like' ||
+        type === 'comment_reply' ||
+        type === 'post') &&
+      notif.entity_id
+    ) {
       void this.navigateToNotificationPost(notif.entity_id);
     }
   }
@@ -3462,6 +3498,14 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       this.closePanel({ skipRouteUpdate: true });
       this.focusCountry(target, { tab: 'posts', focusPostId: post.id, focusPost: post });
     } catch {}
+  }
+
+  private tryOpenPendingNotificationPost(): void {
+    if (!this.pendingNotificationPostId) return;
+    if (!this.countriesReady || !this.globeReady) return;
+    const postId = this.pendingNotificationPostId;
+    this.pendingNotificationPostId = null;
+    void this.navigateToNotificationPost(postId);
   }
 
   formatDate(value: string): string {
@@ -4341,6 +4385,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     const state = this.pendingRouteState;
     this.pendingRouteState = null;
     this.applyRouteState(state);
+    this.tryOpenPendingNotificationPost();
   }
 
   private applyRouteState(state: RouteState): void {
@@ -4499,6 +4544,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.closeMenu();
     this.closePanel();
     this.closeSearch();
+    void this.push.enableFromUserGesture();
     void this.router.navigate(['/messages']);
   }
 
@@ -4515,6 +4561,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.saveState = 'idle';
 
     if (p === 'notifications') {
+      void this.push.enableFromUserGesture();
       void this.refreshNotifications();
       void this.refreshBadgeCounts();
       this.startNotificationClock();

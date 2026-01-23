@@ -1,4 +1,5 @@
 import { pool } from '../../../db.js';
+import { PushService } from '../../../push/push.service.js';
 
 type NotificationRow = {
   id: string;
@@ -18,6 +19,7 @@ type NotificationRow = {
 };
 
 export class NotificationsService {
+  private push = new PushService();
   async listForUser(userId: string, limit: number, before?: string | null): Promise<NotificationRow[]> {
     const safeLimit = Math.max(1, Math.min(100, limit || 40));
     const params: Array<string | number> = [userId, safeLimit];
@@ -95,6 +97,12 @@ export class NotificationsService {
       `,
       [targetId, followerId]
     );
+    await this.push.sendToUser(targetId, {
+      title: 'New notification',
+      body: 'Someone followed you.',
+      url: `/user/${followerId}`,
+      tag: `follow:${followerId}`,
+    });
   }
 
   async notifyPostLike(targetId: string, actorId: string, postId: string): Promise<void> {
@@ -108,6 +116,12 @@ export class NotificationsService {
       `,
       [targetId, actorId, postId]
     );
+    await this.push.sendToUser(targetId, {
+      title: 'New notification',
+      body: 'Your post got a like.',
+      url: `/?post=${postId}`,
+      tag: `post:${postId}`,
+    });
   }
 
   async notifyPostComment(targetId: string, actorId: string, postId: string): Promise<void> {
@@ -121,6 +135,12 @@ export class NotificationsService {
       `,
       [targetId, actorId, postId]
     );
+    await this.push.sendToUser(targetId, {
+      title: 'New notification',
+      body: 'New comment on your post.',
+      url: `/?post=${postId}`,
+      tag: `post:${postId}`,
+    });
   }
 
   async notifyCommentLike(targetId: string, actorId: string, postId: string): Promise<void> {
@@ -134,6 +154,12 @@ export class NotificationsService {
       `,
       [targetId, actorId, postId]
     );
+    await this.push.sendToUser(targetId, {
+      title: 'New notification',
+      body: 'Someone liked your comment.',
+      url: `/?post=${postId}`,
+      tag: `post:${postId}`,
+    });
   }
 
   async notifyCommentReply(targetId: string, actorId: string, postId: string): Promise<void> {
@@ -147,9 +173,20 @@ export class NotificationsService {
       `,
       [targetId, actorId, postId]
     );
+    await this.push.sendToUser(targetId, {
+      title: 'New notification',
+      body: 'New reply on your comment.',
+      url: `/?post=${postId}`,
+      tag: `post:${postId}`,
+    });
   }
 
-  async notifyMessage(targetId: string, actorId: string, conversationId: string): Promise<void> {
+  async notifyMessage(
+    targetId: string,
+    actorId: string,
+    conversationId: string,
+    meta?: { senderName?: string | null; preview?: string | null }
+  ): Promise<void> {
     if (!targetId || !actorId || !conversationId || targetId === actorId) return;
     await pool.query(
       `
@@ -160,5 +197,13 @@ export class NotificationsService {
       `,
       [targetId, actorId, conversationId]
     );
+    const title = meta?.senderName?.trim() || 'New message';
+    const preview = meta?.preview?.trim() || 'You received a new message.';
+    await this.push.sendToUser(targetId, {
+      title,
+      body: preview,
+      url: `/messages?c=${conversationId}`,
+      tag: `message:${conversationId}`,
+    });
   }
 }

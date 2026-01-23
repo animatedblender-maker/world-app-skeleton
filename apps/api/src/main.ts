@@ -22,6 +22,7 @@ dotenv.config({ path: path.join(__dirname, '..', '.env') });
 // ✅ ts-node --esm on Windows needs explicit ".ts"
 import { typeDefs } from './graphql/typeDefs.js';
 import { resolvers } from './graphql/resolvers.js';
+import { PushService } from './push/push.service.js';
 
 type AuthedUser = {
   id: string;
@@ -120,7 +121,9 @@ const yoga = createYoga<Context>({
 });
 
 const app = express();
+const push = new PushService();
 
+app.use(express.json({ limit: '200kb' }));
 app.use(
   cors({
     origin: (incomingOrigin, callback) => {
@@ -136,6 +139,31 @@ app.use(
 
 // ✅ health endpoint (typed _req to avoid implicit any)
 app.get('/health', (_req: Request, res: Response) => res.json({ ok: true }));
+
+app.post('/push/subscribe', async (req: Request, res: Response) => {
+  const user = await getUserFromRequest(req);
+  if (!user?.id) return res.status(401).json({ error: 'unauthenticated' });
+
+  const subscription = req.body?.subscription;
+  try {
+    const uaHeader = req.headers['user-agent'];
+    const userAgent = Array.isArray(uaHeader) ? uaHeader.join(' ') : uaHeader;
+    await push.upsertSubscription(user.id, subscription, userAgent);
+    return res.json({ ok: true });
+  } catch (err: any) {
+    return res.status(400).json({ error: err?.message ?? 'invalid_subscription' });
+  }
+});
+
+app.post('/push/unsubscribe', async (req: Request, res: Response) => {
+  const user = await getUserFromRequest(req);
+  if (!user?.id) return res.status(401).json({ error: 'unauthenticated' });
+
+  const endpoint = req.body?.endpoint;
+  if (!endpoint) return res.status(400).json({ error: 'missing_endpoint' });
+  await push.removeSubscription(user.id, endpoint);
+  return res.json({ ok: true });
+});
 
 app.use('/graphql', (req: Request, res: Response) => {
   return yoga.handle(req, res);

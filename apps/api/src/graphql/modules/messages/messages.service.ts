@@ -303,9 +303,16 @@ export class MessagesService {
         [conversationId, userId]
       );
 
+      const senderName =
+        message.sender?.display_name || message.sender?.username || 'New message';
+      const preview = String(message.body ?? '').trim().slice(0, 140);
+
       for (const row of otherMembers.rows) {
         try {
-          await this.notifications.notifyMessage(row.user_id, userId, conversationId);
+          await this.notifications.notifyMessage(row.user_id, userId, conversationId, {
+            senderName,
+            preview,
+          });
         } catch {}
       }
 

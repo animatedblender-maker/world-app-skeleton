@@ -8,6 +8,7 @@ import { AuthService } from '../core/services/auth.service';
 import { MessagesService } from '../core/services/messages.service';
 import { MediaService } from '../core/services/media.service';
 import { NotificationsService, type NotificationItem } from '../core/services/notifications.service';
+import { PushService } from '../core/services/push.service';
 import { Conversation, Message } from '../core/models/messages.model';
 import { PostAuthor } from '../core/models/post.model';
 import { VideoPlayerComponent } from '../components/video-player.component';
@@ -861,11 +862,13 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     private messagesService: MessagesService,
     private mediaService: MediaService,
     private notificationsService: NotificationsService,
+    private push: PushService,
     private zone: NgZone,
     private cdr: ChangeDetectorRef
   ) {}
 
   async ngOnInit(): Promise<void> {
+    void this.push.syncIfGranted();
     const user = await this.auth.getUser();
     this.meId = user?.id ?? null;
     this.forceUi();
