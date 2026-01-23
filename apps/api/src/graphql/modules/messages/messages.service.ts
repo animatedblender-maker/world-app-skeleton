@@ -36,6 +36,7 @@ type ConversationRow = {
     avatar_url: string | null;
     country_name: string | null;
     country_code: string | null;
+    last_read_at: string | null;
   }>;
   last_message: MessageRow | null;
 };
@@ -58,7 +59,8 @@ export class MessagesService {
                 'username', pr.username,
                 'avatar_url', pr.avatar_url,
                 'country_name', pr.country_name,
-                'country_code', pr.country_code
+                'country_code', pr.country_code,
+                'last_read_at', cm2.last_read_at
               )
             )
             from public.conversation_members cm2
@@ -359,7 +361,8 @@ export class MessagesService {
                 'username', pr.username,
                 'avatar_url', pr.avatar_url,
                 'country_name', pr.country_name,
-                'country_code', pr.country_code
+                'country_code', pr.country_code,
+                'last_read_at', cm2.last_read_at
               )
             )
             from public.conversation_members cm2

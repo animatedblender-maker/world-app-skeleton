@@ -97,47 +97,57 @@ import { VideoPlayerComponent } from '../components/video-player.component';
               <div class="status" *ngIf="loadingMessages">Loading messages...</div>
               <div class="status error" *ngIf="messageError">{{ messageError }}</div>
               <div class="message-list" *ngIf="!loadingMessages">
-                <div
-                  class="message"
-                  *ngFor="let message of messages"
-                  [class.me]="message.sender_id === meId"
-                >
-                  <div class="msg-avatar">
-                    <img
-                      *ngIf="senderAvatarUrl(message)"
-                      [src]="senderAvatarUrl(message)"
-                      alt="avatar"
-                    />
-                    <div class="initials" *ngIf="!senderAvatarUrl(message)">
-                      {{ initialsFor(senderInfo(message)) }}
-                    </div>
+                <ng-container *ngFor="let message of messages; let i = index">
+                  <div class="message-day" *ngIf="showDaySeparator(i)">
+                    {{ formatDayLabel(message.created_at) }}
                   </div>
-                  <div class="bubble">
-                    <div class="body" *ngIf="messageText(message) as text">{{ text }}</div>
-                    <div class="message-media" *ngIf="message.media_type && message.media_url">
+                  <div class="message" [class.me]="message.sender_id === meId">
+                    <div class="msg-avatar">
                       <img
-                        *ngIf="message.media_type === 'image'"
-                        [src]="message.media_url"
-                        alt="message media"
-                        (click)="openImageLightbox(message.media_url)"
+                        *ngIf="senderAvatarUrl(message)"
+                        [src]="senderAvatarUrl(message)"
+                        alt="avatar"
                       />
-                      <app-video-player
-                        *ngIf="message.media_type === 'video'"
-                        [src]="message.media_url"
-                      ></app-video-player>
-                      <a
-                        class="media-download"
-                        [href]="message.media_url"
-                        [attr.download]="message.media_name || 'message-media'"
-                        target="_blank"
-                        rel="noopener"
-                      >
-                        Download
-                      </a>
+                      <div class="initials" *ngIf="!senderAvatarUrl(message)">
+                        {{ initialsFor(senderInfo(message)) }}
+                      </div>
                     </div>
-                    <div class="message-time">{{ formatTimestamp(message.created_at) }}</div>
+                    <div class="bubble">
+                      <div class="body" *ngIf="messageText(message) as text">{{ text }}</div>
+                      <div class="message-media" *ngIf="message.media_type && message.media_url">
+                        <img
+                          *ngIf="message.media_type === 'image'"
+                          [src]="message.media_url"
+                          alt="message media"
+                          (click)="openImageLightbox(message.media_url)"
+                        />
+                        <app-video-player
+                          *ngIf="message.media_type === 'video'"
+                          [src]="message.media_url"
+                        ></app-video-player>
+                        <a
+                          class="media-download"
+                          [href]="message.media_url"
+                          [attr.download]="message.media_name || 'message-media'"
+                          target="_blank"
+                          rel="noopener"
+                        >
+                          Download
+                        </a>
+                      </div>
+                      <div class="message-meta">
+                        <span class="message-time">{{ formatTimestamp(message.created_at) }}</span>
+                        <span
+                          class="message-status"
+                          *ngIf="messageStatus(message) as status"
+                          [class.read]="status === 'read'"
+                        >
+                          {{ status === 'sent' ? '✓' : '✓✓' }}
+                        </span>
+                      </div>
+                    </div>
                   </div>
-                </div>
+                </ng-container>
               </div>
             </div>
 
@@ -426,7 +436,6 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       flex:1;
       display:flex;
       flex-direction:column;
-      min-height:200px;
       min-height:0;
       overflow:hidden;
     }
@@ -438,6 +447,17 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       gap:10px;
       overflow-y:auto;
       min-height:0;
+    }
+    .message-day{
+      align-self:center;
+      font-size:11px;
+      letter-spacing:0.12em;
+      text-transform:uppercase;
+      color:rgba(7,20,40,0.55);
+      background:rgba(7,20,40,0.06);
+      border:1px solid rgba(7,20,40,0.08);
+      border-radius:999px;
+      padding:6px 12px;
     }
     .message{
       display:flex;
@@ -522,8 +542,23 @@ import { VideoPlayerComponent } from '../components/video-player.component';
     .message-time{
       font-size:10px;
       opacity:0.6;
+    }
+    .message-meta{
+      display:flex;
+      align-items:center;
+      justify-content:flex-end;
+      gap:8px;
       margin-top:6px;
-      text-align:right;
+    }
+    .message-status{
+      font-size:11px;
+      letter-spacing:0.08em;
+      opacity:0.7;
+      color:rgba(7,20,40,0.6);
+    }
+    .message-status.read{
+      color:rgba(0,155,220,0.95);
+      opacity:1;
     }
     .composer{
       display:flex;
@@ -957,6 +992,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
 
     this.messageBusy = true;
     this.messageError = '';
+    this.messageMediaError = '';
     this.forceUi();
 
     try {
@@ -964,18 +1000,26 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
         | { type: string; path: string; name?: string | null; mime?: string | null; size?: number | null }
         | undefined;
       if (this.messageMediaFile) {
-        const uploaded = await this.mediaService.uploadMessageMedia(
-          this.messageMediaFile,
-          this.activeConversationId
-        );
-        const type = this.messageMediaFile.type.startsWith('video/') ? 'video' : 'image';
-        media = {
-          type,
-          path: uploaded.path,
-          name: uploaded.name,
-          mime: uploaded.mime,
-          size: uploaded.size,
-        };
+        try {
+          const uploaded = await this.mediaService.uploadMessageMedia(
+            this.messageMediaFile,
+            this.activeConversationId
+          );
+          const type = this.messageMediaFile.type.startsWith('video/') ? 'video' : 'image';
+          media = {
+            type,
+            path: uploaded.path,
+            name: uploaded.name,
+            mime: uploaded.mime,
+            size: uploaded.size,
+          };
+        } catch (uploadError: any) {
+          this.messageMediaError =
+            uploadError?.message ?? 'Upload failed. Check your bucket policy and file type.';
+          this.messageBusy = false;
+          this.forceUi();
+          return;
+        }
       }
       const sent = await this.messagesService.sendMessage(this.activeConversationId, body, media);
       this.messages = [...this.messages, sent];
@@ -1238,6 +1282,48 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     });
   }
 
+  formatDayLabel(value: string): string {
+    const parsed = this.parseTimestamp(String(value ?? '').trim());
+    if (Number.isNaN(parsed.getTime())) return '';
+    const now = new Date();
+    const sameYear = parsed.getFullYear() === now.getFullYear();
+    const sameDay =
+      parsed.getFullYear() === now.getFullYear() &&
+      parsed.getMonth() === now.getMonth() &&
+      parsed.getDate() === now.getDate();
+    if (sameDay) return 'Today';
+    const yesterday = new Date(now);
+    yesterday.setDate(now.getDate() - 1);
+    const isYesterday =
+      parsed.getFullYear() === yesterday.getFullYear() &&
+      parsed.getMonth() === yesterday.getMonth() &&
+      parsed.getDate() === yesterday.getDate();
+    if (isYesterday) return 'Yesterday';
+    return parsed.toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      ...(sameYear ? {} : { year: 'numeric' }),
+    });
+  }
+
+  showDaySeparator(index: number): boolean {
+    if (!this.messages.length || index < 0) return false;
+    if (index === 0) return true;
+    const current = this.dayKey(this.messages[index]?.created_at);
+    const previous = this.dayKey(this.messages[index - 1]?.created_at);
+    return current !== previous;
+  }
+
+  messageStatus(message: Message): 'sent' | 'delivered' | 'read' | null {
+    if (!this.meId || message.sender_id !== this.meId) return null;
+    const other = this.otherMember(this.activeConversation);
+    if (!other) return 'sent';
+    const lastRead = other.last_read_at ? this.parseTimestamp(other.last_read_at).getTime() : 0;
+    const created = this.parseTimestamp(message.created_at).getTime();
+    if (lastRead && created && lastRead >= created) return 'read';
+    return 'delivered';
+  }
+
   private parseTimestamp(value: string): Date {
     if (!value) return new Date('');
     if (/^\d{10,}$/.test(value)) {
@@ -1246,6 +1332,15 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       return new Date(ms);
     }
     return new Date(value);
+  }
+
+  private dayKey(value?: string | null): string {
+    const parsed = this.parseTimestamp(String(value ?? '').trim());
+    if (Number.isNaN(parsed.getTime())) return '';
+    const year = parsed.getFullYear();
+    const month = String(parsed.getMonth() + 1).padStart(2, '0');
+    const day = String(parsed.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
   }
 
   private enterThreadView(): void {

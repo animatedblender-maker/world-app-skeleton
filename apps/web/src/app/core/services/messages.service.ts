@@ -20,6 +20,7 @@ query Conversations($limit: Int) {
       avatar_url
       country_name
       country_code
+      last_read_at
     }
     last_message {
       id
@@ -60,6 +61,7 @@ query ConversationById($conversationId: ID!) {
       avatar_url
       country_name
       country_code
+      last_read_at
     }
     last_message {
       id
@@ -125,6 +127,7 @@ mutation StartConversation($targetId: ID!) {
       avatar_url
       country_name
       country_code
+      last_read_at
     }
     last_message {
       id

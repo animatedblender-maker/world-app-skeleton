@@ -7,6 +7,7 @@ export type PostAuthor = {
   avatar_url: string | null;
   country_name: string | null;
   country_code: string | null;
+  last_read_at?: string | null;
 };
 
 export type CountryPost = {

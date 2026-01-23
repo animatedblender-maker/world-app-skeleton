@@ -56,6 +56,7 @@ export const typeDefs = `#graphql
     avatar_url: String
     country_name: String
     country_code: String
+    last_read_at: String
   }
 
   type NotificationActor {
