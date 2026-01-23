@@ -116,6 +116,10 @@ type RouteState = {
       </div>
     </div>
 
+    <div class="globe-logo" aria-hidden="true">
+      <img src="/logo.png" alt="Matterya logo" />
+    </div>
+
     <!-- Ocean map ALWAYS full background -->
     <div id="globe" class="globe-bg" [class.bg-static]="!!selectedCountry"></div>
 
@@ -860,6 +864,28 @@ type RouteState = {
     :host:not(.search-open){
       --top-overlay-height: var(--top-overlay-height-closed);
       --stage-top-pad: var(--stage-top-pad-closed);
+    }
+
+    .globe-logo{
+      position: fixed;
+      top: var(--ui-edge-top);
+      left: var(--ui-edge-left);
+      z-index: 99999;
+      pointer-events: none;
+      width: 52px;
+      height: 52px;
+      padding: 6px;
+      border-radius: 14px;
+      background: rgba(6,14,26,0.55);
+      border: 1px solid rgba(255,255,255,0.2);
+      backdrop-filter: blur(8px);
+    }
+    .globe-logo img{
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      border-radius: 8px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.35);
     }
 
     /* =============== TOPBAR =============== */

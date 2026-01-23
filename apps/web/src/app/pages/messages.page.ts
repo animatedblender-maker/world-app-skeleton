@@ -147,28 +147,35 @@ import { VideoPlayerComponent } from '../components/video-player.component';
                 <input
                   #mediaInput
                   type="file"
-                  accept="image/*,video/*"
+                  accept="image/png,image/jpeg,image/webp,video/mp4,video/webm,video/quicktime"
                   hidden
                   (change)="onMediaSelected($event)"
                 />
-                <textarea
-                  #messageInput
-                  class="composer-input"
-                  name="message"
-                  [(ngModel)]="messageDraft"
-                  placeholder="Write a message..."
-                  maxlength="2000"
-                  rows="1"
-                  (input)="onMessageInput($event)"
-                ></textarea>
+                <div class="composer-field">
+                  <textarea
+                    #messageInput
+                    class="composer-input"
+                    name="message"
+                    [(ngModel)]="messageDraft"
+                    placeholder="Write a message..."
+                    maxlength="2000"
+                    rows="1"
+                    (input)="onMessageInput($event)"
+                  ></textarea>
+                  <div class="composer-preview" *ngIf="messageMediaPreview">
+                    <img *ngIf="messageMediaType === 'image'" [src]="messageMediaPreview" alt="preview" />
+                    <video
+                      *ngIf="messageMediaType === 'video'"
+                      [src]="messageMediaPreview"
+                      muted
+                      playsinline
+                    ></video>
+                    <button class="composer-clear" type="button" (click)="clearMedia()">Remove</button>
+                  </div>
+                </div>
                 <button class="composer-send" type="submit" [disabled]="messageBusy || !canSendMessage()">
                   {{ messageBusy ? 'Sending...' : 'Send' }}
                 </button>
-              </div>
-              <div class="composer-preview" *ngIf="messageMediaPreview">
-                <img *ngIf="messageMediaType === 'image'" [src]="messageMediaPreview" alt="preview" />
-                <video *ngIf="messageMediaType === 'video'" [src]="messageMediaPreview" muted></video>
-                <button class="composer-clear" type="button" (click)="clearMedia()">Remove</button>
               </div>
               <div class="status error" *ngIf="messageMediaError">{{ messageMediaError }}</div>
             </form>
@@ -194,10 +201,13 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       background:#050b14;
     }
     .wrap{
-      min-height:100vh;
+      min-height:100dvh;
       height:100dvh;
       position:relative;
       padding:28px 20px 36px;
+      box-sizing:border-box;
+      display:flex;
+      flex-direction:column;
     }
     .ocean-gradient{
       position:fixed;
@@ -237,7 +247,8 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       box-shadow:0 28px 60px rgba(8,26,52,0.12);
       backdrop-filter: blur(12px);
       color:#0c1422;
-      height:100%;
+      flex:1;
+      box-sizing:border-box;
       display:flex;
       flex-direction:column;
       min-height:0;
@@ -273,7 +284,8 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       border-radius:20px;
       padding:14px;
       border:1px solid rgba(7,20,40,0.08);
-      min-height:320px;
+      min-height:0;
+      overflow:auto;
     }
     .panel-title{
       font-weight:800;
@@ -374,7 +386,7 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       border-radius:20px;
       border:1px solid rgba(7,20,40,0.08);
       background:rgba(255,255,255,0.9);
-      min-height:320px;
+      min-height:0;
       overflow:hidden;
       min-height:0;
     }
@@ -524,17 +536,27 @@ import { VideoPlayerComponent } from '../components/video-player.component';
     .composer-row{
       display:flex;
       gap:10px;
-      align-items:center;
+      align-items:flex-end;
     }
-    .composer-input{
+    .composer-field{
       flex:1;
+      display:flex;
+      flex-direction:column;
+      gap:8px;
       border-radius:16px;
       border:1px solid rgba(7,20,40,0.14);
-      padding:10px 14px;
+      background:white;
+      padding:10px 12px;
+      min-height:56px;
+    }
+    .composer-input{
+      width:100%;
+      border:0;
+      padding:4px 0;
       font-size:14px;
       font-family:inherit;
-      background:white;
-      min-height:44px;
+      background:transparent;
+      min-height:32px;
       max-height:160px;
       line-height:1.45;
       resize:none;
@@ -572,14 +594,14 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       align-items:center;
       gap:12px;
       background:rgba(7,20,40,0.04);
-      border:1px dashed rgba(7,20,40,0.18);
-      border-radius:14px;
-      padding:10px;
+      border:1px solid rgba(7,20,40,0.12);
+      border-radius:12px;
+      padding:8px;
     }
     .composer-preview img,
     .composer-preview video{
-      width:140px;
-      height:90px;
+      width:120px;
+      height:80px;
       object-fit:cover;
       border-radius:10px;
       background:#000;
@@ -978,7 +1000,8 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     if (!input) return;
     input.style.height = 'auto';
     const maxHeight = 160;
-    const next = Math.min(input.scrollHeight, maxHeight);
+    const minHeight = 32;
+    const next = Math.min(Math.max(input.scrollHeight, minHeight), maxHeight);
     input.style.height = `${next}px`;
     input.style.overflowY = input.scrollHeight > maxHeight ? 'auto' : 'hidden';
   }
@@ -992,8 +1015,10 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     const file = input.files?.[0] ?? null;
     if (!file) return;
     const type = file.type || '';
-    if (!type.startsWith('image/') && !type.startsWith('video/')) {
-      this.messageMediaError = 'Only images and videos are supported.';
+    const allowedImage = ['image/png', 'image/jpeg', 'image/webp'];
+    const allowedVideo = ['video/mp4', 'video/webm', 'video/quicktime'];
+    if (!allowedImage.includes(type) && !allowedVideo.includes(type)) {
+      this.messageMediaError = 'Only PNG/JPG/WebP images or MP4/WebM/MOV videos are supported.';
       input.value = '';
       this.forceUi();
       return;
@@ -1029,14 +1054,31 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
 
   messageText(message: Message): string {
     const body = String(message?.body ?? '');
-    if (message?.id && body.trim() === message.id) return '';
+    const trimmed = body.trim();
+    if (!trimmed) return '';
+    if (message?.id && trimmed === message.id) return '';
+    if (this.looksLikeId(trimmed)) return '';
+    if (this.stripTrailingMeta(trimmed) !== trimmed) {
+      return this.stripTrailingMeta(trimmed);
+    }
     return body;
+  }
+
+  private stripTrailingMeta(value: string): string {
+    const parts = value.split(/\s+/).filter(Boolean);
+    if (parts.length < 2) return value;
+    const last = parts[parts.length - 1];
+    if (this.looksLikeId(last)) {
+      return parts.slice(0, -1).join(' ');
+    }
+    return value;
   }
 
   private resetMessageInput(): void {
     const input = this.messageInput?.nativeElement;
     if (!input) return;
-    input.style.height = 'auto';
+    const minHeight = 32;
+    input.style.height = `${minHeight}px`;
     input.style.overflowY = 'hidden';
   }
 
@@ -1044,7 +1086,9 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     const last = convo.last_message;
     if (!last) return 'Start a conversation';
     const body = String(last.body || '').trim();
-    if (body) return body;
+    if (body && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body)) {
+      return body;
+    }
     if (last.media_type === 'video') return 'Video';
     if (last.media_type === 'image') return 'Photo';
     return 'Media message';
@@ -1156,7 +1200,13 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   }
 
   private looksLikeId(value: string): boolean {
-    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) {
+      return true;
+    }
+    if (/^\d{8,}$/.test(value)) {
+      return true;
+    }
+    return false;
   }
 
   initialsFor(user: PostAuthor | null | undefined): string {
@@ -1169,7 +1219,8 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
 
   formatTime(value?: string | null): string {
     if (!value) return '';
-    const parsed = new Date(value);
+    const raw = String(value).trim();
+    const parsed = this.parseTimestamp(raw);
     if (Number.isNaN(parsed.getTime())) return '';
     return parsed.toLocaleTimeString(undefined, {
       hour: '2-digit',
@@ -1178,12 +1229,23 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   }
 
   formatTimestamp(value: string): string {
-    const parsed = new Date(value);
-    if (Number.isNaN(parsed.getTime())) return value;
+    const raw = String(value ?? '').trim();
+    const parsed = this.parseTimestamp(raw);
+    if (Number.isNaN(parsed.getTime())) return '';
     return parsed.toLocaleTimeString(undefined, {
       hour: '2-digit',
       minute: '2-digit',
     });
+  }
+
+  private parseTimestamp(value: string): Date {
+    if (!value) return new Date('');
+    if (/^\d{10,}$/.test(value)) {
+      const numeric = Number(value);
+      const ms = value.length === 10 ? numeric * 1000 : numeric;
+      return new Date(ms);
+    }
+    return new Date(value);
   }
 
   private enterThreadView(): void {
