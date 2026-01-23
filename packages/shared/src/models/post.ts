@@ -15,9 +15,12 @@ export type CountryPost = {
   body: string;
   media_type: string | null;
   media_url: string | null;
+  thumb_url?: string | null;
+  media_caption?: string | null;
   visibility: PostVisibility;
   like_count: number;
   comment_count: number;
+  view_count: number;
   liked_by_me: boolean;
   created_at: string;
   updated_at: string;

@@ -3,6 +3,7 @@ import { BehaviorSubject } from 'rxjs';
 import { GqlService } from './gql.service';
 import { Conversation, Message } from '../models/messages.model';
 import { PostAuthor } from '../models/post.model';
+import { supabase } from '../../supabase/supabase.client';
 
 const CONVERSATIONS_QUERY = `
 query Conversations($limit: Int) {
@@ -25,6 +26,11 @@ query Conversations($limit: Int) {
       conversation_id
       sender_id
       body
+      media_type
+      media_path
+      media_name
+      media_mime
+      media_size
       created_at
       sender {
         user_id
@@ -60,6 +66,11 @@ query ConversationById($conversationId: ID!) {
       conversation_id
       sender_id
       body
+      media_type
+      media_path
+      media_name
+      media_mime
+      media_size
       created_at
       sender {
         user_id
@@ -81,6 +92,11 @@ query MessagesByConversation($conversationId: ID!, $limit: Int, $before: String)
     conversation_id
     sender_id
     body
+    media_type
+    media_path
+    media_name
+    media_mime
+    media_size
     created_at
     sender {
       user_id
@@ -130,12 +146,25 @@ mutation StartConversation($targetId: ID!) {
 `;
 
 const SEND_MESSAGE_MUTATION = `
-mutation SendMessage($conversationId: ID!, $body: String!) {
-  sendMessage(conversation_id: $conversationId, body: $body) {
+mutation SendMessage($conversationId: ID!, $body: String, $mediaType: String, $mediaPath: String, $mediaName: String, $mediaMime: String, $mediaSize: Int) {
+  sendMessage(
+    conversation_id: $conversationId,
+    body: $body,
+    media_type: $mediaType,
+    media_path: $mediaPath,
+    media_name: $mediaName,
+    media_mime: $mediaMime,
+    media_size: $mediaSize
+  ) {
     id
     conversation_id
     sender_id
     body
+    media_type
+    media_path
+    media_name
+    media_mime
+    media_size
     created_at
     sender {
       user_id
@@ -155,6 +184,7 @@ export class MessagesService {
   private pendingConversation: Conversation | null = null;
   private pendingConversationSubject = new BehaviorSubject<Conversation | null>(null);
   readonly pendingConversation$ = this.pendingConversationSubject.asObservable();
+  private mediaCache = new Map<string, { url: string; expiresAt: number }>();
 
   constructor(private gql: GqlService) {
     const stored = this.readPendingStorage();
@@ -185,7 +215,8 @@ export class MessagesService {
       CONVERSATIONS_QUERY,
       { limit }
     );
-    return (conversations ?? []).map((row) => this.mapConversation(row));
+    const mapped = (conversations ?? []).map((row) => this.mapConversation(row));
+    return await Promise.all(mapped.map((convo) => this.hydrateConversation(convo)));
   }
 
   async getConversationById(conversationId: string): Promise<Conversation | null> {
@@ -193,7 +224,8 @@ export class MessagesService {
       CONVERSATION_BY_ID_QUERY,
       { conversationId }
     );
-    return conversationById ? this.mapConversation(conversationById) : null;
+    if (!conversationById) return null;
+    return await this.hydrateConversation(this.mapConversation(conversationById));
   }
 
   async listMessages(conversationId: string, limit = 40, before?: string | null): Promise<Message[]> {
@@ -201,7 +233,8 @@ export class MessagesService {
       MESSAGES_QUERY,
       { conversationId, limit, before: before ?? null }
     );
-    return (messagesByConversation ?? []).map((row) => this.mapMessage(row));
+    const mapped = (messagesByConversation ?? []).map((row) => this.mapMessage(row));
+    return await Promise.all(mapped.map((message) => this.hydrateMessageMedia(message)));
   }
 
   async startConversation(targetId: string): Promise<Conversation> {
@@ -212,12 +245,32 @@ export class MessagesService {
     return this.mapConversation(startConversation);
   }
 
-  async sendMessage(conversationId: string, body: string): Promise<Message> {
+  async sendMessage(
+    conversationId: string,
+    body: string,
+    media?: {
+      type: string;
+      path: string;
+      name?: string | null;
+      mime?: string | null;
+      size?: number | null;
+    }
+  ): Promise<Message> {
+    const trimmed = String(body ?? '').trim();
+    const payload = {
+      conversationId,
+      body: trimmed || null,
+      mediaType: media?.type ?? null,
+      mediaPath: media?.path ?? null,
+      mediaName: media?.name ?? null,
+      mediaMime: media?.mime ?? null,
+      mediaSize: media?.size ?? null,
+    };
     const { sendMessage } = await this.gql.request<{ sendMessage: any }>(
       SEND_MESSAGE_MUTATION,
-      { conversationId, body: body.trim() }
+      payload
     );
-    return this.mapMessage(sendMessage);
+    return await this.hydrateMessageMedia(this.mapMessage(sendMessage));
   }
 
   private mapAuthor(row: any): PostAuthor | null {
@@ -238,6 +291,11 @@ export class MessagesService {
       conversation_id: row.conversation_id,
       sender_id: row.sender_id,
       body: row.body ?? '',
+      media_type: row.media_type ?? null,
+      media_path: row.media_path ?? null,
+      media_name: row.media_name ?? null,
+      media_mime: row.media_mime ?? null,
+      media_size: row.media_size ?? null,
       created_at: row.created_at,
       sender: row.sender ? this.mapAuthor(row.sender) : null,
     };
@@ -253,6 +311,28 @@ export class MessagesService {
       members: Array.isArray(row.members) ? row.members.map((m: any) => this.mapAuthor(m) as PostAuthor) : [],
       last_message: row.last_message ? this.mapMessage(row.last_message) : null,
     };
+  }
+
+  private async hydrateConversation(convo: Conversation): Promise<Conversation> {
+    if (!convo.last_message) return convo;
+    const last_message = await this.hydrateMessageMedia(convo.last_message);
+    return { ...convo, last_message };
+  }
+
+  private async hydrateMessageMedia(message: Message): Promise<Message> {
+    if (!message.media_path) return message;
+    const url = await this.getSignedUrl(message.media_path);
+    return { ...message, media_url: url };
+  }
+
+  private async getSignedUrl(path: string): Promise<string | null> {
+    if (!path) return null;
+    const cached = this.mediaCache.get(path);
+    if (cached && cached.expiresAt > Date.now()) return cached.url;
+    const { data, error } = await supabase.storage.from('messages').createSignedUrl(path, 60 * 60);
+    if (error || !data?.signedUrl) return null;
+    this.mediaCache.set(path, { url: data.signedUrl, expiresAt: Date.now() + 55 * 60_000 });
+    return data.signedUrl;
   }
 
   private readPendingStorage(): Conversation | null {

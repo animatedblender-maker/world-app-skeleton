@@ -13,6 +13,7 @@ import { Subscription } from 'rxjs';
 import { ProfileService, type Profile } from '../core/services/profile.service';
 import { AuthService } from '../core/services/auth.service';
 import { MediaService } from '../core/services/media.service';
+import { VideoPlayerComponent } from '../components/video-player.component';
 import { PostsService } from '../core/services/posts.service';
 import { PresenceService } from '../core/services/presence.service';
 import {
@@ -28,7 +29,7 @@ import { MessagesService } from '../core/services/messages.service';
 @Component({
   selector: 'app-profile-page',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, VideoPlayerComponent],
   template: `
     <div class="wrap">
       <div class="ocean-gradient" aria-hidden="true"></div>
@@ -348,7 +349,11 @@ import { MessagesService } from '../core/services/messages.service';
             No posts yet.
           </div>
           <div class="post-list" *ngIf="!loadingProfilePosts && profilePosts.length">
-            <article class="post-card" *ngFor="let post of profilePosts">
+            <article
+              class="post-card"
+              [class.media]="!!post.media_url && post.media_type !== 'none'"
+              *ngFor="let post of profilePosts; trackBy: trackProfilePostById"
+            >
               <div class="post-author">
                 <div class="author-core">
                   <div class="author-avatar">
@@ -423,11 +428,34 @@ import { MessagesService } from '../core/services/messages.service';
               </div>
               <div class="post-body" *ngIf="editingPostId !== post.id">
                 <div class="post-title" *ngIf="post.title">{{ post.title }}</div>
-                <p>{{ post.body }}</p>
+                <p class="post-text" [class.clamped]="!isPostExpanded(post.id) && isPostExpandable(post)">{{ post.body }}</p>
               </div>
+              <div class="post-caption post-text" [class.clamped]="!isPostExpanded(post.id) && isPostExpandable(post)" *ngIf="editingPostId !== post.id && post.media_caption">
+                {{ post.media_caption }}
+              </div>
+              <button
+                class="see-more"
+                type="button"
+                *ngIf="editingPostId !== post.id && isPostExpandable(post)"
+                (click)="togglePostExpanded(post.id)"
+              >
+                {{ isPostExpanded(post.id) ? 'See less' : 'See more' }}
+              </button>
               <div class="post-media" *ngIf="editingPostId !== post.id && post.media_url && post.media_type !== 'none'">
-                <img *ngIf="post.media_type === 'image'" [src]="post.media_url" alt="post media" />
-                <video *ngIf="post.media_type === 'video'" [src]="post.media_url" controls></video>
+                <img
+                  *ngIf="post.media_type === 'image'"
+                  class="zoomable"
+                  [src]="post.media_url"
+                  alt="post media"
+                  (click)="openImageLightbox(post.media_url)"
+                />
+                <app-video-player
+                  *ngIf="post.media_type === 'video'"
+                  [src]="post.media_url"
+                  tapBehavior="emit"
+                  (viewed)="recordView(post)"
+                  (videoTap)="openReels(post)"
+                  ></app-video-player>
               </div>
               <div class="post-actions" *ngIf="editingPostId !== post.id">
                 <div class="post-action-group">
@@ -458,6 +486,10 @@ import { MessagesService } from '../core/services/messages.service';
                   <span class="icon">{{ '\u{1F4AC}' }}</span>
                   <span class="count">{{ post.comment_count }}</span>
                 </button>
+                <div class="post-action view" aria-label="Views">
+                  <span class="icon">{{ '\u{1F441}' }}</span>
+                  <span class="count">{{ post.view_count }}</span>
+                </div>
               </div>
               <div class="post-action-error" *ngIf="postActionError[post.id]">
                 {{ postActionError[post.id] }}
@@ -658,6 +690,26 @@ import { MessagesService } from '../core/services/messages.service';
           <span class="ring"></span>
         </div>
         <button class="ghost-link" type="button" (click)="closeAvatarModal()">Close</button>
+      </div>
+    </div>
+
+    <div
+      class="lightbox"
+      *ngIf="lightboxUrl"
+      (click)="closeImageLightbox()"
+      role="dialog"
+      aria-modal="true"
+    >
+      <button
+        class="lightbox-close"
+        type="button"
+        (click)="closeImageLightbox(); $event.stopPropagation()"
+        aria-label="Close"
+      >
+        ×
+      </button>
+      <div class="lightbox-frame" (click)="$event.stopPropagation()">
+        <img [src]="lightboxUrl" alt="Expanded media" />
       </div>
     </div>
   `,
@@ -1267,6 +1319,7 @@ import { MessagesService } from '../core/services/messages.service';
       border: 1px solid rgba(0,0,0,0.08);
       box-shadow: 0 30px 90px rgba(0,0,0,0.25);
       color: rgba(6,8,14,0.92);
+      box-sizing: border-box;
     }
     .composer-posts .sec-title{
       font-size: 14px;
@@ -1290,6 +1343,7 @@ import { MessagesService } from '../core/services/messages.service';
       flex-direction:column;
       gap:16px;
       width: 100%;
+      box-sizing: border-box;
     }
     .post-card{
       position:relative;
@@ -1298,6 +1352,7 @@ import { MessagesService } from '../core/services/messages.service';
       background:rgba(255,255,255,0.98);
       padding:18px;
       box-shadow:0 18px 60px rgba(0,0,0,0.15);
+      box-sizing: border-box;
     }
     .post-author{
       margin-bottom:10px;
@@ -1358,6 +1413,12 @@ import { MessagesService } from '../core/services/messages.service';
       line-height:1.7;
       opacity:0.85;
       white-space:pre-line;
+    }
+    .post-caption{
+      margin-top:10px;
+      font-size:13px;
+      line-height:1.45;
+      opacity:0.75;
     }
     .post-media{
       margin-top:12px;
@@ -1421,6 +1482,11 @@ import { MessagesService } from '../core/services/messages.service';
       justify-content:center;
     }
     .post-action:disabled{ opacity:0.6; cursor:not-allowed; }
+    .post-action.view{
+      cursor:default;
+      border-color:rgba(0,0,0,0.12);
+      background:rgba(255,255,255,0.9);
+    }
     .post-action-error{
       margin-top:6px;
       font-size:11px;
@@ -1776,6 +1842,10 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
   editPostVisibility: 'public' | 'followers' | 'private' = 'public';
   postEditBusy = false;
   postEditError = '';
+  lightboxUrl: string | null = null;
+  private readonly POST_TEXT_LIMIT = 220;
+  private expandedPosts = new Set<string>();
+  private viewedPostIds = new Set<string>();
   openPostMenuId: string | null = null;
   confirmDeletePostId: string | null = null;
   likeBusy: Record<string, boolean> = {};
@@ -2190,6 +2260,40 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     const slug = user.username?.trim() || user.user_id;
     if (!slug) return;
     void this.router.navigate(['/user', slug]);
+  }
+
+  openReels(post: CountryPost): void {
+    if (!post) return;
+    const code =
+      post.country_code?.toUpperCase() ||
+      post.author?.country_code?.toUpperCase() ||
+      this.profile?.country_code?.toUpperCase();
+    if (!code) return;
+    const seedPosts = this.buildReelSeedPosts(post);
+    void this.router.navigate(['/reels', code], {
+      queryParams: { postId: post.id },
+      state: {
+        seedPosts,
+        seedCountry: code,
+        countryName: this.profile?.country_name || post.country_name || null,
+      },
+    });
+  }
+
+  private buildReelSeedPosts(post: CountryPost): CountryPost[] {
+    const videos = (this.profilePosts || []).filter(
+      (item) => item.media_type === 'video' && !!item.media_url
+    );
+    const combined = [post, ...videos];
+    const seen = new Set<string>();
+    const deduped: CountryPost[] = [];
+    for (const item of combined) {
+      if (!item?.id || seen.has(item.id)) continue;
+      seen.add(item.id);
+      deduped.push(item);
+      if (deduped.length >= 50) break;
+    }
+    return deduped;
   }
 
   onProfileMediaSelect(event: Event): void {
@@ -2827,6 +2931,13 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     }
   }
 
+  recordView(post: CountryPost): void {
+    if (!post?.id || this.viewedPostIds.has(post.id)) return;
+    this.viewedPostIds.add(post.id);
+    void this.posts.recordView(post);
+    this.forceUi();
+  }
+
   async togglePostLike(post: CountryPost): Promise<void> {
     if (!this.meId || !post?.id) {
       this.postActionError[post.id] = 'Sign in to like posts.';
@@ -3108,6 +3219,10 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     }
   }
 
+  trackProfilePostById(index: number, post: CountryPost): string {
+    return post?.id ?? String(index);
+  }
+
   private sortPostsDesc(posts: CountryPost[]): CountryPost[] {
     return [...posts].sort((a, b) => {
       return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
@@ -3154,8 +3269,44 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     return new File([blob], `avatar.${outExt}`, { type: outType });
   }
 
+  openImageLightbox(url: string | null): void {
+    const next = String(url || '').trim();
+    if (!next) return;
+    this.lightboxUrl = next;
+    this.forceUi();
+  }
+
+  closeImageLightbox(): void {
+    if (!this.lightboxUrl) return;
+    this.lightboxUrl = null;
+    this.forceUi();
+  }
+
   private forceUi(): void {
     this.zone.run(() => this.cdr.detectChanges());
+  }
+
+  isPostExpanded(postId: string): boolean {
+    return this.expandedPosts.has(postId);
+  }
+
+  isPostExpandable(post: CountryPost): boolean {
+    if (!post) return false;
+    const text = [post.title, post.body, post.media_caption]
+      .filter((value) => !!value)
+      .join(' ')
+      .trim();
+    return text.length > this.POST_TEXT_LIMIT;
+  }
+
+  togglePostExpanded(postId: string): void {
+    if (!postId) return;
+    if (this.expandedPosts.has(postId)) {
+      this.expandedPosts.delete(postId);
+    } else {
+      this.expandedPosts.add(postId);
+    }
+    this.forceUi();
   }
 }
 

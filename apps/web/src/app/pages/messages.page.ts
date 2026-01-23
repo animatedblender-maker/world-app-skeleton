@@ -1,4 +1,4 @@
-import { ChangeDetectorRef, Component, NgZone, OnDestroy, OnInit } from '@angular/core';
+import { ChangeDetectorRef, Component, ElementRef, NgZone, OnDestroy, OnInit, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
@@ -6,14 +6,16 @@ import { Subscription } from 'rxjs';
 
 import { AuthService } from '../core/services/auth.service';
 import { MessagesService } from '../core/services/messages.service';
+import { MediaService } from '../core/services/media.service';
 import { NotificationsService, type NotificationItem } from '../core/services/notifications.service';
 import { Conversation, Message } from '../core/models/messages.model';
 import { PostAuthor } from '../core/models/post.model';
+import { VideoPlayerComponent } from '../components/video-player.component';
 
 @Component({
   selector: 'app-messages-page',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, VideoPlayerComponent],
   template: `
     <div class="wrap">
       <div class="ocean-gradient" aria-hidden="true"></div>
@@ -49,9 +51,7 @@ import { PostAuthor } from '../core/models/post.model';
               </div>
               <div class="meta">
                 <div class="name">{{ displayNameFor(otherMember(convo)) }}</div>
-                <div class="snippet">
-                  {{ convo.last_message?.body || 'Start a conversation' }}
-                </div>
+                <div class="snippet">{{ conversationSnippet(convo) }}</div>
               </div>
               <div class="time">{{ formatTime(convo.last_message_at || convo.updated_at) }}</div>
               <span class="conversation-unread" *ngIf="isConversationUnread(convo)"></span>
@@ -113,7 +113,28 @@ import { PostAuthor } from '../core/models/post.model';
                     </div>
                   </div>
                   <div class="bubble">
-                    <div class="body">{{ message.body }}</div>
+                    <div class="body" *ngIf="message.body">{{ message.body }}</div>
+                    <div class="message-media" *ngIf="message.media_type && message.media_url">
+                      <img
+                        *ngIf="message.media_type === 'image'"
+                        [src]="message.media_url"
+                        alt="message media"
+                        (click)="openImageLightbox(message.media_url)"
+                      />
+                      <app-video-player
+                        *ngIf="message.media_type === 'video'"
+                        [src]="message.media_url"
+                      ></app-video-player>
+                      <a
+                        class="media-download"
+                        [href]="message.media_url"
+                        [attr.download]="message.media_name || 'message-media'"
+                        target="_blank"
+                        rel="noopener"
+                      >
+                        Download
+                      </a>
+                    </div>
                     <div class="message-time">{{ formatTimestamp(message.created_at) }}</div>
                   </div>
                 </div>
@@ -121,20 +142,43 @@ import { PostAuthor } from '../core/models/post.model';
             </div>
 
             <form class="composer" *ngIf="activeConversation" (ngSubmit)="sendMessage()">
-              <input
-                class="composer-input"
-                name="message"
-                [(ngModel)]="messageDraft"
-                placeholder="Write a message..."
-                maxlength="2000"
-                autocomplete="off"
-              />
-              <button class="composer-send" type="submit" [disabled]="messageBusy || !messageDraft.trim()">
-                {{ messageBusy ? 'Sending...' : 'Send' }}
-              </button>
+              <div class="composer-row">
+                <button class="composer-attach" type="button" (click)="triggerMediaPicker()">+</button>
+                <input
+                  #mediaInput
+                  type="file"
+                  accept="image/*,video/*"
+                  hidden
+                  (change)="onMediaSelected($event)"
+                />
+                <input
+                  class="composer-input"
+                  name="message"
+                  [(ngModel)]="messageDraft"
+                  placeholder="Write a message..."
+                  maxlength="2000"
+                  autocomplete="off"
+                />
+                <button class="composer-send" type="submit" [disabled]="messageBusy || !canSendMessage()">
+                  {{ messageBusy ? 'Sending...' : 'Send' }}
+                </button>
+              </div>
+              <div class="composer-preview" *ngIf="messageMediaPreview">
+                <img *ngIf="messageMediaType === 'image'" [src]="messageMediaPreview" alt="preview" />
+                <video *ngIf="messageMediaType === 'video'" [src]="messageMediaPreview" muted></video>
+                <button class="composer-clear" type="button" (click)="clearMedia()">Remove</button>
+              </div>
+              <div class="status error" *ngIf="messageMediaError">{{ messageMediaError }}</div>
             </form>
           </section>
         </div>
+      </div>
+    </div>
+
+    <div class="lightbox" *ngIf="lightboxUrl" (click)="closeImageLightbox()">
+      <div class="lightbox-card" (click)="$event.stopPropagation()">
+        <button class="lightbox-close" type="button" (click)="closeImageLightbox()">x</button>
+        <img [src]="lightboxUrl" alt="Preview" />
       </div>
     </div>
   `,
@@ -422,6 +466,34 @@ import { PostAuthor } from '../core/models/post.model';
       white-space:pre-wrap;
       word-break:break-word;
     }
+    .message-media{
+      margin-top:8px;
+      display:flex;
+      flex-direction:column;
+      gap:8px;
+    }
+    .message-media img,
+    .message-media app-video-player{
+      width:100%;
+      max-height:280px;
+      border-radius:14px;
+      overflow:hidden;
+      border:1px solid rgba(7,20,40,0.12);
+      background:#000;
+    }
+    .message-media img{
+      display:block;
+      object-fit:cover;
+      cursor:pointer;
+    }
+    .media-download{
+      font-size:11px;
+      letter-spacing:0.08em;
+      text-transform:uppercase;
+      font-weight:700;
+      color:rgba(7,20,40,0.65);
+      text-decoration:none;
+    }
     .message-time{
       font-size:10px;
       opacity:0.6;
@@ -430,10 +502,16 @@ import { PostAuthor } from '../core/models/post.model';
     }
     .composer{
       display:flex;
+      flex-direction:column;
       gap:10px;
       padding:12px 14px;
       border-top:1px solid rgba(7,20,40,0.08);
       background:rgba(255,255,255,0.95);
+    }
+    .composer-row{
+      display:flex;
+      gap:10px;
+      align-items:center;
     }
     .composer-input{
       flex:1;
@@ -443,6 +521,18 @@ import { PostAuthor } from '../core/models/post.model';
       font-size:14px;
       font-family:inherit;
       background:white;
+    }
+    .composer-attach{
+      width:38px;
+      height:38px;
+      border-radius:50%;
+      border:1px solid rgba(7,20,40,0.15);
+      background:white;
+      font-weight:900;
+      font-size:18px;
+      line-height:1;
+      cursor:pointer;
+      color:rgba(7,20,40,0.7);
     }
     .composer-send{
       border:0;
@@ -458,6 +548,71 @@ import { PostAuthor } from '../core/models/post.model';
       opacity:0.6;
       cursor:not-allowed;
       box-shadow:none;
+    }
+    .composer-preview{
+      display:flex;
+      align-items:center;
+      gap:12px;
+      background:rgba(7,20,40,0.04);
+      border:1px dashed rgba(7,20,40,0.18);
+      border-radius:14px;
+      padding:10px;
+    }
+    .composer-preview img,
+    .composer-preview video{
+      width:140px;
+      height:90px;
+      object-fit:cover;
+      border-radius:10px;
+      background:#000;
+      border:1px solid rgba(7,20,40,0.1);
+    }
+    .composer-clear{
+      border:0;
+      background:none;
+      color:rgba(7,20,40,0.6);
+      font-weight:700;
+      letter-spacing:0.12em;
+      text-transform:uppercase;
+      font-size:10px;
+      cursor:pointer;
+    }
+    .lightbox{
+      position:fixed;
+      inset:0;
+      background:rgba(5,10,18,0.7);
+      backdrop-filter:blur(6px);
+      display:grid;
+      place-items:center;
+      z-index:100;
+    }
+    .lightbox-card{
+      position:relative;
+      max-width:min(92vw, 780px);
+      max-height:80vh;
+      background:rgba(255,255,255,0.95);
+      border-radius:18px;
+      padding:12px;
+      box-shadow:0 20px 50px rgba(0,0,0,0.25);
+    }
+    .lightbox-card img{
+      width:100%;
+      height:auto;
+      max-height:70vh;
+      display:block;
+      border-radius:12px;
+    }
+    .lightbox-close{
+      position:absolute;
+      top:8px;
+      right:8px;
+      width:30px;
+      height:30px;
+      border-radius:50%;
+      border:1px solid rgba(7,20,40,0.2);
+      background:white;
+      cursor:pointer;
+      font-weight:800;
     }
     @media (max-width: 900px){
       .layout{
@@ -489,17 +644,24 @@ import { PostAuthor } from '../core/models/post.model';
       .bubble{
         max-width:86%;
       }
-      .composer{
-        flex-direction:column;
-      }
       .composer-send{
         width:100%;
+      }
+      .composer-row{
+        flex-direction:column;
+        align-items:stretch;
+      }
+      .composer-attach{
+        width:100%;
+        border-radius:14px;
+        height:42px;
       }
     }
     `
   ],
 })
 export class MessagesPageComponent implements OnInit, OnDestroy {
+  @ViewChild('mediaInput') mediaInput?: ElementRef<HTMLInputElement>;
   conversations: Conversation[] = [];
   messages: Message[] = [];
   activeConversation: Conversation | null = null;
@@ -510,6 +672,11 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   messageError = '';
   messageDraft = '';
   messageBusy = false;
+  messageMediaFile: File | null = null;
+  messageMediaPreview = '';
+  messageMediaType: 'image' | 'video' | null = null;
+  messageMediaError = '';
+  lightboxUrl: string | null = null;
   meId: string | null = null;
   private pendingConversation: Conversation | null = null;
   private routeSub?: Subscription;
@@ -524,6 +691,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     private router: Router,
     private auth: AuthService,
     private messagesService: MessagesService,
+    private mediaService: MediaService,
     private notificationsService: NotificationsService,
     private zone: NgZone,
     private cdr: ChangeDetectorRef
@@ -584,6 +752,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       window.clearInterval(this.pollTimer);
       this.pollTimer = null;
     }
+    this.clearMedia();
   }
 
   async loadConversations(selectId?: string | null): Promise<void> {
@@ -743,16 +912,34 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   async sendMessage(): Promise<void> {
     if (!this.activeConversationId || this.messageBusy) return;
     const body = this.messageDraft.trim();
-    if (!body) return;
+    if (!body && !this.messageMediaFile) return;
 
     this.messageBusy = true;
     this.messageError = '';
     this.forceUi();
 
     try {
-      const sent = await this.messagesService.sendMessage(this.activeConversationId, body);
+      let media:
+        | { type: string; path: string; name?: string | null; mime?: string | null; size?: number | null }
+        | undefined;
+      if (this.messageMediaFile) {
+        const uploaded = await this.mediaService.uploadMessageMedia(
+          this.messageMediaFile,
+          this.activeConversationId
+        );
+        const type = this.messageMediaFile.type.startsWith('video/') ? 'video' : 'image';
+        media = {
+          type,
+          path: uploaded.path,
+          name: uploaded.name,
+          mime: uploaded.mime,
+          size: uploaded.size,
+        };
+      }
+      const sent = await this.messagesService.sendMessage(this.activeConversationId, body, media);
       this.messages = [...this.messages, sent];
       this.messageDraft = '';
+      this.clearMedia();
       this.bumpConversation(sent);
     } catch (e: any) {
       this.messageError = e?.message ?? String(e);
@@ -760,6 +947,64 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       this.messageBusy = false;
       this.forceUi();
     }
+  }
+
+  canSendMessage(): boolean {
+    return !!(this.messageDraft.trim() || this.messageMediaFile);
+  }
+
+  triggerMediaPicker(): void {
+    this.mediaInput?.nativeElement.click();
+  }
+
+  onMediaSelected(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0] ?? null;
+    if (!file) return;
+    const type = file.type || '';
+    if (!type.startsWith('image/') && !type.startsWith('video/')) {
+      this.messageMediaError = 'Only images and videos are supported.';
+      input.value = '';
+      this.forceUi();
+      return;
+    }
+    this.clearMedia();
+    this.messageMediaFile = file;
+    this.messageMediaType = type.startsWith('video/') ? 'video' : 'image';
+    this.messageMediaPreview = URL.createObjectURL(file);
+    this.messageMediaError = '';
+    input.value = '';
+    this.forceUi();
+  }
+
+  clearMedia(): void {
+    if (this.messageMediaPreview) {
+      try { URL.revokeObjectURL(this.messageMediaPreview); } catch {}
+    }
+    this.messageMediaFile = null;
+    this.messageMediaType = null;
+    this.messageMediaPreview = '';
+    this.messageMediaError = '';
+  }
+
+  openImageLightbox(url: string): void {
+    this.lightboxUrl = url;
+    this.forceUi();
+  }
+
+  closeImageLightbox(): void {
+    this.lightboxUrl = null;
+    this.forceUi();
+  }
+
+  conversationSnippet(convo: Conversation): string {
+    const last = convo.last_message;
+    if (!last) return 'Start a conversation';
+    const body = String(last.body || '').trim();
+    if (body) return body;
+    if (last.media_type === 'video') return 'Video';
+    if (last.media_type === 'image') return 'Photo';
+    return 'Media message';
   }
 
   private bumpConversation(sent: Message): void {

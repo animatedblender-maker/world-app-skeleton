@@ -11,6 +11,7 @@ import { SearchService } from '../search/search.service';
 import { AuthService } from '../core/services/auth.service';
 import { GraphqlService } from '../core/services/graphql.service';
 import { MediaService } from '../core/services/media.service';
+import { VideoPlayerComponent } from '../components/video-player.component';
 import { ProfileService, type Profile } from '../core/services/profile.service';
 import { LocationService } from '../core/services/location.service';
 import { PresenceService, type PresenceSnapshot } from '../core/services/presence.service';
@@ -38,7 +39,7 @@ type RouteState = {
 @Component({
   selector: 'app-globe-page',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, VideoPlayerComponent],
   template: `
     <div
       class="top-overlay"
@@ -288,7 +289,7 @@ type RouteState = {
               <div *ngSwitchCase="'following'" class="posts-pane">
                 <div class="posts-state hint">Posts from people you follow (not tied to a country).</div>
                 <ng-container
-                  *ngTemplateOutlet="postListTpl; context: { posts: followingPosts, loading: followingLoading, error: followingError, empty: 'No followed posts yet.' }"
+                  *ngTemplateOutlet="postListTpl; context: { posts: visibleFollowingPosts, loading: followingLoading, error: followingError, empty: 'No followed posts yet.' }"
                 ></ng-container>
               </div>
 
@@ -300,9 +301,10 @@ type RouteState = {
                   <div class="posts-empty" *ngIf="!posts.length">{{ empty }}</div>
                   <div
                     class="post-card"
+                    [class.media]="!!post.media_url && post.media_type !== 'none'"
                     [class.post-highlight]="highlightedPostId === post.id"
                     [attr.id]="'post-' + post.id"
-                    *ngFor="let post of posts"
+                    *ngFor="let post of posts; trackBy: trackPostById"
                   >
                     <div class="post-author">
                       <div
@@ -393,13 +395,36 @@ type RouteState = {
                         </div>
                       </div>
                     </div>
-                    <div class="post-body" *ngIf="editingPostId !== post.id">
-                      <div class="post-title" *ngIf="post.title">{{ post.title }}</div>
-                      <p>{{ post.body }}</p>
-                    </div>
+              <div class="post-body" *ngIf="editingPostId !== post.id">
+                <div class="post-title" *ngIf="post.title">{{ post.title }}</div>
+                <p class="post-text" [class.clamped]="!isPostExpanded(post.id) && isPostExpandable(post)">{{ post.body }}</p>
+              </div>
+              <div class="post-caption post-text" [class.clamped]="!isPostExpanded(post.id) && isPostExpandable(post)" *ngIf="editingPostId !== post.id && post.media_caption">
+                {{ post.media_caption }}
+              </div>
+              <button
+                class="see-more"
+                type="button"
+                *ngIf="editingPostId !== post.id && isPostExpandable(post)"
+                (click)="togglePostExpanded(post.id)"
+              >
+                {{ isPostExpanded(post.id) ? 'See less' : 'See more' }}
+              </button>
                     <div class="post-media" *ngIf="editingPostId !== post.id && post.media_url && post.media_type !== 'none'">
-                      <img *ngIf="post.media_type === 'image'" [src]="post.media_url" alt="post media" />
-                      <video *ngIf="post.media_type === 'video'" [src]="post.media_url" controls></video>
+                      <img
+                        *ngIf="post.media_type === 'image'"
+                        class="zoomable"
+                        [src]="post.media_url"
+                        alt="post media"
+                        (click)="openImageLightbox(post.media_url); $event.stopPropagation()"
+                      />
+                      <app-video-player
+                        *ngIf="post.media_type === 'video'"
+                        [src]="post.media_url"
+                        tapBehavior="emit"
+                        (viewed)="recordView(post)"
+                        (videoTap)="openReels(post)"
+                      ></app-video-player>
                     </div>
                     <div class="post-actions" *ngIf="editingPostId !== post.id">
                       <div class="post-action-group">
@@ -430,6 +455,10 @@ type RouteState = {
                         <span class="icon">{{ '\u{1F4AC}' }}</span>
                         <span class="count">{{ post.comment_count }}</span>
                       </button>
+                      <div class="post-action view" aria-label="Views">
+                        <span class="icon">{{ '\u{1F441}' }}</span>
+                        <span class="count">{{ post.view_count }}</span>
+                      </div>
                     </div>
                     <div class="post-action-error" *ngIf="postActionError[post.id]">
                       {{ postActionError[post.id] }}
@@ -567,12 +596,20 @@ type RouteState = {
                       <div class="post-edit-error" *ngIf="postEditError">{{ postEditError }}</div>
                     </div>
                   </div>
+                  <button
+                    class="load-more"
+                    type="button"
+                    *ngIf="hasMorePosts"
+                    (click)="loadMorePosts()"
+                  >
+                    Load more
+                  </button>
                 </div>
               </ng-template>
 
               <div *ngSwitchCase="'media'" class="posts-pane">
                 <ng-container
-                  *ngTemplateOutlet="postListTpl; context: { posts: mediaPosts, loading: postsLoading, error: postsError, empty: 'No media posts yet.' }"
+                  *ngTemplateOutlet="postListTpl; context: { posts: visibleMediaPosts, loading: postsLoading, error: postsError, empty: 'No media posts yet.' }"
                 ></ng-container>
               </div>
 
@@ -611,6 +648,26 @@ type RouteState = {
       *ngIf="menuOpen || panel === 'notifications' || searchOpen"
       (click)="closeMenu(); closePanel(); closeSearch()"
     ></div>
+
+    <div
+      class="lightbox"
+      *ngIf="lightboxUrl"
+      (click)="closeImageLightbox()"
+      role="dialog"
+      aria-modal="true"
+    >
+      <button
+        class="lightbox-close"
+        type="button"
+        (click)="closeImageLightbox(); $event.stopPropagation()"
+        aria-label="Close"
+      >
+        ×
+      </button>
+      <div class="lightbox-frame" (click)="$event.stopPropagation()">
+        <img [src]="lightboxUrl" alt="Expanded media" />
+      </div>
+    </div>
 
     <!-- Avatar orb overlay fixed (restored) -->
     <div class="user-node">
@@ -1185,11 +1242,12 @@ type RouteState = {
     }
     .ph-title{ font-weight: 900; letter-spacing: .10em; font-size: 12px; text-transform: uppercase; }
     .ph-sub{ margin-top: 6px; opacity: .75; font-size: 12px; line-height: 1.4; }
-    .posts-pane{ display:flex; flex-direction:column; gap:18px; }
+    .posts-pane{ display:flex; flex-direction:column; gap:18px; box-sizing:border-box; }
     .posts-pane > *{
       width: min(720px, 100%);
       margin-left: auto;
       margin-right: auto;
+      box-sizing:border-box;
     }
     .composer{
       border-radius:20px;
@@ -1197,6 +1255,7 @@ type RouteState = {
       background:rgba(255,255,255,0.95);
       padding:16px;
       box-shadow:0 20px 60px rgba(0,0,0,0.10);
+      box-sizing:border-box;
     }
     .composer-row{ display:flex; gap:14px; align-items:flex-start; }
     .composer-avatar{
@@ -1304,8 +1363,20 @@ type RouteState = {
     .posts-state{ font-size:13px; font-weight:700; opacity:0.7; }
     .posts-state.hint{ opacity:0.6; }
     .posts-state.error{ color:#ff6b81; }
-    .posts-list{ display:flex; flex-direction:column; gap:16px; }
+    .posts-list{ display:flex; flex-direction:column; gap:16px; box-sizing:border-box; }
     .posts-empty{ text-align:center; font-size:13px; opacity:0.65; }
+    .load-more{
+      align-self:center;
+      border:1px solid rgba(0,0,0,0.18);
+      border-radius:999px;
+      padding:10px 16px;
+      background:rgba(255,255,255,0.92);
+      font-size:11px;
+      font-weight:900;
+      letter-spacing:0.12em;
+      cursor:pointer;
+      color:rgba(10,12,18,0.85);
+    }
     .post-card{
       position:relative;
       border-radius:20px;
@@ -1313,6 +1384,7 @@ type RouteState = {
       background:rgba(255,255,255,0.98);
       padding:16px;
       box-shadow:0 18px 60px rgba(0,0,0,0.15);
+      box-sizing:border-box;
     }
     .post-author{
       display:flex;
@@ -1372,6 +1444,7 @@ type RouteState = {
     }
     .follow-chip:disabled{ opacity:0.6; cursor:not-allowed; }
     .post-body{ margin-top:12px; font-size:14px; line-height:1.5; color:rgba(10,12,18,0.85); }
+    .post-caption{ margin-top:10px; font-size:13px; line-height:1.45; color:rgba(10,12,18,0.75); }
     .post-media{
       margin-top:12px;
       border-radius:18px;
@@ -2324,6 +2397,9 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   reportBusy = false;
   reportError = '';
   reportFeedback = '';
+  private readonly POST_TEXT_LIMIT = 220;
+  private expandedPosts = new Set<string>();
+  private viewedPostIds = new Set<string>();
   private followingIds = new Set<string>();
   private followBusyMap = new Map<string, boolean>();
   private pendingPostId: string | null = null;
@@ -2335,6 +2411,10 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   followingError = '';
   followingLoaded = false;
 
+  private readonly POSTS_RENDER_START = 120;
+  private readonly POSTS_RENDER_STEP = 80;
+  postsRenderLimit = this.POSTS_RENDER_START;
+
   notifications: NotificationItem[] = [];
   notificationsLoading = false;
   notificationsActionBusy = false;
@@ -2345,6 +2425,8 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   bellPulse = false;
   private bellPulseTimer: number | null = null;
   private notificationCountInitialized = false;
+
+  lightboxUrl: string | null = null;
 
   private notificationInsertSub?: Subscription;
   private notificationUpdateSub?: Subscription;
@@ -2868,6 +2950,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     if (!country?.code) {
       this.posts = [];
       this.postsError = '';
+      this.postsRenderLimit = this.POSTS_RENDER_START;
       this.forceUi();
       return;
     }
@@ -2878,6 +2961,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
 
     try {
       this.posts = this.sortPostsAsc(await this.postsService.listByCountry(country.code));
+      this.postsRenderLimit = this.POSTS_RENDER_START;
       if (this.notificationFocusPostId) {
         const match = this.posts.find((post) => post.id === this.notificationFocusPostId);
         if (match) this.notificationFocusPost = match;
@@ -2913,6 +2997,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       const lists = await Promise.all(ids.map((id) => this.postsService.listForAuthor(id, limitPer)));
       const merged = lists.flat();
       this.followingPosts = this.sortPostsDesc(merged);
+      this.postsRenderLimit = this.POSTS_RENDER_START;
     } catch (e: any) {
       this.followingError = e?.message ?? String(e);
     } finally {
@@ -2922,14 +3007,86 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   get visiblePosts(): CountryPost[] {
-    if (!this.notificationFocusPostId) return this.posts;
+    if (!this.notificationFocusPostId) return this.limitPosts(this.posts);
     const match = this.posts.find((post) => post.id === this.notificationFocusPostId);
     if (match) return [match];
     return this.notificationFocusPost ? [this.notificationFocusPost] : [];
   }
 
+  get visibleFollowingPosts(): CountryPost[] {
+    return this.limitPosts(this.followingPosts);
+  }
+
   get mediaPosts(): CountryPost[] {
     return this.posts.filter((post) => !!post.media_url && post.media_type !== 'none');
+  }
+
+  get visibleMediaPosts(): CountryPost[] {
+    return this.limitPosts(this.mediaPosts);
+  }
+
+  get hasMorePosts(): boolean {
+    if (this.notificationFocusPostId) return false;
+    const list =
+      this.countryTab === 'following'
+        ? this.followingPosts
+        : this.countryTab === 'media'
+          ? this.mediaPosts
+          : this.posts;
+    return list.length > this.postsRenderLimit;
+  }
+
+  trackPostById(index: number, post: CountryPost): string {
+    return post?.id ?? String(index);
+  }
+
+  loadMorePosts(): void {
+    this.postsRenderLimit = Math.max(
+      this.POSTS_RENDER_START,
+      this.postsRenderLimit + this.POSTS_RENDER_STEP
+    );
+    this.forceUi();
+  }
+
+  private limitPosts(list: CountryPost[]): CountryPost[] {
+    if (!list?.length) return [];
+    return list.slice(0, this.postsRenderLimit);
+  }
+
+  isPostExpanded(postId: string): boolean {
+    return this.expandedPosts.has(postId);
+  }
+
+  isPostExpandable(post: CountryPost): boolean {
+    if (!post) return false;
+    const text = [post.title, post.body, post.media_caption]
+      .filter((value) => !!value)
+      .join(' ')
+      .trim();
+    return text.length > this.POST_TEXT_LIMIT;
+  }
+
+  togglePostExpanded(postId: string): void {
+    if (!postId) return;
+    if (this.expandedPosts.has(postId)) {
+      this.expandedPosts.delete(postId);
+    } else {
+      this.expandedPosts.add(postId);
+    }
+    this.forceUi();
+  }
+
+  openImageLightbox(url: string | null): void {
+    const next = String(url || '').trim();
+    if (!next) return;
+    this.lightboxUrl = next;
+    this.forceUi();
+  }
+
+  closeImageLightbox(): void {
+    if (!this.lightboxUrl) return;
+    this.lightboxUrl = null;
+    this.forceUi();
   }
 
   private tryScrollToPendingPost(): void {
@@ -3549,6 +3706,13 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     }
   }
 
+  recordView(post: CountryPost): void {
+    if (!post?.id || this.viewedPostIds.has(post.id)) return;
+    this.viewedPostIds.add(post.id);
+    void this.postsService.recordView(post);
+    this.forceUi();
+  }
+
   async togglePostLike(post: CountryPost): Promise<void> {
     if (!this.meId || !post?.id) {
       this.postActionError[post.id] = 'Sign in to like posts.';
@@ -3843,6 +4007,46 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     const slug = author.username?.trim() || author.user_id;
     if (!slug) return;
     void this.router.navigate(['/user', slug]);
+  }
+
+  openReels(post: CountryPost): void {
+    if (!post) return;
+    const code =
+      post.country_code?.toUpperCase() ||
+      post.author?.country_code?.toUpperCase() ||
+      this.selectedCountry?.code?.toUpperCase();
+    if (!code) return;
+    const seedPosts = this.buildReelSeedPosts(post);
+    void this.router.navigate(['/reels', code], {
+      queryParams: { postId: post.id },
+      state: {
+        seedPosts,
+        seedCountry: code,
+        countryName: this.selectedCountry?.name || post.country_name || null,
+      },
+    });
+  }
+
+  private buildReelSeedPosts(post: CountryPost): CountryPost[] {
+    const sources = [
+      this.visibleMediaPosts,
+      this.visiblePosts,
+      this.visibleFollowingPosts,
+    ].filter((list) => Array.isArray(list) && list.length);
+    const base = sources.length ? sources[0] : [];
+    const videos = base.filter(
+      (item) => item.media_type === 'video' && !!item.media_url
+    );
+    const combined = [post, ...videos];
+    const seen = new Set<string>();
+    const deduped: CountryPost[] = [];
+    for (const item of combined) {
+      if (!item?.id || seen.has(item.id)) continue;
+      seen.add(item.id);
+      deduped.push(item);
+      if (deduped.length >= 50) break;
+    }
+    return deduped;
   }
 
   followBusyFor(authorId: string): boolean {

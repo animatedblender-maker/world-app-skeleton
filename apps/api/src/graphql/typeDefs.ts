@@ -122,6 +122,11 @@ export const typeDefs = `#graphql
     conversation_id: ID!
     sender_id: ID!
     body: String!
+    media_type: String
+    media_path: String
+    media_name: String
+    media_mime: String
+    media_size: Int
     created_at: String!
     sender: PostAuthor
   }
@@ -258,7 +263,15 @@ export const typeDefs = `#graphql
 
     # Messaging
     startConversation(target_id: ID!): Conversation!
-    sendMessage(conversation_id: ID!, body: String!): Message!
+    sendMessage(
+      conversation_id: ID!
+      body: String
+      media_type: String
+      media_path: String
+      media_name: String
+      media_mime: String
+      media_size: Int
+    ): Message!
 
     # Notifications
     markNotificationRead(id: ID!): Boolean!

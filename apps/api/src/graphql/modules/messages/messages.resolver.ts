@@ -57,11 +57,29 @@ export const messagesResolvers = {
       if (!args?.target_id) throw new Error('target_id is required.');
       return await svc().startConversation(args.target_id, user.id);
     },
-    sendMessage: async (_: any, args: { conversation_id: string; body: string }, ctx: Context) => {
+    sendMessage: async (
+      _: any,
+      args: {
+        conversation_id: string;
+        body?: string | null;
+        media_type?: string | null;
+        media_path?: string | null;
+        media_name?: string | null;
+        media_mime?: string | null;
+        media_size?: number | null;
+      },
+      ctx: Context
+    ) => {
       const user = requireAuth(ctx);
       if (!args?.conversation_id) throw new Error('conversation_id is required.');
-      if (!args?.body) throw new Error('body is required.');
-      return await svc().sendMessage(args.conversation_id, user.id, args.body);
+      return await svc().sendMessage(args.conversation_id, user.id, {
+        body: args?.body ?? null,
+        media_type: args?.media_type ?? null,
+        media_path: args?.media_path ?? null,
+        media_name: args?.media_name ?? null,
+        media_mime: args?.media_mime ?? null,
+        media_size: args?.media_size ?? null,
+      });
     },
   },
 };

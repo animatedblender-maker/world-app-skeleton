@@ -1,13 +1,77 @@
 import { Injectable } from '@angular/core';
+import { environment } from '../../../envirnoments/envirnoment';
 import { GqlService } from './gql.service';
 import { CountryPost, PostComment, PostLike } from '../models/post.model';
 import { PostEventsService } from './post-events.service';
+import { DemoDatasetService } from './demo-dataset.service';
 
 @Injectable({ providedIn: 'root' })
 export class PostsService {
-  constructor(private gql: GqlService, private postEvents: PostEventsService) {}
+  constructor(
+    private gql: GqlService,
+    private postEvents: PostEventsService,
+    private demoData: DemoDatasetService
+  ) {}
 
-  async listByCountry(countryCode: string, limit = 25): Promise<CountryPost[]> {
+  async listByCountry(
+    countryCode: string,
+    limit = 25,
+    opts?: { demoLimit?: number; skipComments?: boolean }
+  ): Promise<CountryPost[]> {
+    if (environment.useDemoDataset) {
+      const minDemo = opts?.demoLimit ?? 1000;
+      const demoLimit = Math.max(limit, minDemo);
+      const [realResult, demoResult] = await Promise.allSettled([
+        this.withTimeout(
+          this.gql.request<{ postsByCountry: any[] }>(
+          `
+          query PostsByCountry($code: String!, $limit: Int) {
+            postsByCountry(country_code: $code, limit: $limit) {
+              id
+              title
+              body
+              media_type
+              media_url
+              visibility
+              like_count
+              comment_count
+              liked_by_me
+              created_at
+              updated_at
+              author_id
+              country_name
+              country_code
+              city_name
+              author {
+                user_id
+                display_name
+                username
+                avatar_url
+                country_name
+                country_code
+              }
+            }
+          }
+          `,
+          { code: countryCode, limit: demoLimit }
+        ),
+          1600,
+          'postsByCountry'
+        ),
+        this.demoData.listByCountry(countryCode, demoLimit, {
+          skipComments: opts?.skipComments,
+        }),
+      ]);
+
+      const realPosts =
+        realResult.status === 'fulfilled'
+          ? (realResult.value.postsByCountry ?? []).map((row) => this.mapPost(row))
+          : [];
+      const demoPosts = demoResult.status === 'fulfilled' ? demoResult.value : [];
+
+      return this.mergePosts(realPosts, demoPosts, demoLimit);
+    }
+
     const query = `
       query PostsByCountry($code: String!, $limit: Int) {
         postsByCountry(country_code: $code, limit: $limit) {
@@ -47,6 +111,9 @@ export class PostsService {
 
   async listForAuthor(userId: string, limit = 25): Promise<CountryPost[]> {
     if (!userId) return [];
+    if (environment.useDemoDataset && /^user_/.test(userId)) {
+      return this.demoData.listForAuthor(userId, limit);
+    }
     const query = `
       query PostsByAuthor($authorId: ID!, $limit: Int) {
         postsByAuthor(user_id: $authorId, limit: $limit) {
@@ -86,6 +153,9 @@ export class PostsService {
 
   async getPostById(postId: string): Promise<CountryPost | null> {
     if (!postId) return null;
+    if (environment.useDemoDataset && (await this.demoData.isDemoPostId(postId))) {
+      return this.demoData.getPostById(postId);
+    }
     const query = `
       query PostById($postId: ID!) {
         postById(post_id: $postId) {
@@ -258,6 +328,11 @@ export class PostsService {
   }
 
   async likePost(postId: string): Promise<CountryPost> {
+    if (environment.useDemoDataset && (await this.demoData.isDemoPostId(postId))) {
+      const updated = await this.demoData.likePost(postId);
+      this.postEvents.emitUpdated(updated);
+      return updated;
+    }
     const mutation = `
       mutation LikePost($postId: ID!) {
         likePost(post_id: $postId) {
@@ -295,6 +370,11 @@ export class PostsService {
   }
 
   async unlikePost(postId: string): Promise<CountryPost> {
+    if (environment.useDemoDataset && (await this.demoData.isDemoPostId(postId))) {
+      const updated = await this.demoData.unlikePost(postId);
+      this.postEvents.emitUpdated(updated);
+      return updated;
+    }
     const mutation = `
       mutation UnlikePost($postId: ID!) {
         unlikePost(post_id: $postId) {
@@ -331,7 +411,20 @@ export class PostsService {
     return mapped;
   }
 
+  async recordView(post: CountryPost): Promise<void> {
+    if (!post?.id) return;
+    if (environment.useDemoDataset && (await this.demoData.isDemoPostId(post.id))) {
+      await this.demoData.recordView(post.id);
+      return;
+    }
+    post.view_count = Number(post.view_count ?? 0) + 1;
+  }
+
   async listComments(postId: string, limit = 25, before?: string | null): Promise<PostComment[]> {
+    if (environment.useDemoDataset && (await this.demoData.isDemoPostId(postId))) {
+      const demoLimit = Math.max(limit, 1000);
+      return this.demoData.listComments(postId, demoLimit);
+    }
     const query = `
       query CommentsByPost($postId: ID!, $limit: Int, $before: String) {
         commentsByPost(post_id: $postId, limit: $limit, before: $before) {
@@ -365,6 +458,9 @@ export class PostsService {
 
   async listLikes(postId: string, limit = 25): Promise<PostLike[]> {
     if (!postId) return [];
+    if (environment.useDemoDataset && (await this.demoData.isDemoPostId(postId))) {
+      return this.demoData.listLikes(postId, limit);
+    }
     const query = `
       query PostLikes($postId: ID!, $limit: Int) {
         postLikes(post_id: $postId, limit: $limit) {
@@ -390,6 +486,9 @@ export class PostsService {
   }
 
   async addComment(postId: string, body: string, parentId?: string | null): Promise<PostComment> {
+    if (environment.useDemoDataset && (await this.demoData.isDemoPostId(postId))) {
+      return this.demoData.addComment(postId, body, parentId ?? null);
+    }
     const mutation = `
       mutation AddComment($postId: ID!, $body: String!, $parentId: ID) {
         addComment(post_id: $postId, body: $body, parent_id: $parentId) {
@@ -423,6 +522,9 @@ export class PostsService {
   }
 
   async likeComment(commentId: string): Promise<PostComment> {
+    if (environment.useDemoDataset && this.demoData.isDemoCommentId(commentId)) {
+      return this.demoData.likeComment(commentId);
+    }
     const mutation = `
       mutation LikeComment($commentId: ID!) {
         likeComment(comment_id: $commentId) {
@@ -451,6 +553,9 @@ export class PostsService {
   }
 
   async unlikeComment(commentId: string): Promise<PostComment> {
+    if (environment.useDemoDataset && this.demoData.isDemoCommentId(commentId)) {
+      return this.demoData.unlikeComment(commentId);
+    }
     const mutation = `
       mutation UnlikeComment($commentId: ID!) {
         unlikeComment(comment_id: $commentId) {
@@ -493,15 +598,22 @@ export class PostsService {
   }
 
   private mapPost(row: any): CountryPost {
+    const viewCount =
+      row?.view_count != null
+        ? Number(row.view_count)
+        : this.estimateViewCount(row?.id, row?.like_count, row?.comment_count);
     return {
       id: row.id,
       title: row.title ?? null,
       body: row.body ?? '',
       media_type: row.media_type ?? 'none',
       media_url: row.media_url ?? null,
+      thumb_url: row.thumb_url ?? null,
+      media_caption: row.media_caption ?? null,
       visibility: row.visibility ?? 'public',
       like_count: Number(row.like_count ?? 0),
       comment_count: Number(row.comment_count ?? 0),
+      view_count: viewCount,
       liked_by_me: !!row.liked_by_me,
       created_at: row.created_at,
       updated_at: row.updated_at ?? row.created_at,
@@ -561,5 +673,58 @@ export class PostsService {
           }
         : null,
     };
+  }
+
+  private mergePosts(real: CountryPost[], demo: CountryPost[], limit: number): CountryPost[] {
+    const combined = [...real, ...demo];
+    const seen = new Set<string>();
+    const deduped: CountryPost[] = [];
+    for (const post of combined) {
+      if (!post?.id || seen.has(post.id)) continue;
+      seen.add(post.id);
+      deduped.push(post);
+    }
+    if (real.length) {
+      const realIds = new Set(real.map((post) => post.id));
+      const realOrdered = real
+        .filter((post) => realIds.has(post.id))
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      const demoOrdered = deduped.filter((post) => !realIds.has(post.id));
+      return [...realOrdered, ...demoOrdered].slice(0, Math.max(1, limit));
+    }
+    return deduped.slice(0, Math.max(1, limit));
+  }
+
+  private estimateViewCount(id: string | null | undefined, likeCount: any, commentCount: any): number {
+    const likes = Number(likeCount ?? 0);
+    const comments = Number(commentCount ?? 0);
+    if (!likes && !comments) return 0;
+    const seed = this.hashSeed(String(id || 'post'));
+    const jitter = seed % 1200;
+    const base = likes * 12 + comments * 6 + jitter;
+    return Math.max(base, likes + comments);
+  }
+
+  private hashSeed(value: string): number {
+    let h = 2166136261;
+    for (let i = 0; i < value.length; i++) {
+      h ^= value.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return h >>> 0;
+  }
+
+  private async withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<T>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`${label} timeout`)), ms);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 }

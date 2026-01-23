@@ -6,6 +6,11 @@ type MessageRow = {
   conversation_id: string;
   sender_id: string;
   body: string;
+  media_type?: string | null;
+  media_path?: string | null;
+  media_name?: string | null;
+  media_mime?: string | null;
+  media_size?: number | null;
   created_at: string;
   sender: {
     user_id: string;
@@ -67,6 +72,11 @@ export class MessagesService {
             'conversation_id', m.conversation_id,
             'sender_id', m.sender_id,
             'body', m.body,
+            'media_type', m.media_type,
+            'media_path', m.media_path,
+            'media_name', m.media_name,
+            'media_mime', m.media_mime,
+            'media_size', m.media_size,
             'created_at', m.created_at,
             'sender', jsonb_build_object(
               'user_id', pr2.user_id,
@@ -198,19 +208,49 @@ export class MessagesService {
     return convo;
   }
 
-  async sendMessage(conversationId: string, userId: string, body: string): Promise<MessageRow> {
-    const trimmed = String(body ?? '').trim();
-    if (!trimmed) throw new Error('Message is required.');
+  async sendMessage(
+    conversationId: string,
+    userId: string,
+    payload: {
+      body?: string | null;
+      media_type?: string | null;
+      media_path?: string | null;
+      media_name?: string | null;
+      media_mime?: string | null;
+      media_size?: number | null;
+    }
+  ): Promise<MessageRow> {
+    const trimmed = String(payload?.body ?? '').trim();
+    const mediaPath = payload?.media_path ?? null;
+    if (!trimmed && !mediaPath) throw new Error('Message is required.');
 
     await this.ensureMember(conversationId, userId);
 
     const { rows } = await pool.query<{ id: string }>(
       `
-      insert into public.messages (conversation_id, sender_id, body)
-      values ($1, $2, $3)
+      insert into public.messages (
+        conversation_id,
+        sender_id,
+        body,
+        media_type,
+        media_path,
+        media_name,
+        media_mime,
+        media_size
+      )
+      values ($1, $2, $3, $4, $5, $6, $7, $8)
       returning id
       `,
-      [conversationId, userId, trimmed]
+      [
+        conversationId,
+        userId,
+        trimmed,
+        payload?.media_type ?? null,
+        mediaPath,
+        payload?.media_name ?? null,
+        payload?.media_mime ?? null,
+        payload?.media_size ?? null,
+      ]
     );
 
     const messageId = rows[0]?.id ?? null;
@@ -320,6 +360,11 @@ export class MessagesService {
             'conversation_id', m.conversation_id,
             'sender_id', m.sender_id,
             'body', m.body,
+            'media_type', m.media_type,
+            'media_path', m.media_path,
+            'media_name', m.media_name,
+            'media_mime', m.media_mime,
+            'media_size', m.media_size,
             'created_at', m.created_at,
             'sender', jsonb_build_object(
               'user_id', pr2.user_id,

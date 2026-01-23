@@ -22,6 +22,8 @@ export type Profile = {
   country_code?: string | null;
   city_name?: string | null;
   bio?: string | null;
+  followers_count?: number | null;
+  following_count?: number | null;
   created_at: string;
   updated_at: string;
 };

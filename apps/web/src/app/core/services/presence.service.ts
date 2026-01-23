@@ -86,7 +86,7 @@ export class PresenceService {
 
   // UI updates
   private renderTimer: any = null;
-  private readonly RENDER_MS = 250;
+  private readonly RENDER_MS = 800;
 
   // totals refresh (new registrations)
   private refreshProfilesTimer: any = null;
@@ -94,10 +94,15 @@ export class PresenceService {
 
   // fake online refresh
   private fakeOnlineTimer: any = null;
-  private readonly FAKE_ONLINE_REFRESH_MS = 20_000;
+  private readonly FAKE_ONLINE_REFRESH_MS = 30_000;
   private readonly FAKE_ONLINE_MIN = 0.4;
   private readonly FAKE_ONLINE_MAX = 0.65;
   private readonly FAKE_ONLINE_WAVE_SECONDS = 180;
+  private readonly MAX_FAKE_POINTS = 3500;
+  private readonly MAX_TOTAL_POINTS = 4200;
+
+  private baseTotalsByCountry: Record<string, number> = {};
+  private baseTotalUsers = 0;
 
   // Dot styling for all presence points.
   private readonly DOT_COLOR = 'rgba(0,255,209,0.92)';
@@ -220,6 +225,18 @@ export class PresenceService {
         city_name: prof.city_name ?? null,
       });
     }
+    this.rebuildTotalsCache();
+  }
+
+  private rebuildTotalsCache(): void {
+    const totals: Record<string, number> = {};
+    for (const [, prof] of this.profilesById.entries()) {
+      const cc = String(prof.country_code ?? '').trim().toUpperCase();
+      if (!cc) continue;
+      totals[cc] = (totals[cc] ?? 0) + 1;
+    }
+    this.baseTotalsByCountry = totals;
+    this.baseTotalUsers = this.profilesById.size;
   }
 
   private startFakeOnline(): void {
@@ -271,7 +288,7 @@ export class PresenceService {
         lng: pos.lng,
         cc,
         color: this.DOT_COLOR,
-        radius: 1.8,
+        radius: 1.4,
       });
     }
 
@@ -290,14 +307,24 @@ export class PresenceService {
             lng: pos.lng,
             cc,
             color: this.DOT_COLOR,
-            radius: 1.8,
+            radius: 1.4,
           });
         }
       }
     }
 
+    if (onlinePoints.length > this.MAX_FAKE_POINTS) {
+      const step = Math.ceil(onlinePoints.length / this.MAX_FAKE_POINTS);
+      const sampled: ConnectionPoint[] = [];
+      for (let i = 0; i < onlinePoints.length; i += step) {
+        sampled.push(onlinePoints[i]);
+      }
+      this.fakeOnlinePoints = sampled;
+    } else {
+      this.fakeOnlinePoints = onlinePoints;
+    }
+
     this.fakeOnlineIds = onlineIds;
-    this.fakeOnlinePoints = onlinePoints;
     this.fakeOnlineByCountry = byCountry;
     this.emit();
   }
@@ -387,13 +414,8 @@ export class PresenceService {
     if (!this.onUpdateCb) return;
 
     const byCountry: Record<string, { total: number; online: number }> = {};
-
-    // totals from profiles
-    for (const [, prof] of this.profilesById.entries()) {
-      const cc = String(prof.country_code ?? '').trim().toUpperCase();
-      if (!cc) continue;
-      byCountry[cc] ??= { total: 0, online: 0 };
-      byCountry[cc].total += 1;
+    for (const [cc, total] of Object.entries(this.baseTotalsByCountry)) {
+      byCountry[cc] = { total, online: 0 };
     }
 
     for (const [cc, count] of Object.entries(this.fakeOnlineByCountry)) {
@@ -404,7 +426,7 @@ export class PresenceService {
     const onlineIds = [...this.fakeOnlineIds];
 
     // dots for online only
-    const points: ConnectionPoint[] = [...this.fakeOnlinePoints];
+    let points: ConnectionPoint[] = [...this.fakeOnlinePoints];
 
     for (const userId of this.onlineMetaById.keys()) {
       const meta = this.onlineMetaById.get(userId);
@@ -428,12 +450,12 @@ export class PresenceService {
         lng: pos.lng,
         cc,
         color: this.DOT_COLOR,
-        radius: 2.0,
+        radius: 1.6,
       });
       onlineIds.push(userId);
     }
 
-    let totalUsers = this.profilesById.size;
+    let totalUsers = this.baseTotalUsers || this.profilesById.size;
     let onlineUsers = onlineIds.length;
 
     for (const [rawCode, override] of Object.entries(this.overridesByCountry)) {
@@ -458,6 +480,11 @@ export class PresenceService {
       }
 
       byCountry[cc] = next;
+    }
+
+    if (points.length > this.MAX_TOTAL_POINTS) {
+      const step = Math.ceil(points.length / this.MAX_TOTAL_POINTS);
+      points = points.filter((_, idx) => idx % step === 0);
     }
 
     this.onUpdateCb({

@@ -5,6 +5,12 @@ export type Message = {
   conversation_id: string;
   sender_id: string;
   body: string;
+  media_type?: string | null;
+  media_path?: string | null;
+  media_url?: string | null;
+  media_name?: string | null;
+  media_mime?: string | null;
+  media_size?: number | null;
   created_at: string;
   sender?: PostAuthor | null;
 };

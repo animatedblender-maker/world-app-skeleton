@@ -24,6 +24,29 @@ export class MediaService {
     return { path, publicUrl: data.publicUrl };
   }
 
+  async uploadMessageMedia(
+    file: File,
+    conversationId: string
+  ): Promise<{ path: string; name: string; mime: string; size: number }> {
+    const { data: sessionData, error: sessionErr } = await supabase.auth.getSession();
+    if (sessionErr) throw sessionErr;
+    const userId = sessionData.session?.user?.id;
+    if (!userId) throw new Error('Not authenticated');
+
+    const ext = (file.name.split('.').pop() || 'bin').toLowerCase();
+    const safeName = file.name || `message.${ext}`;
+    const path = `${userId}/${conversationId}/${crypto.randomUUID()}.${ext}`;
+
+    const { error } = await supabase.storage.from('messages').upload(path, file, {
+      upsert: false,
+      cacheControl: '3600',
+      contentType: file.type || 'application/octet-stream',
+    });
+    if (error) throw error;
+
+    return { path, name: safeName, mime: file.type || 'application/octet-stream', size: file.size };
+  }
+
   // ✅ Avatar upload (bucket: avatars)
   // - blocks GIF
   // - accepts a File (we will pass a cropped File from the cropper)
