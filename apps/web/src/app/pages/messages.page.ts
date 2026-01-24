@@ -9,10 +9,10 @@ import { MessagesService } from '../core/services/messages.service';
 import { MediaService } from '../core/services/media.service';
 import { NotificationsService, type NotificationItem } from '../core/services/notifications.service';
 import { PushService } from '../core/services/push.service';
+import { CallService, type CallSignal } from '../core/services/call.service';
 import { Conversation, Message } from '../core/models/messages.model';
 import { PostAuthor } from '../core/models/post.model';
 import { VideoPlayerComponent } from '../components/video-player.component';
-import { environment } from '../../envirnoments/envirnoment';
 
 @Component({
   selector: 'app-messages-page',
@@ -1124,6 +1124,8 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   private pendingConversation: Conversation | null = null;
   private routeSub?: Subscription;
   private pendingSub?: Subscription;
+  private callSignalSub?: Subscription;
+  private callConnectedSub?: Subscription;
   private pollTimer: number | null = null;
   mobileThreadOnly = false;
   unreadConversationIds = new Set<string>();
@@ -1139,7 +1141,6 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   private callFromId: string | null = null;
   private incomingOffer: { conversationId: string; from: string; sdp: any; callType: 'audio' | 'video' } | null =
     null;
-  private ws?: WebSocket;
   private wsConnected = false;
   private pc?: RTCPeerConnection;
   private localStream?: MediaStream;
@@ -1156,6 +1157,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   callSpeaking = false;
   callTimerSeconds = 0;
   private callTimerId: number | null = null;
+  private callDisconnectTimer: number | null = null;
   private callStartAt: number | null = null;
   private callLogSent = false;
   private destroyed = false;
@@ -1168,6 +1170,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     private mediaService: MediaService,
     private notificationsService: NotificationsService,
     private push: PushService,
+    private callService: CallService,
     private zone: NgZone,
     private cdr: ChangeDetectorRef
   ) {}
@@ -1177,7 +1180,14 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     const user = await this.auth.getUser();
     this.meId = user?.id ?? null;
     this.forceUi();
-    void this.connectSignaling();
+    this.wsConnected = this.callService.connected;
+    this.callSignalSub = this.callService.signals$.subscribe((msg) => {
+      void this.handleSignalMessage(msg);
+    });
+    this.callConnectedSub = this.callService.connected$.subscribe((connected) => {
+      this.wsConnected = connected;
+      this.forceUi();
+    });
 
     const stashed = this.messagesService.getPendingConversation();
     const navState = (this.router.getCurrentNavigation()?.extras.state ?? history.state) as
@@ -1234,11 +1244,12 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     this.destroyed = true;
     this.routeSub?.unsubscribe();
     this.pendingSub?.unsubscribe();
+    this.callSignalSub?.unsubscribe();
+    this.callConnectedSub?.unsubscribe();
     if (this.pollTimer) {
       window.clearInterval(this.pollTimer);
       this.pollTimer = null;
     }
-    this.ws?.close();
     this.cleanupCall();
     this.clearMedia();
   }
@@ -1443,6 +1454,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
         await this.activateConversationById(this.callConversationId);
       }
       this.callIncoming = false;
+      this.callService.clearIncomingCall();
       this.forceUi();
       await this.startCall(type);
       return;
@@ -1455,6 +1467,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     this.callConnecting = true;
     this.callActive = false;
     this.callError = '';
+    this.callService.clearIncomingCall();
     this.callStartAt = null;
     this.callLogSent = false;
     this.forceUi();
@@ -1476,6 +1489,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   declineCall(): void {
     if (!this.incomingOffer) return;
     this.sendSignal('call-decline', this.incomingOffer.conversationId);
+    this.callService.clearIncomingCall();
     this.cleanupCall();
   }
 
@@ -1531,60 +1545,14 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     this.callLogSent = true;
   }
 
-  private async connectSignaling(): Promise<void> {
-    if (this.destroyed || !this.meId) return;
-    const token = await this.auth.getAccessToken();
-    if (!token) return;
-    const base = environment.apiBaseUrl || environment.graphqlEndpoint.replace(/\/graphql$/, '');
-    const wsBase = base.startsWith('https') ? base.replace(/^https/, 'wss') : base.replace(/^http/, 'ws');
-    const wsUrl = `${wsBase}/ws?token=${encodeURIComponent(token)}`;
-
-    if (this.ws && this.ws.url === wsUrl && this.ws.readyState <= WebSocket.OPEN) return;
-    this.ws?.close();
-
-    const socket = new WebSocket(wsUrl);
-    this.ws = socket;
-
-    socket.onopen = () => {
-      this.wsConnected = true;
-      this.forceUi();
-    };
-    socket.onmessage = (event) => {
-      void this.handleSignal(String(event.data ?? ''));
-    };
-    socket.onclose = () => {
-      this.wsConnected = false;
-      this.ws = undefined;
-      this.forceUi();
-      if (!this.destroyed) {
-        window.setTimeout(() => void this.connectSignaling(), 3000);
-      }
-    };
-    socket.onerror = () => {
-      this.wsConnected = false;
-    };
-  }
-
   private sendSignal(type: string, conversationId: string | null, payload?: Record<string, any>): void {
-    if (!conversationId || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    const msg = {
-      type,
-      conversationId,
+    this.callService.sendSignal(type, conversationId, {
       from: this.meId,
       ...(payload ?? {}),
-    };
-    try {
-      this.ws.send(JSON.stringify(msg));
-    } catch {}
+    });
   }
 
-  private async handleSignal(raw: string): Promise<void> {
-    let msg: any = null;
-    try {
-      msg = JSON.parse(raw);
-    } catch {
-      return;
-    }
+  private async handleSignalMessage(msg: CallSignal): Promise<void> {
     const type = String(msg?.type ?? '');
     const conversationId = String(msg?.conversationId ?? '');
     const from = String(msg?.from ?? '');
@@ -1595,8 +1563,8 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
         this.sendSignal('call-busy', conversationId);
         return;
       }
-      const callType = msg?.callType === 'video' ? 'video' : 'audio';
-      if (!msg?.sdp) return;
+      const callType = msg.callType === 'video' ? 'video' : 'audio';
+      if (!msg.sdp) return;
       this.incomingOffer = { conversationId, from, sdp: msg.sdp, callType };
       this.callConversationId = conversationId;
       this.callType = callType;
@@ -1606,6 +1574,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       this.callActive = false;
       this.callStartAt = null;
       this.callLogSent = false;
+      this.callService.clearIncomingCall();
       this.forceUi();
       if (conversationId !== this.activeConversationId) {
         await this.activateConversationById(conversationId);
@@ -1615,7 +1584,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
 
     if (conversationId !== this.callConversationId) return;
 
-    if (type === 'call-answer' && msg?.sdp) {
+    if (type === 'call-answer' && msg.sdp) {
       if (!this.pc) return;
       await this.pc.setRemoteDescription(msg.sdp);
       await this.flushIceCandidates();
@@ -1626,7 +1595,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       return;
     }
 
-    if (type === 'ice-candidate' && msg?.candidate) {
+    if (type === 'ice-candidate' && msg.candidate) {
       if (!this.pc) {
         this.pendingCandidates.push(msg.candidate);
         return;
@@ -1689,15 +1658,22 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
 
     this.pc.onconnectionstatechange = () => {
       const state = this.pc?.connectionState;
+      const hasRemote = !!this.pc?.remoteDescription;
       if (state === 'connected') {
         this.callActive = true;
         this.callConnecting = false;
         this.markCallActive();
+        this.clearDisconnectTimer();
         this.forceUi();
       }
-      if (state === 'failed' || state === 'disconnected' || state === 'closed') {
-        if (this.callActive || this.callConnecting) {
+      if (state === 'failed' || state === 'closed') {
+        if (this.callActive || (this.callConnecting && hasRemote)) {
           this.cleanupCall();
+        }
+      }
+      if (state === 'disconnected') {
+        if (this.callActive) {
+          this.startDisconnectTimer();
         }
       }
     };
@@ -1767,6 +1743,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     this.callSpeaking = false;
     this.callTimerSeconds = 0;
     this.stopCallTimer();
+    this.clearDisconnectTimer();
     this.stopVoiceDetection();
 
     if (this.pc) {
@@ -1813,6 +1790,21 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     if (!this.callTimerId) return;
     window.clearInterval(this.callTimerId);
     this.callTimerId = null;
+  }
+
+  private startDisconnectTimer(): void {
+    if (this.callDisconnectTimer) return;
+    this.callDisconnectTimer = window.setTimeout(() => {
+      if (this.callActive) {
+        this.cleanupCall();
+      }
+    }, 8000);
+  }
+
+  private clearDisconnectTimer(): void {
+    if (!this.callDisconnectTimer) return;
+    window.clearTimeout(this.callDisconnectTimer);
+    this.callDisconnectTimer = null;
   }
 
   private startVoiceDetection(): void {
