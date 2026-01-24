@@ -1954,9 +1954,9 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       if (!key || value === undefined) continue;
       data[key] = value;
     }
-    const status = String(data.status ?? '').trim();
-    const kind = data.kind === 'video' ? 'video' : 'audio';
-    const duration = Number(data.duration ?? 0);
+    const status = String(data['status'] ?? '').trim();
+    const kind = data['kind'] === 'video' ? 'video' : 'audio';
+    const duration = Number(data['duration'] ?? 0);
     if (!status) return null;
     return {
       status,
