@@ -306,14 +306,17 @@ export class MessagesService {
       const senderName =
         message.sender?.display_name || message.sender?.username || 'New message';
       const preview = String(message.body ?? '').trim().slice(0, 140);
+      const isCallLog = preview.startsWith('__call__|');
 
-      for (const row of otherMembers.rows) {
-        try {
-          await this.notifications.notifyMessage(row.user_id, userId, conversationId, {
-            senderName,
-            preview,
-          });
-        } catch {}
+      if (!isCallLog) {
+        for (const row of otherMembers.rows) {
+          try {
+            await this.notifications.notifyMessage(row.user_id, userId, conversationId, {
+              senderName,
+              preview,
+            });
+          } catch {}
+        }
       }
 
       return message;

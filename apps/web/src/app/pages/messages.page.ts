@@ -80,7 +80,7 @@ import { environment } from '../../envirnoments/envirnoment';
                   {{ initialsFor(otherMember(activeConversation)) }}
                 </div>
               </div>
-              <div>
+              <div class="thread-meta">
                 <div class="thread-name">{{ displayNameFor(otherMember(activeConversation)) }}</div>
                 <div
                   class="thread-sub"
@@ -123,7 +123,7 @@ import { environment } from '../../envirnoments/envirnoment';
                   <div class="message-day" *ngIf="showDaySeparator(i)">
                     {{ formatDayLabel(message.created_at) }}
                   </div>
-                  <div class="message" [class.me]="message.sender_id === meId">
+                  <div class="message" [class.me]="message.sender_id === meId" [class.call-log]="isCallLogMessage(message)">
                     <div class="msg-avatar">
                       <img
                         *ngIf="senderAvatarUrl(message)"
@@ -135,7 +135,9 @@ import { environment } from '../../envirnoments/envirnoment';
                       </div>
                     </div>
                     <div class="bubble">
-                      <div class="body" *ngIf="messageText(message) as text">{{ text }}</div>
+                      <div class="body" *ngIf="messageText(message) as text" [class.call-log]="isCallLogMessage(message)">
+                        {{ text }}
+                      </div>
                       <div class="message-media" *ngIf="message.media_type && message.media_url">
                         <img
                           *ngIf="message.media_type === 'image'"
@@ -242,6 +244,7 @@ import { environment } from '../../envirnoments/envirnoment';
             <div class="call-title">{{ callTitle() }}</div>
             <div class="call-sub">{{ callStatusText() }}</div>
           </div>
+          <div class="call-timer">{{ callTimerLabel() }}</div>
         </div>
         <div class="call-body">
           <video
@@ -251,7 +254,7 @@ import { environment } from '../../envirnoments/envirnoment';
             playsinline
             *ngIf="callType === 'video'"
           ></video>
-          <div class="call-avatar" *ngIf="callType !== 'video'">
+          <div class="call-avatar" [class.speaking]="callSpeaking" *ngIf="callType !== 'video'">
             <img *ngIf="callPeerAvatar()" [src]="callPeerAvatar()" alt="avatar" />
             <div class="initials" *ngIf="!callPeerAvatar()">
               {{ initialsFor(callPeer()) }}
@@ -507,20 +510,32 @@ import { environment } from '../../envirnoments/envirnoment';
       padding:14px;
       border-bottom:1px solid rgba(7,20,40,0.08);
       background:rgba(255,255,255,0.95);
+      min-width:0;
+    }
+    .thread-meta{
+      min-width:0;
+      flex:1;
     }
     .thread-name{
       font-weight:800;
       font-size:16px;
       color:rgba(7,16,28,0.9);
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
     }
     .thread-sub{
       font-size:12px;
       opacity:0.6;
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
     }
     .thread-actions{
       margin-left:auto;
       display:flex;
       gap:8px;
+      flex-shrink:0;
     }
     .call-btn{
       width:34px;
@@ -619,6 +634,20 @@ import { environment } from '../../envirnoments/envirnoment';
     .body{
       white-space:pre-wrap;
       word-break:break-word;
+    }
+    .message.call-log .bubble{
+      background:rgba(7,20,40,0.06);
+      border:1px dashed rgba(7,20,40,0.2);
+      box-shadow:none;
+    }
+    .message.call-log .body{
+      font-style:italic;
+      color:rgba(7,20,40,0.7);
+      text-align:center;
+      letter-spacing:0.02em;
+    }
+    .message.call-log.me .bubble{
+      background:rgba(8,40,70,0.08);
     }
     .message-media{
       margin-top:8px;
@@ -876,11 +905,12 @@ import { environment } from '../../envirnoments/envirnoment';
       display:grid;
       place-items:center;
       z-index:120;
-      padding:16px;
+      padding:calc(16px + env(safe-area-inset-top)) 16px calc(16px + env(safe-area-inset-bottom));
     }
     .call-card{
       width:min(92vw, 520px);
-      height:min(86vh, 680px);
+      height:min(86svh, 680px);
+      max-height:calc(100svh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
       background:rgba(8,16,28,0.96);
       border-radius:24px;
       padding:18px;
@@ -888,9 +918,11 @@ import { environment } from '../../envirnoments/envirnoment';
       flex-direction:column;
       color:#e8f1ff;
       box-shadow:0 24px 60px rgba(0,0,0,0.35);
+      box-sizing:border-box;
     }
     .call-card.video{
       width:min(96vw, 720px);
+      height:min(90svh, 720px);
     }
     .call-top{
       display:flex;
@@ -912,6 +944,13 @@ import { environment } from '../../envirnoments/envirnoment';
     .call-sub{
       font-size:12px;
       opacity:0.7;
+    }
+    .call-timer{
+      margin-left:auto;
+      font-size:12px;
+      letter-spacing:0.12em;
+      text-transform:uppercase;
+      color:rgba(255,255,255,0.7);
     }
     .call-body{
       flex:1;
@@ -948,6 +987,15 @@ import { environment } from '../../envirnoments/envirnoment';
       place-items:center;
       background:rgba(255,255,255,0.08);
       overflow:hidden;
+      border:1px solid rgba(255,255,255,0.08);
+      box-shadow:0 0 0 rgba(0,0,0,0);
+      transition: box-shadow 200ms ease, transform 200ms ease;
+    }
+    .call-avatar.speaking{
+      box-shadow:
+        0 0 0 6px rgba(0,155,220,0.18),
+        0 0 18px rgba(0,155,220,0.45);
+      transform:scale(1.03);
     }
     .call-avatar img{
       width:100%;
@@ -1006,6 +1054,13 @@ import { environment } from '../../envirnoments/envirnoment';
       .message-list{
         min-height:0;
       }
+      .thread-header{
+        flex-wrap:wrap;
+      }
+      .thread-actions{
+        width:100%;
+        justify-content:flex-end;
+      }
     }
     @media (max-width: 600px){
       .wrap{
@@ -1030,7 +1085,8 @@ import { environment } from '../../envirnoments/envirnoment';
         height:42px;
       }
       .call-card{
-        height:min(88vh, 620px);
+        height:min(80svh, 600px);
+        max-height:calc(100svh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
       }
       .call-local{
         width:96px;
@@ -1093,6 +1149,13 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   private pendingCallFrom: string | null = null;
   private pendingCallConversationId: string | null = null;
   private readonly callLogPrefix = '__call__|';
+  private audioContext?: AudioContext;
+  private audioAnalyser?: AnalyserNode;
+  private audioData?: Uint8Array<ArrayBuffer>;
+  private speakingRafId: number | null = null;
+  callSpeaking = false;
+  callTimerSeconds = 0;
+  private callTimerId: number | null = null;
   private callStartAt: number | null = null;
   private callLogSent = false;
   private destroyed = false;
@@ -1299,10 +1362,16 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     return '';
   }
 
+  callTimerLabel(): string {
+    if (!this.callStartAt) return '00:00';
+    return this.formatDuration(this.callTimerSeconds);
+  }
+
   private markCallActive(): void {
     if (!this.callStartAt) {
       this.callStartAt = Date.now();
     }
+    this.startCallTimer();
   }
 
   private getCallLogMeta(): {
@@ -1456,6 +1525,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
         this.messages = [...this.messages, sent];
         this.bumpConversation(sent);
         this.scrollToBottom();
+        this.forceUi();
       }
     } catch {}
     this.callLogSent = true;
@@ -1596,6 +1666,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
     this.remoteStream = new MediaStream();
     this.pendingCandidates = [];
+    this.startVoiceDetection();
 
     const iceServers: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }];
     this.pc = new RTCPeerConnection({ iceServers });
@@ -1693,6 +1764,10 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     this.pendingCandidates = [];
     this.callStartAt = null;
     this.callLogSent = false;
+    this.callSpeaking = false;
+    this.callTimerSeconds = 0;
+    this.stopCallTimer();
+    this.stopVoiceDetection();
 
     if (this.pc) {
       this.pc.ontrack = null;
@@ -1720,6 +1795,76 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       this.remoteAudio.srcObject = null;
     }
     this.forceUi();
+  }
+
+  private startCallTimer(): void {
+    if (this.callTimerId) return;
+    this.callTimerId = window.setInterval(() => {
+      if (!this.callStartAt) {
+        this.callTimerSeconds = 0;
+      } else {
+        this.callTimerSeconds = Math.max(0, Math.floor((Date.now() - this.callStartAt) / 1000));
+      }
+      this.forceUi();
+    }, 1000);
+  }
+
+  private stopCallTimer(): void {
+    if (!this.callTimerId) return;
+    window.clearInterval(this.callTimerId);
+    this.callTimerId = null;
+  }
+
+  private startVoiceDetection(): void {
+    if (!this.localStream || this.audioContext) return;
+    const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return;
+    try {
+      this.audioContext = new AudioCtx();
+      const context = this.audioContext;
+      if (!context) return;
+      const source = context.createMediaStreamSource(this.localStream);
+      this.audioAnalyser = context.createAnalyser();
+      this.audioAnalyser.fftSize = 512;
+      source.connect(this.audioAnalyser);
+      this.audioData = new Uint8Array(this.audioAnalyser.fftSize);
+      void context.resume().catch(() => {});
+      const tick = () => {
+        if (!this.audioAnalyser || !this.audioData) return;
+        this.audioAnalyser.getByteTimeDomainData(this.audioData);
+        let sum = 0;
+        for (let i = 0; i < this.audioData.length; i += 1) {
+          const sample = (this.audioData[i] - 128) / 128;
+          sum += sample * sample;
+        }
+        const rms = Math.sqrt(sum / this.audioData.length);
+        const speaking = rms > 0.03;
+        if (speaking !== this.callSpeaking) {
+          this.callSpeaking = speaking;
+          this.forceUi();
+        }
+        this.speakingRafId = requestAnimationFrame(tick);
+      };
+      tick();
+    } catch {
+      this.stopVoiceDetection();
+    }
+  }
+
+  private stopVoiceDetection(): void {
+    if (this.speakingRafId) {
+      cancelAnimationFrame(this.speakingRafId);
+      this.speakingRafId = null;
+    }
+    if (this.audioAnalyser) {
+      try { this.audioAnalyser.disconnect(); } catch {}
+    }
+    this.audioAnalyser = undefined;
+    this.audioData = undefined;
+    if (this.audioContext) {
+      void this.audioContext.close().catch(() => {});
+      this.audioContext = undefined;
+    }
   }
 
   async selectConversation(convo: Conversation, syncUrl: boolean): Promise<void> {
@@ -1882,12 +2027,24 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     input.style.overflowY = input.scrollHeight > maxHeight ? 'auto' : 'hidden';
   }
 
-  private scrollToBottom(): void {
+  private scrollToBottom(retry = 0): void {
     const list = this.messageList?.nativeElement;
-    if (!list) return;
-    requestAnimationFrame(() => {
+    if (!list) {
+      if (retry < 2) {
+        window.setTimeout(() => this.scrollToBottom(retry + 1), 60);
+      }
+      return;
+    }
+    const doScroll = () => {
       list.scrollTop = list.scrollHeight;
+    };
+    requestAnimationFrame(() => {
+      doScroll();
+      requestAnimationFrame(doScroll);
     });
+    if (retry === 0) {
+      window.setTimeout(doScroll, 0);
+    }
   }
 
   private mergeMessages(
@@ -1981,7 +2138,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
 
   isCallLogMessage(message: Message): boolean {
     const body = String(message?.body ?? '').trim();
-    return !!this.parseCallLog(body);
+    return body.includes(this.callLogPrefix) || !!this.parseCallLog(body);
   }
 
   private buildCallLogBody(
@@ -1994,18 +2151,16 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   }
 
   private parseCallLog(body: string): { status: string; kind: 'audio' | 'video'; duration: number } | null {
-    if (!body.startsWith(this.callLogPrefix)) return null;
-    const raw = body.slice(this.callLogPrefix.length);
-    const parts = raw.split('|');
-    const data: Record<string, string> = {};
-    for (const part of parts) {
-      const [key, value] = part.split('=');
-      if (!key || value === undefined) continue;
-      data[key] = value;
-    }
-    const status = String(data['status'] ?? '').trim();
-    const kind = data['kind'] === 'video' ? 'video' : 'audio';
-    const duration = Number(data['duration'] ?? 0);
+    const cleaned = body.replace(/\uFEFF/g, '').trim();
+    const unquoted =
+      (cleaned.startsWith('"') && cleaned.endsWith('"')) || (cleaned.startsWith("'") && cleaned.endsWith("'"))
+        ? cleaned.slice(1, -1)
+        : cleaned;
+    const match = unquoted.match(/__call__\|status=([^|]+)\|kind=(audio|video)\|duration=([0-9]+)/i);
+    if (!match) return null;
+    const status = String(match[1] ?? '').trim().toLowerCase();
+    const kind = match[2] === 'video' ? 'video' : 'audio';
+    const duration = Number(match[3] ?? 0);
     if (!status) return null;
     return {
       status,
