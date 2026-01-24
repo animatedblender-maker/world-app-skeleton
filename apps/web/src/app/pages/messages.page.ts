@@ -1453,10 +1453,15 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       if (this.callConversationId && this.activeConversationId !== this.callConversationId) {
         await this.activateConversationById(this.callConversationId);
       }
-      this.callIncoming = false;
+      if (this.callConversationId) {
+        this.callConnecting = true;
+        this.callIncoming = false;
+        this.callActive = false;
+        this.callError = '';
+        this.sendSignal('call-accept', this.callConversationId, { callType: type, to: this.callFromId });
+      }
       this.callService.clearIncomingCall();
       this.forceUi();
-      await this.startCall(type);
       return;
     }
     const offer = this.incomingOffer;
@@ -1559,9 +1564,12 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     if (!type || !conversationId || !from || from === this.meId) return;
 
     if (type === 'call-offer') {
-      if (this.callActive || this.callConnecting || this.callIncoming) {
+      if (this.callActive || this.callIncoming || (this.callConnecting && this.callFromId !== this.meId)) {
         this.sendSignal('call-busy', conversationId);
         return;
+      }
+      if (this.callConnecting && this.callFromId === this.meId) {
+        this.cleanupCall(false);
       }
       const callType = msg.callType === 'video' ? 'video' : 'audio';
       if (!msg.sdp) return;
@@ -1579,6 +1587,21 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       if (conversationId !== this.activeConversationId) {
         await this.activateConversationById(conversationId);
       }
+      return;
+    }
+
+    if (type === 'call-accept') {
+      if (this.callFromId !== this.meId || !this.callConversationId) return;
+      if (conversationId !== this.callConversationId) return;
+      try {
+        const callType = msg.callType === 'video' ? 'video' : (this.callType ?? 'audio');
+        this.callType = callType;
+        await this.ensurePeerConnection(callType);
+        if (!this.pc) return;
+        const offer = await this.pc.createOffer();
+        await this.pc.setLocalDescription(offer);
+        this.sendSignal('call-offer', this.callConversationId, { sdp: offer, callType });
+      } catch {}
       return;
     }
 
@@ -1796,6 +1819,11 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     if (this.callDisconnectTimer) return;
     this.callDisconnectTimer = window.setTimeout(() => {
       if (this.callActive) {
+        if (this.callConversationId) {
+          this.sendSignal('call-end', this.callConversationId);
+        }
+        this.cleanupCall();
+      } else if (this.callConnecting) {
         this.cleanupCall();
       }
     }, 8000);
