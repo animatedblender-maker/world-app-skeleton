@@ -223,7 +223,8 @@ wss.on('connection', async (socket, req) => {
       if (!memberIds.includes(user.id)) return;
 
       if (type === 'call-offer') {
-        const kind = msg?.callType === 'video' ? 'Video call' : 'Voice call';
+        const callParam = msg?.callType === 'video' ? 'video' : 'audio';
+        const kind = callParam === 'video' ? 'Video call' : 'Voice call';
         let callerName = 'Incoming call';
         try {
           const { rows: profileRows } = await pool.query<{ display_name: string | null; username: string | null }>(
@@ -244,7 +245,7 @@ wss.on('connection', async (socket, req) => {
             push.sendToUser(memberId, {
               title: callerName,
               body: `Incoming ${kind.toLowerCase()}.`,
-              url: `/messages?c=${conversationId}`,
+              url: `/messages?c=${conversationId}&call=${callParam}&from=${user.id}`,
               tag: `call:${conversationId}`,
             })
           )

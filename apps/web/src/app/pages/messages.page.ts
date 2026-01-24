@@ -1089,6 +1089,9 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   private localStream?: MediaStream;
   private remoteStream?: MediaStream;
   private pendingCandidates: RTCIceCandidateInit[] = [];
+  private pendingCallType: 'audio' | 'video' | null = null;
+  private pendingCallFrom: string | null = null;
+  private pendingCallConversationId: string | null = null;
   private readonly callLogPrefix = '__call__|';
   private callStartAt: number | null = null;
   private callLogSent = false;
@@ -1130,6 +1133,13 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
 
     this.routeSub = this.route.queryParamMap.subscribe((params) => {
       const convoId = params.get('c');
+      const callParam = params.get('call');
+      const fromParam = params.get('from');
+      if (convoId && callParam) {
+        this.pendingCallType = callParam === 'video' ? 'video' : 'audio';
+        this.pendingCallFrom = fromParam;
+        this.pendingCallConversationId = convoId;
+      }
       if (!convoId) return;
       if (convoId !== this.activeConversationId) {
         void this.activateConversationById(convoId);
@@ -1138,6 +1148,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       if (!this.messages.length) {
         void this.loadMessages(convoId, false);
       }
+      this.maybeShowCallFromParams();
     });
 
     this.pendingSub = this.messagesService.pendingConversation$.subscribe((convo) => {
@@ -1280,7 +1291,9 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
 
   callStatusText(): string {
     if (this.callError) return this.callError;
-    if (this.callIncoming) return 'Incoming call';
+    if (this.callIncoming) {
+      return this.incomingOffer ? 'Incoming call' : 'Tap accept to call back';
+    }
     if (this.callConnecting) return 'Connecting...';
     if (this.callActive) return 'In call';
     return '';
@@ -1302,6 +1315,32 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       kind: this.callType,
       startedAt: this.callStartAt,
     };
+  }
+
+  private maybeShowCallFromParams(): void {
+    if (!this.pendingCallType || !this.pendingCallConversationId) return;
+    if (this.pendingCallConversationId !== this.activeConversationId) return;
+    if (this.callActive || this.callConnecting || this.callIncoming) return;
+    this.callType = this.pendingCallType;
+    this.callConversationId = this.pendingCallConversationId;
+    this.callFromId = this.pendingCallFrom;
+    this.callIncoming = true;
+    this.callConnecting = false;
+    this.callActive = false;
+    this.callError = '';
+    this.pendingCallType = null;
+    this.pendingCallFrom = null;
+    this.pendingCallConversationId = null;
+    this.clearCallParams();
+    this.forceUi();
+  }
+
+  private clearCallParams(): void {
+    void this.router.navigate([], {
+      relativeTo: this.route,
+      queryParams: { call: null, from: null },
+      queryParamsHandling: 'merge',
+    });
   }
 
   async startCall(type: 'audio' | 'video'): Promise<void> {
@@ -1329,7 +1368,16 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   }
 
   async acceptCall(): Promise<void> {
-    if (!this.incomingOffer) return;
+    if (!this.incomingOffer) {
+      const type = this.callType ?? 'audio';
+      if (this.callConversationId && this.activeConversationId !== this.callConversationId) {
+        await this.activateConversationById(this.callConversationId);
+      }
+      this.callIncoming = false;
+      this.forceUi();
+      await this.startCall(type);
+      return;
+    }
     const offer = this.incomingOffer;
     this.callConversationId = offer.conversationId;
     this.callType = offer.callType;
@@ -1687,6 +1735,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       });
     }
     await this.loadMessages(convo.id, false);
+    this.maybeShowCallFromParams();
   }
 
   private async activateConversationById(convoId: string): Promise<void> {
