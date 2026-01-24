@@ -165,7 +165,7 @@ import { environment } from '../../envirnoments/envirnoment';
   <span class="message-edited" *ngIf="isEdited(message)">edited</span>
   <span class="message-status" *ngIf="messageStatus(message) as status" [class.read]="status === 'read'" [innerHTML]="statusGlyph(status)"></span>
 </div>
-<div class="message-actions" *ngIf="message.sender_id === meId && !isEditing(message)">
+<div class="message-actions" *ngIf="message.sender_id === meId && !isEditing(message) && !isCallLogMessage(message)">
   <button class="message-action" type="button" (click)="startEditMessage(message)">Edit</button>
   <button class="message-action danger" type="button" (click)="deleteMessage(message)">Delete</button>
 </div>
@@ -1089,6 +1089,9 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   private localStream?: MediaStream;
   private remoteStream?: MediaStream;
   private pendingCandidates: RTCIceCandidateInit[] = [];
+  private readonly callLogPrefix = '__call__|';
+  private callStartAt: number | null = null;
+  private callLogSent = false;
   private destroyed = false;
 
   constructor(
@@ -1283,6 +1286,24 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     return '';
   }
 
+  private markCallActive(): void {
+    if (!this.callStartAt) {
+      this.callStartAt = Date.now();
+    }
+  }
+
+  private getCallLogMeta(): {
+    conversationId: string | null;
+    kind: 'audio' | 'video' | null;
+    startedAt: number | null;
+  } {
+    return {
+      conversationId: this.callConversationId,
+      kind: this.callType,
+      startedAt: this.callStartAt,
+    };
+  }
+
   async startCall(type: 'audio' | 'video'): Promise<void> {
     if (!this.activeConversationId || !this.canStartCall()) return;
     this.callType = type;
@@ -1292,6 +1313,8 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     this.callActive = false;
     this.callFromId = this.meId;
     this.callError = '';
+    this.callStartAt = null;
+    this.callLogSent = false;
     this.forceUi();
     try {
       await this.ensurePeerConnection(type);
@@ -1315,6 +1338,8 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     this.callConnecting = true;
     this.callActive = false;
     this.callError = '';
+    this.callStartAt = null;
+    this.callLogSent = false;
     this.forceUi();
     try {
       await this.ensurePeerConnection(offer.callType);
@@ -1361,7 +1386,31 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     if (this.callConversationId) {
       this.sendSignal('call-end', this.callConversationId);
     }
+    const meta = this.getCallLogMeta();
+    const status = this.callActive || this.callStartAt ? 'ended' : 'missed';
+    void this.sendCallLog(status, meta);
     this.cleanupCall();
+  }
+
+  private async sendCallLog(
+    status: 'ended' | 'missed',
+    meta: { conversationId: string | null; kind: 'audio' | 'video' | null; startedAt: number | null }
+  ): Promise<void> {
+    if (this.callLogSent) return;
+    const conversationId = meta.conversationId;
+    if (!conversationId) return;
+    const kind: 'audio' | 'video' = meta.kind === 'video' ? 'video' : 'audio';
+    const durationSeconds = meta.startedAt ? Math.round((Date.now() - meta.startedAt) / 1000) : 0;
+    const body = this.buildCallLogBody(status, kind, durationSeconds);
+    try {
+      const sent = await this.messagesService.sendMessage(conversationId, body);
+      if (sent) {
+        this.messages = [...this.messages, sent];
+        this.bumpConversation(sent);
+        this.scrollToBottom();
+      }
+    } catch {}
+    this.callLogSent = true;
   }
 
   private async connectSignaling(): Promise<void> {
@@ -1437,6 +1486,8 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       this.callIncoming = true;
       this.callConnecting = false;
       this.callActive = false;
+      this.callStartAt = null;
+      this.callLogSent = false;
       this.forceUi();
       if (conversationId !== this.activeConversationId) {
         await this.activateConversationById(conversationId);
@@ -1452,6 +1503,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       await this.flushIceCandidates();
       this.callActive = true;
       this.callConnecting = false;
+      this.markCallActive();
       this.forceUi();
       return;
     }
@@ -1471,7 +1523,15 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       return;
     }
 
-    if (type === 'call-decline' || type === 'call-end' || type === 'call-busy') {
+    if (type === 'call-decline' || type === 'call-busy') {
+      if (this.callFromId === this.meId) {
+        void this.sendCallLog('missed', this.getCallLogMeta());
+      }
+      this.cleanupCall();
+      return;
+    }
+
+    if (type === 'call-end') {
       this.cleanupCall();
     }
   }
@@ -1513,6 +1573,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       if (state === 'connected') {
         this.callActive = true;
         this.callConnecting = false;
+        this.markCallActive();
         this.forceUi();
       }
       if (state === 'failed' || state === 'disconnected' || state === 'closed') {
@@ -1582,6 +1643,8 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     this.callFromId = null;
     this.incomingOffer = null;
     this.pendingCandidates = [];
+    this.callStartAt = null;
+    this.callLogSent = false;
 
     if (this.pc) {
       this.pc.ontrack = null;
@@ -1857,12 +1920,82 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     const body = String(message?.body ?? '');
     const trimmed = body.trim();
     if (!trimmed) return '';
+    const callLog = this.parseCallLog(trimmed);
+    if (callLog) return this.formatCallLog(callLog);
     if (message?.id && trimmed === message.id) return '';
     if (this.looksLikeId(trimmed)) return '';
     if (this.stripTrailingMeta(trimmed) !== trimmed) {
       return this.stripTrailingMeta(trimmed);
     }
     return body;
+  }
+
+  isCallLogMessage(message: Message): boolean {
+    const body = String(message?.body ?? '').trim();
+    return !!this.parseCallLog(body);
+  }
+
+  private buildCallLogBody(
+    status: 'ended' | 'missed',
+    kind: 'audio' | 'video',
+    durationSeconds: number
+  ): string {
+    const duration = Math.max(0, Math.floor(durationSeconds));
+    return `${this.callLogPrefix}status=${status}|kind=${kind}|duration=${duration}`;
+  }
+
+  private parseCallLog(body: string): { status: string; kind: 'audio' | 'video'; duration: number } | null {
+    if (!body.startsWith(this.callLogPrefix)) return null;
+    const raw = body.slice(this.callLogPrefix.length);
+    const parts = raw.split('|');
+    const data: Record<string, string> = {};
+    for (const part of parts) {
+      const [key, value] = part.split('=');
+      if (!key || value === undefined) continue;
+      data[key] = value;
+    }
+    const status = String(data.status ?? '').trim();
+    const kind = data.kind === 'video' ? 'video' : 'audio';
+    const duration = Number(data.duration ?? 0);
+    if (!status) return null;
+    return {
+      status,
+      kind,
+      duration: Number.isFinite(duration) ? duration : 0,
+    };
+  }
+
+  private formatCallLog(log: { status: string; kind: 'audio' | 'video'; duration: number }): string {
+    const kindLabel = log.kind === 'video' ? 'Video call' : 'Voice call';
+    let label = '';
+    if (log.status === 'ended') {
+      label = `${kindLabel} ended`;
+      if (log.duration > 0) {
+        label += ` (${this.formatDuration(log.duration)})`;
+      }
+      return label;
+    }
+    if (log.status === 'missed') {
+      return `Missed ${kindLabel}`;
+    }
+    if (log.status === 'busy') {
+      return `Missed ${kindLabel}`;
+    }
+    if (log.status === 'declined') {
+      return `${kindLabel} declined`;
+    }
+    return `${kindLabel} call`;
+  }
+
+  private formatDuration(totalSeconds: number): string {
+    const seconds = Math.max(0, Math.floor(totalSeconds));
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    if (hours > 0) {
+      return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    }
+    return `${minutes}:${String(secs).padStart(2, '0')}`;
   }
 
   private stripTrailingMeta(value: string): string {
@@ -1887,6 +2020,8 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     const last = convo.last_message;
     if (!last) return 'Start a conversation';
     const body = String(last.body || '').trim();
+    const callLog = this.parseCallLog(body);
+    if (callLog) return this.formatCallLog(callLog);
     if (body && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body)) {
       return body;
     }
@@ -2099,6 +2234,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
 
   startEditMessage(message: Message): void {
     if (!this.meId || message.sender_id !== this.meId) return;
+    if (this.isCallLogMessage(message)) return;
     const body = String(message.body ?? '').trim();
     if (!body) return;
     this.editingMessageId = message.id;

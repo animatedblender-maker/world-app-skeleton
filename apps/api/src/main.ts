@@ -222,6 +222,35 @@ wss.on('connection', async (socket, req) => {
       const memberIds = rows.map((row) => row.user_id);
       if (!memberIds.includes(user.id)) return;
 
+      if (type === 'call-offer') {
+        const kind = msg?.callType === 'video' ? 'Video call' : 'Voice call';
+        let callerName = 'Incoming call';
+        try {
+          const { rows: profileRows } = await pool.query<{ display_name: string | null; username: string | null }>(
+            `
+            select display_name, username
+            from public.profiles
+            where user_id = $1
+            `,
+            [user.id]
+          );
+          const profile = profileRows[0];
+          const name = profile?.display_name?.trim() || profile?.username?.trim();
+          if (name) callerName = name;
+        } catch {}
+        const notifyTargets = memberIds.filter((memberId) => memberId !== user.id);
+        await Promise.all(
+          notifyTargets.map((memberId) =>
+            push.sendToUser(memberId, {
+              title: callerName,
+              body: `Incoming ${kind.toLowerCase()}.`,
+              url: `/messages?c=${conversationId}`,
+              tag: `call:${conversationId}`,
+            })
+          )
+        );
+      }
+
       const payload = JSON.stringify({
         ...msg,
         from: user.id,
