@@ -12,6 +12,7 @@ import { PushService } from '../core/services/push.service';
 import { Conversation, Message } from '../core/models/messages.model';
 import { PostAuthor } from '../core/models/post.model';
 import { VideoPlayerComponent } from '../components/video-player.component';
+import { environment } from '../../envirnoments/envirnoment';
 
 @Component({
   selector: 'app-messages-page',
@@ -87,6 +88,26 @@ import { VideoPlayerComponent } from '../components/video-player.component';
                 >
                   {{ handle }}
                 </div>
+              </div>
+              <div class="thread-actions">
+                <button
+                  class="call-btn"
+                  type="button"
+                  [disabled]="!canStartCall()"
+                  (click)="startCall('audio')"
+                  aria-label="Start voice call"
+                >
+                  &#x260E;
+                </button>
+                <button
+                  class="call-btn"
+                  type="button"
+                  [disabled]="!canStartCall()"
+                  (click)="startCall('video')"
+                  aria-label="Start video call"
+                >
+                  &#x1F4F9;
+                </button>
               </div>
             </div>
 
@@ -210,6 +231,61 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       <div class="lightbox-card" (click)="$event.stopPropagation()">
         <button class="lightbox-close" type="button" (click)="closeImageLightbox()">x</button>
         <img [src]="lightboxUrl" alt="Preview" />
+      </div>
+    </div>
+
+    <div class="call-overlay" *ngIf="callUiOpen">
+      <div class="call-card" [class.video]="callType === 'video'" (click)="$event.stopPropagation()">
+        <div class="call-top">
+          <img class="call-logo" src="/logo.png" alt="Matterya" />
+          <div>
+            <div class="call-title">{{ callTitle() }}</div>
+            <div class="call-sub">{{ callStatusText() }}</div>
+          </div>
+        </div>
+        <div class="call-body">
+          <video
+            #remoteVideo
+            class="call-remote"
+            autoplay
+            playsinline
+            *ngIf="callType === 'video'"
+          ></video>
+          <div class="call-avatar" *ngIf="callType !== 'video'">
+            <img *ngIf="callPeerAvatar()" [src]="callPeerAvatar()" alt="avatar" />
+            <div class="initials" *ngIf="!callPeerAvatar()">
+              {{ initialsFor(callPeer()) }}
+            </div>
+          </div>
+          <video
+            #localVideo
+            class="call-local"
+            autoplay
+            muted
+            playsinline
+            *ngIf="callType === 'video'"
+          ></video>
+        </div>
+        <div class="call-controls">
+          <ng-container *ngIf="callIncoming; else activeControls">
+            <button class="call-action accept" type="button" (click)="acceptCall()">Accept</button>
+            <button class="call-action end" type="button" (click)="declineCall()">Decline</button>
+          </ng-container>
+          <ng-template #activeControls>
+            <button class="call-action ghost" type="button" (click)="toggleMute()">
+              {{ callMuted ? 'Unmute' : 'Mute' }}
+            </button>
+            <button
+              class="call-action ghost"
+              type="button"
+              *ngIf="callType === 'video'"
+              (click)="toggleCamera()"
+            >
+              {{ callCameraOff ? 'Camera on' : 'Camera off' }}
+            </button>
+            <button class="call-action end" type="button" (click)="endCall()">End</button>
+          </ng-template>
+        </div>
       </div>
     </div>
   `,
@@ -440,6 +516,25 @@ import { VideoPlayerComponent } from '../components/video-player.component';
     .thread-sub{
       font-size:12px;
       opacity:0.6;
+    }
+    .thread-actions{
+      margin-left:auto;
+      display:flex;
+      gap:8px;
+    }
+    .call-btn{
+      width:34px;
+      height:34px;
+      border-radius:10px;
+      border:1px solid rgba(7,20,40,0.15);
+      background:rgba(7,28,42,0.06);
+      color:rgba(7,20,40,0.9);
+      font-size:16px;
+      cursor:pointer;
+    }
+    .call-btn:disabled{
+      opacity:0.45;
+      cursor:not-allowed;
     }
     .thread-empty{
       padding:24px;
@@ -773,6 +868,119 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       cursor:pointer;
       font-weight:800;
     }
+    .call-overlay{
+      position:fixed;
+      inset:0;
+      background:rgba(5,10,18,0.75);
+      backdrop-filter:blur(10px);
+      display:grid;
+      place-items:center;
+      z-index:120;
+      padding:16px;
+    }
+    .call-card{
+      width:min(92vw, 520px);
+      height:min(86vh, 680px);
+      background:rgba(8,16,28,0.96);
+      border-radius:24px;
+      padding:18px;
+      display:flex;
+      flex-direction:column;
+      color:#e8f1ff;
+      box-shadow:0 24px 60px rgba(0,0,0,0.35);
+    }
+    .call-card.video{
+      width:min(96vw, 720px);
+    }
+    .call-top{
+      display:flex;
+      align-items:center;
+      gap:12px;
+      margin-bottom:12px;
+    }
+    .call-logo{
+      width:32px;
+      height:32px;
+      border-radius:10px;
+      object-fit:cover;
+      background:rgba(255,255,255,0.08);
+    }
+    .call-title{
+      font-weight:700;
+      font-size:16px;
+    }
+    .call-sub{
+      font-size:12px;
+      opacity:0.7;
+    }
+    .call-body{
+      flex:1;
+      position:relative;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      border-radius:18px;
+      background:rgba(0,0,0,0.2);
+      overflow:hidden;
+    }
+    .call-remote{
+      width:100%;
+      height:100%;
+      object-fit:cover;
+      background:#000;
+    }
+    .call-local{
+      position:absolute;
+      width:130px;
+      height:96px;
+      bottom:12px;
+      right:12px;
+      border-radius:12px;
+      border:1px solid rgba(255,255,255,0.25);
+      background:#000;
+      object-fit:cover;
+    }
+    .call-avatar{
+      width:120px;
+      height:120px;
+      border-radius:50%;
+      display:grid;
+      place-items:center;
+      background:rgba(255,255,255,0.08);
+      overflow:hidden;
+    }
+    .call-avatar img{
+      width:100%;
+      height:100%;
+      object-fit:cover;
+    }
+    .call-controls{
+      margin-top:14px;
+      display:flex;
+      gap:10px;
+      justify-content:center;
+      flex-wrap:wrap;
+    }
+    .call-action{
+      border:0;
+      border-radius:18px;
+      padding:10px 16px;
+      background:rgba(255,255,255,0.12);
+      color:#eef6ff;
+      font-weight:600;
+      cursor:pointer;
+    }
+    .call-action.ghost{
+      background:rgba(255,255,255,0.08);
+    }
+    .call-action.accept{
+      background:#2f9d66;
+      color:#fff;
+    }
+    .call-action.end{
+      background:#d84c4c;
+      color:#fff;
+    }
     @media (max-width: 900px){
       .wrap{
         padding:16px 12px 16px;
@@ -821,6 +1029,13 @@ import { VideoPlayerComponent } from '../components/video-player.component';
         border-radius:14px;
         height:42px;
       }
+      .call-card{
+        height:min(88vh, 620px);
+      }
+      .call-local{
+        width:96px;
+        height:72px;
+      }
     }
     `
   ],
@@ -829,6 +1044,8 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   @ViewChild('mediaInput') mediaInput?: ElementRef<HTMLInputElement>;
   @ViewChild('messageInput') messageInput?: ElementRef<HTMLTextAreaElement>;
   @ViewChild('messageList') messageList?: ElementRef<HTMLDivElement>;
+  @ViewChild('remoteVideo') remoteVideo?: ElementRef<HTMLVideoElement>;
+  @ViewChild('localVideo') localVideo?: ElementRef<HTMLVideoElement>;
   conversations: Conversation[] = [];
   messages: Message[] = [];
   activeConversation: Conversation | null = null;
@@ -855,6 +1072,24 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   mobileThreadOnly = false;
   unreadConversationIds = new Set<string>();
   private messageNotifications: NotificationItem[] = [];
+  callActive = false;
+  callConnecting = false;
+  callIncoming = false;
+  callType: 'audio' | 'video' | null = null;
+  callConversationId: string | null = null;
+  callMuted = false;
+  callCameraOff = false;
+  callError = '';
+  private callFromId: string | null = null;
+  private incomingOffer: { conversationId: string; from: string; sdp: any; callType: 'audio' | 'video' } | null =
+    null;
+  private ws?: WebSocket;
+  private wsConnected = false;
+  private pc?: RTCPeerConnection;
+  private localStream?: MediaStream;
+  private remoteStream?: MediaStream;
+  private pendingCandidates: RTCIceCandidateInit[] = [];
+  private destroyed = false;
 
   constructor(
     private route: ActivatedRoute,
@@ -873,6 +1108,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     const user = await this.auth.getUser();
     this.meId = user?.id ?? null;
     this.forceUi();
+    void this.connectSignaling();
 
     const stashed = this.messagesService.getPendingConversation();
     const navState = (this.router.getCurrentNavigation()?.extras.state ?? history.state) as
@@ -918,12 +1154,15 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.destroyed = true;
     this.routeSub?.unsubscribe();
     this.pendingSub?.unsubscribe();
     if (this.pollTimer) {
       window.clearInterval(this.pollTimer);
       this.pollTimer = null;
     }
+    this.ws?.close();
+    this.cleanupCall();
     this.clearMedia();
   }
 
@@ -1000,6 +1239,378 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     }, 6000);
   }
 
+  get callUiOpen(): boolean {
+    return this.callActive || this.callConnecting || this.callIncoming;
+  }
+
+  canStartCall(): boolean {
+    return !!(
+      this.activeConversationId &&
+      this.wsConnected &&
+      !this.callActive &&
+      !this.callConnecting &&
+      !this.callIncoming
+    );
+  }
+
+  callPeer(): PostAuthor | null {
+    if (!this.activeConversation) return null;
+    if (this.callFromId) {
+      return (
+        this.activeConversation.members.find((member) => member.user_id === this.callFromId) ??
+        this.otherMember(this.activeConversation)
+      );
+    }
+    return this.otherMember(this.activeConversation);
+  }
+
+  callPeerAvatar(): string {
+    return this.callPeer()?.avatar_url ?? '';
+  }
+
+  callTitle(): string {
+    const peer = this.callPeer();
+    const name = peer ? this.displayNameFor(peer) : 'Member';
+    const kind = this.callType === 'video' ? 'Video call' : 'Voice call';
+    return `${kind} · ${name}`;
+  }
+
+  callStatusText(): string {
+    if (this.callError) return this.callError;
+    if (this.callIncoming) return 'Incoming call';
+    if (this.callConnecting) return 'Connecting...';
+    if (this.callActive) return 'In call';
+    return '';
+  }
+
+  async startCall(type: 'audio' | 'video'): Promise<void> {
+    if (!this.activeConversationId || !this.canStartCall()) return;
+    this.callType = type;
+    this.callConversationId = this.activeConversationId;
+    this.callConnecting = true;
+    this.callIncoming = false;
+    this.callActive = false;
+    this.callFromId = this.meId;
+    this.callError = '';
+    this.forceUi();
+    try {
+      await this.ensurePeerConnection(type);
+      if (!this.pc) return;
+      const offer = await this.pc.createOffer();
+      await this.pc.setLocalDescription(offer);
+      this.sendSignal('call-offer', this.callConversationId, { sdp: offer, callType: type });
+    } catch (e: any) {
+      this.callError = e?.message ?? 'Call failed.';
+      this.cleanupCall(false);
+    }
+  }
+
+  async acceptCall(): Promise<void> {
+    if (!this.incomingOffer) return;
+    const offer = this.incomingOffer;
+    this.callConversationId = offer.conversationId;
+    this.callType = offer.callType;
+    this.callFromId = offer.from;
+    this.callIncoming = false;
+    this.callConnecting = true;
+    this.callActive = false;
+    this.callError = '';
+    this.forceUi();
+    try {
+      await this.ensurePeerConnection(offer.callType);
+      if (!this.pc) return;
+      await this.pc.setRemoteDescription(offer.sdp);
+      await this.flushIceCandidates();
+      const answer = await this.pc.createAnswer();
+      await this.pc.setLocalDescription(answer);
+      this.sendSignal('call-answer', offer.conversationId, { sdp: answer });
+      this.incomingOffer = null;
+    } catch (e: any) {
+      this.callError = e?.message ?? 'Call failed.';
+      this.cleanupCall(false);
+    }
+  }
+
+  declineCall(): void {
+    if (!this.incomingOffer) return;
+    this.sendSignal('call-decline', this.incomingOffer.conversationId);
+    this.cleanupCall();
+  }
+
+  toggleMute(): void {
+    if (!this.localStream) return;
+    const next = !this.callMuted;
+    this.localStream.getAudioTracks().forEach((track) => {
+      track.enabled = !next;
+    });
+    this.callMuted = next;
+    this.forceUi();
+  }
+
+  toggleCamera(): void {
+    if (!this.localStream) return;
+    const next = !this.callCameraOff;
+    this.localStream.getVideoTracks().forEach((track) => {
+      track.enabled = !next;
+    });
+    this.callCameraOff = next;
+    this.forceUi();
+  }
+
+  endCall(): void {
+    if (this.callConversationId) {
+      this.sendSignal('call-end', this.callConversationId);
+    }
+    this.cleanupCall();
+  }
+
+  private async connectSignaling(): Promise<void> {
+    if (this.destroyed || !this.meId) return;
+    const token = await this.auth.getAccessToken();
+    if (!token) return;
+    const base = environment.apiBaseUrl || environment.graphqlEndpoint.replace(/\/graphql$/, '');
+    const wsBase = base.startsWith('https') ? base.replace(/^https/, 'wss') : base.replace(/^http/, 'ws');
+    const wsUrl = `${wsBase}/ws?token=${encodeURIComponent(token)}`;
+
+    if (this.ws && this.ws.url === wsUrl && this.ws.readyState <= WebSocket.OPEN) return;
+    this.ws?.close();
+
+    const socket = new WebSocket(wsUrl);
+    this.ws = socket;
+
+    socket.onopen = () => {
+      this.wsConnected = true;
+      this.forceUi();
+    };
+    socket.onmessage = (event) => {
+      void this.handleSignal(String(event.data ?? ''));
+    };
+    socket.onclose = () => {
+      this.wsConnected = false;
+      this.ws = undefined;
+      this.forceUi();
+      if (!this.destroyed) {
+        window.setTimeout(() => void this.connectSignaling(), 3000);
+      }
+    };
+    socket.onerror = () => {
+      this.wsConnected = false;
+    };
+  }
+
+  private sendSignal(type: string, conversationId: string | null, payload?: Record<string, any>): void {
+    if (!conversationId || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const msg = {
+      type,
+      conversationId,
+      from: this.meId,
+      ...(payload ?? {}),
+    };
+    try {
+      this.ws.send(JSON.stringify(msg));
+    } catch {}
+  }
+
+  private async handleSignal(raw: string): Promise<void> {
+    let msg: any = null;
+    try {
+      msg = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    const type = String(msg?.type ?? '');
+    const conversationId = String(msg?.conversationId ?? '');
+    const from = String(msg?.from ?? '');
+    if (!type || !conversationId || !from || from === this.meId) return;
+
+    if (type === 'call-offer') {
+      if (this.callActive || this.callConnecting || this.callIncoming) {
+        this.sendSignal('call-busy', conversationId);
+        return;
+      }
+      const callType = msg?.callType === 'video' ? 'video' : 'audio';
+      if (!msg?.sdp) return;
+      this.incomingOffer = { conversationId, from, sdp: msg.sdp, callType };
+      this.callConversationId = conversationId;
+      this.callType = callType;
+      this.callFromId = from;
+      this.callIncoming = true;
+      this.callConnecting = false;
+      this.callActive = false;
+      this.forceUi();
+      if (conversationId !== this.activeConversationId) {
+        await this.activateConversationById(conversationId);
+      }
+      return;
+    }
+
+    if (conversationId !== this.callConversationId) return;
+
+    if (type === 'call-answer' && msg?.sdp) {
+      if (!this.pc) return;
+      await this.pc.setRemoteDescription(msg.sdp);
+      await this.flushIceCandidates();
+      this.callActive = true;
+      this.callConnecting = false;
+      this.forceUi();
+      return;
+    }
+
+    if (type === 'ice-candidate' && msg?.candidate) {
+      if (!this.pc) {
+        this.pendingCandidates.push(msg.candidate);
+        return;
+      }
+      if (this.pc.remoteDescription) {
+        try {
+          await this.pc.addIceCandidate(msg.candidate);
+        } catch {}
+      } else {
+        this.pendingCandidates.push(msg.candidate);
+      }
+      return;
+    }
+
+    if (type === 'call-decline' || type === 'call-end' || type === 'call-busy') {
+      this.cleanupCall();
+    }
+  }
+
+  private async ensurePeerConnection(callType: 'audio' | 'video'): Promise<void> {
+    if (this.pc) return;
+    this.callMuted = false;
+    this.callCameraOff = false;
+
+    const constraints: MediaStreamConstraints = {
+      audio: true,
+      video: callType === 'video',
+    };
+    this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
+    this.remoteStream = new MediaStream();
+    this.pendingCandidates = [];
+
+    const iceServers: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }];
+    this.pc = new RTCPeerConnection({ iceServers });
+
+    this.pc.ontrack = (event) => {
+      const stream = event.streams?.[0];
+      if (!stream || !this.remoteStream) return;
+      for (const track of stream.getTracks()) {
+        if (!this.remoteStream.getTracks().some((t) => t.id === track.id)) {
+          this.remoteStream.addTrack(track);
+        }
+      }
+      this.attachRemoteStream();
+    };
+
+    this.pc.onicecandidate = (event) => {
+      if (!event.candidate) return;
+      this.sendSignal('ice-candidate', this.callConversationId, { candidate: event.candidate });
+    };
+
+    this.pc.onconnectionstatechange = () => {
+      const state = this.pc?.connectionState;
+      if (state === 'connected') {
+        this.callActive = true;
+        this.callConnecting = false;
+        this.forceUi();
+      }
+      if (state === 'failed' || state === 'disconnected' || state === 'closed') {
+        if (this.callActive || this.callConnecting) {
+          this.cleanupCall();
+        }
+      }
+    };
+
+    this.localStream.getTracks().forEach((track) => {
+      this.pc?.addTrack(track, this.localStream as MediaStream);
+    });
+
+    this.forceUi();
+    requestAnimationFrame(() => {
+      this.attachLocalStream();
+    });
+  }
+
+  private attachLocalStream(): void {
+    if (!this.localStream || this.callType !== 'video') return;
+    const video = this.localVideo?.nativeElement;
+    if (!video) return;
+    video.srcObject = this.localStream;
+    void video.play().catch(() => {});
+  }
+
+  private remoteAudio?: HTMLAudioElement;
+
+  private attachRemoteStream(): void {
+    if (!this.remoteStream) return;
+    if (this.callType === 'video') {
+      const video = this.remoteVideo?.nativeElement;
+      if (!video) return;
+      video.srcObject = this.remoteStream;
+      void video.play().catch(() => {});
+      return;
+    }
+    if (!this.remoteAudio) {
+      this.remoteAudio = new Audio();
+      this.remoteAudio.autoplay = true;
+    }
+    this.remoteAudio.srcObject = this.remoteStream as unknown as MediaStream;
+    void this.remoteAudio.play().catch(() => {});
+  }
+
+  private async flushIceCandidates(): Promise<void> {
+    if (!this.pc || !this.pendingCandidates.length) return;
+    const pending = [...this.pendingCandidates];
+    this.pendingCandidates = [];
+    for (const candidate of pending) {
+      try {
+        await this.pc.addIceCandidate(candidate);
+      } catch {}
+    }
+  }
+
+  private cleanupCall(resetError = true): void {
+    if (resetError) this.callError = '';
+    this.callActive = false;
+    this.callConnecting = false;
+    this.callIncoming = false;
+    this.callType = null;
+    this.callConversationId = null;
+    this.callMuted = false;
+    this.callCameraOff = false;
+    this.callFromId = null;
+    this.incomingOffer = null;
+    this.pendingCandidates = [];
+
+    if (this.pc) {
+      this.pc.ontrack = null;
+      this.pc.onicecandidate = null;
+      this.pc.onconnectionstatechange = null;
+      this.pc.close();
+    }
+    this.pc = undefined;
+
+    if (this.localStream) {
+      this.localStream.getTracks().forEach((track) => track.stop());
+      this.localStream = undefined;
+    }
+    if (this.remoteStream) {
+      this.remoteStream.getTracks().forEach((track) => track.stop());
+      this.remoteStream = undefined;
+    }
+    if (this.localVideo?.nativeElement) {
+      this.localVideo.nativeElement.srcObject = null;
+    }
+    if (this.remoteVideo?.nativeElement) {
+      this.remoteVideo.nativeElement.srcObject = null;
+    }
+    if (this.remoteAudio) {
+      this.remoteAudio.srcObject = null;
+    }
+    this.forceUi();
+  }
+
   async selectConversation(convo: Conversation, syncUrl: boolean): Promise<void> {
     this.activeConversation = convo;
     this.activeConversationId = convo.id;
@@ -1068,10 +1679,17 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       this.messageError = '';
       this.forceUi();
     }
+    const prevLastId = this.messages[this.messages.length - 1]?.id ?? null;
     let shouldScroll = false;
     try {
-      this.messages = await this.messagesService.listMessages(conversationId, 60);
-      shouldScroll = true;
+      const fetched = await this.messagesService.listMessages(conversationId, 60);
+      if (silent) {
+        this.messages = this.mergeMessages(conversationId, this.messages, fetched, 200);
+      } else {
+        this.messages = fetched;
+      }
+      const nextLastId = this.messages[this.messages.length - 1]?.id ?? null;
+      shouldScroll = nextLastId !== prevLastId || !silent;
       if (!silent) {
         await this.markConversationNotificationsRead(conversationId);
       }
@@ -1158,6 +1776,35 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     requestAnimationFrame(() => {
       list.scrollTop = list.scrollHeight;
     });
+  }
+
+  private mergeMessages(
+    conversationId: string,
+    existing: Message[],
+    incoming: Message[],
+    maxItems: number
+  ): Message[] {
+    const map = new Map<string, Message>();
+    for (const msg of existing) {
+      if (!msg?.id || msg.conversation_id !== conversationId) continue;
+      map.set(msg.id, msg);
+    }
+    for (const msg of incoming) {
+      if (!msg?.id || msg.conversation_id !== conversationId) continue;
+      map.set(msg.id, msg);
+    }
+    const merged = Array.from(map.values());
+    merged.sort((a, b) => this.messageEpoch(a.created_at) - this.messageEpoch(b.created_at));
+    if (merged.length > maxItems) return merged.slice(-maxItems);
+    return merged;
+  }
+
+  private messageEpoch(value: string): number {
+    if (!value) return 0;
+    const asNumber = Number(value);
+    if (Number.isFinite(asNumber)) return asNumber;
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : 0;
   }
 
   triggerMediaPicker(): void {

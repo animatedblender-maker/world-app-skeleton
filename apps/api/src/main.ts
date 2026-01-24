@@ -4,6 +4,8 @@ import { GraphQLError } from 'graphql';
 import { createYoga, createSchema, maskError as yogaMaskError } from 'graphql-yoga';
 import type { YogaInitialContext, YogaSchemaDefinition } from 'graphql-yoga';
 import { jwtVerify, createRemoteJWKSet } from 'jose';
+import http from 'node:http';
+import { WebSocketServer } from 'ws';
 
 import dotenv from 'dotenv';
 import path from 'node:path';
@@ -23,6 +25,7 @@ dotenv.config({ path: path.join(__dirname, '..', '.env') });
 import { typeDefs } from './graphql/typeDefs.js';
 import { resolvers } from './graphql/resolvers.js';
 import { PushService } from './push/push.service.js';
+import { pool } from './db.js';
 
 type AuthedUser = {
   id: string;
@@ -92,6 +95,24 @@ async function getUserFromRequest(req: Request): Promise<AuthedUser | null> {
   }
 }
 
+async function getUserFromToken(token: string | null): Promise<AuthedUser | null> {
+  try {
+    if (!token || !JWKS) return null;
+    const { payload } = await jwtVerify(token, JWKS, {});
+    return {
+      id: String(payload.sub),
+      email: typeof payload['email'] === 'string' ? payload['email'] : undefined,
+      role: typeof payload['role'] === 'string' ? payload['role'] : undefined,
+      aud:
+        typeof payload['aud'] === 'string' || Array.isArray(payload['aud'])
+          ? payload['aud']
+          : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
 const schema: YogaSchemaDefinition<Context, {}> = createSchema({ typeDefs, resolvers }) as YogaSchemaDefinition<
   Context,
   {}
@@ -122,6 +143,9 @@ const yoga = createYoga<Context>({
 
 const app = express();
 const push = new PushService();
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server, path: '/ws' });
+const socketsByUser = new Map<string, Set<any>>();
 
 app.use(express.json({ limit: '200kb' }));
 app.use(
@@ -165,12 +189,73 @@ app.post('/push/unsubscribe', async (req: Request, res: Response) => {
   return res.json({ ok: true });
 });
 
+wss.on('connection', async (socket, req) => {
+  const url = new URL(req.url ?? '', `http://${req.headers.host}`);
+  const token = url.searchParams.get('token');
+  const user = await getUserFromToken(token);
+  if (!user?.id) {
+    socket.close(1008, 'unauthorized');
+    return;
+  }
+
+  if (!socketsByUser.has(user.id)) {
+    socketsByUser.set(user.id, new Set());
+  }
+  socketsByUser.get(user.id)!.add(socket);
+
+  socket.on('message', async (data: any) => {
+    let msg: any = null;
+    try {
+      msg = JSON.parse(String(data ?? ''));
+    } catch {
+      return;
+    }
+    const type = String(msg?.type ?? '');
+    const conversationId = String(msg?.conversationId ?? '');
+    if (!type || !conversationId) return;
+
+    try {
+      const { rows } = await pool.query<{ user_id: string }>(
+        `select user_id from public.conversation_members where conversation_id = $1`,
+        [conversationId]
+      );
+      const memberIds = rows.map((row) => row.user_id);
+      if (!memberIds.includes(user.id)) return;
+
+      const payload = JSON.stringify({
+        ...msg,
+        from: user.id,
+      });
+      for (const memberId of memberIds) {
+        if (memberId === user.id) continue;
+        const sockets = socketsByUser.get(memberId);
+        if (!sockets) continue;
+        for (const s of sockets) {
+          if (s.readyState === 1) {
+            s.send(payload);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('ws signal failed', err);
+    }
+  });
+
+  socket.on('close', () => {
+    const set = socketsByUser.get(user.id);
+    if (!set) return;
+    set.delete(socket);
+    if (!set.size) socketsByUser.delete(user.id);
+  });
+});
+
 app.use('/graphql', (req: Request, res: Response) => {
   return yoga.handle(req, res);
 });
 
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`✅ GraphQL running at http://localhost:${PORT}/graphql`);
+  console.log(`✅ WS signaling at  http://localhost:${PORT}/ws`);
   console.log(`✅ Health at        http://localhost:${PORT}/health`);
   console.log(`✅ CORS origins allowed: ${ALLOWED_ORIGINS.join(', ')}`);
 });
