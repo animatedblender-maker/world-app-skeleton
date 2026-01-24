@@ -97,7 +97,7 @@ import { VideoPlayerComponent } from '../components/video-player.component';
             <div class="messages" *ngIf="activeConversation">
               <div class="status" *ngIf="loadingMessages">Loading messages...</div>
               <div class="status error" *ngIf="messageError">{{ messageError }}</div>
-              <div class="message-list" *ngIf="!loadingMessages">
+              <div class="message-list" *ngIf="!loadingMessages" #messageList>
                 <ng-container *ngFor="let message of messages; let i = index">
                   <div class="message-day" *ngIf="showDaySeparator(i)">
                     {{ formatDayLabel(message.created_at) }}
@@ -828,6 +828,7 @@ import { VideoPlayerComponent } from '../components/video-player.component';
 export class MessagesPageComponent implements OnInit, OnDestroy {
   @ViewChild('mediaInput') mediaInput?: ElementRef<HTMLInputElement>;
   @ViewChild('messageInput') messageInput?: ElementRef<HTMLTextAreaElement>;
+  @ViewChild('messageList') messageList?: ElementRef<HTMLDivElement>;
   conversations: Conversation[] = [];
   messages: Message[] = [];
   activeConversation: Conversation | null = null;
@@ -1067,8 +1068,10 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       this.messageError = '';
       this.forceUi();
     }
+    let shouldScroll = false;
     try {
       this.messages = await this.messagesService.listMessages(conversationId, 60);
+      shouldScroll = true;
       if (!silent) {
         await this.markConversationNotificationsRead(conversationId);
       }
@@ -1077,6 +1080,9 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     } finally {
       this.loadingMessages = false;
       this.forceUi();
+      if (shouldScroll) {
+        this.scrollToBottom();
+      }
     }
   }
 
@@ -1122,6 +1128,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       this.resetMessageInput();
       this.clearMedia();
       this.bumpConversation(sent);
+      this.scrollToBottom();
     } catch (e: any) {
       this.messageError = e?.message ?? String(e);
     } finally {
@@ -1143,6 +1150,14 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     const next = Math.min(Math.max(input.scrollHeight, minHeight), maxHeight);
     input.style.height = `${next}px`;
     input.style.overflowY = input.scrollHeight > maxHeight ? 'auto' : 'hidden';
+  }
+
+  private scrollToBottom(): void {
+    const list = this.messageList?.nativeElement;
+    if (!list) return;
+    requestAnimationFrame(() => {
+      list.scrollTop = list.scrollHeight;
+    });
   }
 
   triggerMediaPicker(): void {

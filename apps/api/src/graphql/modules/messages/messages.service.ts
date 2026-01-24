@@ -148,13 +148,13 @@ export class MessagesService {
       left join public.profiles pr on pr.user_id = m.sender_id
       where m.conversation_id = $1
         ${beforeClause}
-      order by m.created_at asc
+      order by m.created_at desc
       limit $2
       `,
       params
     );
 
-    return rows as MessageRow[];
+    return rows.reverse() as MessageRow[];
   }
 
   async startConversation(targetId: string, userId: string): Promise<ConversationRow> {
