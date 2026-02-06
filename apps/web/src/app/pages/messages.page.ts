@@ -29,20 +29,8 @@ import { VideoPlayerComponent } from '../components/video-player.component';
           <button class="logo-btn" type="button" (click)="goHome()">
             <img src="/logo.png" alt="Matterya" />
           </button>
-          <div class="icon-row">
-            <button class="icon-btn" type="button" (click)="openSearch()" aria-label="Search">
-              &#x1F50D;
-            </button>
-            <button class="icon-btn active" type="button" aria-label="Messages">
-              &#x1F4AC;
-              <span class="icon-badge" *ngIf="messagesBadgeCount">{{ messagesBadgeCount }}</span>
-            </button>
-            <button class="icon-btn" type="button" (click)="openNotifications()" aria-label="Notifications">
-              &#x1F514;
-            </button>
-          </div>
+          <button class="back-btn" type="button" (click)="goBack()">Back</button>
         </div>
-        <button class="ghost-link back-link" type="button" (click)="goBack()">Back</button>
         <div class="layout" [class.thread-only]="mobileThreadOnly">
           <aside class="panel">
             <div class="panel-title">Messages</div>
@@ -233,7 +221,6 @@ import { VideoPlayerComponent } from '../components/video-player.component';
                 <button type="button" class="composer-reply-close" (click)="cancelReply()">×</button>
               </div>
               <div class="composer-row">
-                <button class="composer-attach" type="button" (click)="triggerMediaPicker()">+</button>
                 <input
                   #mediaInput
                   type="file"
@@ -242,6 +229,9 @@ import { VideoPlayerComponent } from '../components/video-player.component';
                   (change)="onMediaSelected($event)"
                 />
                 <div class="composer-field">
+                  <button class="composer-attach" type="button" (click)="triggerMediaPicker()" title="Add media">
+                    +
+                  </button>
                   <textarea
                     #messageInput
                     class="composer-input"
@@ -351,7 +341,7 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       min-height:100%;
       height:100%;
       position:relative;
-      padding:28px 20px calc(36px + env(safe-area-inset-bottom));
+      padding:0;
       box-sizing:border-box;
       display:flex;
       flex-direction:column;
@@ -385,14 +375,16 @@ import { VideoPlayerComponent } from '../components/video-player.component';
     .card{
       position:relative;
       z-index:3;
-      max-width:1100px;
-      margin:0 auto;
-      background:rgba(255,255,255,0.9);
-      border-radius:28px;
-      padding:22px;
-      border:1px solid rgba(7,20,40,0.08);
-      box-shadow:0 28px 60px rgba(8,26,52,0.12);
-      backdrop-filter: blur(12px);
+      width:100%;
+      height:100%;
+      max-width:none;
+      margin:0;
+      background:transparent;
+      border-radius:0;
+      padding:0;
+      border:0;
+      box-shadow:none;
+      backdrop-filter: blur(10px);
       color:#0c1422;
       flex:1;
       box-sizing:border-box;
@@ -401,22 +393,45 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       min-height:0;
       overflow:hidden;
     }
-    .ghost-link{
+    .msg-topbar{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+      margin-bottom:12px;
+      flex-shrink:0;
+    }
+    .logo-btn{
+      width:44px;
+      height:44px;
+      border-radius:50%;
       border:0;
-      background:none;
-      color:rgba(10,20,32,0.7);
-      letter-spacing:0.22em;
+      background:rgba(10,14,22,0.85);
+      display:grid;
+      place-items:center;
+      cursor:pointer;
+      padding:0;
+    }
+    .logo-btn img{
+      width:34px;
+      height:34px;
+      object-fit:contain;
+    }
+    .back-btn{
+      border:0;
+      background:rgba(7,20,40,0.08);
+      color:rgba(10,20,32,0.85);
+      letter-spacing:0.18em;
       font-size:11px;
       text-transform:uppercase;
       cursor:pointer;
-    }
-    .back-link{
-      margin-bottom:12px;
+      padding:10px 14px;
+      border-radius:999px;
     }
     .layout{
       display:grid;
       grid-template-columns:320px 1fr;
-      gap:18px;
+      gap:0;
       align-items:stretch;
       flex:1;
       min-height:0;
@@ -927,8 +942,9 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       border-radius:16px;
       border:1px solid rgba(7,20,40,0.14);
       background:white;
-      padding:10px 12px;
+      padding:10px 12px 10px 44px;
       min-height:56px;
+      position:relative;
     }
     .composer-input{
       width:100%;
@@ -944,16 +960,21 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       overflow-y:hidden;
     }
     .composer-attach{
-      width:38px;
-      height:38px;
+      position:absolute;
+      left:10px;
+      top:10px;
+      width:26px;
+      height:26px;
       border-radius:50%;
       border:1px solid rgba(7,20,40,0.15);
-      background:white;
+      background:rgba(7,20,40,0.06);
       font-weight:900;
-      font-size:18px;
+      font-size:16px;
       line-height:1;
       cursor:pointer;
       color:rgba(7,20,40,0.7);
+      display:grid;
+      place-items:center;
     }
     .composer-send{
       border:0;
@@ -1207,56 +1228,6 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       .card{
       padding:16px;
     }
-    .msg-topbar{
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-      gap:12px;
-      margin-bottom:12px;
-    }
-    .logo-btn{
-      width:44px;
-      height:44px;
-      border-radius:50%;
-      border:0;
-      background:rgba(10,14,22,0.85);
-      display:grid;
-      place-items:center;
-      cursor:pointer;
-    }
-    .logo-btn img{
-      width:34px;
-      height:34px;
-    }
-    .icon-row{
-      display:flex;
-      gap:10px;
-    }
-    .icon-btn{
-      position:relative;
-      width:38px;
-      height:38px;
-      border-radius:50%;
-      border:0;
-      background:rgba(10,14,22,0.85);
-      color:#fff;
-      font-size:16px;
-      cursor:pointer;
-    }
-    .icon-btn.active{
-      box-shadow:0 0 0 2px rgba(0,199,255,0.35);
-    }
-    .icon-badge{
-      position:absolute;
-      top:-4px;
-      right:-4px;
-      background:#ff4d6d;
-      color:#fff;
-      border-radius:999px;
-      padding:2px 6px;
-      font-size:10px;
-      font-weight:700;
-    }
       .bubble{
         max-width:86%;
       }
@@ -1268,9 +1239,12 @@ import { VideoPlayerComponent } from '../components/video-player.component';
         align-items:stretch;
       }
       .composer-attach{
-        width:100%;
-        border-radius:14px;
-        height:42px;
+        left:8px;
+        top:8px;
+        width:24px;
+        height:24px;
+        font-size:15px;
+        border-radius:50%;
       }
       .call-card{
         height:min(80svh, 600px);

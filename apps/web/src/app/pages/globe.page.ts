@@ -1417,9 +1417,9 @@ type CountryMood = {
     .ph-sub{ margin-top: 6px; opacity: .75; font-size: 12px; line-height: 1.4; }
     .posts-pane{ display:flex; flex-direction:column; gap:18px; box-sizing:border-box; }
     .posts-pane > *{
-      width: min(720px, 100%);
-      margin-left: auto;
-      margin-right: auto;
+      width: 100%;
+      margin-left: 0;
+      margin-right: 0;
       box-sizing:border-box;
     }
     .composer{

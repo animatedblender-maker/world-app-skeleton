@@ -9,36 +9,45 @@ import { messagesResolvers } from './modules/messages/messages.resolver.js';
 import { insightsResolvers } from './modules/insights/insights.resolver.js';
 
 async function reverseGeocodeNominatim(lat: number, lng: number) {
-  const url = new URL('https://nominatim.openstreetmap.org/reverse');
+  const baseUrl = process.env.NOMINATIM_URL ?? 'https://nominatim.openstreetmap.org/reverse';
+  const url = new URL(baseUrl);
   url.searchParams.set('format', 'jsonv2');
   url.searchParams.set('lat', String(lat));
   url.searchParams.set('lon', String(lng));
 
   const ua = process.env.NOMINATIM_UA ?? 'WorldAppMVP/1.0 (local dev)';
+  const controller = new AbortController();
+  const timeoutMs = Number(process.env.NOMINATIM_TIMEOUT_MS ?? 3500);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-  const res = await fetch(url.toString(), {
-    headers: {
-      'User-Agent': ua,
-      Accept: 'application/json',
-    },
-  });
+  try {
+    const res = await fetch(url.toString(), {
+      headers: {
+        'User-Agent': ua,
+        Accept: 'application/json',
+      },
+      signal: controller.signal,
+    });
 
-  if (!res.ok) throw new Error(`Nominatim failed: ${res.status}`);
-  const json: any = await res.json();
-  const addr = json.address ?? {};
+    if (!res.ok) throw new Error(`Nominatim failed: ${res.status}`);
+    const json: any = await res.json();
+    const addr = json.address ?? {};
 
-  const countryName = addr.country ?? 'Unknown';
-  const countryCode = String(addr.country_code ?? '').toUpperCase() || 'XX';
-  const cityName =
-    addr.city ??
-    addr.town ??
-    addr.village ??
-    addr.municipality ??
-    addr.state_district ??
-    addr.state ??
-    null;
+    const countryName = addr.country ?? 'Unknown';
+    const countryCode = String(addr.country_code ?? '').toUpperCase() || 'XX';
+    const cityName =
+      addr.city ??
+      addr.town ??
+      addr.village ??
+      addr.municipality ??
+      addr.state_district ??
+      addr.state ??
+      null;
 
-  return { countryName, countryCode, cityName };
+    return { countryName, countryCode, cityName };
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 export const resolvers = {
@@ -55,8 +64,17 @@ export const resolvers = {
 
   Mutation: {
     detectLocation: async (_: any, { lat, lng }: any) => {
-      const { countryName, countryCode, cityName } = await reverseGeocodeNominatim(lat, lng);
-      return { countryCode, countryName, cityName, source: 'nominatim' };
+      try {
+        const { countryName, countryCode, cityName } = await reverseGeocodeNominatim(lat, lng);
+        return { countryCode, countryName, cityName, source: 'nominatim' };
+      } catch (err) {
+        return {
+          countryCode: 'XX',
+          countryName: 'Unknown',
+          cityName: null,
+          source: 'fallback',
+        };
+      }
     },
 
     ...(profilesResolvers.Mutation ?? {}),

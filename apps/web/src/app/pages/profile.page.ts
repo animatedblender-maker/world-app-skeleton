@@ -742,19 +742,17 @@ import { SUPABASE_URL } from '../config/supabase.config';
     .wrap{
       position: fixed;
       inset: 0;
-      padding: 86px max(16px, env(safe-area-inset-left)) 32px max(16px, env(safe-area-inset-right));
+      padding: 72px max(16px, env(safe-area-inset-left)) 24px max(16px, env(safe-area-inset-right));
       box-sizing: border-box;
       overflow-y: auto;
       overflow-x: hidden;
-      background: #031421;
+      background: transparent;
       color: rgba(255,255,255,0.92);
     }
     .wrap > .ocean-gradient,
     .wrap > .ocean-dots,
     .wrap > .noise{
-      position:absolute;
-      inset:0;
-      pointer-events:none;
+      display:none;
     }
     .ocean-gradient{
       z-index:0;
@@ -803,13 +801,13 @@ import { SUPABASE_URL } from '../config/supabase.config';
     .card{
       position: relative;
       z-index:3;
-      width: min(720px, 100%);
-      margin: 0 auto;
-      border-radius: 28px;
-      padding: 24px;
-      background: rgba(245,247,250,0.95);
-      border: 1px solid rgba(0,0,0,0.08);
-      box-shadow: 0 30px 90px rgba(0,0,0,0.50);
+      width: 100%;
+      margin: 0;
+      border-radius: 0;
+      padding: 16px 0;
+      background: transparent;
+      border: 0;
+      box-shadow: none;
       color: rgba(10,12,18,0.92);
       min-height: 200px;
       box-sizing: border-box;
@@ -855,7 +853,7 @@ import { SUPABASE_URL } from '../config/supabase.config';
     .composer{
       margin:20px auto 0;
       width:100%;
-      max-width:700px;
+      max-width:none;
       border-radius:20px;
       border:1px solid rgba(0,0,0,0.06);
       background:rgba(255,255,255,0.95);
@@ -1336,13 +1334,13 @@ import { SUPABASE_URL } from '../config/supabase.config';
     }
     .composer-posts{
       width: 100%;
-      max-width: 700px;
-      margin: 24px auto 0;
-      border-radius: 24px;
-      padding: 20px;
-      background: rgba(255,255,255,0.95);
-      border: 1px solid rgba(0,0,0,0.08);
-      box-shadow: 0 30px 90px rgba(0,0,0,0.25);
+      max-width: none;
+      margin: 24px 0 0;
+      border-radius: 0;
+      padding: 0;
+      background: transparent;
+      border: 0;
+      box-shadow: none;
       color: rgba(6,8,14,0.92);
       box-sizing: border-box;
     }
