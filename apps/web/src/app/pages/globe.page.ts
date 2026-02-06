@@ -1269,8 +1269,8 @@ type CountryMood = {
     .stage.focus.feed-full{
       grid-template-columns: 1fr;
       padding-top: var(--stage-top-pad);
-      padding-left: var(--ui-edge-left);
-      padding-right: var(--ui-edge-right);
+      padding-left: 0;
+      padding-right: 0;
       gap: 0;
     }
       .stage.focus.feed-full .map-pane{

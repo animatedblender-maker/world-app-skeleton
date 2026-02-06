@@ -35,14 +35,11 @@ import { SUPABASE_URL } from '../config/supabase.config';
   imports: [CommonModule, FormsModule, VideoPlayerComponent],
   template: `
     <div class="wrap">
-      <div class="ocean-gradient" aria-hidden="true"></div>
-      <div class="ocean-dots" aria-hidden="true"></div>
-      <div class="noise" aria-hidden="true"></div>
       <div class="card" *ngIf="!loading && !error && profile; else stateTpl">
-        <div class="profile-topbar">
-          <button class="ghost-link back-link" type="button" (click)="goBack()">← BACK</button>
-        </div>
         <div class="head">
+          <div class="head-actions">
+            <button class="ghost-link back-link" type="button" (click)="goBack()">Back</button>
+          </div>
             <div class="avatar-block" (click)="openAvatarModal()">
               <div class="avatar">
                 <img
@@ -744,7 +741,7 @@ import { SUPABASE_URL } from '../config/supabase.config';
     .wrap{
       position: fixed;
       inset: 0;
-      padding: 72px max(16px, env(safe-area-inset-left)) 24px max(16px, env(safe-area-inset-right));
+      padding: 0;
       box-sizing: border-box;
       overflow-y: auto;
       overflow-x: hidden;
@@ -802,27 +799,17 @@ import { SUPABASE_URL } from '../config/supabase.config';
     }
     .card{
       position: relative;
-      z-index:3;
+      z-index:1;
       width: 100%;
       margin: 0;
       border-radius: 0;
-      padding: 16px 0;
+      padding: 0;
       background: transparent;
       border: 0;
       box-shadow: none;
       color: rgba(10,12,18,0.92);
-      min-height: 200px;
+      min-height: 100%;
       box-sizing: border-box;
-    }
-    .profile-topbar{
-      width: 100%;
-      background: #fff;
-      border-bottom: 1px solid rgba(10,20,32,0.08);
-      padding: 10px 14px;
-      box-sizing: border-box;
-      display: flex;
-      align-items: center;
-      justify-content: flex-start;
     }
     .state{
       text-align:center;
@@ -1075,6 +1062,11 @@ import { SUPABASE_URL } from '../config/supabase.config';
       align-items:flex-start;
       flex-wrap:wrap;
     }
+    .head-actions{
+      margin-left:auto;
+      display:flex;
+      align-items:flex-start;
+    }
     .avatar-block{
       display:flex;
       flex-direction:column;
@@ -1130,11 +1122,12 @@ import { SUPABASE_URL } from '../config/supabase.config';
       cursor:pointer;
     }
     .back-link{
-      color: rgba(0,0,0,0.65);
+      color: rgba(0,0,0,0.75);
       margin-bottom:0;
       display:inline-flex;
       align-items:center;
       gap:6px;
+      background:transparent;
     }
     .ghost-link.strong{
       letter-spacing:0.18em;

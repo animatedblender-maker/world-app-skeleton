@@ -3,7 +3,7 @@ import cors from 'cors';
 import { GraphQLError } from 'graphql';
 import { createYoga, createSchema, maskError as yogaMaskError } from 'graphql-yoga';
 import type { YogaInitialContext, YogaSchemaDefinition } from 'graphql-yoga';
-import { jwtVerify, createRemoteJWKSet } from 'jose';
+import { SignJWT, jwtVerify, createRemoteJWKSet } from 'jose';
 import http from 'node:http';
 import { WebSocketServer } from 'ws';
 
@@ -55,6 +55,9 @@ const ALLOWED_ORIGINS = Array.from(
 const PORT = Number(process.env.PORT ?? 3000);
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
+const LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY;
+const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET;
+const LIVEKIT_URL = process.env.LIVEKIT_URL;
 
 if (!SUPABASE_URL) {
   console.warn('⚠️ SUPABASE_URL not set. JWT verification will fail until you set it.');
@@ -187,6 +190,32 @@ app.post('/push/unsubscribe', async (req: Request, res: Response) => {
   if (!endpoint) return res.status(400).json({ error: 'missing_endpoint' });
   await push.removeSubscription(user.id, endpoint);
   return res.json({ ok: true });
+});
+
+app.post('/livekit/token', async (req: Request, res: Response) => {
+  const user = await getUserFromRequest(req);
+  if (!user?.id) return res.status(401).json({ error: 'unauthenticated' });
+  const room = String(req.body?.room ?? '').trim();
+  if (!room) return res.status(400).json({ error: 'missing_room' });
+  if (!LIVEKIT_API_KEY || !LIVEKIT_API_SECRET) {
+    return res.status(500).json({ error: 'livekit_not_configured' });
+  }
+  const jwt = await new SignJWT({
+    name: user.email ?? user.id,
+    video: {
+      room,
+      roomJoin: true,
+      canPublish: true,
+      canSubscribe: true,
+    },
+  })
+    .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
+    .setIssuer(LIVEKIT_API_KEY)
+    .setSubject(user.id)
+    .setIssuedAt()
+    .setExpirationTime('1h')
+    .sign(new TextEncoder().encode(LIVEKIT_API_SECRET));
+  return res.json({ token: jwt, url: LIVEKIT_URL ?? '' });
 });
 
 wss.on('connection', async (socket, req) => {

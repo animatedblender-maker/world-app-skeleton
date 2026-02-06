@@ -196,7 +196,8 @@ export class ProfileService {
 
   isComplete(p: Profile | null) {
     if (!p) return false;
-    return !!p.display_name && !!p.country_code && p.country_name !== 'Unknown';
+    // Treat profiles with a display name + country name as complete even if code is missing.
+    return !!p.display_name && !!p.country_name && p.country_name !== 'Unknown';
   }
 
   async searchProfiles(query: string, limit = 6) {

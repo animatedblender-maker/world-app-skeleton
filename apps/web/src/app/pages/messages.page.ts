@@ -13,6 +13,7 @@ import { CallService, type CallSignal } from '../core/services/call.service';
 import { Conversation, Message } from '../core/models/messages.model';
 import { PostAuthor } from '../core/models/post.model';
 import { VideoPlayerComponent } from '../components/video-player.component';
+import { environment } from '../../envirnoments/envirnoment';
 
 @Component({
   selector: 'app-messages-page',
@@ -20,20 +21,13 @@ import { VideoPlayerComponent } from '../components/video-player.component';
   imports: [CommonModule, FormsModule, VideoPlayerComponent],
   template: `
     <div class="wrap">
-      <div class="ocean-gradient" aria-hidden="true"></div>
-      <div class="ocean-dots" aria-hidden="true"></div>
-      <div class="noise" aria-hidden="true"></div>
-
       <div class="card">
-        <div class="msg-topbar">
-          <button class="logo-btn" type="button" (click)="goHome()">
-            <img src="/logo.png" alt="Matterya" />
-          </button>
-          <button class="back-btn" type="button" (click)="goBack()">Back</button>
-        </div>
         <div class="layout" [class.thread-only]="mobileThreadOnly">
           <aside class="panel">
-            <div class="panel-title">Messages</div>
+            <div class="panel-title">
+              <span>Messages</span>
+              <button class="panel-backlink" type="button" (click)="goBack()">Back</button>
+            </div>
             <div class="status" *ngIf="loadingConversations">Loading conversations...</div>
             <div class="status error" *ngIf="conversationError">{{ conversationError }}</div>
             <div class="status" *ngIf="!loadingConversations && !conversations.length">
@@ -65,7 +59,7 @@ import { VideoPlayerComponent } from '../components/video-player.component';
             </button>
           </aside>
 
-          <section class="thread">
+          <section class="thread" *ngIf="activeConversation || !isNarrow">
             <div class="thread-header" *ngIf="activeConversation; else emptyThread">
               <button
                 class="thread-back"
@@ -95,6 +89,7 @@ import { VideoPlayerComponent } from '../components/video-player.component';
                 </div>
               </div>
               <div class="thread-actions">
+                <button class="thread-backlink" type="button" (click)="goBack()">Back</button>
                 <button
                   class="call-btn"
                   type="button"
@@ -102,7 +97,7 @@ import { VideoPlayerComponent } from '../components/video-player.component';
                   (click)="startCall('audio')"
                   aria-label="Start voice call"
                 >
-                  &#x260E;
+                  <img class="call-icon" src="/assets/phonecall.svg" alt="" aria-hidden="true" />
                 </button>
                 <button
                   class="call-btn"
@@ -111,7 +106,7 @@ import { VideoPlayerComponent } from '../components/video-player.component';
                   (click)="startCall('video')"
                   aria-label="Start video call"
                 >
-                  &#x1F4F9;
+                  <img class="call-icon" src="/assets/videocall.svg" alt="" aria-hidden="true" />
                 </button>
               </div>
             </div>
@@ -337,7 +332,7 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       height:100svh;
       position:relative;
       color:#e6f1ff;
-      background:#050b14;
+      background:transparent;
     }
     .wrap{
       min-height:100%;
@@ -348,35 +343,9 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       display:flex;
       flex-direction:column;
     }
-    .ocean-gradient{
-      position:fixed;
-      inset:0;
-      background:
-        radial-gradient(circle at 12% 20%, rgba(0,255,209,0.12), transparent 52%),
-        radial-gradient(circle at 88% 20%, rgba(0,155,220,0.25), transparent 48%),
-        linear-gradient(180deg, #0b1526, #050b13 60%, #03060c);
-      z-index:0;
-    }
-    .ocean-dots{
-      position:fixed;
-      inset:0;
-      background-image: radial-gradient(rgba(255,255,255,0.55) 1px, transparent 1px);
-      background-size: 18px 18px;
-      opacity:0.18;
-      z-index:1;
-      pointer-events:none;
-    }
-    .noise{
-      position:fixed;
-      inset:0;
-      background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120' viewBox='0 0 120 120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='.08'/%3E%3C/svg%3E");
-      opacity:0.12;
-      z-index:2;
-      pointer-events:none;
-    }
     .card{
       position:relative;
-      z-index:3;
+      z-index:1;
       width:100%;
       height:100%;
       max-width:none;
@@ -386,7 +355,7 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       padding:0;
       border:0;
       box-shadow:none;
-      backdrop-filter: blur(10px);
+      backdrop-filter:none;
       color:#0c1422;
       flex:1;
       box-sizing:border-box;
@@ -394,46 +363,6 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       flex-direction:column;
       min-height:0;
       overflow:hidden;
-    }
-    .msg-topbar{
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-      gap:12px;
-      margin-bottom:12px;
-      width:100%;
-      background:#fff;
-      padding:10px 14px;
-      border-bottom:1px solid rgba(10,20,32,0.08);
-      box-sizing:border-box;
-      flex-shrink:0;
-    }
-    .logo-btn{
-      width:44px;
-      height:44px;
-      border-radius:50%;
-      border:0;
-      background:rgba(10,14,22,0.85);
-      display:grid;
-      place-items:center;
-      cursor:pointer;
-      padding:0;
-    }
-    .logo-btn img{
-      width:34px;
-      height:34px;
-      object-fit:contain;
-    }
-    .back-btn{
-      border:0;
-      background:rgba(7,20,40,0.08);
-      color:rgba(10,20,32,0.85);
-      letter-spacing:0.18em;
-      font-size:11px;
-      text-transform:uppercase;
-      cursor:pointer;
-      padding:10px 14px;
-      border-radius:999px;
     }
     .layout{
       display:grid;
@@ -450,10 +379,10 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       display:flex;
       flex-direction:column;
       gap:10px;
-      background:rgba(255,255,255,0.86);
-      border-radius:20px;
+      background:transparent;
+      border-radius:0;
       padding:14px;
-      border:1px solid rgba(7,20,40,0.08);
+      border:0;
       min-height:0;
       overflow:auto;
     }
@@ -464,6 +393,20 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       font-size:11px;
       color:rgba(9,22,38,0.6);
       margin-bottom:6px;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+    }
+    .panel-backlink{
+      border:0;
+      background:transparent;
+      color:rgba(10,20,32,0.85);
+      letter-spacing:0.14em;
+      font-size:10px;
+      text-transform:uppercase;
+      cursor:pointer;
+      padding:4px 6px;
     }
     .status{
       font-size:13px;
@@ -553,9 +496,9 @@ import { VideoPlayerComponent } from '../components/video-player.component';
     .thread{
       display:flex;
       flex-direction:column;
-      border-radius:20px;
-      border:1px solid rgba(7,20,40,0.08);
-      background:rgba(255,255,255,0.9);
+      border-radius:0;
+      border:0;
+      background:transparent;
       min-height:0;
       overflow:hidden;
       min-height:0;
@@ -575,9 +518,20 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       align-items:center;
       gap:12px;
       padding:14px;
-      border-bottom:1px solid rgba(7,20,40,0.08);
-      background:rgba(255,255,255,0.95);
+      border-bottom:1px solid rgba(7,20,40,0.12);
+      background:transparent;
       min-width:0;
+    }
+    .thread-backlink{
+      margin-left:auto;
+      border:0;
+      background:transparent;
+      color:rgba(10,20,32,0.85);
+      letter-spacing:0.14em;
+      font-size:11px;
+      text-transform:uppercase;
+      cursor:pointer;
+      padding:6px 10px;
     }
     .thread-meta{
       min-width:0;
@@ -613,6 +567,15 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       color:rgba(7,20,40,0.9);
       font-size:16px;
       cursor:pointer;
+      display:grid;
+      place-items:center;
+    }
+    .call-icon{
+      width:18px;
+      height:18px;
+      display:block;
+      object-fit:contain;
+      filter: invert(14%) sepia(10%) saturate(380%) hue-rotate(178deg) brightness(92%) contrast(92%);
     }
     .call-btn:disabled{
       opacity:0.45;
@@ -1301,6 +1264,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   private callConnectedSub?: Subscription;
   private pollTimer: number | null = null;
   mobileThreadOnly = false;
+  isNarrow = false;
   unreadConversationIds = new Set<string>();
   private messageNotifications: NotificationItem[] = [];
   callActive = false;
@@ -1313,19 +1277,26 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   callError = '';
   private callFromId: string | null = null;
   private incomingOffer:
-    | { conversationId: string; from: string; sdp: any; callType: 'audio' | 'video'; callId?: string | null }
+    | {
+        conversationId: string;
+        from: string;
+        callType: 'audio' | 'video';
+        callId?: string | null;
+        roomName?: string | null;
+      }
     | null =
       null;
   private wsConnected = false;
-  private pc?: RTCPeerConnection;
   private localStream?: MediaStream;
   private remoteStream?: MediaStream;
-  private pendingCandidates: RTCIceCandidateInit[] = [];
+  private livekitRoom?: any;
+  private livekitLocalTracks: any[] = [];
   private pendingCallType: 'audio' | 'video' | null = null;
   private pendingCallFrom: string | null = null;
   private pendingCallConversationId: string | null = null;
   private awaitingOffer = false;
   private callSessionId: string | null = null;
+  private callRoomName: string | null = null;
   private readonly callLogPrefix = '__call__|';
   private audioContext?: AudioContext;
   private audioAnalyser?: AnalyserNode;
@@ -1356,6 +1327,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   ) {}
 
   async ngOnInit(): Promise<void> {
+    this.updateViewportFlag();
     void this.push.syncIfGranted();
     const user = await this.auth.getUser();
     this.meId = user?.id ?? null;
@@ -1616,6 +1588,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     this.callType = type;
     this.callConversationId = this.activeConversationId;
     this.callSessionId = this.newCallSessionId();
+    this.callRoomName = `call_${this.callConversationId}_${this.callSessionId}`;
     this.callConnecting = true;
     this.callIncoming = false;
     this.callActive = false;
@@ -1625,11 +1598,11 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     this.callLogSent = false;
     this.forceUi();
     try {
-      await this.ensurePeerConnection(type);
-      if (!this.pc) return;
-      const offer = await this.pc.createOffer();
-      await this.pc.setLocalDescription(offer);
-      this.sendSignal('call-offer', this.callConversationId, { sdp: offer, callType: type });
+      await this.ensureLiveKitConnected(type, this.callRoomName);
+      this.sendSignal('call-offer', this.callConversationId, {
+        callType: type,
+        roomName: this.callRoomName,
+      });
     } catch (e: any) {
       this.callError = e?.message ?? 'Call failed.';
       this.cleanupCall(false);
@@ -1670,13 +1643,16 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     this.awaitingOffer = false;
     this.forceUi();
     try {
-      await this.ensurePeerConnection(offer.callType);
-      if (!this.pc) return;
-      await this.pc.setRemoteDescription(offer.sdp);
-      await this.flushIceCandidates();
-      const answer = await this.pc.createAnswer();
-      await this.pc.setLocalDescription(answer);
-      this.sendSignal('call-answer', offer.conversationId, { sdp: answer });
+      const roomName =
+        offer.roomName ??
+        (offer.callId ? `call_${offer.conversationId}_${offer.callId}` : null);
+      this.callRoomName = roomName;
+      if (!roomName) throw new Error('Missing call room.');
+      await this.ensureLiveKitConnected(offer.callType, roomName);
+      this.sendSignal('call-accept', offer.conversationId, {
+        callType: offer.callType,
+        roomName,
+      });
       this.incomingOffer = null;
     } catch (e: any) {
       this.callError = e?.message ?? 'Call failed.';
@@ -1692,21 +1668,27 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   }
 
   toggleMute(): void {
-    if (!this.localStream) return;
     const next = !this.callMuted;
-    this.localStream.getAudioTracks().forEach((track) => {
-      track.enabled = !next;
-    });
+    if (this.livekitRoom) {
+      void this.livekitRoom.localParticipant.setMicrophoneEnabled(!next);
+    } else if (this.localStream) {
+      this.localStream.getAudioTracks().forEach((track) => {
+        track.enabled = !next;
+      });
+    }
     this.callMuted = next;
     this.forceUi();
   }
 
   toggleCamera(): void {
-    if (!this.localStream) return;
     const next = !this.callCameraOff;
-    this.localStream.getVideoTracks().forEach((track) => {
-      track.enabled = !next;
-    });
+    if (this.livekitRoom) {
+      void this.livekitRoom.localParticipant.setCameraEnabled(!next);
+    } else if (this.localStream) {
+      this.localStream.getVideoTracks().forEach((track) => {
+        track.enabled = !next;
+      });
+    }
     this.callCameraOff = next;
     this.forceUi();
   }
@@ -1775,11 +1757,12 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       }
       const callType = msg.callType === 'video' ? 'video' : 'audio';
       const callId = msgCallId || null;
-      if (!msg.sdp) return;
       if (callId) {
         this.callSessionId = callId;
       }
-      this.incomingOffer = { conversationId, from, sdp: msg.sdp, callType, callId };
+      const roomName =
+        typeof (msg as any)?.roomName === 'string' ? String((msg as any).roomName) : null;
+      this.incomingOffer = { conversationId, from, callType, callId, roomName };
       this.awaitingOffer = false;
       if (this.callConnecting && (this.callFromId === from || expectingOffer)) {
         this.callIncoming = false;
@@ -1808,63 +1791,18 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       try {
         const callType = msg.callType === 'video' ? 'video' : (this.callType ?? 'audio');
         this.callType = callType;
-        if (this.pc && this.pc.signalingState === 'closed') {
-          this.pc = undefined;
-        }
-        if (this.pc && this.pc.signalingState !== 'stable') {
-          const convoId = this.callConversationId;
-          this.cleanupCall(false);
-          this.callConversationId = convoId;
-          this.callType = callType;
-          this.callFromId = this.meId;
-          this.callConnecting = true;
-          this.callIncoming = false;
-          this.callActive = false;
-          this.callError = '';
-        }
-        await this.ensurePeerConnection(callType);
-        if (!this.pc) return;
-        try {
-          if (typeof this.pc.restartIce === 'function') {
-            this.pc.restartIce();
-          }
-        } catch {}
-        const offer = await this.pc.createOffer({ iceRestart: true });
-        await this.pc.setLocalDescription(offer);
-        this.sendSignal('call-offer', this.callConversationId, { sdp: offer, callType });
+        const roomName =
+          typeof (msg as any)?.roomName === 'string'
+            ? String((msg as any).roomName)
+            : this.callRoomName;
+        if (!roomName) return;
+        this.callRoomName = roomName;
+        await this.ensureLiveKitConnected(callType, roomName);
       } catch {}
       return;
     }
 
     if (conversationId !== this.callConversationId) return;
-
-    if (type === 'call-answer' && msg.sdp) {
-      if (!callIdMatches) return;
-      if (!this.pc) return;
-      await this.pc.setRemoteDescription(msg.sdp);
-      await this.flushIceCandidates();
-      this.callActive = true;
-      this.callConnecting = false;
-      this.markCallActive();
-      this.forceUi();
-      return;
-    }
-
-    if (type === 'ice-candidate' && msg.candidate) {
-      if (!callIdMatches) return;
-      if (!this.pc) {
-        this.pendingCandidates.push(msg.candidate);
-        return;
-      }
-      if (this.pc.remoteDescription) {
-        try {
-          await this.pc.addIceCandidate(msg.candidate);
-        } catch {}
-      } else {
-        this.pendingCandidates.push(msg.candidate);
-      }
-      return;
-    }
 
     if (type === 'call-decline' || type === 'call-busy') {
       if (!callIdMatches) return;
@@ -1881,69 +1819,130 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  private async ensurePeerConnection(callType: 'audio' | 'video'): Promise<void> {
-    if (this.pc) return;
+  private async ensureLiveKitConnected(callType: 'audio' | 'video', roomName: string): Promise<void> {
+    if (this.livekitRoom && this.livekitRoom.name === roomName) return;
+    await this.disconnectLiveKit();
     this.callMuted = false;
-    this.callCameraOff = false;
+    this.callCameraOff = callType !== 'video';
+    const tokenInfo = await this.fetchLiveKitToken(roomName);
+    const url = tokenInfo.url || environment.livekitUrl;
+    if (!url) throw new Error('LiveKit URL not configured.');
 
-    const constraints: MediaStreamConstraints = {
-      audio: true,
-      video: callType === 'video',
-    };
-    this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
+    const LiveKit = (window as any).LiveKit;
+    if (!LiveKit) throw new Error('LiveKit not loaded.');
+    const { Room, RoomEvent, createLocalTracks } = LiveKit;
+    const room = new Room({ adaptiveStream: true, dynacast: true });
+    this.livekitRoom = room;
     this.remoteStream = new MediaStream();
-    this.pendingCandidates = [];
-    this.startVoiceDetection();
 
-    const iceServers: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }];
-    this.pc = new RTCPeerConnection({ iceServers });
-
-    this.pc.ontrack = (event) => {
-      const stream = event.streams?.[0];
-      if (!stream || !this.remoteStream) return;
-      for (const track of stream.getTracks()) {
-        if (!this.remoteStream.getTracks().some((t) => t.id === track.id)) {
-          this.remoteStream.addTrack(track);
-        }
+    room.on(RoomEvent.TrackSubscribed, (track: any) => {
+      const mediaTrack = (track as any)?.mediaStreamTrack as MediaStreamTrack | undefined;
+      if (!mediaTrack) return;
+      if (!this.remoteStream) this.remoteStream = new MediaStream();
+      if (!this.remoteStream.getTracks().some((t) => t.id === mediaTrack.id)) {
+        this.remoteStream.addTrack(mediaTrack);
       }
       this.attachRemoteStream();
-    };
-
-    this.pc.onicecandidate = (event) => {
-      if (!event.candidate) return;
-      this.sendSignal('ice-candidate', this.callConversationId, { candidate: event.candidate });
-    };
-
-    this.pc.onconnectionstatechange = () => {
-      const state = this.pc?.connectionState;
-      const hasRemote = !!this.pc?.remoteDescription;
-      if (state === 'connected') {
+      if (!this.callActive) {
         this.callActive = true;
         this.callConnecting = false;
         this.markCallActive();
         this.clearDisconnectTimer();
         this.forceUi();
       }
-      if (state === 'failed' || state === 'closed') {
-        if (this.callActive || (this.callConnecting && hasRemote)) {
-          this.cleanupCall();
-        }
-      }
-      if (state === 'disconnected') {
-        if (this.callActive) {
-          this.startDisconnectTimer();
-        }
-      }
-    };
-
-    this.localStream.getTracks().forEach((track) => {
-      this.pc?.addTrack(track, this.localStream as MediaStream);
     });
 
+    room.on(RoomEvent.TrackUnsubscribed, (track: any) => {
+      const mediaTrack = (track as any)?.mediaStreamTrack as MediaStreamTrack | undefined;
+      if (!mediaTrack || !this.remoteStream) return;
+      this.remoteStream.removeTrack(mediaTrack);
+    });
+
+    room.on(RoomEvent.ParticipantConnected, () => {
+      if (!this.callActive) {
+        this.callActive = true;
+        this.callConnecting = false;
+        this.markCallActive();
+        this.clearDisconnectTimer();
+        this.forceUi();
+      }
+    });
+
+    room.on(RoomEvent.ParticipantDisconnected, () => {
+      if (this.callActive) {
+        this.startDisconnectTimer();
+      }
+    });
+
+    room.on(RoomEvent.Disconnected, () => {
+      if (!this.destroyed) {
+        this.cleanupCall();
+      }
+    });
+
+    await room.connect(url, tokenInfo.token);
+    this.callConnecting = true;
+    this.callError = '';
+
+    const tracks = await createLocalTracks({
+      audio: true,
+      video: callType === 'video',
+    });
+    this.livekitLocalTracks = tracks;
+    this.localStream = new MediaStream();
+    for (const track of tracks) {
+      const mediaTrack = (track as any)?.mediaStreamTrack as MediaStreamTrack | undefined;
+      if (mediaTrack) this.localStream.addTrack(mediaTrack);
+      await room.localParticipant.publishTrack(track);
+    }
+    this.startVoiceDetection();
     this.forceUi();
     requestAnimationFrame(() => {
       this.attachLocalStream();
     });
+  }
+
+  private async fetchLiveKitToken(roomName: string): Promise<{ token: string; url: string }> {
+    const token = await this.auth.getAccessToken();
+    if (!token) throw new Error('Missing auth token.');
+    const res = await fetch(`${environment.apiBaseUrl}/livekit/token`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        room: roomName,
+        name: this.meId ?? 'member',
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const msg = typeof data?.error === 'string' ? data.error : 'LiveKit auth failed.';
+      throw new Error(msg);
+    }
+    const url = typeof data?.url === 'string' ? data.url : environment.livekitUrl;
+    const lkToken = typeof data?.token === 'string' ? data.token : '';
+    if (!lkToken) throw new Error('Missing LiveKit token.');
+    return { token: lkToken, url: url ?? '' };
+  }
+
+  private async disconnectLiveKit(): Promise<void> {
+    if (this.livekitRoom) {
+      try {
+        this.livekitRoom.removeAllListeners();
+        this.livekitRoom.disconnect();
+      } catch {}
+      this.livekitRoom = undefined;
+    }
+    if (this.livekitLocalTracks.length) {
+      for (const track of this.livekitLocalTracks) {
+        try {
+          track.stop();
+        } catch {}
+      }
+      this.livekitLocalTracks = [];
+    }
   }
 
   private attachLocalStream(): void {
@@ -1973,17 +1972,6 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     void this.remoteAudio.play().catch(() => {});
   }
 
-  private async flushIceCandidates(): Promise<void> {
-    if (!this.pc || !this.pendingCandidates.length) return;
-    const pending = [...this.pendingCandidates];
-    this.pendingCandidates = [];
-    for (const candidate of pending) {
-      try {
-        await this.pc.addIceCandidate(candidate);
-      } catch {}
-    }
-  }
-
   private cleanupCall(resetError = true): void {
     if (resetError) this.callError = '';
     this.callActive = false;
@@ -1995,24 +1983,18 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     this.callCameraOff = false;
     this.callFromId = null;
     this.incomingOffer = null;
-    this.pendingCandidates = [];
     this.callStartAt = null;
     this.callLogSent = false;
     this.callSpeaking = false;
     this.callTimerSeconds = 0;
     this.awaitingOffer = false;
     this.callSessionId = null;
+    this.callRoomName = null;
     this.stopCallTimer();
     this.clearDisconnectTimer();
     this.stopVoiceDetection();
 
-    if (this.pc) {
-      this.pc.ontrack = null;
-      this.pc.onicecandidate = null;
-      this.pc.onconnectionstatechange = null;
-      this.pc.close();
-    }
-    this.pc = undefined;
+    void this.disconnectLiveKit();
 
     if (this.localStream) {
       this.localStream.getTracks().forEach((track) => track.stop());
@@ -2967,11 +2949,18 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   private enterThreadView(): void {
     if (typeof window === 'undefined') return;
     this.mobileThreadOnly = window.innerWidth <= 900;
+    this.updateViewportFlag();
   }
 
   showConversationList(): void {
     this.mobileThreadOnly = false;
+    this.updateViewportFlag();
     this.forceUi();
+  }
+
+  private updateViewportFlag(): void {
+    if (typeof window === 'undefined') return;
+    this.isNarrow = window.innerWidth <= 900;
   }
 
   private forceUi(): void {

@@ -15,7 +15,13 @@ export class LocationService {
     const ip = await this.fromIp();
     if (ip) return ip;
 
-    throw new Error('LOCATION_DETECT_FAILED');
+    // Avoid throwing to keep GraphQL stable; client can fall back to manual selection.
+    return {
+      countryCode: '',
+      countryName: 'Unknown',
+      cityName: null,
+      source: 'ip',
+    };
   }
 
   private async fromNominatim(lat: number, lng: number): Promise<DetectedLocation | null> {

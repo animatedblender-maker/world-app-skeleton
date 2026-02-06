@@ -24,6 +24,9 @@ type DetectLocationResult = {
   template: `
   <div class="wrap">
     <div class="card">
+      <div class="topbar">
+        <button class="back" type="button" (click)="goBack()">Back</button>
+      </div>
       <div class="title">Create your profile</div>
       <div class="sub">Auto-detect is default. Manual selection is fallback.</div>
 
@@ -98,6 +101,22 @@ type DetectLocationResult = {
     }
     .title{ font-weight:900; letter-spacing:0.08em; font-size:18px; }
     .sub{ margin-top:6px; opacity:.7; font-size:13px; }
+    .topbar{
+      display:flex;
+      justify-content:flex-end;
+      margin-bottom:8px;
+    }
+    .back{
+      border:1px solid rgba(255,255,255,0.12);
+      background: rgba(8,10,18,0.75);
+      color: rgba(255,255,255,0.85);
+      padding:8px 12px;
+      border-radius:12px;
+      cursor:pointer;
+      font-weight:800;
+      letter-spacing:0.08em;
+      font-size:11px;
+    }
     .field{ margin-top:14px; display:grid; gap:8px; }
     label{ font-size:12px; opacity:.75; letter-spacing:0.12em; }
     input,select{
@@ -307,6 +326,14 @@ export class ProfileSetupPageComponent implements OnInit {
       this.busy = false;
       this.cdr.detectChanges();
     }
+  }
+
+  async goBack(): Promise<void> {
+    if (history.length > 1) {
+      history.back();
+      return;
+    }
+    await this.router.navigateByUrl('/');
   }
 
   private getBrowserCoords(timeoutMs: number): Promise<{ lat: number; lng: number } | null> {
