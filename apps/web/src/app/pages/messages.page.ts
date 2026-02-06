@@ -25,6 +25,23 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       <div class="noise" aria-hidden="true"></div>
 
       <div class="card">
+        <div class="topbar">
+          <button class="logo-btn" type="button" (click)="goHome()">
+            <img src="/logo.png" alt="Matterya" />
+          </button>
+          <div class="icon-row">
+            <button class="icon-btn" type="button" (click)="openSearch()" aria-label="Search">
+              &#x1F50D;
+            </button>
+            <button class="icon-btn active" type="button" aria-label="Messages">
+              &#x1F4AC;
+              <span class="icon-badge" *ngIf="messagesBadgeCount">{{ messagesBadgeCount }}</span>
+            </button>
+            <button class="icon-btn" type="button" (click)="openNotifications()" aria-label="Notifications">
+              &#x1F514;
+            </button>
+          </div>
+        </div>
         <button class="ghost-link back-link" type="button" (click)="goBack()">Back</button>
         <div class="layout" [class.thread-only]="mobileThreadOnly">
           <aside class="panel">
@@ -119,11 +136,12 @@ import { VideoPlayerComponent } from '../components/video-player.component';
               <div class="status" *ngIf="loadingMessages">Loading messages...</div>
               <div class="status error" *ngIf="messageError">{{ messageError }}</div>
               <div class="message-list" *ngIf="!loadingMessages" #messageList>
-                <ng-container *ngFor="let message of messages; let i = index">
-                  <div class="message-day" *ngIf="showDaySeparator(i)">
-                    {{ formatDayLabel(message.created_at) }}
-                  </div>
-                  <div class="message" [class.me]="message.sender_id === meId" [class.call-log]="isCallLogMessage(message)">
+                <ng-container *ngFor="let message of messages; let i = index; trackBy: trackMessageById">
+                  <ng-container *ngIf="!isReactionMessage(message)">
+                    <div class="message-day" *ngIf="showDaySeparatorVisible(i)">
+                      {{ formatDayLabel(message.created_at) }}
+                    </div>
+                    <div class="message" [class.me]="message.sender_id === meId" [class.call-log]="isCallLogMessage(message)" [attr.id]="'msg-' + message.id">
                     <div class="msg-avatar">
                       <img
                         *ngIf="senderAvatarUrl(message)"
@@ -135,6 +153,10 @@ import { VideoPlayerComponent } from '../components/video-player.component';
                       </div>
                     </div>
                     <div class="bubble">
+                      <div class="reply-preview" *ngIf="replyPreview(message) as reply" (click)="scrollToMessage(reply.id)">
+                        <div class="reply-meta">Replying to {{ reply.name }}</div>
+                        <div class="reply-text">{{ reply.text }}</div>
+                      </div>
                       <div class="body" *ngIf="messageText(message) as text" [class.call-log]="isCallLogMessage(message)">
                         {{ text }}
                       </div>
@@ -160,17 +182,32 @@ import { VideoPlayerComponent } from '../components/video-player.component';
                         </a>
                       </div>
                       <div class="message-meta">
-  <span class="message-time">
-    {{ formatTimestamp(message.created_at) }}
-    <span class="message-date">{{ formatDayLabel(message.created_at) }}</span>
-  </span>
-  <span class="message-edited" *ngIf="isEdited(message)">edited</span>
-  <span class="message-status" *ngIf="messageStatus(message) as status" [class.read]="status === 'read'" [innerHTML]="statusGlyph(status)"></span>
-</div>
-<div class="message-actions" *ngIf="message.sender_id === meId && !isEditing(message) && !isCallLogMessage(message)">
-  <button class="message-action" type="button" (click)="startEditMessage(message)">Edit</button>
-  <button class="message-action danger" type="button" (click)="deleteMessage(message)">Delete</button>
-</div>
+                        <span class="message-time">
+                          {{ formatTimestamp(message.created_at) }}
+                          <span class="message-date">{{ formatDayLabel(message.created_at) }}</span>
+                        </span>
+                        <span class="message-edited" *ngIf="isEdited(message)">edited</span>
+                        <span class="message-status" *ngIf="messageStatus(message) as status" [class.read]="status === 'read'" [innerHTML]="statusGlyph(status)"></span>
+                      </div>
+                      <div class="message-reactions">
+                        <button
+                          class="message-reply"
+                          type="button"
+                          (click)="startReply(message)"
+                          title="Reply"
+                        >↩ Reply</button>
+                        <button
+                          class="message-like"
+                          type="button"
+                          [class.active]="isMessageLikedByMe(message)"
+                          (click)="toggleMessageLike(message)"
+                          title="Like"
+                        ><span class="heart">{{ isMessageLikedByMe(message) ? '❤' : '♡' }}</span> {{ messageLikeCount(message) }}</button>
+                      </div>
+                      <div class="message-actions" *ngIf="message.sender_id === meId && !isEditing(message) && !isCallLogMessage(message)">
+                        <button class="message-action" type="button" (click)="startEditMessage(message)">Edit</button>
+                        <button class="message-action danger" type="button" (click)="deleteMessage(message)">Delete</button>
+                      </div>
 <div class="message-edit" *ngIf="isEditing(message)">
   <textarea class="message-edit-input" [(ngModel)]="editingDraft" rows="2"></textarea>
   <div class="message-edit-actions">
@@ -182,11 +219,19 @@ import { VideoPlayerComponent } from '../components/video-player.component';
 </div>
                     </div>
                   </div>
+                  </ng-container>
                 </ng-container>
               </div>
             </div>
 
             <form class="composer" *ngIf="activeConversation" (ngSubmit)="sendMessage()">
+              <div class="composer-reply" *ngIf="replyingTo">
+                <div>
+                  Replying to <strong>{{ displayNameFor(senderInfo(replyingTo)) }}</strong>
+                </div>
+                <div class="composer-reply-text">{{ replySnippet(replyingTo) }}</div>
+                <button type="button" class="composer-reply-close" (click)="cancelReply()">×</button>
+              </div>
               <div class="composer-row">
                 <button class="composer-attach" type="button" (click)="triggerMediaPicker()">+</button>
                 <input
@@ -658,7 +703,6 @@ import { VideoPlayerComponent } from '../components/video-player.component';
     .message-media img,
     .message-media app-video-player{
       width:100%;
-      max-height:280px;
       border-radius:14px;
       overflow:hidden;
       border:1px solid rgba(7,20,40,0.12);
@@ -668,6 +712,17 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       display:block;
       object-fit:cover;
       cursor:pointer;
+    }
+    .message-media app-video-player{
+      width:100%;
+    }
+    .message-media app-video-player ::ng-deep .video-shell{
+      max-height:none;
+    }
+    .message-media app-video-player ::ng-deep video{
+      height:100%;
+      width:100%;
+      object-fit:contain;
     }
     .media-download{
       font-size:11px;
@@ -687,6 +742,34 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       justify-content:flex-end;
       gap:8px;
       margin-top:6px;
+    }
+    .message-reactions{
+      display:flex;
+      justify-content:flex-end;
+      gap:8px;
+      margin-top:6px;
+    }
+    .message-like,
+    .message-reply{
+      border:0;
+      background:rgba(255,255,255,0.65);
+      color:rgba(7,20,40,0.9);
+      font-size:10px;
+      letter-spacing:0.08em;
+      text-transform:uppercase;
+      padding:4px 8px;
+      border-radius:999px;
+      cursor:pointer;
+    }
+    .message-like .heart{
+      color:rgba(7,20,40,0.95);
+    }
+    .message-like.active{
+      color:#ff6b8a;
+      background:rgba(255,107,138,0.18);
+    }
+    .message-like.active .heart{
+      color:#ff6b8a;
     }
     .message-date{
       margin-left:6px;
@@ -714,6 +797,24 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       justify-content:flex-end;
       gap:10px;
       margin-top:6px;
+    }
+    .reply-preview{
+      border-left:2px solid rgba(120,210,255,0.6);
+      padding-left:10px;
+      margin-bottom:8px;
+      font-size:12px;
+      opacity:0.9;
+    }
+    .reply-meta{
+      font-weight:700;
+      font-size:10px;
+      text-transform:uppercase;
+      letter-spacing:0.12em;
+      opacity:0.7;
+    }
+    .reply-text{
+      margin-top:4px;
+      opacity:0.85;
     }
     .message-action{
       border:0;
@@ -748,6 +849,35 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       justify-content:flex-end;
       gap:8px;
     }
+    .composer-reply{
+      position:relative;
+      padding:8px 10px;
+      border-radius:12px;
+      background:rgba(255,255,255,0.08);
+      margin:0 0 8px;
+      font-size:12px;
+      color:#eef6ff;
+    }
+    .composer-reply-text{
+      margin-top:4px;
+      opacity:0.8;
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+    }
+    .composer-reply-close{
+      position:absolute;
+      right:8px;
+      top:6px;
+      border:0;
+      background:transparent;
+      color:#fff;
+      font-size:16px;
+      cursor:pointer;
+    }
+    .message-highlight .bubble{
+      box-shadow:0 0 0 2px rgba(120,210,255,0.55), 0 0 20px rgba(120,210,255,0.35);
+    }
     .message-edit-actions .ghost{
       border:0;
       background:none;
@@ -767,6 +897,14 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       letter-spacing:0.08em;
       text-transform:uppercase;
       cursor:pointer;
+    }
+    @media (max-width: 600px){
+      .message-media app-video-player ::ng-deep .video-shell{
+        max-height:240px;
+      }
+      .message-media app-video-player ::ng-deep video{
+        max-height:240px;
+      }
     }
     .composer{
       display:flex;
@@ -1067,8 +1205,58 @@ import { VideoPlayerComponent } from '../components/video-player.component';
         padding:12px;
       }
       .card{
-        padding:16px;
-      }
+      padding:16px;
+    }
+    .topbar{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+      margin-bottom:12px;
+    }
+    .logo-btn{
+      width:44px;
+      height:44px;
+      border-radius:50%;
+      border:0;
+      background:rgba(10,14,22,0.85);
+      display:grid;
+      place-items:center;
+      cursor:pointer;
+    }
+    .logo-btn img{
+      width:34px;
+      height:34px;
+    }
+    .icon-row{
+      display:flex;
+      gap:10px;
+    }
+    .icon-btn{
+      position:relative;
+      width:38px;
+      height:38px;
+      border-radius:50%;
+      border:0;
+      background:rgba(10,14,22,0.85);
+      color:#fff;
+      font-size:16px;
+      cursor:pointer;
+    }
+    .icon-btn.active{
+      box-shadow:0 0 0 2px rgba(0,199,255,0.35);
+    }
+    .icon-badge{
+      position:absolute;
+      top:-4px;
+      right:-4px;
+      background:#ff4d6d;
+      color:#fff;
+      border-radius:999px;
+      padding:2px 6px;
+      font-size:10px;
+      font-weight:700;
+    }
       .bubble{
         max-width:86%;
       }
@@ -1116,6 +1304,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   messageMediaPreview = '';
   messageMediaType: 'image' | 'video' | null = null;
   messageMediaError = '';
+  replyingTo: Message | null = null;
   lightboxUrl: string | null = null;
   meId: string | null = null;
   editingMessageId: string | null = null;
@@ -1139,8 +1328,10 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   callCameraOff = false;
   callError = '';
   private callFromId: string | null = null;
-  private incomingOffer: { conversationId: string; from: string; sdp: any; callType: 'audio' | 'video' } | null =
-    null;
+  private incomingOffer:
+    | { conversationId: string; from: string; sdp: any; callType: 'audio' | 'video'; callId?: string | null }
+    | null =
+      null;
   private wsConnected = false;
   private pc?: RTCPeerConnection;
   private localStream?: MediaStream;
@@ -1149,6 +1340,8 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   private pendingCallType: 'audio' | 'video' | null = null;
   private pendingCallFrom: string | null = null;
   private pendingCallConversationId: string | null = null;
+  private awaitingOffer = false;
+  private callSessionId: string | null = null;
   private readonly callLogPrefix = '__call__|';
   private audioContext?: AudioContext;
   private audioAnalyser?: AnalyserNode;
@@ -1161,6 +1354,9 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   private callStartAt: number | null = null;
   private callLogSent = false;
   private destroyed = false;
+  private readonly REACTION_PREFIX = '__react__|';
+  private readonly REPLY_PREFIX = '__reply__|';
+  private reactionsByMessage = new Map<string, { count: number; likedByMe: boolean }>();
 
   constructor(
     private route: ActivatedRoute,
@@ -1423,10 +1619,19 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     });
   }
 
+  private newCallSessionId(): string {
+    try {
+      return crypto.randomUUID();
+    } catch {
+      return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    }
+  }
+
   async startCall(type: 'audio' | 'video'): Promise<void> {
     if (!this.activeConversationId || !this.canStartCall()) return;
     this.callType = type;
     this.callConversationId = this.activeConversationId;
+    this.callSessionId = this.newCallSessionId();
     this.callConnecting = true;
     this.callIncoming = false;
     this.callActive = false;
@@ -1458,6 +1663,8 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
         this.callIncoming = false;
         this.callActive = false;
         this.callError = '';
+        this.callSessionId = null;
+        this.awaitingOffer = true;
         this.sendSignal('call-accept', this.callConversationId, { callType: type, to: this.callFromId });
       }
       this.callService.clearIncomingCall();
@@ -1468,6 +1675,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     this.callConversationId = offer.conversationId;
     this.callType = offer.callType;
     this.callFromId = offer.from;
+    this.callSessionId = offer.callId ?? this.callSessionId;
     this.callIncoming = false;
     this.callConnecting = true;
     this.callActive = false;
@@ -1475,6 +1683,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     this.callService.clearIncomingCall();
     this.callStartAt = null;
     this.callLogSent = false;
+    this.awaitingOffer = false;
     this.forceUi();
     try {
       await this.ensurePeerConnection(offer.callType);
@@ -1553,6 +1762,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   private sendSignal(type: string, conversationId: string | null, payload?: Record<string, any>): void {
     this.callService.sendSignal(type, conversationId, {
       from: this.meId,
+      ...(this.callSessionId ? { callId: this.callSessionId } : {}),
       ...(payload ?? {}),
     });
   }
@@ -1561,19 +1771,37 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     const type = String(msg?.type ?? '');
     const conversationId = String(msg?.conversationId ?? '');
     const from = String(msg?.from ?? '');
+    const msgCallId = typeof (msg as any)?.callId === 'string' ? String((msg as any).callId) : '';
+    const callIdMatches = this.callSessionId ? msgCallId === this.callSessionId : true;
     if (!type || !conversationId || !from || from === this.meId) return;
 
     if (type === 'call-offer') {
-      if (this.callActive || this.callIncoming || (this.callConnecting && this.callFromId !== this.meId)) {
-        this.sendSignal('call-busy', conversationId);
+      const expectingOffer = this.awaitingOffer && conversationId === this.callConversationId;
+      if (
+        !expectingOffer &&
+        (this.callActive ||
+          this.callIncoming ||
+          (this.callConnecting && this.callFromId && this.callFromId !== from))
+      ) {
+        this.sendSignal('call-busy', conversationId, { callId: msgCallId });
         return;
       }
-      if (this.callConnecting && this.callFromId === this.meId) {
+      if (!expectingOffer && this.callConnecting && this.callFromId === this.meId) {
         this.cleanupCall(false);
       }
       const callType = msg.callType === 'video' ? 'video' : 'audio';
+      const callId = msgCallId || null;
       if (!msg.sdp) return;
-      this.incomingOffer = { conversationId, from, sdp: msg.sdp, callType };
+      if (callId) {
+        this.callSessionId = callId;
+      }
+      this.incomingOffer = { conversationId, from, sdp: msg.sdp, callType, callId };
+      this.awaitingOffer = false;
+      if (this.callConnecting && (this.callFromId === from || expectingOffer)) {
+        this.callIncoming = false;
+        await this.acceptCall();
+        return;
+      }
       this.callConversationId = conversationId;
       this.callType = callType;
       this.callFromId = from;
@@ -1596,9 +1824,28 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       try {
         const callType = msg.callType === 'video' ? 'video' : (this.callType ?? 'audio');
         this.callType = callType;
+        if (this.pc && this.pc.signalingState === 'closed') {
+          this.pc = undefined;
+        }
+        if (this.pc && this.pc.signalingState !== 'stable') {
+          const convoId = this.callConversationId;
+          this.cleanupCall(false);
+          this.callConversationId = convoId;
+          this.callType = callType;
+          this.callFromId = this.meId;
+          this.callConnecting = true;
+          this.callIncoming = false;
+          this.callActive = false;
+          this.callError = '';
+        }
         await this.ensurePeerConnection(callType);
         if (!this.pc) return;
-        const offer = await this.pc.createOffer();
+        try {
+          if (typeof this.pc.restartIce === 'function') {
+            this.pc.restartIce();
+          }
+        } catch {}
+        const offer = await this.pc.createOffer({ iceRestart: true });
         await this.pc.setLocalDescription(offer);
         this.sendSignal('call-offer', this.callConversationId, { sdp: offer, callType });
       } catch {}
@@ -1608,6 +1855,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     if (conversationId !== this.callConversationId) return;
 
     if (type === 'call-answer' && msg.sdp) {
+      if (!callIdMatches) return;
       if (!this.pc) return;
       await this.pc.setRemoteDescription(msg.sdp);
       await this.flushIceCandidates();
@@ -1619,6 +1867,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     }
 
     if (type === 'ice-candidate' && msg.candidate) {
+      if (!callIdMatches) return;
       if (!this.pc) {
         this.pendingCandidates.push(msg.candidate);
         return;
@@ -1634,6 +1883,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     }
 
     if (type === 'call-decline' || type === 'call-busy') {
+      if (!callIdMatches) return;
       if (this.callFromId === this.meId) {
         void this.sendCallLog('missed', this.getCallLogMeta());
       }
@@ -1642,6 +1892,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     }
 
     if (type === 'call-end') {
+      if (!callIdMatches) return;
       this.cleanupCall();
     }
   }
@@ -1765,6 +2016,8 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     this.callLogSent = false;
     this.callSpeaking = false;
     this.callTimerSeconds = 0;
+    this.awaitingOffer = false;
+    this.callSessionId = null;
     this.stopCallTimer();
     this.clearDisconnectTimer();
     this.stopVoiceDetection();
@@ -1959,12 +2212,13 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     const prevLastId = this.messages[this.messages.length - 1]?.id ?? null;
     let shouldScroll = false;
     try {
-      const fetched = await this.messagesService.listMessages(conversationId, 60);
+      const fetched = await this.messagesService.listMessages(conversationId, 300);
       if (silent) {
         this.messages = this.mergeMessages(conversationId, this.messages, fetched, 200);
       } else {
         this.messages = fetched;
       }
+      this.rebuildReactions();
       const nextLastId = this.messages[this.messages.length - 1]?.id ?? null;
       shouldScroll = nextLastId !== prevLastId || !silent;
       if (!silent) {
@@ -1983,8 +2237,11 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
 
   async sendMessage(): Promise<void> {
     if (!this.activeConversationId || this.messageBusy) return;
-    const body = this.messageDraft.trim();
+    let body = this.messageDraft.trim();
     if (!body && !this.messageMediaFile) return;
+    if (this.replyingTo) {
+      body = this.buildReplyBody(this.replyingTo, body);
+    }
 
     this.messageBusy = true;
     this.messageError = '';
@@ -2020,6 +2277,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       const sent = await this.messagesService.sendMessage(this.activeConversationId, body, media);
       this.messages = [...this.messages, sent];
       this.messageDraft = '';
+      this.replyingTo = null;
       this.resetMessageInput();
       this.clearMedia();
       this.bumpConversation(sent);
@@ -2096,6 +2354,10 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     return Number.isFinite(parsed) ? parsed : 0;
   }
 
+  trackMessageById(index: number, message: Message): string | number {
+    return message?.id ?? index;
+  }
+
   triggerMediaPicker(): void {
     this.mediaInput?.nativeElement.click();
   }
@@ -2146,14 +2408,93 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     const body = String(message?.body ?? '');
     const trimmed = body.trim();
     if (!trimmed) return '';
+    if (this.isReactionMessage(message)) return '';
     const callLog = this.parseCallLog(trimmed);
     if (callLog) return this.formatCallLog(callLog);
+    const reply = this.parseReply(trimmed);
+    if (reply) {
+      const cleaned = reply.body.trim();
+      if (cleaned) return cleaned;
+      return '';
+    }
     if (message?.id && trimmed === message.id) return '';
     if (this.looksLikeId(trimmed)) return '';
     if (this.stripTrailingMeta(trimmed) !== trimmed) {
       return this.stripTrailingMeta(trimmed);
     }
     return body;
+  }
+
+  startReply(message: Message): void {
+    if (!message) return;
+    this.replyingTo = message;
+    this.forceUi();
+  }
+
+  cancelReply(): void {
+    this.replyingTo = null;
+    this.forceUi();
+  }
+
+  replyPreview(message: Message): { id: string; name: string; text: string } | null {
+    const parsed = this.parseReply(String(message?.body ?? ''));
+    if (!parsed) return null;
+    const target = this.messages.find((m) => m.id === parsed.targetId) ?? null;
+    const name = target ? this.displayNameFor(this.senderInfo(target)) : 'Message';
+    let text = parsed.text || (target ? this.messageText(target) : '');
+    if (!text && target?.media_type) {
+      text = target.media_type === 'video' ? 'Video' : 'Photo';
+    }
+    if (!text) return null;
+    return { id: parsed.targetId, name, text };
+  }
+
+  scrollToMessage(messageId: string): void {
+    if (!messageId) return;
+    const el = document.getElementById(`msg-${messageId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.add('message-highlight');
+      window.setTimeout(() => el.classList.remove('message-highlight'), 900);
+      return;
+    }
+    this.scrollToBottom();
+  }
+
+  replySnippet(message: Message | null): string {
+    if (!message) return '';
+    const text = this.messageText(message);
+    if (text) return text;
+    if (message.media_type === 'video') return 'Video';
+    if (message.media_type === 'image') return 'Photo';
+    return '';
+  }
+
+  isReactionMessage(message: Message): boolean {
+    return !!this.parseReaction(String(message?.body ?? ''));
+  }
+
+  messageLikeCount(message: Message): number {
+    const data = this.reactionsByMessage.get(message.id);
+    return data?.count ?? 0;
+  }
+
+  isMessageLikedByMe(message: Message): boolean {
+    const data = this.reactionsByMessage.get(message.id);
+    return !!data?.likedByMe;
+  }
+
+  async toggleMessageLike(message: Message): Promise<void> {
+    if (!this.activeConversationId || !message?.id) return;
+    const liked = this.isMessageLikedByMe(message);
+    const body = this.buildReactionBody(message.id, liked ? 0 : 1);
+    try {
+      const sent = await this.messagesService.sendMessage(this.activeConversationId, body);
+      this.messages = [...this.messages, sent];
+      this.bumpConversation(sent);
+      this.rebuildReactions();
+      this.forceUi();
+    } catch {}
   }
 
   isCallLogMessage(message: Message): boolean {
@@ -2187,6 +2528,84 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       kind,
       duration: Number.isFinite(duration) ? duration : 0,
     };
+  }
+
+  private buildReplyBody(target: Message, body: string): string {
+    const targetId = target?.id ?? '';
+    const text = this.messageText(target) || '';
+    const encoded = this.encodeBase64(text.slice(0, 160));
+    return `${this.REPLY_PREFIX}id=${targetId}|text=${encoded}||${body}`;
+  }
+
+  private parseReply(body: string): { targetId: string; text: string; body: string } | null {
+    const trimmed = String(body ?? '').trim();
+    if (!trimmed.startsWith(this.REPLY_PREFIX)) return null;
+    const parts = trimmed.split('||');
+    const meta = parts[0] ?? '';
+    const rest = parts.slice(1).join('||');
+    const idMatch = meta.match(/id=([^|]+)/i);
+    const textMatch = meta.match(/text=([^|]+)/i);
+    const targetId = idMatch ? String(idMatch[1]) : '';
+    const text = textMatch ? this.decodeBase64(String(textMatch[1])) : '';
+    return { targetId, text, body: rest };
+  }
+
+  private buildReactionBody(targetId: string, state: 0 | 1): string {
+    return `${this.REACTION_PREFIX}target=${targetId}|emoji=❤|state=${state}`;
+  }
+
+  private parseReaction(body: string): { targetId: string; emoji: string; state: number } | null {
+    const trimmed = String(body ?? '').trim();
+    if (!trimmed.startsWith(this.REACTION_PREFIX)) return null;
+    const targetMatch = trimmed.match(/target=([^|]+)/i);
+    const emojiMatch = trimmed.match(/emoji=([^|]+)/i);
+    const stateMatch = trimmed.match(/state=([01])/i);
+    if (!targetMatch) return null;
+    return {
+      targetId: String(targetMatch[1]),
+      emoji: emojiMatch ? String(emojiMatch[1]) : '❤',
+      state: stateMatch ? Number(stateMatch[1]) : 1,
+    };
+  }
+
+  private rebuildReactions(): void {
+    const perMessage = new Map<string, Map<string, number>>();
+    for (const msg of this.messages) {
+      const reaction = this.parseReaction(msg.body);
+      if (!reaction) continue;
+      const targetId = reaction.targetId;
+      const senderId = msg.sender_id || '';
+      if (!targetId || !senderId) continue;
+      if (!perMessage.has(targetId)) perMessage.set(targetId, new Map());
+      perMessage.get(targetId)!.set(senderId, reaction.state);
+    }
+    const summary = new Map<string, { count: number; likedByMe: boolean }>();
+    for (const [targetId, states] of perMessage.entries()) {
+      let count = 0;
+      let likedByMe = false;
+      for (const [userId, state] of states.entries()) {
+        if (state === 1) count += 1;
+        if (userId === this.meId && state === 1) likedByMe = true;
+      }
+      summary.set(targetId, { count, likedByMe });
+    }
+    this.reactionsByMessage = summary;
+  }
+
+  private encodeBase64(value: string): string {
+    try {
+      return btoa(unescape(encodeURIComponent(value)));
+    } catch {
+      return '';
+    }
+  }
+
+  private decodeBase64(value: string): string {
+    try {
+      return decodeURIComponent(escape(atob(value)));
+    } catch {
+      return '';
+    }
   }
 
   private formatCallLog(log: { status: string; kind: 'audio' | 'video'; duration: number }): string {
@@ -2244,8 +2663,15 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     const last = convo.last_message;
     if (!last) return 'Start a conversation';
     const body = String(last.body || '').trim();
+    const reaction = this.parseReaction(body);
+    if (reaction) return 'Liked a message';
     const callLog = this.parseCallLog(body);
     if (callLog) return this.formatCallLog(callLog);
+    const reply = this.parseReply(body);
+    if (reply) {
+      const cleaned = reply.body.trim();
+      if (cleaned) return cleaned;
+    }
     if (body && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body)) {
       return body;
     }
@@ -2291,6 +2717,10 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
 
   isConversationUnread(convo: Conversation): boolean {
     return this.unreadConversationIds.has(convo.id);
+  }
+
+  get messagesBadgeCount(): number {
+    return this.unreadConversationIds.size;
   }
 
   private async refreshUnreadConversations(): Promise<void> {
@@ -2430,6 +2860,23 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     return current !== previous;
   }
 
+  showDaySeparatorVisible(index: number): boolean {
+    if (!this.messages.length || index < 0) return false;
+    const currentMsg = this.messages[index];
+    if (!currentMsg || this.isReactionMessage(currentMsg)) return false;
+    let prevIdx = index - 1;
+    while (prevIdx >= 0) {
+      const prevMsg = this.messages[prevIdx];
+      if (prevMsg && !this.isReactionMessage(prevMsg)) {
+        const current = this.dayKey(currentMsg.created_at);
+        const previous = this.dayKey(prevMsg.created_at);
+        return current !== previous;
+      }
+      prevIdx -= 1;
+    }
+    return true;
+  }
+
   messageStatus(message: Message): 'sent' | 'read' | null {
     if (!this.meId || message.sender_id !== this.meId) return null;
     const other = this.otherMember(this.activeConversation);
@@ -2549,6 +2996,18 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
 
   goBack(): void {
     void this.router.navigate(['/globe']);
+  }
+
+  goHome(): void {
+    void this.router.navigate(['/globe']);
+  }
+
+  openNotifications(): void {
+    void this.router.navigate(['/globe'], { queryParams: { panel: 'notifications' } });
+  }
+
+  openSearch(): void {
+    void this.router.navigate(['/globe'], { queryParams: { search: '1' } });
   }
 }
 

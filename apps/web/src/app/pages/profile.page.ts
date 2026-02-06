@@ -1,9 +1,11 @@
 import {
   Component,
   ChangeDetectorRef,
+  ElementRef,
   NgZone,
   OnDestroy,
   OnInit,
+  ViewChild,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -25,6 +27,7 @@ import { CountryPost, PostComment, PostLike } from '../core/models/post.model';
 import { FollowService } from '../core/services/follow.service';
 import { LocationService } from '../core/services/location.service';
 import { MessagesService } from '../core/services/messages.service';
+import { SUPABASE_URL } from '../config/supabase.config';
 
 @Component({
   selector: 'app-profile-page',
@@ -50,14 +53,26 @@ import { MessagesService } from '../core/services/messages.service';
               <div class="init" *ngIf="!avatarImage">{{ initials }}</div>
               <span class="ring"></span>
             </div>
-            <button
-              *ngIf="isOwner && profileEditMode"
-              type="button"
-              class="micro-btn outline"
-              (click)="toggleAvatarEditor($event)"
-            >
-              {{ editingAvatar ? 'Close avatar editor' : 'Edit avatar' }}
-            </button>
+            <div class="avatar-actions" *ngIf="isOwner">
+              <button
+                type="button"
+                class="micro-btn"
+                (click)="triggerAvatarUpload($event)"
+              >
+                Upload
+              </button>
+              <button
+                type="button"
+                class="micro-btn outline"
+                (click)="saveAvatar()"
+                [disabled]="avatarSaving || !draftAvatarUploadUrl"
+              >
+                {{ avatarSaving ? 'Saving…' : 'Save' }}
+              </button>
+              <span class="hint" *ngIf="avatarUploading && !draftAvatarUploadUrl">Uploading...</span>
+              <span class="hint" *ngIf="!avatarUploading && draftAvatarUrl && !draftAvatarUploadUrl">Selected?</span>
+              <small class="hint error" *ngIf="avatarError">{{ avatarError }}</small>
+            </div>
           </div>
 
           <div class="info">
@@ -636,10 +651,7 @@ import { MessagesService } from '../core/services/messages.service';
               <div class="sec-title">Avatar</div>
               <small>Upload a square image (PNG/JPG/WebP). Drag to position inside the circle.</small>
             </div>
-            <label class="btn-file">
-              Choose image
-              <input type="file" accept="image/*" (change)="onAvatar($event)" />
-            </label>
+            <button class="btn-file" type="button" (click)="avatarInput.click()">Choose image</button>
           </div>
 
           <div class="editor-preview">
@@ -661,13 +673,11 @@ import { MessagesService } from '../core/services/messages.service';
           </div>
 
           <div class="edit-actions">
-            <button class="btn" type="button" (click)="saveAvatar()" [disabled]="!draftAvatarUrl || avatarSaving">
-              {{ avatarSaving ? 'Saving…' : 'Save avatar' }}
-            </button>
-            <button class="ghost-link" type="button" (click)="cancelAvatarEdit()">Cancel</button>
-            <small class="hint error" *ngIf="avatarError">{{ avatarError }}</small>
+              <span class="hint" *ngIf="avatarUploading && !draftAvatarUploadUrl">Uploading...</span>
+              <button class="ghost-link" type="button" (click)="cancelAvatarEdit()">Cancel</button>
+              <small class="hint error" *ngIf="avatarError">{{ avatarError }}</small>
+            </div>
           </div>
-        </div>
       </div>
 
       <ng-template #stateTpl>
@@ -677,6 +687,14 @@ import { MessagesService } from '../core/services/messages.service';
         </div>
       </ng-template>
     </div>
+
+    <input
+      #avatarInput
+      type="file"
+      accept="image/*"
+      (change)="onAvatar($event)"
+      style="display:none;"
+    />
 
     <div class="avatar-modal" *ngIf="avatarModalOpen" (click)="closeAvatarModal()">
       <div class="avatar-modal-card" (click)="$event.stopPropagation()">
@@ -1053,6 +1071,13 @@ import { MessagesService } from '../core/services/messages.service';
       align-items:center;
       gap:8px;
       cursor:pointer;
+    }
+    .avatar-actions{
+      display:flex;
+      flex-direction:column;
+      align-items:flex-start;
+      gap:8px;
+      width:100%;
     }
     .avatar{
       width: 110px;
@@ -1817,6 +1842,8 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
 
   isOwner = false;
   meId: string | null = null;
+  meEmail: string | null = null;
+  private currentSlug = '';
   followersCount: number | null = null;
   followingCount: number | null = null;
   followMetaLoading = false;
@@ -1881,6 +1908,8 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
   avatarNormX = 0;
   avatarNormY = 0;
   avatarModalOpen = false;
+  @ViewChild('avatarInput') avatarInputRef?: ElementRef<HTMLInputElement>;
+  private avatarBeforeEdit = '';
 
   editingName = false;
   nameSaving = false;
@@ -1902,8 +1931,11 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
 
   editingAvatar = false;
   avatarSaving = false;
+  avatarUploading = false;
   avatarError = '';
   draftAvatarUrl = '';
+  draftAvatarUploadUrl = '';
+  private avatarPreviewUrl = '';
 
   private readonly AVATAR_OUT_SIZE = 512;
   private readonly EDIT_SIZE = 180;
@@ -1956,6 +1988,7 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     });
     const user = await this.auth.getUser();
     this.meId = user?.id ?? null;
+    this.meEmail = user?.email ?? null;
     void this.startPresenceStatus();
 
     this.sub = this.route.paramMap.subscribe((params) => {
@@ -2025,22 +2058,37 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     this.forceUi();
 
     try {
-      const slug = (slugRaw || '').trim();
-      if (!slug) throw new Error('Profile not found.');
+    const slug = (slugRaw || '').trim();
+    if (!slug) throw new Error('Profile not found.');
 
-      const username = slug.startsWith('@') ? slug.slice(1) : slug;
+    const username = slug.startsWith('@') ? slug.slice(1) : slug;
+    this.currentSlug = username.toLowerCase();
 
-      let profile: Profile | null = null;
+    let profile: Profile | null = null;
 
-      if (username) {
-        const byUsername = await this.profiles.profileByUsername(username);
-        profile = byUsername.profileByUsername ?? null;
+    if (username) {
+      const byUsername = await this.profiles.profileByUsername(username);
+      profile = byUsername.profileByUsername ?? null;
+    }
+
+    if (!profile && this.meId) {
+      const byMe = await this.profiles.profileById(this.meId);
+      const meProfile = byMe.profileById ?? null;
+      if (meProfile) {
+        const slugLower = this.currentSlug;
+        const meUsername = (meProfile.username || '').toLowerCase();
+        const meDisplay = (meProfile.display_name || '').toLowerCase();
+        const meEmailLocal = (meProfile.email || '').split('@')[0].toLowerCase();
+        if (slugLower === meUsername || slugLower === meDisplay || slugLower === meEmailLocal) {
+          profile = meProfile;
+        }
       }
+    }
 
-      if (!profile) {
-        const byId = await this.profiles.profileById(slug);
-        profile = byId.profileById ?? null;
-      }
+    if (!profile) {
+      const byId = await this.profiles.profileById(slug);
+      profile = byId.profileById ?? null;
+    }
 
       if (!profile) {
         this.error = 'Profile not found.';
@@ -2057,7 +2105,7 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
 
   private applyProfile(profile: Profile): void {
     this.profile = profile;
-    this.avatarImage = (profile as any)?.avatar_url ?? '';
+    this.avatarImage = this.normalizeAvatarUrl((profile as any)?.avatar_url ?? '');
     this.bio = (profile as any)?.bio ?? '';
     this.draftDisplayName = profile.display_name ?? '';
     this.draftBio = this.bio ?? '';
@@ -2066,7 +2114,14 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     this.shareUrl = this.buildShareUrl(profile);
     this.shareCopied = false;
     this.shareError = '';
-    this.isOwner = !!this.meId && profile.user_id === this.meId;
+    const emailLocal = (this.meEmail || '').split('@')[0].toLowerCase();
+    const profileUsername = (profile.username || '').toLowerCase();
+    const profileEmail = (profile.email || '').toLowerCase();
+    const slugMatch = this.currentSlug && (profileUsername === this.currentSlug || emailLocal === this.currentSlug);
+    this.isOwner =
+      (!!this.meId && profile.user_id === this.meId) ||
+      (!!this.meEmail && profileEmail && profileEmail === (this.meEmail || '').toLowerCase()) ||
+      (!!this.meEmail && slugMatch);
     this.updateProfileOnline();
     this.stopLocationRefresh();
     if (this.isOwner) this.startLocationRefresh();
@@ -2513,8 +2568,31 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     this.avatarError = '';
     if (this.editingAvatar) {
       this.draftAvatarUrl = this.avatarImage || '';
+      this.draftAvatarUploadUrl = this.avatarImage || '';
       this.draftNormX = this.avatarNormX;
       this.draftNormY = this.avatarNormY;
+    }
+    this.forceUi();
+  }
+
+  triggerAvatarUpload(event: Event): void {
+    this.openAvatarUpload(event);
+    const input = this.avatarInputRef?.nativeElement;
+    if (input) {
+      input.click();
+    }
+  }
+
+  openAvatarUpload(event: Event): void {
+    event.stopPropagation();
+    if (!this.editingAvatar) {
+      this.avatarBeforeEdit = this.avatarImage || '';
+      this.editingAvatar = true;
+      this.draftAvatarUrl = this.avatarImage || '';
+      this.draftAvatarUploadUrl = '';
+      this.draftNormX = this.avatarNormX;
+      this.draftNormY = this.avatarNormY;
+      this.forceUi();
     }
   }
 
@@ -2522,6 +2600,13 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     this.editingAvatar = false;
     this.avatarError = '';
     this.draftAvatarUrl = '';
+    this.draftAvatarUploadUrl = '';
+    this.avatarImage = this.avatarBeforeEdit || this.normalizeAvatarUrl(this.profile?.avatar_url ?? '');
+    this.avatarBeforeEdit = '';
+    if (this.avatarPreviewUrl) {
+      try { URL.revokeObjectURL(this.avatarPreviewUrl); } catch {}
+      this.avatarPreviewUrl = '';
+    }
     this.draftNormX = this.avatarNormX;
     this.draftNormY = this.avatarNormY;
   }
@@ -2548,44 +2633,77 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     const file = input.files?.[0];
     if (!file) return;
 
+    if (!this.editingAvatar) {
+      this.avatarBeforeEdit = this.avatarImage || '';
+      this.editingAvatar = true;
+    }
     this.avatarError = '';
     this.avatarSaving = false;
+    this.avatarUploading = true;
     this.forceUi();
 
     try {
-      const cropped = await this.cropAvatarToSquare(file);
-      const upload = await this.media.uploadAvatar(cropped);
-      if (!upload.url) throw new Error('Upload returned no URL.');
-
-      this.draftAvatarUrl = upload.url;
+      let uploadFile = file;
+      try {
+        uploadFile = await this.cropAvatarToSquare(file);
+      } catch {
+        // Fallback to original file if crop fails (e.g. HEIC decode issues)
+        this.avatarError = 'Crop failed, using original image.';
+      }
+      if (this.avatarPreviewUrl) {
+        try { URL.revokeObjectURL(this.avatarPreviewUrl); } catch {}
+        this.avatarPreviewUrl = '';
+      }
+      this.avatarPreviewUrl = URL.createObjectURL(uploadFile);
+      this.draftAvatarUrl = this.avatarPreviewUrl;
+      this.avatarImage = this.draftAvatarUrl;
+      this.draftAvatarUploadUrl = '';
       this.draftNormX = 0;
       this.draftNormY = 0;
+
+      const upload = await this.media.uploadAvatar(uploadFile);
+      if (!upload.url) throw new Error('Upload returned no URL.');
+
+      // Keep the same logic as profile creation: save the public URL
+      this.draftAvatarUploadUrl = upload.url;
+      this.draftAvatarUrl = upload.url;
+      this.avatarImage = this.draftAvatarUrl;
+      if (this.avatarPreviewUrl) {
+        try { URL.revokeObjectURL(this.avatarPreviewUrl); } catch {}
+        this.avatarPreviewUrl = '';
+      }
     } catch (e: any) {
       this.avatarError = e?.message ?? String(e);
     } finally {
       input.value = '';
+      this.avatarUploading = false;
       this.forceUi();
     }
   }
 
   async saveAvatar(): Promise<void> {
-    if (!this.draftAvatarUrl) return;
+    if (!this.draftAvatarUploadUrl) {
+      this.avatarError = 'Upload pending. Please wait for the image to finish uploading.';
+      this.forceUi();
+      return;
+    }
     this.avatarSaving = true;
     this.avatarError = '';
     this.forceUi();
 
-    try {
-      const res = await this.profiles.updateProfile({
-        avatar_url: this.draftAvatarUrl,
-      });
-      this.applyProfile(res.updateProfile);
-      this.avatarImage = this.profile?.avatar_url ?? '';
-      this.avatarNormX = this.draftNormX;
-      this.avatarNormY = this.draftNormY;
-      this.editingAvatar = false;
-    } catch (e: any) {
-      this.avatarError = e?.message ?? String(e);
-    } finally {
+      try {
+        const res = await this.profiles.updateProfile({
+          avatar_url: this.draftAvatarUploadUrl,
+        });
+        this.applyProfile(res.updateProfile);
+        this.avatarImage = this.normalizeAvatarUrl(this.profile?.avatar_url ?? '');
+        this.avatarNormX = this.draftNormX;
+        this.avatarNormY = this.draftNormY;
+        this.editingAvatar = false;
+        this.avatarBeforeEdit = '';
+      } catch (e: any) {
+        this.avatarError = e?.message ?? String(e);
+      } finally {
       this.avatarSaving = false;
       this.forceUi();
     }
@@ -2720,6 +2838,17 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
 
   private clampNorm(v: number): number {
     return Math.max(-1, Math.min(1, v));
+  }
+
+  private normalizeAvatarUrl(url: string | null | undefined): string {
+    const raw = String(url || '').trim();
+    if (!raw) return '';
+    if (/^https?:\/\//i.test(raw) || raw.startsWith('data:') || raw.startsWith('blob:') || raw.startsWith('/')) {
+      return raw;
+    }
+    if (raw.includes('/storage/v1/object/')) return raw;
+    const normalized = raw.replace(/^\/+/, '');
+    return `${SUPABASE_URL}/storage/v1/object/public/avatars/${normalized}`;
   }
 
   private maxOffset(size: number, scale: number): number {
@@ -3238,10 +3367,16 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
       type === 'image/png' || type === 'image/webp' ? 'image/png' : 'image/jpeg';
     const outExt = outType === 'image/png' ? 'png' : 'jpg';
 
-    const bitmap = await createImageBitmap(file);
-    const side = Math.min(bitmap.width, bitmap.height);
-    const sx = Math.floor((bitmap.width - side) / 2);
-    const sy = Math.floor((bitmap.height - side) / 2);
+    let bitmap: ImageBitmap | null = null;
+    let width = 0;
+    let height = 0;
+    try {
+      bitmap = await createImageBitmap(file);
+      width = bitmap.width;
+      height = bitmap.height;
+    } catch {
+      bitmap = null;
+    }
 
     const canvas = document.createElement('canvas');
     canvas.width = this.AVATAR_OUT_SIZE;
@@ -3254,9 +3389,25 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     (ctx as any).imageSmoothingQuality = 'high';
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(bitmap, sx, sy, side, side, 0, 0, canvas.width, canvas.height);
-
-    bitmap.close?.();
+    if (bitmap) {
+      const side = Math.min(width, height);
+      const sx = Math.floor((width - side) / 2);
+      const sy = Math.floor((height - side) / 2);
+      ctx.drawImage(bitmap, sx, sy, side, side, 0, 0, canvas.width, canvas.height);
+      bitmap.close?.();
+    } else {
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const el = new Image();
+        el.onload = () => resolve(el);
+        el.onerror = () => reject(new Error('Image decode failed.'));
+        el.src = URL.createObjectURL(file);
+      });
+      const side = Math.min(img.naturalWidth, img.naturalHeight);
+      const sx = Math.floor((img.naturalWidth - side) / 2);
+      const sy = Math.floor((img.naturalHeight - side) / 2);
+      ctx.drawImage(img, sx, sy, side, side, 0, 0, canvas.width, canvas.height);
+      try { URL.revokeObjectURL(img.src); } catch {}
+    }
 
     const blob: Blob = await new Promise((resolve, reject) => {
       canvas.toBlob(
@@ -3309,6 +3460,8 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     this.forceUi();
   }
 }
+
+
 
 
 

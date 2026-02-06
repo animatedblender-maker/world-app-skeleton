@@ -11,12 +11,14 @@ export type CallSignal = {
   callType?: 'audio' | 'video';
   sdp?: any;
   candidate?: any;
+  callId?: string;
 };
 
 export type IncomingCall = {
   conversationId: string;
   from: string;
   callType: 'audio' | 'video';
+  callId?: string;
 };
 
 @Injectable({ providedIn: 'root' })
@@ -106,7 +108,8 @@ export class CallService {
     this.zone.run(() => {
       if (type === 'call-offer') {
         const callType = msg.callType === 'video' ? 'video' : 'audio';
-        this.incomingSubject.next({ conversationId, from, callType });
+        const callId = typeof msg.callId === 'string' ? msg.callId : undefined;
+        this.incomingSubject.next({ conversationId, from, callType, callId });
       }
 
       if (type === 'call-end' || type === 'call-decline' || type === 'call-busy') {

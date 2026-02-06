@@ -1,160 +1,127 @@
-// MapLibre-backed service (SAME service name + API)
-//
-// ✅ Infinite-looking ocean: world copies ON
-// ✅ Fullscreen-safe: forces map.resize() after load
-// ✅ Click/search: centers + zooms (with padding for your topbar)
-// ✅ Labels: one per country
-// ✅ Connections: floating points = user connections
-// ✅ Focus mode: solo selected country + filter connection dots by country code
-//
-// IMPORTANT: No hover -> NO pill updates. Only click/search triggers selection.
-
 import { Injectable } from '@angular/core';
-import { continentColors, oceanColor } from './palette';
 import type { CountryModel } from '../data/countries.service';
 
-import maplibregl, { Map as MLMap, GeoJSONSource, MapMouseEvent, PaddingOptions } from 'maplibre-gl';
-import 'maplibre-gl/dist/maplibre-gl.css';
-
 type CountriesPayload = { features: any[]; countries: CountryModel[] };
-type CountriesFeature = GeoJSON.Feature<GeoJSON.Geometry, any> & { id?: number };
 
-/** Connection point model (your "floating dots") */
+/** Connection point model (floating dots / stars). */
 export type ConnectionPoint = {
   id: string | number;
   lat: number;
   lng: number;
-
-  /** ISO2 (DE/US/EG) for focus filter */
   cc?: string | null;
-
   color?: string;
   radius?: number;
 };
 
 @Injectable({ providedIn: 'root' })
 export class GlobeService {
-  private map: MLMap | null = null;
-
-  private features: CountriesFeature[] = [];
-  private countries: CountryModel[] = [];
-  private selectedId: number | null = null;
-
-  private countryClickCb: ((country: CountryModel) => void) | null = null;
-  private cachedPayload: CountriesPayload | null = null;
-
-  // --- Sources / layers ---
-  private readonly COUNTRIES_SOURCE = 'worldapp-countries';
-  private readonly FILL_LAYER = 'worldapp-fill';
-  private readonly LINE_LAYER = 'worldapp-line';
-
-  private readonly LABEL_SOURCE = 'worldapp-country-labels';
-  private readonly LABEL_LAYER = 'worldapp-labels';
-
-  private readonly CONN_SOURCE = 'worldapp-connections';
-  private readonly CONN_LAYER = 'worldapp-connections-layer';
-  private cachedConnections: ConnectionPoint[] = [];
-
-  private readonly ONLINE_COLOR = 'rgba(0,255,120,0.98)';
-  private readonly OFFLINE_ALPHA = 0.85;
-
-  // ✅ Focus filters
-  private soloCountryId: number | null = null;
-  private connectionsCountryCode: string | null = null; // ISO2
-  private pendingConnFilterApply = false;
-
-  // --- Mystical overlay ---
+  private viewer: any = null;
+  private Cesium: any = null;
   private overlayHost: HTMLElement | null = null;
-  private auraEl: HTMLDivElement | null = null;
-  private grainEl: HTMLDivElement | null = null;
   private particleCanvas: HTMLCanvasElement | null = null;
   private particleCtx: CanvasRenderingContext2D | null = null;
   private raf = 0;
+  private particleScale = 1;
+  private canvasOffsetX = 0;
+  private canvasOffsetY = 0;
+  private canvasCssWidth = 0;
+  private canvasCssHeight = 0;
+  private drawBufferWidth = 0;
+  private drawBufferHeight = 0;
+  private cssScaleX = 1;
+  private cssScaleY = 1;
+  private hostCssWidth = 0;
+  private hostCssHeight = 0;
+  private readyResolver: (() => void) | null = null;
+  private readyPromise = new Promise<void>((resolve) => {
+    this.readyResolver = resolve;
+  });
 
-  private readonly MIN_LABEL_SIZE_PX = 12;
-  private readonly MAX_LABEL_SIZE_PX = 18;
+  private countries: CountryModel[] = [];
+  private cachedPayload: CountriesPayload | null = null;
+  private countryClickCb: ((country: CountryModel) => void) | null = null;
+  private selectedId: number | null = null;
 
-  private readonly DEFAULT_VIEW_PADDING: PaddingOptions = { top: 90, bottom: 20, left: 20, right: 20 };
-  private viewPadding: PaddingOptions = { ...this.DEFAULT_VIEW_PADDING };
-  private mapReady = false;
-  private readyResolvers: Array<() => void> = [];
-  private pendingSelectedCountryId: number | null = null;
-  private hasPendingSelection = false;
-  private focusedLabelId: number | null = null;
-  private mapInteractive = true;
+  private cachedConnections: ConnectionPoint[] = [];
+  private onlineConnectionIds = new globalThis.Set<string>();
+
+  private readonly MAX_NETWORK_NODES = 140;
+  private readonly MAX_NETWORK_LINKS = 2;
+  private readonly MAX_LINK_DISTANCE = 160;
+  private readonly FIRE_TRAIL_ALPHA = 0.55;
+  private readonly FIRE_MAX_SEGMENTS = 4;
+  private readonly FIRE_MIN_SPEED = 0.18;
+  private readonly FIRE_MAX_SPEED = 0.35;
+  private fireTrails = new globalThis.Map<
+    string,
+    { phase: number; speed: number; tail: Array<{ x: number; y: number }> }
+  >();
+
+  private labelsDataSource: any = null;
+  private countriesDataSource: any = null;
 
   init(globeEl: HTMLElement): void {
-    const cs = getComputedStyle(globeEl);
-    if (cs.position === 'static') globeEl.style.position = 'relative';
+    this.overlayHost = globeEl;
+    if (getComputedStyle(globeEl).position === 'static') globeEl.style.position = 'relative';
 
-    globeEl.style.background = oceanColor;
+    this.ensureCesium().then((Cesium) => {
+      if (!Cesium) return;
+      this.Cesium = Cesium;
 
-    const style: any = {
-      version: 8,
-      sources: {},
-      layers: [{ id: 'bg', type: 'background', paint: { 'background-color': oceanColor } }],
-    };
-
-    const map = new maplibregl.Map({
-      container: globeEl,
-      style,
-      center: [0, 20],
-      zoom: 1.35,
-      minZoom: 1.05,
-      maxZoom: 6.2,
-      attributionControl: false,
-      dragRotate: false,
-      pitchWithRotate: false,
-    });
-
-    map.dragRotate.disable();
-    map.touchZoomRotate.disableRotation();
-
-    try { map.setRenderWorldCopies(true); } catch {}
-    try { (map.getCanvas().parentElement as HTMLElement).style.background = oceanColor; } catch {}
-
-    this.installMysticOverlay(globeEl);
-
-    map.on('load', () => {
-      this.map = map;
-
-      requestAnimationFrame(() => map.resize());
-      setTimeout(() => map.resize(), 0);
-      setTimeout(() => map.resize(), 80);
-
-      // ✅ Click selection only
-      map.on('click', this.FILL_LAYER, (e: MapMouseEvent) => this.onCountryClickInternal(e));
-      map.on('mouseenter', this.FILL_LAYER, () => {
-        if (!this.mapInteractive) return;
-        map.getCanvas().style.cursor = 'pointer';
+      const blankPixel =
+        'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=';
+      const viewer = new Cesium.Viewer(globeEl, {
+        animation: false,
+        timeline: false,
+        geocoder: false,
+        homeButton: false,
+        baseLayerPicker: false,
+        imageryProvider: new Cesium.SingleTileImageryProvider({ url: blankPixel }),
+        terrainProvider: new Cesium.EllipsoidTerrainProvider(),
+        sceneModePicker: false,
+        navigationHelpButton: false,
+        infoBox: false,
+        selectionIndicator: false,
+        fullscreenButton: false,
+        shouldAnimate: true,
       });
-      map.on('mouseleave', this.FILL_LAYER, () => {
-        if (!this.mapInteractive) return;
-        map.getCanvas().style.cursor = '';
-      });
+
+      // Hide Cesium credits/logo.
+      try { viewer.cesiumWidget.creditContainer.style.display = 'none'; } catch {}
+
+      // Stylized globe (no photo imagery).
+      viewer.imageryLayers.removeAll();
+
+      viewer.scene.globe.enableLighting = false;
+      viewer.scene.skyAtmosphere.show = false;
+      viewer.scene.globe.showGroundAtmosphere = false;
+      viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#05080f');
+      const ocean = Cesium.Color.fromCssColorString('#0b2b3b');
+      viewer.scene.globe.baseColor = ocean;
+      viewer.scene.globe.material = Cesium.Material.fromType('Color', { color: ocean });
+      viewer.scene.postProcessStages.fxaa.enabled = true;
+      viewer.scene.screenSpaceCameraController.maximumZoomDistance = 60_000_000;
+      viewer.scene.screenSpaceCameraController.minimumZoomDistance = 600_000;
+
+      this.viewer = viewer;
+      const overlayTarget = viewer.scene.canvas?.parentElement ?? globeEl;
+      this.overlayHost = overlayTarget;
+      this.installOverlay(overlayTarget);
+      this.startOverlayLoop();
+      this.installClickHandler();
+      this.readyResolver?.();
 
       if (this.cachedPayload) this.setDataFast(this.cachedPayload);
       if (this.cachedConnections.length) this.setConnections(this.cachedConnections);
-
-      // Apply any pending filters now that map is ready
-      this.applySoloCountryFilterNow();
-      this.applyConnectionsCountryFilterNow();
-
-      this.startOverlayLoop();
-      this.applyInteractivity();
-      this.markReady();
     });
 
-    window.addEventListener('resize', () => {
-      try { map.resize(); } catch {}
-      this.resizeParticles();
-    });
+    window.addEventListener('resize', () => this.resize());
   }
 
-  /** External resize hook for layout changes */
   resize(): void {
-    if (!this.map) return;
-    try { this.map.resize(); } catch {}
+    if (this.viewer) {
+      try { this.viewer.resize(); } catch {}
+    }
     this.resizeParticles();
   }
 
@@ -162,9 +129,18 @@ export class GlobeService {
     this.countryClickCb = cb;
   }
 
+  whenReady(): Promise<void> {
+    return this.readyPromise;
+  }
+
   setInteractive(enabled: boolean): void {
-    this.mapInteractive = !!enabled;
-    this.applyInteractivity();
+    if (!this.viewer) return;
+    const ctrl = this.viewer.scene.screenSpaceCameraController;
+    ctrl.enableRotate = enabled;
+    ctrl.enableZoom = enabled;
+    ctrl.enableTranslate = enabled;
+    ctrl.enableTilt = enabled;
+    ctrl.enableLook = enabled;
   }
 
   setData(payload: CountriesPayload): void {
@@ -176,689 +152,415 @@ export class GlobeService {
   }
 
   setDataFast(payload: CountriesPayload): void {
-    if (!this.map) {
-      this.cachedPayload = payload;
-      return;
-    }
-
     this.cachedPayload = payload;
     this.countries = payload.countries || [];
+    if (!this.viewer || !this.Cesium) return;
 
-    const normalized: CountriesFeature[] = (payload.features || []).map((f: any) => {
+    const Cesium = this.Cesium;
+    if (this.countriesDataSource) {
+      try { this.viewer.dataSources.remove(this.countriesDataSource, true); } catch {}
+    }
+    if (this.labelsDataSource) {
+      try { this.viewer.dataSources.remove(this.labelsDataSource, true); } catch {}
+    }
+
+    const features = (payload.features || []).map((f) => {
       const props = (f.properties ??= {});
       const rawId = f.__id ?? props.__id ?? props.id;
       const id = Number(rawId);
-
       props.__id = Number.isFinite(id) ? id : undefined;
-      props.fill = this.fillForProps(props);
+      return f;
+    });
+    const featureCollection = { type: 'FeatureCollection', features };
+    const ds = new Cesium.GeoJsonDataSource('countries');
+    ds.load(featureCollection as any, { clampToGround: true }).then((loaded: any) => {
+      for (const entity of loaded.entities.values) {
+        const id = entity.properties?.__id?.getValue?.();
+        const fill = this.countryFillColor(Number(id));
+        if (entity.polygon) {
+          entity.polygon.material = Cesium.Color.fromCssColorString(fill);
+          entity.polygon.outline = true;
+          entity.polygon.outlineColor = Cesium.Color.fromCssColorString('rgba(8,22,40,0.65)');
+          entity.polygon.outlineWidth = 1.1 as any;
+        }
+      }
+      this.countriesDataSource = loaded;
+      this.viewer.dataSources.add(loaded);
 
-      return {
-        type: 'Feature',
-        geometry: f.geometry,
-        properties: props,
-        id: props.__id,
-      };
+      const nameById = new Map<number, string>();
+      const labelSizeById = new Map<number, number>();
+      for (const c of this.countries) {
+        if (Number.isFinite(c.id as any)) {
+          const cid = Number(c.id);
+          nameById.set(cid, c.name);
+          labelSizeById.set(cid, Number.isFinite(c.labelSize as any) ? Number(c.labelSize) : 1);
+        }
+      }
+      const labels = new Cesium.CustomDataSource('country-labels');
+      const now = Cesium.JulianDate.now();
+      for (const entity of loaded.entities.values) {
+        const id = Number(entity.properties?.__id?.getValue?.());
+        const fallbackName = entity.properties?.name?.getValue?.() || entity.properties?.NAME?.getValue?.();
+        const name = nameById.get(id) || fallbackName;
+        if (!name) continue;
+        const labelSize = labelSizeById.get(id) ?? 1;
+        const labelXRaw =
+          [
+            entity.properties?.LABEL_X?.getValue?.(now),
+            entity.properties?.label_x?.getValue?.(now),
+            entity.properties?.LABEL_X?.getValue?.(),
+            entity.properties?.label_x?.getValue?.(),
+          ].find((v) => Number.isFinite(Number(v))) ?? null;
+        const labelYRaw =
+          [
+            entity.properties?.LABEL_Y?.getValue?.(now),
+            entity.properties?.label_y?.getValue?.(now),
+            entity.properties?.LABEL_Y?.getValue?.(),
+            entity.properties?.label_y?.getValue?.(),
+          ].find((v) => Number.isFinite(Number(v))) ?? null;
+        const labelX = labelXRaw == null ? NaN : Number(labelXRaw);
+        const labelY = labelYRaw == null ? NaN : Number(labelYRaw);
+
+        let position: any = null;
+        if (Number.isFinite(labelX) && Number.isFinite(labelY)) {
+          position = Cesium.Cartesian3.fromDegrees(labelX, labelY);
+        } else {
+          const hierarchy = entity.polygon?.hierarchy?.getValue?.(now);
+          const positions = hierarchy?.positions;
+          if (!positions || !positions.length) continue;
+          const sphere = Cesium.BoundingSphere.fromPoints(positions);
+          position = sphere.center;
+        }
+
+        if (!position) continue;
+        const maxDistance =
+          labelSize <= 0.5 ? 700_000 :
+          labelSize <= 0.8 ? 1_400_000 :
+          labelSize <= 1.2 ? 2_600_000 :
+          labelSize <= 1.8 ? 4_500_000 :
+          8_000_000;
+        const fontSize =
+          labelSize <= 0.5 ? 11 :
+          labelSize <= 0.8 ? 12 :
+          labelSize <= 1.2 ? 14 :
+          labelSize <= 1.8 ? 16 :
+          18;
+        labels.entities.add({
+          position,
+          label: {
+            text: name,
+            font: `${fontSize}px "Montserrat", sans-serif`,
+            fillColor: Cesium.Color.fromCssColorString('rgba(252,246,228,0.98)'),
+            outlineColor: Cesium.Color.fromCssColorString('rgba(8,16,24,0.92)'),
+            outlineWidth: 4,
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+            showBackground: true,
+            backgroundColor: Cesium.Color.fromCssColorString('rgba(6,14,24,0.45)'),
+            horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+            verticalOrigin: Cesium.VerticalOrigin.CENTER,
+            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+            distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, maxDistance),
+            scaleByDistance: new Cesium.NearFarScalar(400_000, 1.0, maxDistance, 0.35),
+            translucencyByDistance: new Cesium.NearFarScalar(400_000, 1.0, maxDistance, 0.0),
+          },
+        });
+      }
+      this.labelsDataSource = labels;
+      this.viewer.dataSources.add(labels);
     });
 
-    this.features = normalized;
-
-    const countriesFC: GeoJSON.FeatureCollection = {
-      type: 'FeatureCollection',
-      features: this.features,
-    };
-
-    const uniqueCountries = this.uniqueCountriesById(this.countries);
-    const labelsFC: GeoJSON.FeatureCollection = {
-      type: 'FeatureCollection',
-      features: uniqueCountries
-        .filter((c) => Number.isFinite(c.center?.lat) && Number.isFinite(c.center?.lng))
-        .map((c) => {
-          const base = 12 + (c.labelSize ?? 1) * 2;
-          const size = Math.max(this.MIN_LABEL_SIZE_PX, Math.min(this.MAX_LABEL_SIZE_PX, base));
-          return {
-            type: 'Feature',
-            geometry: { type: 'Point', coordinates: [c.center.lng, c.center.lat] },
-            properties: { id: c.id, name: c.name, labelSize: size },
-            id: c.id,
-          } as GeoJSON.Feature<GeoJSON.Point, any>;
-        }),
-    };
-
-    const map = this.map;
-
-    const countriesSrc = map.getSource(this.COUNTRIES_SOURCE) as GeoJSONSource | undefined;
-    if (!countriesSrc) {
-      map.addSource(this.COUNTRIES_SOURCE, { type: 'geojson', data: countriesFC });
-
-      map.addLayer({
-        id: this.FILL_LAYER,
-        type: 'fill',
-        source: this.COUNTRIES_SOURCE,
-        paint: {
-          'fill-color': [
-            'case',
-            ['boolean', ['feature-state', 'selected'], false],
-            'rgba(255,255,255,0.35)',
-            ['get', 'fill'],
-          ],
-          'fill-opacity': [
-            'case',
-            ['boolean', ['feature-state', 'dimmed'], false],
-            0.08,
-            1.0,
-          ],
-          'fill-opacity-transition': { duration: 480 },
-        },
-      });
-
-      map.addLayer({
-        id: this.LINE_LAYER,
-        type: 'line',
-        source: this.COUNTRIES_SOURCE,
-        paint: {
-          'line-color': 'rgba(0,40,60,0.85)',
-          'line-width': 1.4,
-          'line-opacity': [
-            'case',
-            ['boolean', ['feature-state', 'dimmed'], false],
-            0.25,
-            0.92,
-          ],
-          'line-opacity-transition': { duration: 480 },
-        },
-      });
-    } else {
-      countriesSrc.setData(countriesFC);
-    }
-
-    const labelsSrc = map.getSource(this.LABEL_SOURCE) as GeoJSONSource | undefined;
-    if (!labelsSrc) {
-      map.addSource(this.LABEL_SOURCE, { type: 'geojson', data: labelsFC });
-
-      map.addLayer({
-        id: this.LABEL_LAYER,
-        type: 'symbol',
-        source: this.LABEL_SOURCE,
-        layout: {
-          'text-field': ['get', 'name'],
-          'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
-          'text-size': ['coalesce', ['get', 'labelSize'], 13],
-          'text-anchor': 'center',
-          'symbol-placement': 'point',
-          'text-allow-overlap': false,
-          'text-ignore-placement': false,
-        },
-        paint: {
-          'text-color': 'rgba(255,255,255,0.94)',
-          'text-halo-color': 'rgba(0,0,0,0.45)',
-          'text-halo-width': 1.2,
-        },
-      });
-
-      this.applyLabelFilterNow();
-    } else {
-      labelsSrc.setData(labelsFC);
-      this.applyLabelFilterNow();
-    }
-
-    this.selectedId = null;
-    this.tryApplyPendingSelection();
-
-    // ✅ apply solo filter after data exists
-    this.applySoloCountryFilterNow();
-
-    // ✅ connections filter: only apply when layer exists (safe)
-    this.pendingConnFilterApply = true;
-    this.applyConnectionsCountryFilterNow();
-
-    this.bumpAura();
+    // Labels enabled for country names.
   }
-
-  // -----------------------------
-  // Connections
-  // -----------------------------
 
   setConnections(points: ConnectionPoint[]): void {
     this.cachedConnections = points || [];
-    if (!this.map) return;
-
-    const features: GeoJSON.Feature<GeoJSON.Point, any>[] = (points || [])
-      .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng))
-      .map((p) => {
-        const cc = p.cc ? String(p.cc).toUpperCase() : null;
-        return {
-          type: 'Feature',
-          geometry: { type: 'Point', coordinates: [p.lng, p.lat] },
-          properties: {
-            id: String(p.id),
-            cc,
-            baseColor: p.color ?? 'rgba(160,220,255,0.85)',
-            r: typeof p.radius === 'number' ? p.radius : 2.0,
-          },
-          id: String(p.id),
-        };
-      });
-
-    const fc: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features };
-
-    const map = this.map;
-    const src = map.getSource(this.CONN_SOURCE) as GeoJSONSource | undefined;
-
-    if (!src) {
-      map.addSource(this.CONN_SOURCE, { type: 'geojson', data: fc });
-
-      const beforeLayer = this.LABEL_LAYER;
-
-      map.addLayer(
-        {
-          id: this.CONN_LAYER,
-          type: 'circle',
-          source: this.CONN_SOURCE,
-          paint: {
-            'circle-color': [
-              'case',
-              ['boolean', ['feature-state', 'online'], false],
-              this.ONLINE_COLOR,
-              ['get', 'baseColor'],
-            ],
-            'circle-opacity': [
-              'case',
-              ['boolean', ['feature-state', 'online'], false],
-              1.0,
-              this.OFFLINE_ALPHA,
-            ],
-            'circle-radius': ['coalesce', ['get', 'r'], 2.0],
-            'circle-stroke-color': [
-              'case',
-              ['boolean', ['feature-state', 'online'], false],
-              'rgba(0,255,160,0.85)',
-              'rgba(255,255,255,0.18)',
-            ],
-            'circle-stroke-width': [
-              'case',
-              ['boolean', ['feature-state', 'online'], false],
-              0.8,
-              0.4,
-            ],
-            'circle-blur': [
-              'case',
-              ['boolean', ['feature-state', 'online'], false],
-              0.2,
-              0.1,
-            ],
-          },
-        },
-        beforeLayer
-      );
-
-      // ✅ now layer exists -> apply pending filter
-      this.applyConnectionsCountryFilterNow();
-    } else {
-      src.setData(fc);
-      this.applyConnectionsCountryFilterNow();
-    }
   }
 
   setConnectionOnline(id: string | number, online: boolean): void {
-    if (!this.map) return;
     const key = String(id);
-    try { this.map.setFeatureState({ source: this.CONN_SOURCE, id: key }, { online: !!online }); } catch {}
+    if (online) this.onlineConnectionIds.add(key);
+    else this.onlineConnectionIds.delete(key);
   }
 
   setConnectionsOnline(idsOnline: Array<string | number>): void {
-    if (!this.map) return;
-    const set = new globalThis.Set<string>((idsOnline || []).map((x) => String(x)));
-
-    for (const p of this.cachedConnections) {
-      const key = String(p.id);
-      const online = set.has(key);
-      try { this.map.setFeatureState({ source: this.CONN_SOURCE, id: key }, { online }); } catch {}
-    }
+    this.onlineConnectionIds = new globalThis.Set<string>((idsOnline || []).map((x) => String(x)));
   }
 
-  /** Filter dots by ISO2 while in focus mode (SAFE). */
-  setConnectionsCountryFilter(iso2: string | null): void {
-    const code = iso2 ? String(iso2).toUpperCase() : null;
-    this.connectionsCountryCode = code;
-    this.pendingConnFilterApply = true;
-    this.applyConnectionsCountryFilterNow();
-  }
-
-  private applyConnectionsCountryFilterNow(): void {
-    if (!this.map) return;
-    if (!this.pendingConnFilterApply) return;
-
-    // layer might not exist yet -> keep pending
-    if (!this.map.getLayer(this.CONN_LAYER)) return;
-
-    try {
-      if (!this.connectionsCountryCode) {
-        this.map.setFilter(this.CONN_LAYER, null as any);
-      } else {
-        this.map.setFilter(this.CONN_LAYER, ['==', ['get', 'cc'], this.connectionsCountryCode] as any);
-      }
-      this.pendingConnFilterApply = false;
-    } catch {
-      this.pendingConnFilterApply = true;
-    }
-  }
-
-  // -----------------------------
-  // Labels control
-  // -----------------------------
-
-  showAllLabels(): void {
-    this.focusedLabelId = null;
-    this.applyLabelFilterNow();
-  }
-
-  showFocusLabel(countryId: number): void {
-    this.focusedLabelId = countryId;
-    this.applyLabelFilterNow();
-  }
-
-  private applyLabelFilterNow(): void {
-    if (!this.map) return;
-    if (!this.map.getLayer(this.LABEL_LAYER)) return;
-
-    try {
-      if (this.focusedLabelId == null) {
-        this.map.setFilter(this.LABEL_LAYER, null as any);
-      } else {
-        this.map.setFilter(this.LABEL_LAYER, ['==', ['get', 'id'], this.focusedLabelId] as any);
-      }
-    } catch {}
-  }
-
-  // -----------------------------
-  // Solo-country filter (Option B)
-  // -----------------------------
-
-  setSoloCountry(countryId: number | null): void {
-    this.soloCountryId = countryId;
-    this.applySoloCountryFilterNow();
-  }
-
-  private applySoloCountryFilterNow(): void {
-    if (!this.map) return;
-
-    if (!this.map.getLayer(this.FILL_LAYER) || !this.map.getLayer(this.LINE_LAYER)) return;
-
-    try {
-      if (!this.features.length) return;
-      const soloId = this.soloCountryId;
-      for (const feature of this.features) {
-        const id = Number(feature.id);
-        if (!Number.isFinite(id)) continue;
-        const dimmed = soloId != null && id !== soloId;
-        try {
-          this.map.setFeatureState({ source: this.COUNTRIES_SOURCE, id }, { dimmed });
-        } catch {}
-      }
-    } catch {}
-  }
-
-  // -----------------------------
-  // Selection / camera
-  // -----------------------------
+  setConnectionsCountryFilter(_iso2: string | null): void {}
+  showAllLabels(): void {}
+  showFocusLabel(_countryId: number): void {}
+  setSoloCountry(_countryId: number | null): void {}
 
   selectCountry(countryId: number | null): void {
-    this.pendingSelectedCountryId = countryId;
-    this.hasPendingSelection = true;
-
-    if (!this.map) return;
-    if (!this.map.getSource(this.COUNTRIES_SOURCE)) return;
-
-    this.hasPendingSelection = false;
-    this.applySelectionState(countryId);
-  }
-
-  private applySelectionState(countryId: number | null): void {
-    if (!this.map) return;
-
-    if (this.selectedId != null) {
-      try { this.map.setFeatureState({ source: this.COUNTRIES_SOURCE, id: this.selectedId }, { selected: false }); } catch {}
-    }
-
     this.selectedId = countryId;
-
-    if (countryId != null) {
-      try { this.map.setFeatureState({ source: this.COUNTRIES_SOURCE, id: countryId }, { selected: true }); } catch {}
-    }
-
-    this.bumpAura(Boolean(countryId));
   }
 
-  private tryApplyPendingSelection(): void {
-    if (!this.hasPendingSelection) return;
-    const pending = this.pendingSelectedCountryId ?? null;
-    this.selectCountry(pending);
-  }
-
-  setViewPadding(padding: PaddingOptions | null): void {
-    if (!padding) {
-      this.viewPadding = { ...this.DEFAULT_VIEW_PADDING };
-      return;
-    }
-    this.viewPadding = { ...this.DEFAULT_VIEW_PADDING, ...padding };
-  }
-
-  resetViewPadding(): void {
-    this.viewPadding = { ...this.DEFAULT_VIEW_PADDING };
-  }
+  setViewPadding(_padding: any): void {}
+  resetViewPadding(): void {}
 
   flyTo(lat: number, lng: number, altitudeOrZoom: number, ms = 900): void {
-    if (!this.map) return;
-
-    const zoom = this.altitudeToZoom(altitudeOrZoom);
-
-    this.map.flyTo({
-      center: [lng, lat],
-      zoom,
-      duration: ms,
-      essential: true,
-      padding: this.viewPadding,
+    if (!this.viewer || !this.Cesium) return;
+    const height = this.altitudeToHeight(altitudeOrZoom);
+    this.viewer.camera.flyTo({
+      destination: this.Cesium.Cartesian3.fromDegrees(lng, lat, height),
+      duration: ms / 1000,
     });
-
-    this.bumpAura();
   }
 
   resetView(): void {
-    this.selectCountry(null);
-    this.showAllLabels();
-    this.setSoloCountry(null);
-    this.setConnectionsCountryFilter(null);
-    this.resetViewPadding();
-
-    if (!this.map) return;
-
-    this.map.flyTo({
-      center: [0, 20],
-      zoom: 1.35,
-      duration: 800,
-      essential: true,
-      padding: this.viewPadding,
+    if (!this.viewer || !this.Cesium) return;
+    this.viewer.camera.flyTo({
+      destination: this.Cesium.Cartesian3.fromDegrees(0, 20, 12_000_000),
+      duration: 0.9,
     });
-
-    this.bumpAura();
-  }
-
-  private onCountryClickInternal(e: MapMouseEvent): void {
-    if (!this.map) return;
-    if (!this.mapInteractive) return;
-
-    const hits = this.map.queryRenderedFeatures(e.point, { layers: [this.FILL_LAYER] }) as any[];
-    const f = hits?.[0];
-    const id = Number(f?.id ?? f?.properties?.__id);
-
-    if (!Number.isFinite(id)) return;
-
-    const found = this.countries.find((c) => c.id === id);
-    if (!found) return;
-
-    this.selectCountry(found.id);
-    this.showFocusLabel(found.id);
-
-    if (this.countryClickCb) {
-      this.countryClickCb(found);
-    } else {
-      this.flyTo(found.center.lat, found.center.lng, found.flyAltitude ?? 1.0, 900);
-    }
-  }
-
-  private applyInteractivity(): void {
-    if (!this.map) return;
-    const map = this.map;
-
-    if (this.mapInteractive) {
-      map.dragPan.enable();
-      map.scrollZoom.enable();
-      map.boxZoom.enable();
-      map.keyboard.enable();
-      map.doubleClickZoom.enable();
-      map.touchZoomRotate.enable();
-      map.touchZoomRotate.disableRotation();
-      map.dragRotate.disable();
-    } else {
-      map.dragPan.disable();
-      map.scrollZoom.disable();
-      map.boxZoom.disable();
-      map.keyboard.disable();
-      map.doubleClickZoom.disable();
-      map.touchZoomRotate.disable();
-    }
-
-    map.getCanvas().style.cursor = '';
   }
 
   // -----------------------------
-  // Overlay
+  // Overlay: stars + projectiles
   // -----------------------------
 
-  private installMysticOverlay(host: HTMLElement) {
-    this.overlayHost = host;
-
-    const aura = document.createElement('div');
-    aura.style.position = 'absolute';
-    aura.style.inset = '0';
-    aura.style.pointerEvents = 'none';
-    aura.style.zIndex = '2';
-    aura.style.mixBlendMode = 'screen';
-    aura.style.opacity = '0.9';
-    aura.style.background =
-      `radial-gradient(900px 700px at 50% 30%, rgba(102,191,255,0.18), transparent 60%),
-       radial-gradient(900px 800px at 58% 76%, rgba(140,0,255,0.10), transparent 62%),
-       radial-gradient(1100px 900px at 50% 55%, rgba(102,191,255,0.06), transparent 68%)`;
-    aura.style.filter = 'blur(0px)';
-    aura.style.transition = 'opacity 450ms ease, filter 650ms ease';
-    host.appendChild(aura);
-    this.auraEl = aura;
-
-    const grain = document.createElement('div');
-    grain.style.position = 'absolute';
-    grain.style.inset = '0';
-    grain.style.pointerEvents = 'none';
-    grain.style.zIndex = '3';
-    grain.style.opacity = '0.10';
-    grain.style.mixBlendMode = 'overlay';
-    grain.style.backgroundImage =
-      `repeating-linear-gradient(0deg, rgba(255,255,255,0.045) 0px, rgba(255,255,255,0.045) 1px, rgba(0,0,0,0) 3px, rgba(0,0,0,0) 6px),
-       repeating-linear-gradient(90deg, rgba(255,255,255,0.030) 0px, rgba(255,255,255,0.030) 1px, rgba(0,0,0,0) 3px, rgba(0,0,0,0) 6px)`;
-    grain.style.animation = 'worldappGrain 7s linear infinite';
-    host.appendChild(grain);
-    this.grainEl = grain;
-
-    const styleId = 'worldapp-mystic-style';
-    if (!document.getElementById(styleId)) {
-      const st = document.createElement('style');
-      st.id = styleId;
-      st.textContent = `
-@keyframes worldappGrain {
-  0% { transform: translateY(0px) translateX(0px); opacity: 0.10; }
-  50% { transform: translateY(14px) translateX(-8px); opacity: 0.13; }
-  100% { transform: translateY(0px) translateX(0px); opacity: 0.10; }
-}`;
-      document.head.appendChild(st);
-    }
-
+  private installOverlay(host: HTMLElement) {
+    if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
     const canvas = document.createElement('canvas');
     canvas.style.position = 'absolute';
     canvas.style.inset = '0';
     canvas.style.pointerEvents = 'none';
     canvas.style.zIndex = '4';
-    canvas.style.opacity = '0.55';
-    canvas.style.mixBlendMode = 'screen';
+    canvas.style.opacity = '1';
+    canvas.style.mixBlendMode = 'normal';
     host.appendChild(canvas);
-
     this.particleCanvas = canvas;
     this.particleCtx = canvas.getContext('2d', { alpha: true });
-
     this.resizeParticles();
+  }
+
+  private resizeParticles() {
+    if (!this.particleCanvas || !this.overlayHost) return;
+    const canvasEl = this.viewer?.scene?.canvas;
+    const canvasRect = canvasEl?.getBoundingClientRect?.() ?? this.overlayHost.getBoundingClientRect();
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    this.particleScale = dpr;
+    this.canvasOffsetX = 0;
+    this.canvasOffsetY = 0;
+    this.hostCssWidth = canvasRect.width;
+    this.hostCssHeight = canvasRect.height;
+    this.canvasCssWidth = canvasRect.width;
+    this.canvasCssHeight = canvasRect.height;
+    const drawW = this.viewer?.scene?.drawingBufferWidth ?? canvasEl?.width ?? canvasRect.width;
+    const drawH = this.viewer?.scene?.drawingBufferHeight ?? canvasEl?.height ?? canvasRect.height;
+    this.drawBufferWidth = drawW || canvasRect.width || 1;
+    this.drawBufferHeight = drawH || canvasRect.height || 1;
+    this.cssScaleX = this.canvasCssWidth ? this.canvasCssWidth / this.drawBufferWidth : 1;
+    this.cssScaleY = this.canvasCssHeight ? this.canvasCssHeight / this.drawBufferHeight : 1;
+    this.particleCanvas.width = Math.floor(canvasRect.width * dpr);
+    this.particleCanvas.height = Math.floor(canvasRect.height * dpr);
   }
 
   private startOverlayLoop() {
     if (this.raf) cancelAnimationFrame(this.raf);
-
-    const particles = this.makeParticles(220);
     let lastT = performance.now();
 
     const tick = (now: number) => {
       const dt = Math.min(33, now - lastT);
       lastT = now;
-
-      this.animateAura(now * 0.001);
-      this.drawParticles(particles, dt, now * 0.001);
-
+      this.drawOverlay(dt, now * 0.001);
       this.raf = requestAnimationFrame(tick);
     };
-
     this.raf = requestAnimationFrame(tick);
   }
 
-  private animateAura(t: number) {
-    if (!this.auraEl) return;
-
-    const breath = 0.5 + 0.5 * Math.sin(t * 0.85);
-    const selBoost = this.selectedId != null ? 1 : 0;
-
-    const baseOpacity = 0.78 + 0.10 * breath + 0.08 * selBoost;
-    const blur = 0.6 + 0.9 * breath + 0.7 * selBoost;
-
-    this.auraEl.style.opacity = String(Math.min(0.98, Math.max(0.55, baseOpacity)));
-    this.auraEl.style.filter = `blur(${blur}px)`;
-  }
-
-  private bumpAura(selected = false) {
-    if (!this.auraEl) return;
-    this.auraEl.style.opacity = selected ? '0.98' : '0.92';
-    this.auraEl.style.filter = selected ? 'blur(1.8px)' : 'blur(1.2px)';
-    setTimeout(() => {
-      if (!this.auraEl) return;
-      this.auraEl.style.opacity = '0.90';
-    }, 220);
-  }
-
-  private resizeParticles() {
-    if (!this.particleCanvas || !this.overlayHost) return;
-    const rect = this.overlayHost.getBoundingClientRect();
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-
-    this.particleCanvas.width = Math.floor(rect.width * dpr);
-    this.particleCanvas.height = Math.floor(rect.height * dpr);
-  }
-
-  private makeParticles(count: number) {
-    const p: Array<{ x: number; y: number; r: number; vx: number; vy: number; a: number }> = [];
-    const w = this.particleCanvas?.width ?? 1;
-    const h = this.particleCanvas?.height ?? 1;
-
-    for (let i = 0; i < count; i++) {
-      p.push({
-        x: Math.random() * w,
-        y: Math.random() * h,
-        r: 0.6 + Math.random() * 1.6,
-        vx: -0.015 + Math.random() * 0.03,
-        vy: -0.012 + Math.random() * 0.024,
-        a: 0.10 + Math.random() * 0.22,
-      });
-    }
-    return p;
-  }
-
-  private drawParticles(
-    particles: Array<{ x: number; y: number; r: number; vx: number; vy: number; a: number }>,
-    dtMs: number,
-    t: number
-  ) {
+  private drawOverlay(_dtMs: number, t: number) {
     if (!this.particleCanvas || !this.particleCtx) return;
-
     const ctx = this.particleCtx;
     const w = this.particleCanvas.width;
     const h = this.particleCanvas.height;
 
     ctx.clearRect(0, 0, w, h);
 
-    const breath = 0.5 + 0.5 * Math.sin(t * 1.25);
-    const selBoost = this.selectedId != null ? 0.10 : 0.0;
+    this.drawProjectiles(ctx, w, h, t);
+  }
 
-    for (const p of particles) {
-      p.x += p.vx * dtMs;
-      p.y += p.vy * dtMs;
+  private drawProjectiles(ctx: CanvasRenderingContext2D, w: number, h: number, t: number) {
+    if (!this.viewer || !this.Cesium) return;
 
-      if (p.x < -10) p.x = w + 10;
-      if (p.x > w + 10) p.x = -10;
-      if (p.y < -10) p.y = h + 10;
-      if (p.y > h + 10) p.y = -10;
+    const Cesium = this.Cesium;
+    const occluder = new Cesium.EllipsoidalOccluder(
+      this.viewer.scene.globe.ellipsoid,
+      this.viewer.scene.camera.positionWC
+    );
+    const nodes: Array<{ x: number; y: number; id: string }> = [];
+    const scale = this.particleScale || 1;
+    const cssW = this.hostCssWidth || w / scale;
+    const cssH = this.hostCssHeight || h / scale;
+    for (const p of this.cachedConnections) {
+      if (nodes.length >= this.MAX_NETWORK_NODES) break;
+      if (!Number.isFinite(p.lat) || !Number.isFinite(p.lng)) continue;
+      if (this.onlineConnectionIds.size > 0 && !this.onlineConnectionIds.has(String(p.id))) continue;
+      const cart = Cesium.Cartesian3.fromDegrees(p.lng, p.lat);
+      if (!occluder.isPointVisible(cart)) continue;
+      const screen = this.viewer.scene.cartesianToCanvasCoordinates(cart);
+      if (!screen) continue;
+      const cssX = screen.x * this.cssScaleX;
+      const cssY = screen.y * this.cssScaleY;
+      const sx = cssX + this.canvasOffsetX;
+      const sy = cssY + this.canvasOffsetY;
+      if (sx < -20 || sy < -20 || sx > cssW + 20 || sy > cssH + 20) continue;
+      nodes.push({ x: sx * scale, y: sy * scale, id: String(p.id) });
+    }
 
-      const alpha = p.a * (0.55 + 0.55 * breath) + selBoost;
-      const rr = p.r * (0.85 + 0.25 * breath);
+    if (nodes.length < 2) return;
 
+    // Stars (online users)
+    ctx.fillStyle = 'rgba(90, 175, 255, 1)';
+    ctx.strokeStyle = 'rgba(5, 20, 45, 0.8)';
+    ctx.lineWidth = 0.6;
+    for (const node of nodes) {
+      const size = 5.8;
+      this.drawStar(ctx, node.x, node.y, size, size * 0.45, 5, true);
+    }
+
+    // Build nearest links and animate projectiles.
+    const links: Array<{ a: number; b: number; d: number }> = [];
+    const maxDistSq = this.MAX_LINK_DISTANCE * this.MAX_LINK_DISTANCE;
+    for (let i = 0; i < nodes.length; i += 1) {
+      const a = nodes[i];
+      const nearest: Array<{ idx: number; d: number }> = [];
+      for (let j = 0; j < nodes.length; j += 1) {
+        if (i === j) continue;
+        const b = nodes[j];
+        const dx = a.x - b.x;
+        const dy = a.y - b.y;
+        const d = dx * dx + dy * dy;
+        if (d > maxDistSq) continue;
+        nearest.push({ idx: j, d });
+      }
+      nearest.sort((n1, n2) => n1.d - n2.d);
+      for (let k = 0; k < Math.min(this.MAX_NETWORK_LINKS, nearest.length); k += 1) {
+        const idx = nearest[k].idx;
+        if (i < idx) links.push({ a: i, b: idx, d: nearest[k].d });
+      }
+    }
+
+    for (let i = 0; i < links.length; i += 1) {
+      const link = links[i];
+      const p1 = nodes[link.a];
+      const p2 = nodes[link.b];
+      const key = `${link.a}-${link.b}`;
+      const state =
+        this.fireTrails.get(key) ??
+        { phase: Math.random(), speed: this.FIRE_MIN_SPEED + Math.random() * (this.FIRE_MAX_SPEED - this.FIRE_MIN_SPEED), tail: [] };
+      state.phase = (state.phase + state.speed * 0.016) % 1;
+      this.fireTrails.set(key, state);
+
+      const phase = state.phase;
+      const x = p1.x + (p2.x - p1.x) * phase;
+      const y = p1.y + (p2.y - p1.y) * phase;
+      if (state.tail.length) state.tail.length = 0;
+
+      const sparkle = 2.2;
+      ctx.fillStyle = 'rgba(140, 200, 255, 0.95)';
       ctx.beginPath();
-      ctx.arc(p.x, p.y, rr, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(160, 220, 255, ${alpha.toFixed(3)})`;
+      ctx.arc(x, y, sparkle, 0, Math.PI * 2);
       ctx.fill();
     }
   }
 
-  // -----------------------------
-  // Palette / continent logic
-  // -----------------------------
-
-  private fillForProps(p: any): string {
-    const cont = this.getContinentFromProps(p);
-    return (continentColors as any)[cont] || (continentColors as any)['Unknown'];
-  }
-
-  private getContinentFromProps(p: any): string {
-    const c =
-      p.CONTINENT ||
-      p.continent ||
-      p.REGION_UN ||
-      p.REGION_WB ||
-      p.SUBREGION ||
-      p.region ||
-      null;
-
-    const s = String(c || '').trim();
-    if (!s) return 'Unknown';
-    if (s.includes('Africa')) return 'Africa';
-    if (s.includes('Europe')) return 'Europe';
-    if (s.includes('Asia')) return 'Asia';
-    if (s.includes('Oceania') || s.includes('Australia')) return 'Oceania';
-    if (s.includes('North America')) return 'North America';
-    if (s.includes('South America')) return 'South America';
-    if (s.includes('Antarctica')) return 'Antarctica';
-    return s;
-  }
-
-  private altitudeToZoom(altitude: number): number {
-    if (!Number.isFinite(altitude) || altitude <= 0) return 2.6;
-    const z = 1.1 + 1.7 * (1 / altitude);
-    return Math.max(1.2, Math.min(5.4, z));
-  }
-
-  private uniqueCountriesById(list: CountryModel[]): CountryModel[] {
-    const m = new globalThis.Map<number, CountryModel>();
-    for (const c of list) {
-      if (c && Number.isFinite(c.id) && !m.has(c.id)) m.set(c.id, c);
+  private drawStar(
+    ctx: CanvasRenderingContext2D,
+    cx: number,
+    cy: number,
+    outerR: number,
+    innerR: number,
+    points: number,
+    stroke = false
+  ) {
+    const step = Math.PI / points;
+    let rot = Math.PI / 2 * 3;
+    ctx.beginPath();
+    for (let i = 0; i < points; i += 1) {
+      const x1 = cx + Math.cos(rot) * outerR;
+      const y1 = cy + Math.sin(rot) * outerR;
+      ctx.lineTo(x1, y1);
+      rot += step;
+      const x2 = cx + Math.cos(rot) * innerR;
+      const y2 = cy + Math.sin(rot) * innerR;
+      ctx.lineTo(x2, y2);
+      rot += step;
     }
-    return Array.from(m.values());
+    ctx.lineTo(cx, cy - outerR);
+    ctx.closePath();
+    ctx.fill();
+    if (stroke) ctx.stroke();
   }
 
-  whenReady(): Promise<void> {
-    if (this.mapReady) return Promise.resolve();
-    return new Promise((resolve) => this.readyResolvers.push(resolve));
+  // -----------------------------
+  // Helpers
+  // -----------------------------
+
+  private altitudeToHeight(altitude: number): number {
+    if (!Number.isFinite(altitude) || altitude <= 0) return 8_000_000;
+    return Math.max(900_000, Math.min(40_000_000, 8_000_000 / altitude));
   }
 
-  private markReady(): void {
-    if (this.mapReady) return;
-    this.mapReady = true;
-    const pending = [...this.readyResolvers];
-    this.readyResolvers.length = 0;
-    for (const resolve of pending) {
-      try {
-        resolve();
-      } catch {}
-    }
+  private countryFillColor(id: number): string {
+    const palette = [
+      '#7E9E5B', // sage
+      '#A7BFA5', // soft green
+      '#C8B87A', // sand
+      '#D1A76C', // ochre
+      '#7FA3B8', // slate blue
+      '#5F8E8E', // muted teal
+      '#B48B6A', // clay
+      '#8C9C8C', // olive grey
+    ];
+    const idx = Number.isFinite(id) ? Math.abs(id) % palette.length : 0;
+    return palette[idx];
+  }
+
+  private installClickHandler(): void {
+    if (!this.viewer || !this.Cesium) return;
+    const Cesium = this.Cesium;
+    const handler = new Cesium.ScreenSpaceEventHandler(this.viewer.scene.canvas);
+    handler.setInputAction((movement: any) => {
+      const picked = this.viewer.scene.pick(movement.position);
+      const id = picked?.id?.properties?.__id?.getValue?.() ?? picked?.id?.properties?.__id;
+      const num = Number(id);
+      if (!Number.isFinite(num)) return;
+      const found = this.countries.find((c) => c.id === num);
+      if (!found) return;
+      this.selectCountry(found.id);
+      if (this.countryClickCb) this.countryClickCb(found);
+      else this.flyTo(found.center.lat, found.center.lng, found.flyAltitude ?? 1.0, 900);
+    }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+  }
+
+  private ensureCesium(): Promise<any> {
+    const w = window as any;
+    if (w.Cesium) return Promise.resolve(w.Cesium);
+    return new Promise((resolve, reject) => {
+      w.CESIUM_BASE_URL = 'https://unpkg.com/cesium@1.116.0/Build/Cesium/';
+      const linkId = 'cesium-widgets-css';
+      if (!document.getElementById(linkId)) {
+        const link = document.createElement('link');
+        link.id = linkId;
+        link.rel = 'stylesheet';
+        link.href = 'https://unpkg.com/cesium@1.116.0/Build/Cesium/Widgets/widgets.css';
+        document.head.appendChild(link);
+      }
+      const scriptId = 'cesium-lib';
+      if (document.getElementById(scriptId)) {
+        const ready = (window as any).Cesium;
+        if (ready) resolve(ready);
+        return;
+      }
+      const script = document.createElement('script');
+      script.id = scriptId;
+      script.src = 'https://unpkg.com/cesium@1.116.0/Build/Cesium/Cesium.js';
+      script.async = true;
+      script.onload = () => resolve((window as any).Cesium);
+      script.onerror = () => reject(new Error('Failed to load Cesium'));
+      document.head.appendChild(script);
+    });
   }
 }

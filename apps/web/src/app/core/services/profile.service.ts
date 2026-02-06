@@ -161,24 +161,37 @@ export class ProfileService {
 
   async profileByUsername(username: string) {
     const trimmed = String(username || '').trim().replace(/^@/, '');
-    if (trimmed) {
-      const fake = await this.fakeData.getProfileByUsername(trimmed);
-      if (fake) return { profileByUsername: fake };
+    if (!trimmed) {
+      return { profileByUsername: null };
     }
-    return this.gql.request<{ profileByUsername: Profile | null }>(PROFILE_BY_USERNAME, {
-      username: trimmed,
-    });
+    try {
+      const real = await this.gql.request<{ profileByUsername: Profile | null }>(
+        PROFILE_BY_USERNAME,
+        { username: trimmed }
+      );
+      if (real?.profileByUsername) return real;
+    } catch {
+      // fall back to fake profiles if API fails
+    }
+    const fake = await this.fakeData.getProfileByUsername(trimmed);
+    if (fake) return { profileByUsername: fake };
+    return { profileByUsername: null };
   }
 
   async profileById(userId: string) {
     const trimmed = String(userId || '').trim();
-    if (trimmed) {
-      const fake = await this.fakeData.getProfileById(trimmed);
-      if (fake) return { profileById: fake };
+    if (!trimmed) return { profileById: null };
+    try {
+      const real = await this.gql.request<{ profileById: Profile | null }>(PROFILE_BY_ID, {
+        user_id: trimmed,
+      });
+      if (real?.profileById) return real;
+    } catch {
+      // fall back to fake profiles if API fails
     }
-    return this.gql.request<{ profileById: Profile | null }>(PROFILE_BY_ID, {
-      user_id: trimmed,
-    });
+    const fake = await this.fakeData.getProfileById(trimmed);
+    if (fake) return { profileById: fake };
+    return { profileById: null };
   }
 
   isComplete(p: Profile | null) {

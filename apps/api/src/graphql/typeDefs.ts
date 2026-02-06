@@ -196,6 +196,16 @@ export const typeDefs = `#graphql
     computedAt: String!
   }
 
+  type CountryMood {
+    country_code: String!
+    positive: Int!
+    neutral: Int!
+    negative: Int!
+    total: Int!
+    topics: [String!]!
+    computed_at: String!
+  }
+
   type HeartbeatResult {
     ok: Boolean!
     ttlSeconds: Int!
@@ -220,6 +230,10 @@ export const typeDefs = `#graphql
     # Presence stats
     globalStats: GlobalStats!
     countryStats(iso: String!): CountryStats!
+
+    # Mood / Trends
+    globalMood: CountryMood!
+    countryMood(country_code: String!): CountryMood!
 
     # Posts / social
     postsByCountry(country_code: String!, limit: Int): [Post!]!

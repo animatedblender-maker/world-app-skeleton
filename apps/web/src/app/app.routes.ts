@@ -40,6 +40,12 @@ export const routes: Routes = [
       import('./pages/globe.page').then((m) => m.GlobePageComponent),
   },
   {
+    path: 'globe-cesium',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pages/globe-cesium.page').then((m) => m.GlobeCesiumPageComponent),
+  },
+  {
     path: 'messages',
     canActivate: [authGuard],
     loadComponent: () =>
@@ -50,6 +56,11 @@ export const routes: Routes = [
     canActivate: [authGuard],
     loadComponent: () =>
       import('./pages/reels.page').then((m) => m.ReelsPageComponent),
+  },
+  {
+    path: 'post/:id',
+    loadComponent: () =>
+      import('./pages/post.page').then((m) => m.PostPageComponent),
   },
   {
     path: 'ops-portal-2026',

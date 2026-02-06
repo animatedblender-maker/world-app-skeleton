@@ -127,7 +127,7 @@ export class MessagesService {
         [conversationId, userId]
       );
     }
-    const safeLimit = Math.max(1, Math.min(100, limit || 30));
+    const safeLimit = Math.max(1, Math.min(500, limit || 30));
     const params: Array<string | number> = [conversationId, safeLimit];
     const beforeClause = before ? `and m.created_at < $3::timestamptz` : '';
     if (before) params.push(before);
@@ -307,8 +307,9 @@ export class MessagesService {
         message.sender?.display_name || message.sender?.username || 'New message';
       const preview = String(message.body ?? '').trim().slice(0, 140);
       const isCallLog = preview.startsWith('__call__|');
+      const isReaction = preview.startsWith('__react__|');
 
-      if (!isCallLog) {
+      if (!isCallLog && !isReaction) {
         for (const row of otherMembers.rows) {
           try {
             await this.notifications.notifyMessage(row.user_id, userId, conversationId, {

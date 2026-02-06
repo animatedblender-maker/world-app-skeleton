@@ -20,6 +20,7 @@ import { FollowService } from '../core/services/follow.service';
 import { NotificationsService, type NotificationItem } from '../core/services/notifications.service';
 import { NotificationEventsService } from '../core/services/notification-events.service';
 import { PushService } from '../core/services/push.service';
+import { SUPABASE_URL } from '../config/supabase.config';
 import {
   PostEventsService,
   type PostInsertEvent,
@@ -35,6 +36,15 @@ type RouteState = {
   country: string | null;
   tab: CountryTab | null;
   panel: Exclude<Panel, null> | null;
+};
+type CountryMood = {
+  country_code: string;
+  positive: number;
+  neutral: number;
+  negative: number;
+  total: number;
+  topics: string[];
+  computed_at: string;
 };
 
 @Component({
@@ -60,8 +70,9 @@ type RouteState = {
             >
               {{ tab.label }}
             </button>
-          </div>
-        </div>
+              </div>
+              <div class="feed-clock" *ngIf="selectedCountry">{{ clockLabel }}</div>
+            </div>
         <div class="search-control" *ngIf="searchOpen">
           <input
             type="text"
@@ -117,9 +128,10 @@ type RouteState = {
       </div>
     </div>
 
-    <div class="globe-logo" aria-hidden="true">
-      <img src="/logo.png?v=3" alt="Matterya logo" />
-    </div>
+      <div class="space-backdrop" aria-hidden="true"></div>
+      <button class="globe-logo" type="button" (click)="returnToGlobe()">
+        <img src="/logo.png?v=3" alt="Matterya logo" />
+      </button>
 
     <!-- Ocean map ALWAYS full background -->
     <div id="globe" class="globe-bg" [class.bg-static]="!!selectedCountry"></div>
@@ -451,16 +463,27 @@ type RouteState = {
                           <span class="count">{{ post.like_count }}</span>
                         </button>
                       </div>
-                      <button
-                        class="post-action comment"
-                        type="button"
-                        [class.active]="commentOpen[post.id]"
-                        (click)="toggleComments(post.id)"
-                      >
-                        <span class="icon">{{ '\u{1F4AC}' }}</span>
-                        <span class="count">{{ post.comment_count }}</span>
-                      </button>
-                      <div class="post-action view" aria-label="Views">
+                        <button
+                          class="post-action comment"
+                          type="button"
+                          [class.active]="commentOpen[post.id]"
+                          (click)="toggleComments(post.id)"
+                        >
+                          <span class="icon">{{ '\u{1F4AC}' }}</span>
+                          <span class="count">{{ post.comment_count }}</span>
+                        </button>
+                        <button
+                          class="post-action share"
+                          type="button"
+                          (click)="copyPostShareLink(post, $event)"
+                          aria-label="Share post"
+                        >
+                          <span class="icon">{{ '\u{1F517}' }}</span>
+                        </button>
+                        <span class="post-share-feedback" *ngIf="postShareFeedback[post.id]">
+                          {{ postShareFeedback[post.id] }}
+                        </span>
+                        <div class="post-action view" aria-label="Views">
                         <span class="icon">{{ '\u{1F441}' }}</span>
                         <span class="count">{{ post.view_count }}</span>
                       </div>
@@ -624,12 +647,44 @@ type RouteState = {
                   <div class="stats-row"><span>Total users</span><b>{{ totalUsers ?? '--' }}</b></div>
                   <div class="stats-row"><span>Online now</span><b>{{ onlineUsers ?? '--' }}</b></div>
                 </div>
+                <div class="stats-card mood-card" *ngIf="globalMood">
+                  <div class="stats-title">Global mood</div>
+                  <div class="mood-bars">
+                    <div class="mood-seg positive" [style.width.%]="moodPct(globalMood,'positive')"></div>
+                    <div class="mood-seg neutral" [style.width.%]="moodPct(globalMood,'neutral')"></div>
+                    <div class="mood-seg negative" [style.width.%]="moodPct(globalMood,'negative')"></div>
+                  </div>
+                  <div class="mood-legend">
+                    <span class="positive">Positive {{ moodPct(globalMood,'positive') }}%</span>
+                    <span class="neutral">Neutral {{ moodPct(globalMood,'neutral') }}%</span>
+                    <span class="negative">Negative {{ moodPct(globalMood,'negative') }}%</span>
+                  </div>
+                  <div class="topic-row" *ngIf="globalMood.topics?.length">
+                    <span class="topic-chip" *ngFor="let topic of globalMood.topics">{{ topic }}</span>
+                  </div>
+                </div>
                 <div class="stats-card" *ngIf="selectedCountry">
                   <div class="stats-title">
                     Local ({{ selectedCountry.name }}{{ selectedCountry.code ? ' - ' + selectedCountry.code : '' }})
                   </div>
                   <div class="stats-row"><span>Online</span><b>{{ localOnline ?? 0 }}</b></div>
                   <div class="stats-row"><span>Total</span><b>{{ localTotal ?? 0 }}</b></div>
+                </div>
+                <div class="stats-card mood-card" *ngIf="selectedCountry && localMood">
+                  <div class="stats-title">Local mood</div>
+                  <div class="mood-bars">
+                    <div class="mood-seg positive" [style.width.%]="moodPct(localMood,'positive')"></div>
+                    <div class="mood-seg neutral" [style.width.%]="moodPct(localMood,'neutral')"></div>
+                    <div class="mood-seg negative" [style.width.%]="moodPct(localMood,'negative')"></div>
+                  </div>
+                  <div class="mood-legend">
+                    <span class="positive">Positive {{ moodPct(localMood,'positive') }}%</span>
+                    <span class="neutral">Neutral {{ moodPct(localMood,'neutral') }}%</span>
+                    <span class="negative">Negative {{ moodPct(localMood,'negative') }}%</span>
+                  </div>
+                  <div class="topic-row" *ngIf="localMood.topics?.length">
+                    <span class="topic-chip" *ngFor="let topic of localMood.topics">{{ topic }}</span>
+                  </div>
                 </div>
                 <div class="stats-card">
                   <div class="stats-title">Status</div>
@@ -638,6 +693,8 @@ type RouteState = {
                     <span>Auth</span>
                     <small id="authState">{{ userEmail ? ('Logged in: ' + userEmail) : 'Logged out' }}</small>
                   </div>
+                  <div class="stats-row muted" *ngIf="moodLoading">Loading mood…</div>
+                  <div class="stats-row error" *ngIf="moodError">{{ moodError }}</div>
                   <div class="stats-row muted" *ngIf="loadingProfile">Loading profile...</div>
                   <div class="stats-row error" *ngIf="profileError">{{ profileError }}</div>
                 </div>
@@ -650,8 +707,8 @@ type RouteState = {
 
     <div
       class="node-backdrop"
-      *ngIf="menuOpen || panel === 'notifications' || searchOpen"
-      (click)="closeMenu(); closePanel(); closeSearch()"
+      *ngIf="menuOpen || panel === 'notifications'"
+      (click)="closeMenu(); closePanel()"
     ></div>
 
     <div
@@ -672,6 +729,10 @@ type RouteState = {
       <div class="lightbox-frame" (click)="$event.stopPropagation()">
         <img [src]="lightboxUrl" alt="Expanded media" />
       </div>
+    </div>
+
+    <div class="build-tag-corner" *ngIf="!selectedCountry" aria-hidden="true">
+      {{ clockLabel }}
     </div>
 
     <!-- Avatar orb overlay fixed (restored) -->
@@ -840,6 +901,7 @@ type RouteState = {
   `,
   host: {
     '[class.search-open]': 'searchOpen',
+    '[class.country-open]': '!!selectedCountry',
   },
   styles: [`
     :host{
@@ -854,11 +916,11 @@ type RouteState = {
       --ui-edge-bottom: calc(var(--ui-edge) + var(--safe-bottom));
       --node-size: 44px;
       --ui-gap: 16px;
-      --top-overlay-height-open: 170px;
+      --top-overlay-height-open: 76px;
       --top-overlay-height-closed: 0px;
       --top-overlay-height: var(--top-overlay-height-open);
       --top-overlay-top: calc(var(--ui-edge-top) + var(--node-size) + var(--ui-gap));
-      --stage-top-pad-open: calc(var(--top-overlay-top) + var(--top-overlay-height) + var(--ui-gap));
+      --stage-top-pad-open: calc(var(--top-overlay-top) + var(--top-overlay-height) + 6px);
       --stage-top-pad-closed: calc(var(--ui-edge-top) + var(--node-size) + 8px);
       --stage-top-pad: var(--stage-top-pad-open);
     }
@@ -867,31 +929,88 @@ type RouteState = {
       --stage-top-pad: var(--stage-top-pad-closed);
     }
 
+    .space-backdrop{
+      position: fixed;
+      inset: -10%;
+      z-index: 0;
+      background-image:
+        radial-gradient(circle at 12% 18%, rgba(255,255,255,0.22) 0 1px, transparent 2px),
+        radial-gradient(circle at 68% 24%, rgba(255,255,255,0.18) 0 1px, transparent 2px),
+        radial-gradient(circle at 80% 70%, rgba(255,255,255,0.16) 0 1px, transparent 2px),
+        radial-gradient(circle at 35% 78%, rgba(255,255,255,0.2) 0 1px, transparent 2px),
+        radial-gradient(circle at 52% 45%, rgba(140,190,255,0.14) 0 1px, transparent 3px),
+        radial-gradient(circle at 20% 60%, rgba(120,180,255,0.12) 0 2px, transparent 4px),
+        radial-gradient(circle at 85% 12%, rgba(80,160,255,0.1) 0 2px, transparent 5px),
+        radial-gradient(circle at 50% 50%, rgba(8,18,32,0.85), rgba(3,6,12,0.98) 65%),
+        linear-gradient(160deg, rgba(8,12,20,0.96), rgba(2,4,9,0.98));
+      background-size:
+        240px 240px,
+        280px 280px,
+        320px 320px,
+        360px 360px,
+        420px 420px,
+        620px 620px,
+        900px 900px,
+        cover,
+        cover;
+      background-position:
+        0 0,
+        80px 40px,
+        120px 160px,
+        200px 120px,
+        0 0,
+        0 0,
+        0 0,
+        center,
+        center;
+      filter: contrast(1.05) saturate(1.05);
+      pointer-events: none;
+    }
     .globe-logo{
       position: fixed;
       top: var(--ui-edge-top);
       left: var(--ui-edge-left);
-      z-index: 99999;
-      pointer-events: none;
+      z-index: 6;
+      pointer-events: auto;
       width: var(--node-size);
       height: var(--node-size);
-      padding: 4px;
+      padding: 0;
       box-sizing: border-box;
-      border-radius: 12px;
       display:flex;
       align-items:center;
       justify-content:center;
-      background: rgba(6,14,26,0.8);
-      border: 1px solid rgba(255,255,255,0.35);
-      backdrop-filter: blur(8px);
-      opacity: 1;
+      background: rgba(8,12,18,0.65);
+      border-radius: 50%;
+      border: 0;
+      cursor: pointer;
     }
     .globe-logo img{
-      width: 100%;
-      height: 100%;
+      width: var(--node-size);
+      height: var(--node-size);
       object-fit: contain;
-      border-radius: 8px;
-      box-shadow: 0 10px 25px rgba(0,0,0,0.35);
+      border-radius: 10px;
+      box-shadow: none;
+    }
+    .build-tag-corner{
+      position: fixed;
+      right: var(--ui-edge-right);
+      bottom: var(--ui-edge-bottom);
+      z-index: 11000;
+      font-size: 10px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: rgba(255,255,255,0.8);
+      background: rgba(6,14,26,0.7);
+      border: 1px solid rgba(255,255,255,0.2);
+      padding: 4px 8px;
+      border-radius: 999px;
+      line-height: 1;
+      pointer-events: none;
+    }
+    :host.country-open .build-tag-corner{
+      bottom: auto;
+      top: calc(var(--ui-edge-top) + var(--node-size) + 6px);
+      right: var(--ui-edge-right);
     }
 
     /* =============== TOPBAR =============== */
@@ -1137,6 +1256,8 @@ type RouteState = {
       z-index: 1;
       pointer-events: auto;
       touch-action: auto;
+      filter: saturate(1.2) contrast(1.18) brightness(1.05);
+      transform: translateZ(0);
     }
     .globe-bg.bg-static{
       pointer-events: none;
@@ -1151,7 +1272,7 @@ type RouteState = {
       pointer-events: none;
     }
     .stage.focus{
-      pointer-events: none;
+      pointer-events: auto;
       padding-top: var(--stage-top-pad);
       padding-left: var(--ui-edge-left);
       padding-right: var(--ui-edge-right);
@@ -1160,6 +1281,7 @@ type RouteState = {
       display: grid;
       grid-template-columns: min(420px, 34vw) 1fr;
       gap: var(--ui-gap);
+      min-height: calc(100vh - var(--stage-top-pad));
     }
 
     .stage.focus.feed-full{
@@ -1210,7 +1332,8 @@ type RouteState = {
     }
 
     .main-card{
-      height: 100%;
+      height: calc(100vh - var(--stage-top-pad) - var(--ui-edge-bottom));
+      min-height: calc(100vh - var(--stage-top-pad) - var(--ui-edge-bottom));
       border-radius: 26px;
       padding: 16px;
       box-shadow: 0 30px 90px rgba(0,0,0,0.40);
@@ -1230,6 +1353,17 @@ type RouteState = {
     }
 
     .main-head{ display:flex; align-items: center; justify-content:space-between; gap: 12px; margin-bottom: 10px; }
+    .feed-clock{
+      font-size: 11px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: rgba(12, 18, 30, 0.65);
+      border: 1px solid rgba(0,0,0,0.12);
+      background: rgba(255,255,255,0.75);
+      padding: 6px 10px;
+      border-radius: 999px;
+      white-space: nowrap;
+    }
     .mh-text{ min-width: 0; display:flex; flex-direction:column; justify-content:center; }
     .mh-title-row{ display:flex; align-items:center; gap: 10px; flex-wrap: wrap; }
     .feed-return{
@@ -1266,7 +1400,14 @@ type RouteState = {
       box-shadow: 0 0 0 1px rgba(0,255,209,0.12) inset;
     }
 
-    .tab-body{ flex: 1; min-height: 0; overflow: auto; }
+    .tab-body{
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      -webkit-overflow-scrolling: touch;
+      touch-action: pan-y;
+      overscroll-behavior: contain;
+    }
     .placeholder{ border-radius: 18px; padding: 14px; }
     .placeholder.light{
       border: 1px solid rgba(0,0,0,0.08);
@@ -1532,6 +1673,26 @@ type RouteState = {
       padding:6px 10px;
       min-width:36px;
       justify-content:center;
+    }
+    .post-action.share{
+      padding:6px 10px;
+    }
+    .post-share-feedback{
+      font-size:11px;
+      font-weight:800;
+      letter-spacing:0.08em;
+      text-transform:uppercase;
+      color:rgba(10,12,18,0.65);
+    }
+    .post-action.share{
+      padding:6px 10px;
+    }
+    .post-share-feedback{
+      font-size:11px;
+      font-weight:800;
+      letter-spacing:0.08em;
+      text-transform:uppercase;
+      color:rgba(10,12,18,0.65);
     }
     .post-action:disabled{ opacity:0.6; cursor:not-allowed; }
     .post-action-error{
@@ -1835,6 +1996,40 @@ type RouteState = {
       background: rgba(255,255,255,0.7);
       display: grid;
       gap: 10px;
+    }
+    .mood-card{ gap: 8px; }
+    .mood-bars{
+      height: 10px;
+      border-radius: 999px;
+      overflow: hidden;
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      background: rgba(0,0,0,0.08);
+    }
+    .mood-seg{ height: 100%; }
+    .mood-seg.positive{ background: #3ad29f; }
+    .mood-seg.neutral{ background: #f0c35a; }
+    .mood-seg.negative{ background: #f06b6b; }
+    .mood-legend{
+      display: flex;
+      gap: 8px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: rgba(10,12,18,0.8);
+      flex-wrap: wrap;
+    }
+    .mood-legend .positive{ color: #3ad29f; }
+    .mood-legend .neutral{ color: #f0c35a; }
+    .mood-legend .negative{ color: #f06b6b; }
+    .topic-row{ display: flex; flex-wrap: wrap; gap: 6px; }
+    .topic-chip{
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: rgba(10,12,18,0.08);
+      font-size: 11px;
+      letter-spacing: .04em;
+      color: rgba(10,12,18,0.75);
     }
     .stats-title{
       font-weight: 900;
@@ -2223,14 +2418,14 @@ type RouteState = {
         border-radius: 22px;
       }
     }
-    @media (max-width: 720px){
+      @media (max-width: 720px){
       :host{
         --ui-edge: 12px;
         --node-size: 40px;
-        --top-overlay-height-open: 190px;
+        --top-overlay-height-open: 64px;
         --top-overlay-height-closed: 0px;
         --top-overlay-height: var(--top-overlay-height-open);
-        --stage-top-pad-open: calc(var(--top-overlay-top) + var(--top-overlay-height) + var(--ui-gap));
+        --stage-top-pad-open: calc(var(--top-overlay-top) + var(--top-overlay-height) + 4px);
         --stage-top-pad-closed: calc(var(--ui-edge-top) + var(--node-size) + 8px);
         --stage-top-pad: var(--stage-top-pad-open);
       }
@@ -2260,9 +2455,14 @@ type RouteState = {
         max-height: 40vh;
         overflow: auto;
       }
-      .main-card{
-        padding: 14px;
-      }
+        .main-card{
+          padding: 14px;
+        }
+        .feed-clock{
+          font-size: 10px;
+          letter-spacing: 0.12em;
+          padding: 5px 8px;
+        }
       .feed-return{
         padding: 6px 12px;
         font-size: 9px;
@@ -2302,10 +2502,10 @@ type RouteState = {
     }
     @media (max-width: 520px){
       :host{
-        --top-overlay-height-open: 210px;
+        --top-overlay-height-open: 70px;
         --top-overlay-height-closed: 0px;
         --top-overlay-height: var(--top-overlay-height-open);
-        --stage-top-pad-open: calc(var(--top-overlay-top) + var(--top-overlay-height) + var(--ui-gap));
+        --stage-top-pad-open: calc(var(--top-overlay-top) + var(--top-overlay-height) + 4px);
         --stage-top-pad-closed: calc(var(--ui-edge-top) + var(--node-size) + 8px);
         --stage-top-pad: var(--stage-top-pad-open);
       }
@@ -2347,6 +2547,9 @@ type RouteState = {
   `],
 })
 export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
+    buildTag = 'v2026-02-06-9';
+  clockLabel = '';
+  private clockTimer: any = null;
   menuOpen = false;
   panel: Panel = null;
 
@@ -2371,6 +2574,10 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
 
   localTotal: number | null = null;
   localOnline: number | null = null;
+  globalMood: CountryMood | null = null;
+  localMood: CountryMood | null = null;
+  moodLoading = false;
+  moodError = '';
 
   searchOpen = false;
   userSearchTerm = '';
@@ -2424,6 +2631,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   commentDepth: Record<string, Record<string, number>> = {};
   commentReplyTarget: Record<string, { commentId: string; authorName: string } | null> = {};
   commentLikeBusy: Record<string, Record<string, boolean>> = {};
+  postShareFeedback: Record<string, string> = {};
   reportingPostId: string | null = null;
   reportReason = '';
   reportBusy = false;
@@ -2594,7 +2802,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   get profileAvatar(): string {
-    return (this.profile as any)?.avatar_url ?? '';
+    return this.normalizeAvatarUrl((this.profile as any)?.avatar_url ?? '');
   }
 
   get composerInitial(): string {
@@ -2617,6 +2825,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   async ngOnInit(): Promise<void> {
+    this.startClock();
     void this.push.syncIfGranted();
     this.postEventsCreatedSub = this.postEvents.createdPost$.subscribe((post) => {
       this.zone.run(() => this.handleCountryPostEvent(post));
@@ -2693,7 +2902,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
         meProfile?.display_name ?? (this.userEmail?.split('@')[0] ?? '');
       this.editBio = (meProfile as any)?.bio ?? '';
 
-      this.nodeAvatarUrl = (meProfile as any)?.avatar_url ?? '';
+      this.nodeAvatarUrl = this.normalizeAvatarUrl((meProfile as any)?.avatar_url ?? '');
       this.draftAvatarUrl = this.nodeAvatarUrl;
 
       this.nodeNormX = 0;
@@ -2712,12 +2921,12 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       this.forceUi();
     }
 
-    this.queryParamSub = this.route.queryParamMap.subscribe((params) => {
-      const resetFlag = params.get('resetGlobe');
-      if (resetFlag === '1') {
-        if (!this.resettingGlobe) {
-          this.resettingGlobe = true;
-          this.clearSelectedCountry({ skipRouteUpdate: true });
+      this.queryParamSub = this.route.queryParamMap.subscribe((params) => {
+        const resetFlag = params.get('resetGlobe');
+        if (resetFlag === '1') {
+          if (!this.resettingGlobe) {
+            this.resettingGlobe = true;
+            this.clearSelectedCountry({ skipRouteUpdate: true });
           void this.router
             .navigate([], {
               relativeTo: this.route,
@@ -2728,10 +2937,17 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
               this.resettingGlobe = false;
             });
         }
-        return;
-      }
+          return;
+        }
 
-      const postParam = params.get('post');
+        const searchFlag = params.get('search');
+        if (searchFlag === '1') {
+          this.searchOpen = true;
+        } else if (searchFlag === '0') {
+          this.searchOpen = false;
+        }
+
+        const postParam = params.get('post');
       if (postParam && postParam !== this.lastHandledNotificationPostId) {
         this.pendingNotificationPostId = postParam;
         this.lastHandledNotificationPostId = postParam;
@@ -2836,6 +3052,10 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    if (this.clockTimer) {
+      window.clearInterval(this.clockTimer);
+      this.clockTimer = null;
+    }
     try { this.presence.stop(); } catch {}
     this.queryParamSub?.unsubscribe();
     this.postEventsCreatedSub?.unsubscribe();
@@ -2876,6 +3096,41 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.localOnline = entry?.online ?? 0;
   }
 
+  private async loadMoodStats(): Promise<void> {
+    if (this.moodLoading) return;
+    this.moodLoading = true;
+    this.moodError = '';
+    try {
+      if (this.selectedCountry?.code) {
+        const query = `query Mood($code: String!) {
+          globalMood { country_code positive neutral negative total topics computed_at }
+          countryMood(country_code: $code) { country_code positive neutral negative total topics computed_at }
+        }`;
+        const data = await this.gql.query<{ globalMood: CountryMood; countryMood: CountryMood }>(query, {
+          code: String(this.selectedCountry.code).toUpperCase(),
+        });
+        this.globalMood = data.globalMood ?? null;
+        this.localMood = data.countryMood ?? null;
+      } else {
+        const query = `query Mood { globalMood { country_code positive neutral negative total topics computed_at } }`;
+        const data = await this.gql.query<{ globalMood: CountryMood }>(query);
+        this.globalMood = data.globalMood ?? null;
+        this.localMood = null;
+      }
+    } catch (err: any) {
+      this.moodError = err?.message ?? 'Failed to load mood.';
+    } finally {
+      this.moodLoading = false;
+      this.forceUi();
+    }
+  }
+
+  moodPct(mood: CountryMood | null, key: 'positive' | 'neutral' | 'negative'): number {
+    if (!mood?.total) return 0;
+    const raw = (mood[key] / mood.total) * 100;
+    return Math.max(0, Math.min(100, Math.round(raw)));
+  }
+
   private computeFocusPadding(): { top: number; bottom: number; left: number; right: number } {
     const top = 90;
     const bottom = 20;
@@ -2910,6 +3165,9 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     }
     if (tab === 'following' && !this.followingLoaded && !this.followingLoading) {
       void this.loadFollowingFeed();
+    }
+    if (tab === 'stats') {
+      void this.loadMoodStats();
     }
     if (!opts?.skipRouteUpdate && this.selectedCountry) this.updateRouteState();
     this.forceUi();
@@ -2952,6 +3210,9 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     void this.loadPostsForCountry(country);
     if (tab === 'following') {
       void this.loadFollowingFeed();
+    }
+    if (tab === 'stats') {
+      void this.loadMoodStats();
     }
 
     if (!opts?.skipRouteUpdate) this.updateRouteState();
@@ -3825,6 +4086,30 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.forceUi();
   }
 
+  async copyPostShareLink(post: CountryPost, event?: Event): Promise<void> {
+    event?.stopPropagation?.();
+    if (!post?.id) return;
+    const url = this.buildPostShareUrl(post.id);
+    try {
+      await navigator.clipboard.writeText(url);
+      this.postShareFeedback[post.id] = 'Link copied';
+    } catch {
+      this.postShareFeedback[post.id] = 'Copy failed';
+    }
+    this.forceUi();
+    window.setTimeout(() => {
+      if (this.postShareFeedback[post.id]) {
+        delete this.postShareFeedback[post.id];
+        this.forceUi();
+      }
+    }, 1600);
+  }
+
+  private buildPostShareUrl(postId: string): string {
+    const base = window.location.origin || '';
+    return `${base}/post/${postId}`;
+  }
+
   private async loadLikes(postId: string): Promise<void> {
     if (!postId) return;
     this.likeLoading[postId] = true;
@@ -4585,6 +4870,46 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     if (!opts?.skipRouteUpdate) this.updateRouteState();
   }
 
+  private startClock(): void {
+    this.updateClockLabel();
+    if (this.clockTimer) window.clearInterval(this.clockTimer);
+    this.clockTimer = window.setInterval(() => this.updateClockLabel(), 1000);
+  }
+
+  private updateClockLabel(): void {
+    const time = this.computeLocalTime();
+    this.clockLabel = this.formatClock(time);
+    this.forceUi();
+  }
+
+  private computeLocalTime(): Date {
+    const fallbackCode = String((this.profile as any)?.country_code ?? '').trim().toUpperCase();
+    const fallbackCountry =
+      this.ui.countries.find((c) => String(c.code ?? '').toUpperCase() === fallbackCode) || null;
+    const target = this.selectedCountry || fallbackCountry;
+    const lng = target?.center?.lng;
+    if (lng == null || Number.isNaN(Number(lng))) {
+      return new Date();
+    }
+
+    // Approximate timezone from longitude with 15-minute granularity.
+    const offsetHours = Math.round((Number(lng) / 15) * 4) / 4;
+    const now = new Date();
+    const utcMs = now.getTime() + now.getTimezoneOffset() * 60_000;
+    return new Date(utcMs + offsetHours * 60 * 60_000);
+  }
+
+  private formatClock(date: Date): string {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const y = date.getFullYear();
+    const m = pad(date.getMonth() + 1);
+    const d = pad(date.getDate());
+    const h = pad(date.getHours());
+    const min = pad(date.getMinutes());
+    const s = pad(date.getSeconds());
+    return `${y}-${m}-${d} ${h}:${min}:${s}`;
+  }
+
   // -----------------------------
   // Avatar preview / adjust
   // -----------------------------
@@ -4758,7 +5083,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
 
       this.profile = (res as any).updateProfile;
 
-      this.nodeAvatarUrl = (this.profile as any)?.avatar_url ?? '';
+      this.nodeAvatarUrl = this.normalizeAvatarUrl((this.profile as any)?.avatar_url ?? '');
       this.nodeNormX = this.draftNormX;
       this.nodeNormY = this.draftNormY;
 
@@ -4796,6 +5121,17 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     img.decoding = 'async';
     img.loading = 'eager';
     img.src = url;
+  }
+
+  private normalizeAvatarUrl(url: string | null | undefined): string {
+    const raw = String(url || '').trim();
+    if (!raw) return '';
+    if (/^https?:\/\//i.test(raw) || raw.startsWith('data:') || raw.startsWith('blob:') || raw.startsWith('/')) {
+      return raw;
+    }
+    if (raw.includes('/storage/v1/object/')) return raw;
+    const normalized = raw.replace(/^\/+/, '');
+    return `${SUPABASE_URL}/storage/v1/object/public/avatars/${normalized}`;
   }
 
   private forceUi(): void {

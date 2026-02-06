@@ -6,6 +6,7 @@ import { postsResolvers } from './modules/posts/posts.resolver.js';
 import { followsResolvers } from './modules/follows/follows.resolver.js';
 import { notificationsResolvers } from './modules/notifications/notifications.resolver.js';
 import { messagesResolvers } from './modules/messages/messages.resolver.js';
+import { insightsResolvers } from './modules/insights/insights.resolver.js';
 
 async function reverseGeocodeNominatim(lat: number, lng: number) {
   const url = new URL('https://nominatim.openstreetmap.org/reverse');
@@ -49,6 +50,7 @@ export const resolvers = {
     ...(followsResolvers.Query ?? {}),
     ...(notificationsResolvers.Query ?? {}),
     ...(messagesResolvers.Query ?? {}),
+    ...(insightsResolvers.Query ?? {}),
   },
 
   Mutation: {

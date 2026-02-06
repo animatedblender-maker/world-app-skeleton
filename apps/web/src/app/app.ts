@@ -101,8 +101,8 @@ export class AppComponent {
 
   declineCall(): void {
     if (!this.incomingCall) return;
-    const { conversationId } = this.incomingCall;
-    this.callService.sendSignal('call-decline', conversationId);
+    const { conversationId, callId } = this.incomingCall;
+    this.callService.sendSignal('call-decline', conversationId, { callId });
     this.callService.clearIncomingCall();
   }
 }

@@ -1,3 +1,13 @@
+const SW_VERSION = '2026-02-04-1';
+
+self.addEventListener('install', (event) => {
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(self.clients.claim());
+});
+
 self.addEventListener('push', (event) => {
   const data = event.data ? event.data.json() : {};
   const title = data.title || 'Matterya';
@@ -11,7 +21,36 @@ self.addEventListener('push', (event) => {
     tag: data.tag || undefined,
   };
 
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil(
+    self.clients
+      .matchAll({ type: 'window', includeUncontrolled: true })
+      .then((clientsArr) => {
+        let targetPath = '';
+        let targetChat = '';
+        try {
+          const targetUrl = new URL(data.url || '/', self.location.origin);
+          targetPath = targetUrl.pathname;
+          targetChat = targetUrl.searchParams.get('c') || '';
+        } catch {}
+
+        if (targetPath.startsWith('/messages')) {
+          const inSameChat = clientsArr.some((client) => {
+            if (client.visibilityState !== 'visible') return false;
+            try {
+              const url = new URL(client.url);
+              if (!url.pathname.startsWith('/messages')) return false;
+              if (!targetChat) return true;
+              return url.searchParams.get('c') === targetChat;
+            } catch {
+              return false;
+            }
+          });
+          if (inSameChat) return;
+        }
+
+        return self.registration.showNotification(title, options);
+      })
+  );
 });
 
 self.addEventListener('notificationclick', (event) => {
