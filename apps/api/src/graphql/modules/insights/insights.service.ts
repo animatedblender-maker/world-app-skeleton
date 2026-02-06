@@ -32,7 +32,7 @@ async function getSentimentPipeline() {
       const { pipeline, env } = await import('@xenova/transformers');
       const hfToken = process.env.HF_ACCESS_TOKEN || process.env.HUGGINGFACE_TOKEN || '';
       if (hfToken) {
-        env.HF_ACCESS_TOKEN = hfToken;
+        (env as any).HF_ACCESS_TOKEN = hfToken;
       }
       return pipeline('sentiment-analysis', 'Xenova/twitter-xlm-roberta-base-sentiment');
     })();

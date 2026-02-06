@@ -711,25 +711,7 @@ type CountryMood = {
       (click)="closeMenu(); closePanel()"
     ></div>
 
-    <div
-      class="lightbox"
-      *ngIf="lightboxUrl"
-      (click)="closeImageLightbox()"
-      role="dialog"
-      aria-modal="true"
-    >
-      <button
-        class="lightbox-close"
-        type="button"
-        (click)="closeImageLightbox(); $event.stopPropagation()"
-        aria-label="Close"
-      >
-        ×
-      </button>
-      <div class="lightbox-frame" (click)="$event.stopPropagation()">
-        <img [src]="lightboxUrl" alt="Expanded media" />
-      </div>
-    </div>
+\ \ \ \ <div\n\ \ \ \ \ \ class="lightbox"\n\ \ \ \ \ \ \*ngIf="lightboxUrl"\n\ \ \ \ \ \ \(click\)="closeImageLightbox\(\)"\n\ \ \ \ \ \ role="dialog"\n\ \ \ \ \ \ aria-modal="true"\n\ \ \ \ >\n\ \ \ \ \ \ <div\ class="lightbox-frame"\ \(click\)="\$event\.stopPropagation\(\)">\n\ \ \ \ \ \ \ \ <button\n\ \ \ \ \ \ \ \ \ \ class="lightbox-close"\n\ \ \ \ \ \ \ \ \ \ type="button"\n\ \ \ \ \ \ \ \ \ \ \(click\)="closeImageLightbox\(\);\ \$event\.stopPropagation\(\)"\n\ \ \ \ \ \ \ \ \ \ aria-label="Close"\n\ \ \ \ \ \ \ \ >\n\ \ \ \ \ \ \ \ \ \ ×\n\ \ \ \ \ \ \ \ </button>\n\ \ \ \ \ \ \ \ <img\ \[src]="lightboxUrl"\ alt="Expanded\ media"\ />\n\ \ \ \ \ \ </div>\n\ \ \ \ </div>
 
     <div class="build-tag-corner" *ngIf="!selectedCountry" aria-hidden="true">
       {{ clockLabel }}
@@ -2063,6 +2045,47 @@ type CountryMood = {
     /* =============== AVATAR ORB + MENU (RESTORED) =============== */
     .node-backdrop{ position: fixed; inset: 0; z-index: 11900; background: transparent; }
 
+    .lightbox{
+      position: fixed;
+      inset: 0;
+      background: rgba(5,10,18,0.7);
+      backdrop-filter: blur(6px);
+      display: grid;
+      place-items: center;
+      z-index: 12050;
+    }
+    .lightbox-frame{
+      position: relative;
+      max-width: min(92vw, 860px);
+      max-height: 82vh;
+      background: rgba(255,255,255,0.98);
+      border-radius: 18px;
+      padding: 10px;
+      box-shadow: 0 25px 60px rgba(0,0,0,0.35);
+    }
+    .lightbox-frame img{
+      display: block;
+      width: 100%;
+      height: auto;
+      max-height: 72vh;
+      border-radius: 12px;
+      object-fit: contain;
+    }
+    .lightbox-close{
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      border: 1px solid rgba(7,20,40,0.2);
+      background: #fff;
+      cursor: pointer;
+      font-weight: 800;
+      display: grid;
+      place-items: center;
+    }
+
     .user-node{
       position: fixed;
       top: var(--ui-edge-top);
@@ -2534,9 +2557,9 @@ type CountryMood = {
         padding: 14px;
       }
       .node-menu:not(.notif-menu){
-        left: 50%;
-        right: auto;
-        transform: translateX(-50%);
+        left: auto;
+        right: 0;
+        transform: none;
       }
       .notif-menu{
         left: auto;
@@ -5138,3 +5161,4 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.zone.run(() => this.cdr.detectChanges());
   }
 }
+

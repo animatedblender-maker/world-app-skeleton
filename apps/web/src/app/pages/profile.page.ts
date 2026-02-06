@@ -39,7 +39,9 @@ import { SUPABASE_URL } from '../config/supabase.config';
       <div class="ocean-dots" aria-hidden="true"></div>
       <div class="noise" aria-hidden="true"></div>
       <div class="card" *ngIf="!loading && !error && profile; else stateTpl">
-        <button class="ghost-link back-link" type="button" (click)="goBack()">← BACK</button>
+        <div class="profile-topbar">
+          <button class="ghost-link back-link" type="button" (click)="goBack()">← BACK</button>
+        </div>
         <div class="head">
             <div class="avatar-block" (click)="openAvatarModal()">
               <div class="avatar">
@@ -812,6 +814,16 @@ import { SUPABASE_URL } from '../config/supabase.config';
       min-height: 200px;
       box-sizing: border-box;
     }
+    .profile-topbar{
+      width: 100%;
+      background: #fff;
+      border-bottom: 1px solid rgba(10,20,32,0.08);
+      padding: 10px 14px;
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+    }
     .state{
       text-align:center;
       font-weight:800;
@@ -1119,7 +1131,7 @@ import { SUPABASE_URL } from '../config/supabase.config';
     }
     .back-link{
       color: rgba(0,0,0,0.65);
-      margin-bottom:12px;
+      margin-bottom:0;
       display:inline-flex;
       align-items:center;
       gap:6px;

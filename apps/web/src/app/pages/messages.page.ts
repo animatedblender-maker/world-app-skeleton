@@ -266,8 +266,10 @@ import { VideoPlayerComponent } from '../components/video-player.component';
 
     <div class="lightbox" *ngIf="lightboxUrl" (click)="closeImageLightbox()">
       <div class="lightbox-card" (click)="$event.stopPropagation()">
-        <button class="lightbox-close" type="button" (click)="closeImageLightbox()">x</button>
-        <img [src]="lightboxUrl" alt="Preview" />
+        <div class="lightbox-frame">
+          <button class="lightbox-close" type="button" (click)="closeImageLightbox()">x</button>
+          <img [src]="lightboxUrl" alt="Preview" />
+        </div>
       </div>
     </div>
 
@@ -399,6 +401,11 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       justify-content:space-between;
       gap:12px;
       margin-bottom:12px;
+      width:100%;
+      background:#fff;
+      padding:10px 14px;
+      border-bottom:1px solid rgba(10,20,32,0.08);
+      box-sizing:border-box;
       flex-shrink:0;
     }
     .logo-btn{
@@ -1037,6 +1044,9 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       padding:12px;
       box-shadow:0 20px 50px rgba(0,0,0,0.25);
     }
+    .lightbox-frame{
+      position:relative;
+    }
     .lightbox-card img{
       width:100%;
       height:auto;
@@ -1046,8 +1056,8 @@ import { VideoPlayerComponent } from '../components/video-player.component';
     }
     .lightbox-close{
       position:absolute;
-      top:8px;
-      right:8px;
+      top:6px;
+      right:6px;
       width:30px;
       height:30px;
       border-radius:50%;
@@ -1190,7 +1200,7 @@ import { VideoPlayerComponent } from '../components/video-player.component';
     }
     @media (max-width: 900px){
       .wrap{
-        padding:16px 12px 16px;
+        padding:0;
       }
       .layout{
         grid-template-columns:1fr;
@@ -1223,11 +1233,11 @@ import { VideoPlayerComponent } from '../components/video-player.component';
     }
     @media (max-width: 600px){
       .wrap{
-        padding:12px;
+        padding:0;
       }
       .card{
-      padding:16px;
-    }
+        padding:0;
+      }
       .bubble{
         max-width:86%;
       }
