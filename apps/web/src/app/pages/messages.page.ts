@@ -25,7 +25,7 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       <div class="noise" aria-hidden="true"></div>
 
       <div class="card">
-        <div class="topbar">
+        <div class="msg-topbar">
           <button class="logo-btn" type="button" (click)="goHome()">
             <img src="/logo.png" alt="Matterya" />
           </button>
@@ -1207,7 +1207,7 @@ import { VideoPlayerComponent } from '../components/video-player.component';
       .card{
       padding:16px;
     }
-    .topbar{
+    .msg-topbar{
       display:flex;
       align-items:center;
       justify-content:space-between;

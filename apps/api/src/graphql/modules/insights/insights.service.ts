@@ -29,7 +29,11 @@ async function getSentimentPipeline() {
   if (sentimentPipeline) return sentimentPipeline;
   if (!pipelineInitPromise) {
     pipelineInitPromise = (async () => {
-      const { pipeline } = await import('@xenova/transformers');
+      const { pipeline, env } = await import('@xenova/transformers');
+      const hfToken = process.env.HF_ACCESS_TOKEN || process.env.HUGGINGFACE_TOKEN || '';
+      if (hfToken) {
+        env.HF_ACCESS_TOKEN = hfToken;
+      }
       return pipeline('sentiment-analysis', 'Xenova/twitter-xlm-roberta-base-sentiment');
     })();
   }
@@ -144,13 +148,47 @@ function extractTopics(texts: string[], limit = 8): string[] {
 
 async function classifySentiment(texts: string[]): Promise<SentimentLabel[]> {
   if (!texts.length) return [];
-  const pipe = await getSentimentPipeline();
   const batch = texts.map((t) => clampText(t));
-  const results: Array<{ label: string }> = await pipe(batch);
-  return results.map((res) => {
-    const label = String(res.label ?? '').toLowerCase();
-    if (label.includes('positive')) return 'positive';
-    if (label.includes('negative')) return 'negative';
+  try {
+    const pipe = await getSentimentPipeline();
+    const results: Array<{ label: string }> = await pipe(batch);
+    return results.map((res) => {
+      const label = String(res.label ?? '').toLowerCase();
+      if (label.includes('positive')) return 'positive';
+      if (label.includes('negative')) return 'negative';
+      return 'neutral';
+    });
+  } catch {
+    return await classifySentimentRemote(batch);
+  }
+}
+
+async function classifySentimentRemote(texts: string[]): Promise<SentimentLabel[]> {
+  const token = process.env.HF_ACCESS_TOKEN || process.env.HUGGINGFACE_TOKEN || '';
+  if (!token) {
+    throw new GraphQLError('Sentiment failed: missing HF access token for remote inference.');
+  }
+  const res = await fetch(
+    'https://api-inference.huggingface.co/models/cardiffnlp/twitter-xlm-roberta-base-sentiment',
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ inputs: texts }),
+    }
+  );
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new GraphQLError(`Sentiment failed: ${res.status} ${txt}`);
+  }
+  const json: Array<Array<{ label: string; score: number }>> = await res.json();
+  return json.map((choices) => {
+    const best = [...(choices ?? [])].sort((a, b) => b.score - a.score)[0];
+    const label = String(best?.label ?? '').toUpperCase();
+    if (label === 'LABEL_2' || label.includes('POS')) return 'positive';
+    if (label === 'LABEL_0' || label.includes('NEG')) return 'negative';
     return 'neutral';
   });
 }

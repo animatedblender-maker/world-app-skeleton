@@ -2117,7 +2117,7 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     const emailLocal = (this.meEmail || '').split('@')[0].toLowerCase();
     const profileUsername = (profile.username || '').toLowerCase();
     const profileEmail = (profile.email || '').toLowerCase();
-    const slugMatch = this.currentSlug && (profileUsername === this.currentSlug || emailLocal === this.currentSlug);
+    const slugMatch = !!this.currentSlug && (profileUsername === this.currentSlug || emailLocal === this.currentSlug);
     this.isOwner =
       (!!this.meId && profile.user_id === this.meId) ||
       (!!this.meEmail && profileEmail && profileEmail === (this.meEmail || '').toLowerCase()) ||
