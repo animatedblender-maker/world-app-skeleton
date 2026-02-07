@@ -1310,9 +1310,10 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   private wsConnected = false;
   private localStream?: MediaStream;
   private remoteStream?: MediaStream;
-    private livekitRoom?: any;
-    private livekitLocalTracks: any[] = [];
-    private livekitLoadPromise: Promise<void> | null = null;
+  private livekitRoom?: any;
+  private livekitLocalTracks: any[] = [];
+  private livekitLoadPromise: Promise<void> | null = null;
+  private livekitModule: any | null = null;
   private pendingCallType: 'audio' | 'video' | null = null;
   private pendingCallFrom: string | null = null;
   private pendingCallConversationId: string | null = null;
@@ -1855,7 +1856,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       if (!url) throw new Error('LiveKit URL not configured.');
 
       await this.ensureLiveKitLoaded();
-      const LiveKit = (window as any).LiveKit;
+      const LiveKit = this.livekitModule || (window as any).LiveKit;
       if (!LiveKit) throw new Error('LiveKit not loaded.');
     const { Room, RoomEvent, createLocalTracks } = LiveKit;
     const room = new Room({ adaptiveStream: true, dynacast: true });
@@ -2999,34 +3000,69 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   }
 
   private ensureLiveKitLoaded(): Promise<void> {
-    if ((window as any).LiveKit) return Promise.resolve();
+    if (this.livekitModule || (window as any).LiveKit || (window as any).livekit) {
+      this.livekitModule = this.livekitModule || (window as any).LiveKit || (window as any).livekit;
+      return Promise.resolve();
+    }
     if (this.livekitLoadPromise) return this.livekitLoadPromise;
 
-    this.livekitLoadPromise = new Promise<void>((resolve, reject) => {
-      const existing = document.querySelector('script[data-livekit]') as HTMLScriptElement | null;
-      if (existing && (window as any).LiveKit) {
-        resolve();
+    this.livekitLoadPromise = (async () => {
+      try {
+        const mod = await import('livekit-client');
+        this.livekitModule = mod;
+        (window as any).LiveKit = mod;
         return;
-      }
+      } catch {}
 
-      const script = document.createElement('script');
-      script.src = 'https://unpkg.com/livekit-client/dist/livekit-client.umd.min.js';
-      script.async = true;
-      script.defer = true;
-      script.dataset['livekit'] = '1';
-      script.onload = () => resolve();
-      script.onerror = () => {
-        const fallback = document.createElement('script');
-        fallback.src = 'https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js';
-        fallback.async = true;
-        fallback.defer = true;
-        fallback.dataset['livekit'] = '1-fallback';
-        fallback.onload = () => resolve();
-        fallback.onerror = () => reject(new Error('LiveKit not loaded.'));
-        document.head.appendChild(fallback);
-      };
-      document.head.appendChild(script);
-    });
+      return new Promise<void>((resolve, reject) => {
+        const existing = document.querySelector('script[data-livekit]') as HTMLScriptElement | null;
+        const pickGlobal = () =>
+          (window as any).LiveKit || (window as any).livekit || (window as any).Livekit;
+        if (existing) {
+          const global = pickGlobal();
+          if (global) {
+            this.livekitModule = global;
+            resolve();
+            return;
+          }
+        }
+
+        const script = document.createElement('script');
+        script.src = 'https://unpkg.com/livekit-client@2.17.1/dist/livekit-client.umd.min.js';
+        script.async = true;
+        script.defer = true;
+        script.dataset['livekit'] = '1';
+        script.onload = () => {
+          const global = pickGlobal();
+          if (global) {
+            this.livekitModule = global;
+            resolve();
+            return;
+          }
+          reject(new Error('LiveKit not loaded.'));
+        };
+        script.onerror = () => {
+          const fallback = document.createElement('script');
+          fallback.src =
+            'https://cdn.jsdelivr.net/npm/livekit-client@2.17.1/dist/livekit-client.umd.min.js';
+          fallback.async = true;
+          fallback.defer = true;
+          fallback.dataset['livekit'] = '1-fallback';
+          fallback.onload = () => {
+            const global = pickGlobal();
+            if (global) {
+              this.livekitModule = global;
+              resolve();
+              return;
+            }
+            reject(new Error('LiveKit not loaded.'));
+          };
+          fallback.onerror = () => reject(new Error('LiveKit not loaded.'));
+          document.head.appendChild(fallback);
+        };
+        document.head.appendChild(script);
+      });
+    })();
 
     return this.livekitLoadPromise;
   }
