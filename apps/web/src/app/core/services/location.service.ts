@@ -25,15 +25,23 @@ export class LocationService {
 
   // ✅ THIS is what profile-setup.page.ts calls
   async detectViaGpsThenServer(timeoutMs = 8000): Promise<DetectedLocation | null> {
+    const cached = this.getCachedLocation();
     const coords = await this.getBrowserCoords(timeoutMs);
-    if (!coords) return null;
+    if (!coords) return cached;
 
-    const res = await this.gql.request<{ detectLocation: DetectedLocation }>(
-      DETECT_LOCATION,
-      { lat: coords.lat, lng: coords.lng }
-    );
+    try {
+      const res = await this.gql.request<{ detectLocation: DetectedLocation }>(
+        DETECT_LOCATION,
+        { lat: coords.lat, lng: coords.lng }
+      );
 
-    return res.detectLocation ?? null;
+      if (res.detectLocation?.countryCode && res.detectLocation?.countryName) {
+        this.setCachedLocation(res.detectLocation);
+      }
+      return res.detectLocation ?? cached;
+    } catch {
+      return cached;
+    }
   }
 
   // Internal helper
@@ -71,5 +79,28 @@ export class LocationService {
         }
       );
     });
+  }
+
+  getCachedLocation(): DetectedLocation | null {
+    try {
+      const raw = localStorage.getItem('matterya:lastLocation');
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as DetectedLocation;
+      if (!parsed?.countryCode || !parsed?.countryName) return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  }
+
+  cacheLocation(loc: DetectedLocation): void {
+    if (!loc?.countryCode || !loc?.countryName) return;
+    this.setCachedLocation(loc);
+  }
+
+  private setCachedLocation(loc: DetectedLocation): void {
+    try {
+      localStorage.setItem('matterya:lastLocation', JSON.stringify(loc));
+    } catch {}
   }
 }

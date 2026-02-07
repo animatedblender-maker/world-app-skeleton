@@ -97,7 +97,7 @@ import { environment } from '../../envirnoments/envirnoment';
                   (click)="startCall('audio')"
                   aria-label="Start voice call"
                 >
-                  <img class="call-icon" src="/assets/phonecall.svg" alt="" aria-hidden="true" />
+                  <img class="call-icon" src="assets/phonecall.svg" alt="" aria-hidden="true" />
                 </button>
                 <button
                   class="call-btn"
@@ -106,7 +106,7 @@ import { environment } from '../../envirnoments/envirnoment';
                   (click)="startCall('video')"
                   aria-label="Start video call"
                 >
-                  <img class="call-icon" src="/assets/videocall.svg" alt="" aria-hidden="true" />
+                  <img class="call-icon" src="assets/videocall.svg" alt="" aria-hidden="true" />
                 </button>
               </div>
             </div>
@@ -1190,8 +1190,7 @@ import { environment } from '../../envirnoments/envirnoment';
         flex-wrap:wrap;
       }
       .thread-actions{
-        width:100%;
-        justify-content:flex-end;
+        align-items:center;
       }
     }
     @media (max-width: 600px){
@@ -1226,6 +1225,9 @@ import { environment } from '../../envirnoments/envirnoment';
       .call-local{
         width:96px;
         height:72px;
+      }
+      .thread-actions{
+        align-items:center;
       }
     }
     `
@@ -1480,7 +1482,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   }
 
   get callUiOpen(): boolean {
-    return this.callActive || this.callConnecting || this.callIncoming;
+    return this.callActive || this.callConnecting || this.callIncoming || !!this.callError;
   }
 
   canStartCall(): boolean {
@@ -1605,7 +1607,9 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       });
     } catch (e: any) {
       this.callError = e?.message ?? 'Call failed.';
-      this.cleanupCall(false);
+      this.callConnecting = false;
+      this.callActive = false;
+      this.forceUi();
     }
   }
 
@@ -1656,7 +1660,9 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       this.incomingOffer = null;
     } catch (e: any) {
       this.callError = e?.message ?? 'Call failed.';
-      this.cleanupCall(false);
+      this.callConnecting = false;
+      this.callActive = false;
+      this.forceUi();
     }
   }
 
@@ -2120,6 +2126,8 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     }
     await this.loadMessages(convo.id, false);
     this.maybeShowCallFromParams();
+    this.scrollToBottom();
+    window.setTimeout(() => this.scrollToBottom(), 80);
   }
 
   private async activateConversationById(convoId: string): Promise<void> {
@@ -2138,6 +2146,8 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       this.enterThreadView();
       this.forceUi();
       await this.loadMessages(convoId, false);
+      this.scrollToBottom();
+      window.setTimeout(() => this.scrollToBottom(), 80);
       return;
     }
     const fetched = await this.fetchConversationById(convoId);
@@ -2152,6 +2162,8 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     this.enterThreadView();
     this.forceUi();
     await this.loadMessages(convoId, false);
+    this.scrollToBottom();
+    window.setTimeout(() => this.scrollToBottom(), 80);
   }
 
   private upsertConversation(convo: Conversation): void {
