@@ -1,4 +1,5 @@
 import { pool } from '../db.js';
+import { runAllCountryMoods } from '../graphql/modules/insights/insights.service.js';
 
 type CaptionResult = {
   post_id: string;
@@ -95,26 +96,5 @@ async function saveCaptions(captions: CaptionResult[]): Promise<void> {
 }
 
 export async function runDailyInsights(): Promise<{ processed: number; failed: number }> {
-  const posts = await fetchPostsNeedingCaptions();
-  if (!posts.length) return { processed: 0, failed: 0 };
-
-  const captions: CaptionResult[] = [];
-  let failed = 0;
-  for (const post of posts) {
-    const url =
-      post.media_type === 'video' ? (post.thumb_url ? post.thumb_url : null) : post.media_url;
-    if (!url) {
-      failed += 1;
-      continue;
-    }
-    try {
-      const caption = await captionImage(url);
-      if (caption) captions.push({ post_id: post.id, caption });
-    } catch {
-      failed += 1;
-    }
-  }
-
-  await saveCaptions(captions);
-  return { processed: captions.length, failed };
+  return await runAllCountryMoods();
 }

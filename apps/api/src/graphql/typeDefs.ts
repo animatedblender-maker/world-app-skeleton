@@ -203,6 +203,7 @@ export const typeDefs = `#graphql
     negative: Int!
     total: Int!
     topics: [String!]!
+    insight: String!
     computed_at: String!
   }
 

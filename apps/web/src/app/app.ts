@@ -81,6 +81,13 @@ export class AppComponent {
   isMessagesRoute = false;
 
   constructor(private callService: CallService, private router: Router) {
+    const redirect = new URLSearchParams(window.location.search).get('redirect');
+    if (redirect) {
+      try {
+        window.history.replaceState(null, '', redirect);
+        void this.router.navigateByUrl(redirect);
+      } catch {}
+    }
     this.callService.incoming$.subscribe((call) => {
       this.incomingCall = call;
     });

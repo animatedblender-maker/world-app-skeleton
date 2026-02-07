@@ -11,6 +11,7 @@ type MoodCounts = {
 export type CountryMood = MoodCounts & {
   country_code: string;
   topics: string[];
+  insight: string;
   computed_at: string;
 };
 
@@ -146,6 +147,31 @@ function extractTopics(texts: string[], limit = 8): string[] {
     .map(([word]) => word);
 }
 
+function formatTopic(word: string): string {
+  if (!word) return word;
+  return word.length > 1 ? word[0].toUpperCase() + word.slice(1) : word.toUpperCase();
+}
+
+function buildInsight(counts: MoodCounts, topics: string[]): string {
+  if (!counts.total) {
+    return 'Not enough recent posts to summarize yet.';
+  }
+
+  const posPct = counts.positive / counts.total;
+  const negPct = counts.negative / counts.total;
+  const delta = posPct - negPct;
+  const mood =
+    delta > 0.12 ? 'optimistic' :
+    delta < -0.12 ? 'tense' :
+    'mixed';
+
+  const topTopics = topics.slice(0, 4).map(formatTopic);
+  if (topTopics.length) {
+    return `Overall mood feels ${mood}. Top themes: ${topTopics.join(', ')}.`;
+  }
+  return `Overall mood feels ${mood}, with a wide mix of conversations.`;
+}
+
 async function classifySentiment(texts: string[]): Promise<SentimentLabel[]> {
   if (!texts.length) return [];
   const batch = texts.map((t) => clampText(t));
@@ -205,11 +231,10 @@ async function fetchTexts(countryCode?: string | null): Promise<string[]> {
   }
   params.push(Math.floor(MAX_TEXTS * 0.6));
   const postLimitParam = params.length;
-  const postsRes = await pool.query<{ title: string | null; body: string; caption: string | null }>(
+  const postsRes = await pool.query<{ title: string | null; body: string }>(
     `
-    select p.title, p.body, c.caption
+    select p.title, p.body
     from public.posts p
-    left join public.post_media_captions c on c.post_id = p.id
     ${whereSql}
     order by p.created_at desc
     limit $${postLimitParam}
@@ -241,8 +266,7 @@ async function fetchTexts(countryCode?: string | null): Promise<string[]> {
   for (const row of postsRes.rows) {
     const title = row.title ? String(row.title).trim() : '';
     const body = String(row.body ?? '').trim();
-    const caption = row.caption ? String(row.caption).trim() : '';
-    const combined = `${title} ${body} ${caption}`.trim();
+    const combined = `${title} ${body}`.trim();
     if (combined) texts.push(combined);
   }
   for (const row of commentsRes.rows) {
@@ -266,6 +290,7 @@ export async function getCountryMood(countryCode?: string | null): Promise<Count
       negative: 0,
       total: 0,
       topics: [],
+      insight: 'Not enough recent posts to summarize yet.',
       computed_at: new Date().toISOString(),
     };
     cache.set(key, { at: Date.now(), value: empty });
@@ -285,13 +310,48 @@ export async function getCountryMood(countryCode?: string | null): Promise<Count
   }
 
   const topics = extractTopics(texts, 10);
+  const insight = buildInsight(counts, topics);
   const mood: CountryMood = {
     country_code: countryCode ? countryCode.toUpperCase() : 'GLOBAL',
     ...counts,
     topics,
+    insight,
     computed_at: new Date().toISOString(),
   };
 
   cache.set(key, { at: Date.now(), value: mood });
   return mood;
+}
+
+export async function runAllCountryMoods(): Promise<{ processed: number; failed: number }> {
+  const { rows } = await pool.query<{ country_code: string | null }>(
+    `
+    select distinct country_code
+    from public.posts
+    where country_code is not null
+    order by country_code asc
+    `
+  );
+
+  let processed = 0;
+  let failed = 0;
+
+  for (const row of rows) {
+    const code = String(row.country_code ?? '').trim().toUpperCase();
+    if (!code) continue;
+    try {
+      await getCountryMood(code);
+      processed += 1;
+    } catch {
+      failed += 1;
+    }
+  }
+
+  try {
+    await getCountryMood(null);
+  } catch {
+    failed += 1;
+  }
+
+  return { processed, failed };
 }

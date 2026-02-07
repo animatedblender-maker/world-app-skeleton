@@ -44,6 +44,7 @@ type CountryMood = {
   negative: number;
   total: number;
   topics: string[];
+  insight: string;
   computed_at: string;
 };
 
@@ -745,6 +746,7 @@ type CountryMood = {
                   <div class="topic-row" *ngIf="globalMood.topics?.length">
                     <span class="topic-chip" *ngFor="let topic of globalMood.topics">{{ topic }}</span>
                   </div>
+                  <div class="mood-insight" *ngIf="globalMood.insight">{{ globalMood.insight }}</div>
                 </div>
                 <div class="stats-card" *ngIf="selectedCountry">
                   <div class="stats-title">
@@ -768,6 +770,7 @@ type CountryMood = {
                   <div class="topic-row" *ngIf="localMood.topics?.length">
                     <span class="topic-chip" *ngFor="let topic of localMood.topics">{{ topic }}</span>
                   </div>
+                  <div class="mood-insight" *ngIf="localMood.insight">{{ localMood.insight }}</div>
                 </div>
                 <div class="stats-card">
                   <div class="stats-title">Status</div>
@@ -2148,6 +2151,11 @@ type CountryMood = {
       letter-spacing: .04em;
       color: rgba(10,12,18,0.75);
     }
+    .mood-insight{
+      font-size: 12px;
+      line-height: 1.4;
+      color: rgba(10,12,18,0.75);
+    }
     .stats-title{
       font-weight: 900;
       letter-spacing: 0.18em;
@@ -3311,8 +3319,8 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     try {
       if (this.selectedCountry?.code) {
         const query = `query Mood($code: String!) {
-          globalMood { country_code positive neutral negative total topics computed_at }
-          countryMood(country_code: $code) { country_code positive neutral negative total topics computed_at }
+          globalMood { country_code positive neutral negative total topics insight computed_at }
+          countryMood(country_code: $code) { country_code positive neutral negative total topics insight computed_at }
         }`;
         const data = await this.gql.query<{ globalMood: CountryMood; countryMood: CountryMood }>(query, {
           code: String(this.selectedCountry.code).toUpperCase(),
@@ -3320,7 +3328,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
         this.globalMood = data.globalMood ?? null;
         this.localMood = data.countryMood ?? null;
       } else {
-        const query = `query Mood { globalMood { country_code positive neutral negative total topics computed_at } }`;
+        const query = `query Mood { globalMood { country_code positive neutral negative total topics insight computed_at } }`;
         const data = await this.gql.query<{ globalMood: CountryMood }>(query);
         this.globalMood = data.globalMood ?? null;
         this.localMood = null;

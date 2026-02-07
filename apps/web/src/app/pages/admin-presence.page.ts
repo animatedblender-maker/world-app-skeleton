@@ -104,7 +104,7 @@ const EMPTY_OVERRIDE: PresenceOverride = Object.freeze({ total: null, online: nu
         <div class="card-head">
           <div>
             <div class="card-title">Daily insights</div>
-            <div class="card-sub">Run the manual daily insights job.</div>
+            <div class="card-sub">Run the manual country insights refresh.</div>
           </div>
         </div>
         <div class="cron-row">
@@ -433,7 +433,7 @@ export class AdminPresencePageComponent implements OnInit, OnDestroy {
       } else {
         const processed = Number(data?.processed ?? 0);
         const failed = Number(data?.failed ?? 0);
-        this.cronStatus = `Done. Captions: ${processed}, Failed: ${failed}`;
+      this.cronStatus = `Done. Countries: ${processed}, Failed: ${failed}`;
       }
     } catch (err: any) {
       this.cronStatus = `Failed: ${err?.message ?? 'unknown error'}`;

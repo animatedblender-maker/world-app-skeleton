@@ -69,6 +69,12 @@ export const routes: Routes = [
       import('./pages/admin-presence.page').then((m) => m.AdminPresencePageComponent),
   },
   {
+    path: 'admin-presence',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pages/admin-presence.page').then((m) => m.AdminPresencePageComponent),
+  },
+  {
     path: 'user/:slug',
     loadComponent: () =>
       import('./pages/profile.page').then((m) => m.ProfilePageComponent),

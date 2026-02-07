@@ -1608,6 +1608,9 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
 
   async startCall(type: 'audio' | 'video'): Promise<void> {
     if (!this.activeConversationId || !this.canStartCall()) return;
+    if (this.callActive || this.callConnecting || this.callIncoming) {
+      this.cleanupCall();
+    }
     this.callType = type;
     this.callConversationId = this.activeConversationId;
     this.callSessionId = this.newCallSessionId();
@@ -1721,13 +1724,10 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   }
 
   endCall(): void {
-    if (this.callConversationId) {
-      this.sendSignal('call-end', this.callConversationId);
-    }
     const meta = this.getCallLogMeta();
     const status = this.callActive || this.callStartAt ? 'ended' : 'missed';
     void this.sendCallLog(status, meta);
-    this.cleanupCall();
+    this.cleanupCall(true, true);
   }
 
   private async sendCallLog(
@@ -2002,7 +2002,10 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     void this.remoteAudio.play().catch(() => {});
   }
 
-  private cleanupCall(resetError = true): void {
+  private cleanupCall(resetError = true, notifyRemote = false): void {
+    if (notifyRemote && this.callConversationId) {
+      this.sendSignal('call-end', this.callConversationId);
+    }
     if (resetError) this.callError = '';
     this.callActive = false;
     this.callConnecting = false;
