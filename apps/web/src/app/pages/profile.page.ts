@@ -456,20 +456,72 @@ import { SUPABASE_URL } from '../config/supabase.config';
                 {{ isPostExpanded(post.id) ? 'See less' : 'See more' }}
               </button>
               <div class="post-media" *ngIf="editingPostId !== post.id && post.media_url && post.media_type !== 'none'">
-                <img
-                  *ngIf="post.media_type === 'image'"
-                  class="zoomable"
-                  [src]="post.media_url"
-                  alt="post media"
-                  (click)="openImageLightbox(post.media_url)"
-                />
-                <app-video-player
-                  *ngIf="post.media_type === 'video'"
-                  [src]="post.media_url"
-                  tapBehavior="emit"
-                  (viewed)="recordView(post)"
-                  (videoTap)="openReels(post)"
-                  ></app-video-player>
+                <ng-container *ngIf="postMediaUrls(post) as mediaUrls">
+                  <ng-container *ngIf="postMediaTypes(post) as mediaTypes">
+                    <ng-container *ngIf="mediaUrls.length <= 1; else mediaGallery">
+                      <img
+                        *ngIf="mediaTypes[0] === 'image'"
+                        class="zoomable"
+                        [src]="mediaUrls[0]"
+                        alt="post media"
+                        (click)="openImageLightbox(mediaUrls[0])"
+                      />
+                      <app-video-player
+                        *ngIf="mediaTypes[0] === 'video'"
+                        [src]="mediaUrls[0]"
+                        tapBehavior="emit"
+                        (viewed)="recordView(post)"
+                        (videoTap)="onPostVideoTap(post)"
+                        ></app-video-player>
+                    </ng-container>
+                    <ng-template #mediaGallery>
+                      <div class="media-gallery">
+                        <div class="media-strip" [style.transform]="mediaTransform(post)">
+                          <div class="media-item" *ngFor="let url of mediaUrls; let idx = index">
+                            <app-video-player
+                              *ngIf="mediaTypes[idx] === 'video'"
+                              [src]="url"
+                              tapBehavior="emit"
+                              (viewed)="recordView(post)"
+                              (videoTap)="onPostVideoTap(post)"
+                            ></app-video-player>
+                            <img
+                              *ngIf="mediaTypes[idx] === 'image'"
+                              class="zoomable"
+                              [src]="url"
+                              alt="post media"
+                              (click)="openImageLightbox(url)"
+                            />
+                          </div>
+                        </div>
+                        <button
+                          class="media-nav left"
+                          type="button"
+                          *ngIf="postMediaIndexValue(post) > 0"
+                          (click)="prevPostMedia(post)"
+                          aria-label="Previous media"
+                        >
+                          &lt;
+                        </button>
+                        <button
+                          class="media-nav right"
+                          type="button"
+                          *ngIf="postMediaIndexValue(post) < mediaUrls.length - 1"
+                          (click)="nextPostMedia(post, mediaUrls.length)"
+                          aria-label="Next media"
+                        >
+                          &gt;
+                        </button>
+                        <div class="media-dots">
+                          <span
+                            *ngFor="let _ of mediaUrls; let dotIndex = index"
+                            [class.active]="dotIndex === postMediaIndexValue(post)"
+                          ></span>
+                        </div>
+                      </div>
+                    </ng-template>
+                  </ng-container>
+                </ng-container>
               </div>
               <div class="post-actions" *ngIf="editingPostId !== post.id">
                 <div class="post-action-group">
@@ -1463,6 +1515,60 @@ import { SUPABASE_URL } from '../config/supabase.config';
       object-fit:cover;
       background:#000;
     }
+    .media-gallery{
+      position:relative;
+      width:100%;
+      overflow:hidden;
+      background:#000;
+    }
+    .media-strip{
+      display:flex;
+      width:100%;
+      transition:transform 0.28s ease;
+    }
+    .media-item{
+      min-width:100%;
+      flex:0 0 100%;
+    }
+    .media-nav{
+      position:absolute;
+      top:50%;
+      transform:translateY(-50%);
+      width:34px;
+      height:34px;
+      border-radius:50%;
+      border:1px solid rgba(255,255,255,0.5);
+      background:rgba(0,0,0,0.45);
+      color:#fff;
+      font-size:20px;
+      line-height:1;
+      display:grid;
+      place-items:center;
+      cursor:pointer;
+      z-index:2;
+    }
+    .media-nav.left{ left:10px; }
+    .media-nav.right{ right:10px; }
+    .media-dots{
+      position:absolute;
+      bottom:10px;
+      left:50%;
+      transform:translateX(-50%);
+      display:flex;
+      gap:6px;
+      padding:4px 8px;
+      border-radius:999px;
+      background:rgba(0,0,0,0.4);
+      z-index:2;
+    }
+    .media-dots span{
+      width:6px;
+      height:6px;
+      border-radius:50%;
+      background:rgba(255,255,255,0.5);
+      display:inline-block;
+    }
+    .media-dots span.active{ background:#fff; }
     .post-visibility{
       font-weight:800;
       font-size:10px;
@@ -1806,12 +1912,24 @@ import { SUPABASE_URL } from '../config/supabase.config';
     }
     @media (max-width: 700px){
       .wrap{
-        padding: 72px max(12px, env(safe-area-inset-left)) 24px max(12px, env(safe-area-inset-right));
+        padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-left)) 20px max(12px, env(safe-area-inset-right));
       }
-      .card{ padding:18px; border-radius:22px; }
-      .head{ gap:16px; }
+      .card{ padding:16px; border-radius:18px; }
+      .head{
+        gap:12px;
+        align-items:center;
+        justify-content:flex-start;
+      }
+      .head-actions{
+        width:100%;
+        justify-content:flex-end;
+        margin-left:0;
+      }
+      .info{
+        width:100%;
+      }
       .title-row{ flex-direction:column; align-items:flex-start; }
-      .title-actions{ width:100%; flex-wrap:wrap; }
+      .title-actions{ width:100%; flex-wrap:wrap; justify-content:flex-start; }
     }
     @media (max-width: 520px){
       .avatar{ width:96px; height:96px; }
@@ -1862,6 +1980,7 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
   postMediaPreview = '';
   postMediaType: 'image' | 'video' | null = null;
   postMediaError = '';
+  postMediaIndex: Record<string, number> = {};
   postBusy = false;
   postError = '';
   postFeedback = '';
@@ -2320,6 +2439,92 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     void this.router.navigate(['/user', slug]);
   }
 
+  postMediaUrls(post: CountryPost): string[] {
+    const raw = String(post?.media_url || '').trim();
+    if (!raw) return [];
+    if (raw.startsWith('{') || raw.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(raw) as { urls?: string[]; url?: string };
+        if (Array.isArray(parsed?.urls)) return parsed.urls.filter(Boolean);
+        if (parsed?.url) return [parsed.url];
+      } catch {}
+    }
+    return [raw];
+  }
+
+  postMediaTypes(post: CountryPost): Array<'image' | 'video'> {
+    const raw = String(post?.media_url || '').trim();
+    if (!raw) return [];
+    if (raw.startsWith('{') || raw.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(raw) as { types?: Array<'image' | 'video'>; urls?: string[]; url?: string };
+        if (Array.isArray(parsed?.types) && parsed.types.length) {
+          if (Array.isArray(parsed?.urls) && parsed.urls.length) {
+            return parsed.urls.map((url, idx) => {
+              const declared = parsed.types?.[idx];
+              if (declared === 'video' || declared === 'image') return declared;
+              return this.inferMediaTypeFromUrl(url, post.media_type);
+            });
+          }
+          return parsed.types.map((t) => (t === 'video' ? 'video' : 'image'));
+        }
+        if (Array.isArray(parsed?.urls)) {
+          return parsed.urls.map((url) => this.inferMediaTypeFromUrl(url, post.media_type));
+        }
+        if (parsed?.url) {
+          return [this.inferMediaTypeFromUrl(parsed.url, post.media_type)];
+        }
+      } catch {}
+    }
+    return [this.inferMediaTypeFromUrl(raw, post.media_type)];
+  }
+
+  private inferMediaTypeFromUrl(url: string, fallback: string | null | undefined): 'image' | 'video' {
+    const lower = String(url || '').toLowerCase();
+    if (/\.(mp4|webm|mov|m4v|avi|mkv)(\?|#|$)/.test(lower)) return 'video';
+    if (/\.(jpg|jpeg|png|gif|webp|avif)(\?|#|$)/.test(lower)) return 'image';
+    return String(fallback || '').toLowerCase() === 'video' ? 'video' : 'image';
+  }
+
+  postIsReel(post: CountryPost): boolean {
+    const raw = String(post?.media_url || '').trim();
+    if (!raw) return false;
+    if (raw.startsWith('{') || raw.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(raw) as { reel?: boolean };
+        return !!parsed?.reel;
+      } catch {}
+    }
+    return false;
+  }
+
+  postMediaIndexValue(post: CountryPost): number {
+    return this.postMediaIndex[post.id] ?? 0;
+  }
+
+  mediaTransform(post: CountryPost): string {
+    const idx = this.postMediaIndexValue(post);
+    return `translateX(-${idx * 100}%)`;
+  }
+
+  nextPostMedia(post: CountryPost, total: number): void {
+    const current = this.postMediaIndexValue(post);
+    const next = Math.min(total - 1, current + 1);
+    this.postMediaIndex[post.id] = next;
+  }
+
+  prevPostMedia(post: CountryPost): void {
+    const current = this.postMediaIndexValue(post);
+    const next = Math.max(0, current - 1);
+    this.postMediaIndex[post.id] = next;
+  }
+
+  onPostVideoTap(post: CountryPost): void {
+    if (this.postIsReel(post)) {
+      this.openReels(post);
+    }
+  }
+
   openReels(post: CountryPost): void {
     if (!post) return;
     const code =
@@ -2340,7 +2545,7 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
 
   private buildReelSeedPosts(post: CountryPost): CountryPost[] {
     const videos = (this.profilePosts || []).filter(
-      (item) => item.media_type === 'video' && !!item.media_url
+      (item) => item.media_type === 'video' && !!item.media_url && this.postIsReel(item)
     );
     const combined = [post, ...videos];
     const seen = new Set<string>();

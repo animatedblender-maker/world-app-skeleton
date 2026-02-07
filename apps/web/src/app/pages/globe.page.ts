@@ -60,19 +60,18 @@ type CountryMood = {
       (click)="$event.stopPropagation()"
     >
       <div class="overlay-inner">
-        <div class="top-actions">
-          <div class="tab-row" *ngIf="searchOpen">
-            <button
-              *ngFor="let tab of searchTabs"
-              type="button"
-              class="tab"
-              [class.active]="tab.id === activeTab"
-              (click)="setActiveTab(tab.id)"
-            >
-              {{ tab.label }}
-            </button>
+          <div class="top-actions">
+            <div class="tab-row" *ngIf="searchOpen">
+              <button
+                *ngFor="let tab of searchTabs"
+                type="button"
+                class="tab"
+                [class.active]="tab.id === activeTab"
+                (click)="setActiveTab(tab.id)"
+              >
+                {{ tab.label }}
+              </button>
               </div>
-              <div class="feed-clock" *ngIf="selectedCountry">{{ clockLabel }}</div>
             </div>
         <div class="search-control" *ngIf="searchOpen">
           <input
@@ -160,7 +159,10 @@ type CountryMood = {
                   Return to globe
                 </button>
               </div>
-              <div class="mh-sub">{{ selectedCountry.name }} public space</div>
+              <div class="mh-sub">
+                {{ selectedCountry.name }} public space
+                <span class="mh-clock" *ngIf="clockLabel">({{ clockLabel }})</span>
+              </div>
             </div>
           </div>
 
@@ -200,7 +202,7 @@ type CountryMood = {
                         <div class="composer-cta">
                           <button
                             *ngIf="canPostHere && composerOpen"
-                            class="pill-link ghost"
+                            class="flat-action ghost"
                             type="button"
                             (click)="composerOpen = false; clearComposerMedia()"
                           >
@@ -208,7 +210,7 @@ type CountryMood = {
                           </button>
                           <button
                             *ngIf="!canPostHere"
-                            class="pill-link"
+                            class="flat-action"
                             type="button"
                             (click)="clearSelectedCountry()"
                           >
@@ -245,13 +247,13 @@ type CountryMood = {
                             #composerMediaInput
                             type="file"
                             [attr.accept]="composerMediaMode === 'video' || composerMediaMode === 'reel' ? 'video/*' : 'image/*,video/*'"
-                            [attr.multiple]="composerMediaMode === 'video' ? '' : null"
+                            [attr.multiple]="composerMediaMode === 'reel' ? null : ''"
                             (change)="onComposerMediaSelect($event)"
                             style="display:none;"
                           />
                           <div class="composer-type">
                             <button
-                              class="pill-link ghost"
+                              class="type-chip"
                               type="button"
                               [class.active]="composerMediaMode === 'post'"
                               (click)="setComposerMediaMode('post')"
@@ -259,7 +261,7 @@ type CountryMood = {
                               Post
                             </button>
                             <button
-                              class="pill-link ghost"
+                              class="type-chip"
                               type="button"
                               [class.active]="composerMediaMode === 'video'"
                               (click)="setComposerMediaMode('video')"
@@ -267,7 +269,7 @@ type CountryMood = {
                               Video
                             </button>
                             <button
-                              class="pill-link ghost"
+                              class="type-chip"
                               type="button"
                               [class.active]="composerMediaMode === 'reel'"
                               (click)="setComposerMediaMode('reel')"
@@ -275,21 +277,23 @@ type CountryMood = {
                               Reel
                             </button>
                           </div>
-                          <button
-                            class="pill-link ghost"
-                            type="button"
-                            (click)="composerMediaInput.click()"
-                          >
-                            Add media
-                          </button>
-                          <button
-                            class="pill-link ghost"
-                            type="button"
-                            *ngIf="composerMediaFiles.length"
-                            (click)="clearComposerMedia()"
-                          >
-                            Remove
-                          </button>
+                          <div class="composer-media-actions">
+                            <button
+                              class="flat-action"
+                              type="button"
+                              (click)="composerMediaInput.click()"
+                            >
+                              Add media
+                            </button>
+                            <button
+                              class="flat-action danger"
+                              type="button"
+                              *ngIf="composerMediaFiles.length"
+                              (click)="clearComposerMedia()"
+                            >
+                              Remove
+                            </button>
+                          </div>
                           <span class="composer-media-name" *ngIf="composerMediaFiles.length">
                             {{ composerMediaFiles[0]?.name }}<span *ngIf="composerMediaFiles.length > 1"> +{{ composerMediaFiles.length - 1 }}</span>
                           </span>
@@ -297,17 +301,22 @@ type CountryMood = {
                         <div class="composer-media-error" *ngIf="composerMediaError">
                           {{ composerMediaError }}
                         </div>
-                        <div class="composer-media-preview" *ngIf="composerMediaPreview">
-                          <img
-                            *ngIf="composerMediaType === 'image'"
-                            [src]="composerMediaPreview"
-                            alt="media preview"
-                          />
-                          <video
-                            *ngIf="composerMediaType === 'video'"
-                            [src]="composerMediaPreview"
-                            controls
-                          ></video>
+                        <div class="composer-media-preview" *ngIf="composerMediaPreviews.length">
+                          <div class="composer-preview-strip" [class.single]="composerMediaPreviews.length === 1">
+                            <div class="composer-preview-item" *ngFor="let preview of composerMediaPreviews; let idx = index">
+                              <img
+                                *ngIf="composerMediaTypes[idx] === 'image'"
+                                [src]="preview"
+                                alt="media preview"
+                              />
+                              <video
+                                *ngIf="composerMediaTypes[idx] === 'video'"
+                                [src]="preview"
+                                muted
+                                playsinline
+                              ></video>
+                            </div>
+                          </div>
                         </div>
                       </ng-container>
                     </div>
@@ -457,74 +466,70 @@ type CountryMood = {
               </button>
                     <div class="post-media" *ngIf="editingPostId !== post.id && post.media_url && post.media_type !== 'none'">
                       <ng-container *ngIf="postMediaUrls(post) as mediaUrls">
-                        <ng-container *ngIf="mediaUrls.length <= 1; else mediaGallery">
-                          <img
-                            *ngIf="post.media_type === 'image'"
-                            class="zoomable"
-                            [src]="mediaUrls[0]"
-                            alt="post media"
-                            (click)="openImageLightbox(mediaUrls[0]); $event.stopPropagation()"
-                          />
-                          <app-video-player
-                            *ngIf="post.media_type === 'video'"
-                            [src]="mediaUrls[0]"
-                            tapBehavior="emit"
-                            (viewed)="recordView(post)"
-                            (videoTap)="onPostVideoTap(post)"
-                          ></app-video-player>
-                          <div class="media-badge" *ngIf="post.media_type === 'video'">
-                            {{ postIsReel(post) ? 'REEL' : 'VIDEO' }}
-                          </div>
-                        </ng-container>
-                        <ng-template #mediaGallery>
-                          <div class="media-gallery">
-                            <div class="media-strip" [style.transform]="mediaTransform(post)">
-                              <div class="media-item" *ngFor="let url of mediaUrls; let idx = index">
-                                <app-video-player
-                                  *ngIf="post.media_type === 'video'"
-                                  [src]="url"
-                                  tapBehavior="emit"
-                                  (viewed)="recordView(post)"
-                                  (videoTap)="onPostVideoTap(post)"
-                                ></app-video-player>
-                                <img
-                                  *ngIf="post.media_type === 'image'"
-                                  class="zoomable"
-                                  [src]="url"
-                                  alt="post media"
-                                  (click)="openImageLightbox(url); $event.stopPropagation()"
-                                />
+                        <ng-container *ngIf="postMediaTypes(post) as mediaTypes">
+                          <ng-container *ngIf="mediaUrls.length <= 1; else mediaGallery">
+                            <img
+                              *ngIf="mediaTypes[0] === 'image'"
+                              class="zoomable"
+                              [src]="mediaUrls[0]"
+                              alt="post media"
+                              (click)="openImageLightbox(mediaUrls[0]); $event.stopPropagation()"
+                            />
+                            <app-video-player
+                              *ngIf="mediaTypes[0] === 'video'"
+                              [src]="mediaUrls[0]"
+                              tapBehavior="emit"
+                              (viewed)="recordView(post)"
+                              (videoTap)="onPostVideoTap(post)"
+                            ></app-video-player>
+                          </ng-container>
+                          <ng-template #mediaGallery>
+                            <div class="media-gallery">
+                              <div class="media-strip" [style.transform]="mediaTransform(post)">
+                                <div class="media-item" *ngFor="let url of mediaUrls; let idx = index">
+                                  <app-video-player
+                                    *ngIf="mediaTypes[idx] === 'video'"
+                                    [src]="url"
+                                    tapBehavior="emit"
+                                    (viewed)="recordView(post)"
+                                    (videoTap)="onPostVideoTap(post)"
+                                  ></app-video-player>
+                                  <img
+                                    *ngIf="mediaTypes[idx] === 'image'"
+                                    class="zoomable"
+                                    [src]="url"
+                                    alt="post media"
+                                    (click)="openImageLightbox(url); $event.stopPropagation()"
+                                  />
+                                </div>
+                              </div>
+                              <button
+                                class="media-nav left"
+                                type="button"
+                                *ngIf="postMediaIndexValue(post) > 0"
+                                (click)="prevPostMedia(post)"
+                                aria-label="Previous media"
+                              >
+                                &lt;
+                              </button>
+                              <button
+                                class="media-nav right"
+                                type="button"
+                                *ngIf="postMediaIndexValue(post) < mediaUrls.length - 1"
+                                (click)="nextPostMedia(post, mediaUrls.length)"
+                                aria-label="Next media"
+                              >
+                                &gt;
+                              </button>
+                              <div class="media-dots">
+                                <span
+                                  *ngFor="let _ of mediaUrls; let dotIndex = index"
+                                  [class.active]="dotIndex === postMediaIndexValue(post)"
+                                ></span>
                               </div>
                             </div>
-                            <button
-                              class="media-nav left"
-                              type="button"
-                              *ngIf="postMediaIndexValue(post) > 0"
-                              (click)="prevPostMedia(post)"
-                              aria-label="Previous media"
-                            >
-                              ‹
-                            </button>
-                            <button
-                              class="media-nav right"
-                              type="button"
-                              *ngIf="postMediaIndexValue(post) < mediaUrls.length - 1"
-                              (click)="nextPostMedia(post, mediaUrls.length)"
-                              aria-label="Next media"
-                            >
-                              ›
-                            </button>
-                            <div class="media-dots">
-                              <span
-                                *ngFor="let _ of mediaUrls; let dotIndex = index"
-                                [class.active]="dotIndex === postMediaIndexValue(post)"
-                              ></span>
-                            </div>
-                            <div class="media-badge" *ngIf="post.media_type === 'video'">
-                              {{ postIsReel(post) ? 'REEL' : 'VIDEO' }}
-                            </div>
-                          </div>
-                        </ng-template>
+                          </ng-template>
+                        </ng-container>
                       </ng-container>
                     </div>
                     <div class="post-actions" *ngIf="editingPostId !== post.id">
@@ -1370,11 +1375,12 @@ type CountryMood = {
       pointer-events: auto;
       min-width: 0;
       min-height: 0;
+      height: 100%;
     }
 
     .main-card{
-        height: calc(100dvh - var(--stage-top-pad) - var(--ui-edge-bottom));
-        min-height: calc(100dvh - var(--stage-top-pad) - var(--ui-edge-bottom));
+        height: 100%;
+        min-height: 0;
         border-radius: 26px;
         padding: 16px;
         box-shadow: 0 30px 90px rgba(0,0,0,0.40);
@@ -1394,17 +1400,6 @@ type CountryMood = {
     }
 
     .main-head{ display:flex; align-items: center; justify-content:space-between; gap: 12px; margin-bottom: 10px; }
-    .feed-clock{
-      font-size: 11px;
-      letter-spacing: 0.14em;
-      text-transform: uppercase;
-      color: rgba(12, 18, 30, 0.65);
-      border: 1px solid rgba(0,0,0,0.12);
-      background: rgba(255,255,255,0.75);
-      padding: 6px 10px;
-      border-radius: 999px;
-      white-space: nowrap;
-    }
     .mh-text{ min-width: 0; display:flex; flex-direction:column; justify-content:center; }
     .mh-title-row{ display:flex; align-items:center; gap: 10px; flex-wrap: wrap; }
     .feed-return{
@@ -1421,7 +1416,14 @@ type CountryMood = {
       white-space: nowrap;
     }
     .mh-title{ font-weight: 900; letter-spacing: .16em; font-size: 12px; text-transform: uppercase; }
-    .mh-sub{ margin-top: 4px; opacity: .72; font-weight: 800; letter-spacing: .08em; font-size: 12px; }
+    .mh-sub{ margin-top: 4px; opacity: .72; font-weight: 800; letter-spacing: .08em; font-size: 12px; display:flex; align-items:center; gap: 6px; flex-wrap: wrap; }
+    .mh-clock{
+      font-size: 11px;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      opacity: .8;
+      white-space: nowrap;
+    }
 
     .tabs{ display:flex; gap: 8px; margin: 12px 0; flex-wrap: wrap; }
     .tab{
@@ -1510,7 +1512,7 @@ type CountryMood = {
     .composer-trigger{
       width:100%;
       margin-top:10px;
-      border-radius:16px;
+      border-radius:10px;
       border:1px solid rgba(0,0,0,0.08);
       background:rgba(245,247,250,0.9);
       text-align:left;
@@ -1528,7 +1530,7 @@ type CountryMood = {
     .composer-textarea{
       width:100%;
       margin-top:10px;
-      border-radius:16px;
+      border-radius:10px;
       border:1px solid rgba(0,0,0,0.08);
       background:rgba(245,247,250,0.9);
       padding:12px;
@@ -1549,10 +1551,47 @@ type CountryMood = {
       gap:6px;
       align-items:center;
     }
-    .composer-type .pill-link.active{
-      background:rgba(10,12,18,0.08);
-      border-color:rgba(10,12,18,0.2);
+    .type-chip{
+      border:1px solid rgba(8,12,20,0.15);
+      background:rgba(255,255,255,0.9);
+      color:rgba(8,12,20,0.75);
+      font-size:10px;
+      letter-spacing:0.18em;
+      font-weight:800;
+      text-transform:uppercase;
+      padding:6px 12px;
+      border-radius:8px;
+      cursor:pointer;
+    }
+    .type-chip.active{
+      background:#0f172a;
+      border-color:#0f172a;
+      color:#fff;
+    }
+    .composer-media-actions{
+      display:flex;
+      gap:6px;
+      align-items:center;
+    }
+    .flat-action{
+      border:1px solid rgba(10,12,18,0.15);
+      background:rgba(255,255,255,0.95);
       color:rgba(10,12,18,0.8);
+      font-size:10px;
+      letter-spacing:0.14em;
+      font-weight:800;
+      text-transform:uppercase;
+      padding:6px 12px;
+      border-radius:8px;
+      cursor:pointer;
+    }
+    .flat-action.ghost{
+      background:transparent;
+    }
+    .flat-action.danger{
+      border-color:rgba(200,0,0,0.3);
+      color:#a11;
+      background:rgba(255,240,240,0.9);
     }
     .composer-media-name{
       font-size:11px;
@@ -1569,16 +1608,32 @@ type CountryMood = {
     }
     .composer-media-preview{
       margin-top:10px;
-      border-radius:18px;
+      border-radius:12px;
       overflow:hidden;
       border:1px solid rgba(0,0,0,0.08);
       background:#fff;
     }
-    .composer-media-preview img,
-    .composer-media-preview video{
+    .composer-preview-strip{
+      display:grid;
+      grid-auto-flow:column;
+      grid-auto-columns:minmax(120px, 1fr);
+      gap:8px;
+      padding:10px;
+    }
+    .composer-preview-strip.single{
+      grid-auto-columns:1fr;
+    }
+    .composer-preview-item{
+      border-radius:10px;
+      overflow:hidden;
+      background:#0b0f19;
+      border:1px solid rgba(0,0,0,0.12);
+    }
+    .composer-preview-item img,
+    .composer-preview-item video{
       width:100%;
       display:block;
-      max-height:420px;
+      height:140px;
       object-fit:cover;
       background:#000;
     }
@@ -2624,11 +2679,6 @@ type CountryMood = {
         .main-card{
           padding: 14px;
         }
-        .feed-clock{
-          font-size: 10px;
-          letter-spacing: 0.12em;
-          padding: 5px 8px;
-        }
       .feed-return{
         padding: 6px 12px;
         font-size: 9px;
@@ -2769,8 +2819,9 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   newPostBody = '';
   composerMediaFiles: File[] = [];
   composerMediaPreviews: string[] = [];
+  composerMediaTypes: Array<'image' | 'video'> = [];
   composerMediaPreview = '';
-  composerMediaType: 'image' | 'video' | null = null;
+  composerMediaType: 'image' | 'video' | 'mixed' | null = null;
   composerMediaMode: 'post' | 'video' | 'reel' = 'post';
   composerMediaError = '';
   postMediaIndex: Record<string, number> = {};
@@ -3406,6 +3457,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.ui.setSelected(country.id);
     this.countrySearchTerm = country.name;
     this.countrySuggestions = [];
+    this.searchOpen = false;
 
     this.globeService.setInteractive(false);
     this.globeService.setSoloCountry(country.id);
@@ -4081,18 +4133,29 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       return;
     }
 
-    const isVideo = files[0].type.startsWith('video/');
-    const maxBytes = isVideo ? 40 * 1024 * 1024 : 12 * 1024 * 1024;
-    const tooLarge = files.find((file) => file.size > maxBytes);
+    const tooLarge = files.find((file) => {
+      const isVideo = file.type.startsWith('video/');
+      const maxBytes = isVideo ? 40 * 1024 * 1024 : 12 * 1024 * 1024;
+      return file.size > maxBytes;
+    });
     if (tooLarge) {
-      this.composerMediaError = `File too large. Max ${isVideo ? '40MB' : '12MB'}.`;
+      const tooLargeIsVideo = tooLarge.type.startsWith('video/');
+      this.composerMediaError = `File too large. Max ${tooLargeIsVideo ? '40MB' : '12MB'}.`;
       input.value = '';
       return;
     }
 
     this.clearComposerMedia();
     this.composerMediaFiles = files;
-    this.composerMediaType = isVideo ? 'video' : 'image';
+    this.composerMediaTypes = files.map((file) =>
+      file.type.startsWith('video/') ? 'video' : 'image'
+    );
+    const uniqueTypes = new Set(this.composerMediaTypes);
+    if (uniqueTypes.size === 1) {
+      this.composerMediaType = this.composerMediaTypes[0] ?? null;
+    } else {
+      this.composerMediaType = 'mixed';
+    }
     this.composerMediaPreviews = files.map((file) => URL.createObjectURL(file));
     this.composerMediaPreview = this.composerMediaPreviews[0] ?? '';
     this.composerMediaError = '';
@@ -4104,6 +4167,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     }
     this.composerMediaFiles = [];
     this.composerMediaPreviews = [];
+    this.composerMediaTypes = [];
     this.composerMediaPreview = '';
     this.composerMediaType = null;
     this.composerMediaError = '';
@@ -4145,10 +4209,18 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
           uploads.push(await this.media.uploadPostMedia(file));
         }
         const urls = uploads.map((u) => u.publicUrl);
-        mediaType = this.composerMediaType || (this.composerMediaFiles[0].type.startsWith('video/') ? 'video' : 'image');
-        if (urls.length > 1 || this.composerMediaMode === 'reel') {
+        const types =
+          this.composerMediaTypes.length
+            ? this.composerMediaTypes
+            : this.composerMediaFiles.map((file) =>
+                file.type.startsWith('video/') ? 'video' : 'image'
+              );
+        const hasVideo = types.includes('video');
+        mediaType = hasVideo ? 'video' : 'image';
+        if (urls.length > 1 || types.length > 1 || this.composerMediaMode === 'reel') {
           mediaUrl = JSON.stringify({
             urls,
+            types,
             reel: this.composerMediaMode === 'reel',
           });
         } else {
@@ -4198,6 +4270,40 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       } catch {}
     }
     return [raw];
+  }
+
+  postMediaTypes(post: CountryPost): Array<'image' | 'video'> {
+    const raw = String(post?.media_url || '').trim();
+    if (!raw) return [];
+    if (raw.startsWith('{') || raw.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(raw) as { types?: Array<'image' | 'video'>; urls?: string[]; url?: string };
+        if (Array.isArray(parsed?.types) && parsed.types.length) {
+          if (Array.isArray(parsed?.urls) && parsed.urls.length) {
+            return parsed.urls.map((url, idx) => {
+              const declared = parsed.types?.[idx];
+              if (declared === 'video' || declared === 'image') return declared;
+              return this.inferMediaTypeFromUrl(url, post.media_type);
+            });
+          }
+          return parsed.types.map((t) => (t === 'video' ? 'video' : 'image'));
+        }
+        if (Array.isArray(parsed?.urls)) {
+          return parsed.urls.map((url) => this.inferMediaTypeFromUrl(url, post.media_type));
+        }
+        if (parsed?.url) {
+          return [this.inferMediaTypeFromUrl(parsed.url, post.media_type)];
+        }
+      } catch {}
+    }
+    return [this.inferMediaTypeFromUrl(raw, post.media_type)];
+  }
+
+  private inferMediaTypeFromUrl(url: string, fallback: string | null | undefined): 'image' | 'video' {
+    const lower = String(url || '').toLowerCase();
+    if (/\.(mp4|webm|mov|m4v|avi|mkv)(\?|#|$)/.test(lower)) return 'video';
+    if (/\.(jpg|jpeg|png|gif|webp|avif)(\?|#|$)/.test(lower)) return 'image';
+    return String(fallback || '').toLowerCase() === 'video' ? 'video' : 'image';
   }
 
   postIsReel(post: CountryPost): boolean {
