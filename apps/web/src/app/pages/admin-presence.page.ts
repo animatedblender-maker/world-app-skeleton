@@ -10,9 +10,11 @@ import {
   type PresenceOverridesMap,
   type PresenceOverride,
 } from '../core/services/presence-overrides.service';
+import { environment } from '../../envirnoments/envirnoment';
 
 const ADMIN_KEY = 'worldapp-admin-2026';
 const ADMIN_STORAGE = 'worldapp.adminKey.v1';
+const CRON_STORAGE = 'worldapp.insightsCronSecret.v1';
 const EMPTY_OVERRIDE: PresenceOverride = Object.freeze({ total: null, online: null });
 
 @Component({
@@ -97,6 +99,26 @@ const EMPTY_OVERRIDE: PresenceOverride = Object.freeze({ total: null, online: nu
           </button>
         </div>
       </div>
+
+      <div class="card cron-card" *ngIf="!locked">
+        <div class="card-head">
+          <div>
+            <div class="card-title">Daily insights</div>
+            <div class="card-sub">Run the manual daily insights job.</div>
+          </div>
+        </div>
+        <div class="cron-row">
+          <input
+            type="password"
+            placeholder="Cron secret"
+            [(ngModel)]="cronSecretInput"
+          />
+          <button type="button" (click)="runDailyInsights()" [disabled]="cronRunning">
+            {{ cronRunning ? 'Running…' : 'Run now' }}
+          </button>
+        </div>
+        <div class="card-sub" *ngIf="cronStatus">{{ cronStatus }}</div>
+      </div>
     </div>
   `,
   styles: [
@@ -124,6 +146,9 @@ const EMPTY_OVERRIDE: PresenceOverride = Object.freeze({ total: null, online: nu
       .lock-card {
         max-width: 520px;
         margin: 12vh auto 0;
+      }
+      .cron-card {
+        margin-top: 18px;
       }
       .card-title {
         font-size: 20px;
@@ -200,6 +225,16 @@ const EMPTY_OVERRIDE: PresenceOverride = Object.freeze({ total: null, online: nu
         gap: 12px;
         align-items: center;
         flex-wrap: wrap;
+      }
+      .cron-row {
+        margin-top: 14px;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .cron-row input {
+        flex: 1 1 240px;
       }
       .tools input {
         max-width: 320px;
@@ -282,6 +317,9 @@ export class AdminPresencePageComponent implements OnInit, OnDestroy {
   keyInput = '';
   keyError = '';
   filter = '';
+  cronSecretInput = '';
+  cronRunning = false;
+  cronStatus = '';
 
   countries: CountryModel[] = [];
   filteredCountries: CountryModel[] = [];
@@ -302,6 +340,7 @@ export class AdminPresencePageComponent implements OnInit, OnDestroy {
     this.overrideCount = Object.keys(this.overrides).length;
     this.unlockFromStorage();
     this.unlockFromQuery();
+    this.loadCronSecret();
 
     this.overridesSub = this.overridesService.observe().subscribe((next) => {
       this.overrides = next || {};
@@ -371,6 +410,38 @@ export class AdminPresencePageComponent implements OnInit, OnDestroy {
     void this.router.navigate(['/globe']);
   }
 
+  async runDailyInsights(): Promise<void> {
+    const secret = this.cronSecretInput.trim();
+    if (!secret) {
+      this.cronStatus = 'Enter the cron secret first.';
+      return;
+    }
+    this.persistCronSecret(secret);
+    this.cronRunning = true;
+    this.cronStatus = 'Running…';
+    try {
+      const res = await fetch(`${environment.apiBaseUrl}/insights/run-daily`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-cron-secret': secret,
+        },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        this.cronStatus = `Failed: ${data?.error ?? res.status}`;
+      } else {
+        const processed = Number(data?.processed ?? 0);
+        const failed = Number(data?.failed ?? 0);
+        this.cronStatus = `Done. Captions: ${processed}, Failed: ${failed}`;
+      }
+    } catch (err: any) {
+      this.cronStatus = `Failed: ${err?.message ?? 'unknown error'}`;
+    } finally {
+      this.cronRunning = false;
+    }
+  }
+
   private async loadCountries(): Promise<void> {
     try {
       const data = await this.countriesService.loadCountries();
@@ -404,9 +475,22 @@ export class AdminPresencePageComponent implements OnInit, OnDestroy {
     } catch {}
   }
 
+  private loadCronSecret(): void {
+    try {
+      const stored = localStorage.getItem(CRON_STORAGE);
+      if (stored) this.cronSecretInput = stored;
+    } catch {}
+  }
+
   private persistKey(key: string): void {
     try {
       localStorage.setItem(ADMIN_STORAGE, key);
+    } catch {}
+  }
+
+  private persistCronSecret(secret: string): void {
+    try {
+      localStorage.setItem(CRON_STORAGE, secret);
     } catch {}
   }
 }

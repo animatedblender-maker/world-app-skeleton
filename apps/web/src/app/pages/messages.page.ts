@@ -1310,8 +1310,9 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   private wsConnected = false;
   private localStream?: MediaStream;
   private remoteStream?: MediaStream;
-  private livekitRoom?: any;
-  private livekitLocalTracks: any[] = [];
+    private livekitRoom?: any;
+    private livekitLocalTracks: any[] = [];
+    private livekitLoadPromise: Promise<void> | null = null;
   private pendingCallType: 'audio' | 'video' | null = null;
   private pendingCallFrom: string | null = null;
   private pendingCallConversationId: string | null = null;
@@ -1844,17 +1845,18 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  private async ensureLiveKitConnected(callType: 'audio' | 'video', roomName: string): Promise<void> {
-    if (this.livekitRoom && this.livekitRoom.name === roomName) return;
-    await this.disconnectLiveKit();
-    this.callMuted = false;
-    this.callCameraOff = callType !== 'video';
-    const tokenInfo = await this.fetchLiveKitToken(roomName);
-    const url = tokenInfo.url || environment.livekitUrl;
-    if (!url) throw new Error('LiveKit URL not configured.');
+    private async ensureLiveKitConnected(callType: 'audio' | 'video', roomName: string): Promise<void> {
+      if (this.livekitRoom && this.livekitRoom.name === roomName) return;
+      await this.disconnectLiveKit();
+      this.callMuted = false;
+      this.callCameraOff = callType !== 'video';
+      const tokenInfo = await this.fetchLiveKitToken(roomName);
+      const url = tokenInfo.url || environment.livekitUrl;
+      if (!url) throw new Error('LiveKit URL not configured.');
 
-    const LiveKit = (window as any).LiveKit;
-    if (!LiveKit) throw new Error('LiveKit not loaded.');
+      await this.ensureLiveKitLoaded();
+      const LiveKit = (window as any).LiveKit;
+      if (!LiveKit) throw new Error('LiveKit not loaded.');
     const { Room, RoomEvent, createLocalTracks } = LiveKit;
     const room = new Room({ adaptiveStream: true, dynacast: true });
     this.livekitRoom = room;
@@ -2996,6 +2998,39 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     this.isNarrow = window.innerWidth <= 900;
   }
 
+  private ensureLiveKitLoaded(): Promise<void> {
+    if ((window as any).LiveKit) return Promise.resolve();
+    if (this.livekitLoadPromise) return this.livekitLoadPromise;
+
+    this.livekitLoadPromise = new Promise<void>((resolve, reject) => {
+      const existing = document.querySelector('script[data-livekit]') as HTMLScriptElement | null;
+      if (existing && (window as any).LiveKit) {
+        resolve();
+        return;
+      }
+
+      const script = document.createElement('script');
+      script.src = 'https://unpkg.com/livekit-client/dist/livekit-client.umd.min.js';
+      script.async = true;
+      script.defer = true;
+      script.dataset['livekit'] = '1';
+      script.onload = () => resolve();
+      script.onerror = () => {
+        const fallback = document.createElement('script');
+        fallback.src = 'https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js';
+        fallback.async = true;
+        fallback.defer = true;
+        fallback.dataset['livekit'] = '1-fallback';
+        fallback.onload = () => resolve();
+        fallback.onerror = () => reject(new Error('LiveKit not loaded.'));
+        document.head.appendChild(fallback);
+      };
+      document.head.appendChild(script);
+    });
+
+    return this.livekitLoadPromise;
+  }
+
   private forceUi(): void {
     this.zone.run(() => this.cdr.detectChanges());
   }
@@ -3016,5 +3051,3 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     void this.router.navigate(['/globe'], { queryParams: { search: '1' } });
   }
 }
-
-

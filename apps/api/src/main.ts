@@ -26,6 +26,7 @@ import { typeDefs } from './graphql/typeDefs.js';
 import { resolvers } from './graphql/resolvers.js';
 import { PushService } from './push/push.service.js';
 import { pool } from './db.js';
+import { runDailyInsights } from './insights/daily-insights.js';
 
 type AuthedUser = {
   id: string;
@@ -58,6 +59,7 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY;
 const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET;
 const LIVEKIT_URL = process.env.LIVEKIT_URL;
+const INSIGHTS_CRON_SECRET = process.env.INSIGHTS_CRON_SECRET || '';
 
 if (!SUPABASE_URL) {
   console.warn('⚠️ SUPABASE_URL not set. JWT verification will fail until you set it.');
@@ -216,6 +218,19 @@ app.post('/livekit/token', async (req: Request, res: Response) => {
     .setExpirationTime('1h')
     .sign(new TextEncoder().encode(LIVEKIT_API_SECRET));
   return res.json({ token: jwt, url: LIVEKIT_URL ?? '' });
+});
+
+app.post('/insights/run-daily', async (req: Request, res: Response) => {
+  const secret = req.headers['x-cron-secret'] || req.query.secret;
+  if (!INSIGHTS_CRON_SECRET || String(secret ?? '') !== INSIGHTS_CRON_SECRET) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  try {
+    const result = await runDailyInsights();
+    return res.json({ ok: true, ...result });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'failed' });
+  }
 });
 
 wss.on('connection', async (socket, req) => {

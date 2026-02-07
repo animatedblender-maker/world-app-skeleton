@@ -80,7 +80,9 @@ import type { CountryPost } from '../core/models/post.model';
     `
       :host {
         display: block;
-        min-height: 100vh;
+        min-height: 100dvh;
+        height: 100dvh;
+        overflow: auto;
         background: radial-gradient(circle at 20% 10%, rgba(40, 80, 120, 0.2), transparent 45%),
           radial-gradient(circle at 80% 0%, rgba(20, 60, 100, 0.25), transparent 40%),
           #060a12;
@@ -88,8 +90,8 @@ import type { CountryPost } from '../core/models/post.model';
       }
       .post-shell {
         position: relative;
-        min-height: 100vh;
-        padding: 88px 18px 60px;
+        min-height: 100dvh;
+        padding: 88px 18px calc(80px + env(safe-area-inset-bottom));
         display: flex;
         flex-direction: column;
         align-items: center;

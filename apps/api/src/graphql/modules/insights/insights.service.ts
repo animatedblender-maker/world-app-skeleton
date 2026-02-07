@@ -205,10 +205,11 @@ async function fetchTexts(countryCode?: string | null): Promise<string[]> {
   }
   params.push(Math.floor(MAX_TEXTS * 0.6));
   const postLimitParam = params.length;
-  const postsRes = await pool.query<{ title: string | null; body: string }>(
+  const postsRes = await pool.query<{ title: string | null; body: string; caption: string | null }>(
     `
-    select title, body
+    select p.title, p.body, c.caption
     from public.posts p
+    left join public.post_media_captions c on c.post_id = p.id
     ${whereSql}
     order by p.created_at desc
     limit $${postLimitParam}
@@ -240,7 +241,8 @@ async function fetchTexts(countryCode?: string | null): Promise<string[]> {
   for (const row of postsRes.rows) {
     const title = row.title ? String(row.title).trim() : '';
     const body = String(row.body ?? '').trim();
-    const combined = `${title} ${body}`.trim();
+    const caption = row.caption ? String(row.caption).trim() : '';
+    const combined = `${title} ${body} ${caption}`.trim();
     if (combined) texts.push(combined);
   }
   for (const row of commentsRes.rows) {

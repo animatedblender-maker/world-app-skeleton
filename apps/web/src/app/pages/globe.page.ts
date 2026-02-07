@@ -1370,14 +1370,14 @@ type CountryMood = {
     }
 
     .main-card{
-      height: calc(100vh - var(--stage-top-pad) - var(--ui-edge-bottom));
-      min-height: calc(100vh - var(--stage-top-pad) - var(--ui-edge-bottom));
-      border-radius: 26px;
-      padding: 16px;
-      box-shadow: 0 30px 90px rgba(0,0,0,0.40);
-      overflow: hidden;
-      display:flex;
-      flex-direction: column;
+        height: calc(100dvh - var(--stage-top-pad) - var(--ui-edge-bottom));
+        min-height: calc(100dvh - var(--stage-top-pad) - var(--ui-edge-bottom));
+        border-radius: 26px;
+        padding: 16px;
+        box-shadow: 0 30px 90px rgba(0,0,0,0.40);
+        overflow: hidden;
+        display:flex;
+        flex-direction: column;
       width: 100%;
       box-sizing: border-box;
     }
@@ -1445,6 +1445,7 @@ type CountryMood = {
       -webkit-overflow-scrolling: touch;
       touch-action: pan-y;
       overscroll-behavior: contain;
+      padding-bottom: calc(18px + env(safe-area-inset-bottom));
     }
     .placeholder{ border-radius: 18px; padding: 14px; }
     .placeholder.light{
@@ -1584,7 +1585,7 @@ type CountryMood = {
     .posts-state{ font-size:13px; font-weight:700; opacity:0.7; }
     .posts-state.hint{ opacity:0.6; }
     .posts-state.error{ color:#ff6b81; }
-    .posts-list{ display:flex; flex-direction:column; gap:16px; box-sizing:border-box; }
+    .posts-list{ display:flex; flex-direction:column; gap:16px; box-sizing:border-box; padding-bottom: 12px; }
     .posts-empty{ text-align:center; font-size:13px; opacity:0.65; }
     .load-more{
       align-self:center;
@@ -2924,17 +2925,41 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   get effectiveCountryCode(): string {
-    const profileCode = ((this.profile as any)?.country_code || '').toUpperCase();
+    const profileCode = String((this.profile as any)?.country_code || '').trim().toUpperCase();
     if (profileCode) return profileCode;
     const cached = this.location.getCachedLocation();
-    return (cached?.countryCode || '').toUpperCase();
+    if (cached?.countryCode) return String(cached.countryCode).trim().toUpperCase();
+    const profileName = (this.profile?.country_name || '').trim();
+    if (profileName) {
+      const match = this.ui.countries.find(
+        (c) => String(c.name || '').trim().toLowerCase() === profileName.toLowerCase()
+      );
+      return match?.code ? String(match.code).trim().toUpperCase() : '';
+    }
+    return '';
   }
 
   get effectiveCountryName(): string {
     const profileName = (this.profile?.country_name || '').trim();
-    if (profileName && profileName !== 'Unknown') return profileName;
+    if (profileName && profileName.toLowerCase() !== 'unknown') return profileName;
+    const profileCode = String((this.profile as any)?.country_code || '').trim().toUpperCase();
+    if (profileCode) {
+      const match = this.ui.countries.find(
+        (c) => String(c.code || '').trim().toUpperCase() === profileCode
+      );
+      if (match?.name) return match.name;
+    }
     const cached = this.location.getCachedLocation();
-    return cached?.countryName || 'your country';
+    if (cached?.countryName && cached.countryName.toLowerCase() !== 'unknown') {
+      return cached.countryName;
+    }
+    if (cached?.countryCode) {
+      const match = this.ui.countries.find(
+        (c) => String(c.code || '').trim().toUpperCase() === cached.countryCode.toUpperCase()
+      );
+      if (match?.name) return match.name;
+    }
+    return 'your country';
   }
 
   private maxOffset(size: number, scale: number): number {
@@ -3671,6 +3696,13 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   private applyPostUpdate(post: CountryPost): void {
+    const followIndex = this.followingPosts.findIndex((existing) => existing.id === post.id);
+    if (followIndex >= 0) {
+      const nextFollowing = [...this.followingPosts];
+      nextFollowing[followIndex] = post;
+      this.followingPosts = this.sortPostsDesc(nextFollowing);
+    }
+
     const currentCode = this.selectedCountry?.code?.toUpperCase() ?? null;
     const postCode = post.country_code?.toUpperCase() ?? null;
     if (!currentCode || !postCode || currentCode !== postCode) return;
@@ -4751,7 +4783,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       const updates: { country_code?: string; country_name?: string; city_name?: string } = {};
 
       if (nextCode && nextCode !== currentCode) updates.country_code = nextCode;
-      if (nextName && nextName.toLowerCase() !== currentName.toLowerCase()) {
+      if (nextName && nextName.toLowerCase() !== 'unknown' && nextName.toLowerCase() !== currentName.toLowerCase()) {
         updates.country_name = nextName;
       }
       if (nextCity && nextCity.toLowerCase() !== currentCity.toLowerCase()) {
