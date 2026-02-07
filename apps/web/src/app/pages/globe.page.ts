@@ -1240,6 +1240,7 @@ type CountryMood = {
       touch-action: auto;
       filter: saturate(1.2) contrast(1.18) brightness(1.05);
       transform: translateZ(0);
+      background: #05080f url('/assets/HDR_multi_nebulae_1.hdr') center/cover no-repeat;
     }
     .globe-bg.bg-static{
       pointer-events: none;

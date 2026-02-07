@@ -95,7 +95,8 @@ export class GlobeService {
       viewer.scene.globe.enableLighting = false;
       viewer.scene.skyAtmosphere.show = false;
       viewer.scene.globe.showGroundAtmosphere = false;
-      viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#05080f');
+      viewer.scene.backgroundColor = Cesium.Color.TRANSPARENT;
+      try { viewer.scene.skyBox.show = false; } catch {}
       const ocean = Cesium.Color.fromCssColorString('#0b2b3b');
       viewer.scene.globe.baseColor = ocean;
       viewer.scene.globe.material = Cesium.Material.fromType('Color', { color: ocean });
