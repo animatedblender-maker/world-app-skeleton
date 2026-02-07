@@ -892,12 +892,16 @@ import { environment } from '../../envirnoments/envirnoment';
       }
     }
     .composer{
+      position:sticky;
+      bottom:0;
+      z-index:5;
       display:flex;
       flex-direction:column;
       gap:10px;
       padding:12px 14px;
       border-top:1px solid rgba(7,20,40,0.08);
       background:rgba(255,255,255,0.95);
+      padding-bottom:calc(12px + env(safe-area-inset-bottom));
     }
     .composer-row{
       display:flex;
@@ -947,6 +951,10 @@ import { environment } from '../../envirnoments/envirnoment';
       place-items:center;
     }
     .composer-send{
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      min-height:44px;
       border:0;
       border-radius:999px;
       padding:10px 18px;
@@ -1228,6 +1236,17 @@ import { environment } from '../../envirnoments/envirnoment';
       }
       .thread-actions{
         align-items:center;
+        gap:6px;
+      }
+      .thread-header{
+        flex-wrap:nowrap;
+        align-items:center;
+      }
+      .thread-meta{
+        min-width:0;
+      }
+      .thread-name{
+        font-size:14px;
       }
     }
     `
@@ -1882,7 +1901,9 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
 
     room.on(RoomEvent.Disconnected, () => {
       if (!this.destroyed) {
-        this.cleanupCall();
+        this.callError = this.callError || 'Call disconnected.';
+        this.cleanupCall(false);
+        this.forceUi();
       }
     });
 

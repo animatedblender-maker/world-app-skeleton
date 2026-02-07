@@ -168,8 +168,11 @@ async function classifySentimentRemote(texts: string[]): Promise<SentimentLabel[
   if (!token) {
     throw new GraphQLError('Sentiment failed: missing HF access token for remote inference.');
   }
+  const baseUrl =
+    process.env.HF_INFERENCE_URL ||
+    'https://router.huggingface.co/hf-inference/models/cardiffnlp/twitter-xlm-roberta-base-sentiment';
   const res = await fetch(
-    'https://router.huggingface.co/hf-inference/models/cardiffnlp/twitter-xlm-roberta-base-sentiment',
+    baseUrl,
     {
       method: 'POST',
       headers: {
