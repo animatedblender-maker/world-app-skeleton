@@ -13,14 +13,14 @@ const HF_CAPTION_URL =
 const MAX_CAPTIONS_PER_RUN = Number(process.env.MAX_CAPTIONS_PER_RUN ?? 120);
 const FETCH_TIMEOUT_MS = Number(process.env.CAPTION_FETCH_TIMEOUT_MS ?? 15000);
 
-async function fetchImageBytes(url: string): Promise<Uint8Array> {
+async function fetchImageBytes(url: string): Promise<ArrayBuffer> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
     const res = await fetch(url, { signal: controller.signal });
     if (!res.ok) throw new Error(`image_fetch_failed:${res.status}`);
     const arrayBuffer = await res.arrayBuffer();
-    return new Uint8Array(arrayBuffer);
+    return arrayBuffer;
   } finally {
     clearTimeout(timeout);
   }
@@ -35,7 +35,7 @@ async function captionImage(url: string): Promise<string> {
       Authorization: `Bearer ${HF_TOKEN}`,
       'Content-Type': 'application/octet-stream',
     },
-    body: bytes,
+    body: bytes as ArrayBuffer,
   });
   if (!res.ok) {
     const msg = await res.text().catch(() => '');
