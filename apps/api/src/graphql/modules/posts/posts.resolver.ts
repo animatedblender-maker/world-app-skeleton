@@ -51,7 +51,10 @@ export const postsResolvers = {
   Mutation: {
     createPost: async (_: any, args: { input: any }, ctx: Context) => {
       const user = requireAuth(ctx);
-      if (!args?.input?.body) throw new Error('Body is required.');
+      const body = String(args?.input?.body ?? '').trim();
+      const hasMedia = !!args?.input?.media_url || !!args?.input?.media_type;
+      const hasShare = !!args?.input?.shared_post_id;
+      if (!body && !hasMedia && !hasShare) throw new Error('Body is required.');
       return await svc().createPost(user.id, args.input);
     },
     updatePost: async (_: any, args: { post_id: string; input: any }, ctx: Context) => {

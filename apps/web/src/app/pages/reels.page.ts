@@ -37,10 +37,11 @@ import { CountryPost, PostComment } from '../core/models/post.model';
           <div class="reel-frame">
             <app-video-player
               class="reel-player controls-hidden"
-              [src]="post.media_url || ''"
+              [src]="reelMediaSrc(post)"
               [poster]="post.thumb_url ?? null"
               preload="auto"
               centerOverlayMode="on-click"
+              [showMute]="false"
               (viewed)="recordView(post)"
             ></app-video-player>
             <div class="reel-gradient" aria-hidden="true"></div>
@@ -68,6 +69,34 @@ import { CountryPost, PostComment } from '../core/models/post.model';
             </div>
 
             <div class="reel-actions" (click)="$event.stopPropagation()">
+              <button
+                class="reel-action mute"
+                type="button"
+                [class.active]="reelMuted"
+                (click)="toggleReelMute()"
+                aria-label="Toggle sound"
+              >
+                <svg
+                  *ngIf="!reelMuted"
+                  class="reel-icon"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                >
+                  <path d="M4 10h4l5-4v12l-5-4H4z"></path>
+                  <path d="M16 9a3 3 0 0 1 0 6"></path>
+                  <path d="M18.5 6.5a6 6 0 0 1 0 11"></path>
+                </svg>
+                <svg
+                  *ngIf="reelMuted"
+                  class="reel-icon"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                >
+                  <path d="M4 10h4l5-4v12l-5-4H4z"></path>
+                  <line x1="16" y1="8" x2="21" y2="13"></line>
+                  <line x1="21" y1="8" x2="16" y2="13"></line>
+                </svg>
+              </button>
               <button
                 class="reel-action"
                 type="button"
@@ -302,6 +331,9 @@ import { CountryPost, PostComment } from '../core/models/post.model';
       .reel-player {
         width: 100%;
         height: 100%;
+      }
+      :host ::ng-deep app-video-player.reel-player .mute-toggle {
+        display: none !important;
       }
       .reel-gradient {
         position: absolute;
@@ -644,6 +676,7 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
   error = '';
   posts: CountryPost[] = [];
   videoPosts: CountryPost[] = [];
+  reelMuted = false;
   meId: string | null = null;
   likeBusy: Record<string, boolean> = {};
   postActionError: Record<string, string> = {};
@@ -665,6 +698,7 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
   private routeSub?: Subscription;
   private querySub?: Subscription;
   private pendingScrollId: string | null = null;
+  private muteListener?: (event: Event) => void;
 
   constructor(
     private route: ActivatedRoute,
@@ -674,6 +708,11 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
   ) {}
 
   ngOnInit(): void {
+    this.reelMuted = this.readGlobalMute();
+    this.muteListener = (event: Event) => {
+      this.reelMuted = !!(event as CustomEvent<boolean>).detail;
+    };
+    window.addEventListener('video-player-mute', this.muteListener);
     void this.loadMe();
     this.routeSub = this.route.paramMap.subscribe((params) => {
       this.countryCode = (params.get('country') || '').toUpperCase();
@@ -695,6 +734,10 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     this.routeSub?.unsubscribe();
     this.querySub?.unsubscribe();
+    if (this.muteListener) {
+      window.removeEventListener('video-player-mute', this.muteListener);
+      this.muteListener = undefined;
+    }
   }
 
   trackPostById(_: number, post: CountryPost): string {
@@ -715,7 +758,7 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
     author: CountryPost['author'] | PostComment['author'] | null | undefined,
     fallbackId?: string | null
   ): void {
-    const slug = author?.username?.trim() || author?.user_id || fallbackId;
+    const slug = fallbackId || author?.user_id || author?.username?.trim();
     if (!slug) return;
     void this.router.navigate(['/user', slug]);
   }
@@ -724,6 +767,15 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
     if (!post?.id || this.viewedPostIds.has(post.id)) return;
     this.viewedPostIds.add(post.id);
     void this.postsService.recordView(post);
+  }
+
+  toggleReelMute(): void {
+    const next = !this.reelMuted;
+    this.reelMuted = next;
+    try {
+      (window as any).__videoMuted = next;
+    } catch {}
+    window.dispatchEvent(new CustomEvent('video-player-mute', { detail: next }));
   }
 
   async togglePostLike(post: CountryPost): Promise<void> {
@@ -847,9 +899,7 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
         skipComments: true,
       });
       this.posts = posts ?? [];
-      this.videoPosts = this.posts.filter(
-        (post) => post.media_type === 'video' && !!post.media_url
-      );
+      this.videoPosts = this.posts.filter((post) => !!this.reelMediaSrc(post));
       this.countryName = this.posts.find((post) => post.country_name)?.country_name || this.countryCode;
       this.tryScrollToPending();
     } catch (e: any) {
@@ -868,9 +918,7 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
     const seedCountry = String(state.seedCountry || '').toUpperCase();
     if (seedCountry && seedCountry !== this.countryCode) return false;
     const seedPosts = Array.isArray(state.seedPosts) ? state.seedPosts : [];
-    const videos = seedPosts.filter(
-      (post) => post?.media_type === 'video' && !!post?.media_url
-    );
+    const videos = seedPosts.filter((post) => !!this.reelMediaSrc(post));
     if (!videos.length) return false;
     this.videoPosts = videos;
     this.countryName = state.countryName || this.countryName;
@@ -898,6 +946,78 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
     if (idx >= 0) {
       this.videoPosts[idx] = { ...this.videoPosts[idx], ...updated };
     }
+  }
+
+  private readGlobalMute(): boolean {
+    try {
+      return (window as any).__videoMuted === true;
+    } catch {
+      return false;
+    }
+  }
+
+  reelMediaSrc(post: CountryPost): string {
+    const urls = this.postMediaUrls(post);
+    if (!urls.length) return '';
+    const types = this.postMediaTypes(post);
+    const idx = types.findIndex((t) => t === 'video');
+    if (idx >= 0) return urls[idx] || urls[0] || '';
+    if (String(post.media_type || '').toLowerCase() === 'video') return urls[0] || '';
+    return '';
+  }
+
+  private postMediaUrls(post: CountryPost): string[] {
+    const raw = String(post?.media_url || '').trim();
+    if (!raw) return [];
+    if (raw.startsWith('{') || raw.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(raw) as any;
+        if (Array.isArray(parsed)) return parsed.filter(Boolean).map(String);
+        if (Array.isArray(parsed?.urls)) return parsed.urls.filter(Boolean);
+        if (parsed?.url) return [parsed.url];
+      } catch {}
+    }
+    return [raw];
+  }
+
+  private postMediaTypes(post: CountryPost): Array<'image' | 'video'> {
+    const raw = String(post?.media_url || '').trim();
+    if (!raw) return [];
+    if (raw.startsWith('{') || raw.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(raw) as any;
+        if (Array.isArray(parsed)) {
+          return parsed.map((url: string) => this.inferMediaTypeFromUrl(url, post.media_type));
+        }
+        if (Array.isArray(parsed?.types) && parsed.types.length) {
+          if (Array.isArray(parsed?.urls) && parsed.urls.length) {
+            return parsed.urls.map((url: string, idx: number) => {
+              const declared = parsed.types?.[idx];
+              if (declared === 'video' || declared === 'image') return declared;
+              return this.inferMediaTypeFromUrl(url, post.media_type);
+            });
+          }
+          return parsed.types.map((t: string) => (t === 'video' ? 'video' : 'image'));
+        }
+        if (Array.isArray(parsed?.urls)) {
+          return parsed.urls.map((url: string) => this.inferMediaTypeFromUrl(url, post.media_type));
+        }
+        if (parsed?.url) {
+          return [this.inferMediaTypeFromUrl(parsed.url, post.media_type)];
+        }
+      } catch {}
+    }
+    return [this.inferMediaTypeFromUrl(raw, post.media_type)];
+  }
+
+  private inferMediaTypeFromUrl(
+    url: string,
+    fallback: string | null | undefined
+  ): 'image' | 'video' {
+    const lower = String(url || '').toLowerCase();
+    if (/\.(mp4|webm|mov|m4v|avi|mkv)(\?|#|$)/.test(lower)) return 'video';
+    if (/\.(jpg|jpeg|png|gif|webp|avif)(\?|#|$)/.test(lower)) return 'image';
+    return String(fallback || '').toLowerCase() === 'video' ? 'video' : 'image';
   }
 
   private bumpPostCommentCount(postId: string, delta: number): void {

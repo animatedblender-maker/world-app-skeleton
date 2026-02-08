@@ -78,6 +78,8 @@ export const typeDefs = `#graphql
     media_type: String!
     media_url: String
     thumb_url: String
+    shared_post_id: ID
+    shared_post: Post
     visibility: String!
     like_count: Int!
     comment_count: Int!
@@ -153,6 +155,7 @@ export const typeDefs = `#graphql
     media_type: String
     media_url: String
     thumb_url: String
+    shared_post_id: ID
   }
 
   input UpdatePostInput {

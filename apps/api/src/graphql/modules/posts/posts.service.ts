@@ -1,7 +1,16 @@
 import { pool } from '../../../db.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 
-type PostRow = {
+type PostAuthorRow = {
+  user_id: string;
+  display_name: string | null;
+  username: string | null;
+  avatar_url: string | null;
+  country_name: string | null;
+  country_code: string | null;
+};
+
+type SharedPostRow = {
   id: string;
   author_id: string;
   category_id: string;
@@ -19,14 +28,12 @@ type PostRow = {
   liked_by_me: boolean;
   created_at: string;
   updated_at: string;
-  author: {
-    user_id: string;
-    display_name: string | null;
-    username: string | null;
-    avatar_url: string | null;
-    country_name: string | null;
-    country_code: string | null;
-  } | null;
+  author: PostAuthorRow | null;
+};
+
+type PostRow = SharedPostRow & {
+  shared_post_id: string | null;
+  shared_post: SharedPostRow | null;
 };
 
 type PostCommentRow = {
@@ -39,27 +46,13 @@ type PostCommentRow = {
   liked_by_me: boolean;
   created_at: string;
   updated_at: string;
-  author: {
-    user_id: string;
-    display_name: string | null;
-    username: string | null;
-    avatar_url: string | null;
-    country_name: string | null;
-    country_code: string | null;
-  } | null;
+  author: PostAuthorRow | null;
 };
 
 type PostLikeRow = {
   user_id: string;
   created_at: string;
-  user: {
-    user_id: string;
-    display_name: string | null;
-    username: string | null;
-    avatar_url: string | null;
-    country_name: string | null;
-    country_code: string | null;
-  } | null;
+  user: PostAuthorRow | null;
 };
 
 type CreatePostInput = {
@@ -72,6 +65,7 @@ type CreatePostInput = {
   media_type?: string | null;
   media_url?: string | null;
   thumb_url?: string | null;
+  shared_post_id?: string | null;
 };
 
 export class PostsService {
@@ -102,9 +96,50 @@ export class PostsService {
           'avatar_url', pr.avatar_url,
           'country_name', pr.country_name,
           'country_code', pr.country_code
-        ) as author
+        ) as author,
+        case
+          when sp.id is null then null
+          else jsonb_build_object(
+            'id', sp.id,
+            'author_id', sp.author_id,
+            'category_id', sp.category_id,
+            'country_name', sp.country_name,
+            'country_code', sp.country_code,
+            'city_name', sp.city_name,
+            'title', sp.title,
+            'body', sp.body,
+            'media_type', sp.media_type,
+            'media_url', sp.media_url,
+            'thumb_url', sp.thumb_url,
+            'visibility', sp.visibility,
+            'like_count', (select count(*)::int from public.post_likes spl where spl.post_id = sp.id),
+            'comment_count', (select count(*)::int from public.post_comments spc where spc.post_id = sp.id),
+            'liked_by_me', case
+              when $3::uuid is not null
+                and exists (
+                  select 1
+                  from public.post_likes spl
+                  where spl.post_id = sp.id and spl.user_id = $3::uuid
+                )
+              then true
+              else false
+            end,
+            'created_at', sp.created_at,
+            'updated_at', sp.updated_at,
+            'author', jsonb_build_object(
+              'user_id', spr.user_id,
+              'display_name', spr.display_name,
+              'username', spr.username,
+              'avatar_url', spr.avatar_url,
+              'country_name', spr.country_name,
+              'country_code', spr.country_code
+            )
+          )
+        end as shared_post
       from public.posts p
       left join public.profiles pr on pr.user_id = p.author_id
+      left join public.posts sp on sp.id = p.shared_post_id
+      left join public.profiles spr on spr.user_id = sp.author_id
       where upper(coalesce(p.country_code, '')) = $1
         and (
           p.visibility in ('public', 'country')
@@ -119,7 +154,7 @@ export class PostsService {
             )
           )
         )
-      order by p.created_at asc, p.id asc
+      order by p.created_at desc, p.id desc
       limit $2
       `,
       [iso, Math.max(1, limit), viewerId]
@@ -154,9 +189,50 @@ export class PostsService {
             'avatar_url', pr.avatar_url,
             'country_name', pr.country_name,
             'country_code', pr.country_code
-          ) as author
+          ) as author,
+          case
+            when sp.id is null then null
+            else jsonb_build_object(
+              'id', sp.id,
+              'author_id', sp.author_id,
+              'category_id', sp.category_id,
+              'country_name', sp.country_name,
+              'country_code', sp.country_code,
+              'city_name', sp.city_name,
+              'title', sp.title,
+              'body', sp.body,
+              'media_type', sp.media_type,
+              'media_url', sp.media_url,
+              'thumb_url', sp.thumb_url,
+              'visibility', sp.visibility,
+              'like_count', (select count(*)::int from public.post_likes spl where spl.post_id = sp.id),
+              'comment_count', (select count(*)::int from public.post_comments spc where spc.post_id = sp.id),
+              'liked_by_me', case
+                when $2::uuid is not null
+                  and exists (
+                    select 1
+                    from public.post_likes spl
+                    where spl.post_id = sp.id and spl.user_id = $2::uuid
+                  )
+                then true
+                else false
+              end,
+              'created_at', sp.created_at,
+              'updated_at', sp.updated_at,
+              'author', jsonb_build_object(
+                'user_id', spr.user_id,
+                'display_name', spr.display_name,
+                'username', spr.username,
+                'avatar_url', spr.avatar_url,
+                'country_name', spr.country_name,
+                'country_code', spr.country_code
+              )
+            )
+          end as shared_post
         from public.posts p
         left join public.profiles pr on pr.user_id = p.author_id
+        left join public.posts sp on sp.id = p.shared_post_id
+        left join public.profiles spr on spr.user_id = sp.author_id
         where p.author_id = $1
         order by p.created_at desc
         limit $3
@@ -190,9 +266,50 @@ export class PostsService {
           'avatar_url', pr.avatar_url,
           'country_name', pr.country_name,
           'country_code', pr.country_code
-        ) as author
+        ) as author,
+        case
+          when sp.id is null then null
+          else jsonb_build_object(
+            'id', sp.id,
+            'author_id', sp.author_id,
+            'category_id', sp.category_id,
+            'country_name', sp.country_name,
+            'country_code', sp.country_code,
+            'city_name', sp.city_name,
+            'title', sp.title,
+            'body', sp.body,
+            'media_type', sp.media_type,
+            'media_url', sp.media_url,
+            'thumb_url', sp.thumb_url,
+            'visibility', sp.visibility,
+            'like_count', (select count(*)::int from public.post_likes spl where spl.post_id = sp.id),
+            'comment_count', (select count(*)::int from public.post_comments spc where spc.post_id = sp.id),
+            'liked_by_me', case
+              when $2::uuid is not null
+                and exists (
+                  select 1
+                  from public.post_likes spl
+                  where spl.post_id = sp.id and spl.user_id = $2::uuid
+                )
+              then true
+              else false
+            end,
+            'created_at', sp.created_at,
+            'updated_at', sp.updated_at,
+            'author', jsonb_build_object(
+              'user_id', spr.user_id,
+              'display_name', spr.display_name,
+              'username', spr.username,
+              'avatar_url', spr.avatar_url,
+              'country_name', spr.country_name,
+              'country_code', spr.country_code
+            )
+          )
+        end as shared_post
       from public.posts p
       left join public.profiles pr on pr.user_id = p.author_id
+      left join public.posts sp on sp.id = p.shared_post_id
+      left join public.profiles spr on spr.user_id = sp.author_id
       where p.author_id = $1
         and (
           p.visibility in ('public', 'country')
@@ -221,19 +338,26 @@ export class PostsService {
   }
 
   async createPost(authorId: string, input: CreatePostInput): Promise<PostRow> {
+    const sharedPostId = input.shared_post_id ? String(input.shared_post_id) : null;
+    if (sharedPostId) {
+      await this.ensurePostAccess(sharedPostId, authorId);
+    }
     const categoryId = await this.resolveCategoryId(input.country_code);
     const iso = (input.country_code || '').toUpperCase();
     const visibility = this.normalizeVisibility(input.visibility) ?? 'public';
     const mediaType = this.normalizeMediaType(input.media_type, input.media_url);
     const mediaUrl = mediaType === 'none' ? null : (input.media_url ?? null);
     const thumbUrl = mediaType === 'none' ? null : (input.thumb_url ?? null);
+    const body = (input.body ?? '').trim();
+    // GraphQL Post.body is non-null, so never return null here.
+    const bodyValue = body.length ? body : '';
 
     const { rows } = await pool.query(
       `
       insert into public.posts
-        (author_id, category_id, country_name, country_code, city_name, title, body, visibility, media_type, media_url, thumb_url)
+        (author_id, category_id, country_name, country_code, city_name, title, body, visibility, media_type, media_url, thumb_url, shared_post_id)
       values
-        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
       returning id
       `,
       [
@@ -243,11 +367,12 @@ export class PostsService {
         iso,
         input.city_name ?? null,
         input.title?.trim() || null,
-        input.body.trim(),
+        bodyValue,
         visibility,
         mediaType,
         mediaUrl,
         thumbUrl,
+        sharedPostId,
       ]
     );
 
@@ -696,9 +821,50 @@ export class PostsService {
           'avatar_url', pr.avatar_url,
           'country_name', pr.country_name,
           'country_code', pr.country_code
-        ) as author
+        ) as author,
+        case
+          when sp.id is null then null
+          else jsonb_build_object(
+            'id', sp.id,
+            'author_id', sp.author_id,
+            'category_id', sp.category_id,
+            'country_name', sp.country_name,
+            'country_code', sp.country_code,
+            'city_name', sp.city_name,
+            'title', sp.title,
+            'body', sp.body,
+            'media_type', sp.media_type,
+            'media_url', sp.media_url,
+            'thumb_url', sp.thumb_url,
+            'visibility', sp.visibility,
+            'like_count', (select count(*)::int from public.post_likes spl where spl.post_id = sp.id),
+            'comment_count', (select count(*)::int from public.post_comments spc where spc.post_id = sp.id),
+            'liked_by_me', case
+              when $2::uuid is not null
+                and exists (
+                  select 1
+                  from public.post_likes spl
+                  where spl.post_id = sp.id and spl.user_id = $2::uuid
+                )
+              then true
+              else false
+            end,
+            'created_at', sp.created_at,
+            'updated_at', sp.updated_at,
+            'author', jsonb_build_object(
+              'user_id', spr.user_id,
+              'display_name', spr.display_name,
+              'username', spr.username,
+              'avatar_url', spr.avatar_url,
+              'country_name', spr.country_name,
+              'country_code', spr.country_code
+            )
+          )
+        end as shared_post
       from public.posts p
       left join public.profiles pr on pr.user_id = p.author_id
+      left join public.posts sp on sp.id = p.shared_post_id
+      left join public.profiles spr on spr.user_id = sp.author_id
       where p.id = $1
         and (
           p.visibility in ('public', 'country')

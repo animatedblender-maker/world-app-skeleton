@@ -41,6 +41,7 @@ import {
       ></video>
       <div class="video-overlay"></div>
       <button
+        *ngIf="showMute"
         class="mute-toggle"
         type="button"
         [attr.aria-label]="isMuted ? 'Unmute video' : 'Mute video'"
@@ -277,6 +278,7 @@ export class VideoPlayerComponent implements AfterViewInit, OnDestroy {
   @Input({ required: true }) src!: string;
   @Input() poster: string | null = null;
   @Input() preload: 'none' | 'metadata' | 'auto' = 'metadata';
+  @Input() showMute = true;
   @Input() centerOverlayMode: 'always' | 'on-click' = 'on-click';
   @Input() tapBehavior: 'toggle' | 'emit' | 'none' = 'toggle';
   @Output() videoTap = new EventEmitter<void>();
@@ -495,7 +497,10 @@ export class VideoPlayerComponent implements AfterViewInit, OnDestroy {
 
   ngAfterViewInit(): void {
     const video = this.videoRef.nativeElement;
-    this.applyGlobalMute(video, VideoPlayerComponent.globalMuted);
+    const windowMuted = typeof window !== 'undefined' ? (window as any).__videoMuted : undefined;
+    const globalMuted = windowMuted === true ? true : VideoPlayerComponent.globalMuted;
+    VideoPlayerComponent.globalMuted = globalMuted;
+    this.applyGlobalMute(video, globalMuted);
     this.muteHandler = (event: Event) => {
       const detail = (event as CustomEvent<boolean>).detail;
       VideoPlayerComponent.globalMuted = detail;
@@ -539,6 +544,9 @@ export class VideoPlayerComponent implements AfterViewInit, OnDestroy {
   private applyGlobalMute(video: HTMLVideoElement, muted: boolean): void {
     video.muted = muted;
     this.isMuted = muted;
+    try {
+      (window as any).__videoMuted = muted;
+    } catch {}
   }
 
   private trackView(video: HTMLVideoElement): void {

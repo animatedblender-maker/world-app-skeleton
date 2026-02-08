@@ -379,8 +379,8 @@ type CountryMood = {
                         [class.clickable]="!!post.author"
                         role="button"
                         tabindex="0"
-                        (click)="openAuthorProfile(post.author); $event.stopPropagation()"
-                        (keyup.enter)="openAuthorProfile(post.author); $event.stopPropagation()"
+                        (click)="openAuthorProfile(post.author, post.author_id); $event.stopPropagation()"
+                        (keyup.enter)="openAuthorProfile(post.author, post.author_id); $event.stopPropagation()"
                       >
                         <div class="author-avatar">
                           <img
@@ -461,42 +461,70 @@ type CountryMood = {
                           </ng-template>
                         </div>
                       </div>
-                    </div>
-              <div class="post-body" *ngIf="editingPostId !== post.id">
-                <div class="post-title" *ngIf="post.title">{{ post.title }}</div>
-                <p
-                  class="post-text"
-                  [class.clamped]="!isPostExpanded(post.id) && isTextExpandable(post.body)"
-                  (click)="onPostTextClick(post.id, $event)"
-                >
-                  <span>{{ isPostExpanded(post.id) ? post.body : postPreview(post.body) }}</span>
-                  <button
-                    class="see-more inline"
-                    type="button"
-                    *ngIf="!isPostExpanded(post.id) && isTextExpandable(post.body)"
-                    (click)="togglePostExpanded(post.id, $event)"
+                  </div>
+                  <div class="post-body" *ngIf="editingPostId !== post.id">
+                    <div class="post-title" *ngIf="post.title">{{ post.title }}</div>
+                    <p
+                      class="post-text"
+                    *ngIf="post.body && (!post.media_url || post.media_type === 'none' || !postHasVideo(post))"
+                    [class.clamped]="!isPostExpanded(post.id) && isTextExpandable(post.body)"
+                    (click)="onPostTextClick(post.id, $event)"
                   >
-                    See more
-                  </button>
-                </p>
-              </div>
-              <div
-                class="post-caption post-text"
-                [class.clamped]="!isPostExpanded(post.id) && isTextExpandable(post.media_caption)"
-                *ngIf="editingPostId !== post.id && post.media_caption"
-                (click)="onPostTextClick(post.id, $event)"
-              >
-                <span>{{ isPostExpanded(post.id) ? post.media_caption : postPreview(post.media_caption) }}</span>
-                <button
-                  class="see-more inline"
-                  type="button"
-                  *ngIf="!post.body && !isPostExpanded(post.id) && isTextExpandable(post.media_caption)"
-                  (click)="togglePostExpanded(post.id, $event)"
-                >
-                  See more
-                </button>
-              </div>
-                    <div class="post-media" *ngIf="editingPostId !== post.id && post.media_url && post.media_type !== 'none'">
+                    <span>{{ isPostExpanded(post.id) ? post.body : postPreview(post.body) }}</span>
+                    <button
+                      class="see-more inline"
+                      type="button"
+                      *ngIf="!isPostExpanded(post.id) && isTextExpandable(post.body)"
+                      (click)="togglePostExpanded(post.id, $event)"
+                    >
+                      See more
+                    </button>
+                    </p>
+                  </div>
+                  <div class="post-shared" *ngIf="post.shared_post as shared">
+                    <div class="shared-label">Shared post</div>
+                    <div
+                      class="shared-card"
+                      role="button"
+                      tabindex="0"
+                      (click)="openSharedPost(shared, $event)"
+                      (keyup.enter)="openSharedPost(shared, $event)"
+                    >
+                      <div class="shared-author">
+                        <div class="shared-avatar">
+                          <img *ngIf="shared.author?.avatar_url" [src]="shared.author?.avatar_url" alt="avatar" />
+                          <div class="shared-initials" *ngIf="!shared.author?.avatar_url">
+                            {{ (shared.author?.display_name || shared.author?.username || 'User').slice(0, 2).toUpperCase() }}
+                          </div>
+                        </div>
+                        <div class="shared-info">
+                          <div class="shared-name">{{ shared.author?.display_name || shared.author?.username || 'Member' }}</div>
+                          <div class="shared-meta">
+                            @{{ shared.author?.username || 'user' }} - {{ shared.created_at | date: 'mediumDate' }}
+                            <span *ngIf="shared.country_name || shared.country_code"> - {{ shared.country_name || shared.country_code }}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="shared-title" *ngIf="shared.title">{{ shared.title }}</div>
+                      <div class="shared-body" *ngIf="shared.body">{{ postPreview(shared.body) }}</div>
+                      <div class="shared-media" *ngIf="shared.media_url && shared.media_type !== 'none'">
+                        <ng-container *ngIf="postMediaUrls(shared) as sharedUrls">
+                          <ng-container *ngIf="postMediaTypes(shared) as sharedTypes">
+                            <img
+                              *ngIf="sharedTypes[0] === 'image'"
+                              [src]="sharedUrls[0]"
+                              alt="shared media"
+                            />
+                            <div class="shared-video" *ngIf="sharedTypes[0] === 'video'">
+                              <img *ngIf="shared.thumb_url" [src]="shared.thumb_url" alt="video thumbnail" />
+                              <div class="shared-video-tag">Video</div>
+                            </div>
+                          </ng-container>
+                        </ng-container>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="post-media" *ngIf="editingPostId !== post.id && post.media_url && post.media_type !== 'none'">
                       <ng-container *ngIf="postMediaUrls(post) as mediaUrls">
                         <ng-container *ngIf="postMediaTypes(post) as mediaTypes">
                           <ng-container *ngIf="mediaUrls.length <= 1; else mediaGallery">
@@ -547,6 +575,22 @@ type CountryMood = {
                         </ng-container>
                       </ng-container>
                     </div>
+                      <div
+                        class="post-caption post-text"
+                        *ngIf="editingPostId !== post.id && post.media_url && post.media_type !== 'none' && postCaptionText(post) as caption"
+                        [class.clamped]="!isPostExpanded(post.id) && isTextExpandable(caption)"
+                        (click)="onPostTextClick(post.id, $event)"
+                      >
+                        <span>{{ isPostExpanded(post.id) ? caption : postPreview(caption) }}</span>
+                        <button
+                          class="see-more inline"
+                          type="button"
+                          *ngIf="!isPostExpanded(post.id) && isTextExpandable(caption)"
+                          (click)="togglePostExpanded(post.id, $event)"
+                        >
+                          See more
+                        </button>
+                      </div>
                     <div class="post-actions" *ngIf="editingPostId !== post.id">
                       <div class="post-action-group">
                         <button
@@ -576,14 +620,14 @@ type CountryMood = {
                           <span class="icon">{{ '\u{1F4AC}' }}</span>
                           <span class="count">{{ post.comment_count }}</span>
                         </button>
-                        <button
-                          class="post-action share"
-                          type="button"
-                          (click)="copyPostShareLink(post, $event)"
-                          aria-label="Share post"
-                        >
-                          <span class="icon">{{ '\u{1F517}' }}</span>
-                        </button>
+                          <button
+                            class="post-action share"
+                            type="button"
+                            (click)="sharePostToCountry(post, $event)"
+                            aria-label="Share to your country"
+                          >
+                            <span class="icon">{{ '\u{1F517}' }}</span>
+                          </button>
                         <span class="post-share-feedback" *ngIf="postShareFeedback[post.id]">
                           {{ postShareFeedback[post.id] }}
                         </span>
@@ -1472,7 +1516,7 @@ type CountryMood = {
     }
     .ph-title{ font-weight: 900; letter-spacing: .10em; font-size: 12px; text-transform: uppercase; }
     .ph-sub{ margin-top: 6px; opacity: .75; font-size: 12px; line-height: 1.4; }
-    .posts-pane{ display:flex; flex-direction:column; gap:8px; box-sizing:border-box; }
+    .posts-pane{ display:flex; flex-direction:column; gap:8px; box-sizing:border-box; overflow-x:hidden; }
     .posts-pane > *{
       width: 100%;
       margin-left: 0;
@@ -1656,7 +1700,7 @@ type CountryMood = {
     .posts-state{ font-size:13px; font-weight:700; opacity:0.7; }
     .posts-state.hint{ opacity:0.6; }
     .posts-state.error{ color:#ff6b81; }
-    .posts-list{ display:flex; flex-direction:column; gap:10px; box-sizing:border-box; padding-bottom: 10px; }
+    .posts-list{ display:flex; flex-direction:column; gap:10px; box-sizing:border-box; padding-bottom: 10px; overflow-x:hidden; }
     .posts-empty{ text-align:center; font-size:13px; opacity:0.65; }
     .load-more{
       align-self:center;
@@ -1679,6 +1723,7 @@ type CountryMood = {
       padding: var(--post-pad-x);
       box-shadow:0 18px 60px rgba(0,0,0,0.15);
       box-sizing:border-box;
+      overflow-x:hidden;
     }
     .post-author{
       display:flex;
@@ -1738,10 +1783,80 @@ type CountryMood = {
     }
     .follow-chip:disabled{ opacity:0.6; cursor:not-allowed; }
     .post-body{ margin-top:12px; font-size:14px; line-height:1.4; color:rgba(10,12,18,0.85); }
-    .post-text{ display:block; line-height:1.4; }
-    .post-text.clamped{
+    .post-shared{ margin-top:12px; }
+    .shared-label{
+      font-size:11px;
+      font-weight:800;
+      letter-spacing:0.08em;
+      text-transform:uppercase;
+      color:rgba(10,12,18,0.55);
+      margin-bottom:6px;
+    }
+    .shared-card{
+      border:1px solid rgba(10,12,18,0.08);
+      border-radius:14px;
+      padding:12px;
+      background:#f5f7fb;
+      cursor:pointer;
+      transition:transform .2s ease, box-shadow .2s ease;
+    }
+    .shared-card:hover{
+      transform:translateY(-1px);
+      box-shadow:0 10px 24px rgba(0,0,0,0.12);
+    }
+    .shared-author{ display:flex; gap:10px; align-items:center; }
+    .shared-avatar{
+      width:34px;
+      height:34px;
+      border-radius:50%;
       overflow:hidden;
-      max-height: 2.1em;
+      background:rgba(10,12,18,0.1);
+      display:grid;
+      place-items:center;
+      flex-shrink:0;
+    }
+    .shared-avatar img{ width:100%; height:100%; object-fit:cover; }
+    .shared-initials{ font-weight:800; font-size:12px; letter-spacing:.08em; }
+    .shared-info{ min-width:0; }
+    .shared-name{ font-weight:800; font-size:13px; }
+    .shared-meta{ font-size:11px; opacity:.7; }
+    .shared-title{ margin-top:10px; font-weight:800; font-size:12px; letter-spacing:.06em; text-transform:uppercase; }
+    .shared-body{ margin-top:6px; font-size:13px; line-height:1.4; color:rgba(10,12,18,0.8); }
+    .shared-media{
+      margin-top:10px;
+      border-radius:12px;
+      overflow:hidden;
+      background:#000;
+    }
+    .shared-media img{ width:100%; height:auto; display:block; }
+    .shared-video{
+      position:relative;
+      display:grid;
+      place-items:center;
+      min-height:120px;
+      background:#0b0f18;
+      color:#e6eefc;
+      font-size:12px;
+      letter-spacing:.08em;
+      text-transform:uppercase;
+    }
+    .shared-video img{ width:100%; height:auto; display:block; }
+    .shared-video-tag{
+      position:absolute;
+      right:8px;
+      bottom:8px;
+      background:rgba(0,0,0,0.65);
+      color:#fff;
+      padding:4px 6px;
+      border-radius:8px;
+      font-size:10px;
+      letter-spacing:.12em;
+      text-transform:uppercase;
+    }
+    .post-text{ display:inline; line-height:1.4; margin:0; }
+    .post-text.clamped{
+      display:inline;
+      padding-bottom: 0;
     }
     .post-caption{ margin-top:10px; font-size:13px; line-height:1.45; color:rgba(10,12,18,0.75); }
     .post-text .see-more.inline{
@@ -1755,6 +1870,7 @@ type CountryMood = {
       color:rgba(10,12,18,0.6);
       text-decoration:underline;
       cursor:pointer;
+      white-space: nowrap;
     }
     .post-media{
       margin-top:12px;
@@ -1780,7 +1896,7 @@ type CountryMood = {
       position:relative;
       width:100%;
       background:#000;
-      padding-bottom:26px;
+      padding-bottom:34px;
       box-sizing:border-box;
     }
     .media-strip{
@@ -1800,7 +1916,7 @@ type CountryMood = {
     }
     .media-dots{
       position:absolute;
-      bottom:6px;
+      bottom:10px;
       left:50%;
       transform:translateX(-50%);
       display:flex;
@@ -2894,9 +3010,10 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   commentItems: Record<string, PostComment[]> = {};
   commentDisplay: Record<string, PostComment[]> = {};
   commentDepth: Record<string, Record<string, number>> = {};
-  commentReplyTarget: Record<string, { commentId: string; authorName: string } | null> = {};
-  commentLikeBusy: Record<string, Record<string, boolean>> = {};
-  postShareFeedback: Record<string, string> = {};
+    commentReplyTarget: Record<string, { commentId: string; authorName: string } | null> = {};
+    commentLikeBusy: Record<string, Record<string, boolean>> = {};
+    postShareFeedback: Record<string, string> = {};
+    postShareBusy: Record<string, boolean> = {};
   reportingPostId: string | null = null;
   reportReason = '';
   reportBusy = false;
@@ -3921,10 +4038,27 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   private getPostPreviewLimit(): number {
     if (typeof window === 'undefined') return this.POST_TEXT_PREVIEW;
     const width = window.innerWidth || 0;
-    if (width < 480) return 70;
-    if (width < 720) return 90;
-    if (width < 1024) return 120;
+    if (width < 480) return 60;
+    if (width < 720) return 80;
+    if (width < 1024) return 105;
     return this.POST_TEXT_PREVIEW;
+  }
+
+  postHasVideo(post: CountryPost): boolean {
+    if (!post) return false;
+    if (String(post.media_type || '').toLowerCase() === 'video') return true;
+    const types = this.postMediaTypes(post);
+    return types.includes('video');
+  }
+
+  postCaptionText(post: CountryPost): string {
+    if (!post) return '';
+    const caption = String(post.media_caption || '').trim();
+    if (caption) return caption;
+    if (this.postHasVideo(post)) {
+      return String(post.body || '').trim();
+    }
+    return '';
   }
 
   openImageLightbox(url: string | null): void {
@@ -3976,7 +4110,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     if (this.posts.some((existing) => existing.id === post.id)) {
       return;
     }
-    this.posts = this.sortPostsDesc([...this.posts, post]);
+    this.posts = this.sortPostsDesc([post, ...this.posts]);
     this.forceUi();
   }
 
@@ -4050,7 +4184,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       return;
     }
 
-    this.posts = this.sortPostsDesc([...this.posts, post]);
+    this.posts = this.sortPostsDesc([post, ...this.posts]);
     this.forceUi();
   }
 
@@ -4527,7 +4661,8 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     if (!raw) return [];
     if (raw.startsWith('{') || raw.startsWith('[')) {
       try {
-        const parsed = JSON.parse(raw) as { urls?: string[]; url?: string };
+        const parsed = JSON.parse(raw) as any;
+        if (Array.isArray(parsed)) return parsed.filter(Boolean).map(String);
         if (Array.isArray(parsed?.urls)) return parsed.urls.filter(Boolean);
         if (parsed?.url) return [parsed.url];
       } catch {}
@@ -4540,19 +4675,22 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     if (!raw) return [];
     if (raw.startsWith('{') || raw.startsWith('[')) {
       try {
-        const parsed = JSON.parse(raw) as { types?: Array<'image' | 'video'>; urls?: string[]; url?: string };
+        const parsed = JSON.parse(raw) as any;
+        if (Array.isArray(parsed)) {
+          return parsed.map((url: string) => this.inferMediaTypeFromUrl(url, post.media_type));
+        }
         if (Array.isArray(parsed?.types) && parsed.types.length) {
           if (Array.isArray(parsed?.urls) && parsed.urls.length) {
-            return parsed.urls.map((url, idx) => {
+            return parsed.urls.map((url: string, idx: number) => {
               const declared = parsed.types?.[idx];
               if (declared === 'video' || declared === 'image') return declared;
               return this.inferMediaTypeFromUrl(url, post.media_type);
             });
           }
-          return parsed.types.map((t) => (t === 'video' ? 'video' : 'image'));
+          return parsed.types.map((t: string) => (t === 'video' ? 'video' : 'image'));
         }
         if (Array.isArray(parsed?.urls)) {
-          return parsed.urls.map((url) => this.inferMediaTypeFromUrl(url, post.media_type));
+          return parsed.urls.map((url: string) => this.inferMediaTypeFromUrl(url, post.media_type));
         }
         if (parsed?.url) {
           return [this.inferMediaTypeFromUrl(parsed.url, post.media_type)];
@@ -4574,8 +4712,9 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     if (!raw) return false;
     if (raw.startsWith('{') || raw.startsWith('[')) {
       try {
-        const parsed = JSON.parse(raw) as { reel?: boolean };
-        return !!parsed?.reel;
+        const parsed = JSON.parse(raw) as any;
+        const reelFlag = parsed?.reel;
+        return reelFlag === true || reelFlag === 'true' || reelFlag === 1 || reelFlag === '1';
       } catch {}
     }
     return false;
@@ -4772,6 +4911,53 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.forceUi();
   }
 
+  async sharePostToCountry(post: CountryPost, event?: Event): Promise<void> {
+    event?.stopPropagation?.();
+    if (!post?.id) return;
+    if (!this.profile || !this.meId) {
+      this.postShareFeedback[post.id] = 'Sign in to share';
+      this.forceUi();
+      return;
+    }
+    const countryCode = this.effectiveCountryCode;
+    const countryName = this.effectiveCountryName;
+    if (!countryCode || !countryName) {
+      this.postShareFeedback[post.id] = 'Set your country to share';
+      this.forceUi();
+      return;
+    }
+    if (this.postShareBusy[post.id]) return;
+    this.postShareBusy[post.id] = true;
+    const originalId = post.shared_post_id || post.id;
+    try {
+      await this.postsService.createPost({
+        authorId: this.meId,
+        title: null,
+        body: '',
+        countryName,
+        countryCode,
+        cityName: this.profile.city_name ?? null,
+        visibility: 'country',
+        mediaType: 'none',
+        mediaUrl: null,
+        thumbUrl: null,
+        sharedPostId: originalId,
+      });
+      this.postShareFeedback[post.id] = 'Shared to your country';
+    } catch (e: any) {
+      this.postShareFeedback[post.id] = e?.message ?? 'Share failed';
+    } finally {
+      delete this.postShareBusy[post.id];
+      this.forceUi();
+      window.setTimeout(() => {
+        if (this.postShareFeedback[post.id]) {
+          delete this.postShareFeedback[post.id];
+          this.forceUi();
+        }
+      }, 1800);
+    }
+  }
+
   async copyPostShareLink(post: CountryPost, event?: Event): Promise<void> {
     event?.stopPropagation?.();
     if (!post?.id) return;
@@ -4794,6 +4980,12 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   private buildPostShareUrl(postId: string): string {
     const base = window.location.origin || '';
     return `${base}/post/${postId}`;
+  }
+
+  openSharedPost(post: CountryPost, event?: Event): void {
+    event?.stopPropagation?.();
+    if (!post?.id) return;
+    void this.router.navigate(['/post', post.id]);
   }
 
   private async loadLikes(postId: string): Promise<void> {
@@ -5048,9 +5240,11 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     return !!authorId && this.meId === authorId;
   }
 
-  openAuthorProfile(author: CountryPost['author'] | null | undefined): void {
-    if (!author) return;
-    const slug = author.username?.trim() || author.user_id;
+  openAuthorProfile(
+    author: CountryPost['author'] | null | undefined,
+    fallbackId?: string | null
+  ): void {
+    const slug = fallbackId || author?.user_id || author?.username?.trim();
     if (!slug) return;
     void this.router.navigate(['/user', slug]);
   }

@@ -18,6 +18,8 @@ export type CountryPost = {
   media_url: string | null;
   thumb_url?: string | null;
   media_caption?: string | null;
+  shared_post_id?: string | null;
+  shared_post?: CountryPost | null;
   visibility: PostVisibility;
   like_count: number;
   comment_count: number;

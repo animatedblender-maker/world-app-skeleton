@@ -32,6 +32,34 @@ export class PostsService {
               body
               media_type
               media_url
+              thumb_url
+              shared_post_id
+              shared_post {
+                id
+                title
+                body
+                media_type
+                media_url
+                thumb_url
+                visibility
+                like_count
+                comment_count
+                liked_by_me
+                created_at
+                updated_at
+                author_id
+                country_name
+                country_code
+                city_name
+                author {
+                  user_id
+                  display_name
+                  username
+                  avatar_url
+                  country_name
+                  country_code
+                }
+              }
               visibility
               like_count
               comment_count
@@ -80,6 +108,34 @@ export class PostsService {
           body
           media_type
           media_url
+          thumb_url
+          shared_post_id
+          shared_post {
+            id
+            title
+            body
+            media_type
+            media_url
+            thumb_url
+            visibility
+            like_count
+            comment_count
+            liked_by_me
+            created_at
+            updated_at
+            author_id
+            country_name
+            country_code
+            city_name
+            author {
+              user_id
+              display_name
+              username
+              avatar_url
+              country_name
+              country_code
+            }
+          }
           visibility
           like_count
           comment_count
@@ -122,6 +178,34 @@ export class PostsService {
           body
           media_type
           media_url
+          thumb_url
+          shared_post_id
+          shared_post {
+            id
+            title
+            body
+            media_type
+            media_url
+            thumb_url
+            visibility
+            like_count
+            comment_count
+            liked_by_me
+            created_at
+            updated_at
+            author_id
+            country_name
+            country_code
+            city_name
+            author {
+              user_id
+              display_name
+              username
+              avatar_url
+              country_name
+              country_code
+            }
+          }
           visibility
           like_count
           comment_count
@@ -164,6 +248,34 @@ export class PostsService {
           body
           media_type
           media_url
+          thumb_url
+          shared_post_id
+          shared_post {
+            id
+            title
+            body
+            media_type
+            media_url
+            thumb_url
+            visibility
+            like_count
+            comment_count
+            liked_by_me
+            created_at
+            updated_at
+            author_id
+            country_name
+            country_code
+            city_name
+            author {
+              user_id
+              display_name
+              username
+              avatar_url
+              country_name
+              country_code
+            }
+          }
           visibility
           like_count
           comment_count
@@ -203,6 +315,7 @@ export class PostsService {
     mediaType?: string | null;
     mediaUrl?: string | null;
     thumbUrl?: string | null;
+    sharedPostId?: string | null;
   }): Promise<CountryPost> {
     if (!input.authorId) throw new Error('authorId is required to post.');
     const mutation = `
@@ -213,6 +326,34 @@ export class PostsService {
           body
           media_type
           media_url
+          thumb_url
+          shared_post_id
+          shared_post {
+            id
+            title
+            body
+            media_type
+            media_url
+            thumb_url
+            visibility
+            like_count
+            comment_count
+            liked_by_me
+            created_at
+            updated_at
+            author_id
+            country_name
+            country_code
+            city_name
+            author {
+              user_id
+              display_name
+              username
+              avatar_url
+              country_name
+              country_code
+            }
+          }
           visibility
           like_count
           comment_count
@@ -245,6 +386,7 @@ export class PostsService {
       media_type: input.mediaType ?? null,
       media_url: input.mediaUrl ?? null,
       thumb_url: input.thumbUrl ?? null,
+      shared_post_id: input.sharedPostId ?? null,
     };
 
     const { createPost } = await this.gql.request<{ createPost: any }>(mutation, {
@@ -267,6 +409,34 @@ export class PostsService {
           body
           media_type
           media_url
+          thumb_url
+          shared_post_id
+          shared_post {
+            id
+            title
+            body
+            media_type
+            media_url
+            thumb_url
+            visibility
+            like_count
+            comment_count
+            liked_by_me
+            created_at
+            updated_at
+            author_id
+            country_name
+            country_code
+            city_name
+            author {
+              user_id
+              display_name
+              username
+              avatar_url
+              country_name
+              country_code
+            }
+          }
           visibility
           like_count
           comment_count
@@ -341,6 +511,34 @@ export class PostsService {
           body
           media_type
           media_url
+          thumb_url
+          shared_post_id
+          shared_post {
+            id
+            title
+            body
+            media_type
+            media_url
+            thumb_url
+            visibility
+            like_count
+            comment_count
+            liked_by_me
+            created_at
+            updated_at
+            author_id
+            country_name
+            country_code
+            city_name
+            author {
+              user_id
+              display_name
+              username
+              avatar_url
+              country_name
+              country_code
+            }
+          }
           visibility
           like_count
           comment_count
@@ -383,6 +581,34 @@ export class PostsService {
           body
           media_type
           media_url
+          thumb_url
+          shared_post_id
+          shared_post {
+            id
+            title
+            body
+            media_type
+            media_url
+            thumb_url
+            visibility
+            like_count
+            comment_count
+            liked_by_me
+            created_at
+            updated_at
+            author_id
+            country_name
+            country_code
+            city_name
+            author {
+              user_id
+              display_name
+              username
+              avatar_url
+              country_name
+              country_code
+            }
+          }
           visibility
           like_count
           comment_count
@@ -597,11 +823,13 @@ export class PostsService {
     return !!reportPost;
   }
 
-  private mapPost(row: any): CountryPost {
+  private mapPost(row: any, depth = 0): CountryPost {
     const viewCount =
       row?.view_count != null
         ? Number(row.view_count)
         : this.estimateViewCount(row?.id, row?.like_count, row?.comment_count);
+    const sharedPost =
+      row?.shared_post && depth < 1 ? this.mapPost(row.shared_post, depth + 1) : null;
     return {
       id: row.id,
       title: row.title ?? null,
@@ -610,6 +838,8 @@ export class PostsService {
       media_url: row.media_url ?? null,
       thumb_url: row.thumb_url ?? null,
       media_caption: row.media_caption ?? null,
+      shared_post_id: row.shared_post_id ?? null,
+      shared_post: sharedPost,
       visibility: row.visibility ?? 'public',
       like_count: Number(row.like_count ?? 0),
       comment_count: Number(row.comment_count ?? 0),
@@ -692,7 +922,9 @@ export class PostsService {
       const demoOrdered = deduped.filter((post) => !realIds.has(post.id));
       return [...realOrdered, ...demoOrdered].slice(0, Math.max(1, limit));
     }
-    return deduped.slice(0, Math.max(1, limit));
+    return deduped
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .slice(0, Math.max(1, limit));
   }
 
   private estimateViewCount(id: string | null | undefined, likeCount: any, commentCount: any): number {

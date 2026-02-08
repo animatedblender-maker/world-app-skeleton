@@ -235,8 +235,12 @@ export class BottomTabsComponent implements OnInit, OnDestroy {
       this.active = 'messages';
       return;
     }
-    if (url.startsWith('/user') || url.startsWith('/me')) {
+    if (url.startsWith('/me')) {
       this.active = 'profile';
+      return;
+    }
+    if (url.startsWith('/user')) {
+      this.active = 'home';
       return;
     }
     if (url.startsWith('/globe') || url === '/' || url.startsWith('/globe-cesium')) {
