@@ -4,6 +4,10 @@ import { NavigationEnd, Router, RouterOutlet } from '@angular/router';
 import { filter } from 'rxjs';
 
 import { CallService, IncomingCall } from './core/services/call.service';
+import { AuthService } from './core/services/auth.service';
+import { NotificationsService } from './core/services/notifications.service';
+import { NotificationEventsService } from './core/services/notification-events.service';
+import type { Subscription } from 'rxjs';
 
 @Component({
   selector: 'app-root',
@@ -11,6 +15,18 @@ import { CallService, IncomingCall } from './core/services/call.service';
   imports: [CommonModule, RouterOutlet],
   template: `
     <router-outlet />
+    <button
+      type="button"
+      class="global-alert"
+      *ngIf="!isMessagesRoute && !isProfileRoute && !isReelsRoute"
+      aria-label="Open alerts"
+      (click)="openNotifications()"
+    >
+      <img class="global-alert-icon" src="/assets/notification.png" alt="" />
+      <span class="global-alert-badge" *ngIf="notificationsUnreadCount > 0">
+        {{ notificationsUnreadCount }}
+      </span>
+    </button>
     <div class="global-call" *ngIf="incomingCall && !isMessagesRoute">
       <div class="global-call-card">
         <div class="global-call-title">
@@ -73,14 +89,94 @@ import { CallService, IncomingCall } from './core/services/call.service';
       background:#d84c4c;
       color:#fff;
     }
+    .global-alert{
+      position: fixed;
+      top: calc(env(safe-area-inset-top) + 14px);
+      right: 16px;
+      width: 34px;
+      height: 34px;
+      border-radius: 12px;
+      border: 0;
+      background: transparent;
+      color: #f4f7ff;
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+      z-index: 120;
+      box-shadow: none;
+      backdrop-filter: none;
+      padding: 0;
+      transition: opacity 0.2s ease, transform 0.2s ease;
+    }
+    :host-context(.feed-header-hidden) .global-alert{
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(-8px);
+    }
+    .global-alert-icon{
+      width: 26px;
+      height: 26px;
+      object-fit: contain;
+      display: block;
+    }
+    .global-alert-badge{
+      position: absolute;
+      top: -4px;
+      right: -4px;
+      min-width: 12px;
+      height: 12px;
+      border-radius: 999px;
+      background: rgba(56, 158, 255, 0.95);
+      color: #041629;
+      font-size: 7px;
+      font-weight: 900;
+      display: grid;
+      place-items: center;
+      padding: 0 4px;
+      box-shadow: 0 0 0 2px rgba(6,10,16,0.8);
+    }
+    @media (max-width: 640px){
+      .global-alert{
+        top: calc(env(safe-area-inset-top) + 10px);
+        right: 12px;
+        width: 30px;
+        height: 30px;
+      }
+      .global-alert-badge{
+        top: -3px;
+        right: -3px;
+        min-width: 11px;
+        height: 11px;
+        font-size: 7px;
+      }
+      .global-alert-icon{
+        width: 24px;
+        height: 24px;
+      }
+    }
     `
   ],
 })
 export class AppComponent {
   incomingCall: IncomingCall | null = null;
   isMessagesRoute = false;
+  isProfileRoute = false;
+  isReelsRoute = false;
+  notificationsUnreadCount = 0;
+  private notificationInsertSub?: Subscription;
+  private notificationUpdateSub?: Subscription;
+  private notificationPollTimer: number | null = null;
+  private notificationsRefreshInFlight = false;
+  private meId: string | null = null;
 
-  constructor(private callService: CallService, private router: Router) {
+  constructor(
+    private callService: CallService,
+    private router: Router,
+    private auth: AuthService,
+    private notifications: NotificationsService,
+    private notificationEvents: NotificationEventsService
+  ) {
+    this.checkForAppUpdate();
     const redirect = new URLSearchParams(window.location.search).get('redirect');
     if (redirect) {
       try {
@@ -92,9 +188,60 @@ export class AppComponent {
       this.incomingCall = call;
     });
     this.isMessagesRoute = this.router.url.startsWith('/messages');
+    this.isProfileRoute = this.router.url.startsWith('/me') || this.router.url.startsWith('/user');
+    this.isReelsRoute = this.router.url.startsWith('/reels');
     this.router.events.pipe(filter((event) => event instanceof NavigationEnd)).subscribe(() => {
       this.isMessagesRoute = this.router.url.startsWith('/messages');
+      this.isProfileRoute = this.router.url.startsWith('/me') || this.router.url.startsWith('/user');
+      this.isReelsRoute = this.router.url.startsWith('/reels');
     });
+    void this.initNotificationBadge();
+  }
+
+  private checkForAppUpdate(): void {
+    if (typeof window === 'undefined') return;
+    const versionUrl = new URL('/version.json', window.location.origin);
+    versionUrl.searchParams.set('t', String(Date.now()));
+    fetch(versionUrl.toString(), {
+      cache: 'no-store',
+      headers: { 'cache-control': 'no-cache' },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!data?.version) return;
+        const key = 'matterya_app_version';
+        const reloadKey = 'matterya_update_reload';
+        let current: string | null = null;
+        let alreadyReloaded = false;
+        try {
+          current = window.localStorage.getItem(key);
+          alreadyReloaded = window.sessionStorage.getItem(reloadKey) === data.version;
+        } catch {}
+        if (current && current !== data.version && !alreadyReloaded) {
+          try {
+            if ('serviceWorker' in navigator) {
+              navigator.serviceWorker.getRegistrations().then((regs) => {
+                regs.forEach((reg) => reg.unregister());
+              });
+            }
+            if ('caches' in window) {
+              caches.keys().then((keys) => keys.forEach((k) => caches.delete(k)));
+            }
+          } catch {}
+          try {
+            window.sessionStorage.setItem(reloadKey, data.version);
+          } catch {}
+          const url = new URL(window.location.href);
+          url.searchParams.set('v', data.version);
+          window.location.replace(url.toString());
+          return;
+        }
+        try {
+          window.localStorage.setItem(key, data.version);
+          window.sessionStorage.removeItem(reloadKey);
+        } catch {}
+      })
+      .catch(() => {});
   }
 
   acceptCall(): void {
@@ -111,5 +258,70 @@ export class AppComponent {
     const { conversationId, callId } = this.incomingCall;
     this.callService.sendSignal('call-decline', conversationId, { callId });
     this.callService.clearIncomingCall();
+  }
+
+  openNotifications(): void {
+    const url = this.router.url;
+    if (url.startsWith('/globe') || url === '/') {
+      void this.router.navigate([], {
+        queryParams: { panel: 'notifications', search: '0' },
+        queryParamsHandling: 'merge',
+      });
+      return;
+    }
+    void this.router.navigate(['/globe'], {
+      queryParams: { panel: 'notifications', search: '0' },
+    });
+  }
+
+  private async initNotificationBadge(): Promise<void> {
+    try {
+      const user = await this.auth.getUser();
+      this.meId = user?.id ?? null;
+      if (!this.meId) {
+        this.notificationsUnreadCount = 0;
+        return;
+      }
+      this.notificationEvents.start(this.meId);
+      this.notificationInsertSub?.unsubscribe();
+      this.notificationUpdateSub?.unsubscribe();
+      this.notificationInsertSub = this.notificationEvents.insert$.subscribe(() => {
+        void this.refreshNotificationsUnread();
+      });
+      this.notificationUpdateSub = this.notificationEvents.update$.subscribe(() => {
+        void this.refreshNotificationsUnread();
+      });
+      void this.refreshNotificationsUnread();
+      this.startNotificationPolling();
+    } catch {
+      // ignore
+    }
+  }
+
+  private startNotificationPolling(): void {
+    if (this.notificationPollTimer) return;
+    this.notificationPollTimer = window.setInterval(() => {
+      void this.refreshNotificationsUnread();
+    }, 20000);
+  }
+
+  private async refreshNotificationsUnread(): Promise<void> {
+    if (this.notificationsRefreshInFlight) return;
+    this.notificationsRefreshInFlight = true;
+    try {
+      if (!this.meId) {
+        this.notificationsUnreadCount = 0;
+        return;
+      }
+      const { notifications } = await this.notifications.list(80);
+      const unread = (notifications ?? []).filter(
+        (notif) => !notif.read_at && String(notif?.type ?? '').toLowerCase() !== 'message'
+      );
+      this.notificationsUnreadCount = unread.length;
+    } catch {
+      // keep last known count
+    } finally {
+      this.notificationsRefreshInFlight = false;
+    }
   }
 }

@@ -198,8 +198,8 @@ import { CountryPost, PostComment } from '../core/models/post.model';
           <div class="comment-hint">Sign in to comment.</div>
         </ng-template>
       </div>
-    </div>
-  `,
+      </div>
+    `,
   styles: [
     `
       :host {
@@ -264,6 +264,8 @@ import { CountryPost, PostComment } from '../core/models/post.model';
         overflow-y: auto;
         scroll-snap-type: y mandatory;
         z-index: 1;
+        padding-bottom: env(safe-area-inset-bottom);
+        box-sizing: border-box;
       }
       .reels-feed::-webkit-scrollbar {
         width: 0;

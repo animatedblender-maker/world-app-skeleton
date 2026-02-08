@@ -5,28 +5,18 @@ import { ActivatedRoute, Router } from '@angular/router';
 import { PostsService } from '../core/services/posts.service';
 import { NotificationsService } from '../core/services/notifications.service';
 import { VideoPlayerComponent } from '../components/video-player.component';
+import { BottomTabsComponent } from '../components/bottom-tabs.component';
 import type { CountryPost } from '../core/models/post.model';
 
 @Component({
   selector: 'app-post-page',
   standalone: true,
-  imports: [CommonModule, VideoPlayerComponent],
+  imports: [CommonModule, VideoPlayerComponent, BottomTabsComponent],
   template: `
     <div class="post-shell">
       <button class="logo-btn" type="button" (click)="goHome()">
         <img src="/logo.png" alt="Matterya" />
       </button>
-      <div class="icon-row">
-        <button class="icon-btn" type="button" (click)="openSearch()" aria-label="Search">
-          &#x1F50D;
-        </button>
-        <button class="icon-btn" type="button" (click)="goMessages()" aria-label="Messages">
-          &#x1F4AC;
-        </button>
-        <button class="icon-btn" type="button" (click)="openNotifications()" aria-label="Notifications">
-          &#x1F514;
-        </button>
-      </div>
 
       <div class="post-card" *ngIf="loading">Loading post...</div>
       <div class="post-card error" *ngIf="!loading && error">{{ error }}</div>
@@ -75,6 +65,7 @@ import type { CountryPost } from '../core/models/post.model';
         </div>
       </div>
     </div>
+    <app-bottom-tabs></app-bottom-tabs>
   `,
   styles: [
     `
@@ -91,7 +82,7 @@ import type { CountryPost } from '../core/models/post.model';
       .post-shell {
         position: relative;
         min-height: 100dvh;
-        padding: 88px 18px calc(80px + env(safe-area-inset-bottom));
+        padding: 88px 18px calc(24px + var(--tabs-safe, 64px));
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -114,24 +105,6 @@ import type { CountryPost } from '../core/models/post.model';
       .logo-btn img {
         width: 36px;
         height: 36px;
-      }
-      .icon-row {
-        position: fixed;
-        top: 18px;
-        right: 18px;
-        display: flex;
-        gap: 10px;
-        z-index: 10;
-      }
-      .icon-btn {
-        width: 40px;
-        height: 40px;
-        border-radius: 50%;
-        border: 0;
-        background: rgba(6, 12, 22, 0.7);
-        color: #e9f2ff;
-        font-size: 16px;
-        cursor: pointer;
       }
       .post-card {
         width: min(720px, 100%);

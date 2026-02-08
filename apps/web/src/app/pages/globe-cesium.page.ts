@@ -1,6 +1,7 @@
 import { AfterViewInit, Component, ElementRef, NgZone, OnDestroy, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
+import { BottomTabsComponent } from '../components/bottom-tabs.component';
 
 import { CountriesService } from '../data/countries.service';
 import { PresenceService } from '../core/services/presence.service';
@@ -9,7 +10,7 @@ import type { ConnectionPoint } from '../globe/globe.service';
 @Component({
   selector: 'app-globe-cesium-page',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, BottomTabsComponent],
   template: `
     <div class="cesium-shell">
       <div class="cesium-top">
@@ -19,6 +20,7 @@ import type { ConnectionPoint } from '../globe/globe.service';
       </div>
       <div #cesiumContainer class="cesium-container"></div>
     </div>
+    <app-bottom-tabs></app-bottom-tabs>
   `,
   styles: [
     `
@@ -31,6 +33,8 @@ import type { ConnectionPoint } from '../globe/globe.service';
       min-height:100vh;
       background:radial-gradient(circle at 30% 15%, rgba(18,74,98,0.75), #0b2a3b 55%, #071924 100%);
       overflow:hidden;
+      padding-bottom: var(--tabs-safe, 64px);
+      box-sizing: border-box;
     }
     .cesium-top{
       position:absolute;

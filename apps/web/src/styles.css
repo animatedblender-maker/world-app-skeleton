@@ -22,7 +22,7 @@ app-root {
 html, body {
   margin: 0;
   height: 100%;
-  background: #f5f6f8;
+  background: var(--app-bg);
   font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
   overflow: hidden;
   touch-action: pan-x pan-y;
@@ -31,6 +31,21 @@ html, body {
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
   box-sizing: border-box;
+}
+
+:root{
+  --app-bg: #f5f6f8;
+  --app-bg-light: #f5f7fa;
+  --app-bg-dark: #05070b;
+  --tabs-height: 64px;
+  --tabs-safe: calc(var(--tabs-height) + env(safe-area-inset-bottom, 0px));
+}
+html.app-bg-light,
+html.app-bg-feed{
+  --app-bg: var(--app-bg-light);
+}
+html.app-bg-globe{
+  --app-bg: var(--app-bg-dark);
 }
 *, *::before, *::after { box-sizing: inherit; }
 #globe { width: 100vw; height: 100vh; }
@@ -376,7 +391,8 @@ html, body {
   flex-direction: column;
 }
 .post-media{
-  height: min(62dvh, 640px);
+  height: auto;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -385,47 +401,44 @@ html, body {
 .post-media img,
 .post-media video{
   width: 100%;
-  height: 100% !important;
+  height: auto !important;
   max-height: none !important;
   object-fit: contain !important;
   background: #0b0d12;
 }
 .post-media app-video-player{
   width: 100%;
-  height: 100%;
+  height: auto;
   display: block;
 }
 .post-media app-video-player .video-shell{
-  height: 100%;
+  height: auto;
 }
 .post-media app-video-player video{
   width: 100% !important;
-  height: 100% !important;
+  height: auto !important;
   max-height: none !important;
   object-fit: contain !important;
   background: #0b0d12;
 }
 .post-text.clamped{
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
+  max-height: 2.1em;
   overflow: hidden;
 }
 .see-more{
-  margin-top: 8px;
-  align-self: flex-start;
-  border: 1px solid rgba(0,0,0,0.18);
-  border-radius: 999px;
-  padding: 6px 12px;
-  background: rgba(255,255,255,0.9);
-  font-size: 11px;
-  font-weight: 900;
-  letter-spacing: 0.12em;
+  margin-left: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-decoration: underline;
   cursor: pointer;
 }
 
 @media (max-width: 720px) {
   .post-media{
-    height: min(64dvh, 520px);
+    height: auto;
   }
 }

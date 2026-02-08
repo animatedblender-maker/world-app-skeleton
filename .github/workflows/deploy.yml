@@ -1,8 +1,7 @@
 name: Deploy Web to GitHub Pages
 
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -16,6 +15,8 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      PAGES_ARTIFACT: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -37,11 +38,13 @@ jobs:
         uses: actions/upload-pages-artifact@v3
         with:
           path: apps/web/dist/web/browser
-          name: github-pages
+          name: ${{ env.PAGES_ARTIFACT }}
 
   deploy:
     runs-on: ubuntu-latest
     needs: build
+    env:
+      PAGES_ARTIFACT: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -49,3 +52,5 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+        with:
+          artifact_name: ${{ env.PAGES_ARTIFACT }}

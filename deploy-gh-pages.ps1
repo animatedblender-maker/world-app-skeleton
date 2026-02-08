@@ -54,6 +54,10 @@ foreach ($extra in @('3rdpartylicenses.txt','prerendered-routes.json')) {
   }
 }
 
+# Stamp a fresh version so the home-screen app can detect updates.
+$versionStamp = Get-Date -Format "yyyyMMddHHmmss"
+@{ version = $versionStamp } | ConvertTo-Json -Compress | Set-Content -Encoding UTF8 (Join-Path $worktreePath 'version.json')
+
 Set-Location $worktreePath
 git add --all
 if (-not (git status -s)) {

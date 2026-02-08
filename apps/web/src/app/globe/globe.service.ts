@@ -13,6 +13,48 @@ export type ConnectionPoint = {
   radius?: number;
 };
 
+type FireworkWord = {
+  text: string;
+  x: number;
+  y: number;
+  life: number;
+  ttl: number;
+  size: number;
+  vx: number;
+  vy: number;
+};
+
+type FireworkShot = {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+  explodeAt: number;
+  trail: Array<{ x: number; y: number }>;
+  burstWords: FireworkWord[] | null;
+};
+
+type FireworkParticle = {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+  ttl: number;
+  size: number;
+};
+
+type FloatingWord = {
+  text: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  alpha: number;
+  size: number;
+};
+
 @Injectable({ providedIn: 'root' })
 export class GlobeService {
   private viewer: any = null;
@@ -46,16 +88,20 @@ export class GlobeService {
   private onlineConnectionIds = new globalThis.Set<string>();
 
   private readonly MAX_NETWORK_NODES = 140;
-  private readonly MAX_NETWORK_LINKS = 2;
-  private readonly MAX_LINK_DISTANCE = 160;
-  private readonly FIRE_TRAIL_ALPHA = 0.55;
-  private readonly FIRE_MAX_SEGMENTS = 4;
-  private readonly FIRE_MIN_SPEED = 0.18;
-  private readonly FIRE_MAX_SPEED = 0.35;
-  private fireTrails = new globalThis.Map<
-    string,
-    { phase: number; speed: number; tail: Array<{ x: number; y: number }> }
-  >();
+  private readonly FIREWORK_SPAWN_INTERVAL = 680;
+  private readonly FIREWORK_MIN_SPEED = 0.03;
+  private readonly FIREWORK_MAX_SPEED = 0.055;
+  private readonly FIREWORK_MIN_TIME = 1600;
+  private readonly FIREWORK_MAX_TIME = 2800;
+  private readonly FIREWORK_MAX = 18;
+  private readonly FIREWORK_TRAIL = 10;
+  private readonly FLOATING_WORD_COUNT = 42;
+  private fireworkShots: FireworkShot[] = [];
+  private fireworkParticles: FireworkParticle[] = [];
+  private lastFireworkSpawn = 0;
+  private floatingWords: FloatingWord[] = [];
+  private floatingWordPool: string[] = [];
+  private fireworkWordGroups: string[][] = [];
 
   private labelsDataSource: any = null;
   private countriesDataSource: any = null;
@@ -64,27 +110,28 @@ export class GlobeService {
     this.overlayHost = globeEl;
     if (getComputedStyle(globeEl).position === 'static') globeEl.style.position = 'relative';
 
-    this.ensureCesium().then((Cesium) => {
-      if (!Cesium) return;
-      this.Cesium = Cesium;
+    this.ensureCesium()
+      .then((Cesium) => {
+        if (!Cesium) return;
+        this.Cesium = Cesium;
 
-      const blankPixel =
-        'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=';
-      const viewer = new Cesium.Viewer(globeEl, {
-        animation: false,
-        timeline: false,
-        geocoder: false,
-        homeButton: false,
-        baseLayerPicker: false,
-        imageryProvider: new Cesium.SingleTileImageryProvider({ url: blankPixel }),
-        terrainProvider: new Cesium.EllipsoidTerrainProvider(),
-        sceneModePicker: false,
-        navigationHelpButton: false,
-        infoBox: false,
-        selectionIndicator: false,
-        fullscreenButton: false,
-        shouldAnimate: true,
-      });
+        const blankPixel =
+          'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=';
+        const viewer = new Cesium.Viewer(globeEl, {
+          animation: false,
+          timeline: false,
+          geocoder: false,
+          homeButton: false,
+          baseLayerPicker: false,
+          imageryProvider: new Cesium.SingleTileImageryProvider({ url: blankPixel }),
+          terrainProvider: new Cesium.EllipsoidTerrainProvider(),
+          sceneModePicker: false,
+          navigationHelpButton: false,
+          infoBox: false,
+          selectionIndicator: false,
+          fullscreenButton: false,
+          shouldAnimate: true,
+        });
 
       // Hide Cesium credits/logo.
       try { viewer.cesiumWidget.creditContainer.style.display = 'none'; } catch {}
@@ -92,29 +139,34 @@ export class GlobeService {
       // Stylized globe (no photo imagery).
       viewer.imageryLayers.removeAll();
 
-      viewer.scene.globe.enableLighting = false;
-      viewer.scene.skyAtmosphere.show = false;
-      viewer.scene.globe.showGroundAtmosphere = false;
-      viewer.scene.backgroundColor = Cesium.Color.TRANSPARENT;
-      try { viewer.scene.skyBox.show = false; } catch {}
-      const ocean = Cesium.Color.fromCssColorString('#0b2b3b');
-      viewer.scene.globe.baseColor = ocean;
-      viewer.scene.globe.material = Cesium.Material.fromType('Color', { color: ocean });
-      viewer.scene.postProcessStages.fxaa.enabled = true;
-      viewer.scene.screenSpaceCameraController.maximumZoomDistance = 60_000_000;
-      viewer.scene.screenSpaceCameraController.minimumZoomDistance = 600_000;
+        viewer.scene.globe.enableLighting = false;
+        viewer.scene.skyAtmosphere.show = false;
+        viewer.scene.globe.showGroundAtmosphere = false;
+        viewer.scene.backgroundColor = Cesium.Color.BLACK;
+        try { viewer.scene.skyBox.show = false; } catch {}
+        const ocean = Cesium.Color.fromCssColorString('#0b2b3b');
+        viewer.scene.globe.baseColor = ocean;
+        viewer.scene.postProcessStages.fxaa.enabled = true;
+        viewer.scene.screenSpaceCameraController.maximumZoomDistance = 60_000_000;
+        viewer.scene.screenSpaceCameraController.minimumZoomDistance = 600_000;
+        viewer.camera.setView({
+          destination: Cesium.Cartesian3.fromDegrees(0, 20, 22_000_000),
+        });
 
-      this.viewer = viewer;
-      const overlayTarget = viewer.scene.canvas?.parentElement ?? globeEl;
-      this.overlayHost = overlayTarget;
-      this.installOverlay(overlayTarget);
-      this.startOverlayLoop();
-      this.installClickHandler();
-      this.readyResolver?.();
+        this.viewer = viewer;
+        const overlayTarget = viewer.scene.canvas?.parentElement ?? globeEl;
+        this.overlayHost = overlayTarget;
+        this.installOverlay(overlayTarget);
+        this.startOverlayLoop();
+        this.installClickHandler();
+        this.readyResolver?.();
 
-      if (this.cachedPayload) this.setDataFast(this.cachedPayload);
-      if (this.cachedConnections.length) this.setConnections(this.cachedConnections);
-    });
+        if (this.cachedPayload) this.setDataFast(this.cachedPayload);
+        if (this.cachedConnections.length) this.setConnections(this.cachedConnections);
+      })
+      .catch((err) => {
+        console.warn('[globe] Cesium failed to load', err);
+      });
 
     window.addEventListener('resize', () => this.resize());
   }
@@ -179,7 +231,9 @@ export class GlobeService {
         const id = entity.properties?.__id?.getValue?.();
         const fill = this.countryFillColor(Number(id));
         if (entity.polygon) {
-          entity.polygon.material = Cesium.Color.fromCssColorString(fill);
+          entity.polygon.material = new Cesium.ColorMaterialProperty(
+            Cesium.Color.fromCssColorString(fill)
+          );
           entity.polygon.outline = true;
           entity.polygon.outlineColor = Cesium.Color.fromCssColorString('rgba(8,22,40,0.65)');
           entity.polygon.outlineWidth = 1.1 as any;
@@ -288,6 +342,32 @@ export class GlobeService {
     this.onlineConnectionIds = new globalThis.Set<string>((idsOnline || []).map((x) => String(x)));
   }
 
+  setFloatingWords(words: string[]): void {
+    const cleaned = (words || [])
+      .map((w) => String(w || '').trim())
+      .filter((w) => w.length >= 3)
+      .map((w) => w.slice(0, 24));
+    const deduped = Array.from(new globalThis.Set(cleaned));
+    this.floatingWordPool = deduped.slice(0, 160);
+    this.floatingWords = [];
+  }
+
+  setFireworkWordGroups(groups: string[][]): void {
+    const cleaned = (groups || [])
+      .map((group) =>
+        (group || [])
+          .map((w) => String(w || '').trim())
+          .filter((w) => w.length >= 2)
+          .map((w) => w.slice(0, 24))
+      )
+      .filter((group) => group.length > 0);
+    this.fireworkWordGroups = cleaned.slice(0, 160);
+    if (!this.floatingWordPool.length && cleaned.length) {
+      const flat = cleaned.flat();
+      this.floatingWordPool = Array.from(new globalThis.Set(flat)).slice(0, 160);
+    }
+  }
+
   setConnectionsCountryFilter(_iso2: string | null): void {}
   showAllLabels(): void {}
   showFocusLabel(_countryId: number): void {}
@@ -312,7 +392,7 @@ export class GlobeService {
   resetView(): void {
     if (!this.viewer || !this.Cesium) return;
     this.viewer.camera.flyTo({
-      destination: this.Cesium.Cartesian3.fromDegrees(0, 20, 12_000_000),
+      destination: this.Cesium.Cartesian3.fromDegrees(0, 20, 22_000_000),
       duration: 0.9,
     });
   }
@@ -365,24 +445,23 @@ export class GlobeService {
     const tick = (now: number) => {
       const dt = Math.min(33, now - lastT);
       lastT = now;
-      this.drawOverlay(dt, now * 0.001);
+      this.drawOverlay(dt, now);
       this.raf = requestAnimationFrame(tick);
     };
     this.raf = requestAnimationFrame(tick);
   }
 
-  private drawOverlay(_dtMs: number, t: number) {
+  private drawOverlay(dtMs: number, nowMs: number) {
     if (!this.particleCanvas || !this.particleCtx) return;
     const ctx = this.particleCtx;
     const w = this.particleCanvas.width;
     const h = this.particleCanvas.height;
 
     ctx.clearRect(0, 0, w, h);
-
-    this.drawProjectiles(ctx, w, h, t);
+    this.drawProjectiles(ctx, w, h, dtMs, nowMs);
   }
 
-  private drawProjectiles(ctx: CanvasRenderingContext2D, w: number, h: number, t: number) {
+  private drawProjectiles(ctx: CanvasRenderingContext2D, w: number, h: number, dtMs: number, nowMs: number) {
     if (!this.viewer || !this.Cesium) return;
 
     const Cesium = this.Cesium;
@@ -390,6 +469,24 @@ export class GlobeService {
       this.viewer.scene.globe.ellipsoid,
       this.viewer.scene.camera.positionWC
     );
+    const nodes = this.collectVisibleNodes(occluder, Cesium, w, h);
+
+    if (!nodes.length) return;
+
+    // Online users as blue dots.
+    const dotRadius = Math.max(2.2, (this.particleScale || 1) * 1.6);
+    ctx.fillStyle = 'rgba(80, 170, 255, 0.95)';
+    for (const node of nodes) {
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, dotRadius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    this.spawnFirework(nodes, w, h, nowMs);
+    this.updateFireworks(ctx, w, h, dtMs);
+  }
+
+  private collectVisibleNodes(occluder: any, Cesium: any, w: number, h: number) {
     const nodes: Array<{ x: number; y: number; id: string }> = [];
     const scale = this.particleScale || 1;
     const cssW = this.hostCssWidth || w / scale;
@@ -409,90 +506,208 @@ export class GlobeService {
       if (sx < -20 || sy < -20 || sx > cssW + 20 || sy > cssH + 20) continue;
       nodes.push({ x: sx * scale, y: sy * scale, id: String(p.id) });
     }
+    return nodes;
+  }
 
-    if (nodes.length < 2) return;
+  private spawnFirework(nodes: Array<{ x: number; y: number }>, w: number, h: number, nowMs: number): void {
+    if (!nodes.length) return;
+    if (this.fireworkShots.length >= this.FIREWORK_MAX) return;
+    if (nowMs - this.lastFireworkSpawn < this.FIREWORK_SPAWN_INTERVAL) return;
 
-    // Stars (online users)
-    ctx.fillStyle = 'rgba(90, 175, 255, 1)';
-    ctx.strokeStyle = 'rgba(5, 20, 45, 0.8)';
-    ctx.lineWidth = 0.6;
-    for (const node of nodes) {
-      const size = 5.8;
-      this.drawStar(ctx, node.x, node.y, size, size * 0.45, 5, true);
+    const node = nodes[Math.floor(Math.random() * nodes.length)];
+    const cx = w * 0.5;
+    const cy = h * 0.5;
+    const dx = node.x - cx;
+    const dy = node.y - cy;
+    const baseAngle = Math.atan2(dy, dx);
+    const jitter = (Math.random() - 0.5) * 0.55;
+    const angle = baseAngle + jitter;
+    const speed = this.FIREWORK_MIN_SPEED + Math.random() * (this.FIREWORK_MAX_SPEED - this.FIREWORK_MIN_SPEED);
+    const shot: FireworkShot = {
+      x: node.x,
+      y: node.y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 0,
+      explodeAt:
+        this.FIREWORK_MIN_TIME +
+        Math.random() * (this.FIREWORK_MAX_TIME - this.FIREWORK_MIN_TIME),
+      trail: [],
+      burstWords: null,
+    };
+    this.fireworkShots.push(shot);
+    this.lastFireworkSpawn = nowMs;
+  }
+
+  private updateFireworks(ctx: CanvasRenderingContext2D, w: number, h: number, dtMs: number): void {
+    if (!this.fireworkShots.length && !this.fireworkParticles.length) return;
+    const trailColor = 'rgba(255,255,255,0.45)';
+    const headColor = 'rgba(255,255,255,0.85)';
+    const lineWidth = Math.max(1, (this.particleScale || 1) * 0.7);
+
+    ctx.lineWidth = lineWidth;
+    const updated: FireworkShot[] = [];
+
+    for (const shot of this.fireworkShots) {
+      if (!shot.burstWords) {
+        shot.life += dtMs;
+        shot.x += shot.vx * dtMs;
+        shot.y += shot.vy * dtMs;
+        shot.trail.push({ x: shot.x, y: shot.y });
+        if (shot.trail.length > this.FIREWORK_TRAIL) shot.trail.shift();
+
+        ctx.strokeStyle = trailColor;
+        ctx.beginPath();
+        for (let i = 0; i < shot.trail.length; i += 1) {
+          const p = shot.trail[i];
+          if (i === 0) ctx.moveTo(p.x, p.y);
+          else ctx.lineTo(p.x, p.y);
+        }
+        ctx.stroke();
+
+        ctx.fillStyle = headColor;
+        ctx.beginPath();
+        ctx.arc(shot.x, shot.y, Math.max(1.6, (this.particleScale || 1) * 0.9), 0, Math.PI * 2);
+        ctx.fill();
+
+        if (shot.life >= shot.explodeAt) {
+          const group = this.pickFireworkGroup();
+          const words = group.length ? group : [];
+          const shuffled = [...words].sort(() => Math.random() - 0.5);
+          const count = Math.min(8, shuffled.length);
+          const burst: FireworkWord[] = [];
+          if (count > 0) {
+            const baseAngle = Math.atan2(shot.vy, shot.vx);
+            const spread = Math.PI / 4;
+            const step = count > 1 ? (spread * 2) / (count - 1) : 0;
+            for (let i = 0; i < count; i += 1) {
+              const offset = count > 1 ? -spread + step * i : 0;
+              const angle = baseAngle + offset + (Math.random() - 0.5) * 0.1;
+              const spd = 0.04 + Math.random() * 0.1;
+              burst.push({
+                text: shuffled[i],
+                x: shot.x,
+                y: shot.y,
+                life: 0,
+                ttl: 1300 + Math.random() * 700,
+                size: 12 + Math.random() * 8,
+                vx: Math.cos(angle) * spd,
+                vy: Math.sin(angle) * spd,
+              });
+            }
+            shot.burstWords = burst;
+          }
+        }
+      }
+
+      if (shot.burstWords) {
+        const alive: FireworkWord[] = [];
+        for (const word of shot.burstWords) {
+          word.life += dtMs;
+          word.x += word.vx * dtMs;
+          word.y += word.vy * dtMs;
+          const progress = Math.min(1, word.life / word.ttl);
+          const alpha = 1 - progress;
+          const size = word.size + progress * 6;
+          ctx.font = `${size}px "Montserrat", sans-serif`;
+          ctx.fillStyle = `rgba(255,255,255,${0.75 * alpha})`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(word.text, word.x, word.y);
+          if (word.life < word.ttl) {
+            alive.push(word);
+          } else {
+            const angle = Math.atan2(word.vy, word.vx);
+            const count = 8 + Math.floor(Math.random() * 8);
+            for (let i = 0; i < count; i += 1) {
+              const jitter = (Math.random() - 0.5) * Math.PI * 0.6;
+              const spd = 0.03 + Math.random() * 0.08;
+              this.fireworkParticles.push({
+                x: word.x,
+                y: word.y,
+                vx: Math.cos(angle + jitter) * spd,
+                vy: Math.sin(angle + jitter) * spd,
+                life: 0,
+                ttl: 650 + Math.random() * 650,
+                size: 1.2 + Math.random() * 1.8,
+              });
+            }
+          }
+        }
+        if (alive.length) {
+          shot.burstWords = alive;
+          updated.push(shot);
+        }
+      } else if (shot.life < shot.explodeAt) {
+        updated.push(shot);
+      }
     }
 
-    // Build nearest links and animate projectiles.
-    const links: Array<{ a: number; b: number; d: number }> = [];
-    const maxDistSq = this.MAX_LINK_DISTANCE * this.MAX_LINK_DISTANCE;
-    for (let i = 0; i < nodes.length; i += 1) {
-      const a = nodes[i];
-      const nearest: Array<{ idx: number; d: number }> = [];
-      for (let j = 0; j < nodes.length; j += 1) {
-        if (i === j) continue;
-        const b = nodes[j];
-        const dx = a.x - b.x;
-        const dy = a.y - b.y;
-        const d = dx * dx + dy * dy;
-        if (d > maxDistSq) continue;
-        nearest.push({ idx: j, d });
+    this.fireworkShots = updated;
+
+    if (this.fireworkParticles.length) {
+      const nextParticles: FireworkParticle[] = [];
+      for (const particle of this.fireworkParticles) {
+        particle.life += dtMs;
+        particle.x += particle.vx * dtMs;
+        particle.y += particle.vy * dtMs;
+        const progress = Math.min(1, particle.life / particle.ttl);
+        const alpha = 1 - progress;
+        ctx.fillStyle = `rgba(255,255,255,${0.7 * alpha})`;
+        ctx.beginPath();
+        ctx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
+        ctx.fill();
+        if (particle.life < particle.ttl) nextParticles.push(particle);
       }
-      nearest.sort((n1, n2) => n1.d - n2.d);
-      for (let k = 0; k < Math.min(this.MAX_NETWORK_LINKS, nearest.length); k += 1) {
-        const idx = nearest[k].idx;
-        if (i < idx) links.push({ a: i, b: idx, d: nearest[k].d });
-      }
-    }
-
-    for (let i = 0; i < links.length; i += 1) {
-      const link = links[i];
-      const p1 = nodes[link.a];
-      const p2 = nodes[link.b];
-      const key = `${link.a}-${link.b}`;
-      const state =
-        this.fireTrails.get(key) ??
-        { phase: Math.random(), speed: this.FIRE_MIN_SPEED + Math.random() * (this.FIRE_MAX_SPEED - this.FIRE_MIN_SPEED), tail: [] };
-      state.phase = (state.phase + state.speed * 0.016) % 1;
-      this.fireTrails.set(key, state);
-
-      const phase = state.phase;
-      const x = p1.x + (p2.x - p1.x) * phase;
-      const y = p1.y + (p2.y - p1.y) * phase;
-      if (state.tail.length) state.tail.length = 0;
-
-      const sparkle = 2.2;
-      ctx.fillStyle = 'rgba(140, 200, 255, 0.95)';
-      ctx.beginPath();
-      ctx.arc(x, y, sparkle, 0, Math.PI * 2);
-      ctx.fill();
+      this.fireworkParticles = nextParticles;
     }
   }
 
-  private drawStar(
-    ctx: CanvasRenderingContext2D,
-    cx: number,
-    cy: number,
-    outerR: number,
-    innerR: number,
-    points: number,
-    stroke = false
-  ) {
-    const step = Math.PI / points;
-    let rot = Math.PI / 2 * 3;
-    ctx.beginPath();
-    for (let i = 0; i < points; i += 1) {
-      const x1 = cx + Math.cos(rot) * outerR;
-      const y1 = cy + Math.sin(rot) * outerR;
-      ctx.lineTo(x1, y1);
-      rot += step;
-      const x2 = cx + Math.cos(rot) * innerR;
-      const y2 = cy + Math.sin(rot) * innerR;
-      ctx.lineTo(x2, y2);
-      rot += step;
+  private pickFireworkWord(): string {
+    if (this.floatingWordPool.length) {
+      return this.floatingWordPool[Math.floor(Math.random() * this.floatingWordPool.length)];
     }
-    ctx.lineTo(cx, cy - outerR);
-    ctx.closePath();
-    ctx.fill();
-    if (stroke) ctx.stroke();
+    return '';
+  }
+
+  private pickFireworkGroup(): string[] {
+    if (this.fireworkWordGroups.length) {
+      return this.fireworkWordGroups[Math.floor(Math.random() * this.fireworkWordGroups.length)];
+    }
+    if (!this.floatingWordPool.length) return [];
+    const count = Math.min(8, Math.max(2, Math.floor(3 + Math.random() * 4)));
+    const group: string[] = [];
+    for (let i = 0; i < count; i += 1) {
+      group.push(this.pickFireworkWord());
+    }
+    return group.filter(Boolean);
+  }
+
+  private drawFloatingWords(ctx: CanvasRenderingContext2D, w: number, h: number, dtMs: number): void {
+    return;
+  }
+
+  private seedFloatingWords(w: number, h: number): void {
+    const pool = this.floatingWordPool;
+    if (!pool.length) {
+      this.floatingWords = [];
+      return;
+    }
+
+    const count = Math.min(this.FLOATING_WORD_COUNT, pool.length);
+    this.floatingWords = [];
+    for (let i = 0; i < count; i += 1) {
+      const text = pool[Math.floor(Math.random() * pool.length)];
+      this.floatingWords.push({
+        text,
+        x: Math.random() * w,
+        y: Math.random() * h,
+        vx: (Math.random() - 0.5) * 0.02,
+        vy: (Math.random() - 0.5) * 0.02,
+        alpha: 0.16 + Math.random() * 0.18,
+        size: 11 + Math.random() * 10,
+      });
+    }
   }
 
   // -----------------------------

@@ -1,5 +1,8 @@
 import { pool } from '../../../db.js';
 import { GraphQLError } from 'graphql';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 type MoodCounts = {
   positive: number;
@@ -22,6 +25,7 @@ const MAX_TEXTS = 220;
 const MAX_TEXT_LEN = 420;
 
 const cache = new Map<string, { at: number; value: CountryMood }>();
+let cachedCountryCodes: string[] | null = null;
 
 let sentimentPipeline: any | null = null;
 let pipelineInitPromise: Promise<any> | null = null;
@@ -197,29 +201,44 @@ async function classifySentimentRemote(texts: string[]): Promise<SentimentLabel[
   const baseUrl =
     process.env.HF_INFERENCE_URL ||
     'https://router.huggingface.co/hf-inference/models/cardiffnlp/twitter-xlm-roberta-base-sentiment';
-  const res = await fetch(
-    baseUrl,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ inputs: texts }),
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
+  try {
+    const res = await fetch(
+      baseUrl,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ inputs: texts }),
+        signal: controller.signal,
+      }
+    );
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      if ([502, 503, 504].includes(res.status)) {
+        return texts.map(() => 'neutral');
+      }
+      throw new GraphQLError(`Sentiment failed: ${res.status} ${txt}`);
     }
-  );
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new GraphQLError(`Sentiment failed: ${res.status} ${txt}`);
+    const json: Array<Array<{ label: string; score: number }>> = await res.json();
+    return json.map((choices) => {
+      const best = [...(choices ?? [])].sort((a, b) => b.score - a.score)[0];
+      const label = String(best?.label ?? '').toUpperCase();
+      if (label === 'LABEL_2' || label.includes('POS')) return 'positive';
+      if (label === 'LABEL_0' || label.includes('NEG')) return 'negative';
+      return 'neutral';
+    });
+  } catch (err: any) {
+    if (String(err?.name) === 'AbortError') {
+      return texts.map(() => 'neutral');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
   }
-  const json: Array<Array<{ label: string; score: number }>> = await res.json();
-  return json.map((choices) => {
-    const best = [...(choices ?? [])].sort((a, b) => b.score - a.score)[0];
-    const label = String(best?.label ?? '').toUpperCase();
-    if (label === 'LABEL_2' || label.includes('POS')) return 'positive';
-    if (label === 'LABEL_0' || label.includes('NEG')) return 'negative';
-    return 'neutral';
-  });
 }
 
 async function fetchTexts(countryCode?: string | null): Promise<string[]> {
@@ -276,6 +295,41 @@ async function fetchTexts(countryCode?: string | null): Promise<string[]> {
   return texts.slice(0, MAX_TEXTS);
 }
 
+async function loadCountryCodesFromGeoJson(): Promise<string[]> {
+  if (cachedCountryCodes) return cachedCountryCodes;
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    path.resolve(here, '../../data/countries50m.geojson'),
+    path.resolve(here, '../data/countries50m.geojson'),
+    path.resolve(process.cwd(), 'apps/api/src/graphql/data/countries50m.geojson'),
+    path.resolve(process.cwd(), 'apps/api/dist/graphql/data/countries50m.geojson'),
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      const raw = await readFile(candidate, 'utf8');
+      const json = JSON.parse(raw) as {
+        features?: Array<{ properties?: Record<string, any> }>;
+      };
+      const codes = new Set<string>();
+      for (const feature of json.features ?? []) {
+        const props = feature?.properties ?? {};
+        const iso2 = String(props.ISO_A2 ?? props.ISO_A2_EH ?? '').trim().toUpperCase();
+        if (iso2.length !== 2) continue;
+        if (iso2 === '-9' || iso2 === '-99' || iso2 === 'ZZ') continue;
+        codes.add(iso2);
+      }
+      cachedCountryCodes = [...codes].sort();
+      return cachedCountryCodes;
+    } catch {
+      // try next candidate
+    }
+  }
+
+  cachedCountryCodes = [];
+  return cachedCountryCodes;
+}
+
 export async function getCountryMood(countryCode?: string | null): Promise<CountryMood> {
   const key = countryCode ? `cc:${countryCode.toUpperCase()}` : 'global';
   const cached = cache.get(key);
@@ -324,6 +378,15 @@ export async function getCountryMood(countryCode?: string | null): Promise<Count
 }
 
 export async function runAllCountryMoods(): Promise<{ processed: number; failed: number }> {
+  const codes = new Set<string>();
+
+  try {
+    const geoCodes = await loadCountryCodesFromGeoJson();
+    for (const code of geoCodes) codes.add(code);
+  } catch {
+    // ignore geojson load errors
+  }
+
   const { rows } = await pool.query<{ country_code: string | null }>(
     `
     select distinct country_code
@@ -332,13 +395,15 @@ export async function runAllCountryMoods(): Promise<{ processed: number; failed:
     order by country_code asc
     `
   );
+  for (const row of rows) {
+    const code = String(row.country_code ?? '').trim().toUpperCase();
+    if (code) codes.add(code);
+  }
 
   let processed = 0;
   let failed = 0;
 
-  for (const row of rows) {
-    const code = String(row.country_code ?? '').trim().toUpperCase();
-    if (!code) continue;
+  for (const code of [...codes].sort()) {
     try {
       await getCountryMood(code);
       processed += 1;

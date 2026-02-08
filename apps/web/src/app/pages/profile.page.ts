@@ -28,11 +28,12 @@ import { FollowService } from '../core/services/follow.service';
 import { LocationService } from '../core/services/location.service';
 import { MessagesService } from '../core/services/messages.service';
 import { SUPABASE_URL } from '../config/supabase.config';
+import { BottomTabsComponent } from '../components/bottom-tabs.component';
 
 @Component({
   selector: 'app-profile-page',
   standalone: true,
-  imports: [CommonModule, FormsModule, VideoPlayerComponent],
+  imports: [CommonModule, FormsModule, VideoPlayerComponent, BottomTabsComponent],
   template: `
     <div class="wrap">
       <div class="card" *ngIf="!loading && !error && profile; else stateTpl">
@@ -52,7 +53,7 @@ import { SUPABASE_URL } from '../config/supabase.config';
               <div class="init" *ngIf="!avatarImage">{{ initials }}</div>
               <span class="ring"></span>
             </div>
-            <div class="avatar-actions" *ngIf="isOwner">
+            <div class="avatar-actions" *ngIf="isOwner && profileEditMode">
               <button
                 type="button"
                 class="micro-btn"
@@ -61,15 +62,15 @@ import { SUPABASE_URL } from '../config/supabase.config';
                 Upload
               </button>
               <button
+                *ngIf="!!draftAvatarUploadUrl"
                 type="button"
                 class="micro-btn outline"
                 (click)="saveAvatar()"
-                [disabled]="avatarSaving || !draftAvatarUploadUrl"
+                [disabled]="avatarSaving"
               >
                 {{ avatarSaving ? 'Saving…' : 'Save' }}
               </button>
               <span class="hint" *ngIf="avatarUploading && !draftAvatarUploadUrl">Uploading...</span>
-              <span class="hint" *ngIf="!avatarUploading && draftAvatarUrl && !draftAvatarUploadUrl">Selected?</span>
               <small class="hint error" *ngIf="avatarError">{{ avatarError }}</small>
             </div>
           </div>
@@ -442,19 +443,38 @@ import { SUPABASE_URL } from '../config/supabase.config';
               </div>
               <div class="post-body" *ngIf="editingPostId !== post.id">
                 <div class="post-title" *ngIf="post.title">{{ post.title }}</div>
-                <p class="post-text" [class.clamped]="!isPostExpanded(post.id) && isPostExpandable(post)">{{ post.body }}</p>
+                <p
+                  class="post-text"
+                  [class.clamped]="!isPostExpanded(post.id) && isTextExpandable(post.body)"
+                  (click)="onPostTextClick(post.id, $event)"
+                >
+                  <span>{{ isPostExpanded(post.id) ? post.body : postPreview(post.body) }}</span>
+                  <button
+                    class="see-more inline"
+                    type="button"
+                    *ngIf="!isPostExpanded(post.id) && isTextExpandable(post.body)"
+                    (click)="togglePostExpanded(post.id, $event)"
+                  >
+                    See more
+                  </button>
+                </p>
               </div>
-              <div class="post-caption post-text" [class.clamped]="!isPostExpanded(post.id) && isPostExpandable(post)" *ngIf="editingPostId !== post.id && post.media_caption">
-                {{ post.media_caption }}
-              </div>
-              <button
-                class="see-more"
-                type="button"
-                *ngIf="editingPostId !== post.id && isPostExpandable(post)"
-                (click)="togglePostExpanded(post.id)"
+              <div
+                class="post-caption post-text"
+                [class.clamped]="!isPostExpanded(post.id) && isTextExpandable(post.media_caption)"
+                *ngIf="editingPostId !== post.id && post.media_caption"
+                (click)="onPostTextClick(post.id, $event)"
               >
-                {{ isPostExpanded(post.id) ? 'See less' : 'See more' }}
-              </button>
+                <span>{{ isPostExpanded(post.id) ? post.media_caption : postPreview(post.media_caption) }}</span>
+                <button
+                  class="see-more inline"
+                  type="button"
+                  *ngIf="!post.body && !isPostExpanded(post.id) && isTextExpandable(post.media_caption)"
+                  (click)="togglePostExpanded(post.id, $event)"
+                >
+                  See more
+                </button>
+              </div>
               <div class="post-media" *ngIf="editingPostId !== post.id && post.media_url && post.media_type !== 'none'">
                 <ng-container *ngIf="postMediaUrls(post) as mediaUrls">
                   <ng-container *ngIf="postMediaTypes(post) as mediaTypes">
@@ -469,19 +489,19 @@ import { SUPABASE_URL } from '../config/supabase.config';
                       <app-video-player
                         *ngIf="mediaTypes[0] === 'video'"
                         [src]="mediaUrls[0]"
-                        tapBehavior="emit"
+                        [tapBehavior]="postIsReel(post) ? 'emit' : 'toggle'"
                         (viewed)="recordView(post)"
                         (videoTap)="onPostVideoTap(post)"
                         ></app-video-player>
                     </ng-container>
                     <ng-template #mediaGallery>
                       <div class="media-gallery">
-                        <div class="media-strip" [style.transform]="mediaTransform(post)">
+                        <div class="media-strip" (scroll)="onPostMediaScroll(post, $event)">
                           <div class="media-item" *ngFor="let url of mediaUrls; let idx = index">
                             <app-video-player
                               *ngIf="mediaTypes[idx] === 'video'"
                               [src]="url"
-                              tapBehavior="emit"
+                              [tapBehavior]="postIsReel(post) ? 'emit' : 'toggle'"
                               (viewed)="recordView(post)"
                               (videoTap)="onPostVideoTap(post)"
                             ></app-video-player>
@@ -494,29 +514,12 @@ import { SUPABASE_URL } from '../config/supabase.config';
                             />
                           </div>
                         </div>
-                        <button
-                          class="media-nav left"
-                          type="button"
-                          *ngIf="postMediaIndexValue(post) > 0"
-                          (click)="prevPostMedia(post)"
-                          aria-label="Previous media"
-                        >
-                          &lt;
-                        </button>
-                        <button
-                          class="media-nav right"
-                          type="button"
-                          *ngIf="postMediaIndexValue(post) < mediaUrls.length - 1"
-                          (click)="nextPostMedia(post, mediaUrls.length)"
-                          aria-label="Next media"
-                        >
-                          &gt;
-                        </button>
                         <div class="media-dots">
                           <span
                             *ngFor="let _ of mediaUrls; let dotIndex = index"
                             [class.active]="dotIndex === postMediaIndexValue(post)"
                           ></span>
+                          <span class="media-count">{{ postMediaIndexValue(post) + 1 }}/{{ mediaUrls.length }}</span>
                         </div>
                       </div>
                     </ng-template>
@@ -781,6 +784,8 @@ import { SUPABASE_URL } from '../config/supabase.config';
         <img [src]="lightboxUrl" alt="Expanded media" />
       </div>
     </div>
+
+    <app-bottom-tabs></app-bottom-tabs>
   `,
   styles: [`
     :host{
@@ -793,7 +798,7 @@ import { SUPABASE_URL } from '../config/supabase.config';
     .wrap{
       position: fixed;
       inset: 0;
-      padding: 0;
+      padding: 0 0 var(--tabs-safe, 64px);
       box-sizing: border-box;
       overflow-y: auto;
       overflow-x: hidden;
@@ -1109,20 +1114,25 @@ import { SUPABASE_URL } from '../config/supabase.config';
       border:0;
     }
     .head{
-      display:flex;
-      gap:20px;
+      position: relative;
+      display:grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap:16px;
       align-items:flex-start;
-      flex-wrap:wrap;
+      padding: 6px 0 0;
     }
     .head-actions{
-      margin-left:auto;
+      position: absolute;
+      top: 0;
+      right: 0;
       display:flex;
-      align-items:flex-start;
+      align-items:center;
+      margin-left:0;
     }
     .avatar-block{
       display:flex;
       flex-direction:column;
-      align-items:center;
+      align-items:flex-start;
       gap:8px;
       cursor:pointer;
     }
@@ -1194,7 +1204,13 @@ import { SUPABASE_URL } from '../config/supabase.config';
     .sub.handle{
       margin:0;
     }
-    .info{ flex:1; min-width:0; }
+    .info{
+      flex:1;
+      min-width:0;
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+    }
     .title{ font-size:20px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; }
     .title-row{
       display:flex;
@@ -1490,9 +1506,29 @@ import { SUPABASE_URL } from '../config/supabase.config';
     .post-body{
       margin:0;
       font-size:14px;
-      line-height:1.7;
+      line-height:1.4;
       opacity:0.85;
       white-space:pre-line;
+    }
+    .post-text{
+      display:block;
+      line-height:1.4;
+    }
+    .post-text.clamped{
+      overflow:hidden;
+      max-height:2.1em;
+    }
+    .post-text .see-more.inline{
+      margin-left:6px;
+      padding:0;
+      border:0;
+      background:transparent;
+      font-size:12px;
+      font-weight:800;
+      letter-spacing:0.02em;
+      color:rgba(10,12,18,0.6);
+      text-decoration:underline;
+      cursor:pointer;
     }
     .post-caption{
       margin-top:10px;
@@ -1511,47 +1547,36 @@ import { SUPABASE_URL } from '../config/supabase.config';
     .post-media video{
       width:100%;
       display:block;
-      max-height:520px;
-      object-fit:cover;
+      max-height:none;
+      height:auto;
+      object-fit:contain;
       background:#000;
     }
     .media-gallery{
       position:relative;
       width:100%;
-      overflow:hidden;
       background:#000;
+      padding-bottom:26px;
+      box-sizing:border-box;
     }
     .media-strip{
       display:flex;
       width:100%;
-      transition:transform 0.28s ease;
+      overflow-x:auto;
+      scroll-snap-type: x mandatory;
+      scroll-behavior: smooth;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
     }
+    .media-strip::-webkit-scrollbar{ display:none; }
     .media-item{
       min-width:100%;
       flex:0 0 100%;
+      scroll-snap-align: center;
     }
-    .media-nav{
-      position:absolute;
-      top:50%;
-      transform:translateY(-50%);
-      width:34px;
-      height:34px;
-      border-radius:50%;
-      border:1px solid rgba(255,255,255,0.5);
-      background:rgba(0,0,0,0.45);
-      color:#fff;
-      font-size:20px;
-      line-height:1;
-      display:grid;
-      place-items:center;
-      cursor:pointer;
-      z-index:2;
-    }
-    .media-nav.left{ left:10px; }
-    .media-nav.right{ right:10px; }
     .media-dots{
       position:absolute;
-      bottom:10px;
+      bottom:6px;
       left:50%;
       transform:translateX(-50%);
       display:flex;
@@ -1560,6 +1585,7 @@ import { SUPABASE_URL } from '../config/supabase.config';
       border-radius:999px;
       background:rgba(0,0,0,0.4);
       z-index:2;
+      align-items:center;
     }
     .media-dots span{
       width:6px;
@@ -1569,6 +1595,16 @@ import { SUPABASE_URL } from '../config/supabase.config';
       display:inline-block;
     }
     .media-dots span.active{ background:#fff; }
+    .media-dots .media-count{
+      width:auto;
+      height:auto;
+      border-radius:12px;
+      padding:1px 6px;
+      font-size:10px;
+      font-weight:800;
+      background:rgba(255,255,255,0.16);
+      color:#fff;
+    }
     .post-visibility{
       font-weight:800;
       font-size:10px;
@@ -1917,13 +1953,12 @@ import { SUPABASE_URL } from '../config/supabase.config';
       .card{ padding:16px; border-radius:18px; }
       .head{
         gap:12px;
-        align-items:center;
-        justify-content:flex-start;
+        align-items:flex-start;
       }
       .head-actions{
-        width:100%;
-        justify-content:flex-end;
-        margin-left:0;
+        position: absolute;
+        top: 10px;
+        right: 10px;
       }
       .info{
         width:100%;
@@ -1993,6 +2028,7 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
   postEditError = '';
   lightboxUrl: string | null = null;
   private readonly POST_TEXT_LIMIT = 220;
+  private readonly POST_TEXT_PREVIEW = 140;
   private expandedPosts = new Set<string>();
   private viewedPostIds = new Set<string>();
   openPostMenuId: string | null = null;
@@ -2502,6 +2538,15 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     return this.postMediaIndex[post.id] ?? 0;
   }
 
+  onPostMediaScroll(post: CountryPost, event: Event): void {
+    const target = event?.target as HTMLElement | null;
+    if (!target) return;
+    const width = target.clientWidth || 1;
+    const max = Math.max(0, target.children.length - 1);
+    const idx = Math.round(target.scrollLeft / width);
+    this.postMediaIndex[post.id] = Math.min(Math.max(idx, 0), max);
+  }
+
   mediaTransform(post: CountryPost): string {
     const idx = this.postMediaIndexValue(post);
     return `translateX(-${idx * 100}%)`;
@@ -2599,8 +2644,9 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
   async submitProfilePost(): Promise<void> {
     if (!this.profile || !this.meId || !this.canPostFromProfile) return;
     const body = this.postBody.trim();
-    if (!body) {
-      this.postError = 'Write something before posting.';
+    const hasMedia = !!this.postMediaFile;
+    if (!body && !hasMedia) {
+      this.postError = 'Add text or media before posting.';
       return;
     }
 
@@ -2623,7 +2669,7 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
         mediaType = this.postMediaType || (this.postMediaFile.type.startsWith('video/') ? 'video' : 'image');
       }
 
-      await this.posts.createPost({
+      const created = await this.posts.createPost({
         authorId: this.meId,
         title: title || null,
         body,
@@ -2633,6 +2679,9 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
         mediaType,
         mediaUrl,
       });
+      if (!this.profilePosts.some((post) => post.id === created.id)) {
+        this.profilePosts = this.sortPostsDesc([created, ...this.profilePosts]);
+      }
 
       this.postTitle = '';
       this.postBody = '';
@@ -3658,7 +3707,27 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     return text.length > this.POST_TEXT_LIMIT;
   }
 
-  togglePostExpanded(postId: string): void {
+  isTextExpandable(text: string | null | undefined): boolean {
+    const value = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!value) return false;
+    return value.length > this.getPostPreviewLimit();
+  }
+
+  postPreview(text: string | null | undefined): string {
+    const value = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!value) return '';
+    const limit = this.getPostPreviewLimit();
+    if (value.length <= limit) return value;
+    const slice = value.slice(0, limit);
+    const lastSpace = slice.lastIndexOf(' ');
+    return (lastSpace > 40 ? slice.slice(0, lastSpace) : slice).trim();
+  }
+
+  togglePostExpanded(postId: string, event?: Event): void {
+    if (event) {
+      event.stopPropagation();
+      event.preventDefault();
+    }
     if (!postId) return;
     if (this.expandedPosts.has(postId)) {
       this.expandedPosts.delete(postId);
@@ -3666,6 +3735,24 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
       this.expandedPosts.add(postId);
     }
     this.forceUi();
+  }
+
+  onPostTextClick(postId: string, event: Event): void {
+    if (!this.expandedPosts.has(postId)) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('button')) return;
+    event.stopPropagation();
+    this.expandedPosts.delete(postId);
+    this.forceUi();
+  }
+
+  private getPostPreviewLimit(): number {
+    if (typeof window === 'undefined') return this.POST_TEXT_PREVIEW;
+    const width = window.innerWidth || 0;
+    if (width < 480) return 70;
+    if (width < 720) return 90;
+    if (width < 1024) return 120;
+    return this.POST_TEXT_PREVIEW;
   }
 }
 

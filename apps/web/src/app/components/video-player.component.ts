@@ -19,7 +19,6 @@ import {
     <div
       class="video-shell"
       [class.is-playing]="isPlaying"
-      [class.controls-visible]="controlsVisible"
       (mousemove)="revealControls()"
       (touchstart)="revealControls()"
     >
@@ -41,6 +40,33 @@ import {
         (playing)="setBuffering(false)"
       ></video>
       <div class="video-overlay"></div>
+      <button
+        class="mute-toggle"
+        type="button"
+        [attr.aria-label]="isMuted ? 'Unmute video' : 'Mute video'"
+        (click)="toggleMute(videoEl, $event)"
+      >
+        <svg
+          *ngIf="!isMuted"
+          class="icon-svg icon-stroke"
+          viewBox="0 0 24 24"
+          aria-hidden="true"
+        >
+          <path d="M4 10h4l5-4v12l-5-4H4z"></path>
+          <path d="M16 9a3 3 0 0 1 0 6"></path>
+          <path d="M18.5 6.5a6 6 0 0 1 0 11"></path>
+        </svg>
+        <svg
+          *ngIf="isMuted"
+          class="icon-svg icon-stroke"
+          viewBox="0 0 24 24"
+          aria-hidden="true"
+        >
+          <path d="M4 10h4l5-4v12l-5-4H4z"></path>
+          <line x1="16" y1="8" x2="21" y2="13"></line>
+          <line x1="21" y1="8" x2="16" y2="13"></line>
+        </svg>
+      </button>
       <button
         class="center-play"
         *ngIf="showCenterOverlay"
@@ -68,89 +94,6 @@ import {
       </button>
       <div class="buffering" *ngIf="isBuffering">
         <span class="spinner"></span>
-      </div>
-      <div class="controls" [class.hidden]="!controlsVisible">
-        <button
-          class="control-btn"
-          type="button"
-          [attr.aria-label]="isPlaying ? 'Pause video' : 'Play video'"
-          (click)="togglePlay(videoEl, $event)"
-        >
-          <svg
-            *ngIf="!isPlaying"
-            class="icon-svg icon-fill"
-            viewBox="0 0 24 24"
-            aria-hidden="true"
-          >
-            <path d="M8 5v14l11-7z"></path>
-          </svg>
-          <svg
-            *ngIf="isPlaying"
-            class="icon-svg icon-fill"
-            viewBox="0 0 24 24"
-            aria-hidden="true"
-          >
-            <rect x="6" y="5" width="4" height="14" rx="1"></rect>
-            <rect x="14" y="5" width="4" height="14" rx="1"></rect>
-          </svg>
-        </button>
-        <div class="progress-wrap" (click)="$event.stopPropagation()">
-          <input
-            type="range"
-            min="0"
-            max="100"
-            step="0.1"
-            [value]="progressPercent"
-            (input)="onScrub($event, videoEl)"
-            [style.--progress]="progressPercent + '%'"
-            aria-label="Seek"
-          />
-        </div>
-        <div class="time">{{ formatTime(currentTime) }} / {{ formatTime(duration) }}</div>
-        <button
-          class="control-btn"
-          type="button"
-          [attr.aria-label]="isMuted ? 'Unmute video' : 'Mute video'"
-          (click)="toggleMute(videoEl, $event)"
-        >
-          <svg
-            *ngIf="!isMuted"
-            class="icon-svg icon-stroke"
-            viewBox="0 0 24 24"
-            aria-hidden="true"
-          >
-            <path d="M4 10h4l5-4v12l-5-4H4z"></path>
-            <path d="M16 9a3 3 0 0 1 0 6"></path>
-            <path d="M18.5 6.5a6 6 0 0 1 0 11"></path>
-          </svg>
-          <svg
-            *ngIf="isMuted"
-            class="icon-svg icon-stroke"
-            viewBox="0 0 24 24"
-            aria-hidden="true"
-          >
-            <path d="M4 10h4l5-4v12l-5-4H4z"></path>
-            <line x1="16" y1="8" x2="21" y2="13"></line>
-            <line x1="21" y1="8" x2="16" y2="13"></line>
-          </svg>
-        </button>
-        <button
-          class="control-btn"
-          type="button"
-          aria-label="Toggle fullscreen"
-          (click)="toggleFullscreen(videoEl, $event)"
-        >
-          <svg
-            class="icon-svg icon-stroke"
-            viewBox="0 0 24 24"
-            aria-hidden="true"
-          >
-            <path d="M8 3H3v5"></path>
-            <path d="M16 3h5v5"></path>
-            <path d="M8 21H3v-5"></path>
-            <path d="M16 21h5v-5"></path>
-          </svg>
-        </button>
       </div>
     </div>
   `,
@@ -183,6 +126,21 @@ import {
         width: 34px;
         height: 34px;
       }
+      :host(.reel-player) .mute-toggle {
+        top: 16px;
+        right: 16px;
+        width: 52px;
+        height: 52px;
+        border-radius: 50%;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        background: rgba(8, 10, 14, 0.65);
+        color: #fff;
+        box-shadow: none;
+      }
+      :host(.reel-player) .icon-svg {
+        width: 22px;
+        height: 22px;
+      }
       :host(.controls-hidden) .controls {
         display: none;
       }
@@ -209,8 +167,9 @@ import {
       video {
         width: 100%;
         display: block;
-        max-height: 520px;
-        object-fit: cover;
+        max-height: none;
+        height: auto;
+        object-fit: contain;
         background: #000;
       }
       .video-shell:fullscreen video,
@@ -263,6 +222,21 @@ import {
         height: 26px;
         fill: #fff;
       }
+      .mute-toggle {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        background: rgba(0, 0, 0, 0.55);
+        color: #fff;
+        display: grid;
+        place-items: center;
+        cursor: pointer;
+        z-index: 3;
+      }
       .buffering {
         position: absolute;
         inset: 0;
@@ -283,49 +257,10 @@ import {
           transform: rotate(360deg);
         }
       }
-      .controls {
-        position: absolute;
-        left: 12px;
-        right: 12px;
-        bottom: 12px;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 8px 10px;
-        border-radius: 999px;
-        background: rgba(10, 10, 10, 0.75);
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        backdrop-filter: blur(10px);
-        transition: opacity 200ms ease, transform 200ms ease;
-      }
-      .controls.hidden {
-        opacity: 0;
-        transform: translateY(6px);
-        pointer-events: none;
-      }
-      .control-btn {
-        border: 0;
-        background: transparent;
-        color: #fff;
-        width: 34px;
-        height: 34px;
-        border-radius: 50%;
-        display: grid;
-        place-items: center;
-        cursor: pointer;
-        transition: background 150ms ease, transform 150ms ease;
-      }
-      .control-btn:hover {
-        background: rgba(255, 255, 255, 0.12);
-        transform: translateY(-1px);
-      }
       .icon-svg {
         width: 18px;
         height: 18px;
         display: block;
-      }
-      .icon-fill {
-        fill: currentColor;
       }
       .icon-stroke {
         fill: none;
@@ -333,67 +268,6 @@ import {
         stroke-width: 2;
         stroke-linecap: round;
         stroke-linejoin: round;
-      }
-      .progress-wrap {
-        flex: 1;
-        display: flex;
-        align-items: center;
-      }
-      input[type='range'] {
-        width: 100%;
-        height: 6px;
-        appearance: none;
-        background: linear-gradient(
-          to right,
-          #ffffff 0%,
-          #ffffff var(--progress),
-          rgba(255, 255, 255, 0.2) var(--progress),
-          rgba(255, 255, 255, 0.2) 100%
-        );
-        border-radius: 999px;
-        outline: none;
-        cursor: pointer;
-      }
-      input[type='range']::-webkit-slider-thumb {
-        appearance: none;
-        width: 14px;
-        height: 14px;
-        border-radius: 50%;
-        background: #fff;
-        box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.18);
-        transition: transform 150ms ease;
-      }
-      input[type='range']::-webkit-slider-thumb:hover {
-        transform: scale(1.1);
-      }
-      input[type='range']::-moz-range-thumb {
-        width: 14px;
-        height: 14px;
-        border-radius: 50%;
-        background: #fff;
-        border: 0;
-        box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.18);
-      }
-      .time {
-        font-size: 11px;
-        font-weight: 700;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: rgba(255, 255, 255, 0.9);
-        min-width: 96px;
-        text-align: right;
-      }
-      @media (max-width: 700px) {
-        .controls {
-          left: 8px;
-          right: 8px;
-          bottom: 8px;
-          gap: 8px;
-          padding: 6px 8px;
-        }
-        .time {
-          display: none;
-        }
       }
     `,
   ],
@@ -403,7 +277,7 @@ export class VideoPlayerComponent implements AfterViewInit, OnDestroy {
   @Input({ required: true }) src!: string;
   @Input() poster: string | null = null;
   @Input() preload: 'none' | 'metadata' | 'auto' = 'metadata';
-  @Input() centerOverlayMode: 'always' | 'on-click' = 'always';
+  @Input() centerOverlayMode: 'always' | 'on-click' = 'on-click';
   @Input() tapBehavior: 'toggle' | 'emit' | 'none' = 'toggle';
   @Output() videoTap = new EventEmitter<void>();
   @Output() viewed = new EventEmitter<void>();

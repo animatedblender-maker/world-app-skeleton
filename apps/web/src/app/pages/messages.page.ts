@@ -14,11 +14,12 @@ import { Conversation, Message } from '../core/models/messages.model';
 import { PostAuthor } from '../core/models/post.model';
 import { VideoPlayerComponent } from '../components/video-player.component';
 import { environment } from '../../envirnoments/envirnoment';
+import { BottomTabsComponent } from '../components/bottom-tabs.component';
 
 @Component({
   selector: 'app-messages-page',
   standalone: true,
-  imports: [CommonModule, FormsModule, VideoPlayerComponent],
+  imports: [CommonModule, FormsModule, VideoPlayerComponent, BottomTabsComponent],
   template: `
     <div class="wrap">
       <div class="card">
@@ -258,6 +259,7 @@ import { environment } from '../../envirnoments/envirnoment';
         </div>
       </div>
     </div>
+    <app-bottom-tabs></app-bottom-tabs>
 
     <div class="lightbox" *ngIf="lightboxUrl" (click)="closeImageLightbox()">
       <div class="lightbox-card" (click)="$event.stopPropagation()">
@@ -338,7 +340,7 @@ import { environment } from '../../envirnoments/envirnoment';
       min-height:100%;
       height:100%;
       position:relative;
-      padding:0;
+      padding:0 0 var(--tabs-safe, 64px);
       box-sizing:border-box;
       display:flex;
       flex-direction:column;
@@ -1176,6 +1178,7 @@ import { environment } from '../../envirnoments/envirnoment';
       .layout{
         grid-template-columns:1fr;
         height:100%;
+        gap:12px;
       }
       .panel{
         max-height:240px;
@@ -1955,7 +1958,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     const lkToken = typeof data?.token === 'string' ? data.token : '';
     if (!lkToken) throw new Error('Missing LiveKit token.');
     return { token: lkToken, url: url ?? '' };
-  }
+  } 
 
   private async disconnectLiveKit(): Promise<void> {
     if (this.livekitRoom) {

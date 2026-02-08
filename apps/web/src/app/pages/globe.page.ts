@@ -12,6 +12,7 @@ import { AuthService } from '../core/services/auth.service';
 import { GraphqlService } from '../core/services/graphql.service';
 import { MediaService } from '../core/services/media.service';
 import { VideoPlayerComponent } from '../components/video-player.component';
+import { BottomTabsComponent } from '../components/bottom-tabs.component';
 import { ProfileService, type Profile } from '../core/services/profile.service';
 import { LocationService } from '../core/services/location.service';
 import { PresenceService, type PresenceSnapshot } from '../core/services/presence.service';
@@ -51,7 +52,7 @@ type CountryMood = {
 @Component({
   selector: 'app-globe-page',
   standalone: true,
-  imports: [CommonModule, FormsModule, VideoPlayerComponent],
+  imports: [CommonModule, FormsModule, VideoPlayerComponent, BottomTabsComponent],
   template: `
     <div
       class="top-overlay"
@@ -129,7 +130,7 @@ type CountryMood = {
     </div>
 
       <div class="space-backdrop" aria-hidden="true"></div>
-      <button class="globe-logo" type="button" (click)="returnToGlobe()">
+      <button class="globe-logo" *ngIf="!selectedCountry" type="button" (click)="returnToGlobe()">
         <img src="/logo.png?v=3" alt="Matterya logo" />
       </button>
 
@@ -146,9 +147,13 @@ type CountryMood = {
       <!-- RIGHT: Main pane (expensive white card) -->
       <div class="main-pane" *ngIf="selectedCountry">
         <div class="main-card white-card">
+          <div class="feed-top" [class.hidden]="feedHeaderHidden">
           <div class="main-head">
             <div class="mh-text">
               <div class="mh-title-row">
+                <button class="feed-logo" type="button" (click)="returnToGlobe()" aria-label="Back to globe">
+                  <img src="/logo.png?v=3" alt="Matterya logo" />
+                </button>
                 <div class="mh-title">COUNTRY FEED</div>
                 <button
                   *ngIf="selectedCountry"
@@ -162,6 +167,13 @@ type CountryMood = {
               <div class="mh-sub">
                 {{ selectedCountry.name }} public space
                 <span class="mh-clock" *ngIf="clockLabel">({{ clockLabel }})</span>
+                <select
+                  class="mh-country-select"
+                  [ngModel]="selectedCountry.code"
+                  (ngModelChange)="onCountryDropdownChange($event)"
+                >
+                  <option *ngFor="let c of countryList" [value]="c.code">{{ c.name }}</option>
+                </select>
               </div>
             </div>
           </div>
@@ -172,8 +184,9 @@ type CountryMood = {
             <button class="tab" [class.active]="countryTab==='media'" (click)="setCountryTab('media')">MEDIA</button>
             <button class="tab" [class.active]="countryTab==='stats'" (click)="setCountryTab('stats')">STATS</button>
           </div>
+          </div>
 
-          <div class="tab-body">
+          <div class="tab-body" (scroll)="onFeedScroll($event)">
             <ng-container [ngSwitch]="countryTab">
               <div *ngSwitchCase="'posts'" class="posts-pane">
                 <div class="composer" *ngIf="profile && selectedCountry">
@@ -451,19 +464,38 @@ type CountryMood = {
                     </div>
               <div class="post-body" *ngIf="editingPostId !== post.id">
                 <div class="post-title" *ngIf="post.title">{{ post.title }}</div>
-                <p class="post-text" [class.clamped]="!isPostExpanded(post.id) && isPostExpandable(post)">{{ post.body }}</p>
+                <p
+                  class="post-text"
+                  [class.clamped]="!isPostExpanded(post.id) && isTextExpandable(post.body)"
+                  (click)="onPostTextClick(post.id, $event)"
+                >
+                  <span>{{ isPostExpanded(post.id) ? post.body : postPreview(post.body) }}</span>
+                  <button
+                    class="see-more inline"
+                    type="button"
+                    *ngIf="!isPostExpanded(post.id) && isTextExpandable(post.body)"
+                    (click)="togglePostExpanded(post.id, $event)"
+                  >
+                    See more
+                  </button>
+                </p>
               </div>
-              <div class="post-caption post-text" [class.clamped]="!isPostExpanded(post.id) && isPostExpandable(post)" *ngIf="editingPostId !== post.id && post.media_caption">
-                {{ post.media_caption }}
-              </div>
-              <button
-                class="see-more"
-                type="button"
-                *ngIf="editingPostId !== post.id && isPostExpandable(post)"
-                (click)="togglePostExpanded(post.id)"
+              <div
+                class="post-caption post-text"
+                [class.clamped]="!isPostExpanded(post.id) && isTextExpandable(post.media_caption)"
+                *ngIf="editingPostId !== post.id && post.media_caption"
+                (click)="onPostTextClick(post.id, $event)"
               >
-                {{ isPostExpanded(post.id) ? 'See less' : 'See more' }}
-              </button>
+                <span>{{ isPostExpanded(post.id) ? post.media_caption : postPreview(post.media_caption) }}</span>
+                <button
+                  class="see-more inline"
+                  type="button"
+                  *ngIf="!post.body && !isPostExpanded(post.id) && isTextExpandable(post.media_caption)"
+                  (click)="togglePostExpanded(post.id, $event)"
+                >
+                  See more
+                </button>
+              </div>
                     <div class="post-media" *ngIf="editingPostId !== post.id && post.media_url && post.media_type !== 'none'">
                       <ng-container *ngIf="postMediaUrls(post) as mediaUrls">
                         <ng-container *ngIf="postMediaTypes(post) as mediaTypes">
@@ -478,19 +510,19 @@ type CountryMood = {
                             <app-video-player
                               *ngIf="mediaTypes[0] === 'video'"
                               [src]="mediaUrls[0]"
-                              tapBehavior="emit"
+                              [tapBehavior]="postIsReel(post) ? 'emit' : 'toggle'"
                               (viewed)="recordView(post)"
                               (videoTap)="onPostVideoTap(post)"
                             ></app-video-player>
                           </ng-container>
                           <ng-template #mediaGallery>
                             <div class="media-gallery">
-                              <div class="media-strip" [style.transform]="mediaTransform(post)">
+                              <div class="media-strip" (scroll)="onPostMediaScroll(post, $event)">
                                 <div class="media-item" *ngFor="let url of mediaUrls; let idx = index">
                                   <app-video-player
                                     *ngIf="mediaTypes[idx] === 'video'"
                                     [src]="url"
-                                    tapBehavior="emit"
+                                    [tapBehavior]="postIsReel(post) ? 'emit' : 'toggle'"
                                     (viewed)="recordView(post)"
                                     (videoTap)="onPostVideoTap(post)"
                                   ></app-video-player>
@@ -503,29 +535,12 @@ type CountryMood = {
                                   />
                                 </div>
                               </div>
-                              <button
-                                class="media-nav left"
-                                type="button"
-                                *ngIf="postMediaIndexValue(post) > 0"
-                                (click)="prevPostMedia(post)"
-                                aria-label="Previous media"
-                              >
-                                &lt;
-                              </button>
-                              <button
-                                class="media-nav right"
-                                type="button"
-                                *ngIf="postMediaIndexValue(post) < mediaUrls.length - 1"
-                                (click)="nextPostMedia(post, mediaUrls.length)"
-                                aria-label="Next media"
-                              >
-                                &gt;
-                              </button>
                               <div class="media-dots">
                                 <span
                                   *ngFor="let _ of mediaUrls; let dotIndex = index"
                                   [class.active]="dotIndex === postMediaIndexValue(post)"
                                 ></span>
+                                <span class="media-count">{{ postMediaIndexValue(post) + 1 }}/{{ mediaUrls.length }}</span>
                               </div>
                             </div>
                           </ng-template>
@@ -798,140 +813,60 @@ type CountryMood = {
 
     <div
       class="node-backdrop"
-      *ngIf="menuOpen || panel === 'notifications'"
-      (click)="closeMenu(); closePanel()"
+      *ngIf="panel === 'notifications'"
+      (click)="closePanel()"
     ></div>
 
 \ \ \ \ <div\n\ \ \ \ \ \ class="lightbox"\n\ \ \ \ \ \ \*ngIf="lightboxUrl"\n\ \ \ \ \ \ \(click\)="closeImageLightbox\(\)"\n\ \ \ \ \ \ role="dialog"\n\ \ \ \ \ \ aria-modal="true"\n\ \ \ \ >\n\ \ \ \ \ \ <div\ class="lightbox-frame"\ \(click\)="\$event\.stopPropagation\(\)">\n\ \ \ \ \ \ \ \ <button\n\ \ \ \ \ \ \ \ \ \ class="lightbox-close"\n\ \ \ \ \ \ \ \ \ \ type="button"\n\ \ \ \ \ \ \ \ \ \ \(click\)="closeImageLightbox\(\);\ \$event\.stopPropagation\(\)"\n\ \ \ \ \ \ \ \ \ \ aria-label="Close"\n\ \ \ \ \ \ \ \ >\n\ \ \ \ \ \ \ \ \ \ ×\n\ \ \ \ \ \ \ \ </button>\n\ \ \ \ \ \ \ \ <img\ \[src]="lightboxUrl"\ alt="Expanded\ media"\ />\n\ \ \ \ \ \ </div>\n\ \ \ \ </div>
 
-    <div class="build-tag-corner" *ngIf="!selectedCountry" aria-hidden="true">
-      {{ clockLabel }}
-    </div>
-
-    <!-- Avatar orb overlay fixed (restored) -->
-    <div class="user-node">
-      <button
-        class="node-msg node-search"
-        type="button"
-        (click)="toggleSearch()"
-        [class.active]="searchOpen"
-        aria-label="Search"
-      >
-        &#x1F50D;
-      </button>
-      <button class="node-msg" type="button" (click)="goToMessages()" aria-label="Messages">
-        &#x1F4AC;
-        <span class="bell-badge" *ngIf="messageBadgeCount">{{ messageBadgeCount }}</span>
-      </button>
-
-      <div class="node-bell-wrap">
-        <button class="node-bell" type="button" (click)="openPanel('notifications')" [class.pulse]="bellPulse">
-          &#x1F514;
-          <span class="bell-badge" *ngIf="bellBadgeCount" [class.pulse]="bellPulse">{{ bellBadgeCount }}</span>
-        </button>
-
-        <div class="node-menu notif-menu" *ngIf="panel === 'notifications'" (click)="$event.stopPropagation()">
-          <div class="node-head">
-            <div class="node-title">NOTIFICATIONS</div>
-            <div class="node-sub2">Unread: {{ notificationsUnreadCount }}</div>
-          </div>
-
-          <div class="notif-actions">
-            <button
-              class="ghost"
-              type="button"
-              (click)="markAllNotificationsRead()"
-              [disabled]="notificationsLoading || notificationsActionBusy || !notifications.length"
-            >
-              Mark all read
-            </button>
-          </div>
-          <div class="notif-state" *ngIf="notificationsLoading">Loading notifications...</div>
-          <div class="notif-state error" *ngIf="!notificationsLoading && notificationsError">
-            {{ notificationsError }}
-          </div>
-          <div class="notif-list" *ngIf="!notificationsLoading && !notificationsError">
-            <div class="notif-empty" *ngIf="!notifications.length">No notifications yet.</div>
-            <button
-              class="notif-item"
-              type="button"
-              *ngFor="let notif of notifications"
-              (click)="openNotification(notif)"
-            >
-              <div class="notif-avatar">
-                <img *ngIf="notif.actor?.avatar_url" [src]="notif.actor?.avatar_url" alt="avatar" />
-                <span *ngIf="!notif.actor?.avatar_url">
-                  {{ (notif.actor?.display_name || notif.actor?.username || 'U').slice(0, 2).toUpperCase() }}
-                </span>
-              </div>
-              <div class="notif-body">
-                <div class="notif-line">
-                  <span class="notif-name">{{ notificationActorName(notif) }}</span>
-                  <span class="notif-text">{{ notificationMessage(notif) }}</span>
-                  <span class="notif-time">{{ formatDate(notif.created_at) }}</span>
-                </div>
-              </div>
-              <span class="notif-unread" *ngIf="!notif.read_at"></span>
-            </button>
-          </div>
-
-          <div class="node-foot">
-            <button class="ghost" type="button" (click)="closePanel()">CLOSE</button>
-          </div>
-        </div>
-      </div>
-
-      <button class="node-orb" type="button" (click)="toggleMenu()" [attr.aria-expanded]="menuOpen">
-        <ng-container *ngIf="nodeAvatarUrl; else initialsTpl">
-          <img
-            class="orb-img"
-            [src]="nodeAvatarUrl"
-            alt="avatar"
-            [style.transform]="nodeAvatarTransform"
-          />
-        </ng-container>
-
-        <ng-template #initialsTpl>
-          <div class="orb-initials">{{ initials }}</div>
-        </ng-template>
-
-        <span class="orb-pulse"></span>
-        <span class="orb-ring"></span>
-      </button>
-
-      <div class="node-menu" *ngIf="menuOpen" (click)="$event.stopPropagation()">
+    <div class="notif-hub" *ngIf="panel === 'notifications'" (click)="$event.stopPropagation()">
+      <div class="node-menu notif-menu">
         <div class="node-head">
-          <div class="node-title">YOUR NODE</div>
-          <div class="node-sub">{{ profile?.display_name || 'Unnamed' }}</div>
-          <div class="node-sub2">{{ userEmail || '--' }}</div>
-
-          <div class="node-sub2" *ngIf="profileError" style="color: rgba(255,120,120,0.95); opacity:1;">
-            {{ profileError }}
-          </div>
+          <div class="node-title">NOTIFICATIONS</div>
+          <div class="node-sub2">Unread: {{ notificationsUnreadCount }}</div>
         </div>
 
-        <div class="node-actions">
-          <button class="node-btn" type="button" (click)="goToMe()">
-            <span class="dot"></span><span>MY PROFILE</span>
+        <div class="notif-actions">
+          <button
+            class="ghost"
+            type="button"
+            (click)="markAllNotificationsRead()"
+            [disabled]="notificationsLoading || notificationsActionBusy || !notifications.length"
+          >
+            Mark all read
           </button>
-          <button class="node-btn" type="button" (click)="openPanel('presence')">
-            <span class="dot"></span><span>MY PRESENCE</span>
-          </button>
-
-          <button class="node-btn" type="button" (click)="openPanel('posts')">
-            <span class="dot"></span><span>MY POSTS</span>
-          </button>
-          <button class="node-btn" type="button" (click)="goToMessages()">
-            <span class="dot"></span><span>MESSAGES</span>
-          </button>
-
-          <button class="node-btn danger" type="button" (click)="logout()">
-            <span class="dot"></span><span>LOGOUT</span>
+        </div>
+        <div class="notif-state" *ngIf="notificationsLoading">Loading notifications...</div>
+        <div class="notif-state error" *ngIf="!notificationsLoading && notificationsError">
+          {{ notificationsError }}
+        </div>
+        <div class="notif-list" *ngIf="!notificationsLoading && !notificationsError">
+          <div class="notif-empty" *ngIf="!notifications.length">No notifications yet.</div>
+          <button
+            class="notif-item"
+            type="button"
+            *ngFor="let notif of notifications"
+            (click)="openNotification(notif)"
+          >
+            <div class="notif-avatar">
+              <img *ngIf="notif.actor?.avatar_url" [src]="notif.actor?.avatar_url" alt="avatar" />
+              <span *ngIf="!notif.actor?.avatar_url">
+                {{ (notif.actor?.display_name || notif.actor?.username || 'U').slice(0, 2).toUpperCase() }}
+              </span>
+            </div>
+            <div class="notif-body">
+              <div class="notif-line">
+                <span class="notif-name">{{ notificationActorName(notif) }}</span>
+                <span class="notif-text">{{ notificationMessage(notif) }}</span>
+                <span class="notif-time">{{ formatDate(notif.created_at) }}</span>
+              </div>
+            </div>
+            <span class="notif-unread" *ngIf="!notif.read_at"></span>
           </button>
         </div>
 
         <div class="node-foot">
-          <button class="ghost" type="button" (click)="closeMenu()">CLOSE</button>
+          <button class="ghost" type="button" (click)="closePanel()">CLOSE</button>
         </div>
       </div>
     </div>
@@ -971,6 +906,8 @@ type CountryMood = {
       </div>
     </div>
 
+    <app-bottom-tabs></app-bottom-tabs>
+
   `,
   host: {
     '[class.search-open]': 'searchOpen',
@@ -992,14 +929,17 @@ type CountryMood = {
       --top-overlay-height-open: 76px;
       --top-overlay-height-closed: 0px;
       --top-overlay-height: var(--top-overlay-height-open);
-      --top-overlay-top: calc(var(--ui-edge-top) + var(--node-size) + var(--ui-gap));
-      --stage-top-pad-open: calc(var(--top-overlay-top) + var(--top-overlay-height) + 6px);
+      --top-overlay-bottom: calc(var(--ui-edge-bottom) + var(--tabs-height, 64px) + 10px);
+      --stage-top-pad-open: var(--stage-top-pad-closed);
       --stage-top-pad-closed: calc(var(--ui-edge-top) + var(--node-size) + 8px);
       --stage-top-pad: var(--stage-top-pad-open);
     }
     :host:not(.search-open){
       --top-overlay-height: var(--top-overlay-height-closed);
       --stage-top-pad: var(--stage-top-pad-closed);
+    }
+    :host.country-open{
+      --stage-top-pad: var(--safe-top);
     }
 
     .space-backdrop{
@@ -1036,10 +976,30 @@ type CountryMood = {
       border-radius: 10px;
       box-shadow: none;
     }
+    .feed-logo{
+        width: calc(var(--node-size) - 4px);
+        height: calc(var(--node-size) - 4px);
+        display:grid;
+        place-items:center;
+        border: 0;
+        padding: 0;
+        background: transparent !important;
+        box-shadow: none;
+        cursor: pointer;
+        flex: 0 0 auto;
+      }
+    .feed-logo img{
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        border-radius: 8px;
+        background: transparent;
+        box-shadow: none;
+      }
     .build-tag-corner{
       position: fixed;
       right: var(--ui-edge-right);
-      bottom: var(--ui-edge-bottom);
+      bottom: calc(var(--ui-edge-bottom) + var(--tabs-height, 64px));
       z-index: 11000;
       font-size: 10px;
       letter-spacing: 0.18em;
@@ -1058,10 +1018,10 @@ type CountryMood = {
       right: var(--ui-edge-right);
     }
 
-    /* =============== TOPBAR =============== */
     .top-overlay{
       position: fixed;
-      top: var(--top-overlay-top);
+      top: auto;
+      bottom: var(--top-overlay-bottom);
       right: var(--ui-edge-right);
       left: auto;
       transform: none;
@@ -1178,7 +1138,8 @@ type CountryMood = {
     .user-suggestions,
     .country-suggestions{
       position:absolute;
-      top: calc(100% + 8px);
+      top: auto;
+      bottom: calc(100% + 8px);
       left: 0;
       right: 0;
       z-index: 12001;
@@ -1292,7 +1253,6 @@ type CountryMood = {
       font-size: 12px;
       opacity: 0.6;
     }
-    /* =============== MAP BG ALWAYS FULL =============== */
     .globe-bg{
       position: fixed;
       inset: 0;
@@ -1302,15 +1262,14 @@ type CountryMood = {
       pointer-events: auto;
       touch-action: auto;
       filter: saturate(1.2) contrast(1.18) brightness(1.05);
-      transform: translateZ(0);
-      background: transparent;
+      transform: translate3d(0, -18px, 0);
+      background: #000;
     }
     .globe-bg.bg-static{
       pointer-events: none;
       touch-action: none;
     }
 
-    /* =============== FOREGROUND STAGE =============== */
     .stage{
       position: fixed;
       inset: 0;
@@ -1322,20 +1281,28 @@ type CountryMood = {
       padding-top: var(--stage-top-pad);
       padding-left: var(--ui-edge-left);
       padding-right: var(--ui-edge-right);
-      padding-bottom: var(--ui-edge-bottom);
+      padding-bottom: calc(var(--ui-edge-bottom) + var(--tabs-height, 64px));
       box-sizing: border-box;
       display: grid;
       grid-template-columns: min(420px, 34vw) 1fr;
+      grid-template-rows: minmax(0, 1fr);
       gap: var(--ui-gap);
-      min-height: calc(100vh - var(--stage-top-pad));
+      min-height: 0;
+      height: calc(100vh - var(--stage-top-pad) - var(--tabs-height, 64px));
+      align-items: stretch;
+      justify-items: stretch;
     }
 
     .stage.focus.feed-full{
       grid-template-columns: 1fr;
+      grid-template-rows: minmax(0, 1fr);
       padding-top: var(--stage-top-pad);
       padding-left: 0;
       padding-right: 0;
       gap: 0;
+      min-height: 0;
+      padding-bottom: 0;
+      height: calc(100vh - var(--stage-top-pad));
     }
       .stage.focus.feed-full .map-pane{
         display: none;
@@ -1347,9 +1314,16 @@ type CountryMood = {
         width: 100%;
         max-width: none;
         border-radius: 0;
+        padding: 10px 8px 14px;
+        --card-pad-x: 8px;
+      }
+      .stage.focus.feed-full .post-card{
+        margin-left: calc(-1 * var(--card-pad-x));
+        margin-right: calc(-1 * var(--card-pad-x));
+        width: calc(100% + (var(--card-pad-x) * 2));
+        border-radius: 0;
       }
 
-    /* left pane is just overlay glass (map is still in background) */
     .map-pane{
       position: relative;
       min-height: 0;
@@ -1366,9 +1340,8 @@ type CountryMood = {
       pointer-events: none;
     }
 
-    /* visually "raise the map" slightly (the background stays fixed) */
     .stage.focus .globe-bg{
-      transform: translateY(-10px);
+      transform: translate3d(0, -10px, 0);
     }
 
     .main-pane{
@@ -1376,22 +1349,25 @@ type CountryMood = {
       min-width: 0;
       min-height: 0;
       height: 100%;
+      align-self: stretch;
     }
 
     .main-card{
-        height: 100%;
-        min-height: 0;
-        border-radius: 26px;
-        padding: 16px;
-        box-shadow: 0 30px 90px rgba(0,0,0,0.40);
-        overflow: hidden;
-        display:flex;
-        flex-direction: column;
+          height: 100%;
+          min-height: 0;
+          border-radius: 26px;
+          padding: 16px;
+          --card-pad-x: 16px;
+          --feed-top-space: 132px;
+          box-shadow: 0 30px 90px rgba(0,0,0,0.40);
+          overflow: hidden;
+          display:flex;
+          flex-direction: column;
       width: 100%;
       box-sizing: border-box;
+      position: relative;
     }
 
-    /* "expensive white" posts container */
     .white-card{
       background: rgba(245, 247, 250, 0.92);
       border: 1px solid rgba(0,0,0,0.08);
@@ -1399,7 +1375,26 @@ type CountryMood = {
       color: rgba(10,12,18,0.90);
     }
 
-    .main-head{ display:flex; align-items: center; justify-content:space-between; gap: 12px; margin-bottom: 10px; }
+    .feed-top{
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 6;
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+      background: rgba(245, 247, 250, 0.92);
+      backdrop-filter: blur(12px);
+      padding: 10px 0 8px;
+      transition: opacity 0.22s ease, transform 0.22s ease;
+    }
+    .feed-top.hidden{
+      opacity:0;
+      transform:translateY(-100%);
+      pointer-events:none;
+    }
+    .main-head{ display:flex; align-items: center; justify-content:space-between; gap: 12px; margin-bottom: 0; }
     .mh-text{ min-width: 0; display:flex; flex-direction:column; justify-content:center; }
     .mh-title-row{ display:flex; align-items:center; gap: 10px; flex-wrap: wrap; }
     .feed-return{
@@ -1424,8 +1419,23 @@ type CountryMood = {
       opacity: .8;
       white-space: nowrap;
     }
+    .mh-country-select{
+      border: 1px solid rgba(0,0,0,0.12);
+      border-radius: 12px;
+      background: rgba(255,255,255,0.9);
+      color: rgba(10,12,18,0.8);
+      font-size: 11px;
+      letter-spacing: .06em;
+      padding: 4px 8px;
+      text-transform: uppercase;
+      font-weight: 700;
+    }
+    .mh-country-select:focus{
+      outline: none;
+      border-color: rgba(0,0,0,0.24);
+    }
 
-    .tabs{ display:flex; gap: 8px; margin: 12px 0; flex-wrap: wrap; }
+    .tabs{ display:flex; gap: 8px; margin: 0; flex-wrap: wrap; }
     .tab{
       border: 1px solid rgba(0,0,0,0.10);
       background: rgba(255,255,255,0.70);
@@ -1447,9 +1457,12 @@ type CountryMood = {
       flex: 1;
       min-height: 0;
       overflow: auto;
+      overflow-x: hidden;
+      scrollbar-gutter: stable both-edges;
       -webkit-overflow-scrolling: touch;
       touch-action: pan-y;
       overscroll-behavior: contain;
+      padding-top: var(--feed-top-space);
       padding-bottom: calc(18px + env(safe-area-inset-bottom));
     }
     .placeholder{ border-radius: 18px; padding: 14px; }
@@ -1459,7 +1472,7 @@ type CountryMood = {
     }
     .ph-title{ font-weight: 900; letter-spacing: .10em; font-size: 12px; text-transform: uppercase; }
     .ph-sub{ margin-top: 6px; opacity: .75; font-size: 12px; line-height: 1.4; }
-    .posts-pane{ display:flex; flex-direction:column; gap:18px; box-sizing:border-box; }
+    .posts-pane{ display:flex; flex-direction:column; gap:8px; box-sizing:border-box; }
     .posts-pane > *{
       width: 100%;
       margin-left: 0;
@@ -1643,7 +1656,7 @@ type CountryMood = {
     .posts-state{ font-size:13px; font-weight:700; opacity:0.7; }
     .posts-state.hint{ opacity:0.6; }
     .posts-state.error{ color:#ff6b81; }
-    .posts-list{ display:flex; flex-direction:column; gap:16px; box-sizing:border-box; padding-bottom: 12px; }
+    .posts-list{ display:flex; flex-direction:column; gap:10px; box-sizing:border-box; padding-bottom: 10px; }
     .posts-empty{ text-align:center; font-size:13px; opacity:0.65; }
     .load-more{
       align-self:center;
@@ -1662,7 +1675,8 @@ type CountryMood = {
       border-radius:20px;
       border:1px solid rgba(0,0,0,0.06);
       background:rgba(255,255,255,0.98);
-      padding:16px;
+      --post-pad-x: 16px;
+      padding: var(--post-pad-x);
       box-shadow:0 18px 60px rgba(0,0,0,0.15);
       box-sizing:border-box;
     }
@@ -1723,61 +1737,70 @@ type CountryMood = {
       box-shadow:none;
     }
     .follow-chip:disabled{ opacity:0.6; cursor:not-allowed; }
-    .post-body{ margin-top:12px; font-size:14px; line-height:1.5; color:rgba(10,12,18,0.85); }
+    .post-body{ margin-top:12px; font-size:14px; line-height:1.4; color:rgba(10,12,18,0.85); }
+    .post-text{ display:block; line-height:1.4; }
+    .post-text.clamped{
+      overflow:hidden;
+      max-height: 2.1em;
+    }
     .post-caption{ margin-top:10px; font-size:13px; line-height:1.45; color:rgba(10,12,18,0.75); }
+    .post-text .see-more.inline{
+      margin-left:6px;
+      padding:0;
+      border:0;
+      background:transparent;
+      font-size:12px;
+      font-weight:800;
+      letter-spacing:0.02em;
+      color:rgba(10,12,18,0.6);
+      text-decoration:underline;
+      cursor:pointer;
+    }
     .post-media{
       margin-top:12px;
-      border-radius:18px;
+      margin-left: calc(-1 * var(--post-pad-x));
+      margin-right: calc(-1 * var(--post-pad-x));
+      border-radius:0;
       overflow:hidden;
       border:1px solid rgba(0,0,0,0.06);
       background:#fff;
       position:relative;
+      width: calc(100% + (var(--post-pad-x) * 2));
     }
     .post-media img,
     .post-media video{
       width:100%;
       display:block;
-      max-height:520px;
-      object-fit:cover;
+      height:auto;
+      max-height:none;
+      object-fit:contain;
       background:#000;
     }
     .media-gallery{
       position:relative;
       width:100%;
-      overflow:hidden;
       background:#000;
+      padding-bottom:26px;
+      box-sizing:border-box;
     }
     .media-strip{
       display:flex;
       width:100%;
-      transition:transform 0.28s ease;
+      overflow-x:auto;
+      scroll-snap-type: x mandatory;
+      scroll-behavior: smooth;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
     }
+    .media-strip::-webkit-scrollbar{ display:none; }
     .media-item{
       min-width:100%;
       flex:0 0 100%;
+      scroll-snap-align: center;
     }
-    .media-nav{
-      position:absolute;
-      top:50%;
-      transform:translateY(-50%);
-      width:34px;
-      height:34px;
-      border-radius:50%;
-      border:1px solid rgba(255,255,255,0.5);
-      background:rgba(0,0,0,0.45);
-      color:#fff;
-      font-size:20px;
-      line-height:1;
-      display:grid;
-      place-items:center;
-      cursor:pointer;
-      z-index:2;
-    }
-    .media-nav.left{ left:10px; }
-    .media-nav.right{ right:10px; }
     .media-dots{
       position:absolute;
-      bottom:10px;
+      bottom:6px;
       left:50%;
       transform:translateX(-50%);
       display:flex;
@@ -1786,6 +1809,7 @@ type CountryMood = {
       border-radius:999px;
       background:rgba(0,0,0,0.4);
       z-index:2;
+      align-items:center;
     }
     .media-dots span{
       width:6px;
@@ -1795,6 +1819,16 @@ type CountryMood = {
       display:inline-block;
     }
     .media-dots span.active{ background:#fff; }
+    .media-dots .media-count{
+      width:auto;
+      height:auto;
+      border-radius:12px;
+      padding:1px 6px;
+      font-size:10px;
+      font-weight:800;
+      background:rgba(255,255,255,0.16);
+      color:#fff;
+    }
     .media-badge{
       position:absolute;
       top:10px;
@@ -2159,7 +2193,6 @@ type CountryMood = {
       letter-spacing:0.06em;
     }
 
-    /* =============== STATS TAB =============== */
     .stats-pane{
       display: grid;
       gap: 14px;
@@ -2240,7 +2273,6 @@ type CountryMood = {
       font-weight: 700;
     }
 
-    /* =============== AVATAR ORB + MENU (RESTORED) =============== */
     .node-backdrop{ position: fixed; inset: 0; z-index: 11900; background: transparent; }
 
     .lightbox{
@@ -2315,9 +2347,6 @@ type CountryMood = {
     }
     .orb-img{ width: 120%; height: 120%; object-fit: cover; border-radius: 999px; will-change: transform; transform: translate3d(0,0,0); transition: transform 90ms linear; }
     .orb-initials{ font-weight: 900; letter-spacing: 0.12em; font-size: 11px; color: rgba(255,255,255,0.92); text-transform: uppercase; }
-    .orb-pulse{ position:absolute; inset:-8px; border-radius:999px; background: radial-gradient(circle at 50% 50%, rgba(0,255,209,0.16), transparent 60%); animation: pulse 2.8s ease-in-out infinite; pointer-events:none; }
-    @keyframes pulse{ 0%,100% { transform: scale(0.98); opacity: .55; } 50% { transform: scale(1.06); opacity: .95; } }
-    .orb-ring{ position:absolute; inset:-2px; border-radius:999px; background: conic-gradient(from 180deg, rgba(0,255,209,0.0), rgba(0,255,209,0.65), rgba(140,0,255,0.55), rgba(0,255,209,0.0)); filter: blur(10px); opacity: 0.35; pointer-events:none; }
 
     .node-menu{
       position: absolute;
@@ -2345,6 +2374,13 @@ type CountryMood = {
       pointer-events:none;
     }
     .node-menu > *{ position:relative; z-index:1; }
+    .notif-hub{
+      position: fixed;
+      top: var(--ui-edge-top);
+      right: var(--ui-edge-right);
+      z-index: 13020;
+      pointer-events: auto;
+    }
     .node-bell-wrap{
       position: relative;
       display: flex;
@@ -2506,7 +2542,6 @@ type CountryMood = {
     }
     .node-edit:hover{ opacity: 1; }
 
-    /* =============== PANEL OVERLAY (PROFILE EDITOR) =============== */
     .overlay{
       position: fixed;
       inset: 0;
@@ -2626,7 +2661,6 @@ type CountryMood = {
     .presence-line .k{ opacity:.65; letter-spacing:.16em; font-weight: 900; font-size: 11px; }
     .presence-line .v{ color: rgba(0,255,209,0.92); font-weight: 900; letter-spacing: .08em; font-size: 12px; }
 
-    /* =============== RESPONSIVE =============== */
     @media (max-width: 900px){
       .stage.focus{
         grid-template-columns: 1fr;
@@ -2639,14 +2673,14 @@ type CountryMood = {
         border-radius: 22px;
       }
     }
-      @media (max-width: 720px){
-      :host{
-        --ui-edge: 12px;
-        --node-size: 40px;
+        @media (max-width: 720px){
+        :host{
+          --ui-edge: 12px;
+          --node-size: 40px;
         --top-overlay-height-open: 64px;
         --top-overlay-height-closed: 0px;
         --top-overlay-height: var(--top-overlay-height-open);
-        --stage-top-pad-open: calc(var(--top-overlay-top) + var(--top-overlay-height) + 4px);
+        --stage-top-pad-open: var(--stage-top-pad-closed);
         --stage-top-pad-closed: calc(var(--ui-edge-top) + var(--node-size) + 8px);
         --stage-top-pad: var(--stage-top-pad-open);
       }
@@ -2678,6 +2712,8 @@ type CountryMood = {
       }
         .main-card{
           padding: 14px;
+          --card-pad-x: 14px;
+          --feed-top-space: 150px;
         }
       .feed-return{
         padding: 6px 12px;
@@ -2721,12 +2757,16 @@ type CountryMood = {
         --top-overlay-height-open: 70px;
         --top-overlay-height-closed: 0px;
         --top-overlay-height: var(--top-overlay-height-open);
-        --stage-top-pad-open: calc(var(--top-overlay-top) + var(--top-overlay-height) + 4px);
+        --stage-top-pad-open: var(--stage-top-pad-closed);
         --stage-top-pad-closed: calc(var(--ui-edge-top) + var(--node-size) + 8px);
         --stage-top-pad: var(--stage-top-pad-open);
       }
+      .main-card{
+        --feed-top-space: 168px;
+      }
       .top-overlay{
-        top: var(--top-overlay-top);
+        top: auto;
+        bottom: var(--top-overlay-bottom);
       }
       .top-actions{
         flex-direction: column;
@@ -2763,7 +2803,11 @@ type CountryMood = {
   `],
 })
 export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
-    buildTag = 'v2026-02-06-9';
+    buildTag = 'v2026-02-07-3';
+  feedHeaderHidden = false;
+  private feedLastScrollTop = 0;
+  private globalFireworkSeeded = false;
+  private globalFireworkPosts: CountryPost[] = [];
   // background is simple black for now
   clockLabel = '';
   private clockTimer: any = null;
@@ -2859,6 +2903,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   reportError = '';
   reportFeedback = '';
   private readonly POST_TEXT_LIMIT = 220;
+  private readonly POST_TEXT_PREVIEW = 140;
   private expandedPosts = new Set<string>();
   private viewedPostIds = new Set<string>();
   private followingIds = new Set<string>();
@@ -3085,6 +3130,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
 
   async ngOnInit(): Promise<void> {
     this.startClock();
+    this.setAppBackground('globe');
     void this.push.syncIfGranted();
     this.postEventsCreatedSub = this.postEvents.createdPost$.subscribe((post) => {
       this.zone.run(() => this.handleCountryPostEvent(post));
@@ -3266,6 +3312,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
         this.countriesReady = true;
         this.tryApplyPendingRouteState();
       });
+      void this.seedGlobalFireworkWords(data.countries);
 
       try {
         await this.presence.start({
@@ -3323,6 +3370,10 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       window.clearInterval(this.clockTimer);
       this.clockTimer = null;
     }
+    this.setAppBackground('light');
+    try {
+      document.body.classList.remove('feed-header-hidden');
+    } catch {}
     try { this.presence.stop(); } catch {}
     this.queryParamSub?.unsubscribe();
     this.postEventsCreatedSub?.unsubscribe();
@@ -3419,6 +3470,43 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     return { top, bottom, left, right };
   }
 
+  private resetFeedHeader(): void {
+    this.setFeedHeaderHidden(false);
+    this.feedLastScrollTop = 0;
+  }
+
+  private setAppBackground(mode: 'globe' | 'feed' | 'light'): void {
+    try {
+      const root = document.documentElement;
+      root.classList.remove('app-bg-globe', 'app-bg-feed', 'app-bg-light');
+      const cls =
+        mode === 'feed' ? 'app-bg-feed' : mode === 'light' ? 'app-bg-light' : 'app-bg-globe';
+      root.classList.add(cls);
+    } catch {}
+  }
+
+  onFeedScroll(event: Event): void {
+    const target = event?.target as HTMLElement | null;
+    if (!target) return;
+    const current = target.scrollTop || 0;
+    const delta = current - this.feedLastScrollTop;
+    if (Math.abs(delta) < 12) return;
+    if (delta > 0 && current > 60) {
+      this.setFeedHeaderHidden(true);
+    } else if (delta < 0) {
+      this.setFeedHeaderHidden(false);
+    }
+    this.feedLastScrollTop = current;
+  }
+
+  private setFeedHeaderHidden(hidden: boolean): void {
+    if (this.feedHeaderHidden === hidden) return;
+    this.feedHeaderHidden = hidden;
+    try {
+      document.body.classList.toggle('feed-header-hidden', hidden);
+    } catch {}
+  }
+
   private applyFocusView(country: CountryModel): void {
     this.globeService.setViewPadding(this.computeFocusPadding());
     this.globeService.flyTo(country.center.lat, country.center.lng, country.flyAltitude ?? 1.0, 900);
@@ -3427,6 +3515,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   setCountryTab(tab: CountryTab, opts?: { skipRouteUpdate?: boolean }): void {
     if (this.countryTab === tab) return;
     this.countryTab = tab;
+    this.resetFeedHeader();
     if ((tab === 'posts' || tab === 'media') && this.selectedCountry && !this.postsLoading && !this.posts.length) {
       void this.loadPostsForCountry(this.selectedCountry);
     }
@@ -3440,6 +3529,22 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.forceUi();
   }
 
+  onCountryDropdownChange(code: string): void {
+    const normalized = String(code || '').trim().toUpperCase();
+    if (!normalized) return;
+    if (this.selectedCountry?.code?.toUpperCase() === normalized) return;
+    const match = this.ui.countries.find(
+      (c) => String(c.code ?? '').toUpperCase() === normalized
+    );
+    if (match) {
+      this.focusCountry(match);
+    }
+  }
+
+  get countryList(): CountryModel[] {
+    return this.ui.countries;
+  }
+
   focusCountry(
     country: CountryModel,
     opts?: { tab?: CountryTab; skipRouteUpdate?: boolean; focusPostId?: string; focusPost?: CountryPost | null }
@@ -3447,8 +3552,10 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     const tab = opts?.tab ?? 'posts';
 
     this.selectedCountry = country;
+    this.setAppBackground('feed');
     this.countryFeedFull = true;
     this.countryTab = tab;
+    this.resetFeedHeader();
     this.notificationFocusPostId = opts?.focusPostId ?? null;
     this.notificationFocusPost = opts?.focusPost ?? null;
     if (!this.canPostHere) this.composerOpen = false;
@@ -3489,8 +3596,10 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   clearSelectedCountry(opts?: { skipRouteUpdate?: boolean }): void {
     const hadState = !!this.selectedCountry || !!this.panel;
     this.selectedCountry = null;
+    this.setAppBackground('globe');
     this.countryFeedFull = true;
     this.countryTab = 'posts';
+    this.resetFeedHeader();
     this.composerOpen = false;
 
     this.ui.setMode('all');
@@ -3515,6 +3624,11 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.clearComposerMedia();
     this.notificationFocusPostId = null;
     this.notificationFocusPost = null;
+    if (this.globalFireworkPosts.length) {
+      this.updateFloatingWordsFromPosts(this.globalFireworkPosts);
+    } else {
+      this.updateFloatingWordsFromPosts([]);
+    }
 
     this.forceUi();
 
@@ -3555,8 +3669,10 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
         const match = this.posts.find((post) => post.id === this.notificationFocusPostId);
         if (match) this.notificationFocusPost = match;
       }
+      this.updateFloatingWordsFromPosts(this.posts);
     } catch (e: any) {
       this.postsError = e?.message ?? String(e);
+      this.updateFloatingWordsFromPosts([]);
     } finally {
       this.postsLoading = false;
       this.forceUi();
@@ -3587,12 +3703,120 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       const merged = lists.flat();
       this.followingPosts = this.sortPostsDesc(merged);
       this.postsRenderLimit = this.POSTS_RENDER_START;
+      this.updateFloatingWordsFromPosts(this.followingPosts);
     } catch (e: any) {
       this.followingError = e?.message ?? String(e);
+      this.updateFloatingWordsFromPosts([]);
     } finally {
       this.followingLoading = false;
       this.forceUi();
     }
+  }
+
+  private async seedGlobalFireworkWords(countries: CountryModel[]): Promise<void> {
+    if (this.globalFireworkSeeded) return;
+    this.globalFireworkSeeded = true;
+    const sample = this.pickSampleCountries(countries, 12);
+    if (!sample.length) return;
+    try {
+      const requests = sample.map((country) => {
+        const code = country.code ?? '';
+        if (!code) return Promise.resolve([] as CountryPost[]);
+        return this.postsService.listByCountry(code, 18, { skipComments: true, demoLimit: 160 });
+      });
+      const results = await Promise.allSettled(requests);
+      const merged: CountryPost[] = [];
+      for (const res of results) {
+        if (res.status === 'fulfilled') merged.push(...res.value);
+      }
+      this.globalFireworkPosts = this.sortPostsDesc(merged).slice(0, 200);
+      if (!this.selectedCountry) {
+        this.updateFloatingWordsFromPosts(this.globalFireworkPosts);
+      }
+    } catch {
+      this.globalFireworkSeeded = false;
+      // Keep globe running even if seed fails.
+    }
+  }
+
+  private pickSampleCountries(countries: CountryModel[], count: number): CountryModel[] {
+    const list = (countries || []).filter((c) => !!c?.code);
+    if (list.length <= count) return list;
+    const copy = [...list];
+    for (let i = copy.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [copy[i], copy[j]] = [copy[j], copy[i]];
+    }
+    return copy.slice(0, count);
+  }
+
+  private updateFloatingWordsFromPosts(posts: CountryPost[]): void {
+    const words = this.extractWordsFromPosts(posts);
+    const groups = this.extractWordGroupsFromPosts(posts);
+    this.globeService.setFloatingWords(words);
+    this.globeService.setFireworkWordGroups(groups);
+  }
+
+  private extractWordsFromPosts(posts: CountryPost[]): string[] {
+    if (!posts?.length) return [];
+    const stop = this.getStopWords();
+    const words: string[] = [];
+    for (const post of posts) {
+      const text = [post?.title, post?.body, post?.media_caption]
+        .filter((value) => !!value)
+        .join(' ')
+        .trim();
+      if (!text) continue;
+      const parts = text.split(/[^\p{L}\p{N}]+/u);
+      for (const part of parts) {
+        const token = part.trim();
+        if (token.length < 4) continue;
+        const lower = token.toLowerCase();
+        if (stop.has(lower)) continue;
+        words.push(token);
+        if (words.length > 360) break;
+      }
+      if (words.length > 360) break;
+    }
+    const deduped = Array.from(new Set(words.map((w) => w.slice(0, 24))));
+    return deduped.slice(0, 160);
+  }
+
+  private extractWordGroupsFromPosts(posts: CountryPost[]): string[][] {
+    if (!posts?.length) return [];
+    const stop = this.getStopWords();
+    const groups: string[][] = [];
+    for (const post of posts) {
+      const text = [post?.title, post?.body, post?.media_caption]
+        .filter((value) => !!value)
+        .join(' ')
+        .trim();
+      if (!text) continue;
+      const parts = text.split(/[^\p{L}\p{N}]+/u);
+      const group: string[] = [];
+      const seen = new Set<string>();
+      for (const part of parts) {
+        const token = part.trim();
+        if (token.length < 4) continue;
+        const lower = token.toLowerCase();
+        if (stop.has(lower) || seen.has(lower)) continue;
+        seen.add(lower);
+        group.push(token.slice(0, 24));
+        if (group.length >= 8) break;
+      }
+      if (group.length) groups.push(group);
+      if (groups.length >= 140) break;
+    }
+    return groups;
+  }
+
+  private getStopWords(): Set<string> {
+    return new Set([
+      'the','and','with','from','that','this','have','has','had','your','you','for','are','was','were',
+      'not','but','like','into','what','when','where','who','why','how','can','could','should','just',
+      'about','than','them','then','there','here','over','under','out','off','our','their','they','she',
+      'him','her','his','hers','its','we','us','a','an','to','of','in','on','at','by','as','or','if','it'
+    ]);
   }
 
   get visiblePosts(): CountryPost[] {
@@ -3655,7 +3879,27 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     return text.length > this.POST_TEXT_LIMIT;
   }
 
-  togglePostExpanded(postId: string): void {
+  isTextExpandable(text: string | null | undefined): boolean {
+    const value = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!value) return false;
+    return value.length > this.getPostPreviewLimit();
+  }
+
+  postPreview(text: string | null | undefined): string {
+    const value = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!value) return '';
+    const limit = this.getPostPreviewLimit();
+    if (value.length <= limit) return value;
+    const slice = value.slice(0, limit);
+    const lastSpace = slice.lastIndexOf(' ');
+    return (lastSpace > 40 ? slice.slice(0, lastSpace) : slice).trim();
+  }
+
+  togglePostExpanded(postId: string, event?: Event): void {
+    if (event) {
+      event.stopPropagation();
+      event.preventDefault();
+    }
     if (!postId) return;
     if (this.expandedPosts.has(postId)) {
       this.expandedPosts.delete(postId);
@@ -3663,6 +3907,24 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       this.expandedPosts.add(postId);
     }
     this.forceUi();
+  }
+
+  onPostTextClick(postId: string, event: Event): void {
+    if (!this.expandedPosts.has(postId)) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('button')) return;
+    event.stopPropagation();
+    this.expandedPosts.delete(postId);
+    this.forceUi();
+  }
+
+  private getPostPreviewLimit(): number {
+    if (typeof window === 'undefined') return this.POST_TEXT_PREVIEW;
+    const width = window.innerWidth || 0;
+    if (width < 480) return 70;
+    if (width < 720) return 90;
+    if (width < 1024) return 120;
+    return this.POST_TEXT_PREVIEW;
   }
 
   openImageLightbox(url: string | null): void {
@@ -4183,8 +4445,9 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       return;
     }
     const body = this.newPostBody.trim();
-    if (!body) {
-      this.postComposerError = 'Write something before posting.';
+    const hasMedia = this.composerMediaFiles.length > 0;
+    if (!body && !hasMedia) {
+      this.postComposerError = 'Add text or media before posting.';
       return;
     }
 
@@ -4241,7 +4504,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       this.newPostTitle = '';
       this.clearComposerMedia();
     if (!this.posts.some((existing) => existing.id === post.id)) {
-      this.posts = this.sortPostsDesc([...this.posts, post]);
+      this.posts = this.sortPostsDesc([post, ...this.posts]);
     }
       this.composerOpen = false;
       this.postFeedback = mediaUrl
@@ -4320,6 +4583,15 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
 
   postMediaIndexValue(post: CountryPost): number {
     return this.postMediaIndex[post.id] ?? 0;
+  }
+
+  onPostMediaScroll(post: CountryPost, event: Event): void {
+    const target = event?.target as HTMLElement | null;
+    if (!target) return;
+    const width = target.clientWidth || 1;
+    const max = Math.max(0, target.children.length - 1);
+    const idx = Math.round(target.scrollLeft / width);
+    this.postMediaIndex[post.id] = Math.min(Math.max(idx, 0), max);
   }
 
   mediaTransform(post: CountryPost): string {
@@ -5318,10 +5590,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     const y = date.getFullYear();
     const m = pad(date.getMonth() + 1);
     const d = pad(date.getDate());
-    const h = pad(date.getHours());
-    const min = pad(date.getMinutes());
-    const s = pad(date.getSeconds());
-    return `${y}-${m}-${d} ${h}:${min}:${s}`;
+    return `${d}.${m}.${y}`;
   }
 
   // -----------------------------
