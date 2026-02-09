@@ -1,4 +1,0 @@
-﻿# Current State
-
-- TBD
-

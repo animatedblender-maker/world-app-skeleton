@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en" data-beasties-container>
+<head>
+  <meta charset="utf-8">
+  <title>matterya</title>
+  <link rel="icon" href="/favicon.png" type="image/png">
+  <link rel="apple-touch-icon" href="/logo.png">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#0b1a26">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <base href="/">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+
+  <script>
+    (function () {
+      var params = new URLSearchParams(window.location.search);
+      var redirect = params.get('redirect');
+      if (!redirect) return;
+      params.delete('redirect');
+      var target = decodeURIComponent(redirect);
+      var rest = params.toString();
+      if (rest) {
+        target += (target.indexOf('?') === -1 ? '?' : '&') + rest;
+      }
+      history.replaceState(null, '', target);
+    })();
+  </script>
+
+  <!-- Libraries -->
+  <script src="https://unpkg.com/globe.gl"></script>
+  <script src="https://unpkg.com/livekit-client/dist/livekit-client.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <!-- ✅ Your Supabase config (after supabase-js, before </head>) -->
+  <script>
+    window.SUPABASE_URL = "https://YOUR_PROJECT_REF.supabase.co";
+    window.SUPABASE_ANON_KEY = "YOUR_ANON_KEY";
+  </script>
+<style>html,body{width:100%}app-root{display:block;width:100%;height:100%}html,body{margin:0;height:100%;background:var(--app-bg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;overflow:hidden;touch-action:pan-x pan-y;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right);box-sizing:border-box}body:before{content:"";position:fixed;top:0;left:0;right:0;height:env(safe-area-inset-top);background:var(--app-bg);z-index:99998;pointer-events:none}:root{--app-bg:#f5f6f8;--app-bg-light:#f5f7fa;--app-bg-feed:#ffffff;--app-bg-dark:#05070b;--tabs-height:64px;--tabs-safe:calc(var(--tabs-height) + env(safe-area-inset-bottom, 0px))}*,*:before,*:after{box-sizing:inherit}</style><link rel="stylesheet" href="styles-SJSGKY5P.css" media="print" onload="this.media='all'"><noscript><link rel="stylesheet" href="styles-SJSGKY5P.css"></noscript></head>
+<body>
+  <app-root></app-root>
+<link rel="modulepreload" href="chunk-S7D4WX2P.js"><link rel="modulepreload" href="chunk-5HBUYTZB.js"><link rel="modulepreload" href="chunk-57X26VKZ.js"><link rel="modulepreload" href="chunk-YQ2TA2FF.js"><link rel="modulepreload" href="chunk-LJDR2ADK.js"><link rel="modulepreload" href="chunk-7DJA5TI4.js"><link rel="modulepreload" href="chunk-AFJFBD4M.js"><link rel="modulepreload" href="chunk-LQQHCQP3.js"><link rel="modulepreload" href="chunk-KO5X6LCN.js"><link rel="modulepreload" href="chunk-SPQ2JWKS.js"><script src="main-SHBJ2AOQ.js" type="module"></script></body>
+</html>
