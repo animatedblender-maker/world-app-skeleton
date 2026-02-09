@@ -27,6 +27,15 @@ import type { Subscription } from 'rxjs';
         {{ notificationsUnreadCount }}
       </span>
     </button>
+    <button
+      type="button"
+      class="global-travel"
+      *ngIf="showTravelButton"
+      aria-label="Travel to a country"
+      (click)="openTravelSearch()"
+    >
+      <span class="global-travel-icon">✈</span>
+    </button>
     <div class="global-call" *ngIf="incomingCall && !isMessagesRoute">
       <div class="global-call-card">
         <div class="global-call-title">
@@ -108,6 +117,32 @@ import type { Subscription } from 'rxjs';
       padding: 0;
       transition: opacity 0.2s ease, transform 0.2s ease;
     }
+    .global-travel{
+      position: fixed;
+      top: calc(env(safe-area-inset-top) + 14px);
+      right: 56px;
+      width: 34px;
+      height: 34px;
+      border-radius: 12px;
+      border: 0;
+      background: transparent;
+      color: #f4f7ff;
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+      z-index: 120;
+      padding: 0;
+      transition: opacity 0.2s ease, transform 0.2s ease;
+    }
+    :host-context(.feed-header-hidden) .global-travel{
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(-8px);
+    }
+    .global-travel-icon{
+      font-size: 20px;
+      line-height: 1;
+    }
     :host-context(.feed-header-hidden) .global-alert{
       opacity: 0;
       pointer-events: none;
@@ -142,6 +177,15 @@ import type { Subscription } from 'rxjs';
         width: 30px;
         height: 30px;
       }
+      .global-travel{
+        top: calc(env(safe-area-inset-top) + 10px);
+        right: 48px;
+        width: 30px;
+        height: 30px;
+      }
+      .global-travel-icon{
+        font-size: 18px;
+      }
       .global-alert-badge{
         top: -3px;
         right: -3px;
@@ -162,6 +206,7 @@ export class AppComponent {
   isMessagesRoute = false;
   isProfileRoute = false;
   isReelsRoute = false;
+  showTravelButton = false;
   notificationsUnreadCount = 0;
   private notificationInsertSub?: Subscription;
   private notificationUpdateSub?: Subscription;
@@ -187,15 +232,72 @@ export class AppComponent {
     this.callService.incoming$.subscribe((call) => {
       this.incomingCall = call;
     });
-    this.isMessagesRoute = this.router.url.startsWith('/messages');
-    this.isProfileRoute = this.router.url.startsWith('/me') || this.router.url.startsWith('/user');
-    this.isReelsRoute = this.router.url.startsWith('/reels');
+    this.updateRouteFlags(this.router.url);
+    this.syncRootBackground(this.router.url);
     this.router.events.pipe(filter((event) => event instanceof NavigationEnd)).subscribe(() => {
-      this.isMessagesRoute = this.router.url.startsWith('/messages');
-      this.isProfileRoute = this.router.url.startsWith('/me') || this.router.url.startsWith('/user');
-      this.isReelsRoute = this.router.url.startsWith('/reels');
+      this.updateRouteFlags(this.router.url);
+      this.syncRootBackground(this.router.url);
     });
     void this.initNotificationBadge();
+  }
+
+  private updateRouteFlags(url: string): void {
+    this.isMessagesRoute = url.startsWith('/messages');
+    this.isProfileRoute = url.startsWith('/me') || url.startsWith('/user');
+    this.isReelsRoute = url.startsWith('/reels');
+    let parsed: URL | null = null;
+    try {
+      parsed = new URL(url, window.location.origin);
+    } catch {}
+    const pathname = parsed?.pathname ?? url;
+    const isGlobe =
+      pathname === '/' || pathname.startsWith('/globe') || pathname.startsWith('/globe-cesium');
+    const hasCountry = !!parsed?.searchParams?.get('country');
+    this.showTravelButton = isGlobe && !hasCountry;
+  }
+
+  private syncRootBackground(url: string): void {
+    if (typeof document === 'undefined') return;
+    const root = document.documentElement;
+    root.classList.remove('app-bg-globe', 'app-bg-feed', 'app-bg-light');
+    const themeMeta = document.querySelector('meta[name="theme-color"]') as HTMLMetaElement | null;
+    const setTheme = (color: string) => {
+      if (themeMeta) themeMeta.setAttribute('content', color);
+      document.body.style.backgroundColor = color;
+      document.documentElement.style.backgroundColor = color;
+    };
+    let parsed: URL | null = null;
+    try {
+      parsed = new URL(url, window.location.origin);
+    } catch {}
+    const pathname = parsed?.pathname ?? url;
+    const isGlobe =
+      pathname.startsWith('/globe') || pathname === '/' || pathname.startsWith('/globe-cesium');
+    const isReels = pathname.startsWith('/reels');
+    const isFeed = isGlobe && !!parsed?.searchParams?.get('country');
+
+    if (isFeed) {
+      root.classList.add('app-bg-feed');
+      const computed = getComputedStyle(root).getPropertyValue('--app-bg').trim();
+      setTheme(computed || '#f5f6f8');
+      return;
+    }
+    if (isGlobe || isReels) {
+      root.classList.add('app-bg-globe');
+      const computed = getComputedStyle(root).getPropertyValue('--app-bg').trim();
+      setTheme(computed || '#05070b');
+      return;
+    }
+    root.classList.add('app-bg-light');
+    const computed = getComputedStyle(root).getPropertyValue('--app-bg').trim();
+    setTheme(computed || '#f5f6f8');
+  }
+
+  openTravelSearch(): void {
+    void this.router.navigate(['/globe'], {
+      queryParams: { travel: '1' },
+      queryParamsHandling: 'merge',
+    });
   }
 
   private checkForAppUpdate(): void {

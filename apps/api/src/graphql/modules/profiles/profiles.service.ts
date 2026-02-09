@@ -100,23 +100,29 @@ export class ProfilesService {
     const raw = (query || '').trim();
     if (!raw) return [];
     const iso = raw.toLowerCase();
-    const pattern = `${iso}%`;
-    const max = Math.max(1, limit);
+    const pattern = `%${iso}%`;
+    const max = Math.max(1, Math.min(100, limit));
 
     const { rows } = await pool.query(
       `
-      select *
-      from public.profiles
-      where lower(username) like $1 or lower(display_name) like $1
-      order by
-        case when lower(username) like $1 then 0
-             when lower(display_name) like $1 then 1
-             else 2
-        end,
-        username nulls last
-      limit $2
+      with q as (
+        select websearch_to_tsquery('simple', $1) as tsq
+      )
+      select *,
+        ts_rank_cd(
+          to_tsvector('simple', coalesce(username, '') || ' ' || coalesce(display_name, '')),
+          q.tsq
+        ) as rank
+      from public.profiles, q
+      where (
+        to_tsvector('simple', coalesce(username, '') || ' ' || coalesce(display_name, '')) @@ q.tsq
+        or lower(coalesce(username, '')) like $2
+        or lower(coalesce(display_name, '')) like $2
+      )
+      order by rank desc nulls last, username nulls last
+      limit $3
       `,
-      [pattern, max]
+      [raw, pattern, max]
     );
 
     return rows as ProfileRow[];

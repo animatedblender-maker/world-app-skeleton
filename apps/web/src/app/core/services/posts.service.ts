@@ -235,6 +235,78 @@ export class PostsService {
     return (postsByAuthor ?? []).map((row) => this.mapPost(row));
   }
 
+  async searchPosts(query: string, limit = 25): Promise<CountryPost[]> {
+    const term = String(query || '').trim();
+    if (!term) return [];
+    const searchQuery = `
+      query SearchPosts($query: String!, $limit: Int) {
+        searchPosts(query: $query, limit: $limit) {
+          id
+          title
+          body
+          media_type
+          media_url
+          thumb_url
+          shared_post_id
+          shared_post {
+            id
+            title
+            body
+            media_type
+            media_url
+            thumb_url
+            visibility
+            like_count
+            comment_count
+            liked_by_me
+            created_at
+            updated_at
+            author_id
+            country_name
+            country_code
+            city_name
+            author {
+              user_id
+              display_name
+              username
+              avatar_url
+              country_name
+              country_code
+            }
+          }
+          visibility
+          like_count
+          comment_count
+          liked_by_me
+          created_at
+          updated_at
+          author_id
+          country_name
+          country_code
+          city_name
+          author {
+            user_id
+            display_name
+            username
+            avatar_url
+            country_name
+            country_code
+          }
+        }
+      }
+    `;
+
+    try {
+      const { searchPosts } = await this.gql.request<{ searchPosts: any[] }>(searchQuery, {
+        query: term,
+        limit,
+      });
+      return (searchPosts ?? []).map((row) => this.mapPost(row));
+    } catch {
+      return [];
+    }
+  }
+
   async getPostById(postId: string): Promise<CountryPost | null> {
     if (!postId) return null;
     if (environment.useDemoDataset && (await this.demoData.isDemoPostId(postId))) {

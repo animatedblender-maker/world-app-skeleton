@@ -32,6 +32,12 @@ export const postsResolvers = {
       const limit = typeof args.limit === 'number' ? args.limit : 25;
       return await svc().postsByAuthor(args.user_id ?? '', limit, ctx.user?.id ?? null);
     },
+    searchPosts: async (_: any, args: { query: string; limit?: number }, ctx: Context) => {
+      const raw = (args?.query ?? '').trim();
+      if (!raw) return [];
+      const limit = typeof args.limit === 'number' ? args.limit : 25;
+      return await svc().searchPosts(raw, limit, ctx.user?.id ?? null);
+    },
     postById: async (_: any, args: { post_id: string }, ctx: Context) => {
       if (!args?.post_id) throw new Error('post_id is required.');
       return await svc().postById(args.post_id, ctx.user?.id ?? null);

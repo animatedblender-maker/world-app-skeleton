@@ -20,35 +20,39 @@ type TabKey = 'home' | 'search' | 'messages' | 'profile';
       <button
         type="button"
         class="tab-btn"
+        aria-label="Feed"
         [class.active]="active === 'home'"
         (click)="goHome()"
       >
-        Feed
+        <span class="tab-icon" aria-hidden="true">🏠</span>
       </button>
       <button
         type="button"
         class="tab-btn"
+        aria-label="Search"
         [class.active]="active === 'search'"
         (click)="openSearch()"
       >
-        Search
+        <span class="tab-icon" aria-hidden="true">🔍</span>
       </button>
       <button
         type="button"
         class="tab-btn"
+        aria-label="Chats"
         [class.active]="active === 'messages'"
         (click)="goMessages()"
       >
-        Chats
+        <span class="tab-icon" aria-hidden="true">💬</span>
         <span class="tab-badge" *ngIf="messagesUnreadCount > 0">{{ messagesUnreadCount }}</span>
       </button>
       <button
         type="button"
         class="tab-btn"
+        aria-label="Profile"
         [class.active]="active === 'profile'"
         (click)="goProfile()"
       >
-        Profile
+        <span class="tab-icon" aria-hidden="true">👤</span>
       </button>
     </nav>
   `,
@@ -74,39 +78,40 @@ type TabKey = 'home' | 'search' | 'messages' | 'profile';
         gap: 6px;
         padding: 6px 12px calc(8px + env(safe-area-inset-bottom));
         height: calc(var(--tabs-height, 64px) + env(safe-area-inset-bottom));
-        background: rgba(6, 10, 16, 0.92);
-        border-top: 1px solid rgba(255, 255, 255, 0.08);
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
-        box-shadow: 0 -12px 30px rgba(0, 0, 0, 0.35);
+        background: #ffffff;
+        border-top: 1px solid rgba(7, 20, 40, 0.08);
+        box-shadow: 0 -6px 20px rgba(12, 18, 24, 0.08);
       }
       .tab-btn {
-        border: 1px solid transparent;
-        border-radius: 999px;
+        border: 0;
+        border-radius: 14px;
         background: transparent;
-        color: rgba(255, 255, 255, 0.75);
-        font-size: 12px;
-        font-weight: 800;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
+        color: rgba(13, 22, 36, 0.7);
         cursor: pointer;
-        padding: 10px 6px;
-        transition: background 160ms ease, color 160ms ease, border 160ms ease;
+        padding: 6px 4px;
+        transition: color 120ms ease;
         position: relative;
+        display: grid;
+        place-items: center;
+        gap: 4px;
       }
       .tab-btn:hover {
-        color: #fff;
-        border-color: rgba(255, 255, 255, 0.2);
+        color: #101724;
       }
       .tab-btn.active {
-        color: #fff;
-        background: rgba(255, 255, 255, 0.12);
-        border-color: rgba(255, 255, 255, 0.25);
+        color: #0b1a2c;
+      }
+      .tab-icon{
+        font-size: 20px;
+        line-height: 1;
+      }
+      .tab-label{
+        display: none;
       }
       .tab-badge{
         position: absolute;
-        top: 4px;
-        right: 8px;
+        top: 2px;
+        right: 10px;
         min-width: 18px;
         height: 18px;
         border-radius: 999px;
@@ -120,10 +125,8 @@ type TabKey = 'home' | 'search' | 'messages' | 'profile';
         box-shadow: 0 0 0 2px rgba(6,10,16,0.8);
       }
       @media (max-width: 640px) {
-        .tab-btn {
-          font-size: 11px;
-          letter-spacing: 0.06em;
-          padding: 9px 4px;
+        .tab-icon{
+          font-size: 18px;
         }
         .tab-badge{
           top: 2px;
@@ -141,6 +144,7 @@ export class BottomTabsComponent implements OnInit, OnDestroy {
   messagesUnreadCount = 0;
   tabsHidden = false;
   private sub?: Subscription;
+  private lastGlobeUrl = '/globe';
   private unreadPollTimer: number | null = null;
   private unreadRefreshInFlight = false;
   private lastScrollTop = 0;
@@ -156,9 +160,12 @@ export class BottomTabsComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     this.syncActive(this.router.url);
+    this.captureGlobeUrl(this.router.url);
     this.sub = this.router.events.subscribe((event) => {
       if (event instanceof NavigationEnd) {
-        this.syncActive(event.urlAfterRedirects || event.url);
+        const url = event.urlAfterRedirects || event.url;
+        this.syncActive(url);
+        this.captureGlobeUrl(url);
       }
     });
     void this.refreshUnreadMessages();
@@ -176,36 +183,29 @@ export class BottomTabsComponent implements OnInit, OnDestroy {
   }
 
   goHome(): void {
-    const cached = this.location.getCachedLocation();
-    const code = cached?.countryCode?.trim().toUpperCase();
-    if (code) {
-      void this.router.navigate(['/globe'], {
-        queryParams: { country: code, tab: 'posts', panel: null, search: '0' },
-      });
+    if (this.lastGlobeUrl) {
+      void this.router.navigateByUrl(this.lastGlobeUrl);
       return;
     }
-    void this.router.navigate(['/globe']);
+    const cached = this.location.getCachedLocation();
+    const code = cached?.countryCode?.trim().toUpperCase();
+    void this.router.navigate(['/globe'], {
+      queryParams: code ? { country: code, tab: 'posts', panel: null } : null,
+    });
   }
 
   openSearch(): void {
-    const onGlobe = this.router.url.startsWith('/globe') || this.router.url === '/';
-    const isOpen = this.router.url.includes('search=1');
-    if (onGlobe) {
-      void this.router.navigate([], {
-        relativeTo: this.route,
-        queryParams: { search: isOpen ? '0' : '1', panel: null },
-        queryParamsHandling: 'merge',
-      });
-      return;
-    }
-    void this.router.navigate(['/globe'], { queryParams: { search: '1' } });
+    if (this.active === 'search') return;
+    void this.router.navigate(['/search']);
   }
 
   goMessages(): void {
+    if (this.active === 'messages') return;
     void this.router.navigate(['/messages']);
   }
 
   goProfile(): void {
+    if (this.active === 'profile') return;
     void this.router.navigate(['/me']);
   }
 
@@ -244,14 +244,29 @@ export class BottomTabsComponent implements OnInit, OnDestroy {
       return;
     }
     if (url.startsWith('/globe') || url === '/' || url.startsWith('/globe-cesium')) {
-      if (url.includes('search=1')) {
-        this.active = 'search';
-        return;
-      }
       this.active = 'home';
       return;
     }
+    if (url.startsWith('/search')) {
+      this.active = 'search';
+      return;
+    }
     this.active = 'home';
+  }
+
+  private captureGlobeUrl(url: string): void {
+    if (!(url.startsWith('/globe') || url === '/' || url.startsWith('/globe-cesium'))) return;
+    this.lastGlobeUrl = this.stripSearchParam(url);
+  }
+
+  private stripSearchParam(url: string): string {
+    try {
+      const parsed = new URL(url, window.location.origin);
+      parsed.searchParams.delete('search');
+      return parsed.pathname + (parsed.search ? parsed.search : '');
+    } catch {
+      return url.replace(/([?&])search=[^&]+/, '').replace(/[?&]$/, '');
+    }
   }
 
   private handleScroll(event: Event): void {

@@ -32,10 +32,22 @@ html, body {
   padding-right: env(safe-area-inset-right);
   box-sizing: border-box;
 }
+body::before{
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: env(safe-area-inset-top);
+  background: var(--app-bg);
+  z-index: 99998;
+  pointer-events: none;
+}
 
 :root{
   --app-bg: #f5f6f8;
   --app-bg-light: #f5f7fa;
+  --app-bg-feed: #ffffff;
   --app-bg-dark: #05070b;
   --tabs-height: 64px;
   --tabs-safe: calc(var(--tabs-height) + env(safe-area-inset-bottom, 0px));
@@ -46,6 +58,9 @@ html.app-bg-feed{
 }
 html.app-bg-globe{
   --app-bg: var(--app-bg-dark);
+}
+html.app-bg-feed{
+  --app-bg: var(--app-bg-feed);
 }
 *, *::before, *::after { box-sizing: inherit; }
 #globe { width: 100vw; height: 100vh; }

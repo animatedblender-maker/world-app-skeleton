@@ -242,6 +242,7 @@ export const typeDefs = `#graphql
     # Posts / social
     postsByCountry(country_code: String!, limit: Int): [Post!]!
     postsByAuthor(user_id: ID!, limit: Int): [Post!]!
+    searchPosts(query: String!, limit: Int): [Post!]!
     postById(post_id: ID!): Post
     commentsByPost(post_id: ID!, limit: Int, before: String): [PostComment!]!
     postLikes(post_id: ID!, limit: Int): [PostLike!]!

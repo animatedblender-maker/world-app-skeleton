@@ -52,6 +52,12 @@ export const routes: Routes = [
       import('./pages/messages.page').then((m) => m.MessagesPageComponent),
   },
   {
+    path: 'search',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pages/search.page').then((m) => m.SearchPageComponent),
+  },
+  {
     path: 'reels/:country',
     canActivate: [authGuard],
     loadComponent: () =>

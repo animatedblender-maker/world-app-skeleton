@@ -203,13 +203,15 @@ export class ProfileService {
   async searchProfiles(query: string, limit = 6) {
     const trimmed = String(query || '').trim();
     if (!trimmed) return { searchProfiles: [] };
+    const normalizedLimit = limit <= 0 ? undefined : limit;
+    const fakeLimit = limit <= 0 ? 5000 : limit;
 
     const [realResult, fakeResult] = await Promise.allSettled([
       this.gql.request<{ searchProfiles: Profile[] }>(SEARCH_PROFILES, {
         query: trimmed,
-        limit,
+        limit: normalizedLimit,
       }),
-      this.fakeData.searchProfiles(trimmed, limit),
+      this.fakeData.searchProfiles(trimmed, fakeLimit),
     ]);
 
     const realProfiles =
@@ -217,6 +219,20 @@ export class ProfileService {
     const fakeProfiles = fakeResult.status === 'fulfilled' ? fakeResult.value : [];
 
     return { searchProfiles: this.mergeProfiles(realProfiles, fakeProfiles, limit) };
+  }
+
+  async searchProfilesReal(query: string, limit = 6) {
+    const trimmed = String(query || '').trim();
+    if (!trimmed) return { searchProfiles: [] };
+    const normalizedLimit = limit <= 0 ? undefined : limit;
+    try {
+      return await this.gql.request<{ searchProfiles: Profile[] }>(SEARCH_PROFILES, {
+        query: trimmed,
+        limit: normalizedLimit,
+      });
+    } catch {
+      return { searchProfiles: [] };
+    }
   }
 
   private mergeProfiles(real: Profile[], fake: Profile[], limit: number): Profile[] {
@@ -233,6 +249,7 @@ export class ProfileService {
     real.forEach(push);
     fake.forEach(push);
 
+    if (limit <= 0) return next;
     return next.slice(0, Math.max(1, limit));
   }
 }

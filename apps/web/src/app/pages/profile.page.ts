@@ -2727,7 +2727,9 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     if (!shared) return;
     const targetId = shared.shared_post_id || shared.id;
     if (!targetId) return;
-    void this.router.navigate(['/post', targetId]);
+    void this.router.navigate(['/globe'], {
+      queryParams: { post: targetId, tab: 'posts', panel: null },
+    });
   }
 
   private buildReelSeedPosts(post: CountryPost): CountryPost[] {

@@ -61,55 +61,17 @@ type CountryMood = {
       (click)="$event.stopPropagation()"
     >
       <div class="overlay-inner">
-          <div class="top-actions">
-            <div class="tab-row" *ngIf="searchOpen">
-              <button
-                *ngFor="let tab of searchTabs"
-                type="button"
-                class="tab"
-                [class.active]="tab.id === activeTab"
-                (click)="setActiveTab(tab.id)"
-              >
-                {{ tab.label }}
-              </button>
-              </div>
-            </div>
+        <div class="travel-title">Travel to a country</div>
         <div class="search-control" *ngIf="searchOpen">
           <input
             type="text"
-            [placeholder]="activeTab === 'people' ? 'Search people...' : 'Search countries...'"
+            placeholder="Type a country..."
             autocomplete="off"
             [(ngModel)]="searchInputValue"
             (keydown)="handleSearchKeydown($event)"
             name="globalSearch"
           />
-          <div class="user-loader" *ngIf="userSuggestionsLoading"></div>
-          <div class="user-suggestions" *ngIf="activeTab === 'people' && userSuggestions.length">
-            <button
-              type="button"
-              class="user-suggestion"
-              *ngFor="let profile of userSuggestions"
-              (click)="selectUserSuggestion(profile)"
-            >
-              <div class="suggestion-avatar">
-                <img *ngIf="profile.avatar_url" [src]="profile.avatar_url" alt="avatar" />
-                <span *ngIf="!profile.avatar_url">
-                  {{ (profile.display_name || profile.username || 'U').slice(0, 2).toUpperCase() }}
-                </span>
-                <span
-                  class="presence-dot"
-                  [class.online]="isUserOnline(profile.user_id)"
-                  [class.offline]="!isUserOnline(profile.user_id)"
-                  aria-hidden="true"
-                ></span>
-              </div>
-              <div class="suggestion-info">
-                <div class="profile-name">{{ profile.display_name || profile.username || 'Member' }}</div>
-                <div class="profile-handle">@{{ profile.username || profile.user_id }}</div>
-              </div>
-            </button>
-          </div>
-          <div class="country-suggestions" *ngIf="activeTab === 'countries' && countrySuggestions.length">
+          <div class="country-suggestions" *ngIf="countrySuggestions.length">
             <div
               class="country-option"
               *ngFor="let country of countrySuggestions"
@@ -121,9 +83,6 @@ type CountryMood = {
               <span>{{ country.name }}</span>
               <small>{{ country.code || country.name }}</small>
             </div>
-          </div>
-          <div class="user-search-error" *ngIf="userSearchError && activeTab === 'people'">
-            {{ userSearchError }}
           </div>
         </div>
       </div>
@@ -225,7 +184,7 @@ type CountryMood = {
                             *ngIf="!canPostHere"
                             class="flat-action"
                             type="button"
-                            (click)="clearSelectedCountry()"
+                            (click)="goToMyCountry()"
                           >
                             GO TO MY COUNTRY
                           </button>
@@ -1507,7 +1466,7 @@ type CountryMood = {
       touch-action: pan-y;
       overscroll-behavior: contain;
       padding-top: var(--feed-top-space);
-      padding-bottom: calc(18px + env(safe-area-inset-bottom));
+      padding-bottom: calc(18px + var(--tabs-safe, 64px));
     }
     .placeholder{ border-radius: 18px; padding: 14px; }
     .placeholder.light{
@@ -3370,9 +3329,30 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
           return;
         }
 
+        const travelFlag = params.get('travel');
+        if (travelFlag === '1') {
+          if (this.selectedCountry) {
+            this.clearSelectedCountry({ skipRouteUpdate: true });
+          }
+          this.searchOpen = true;
+          this.activeTab = 'countries';
+          this.userSearchTerm = '';
+          this.countrySearchTerm = '';
+          this.countrySuggestions = [];
+          this.forceUi();
+          void this.router.navigate([], {
+            relativeTo: this.route,
+            queryParams: { travel: null },
+            queryParamsHandling: 'merge',
+            replaceUrl: true,
+          });
+        }
+
         const searchFlag = params.get('search');
         if (searchFlag === '1') {
-          this.searchOpen = true;
+          this.searchOpen = false;
+          void this.router.navigate(['/search'], { replaceUrl: true });
+          return;
         } else if (searchFlag === '0') {
           this.searchOpen = false;
         }
@@ -3599,6 +3579,14 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       const cls =
         mode === 'feed' ? 'app-bg-feed' : mode === 'light' ? 'app-bg-light' : 'app-bg-globe';
       root.classList.add(cls);
+      const computed = getComputedStyle(root).getPropertyValue('--app-bg').trim();
+      const bg = computed || (mode === 'globe' ? '#05070b' : '#f5f6f8');
+      document.body.style.backgroundColor = bg;
+      document.documentElement.style.backgroundColor = bg;
+      const themeMeta = document.querySelector('meta[name="theme-color"]') as HTMLMetaElement | null;
+      if (themeMeta) {
+        themeMeta.setAttribute('content', bg);
+      }
     } catch {}
   }
 
@@ -3753,6 +3741,45 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     setTimeout(() => this.globeService.resize(), 60);
 
     if (!opts?.skipRouteUpdate && hadState) this.updateRouteState();
+  }
+
+  goToMyCountry(): void {
+    const code = this.effectiveCountryCode;
+    let match: CountryModel | null = null;
+    if (code) {
+      match =
+        this.ui.countries.find(
+          (c) => String(c.code ?? '').trim().toUpperCase() === code
+        ) ?? null;
+    }
+    if (!match) {
+      const name = this.effectiveCountryName.trim();
+      if (name) {
+        const norm = this.search.normalizeName(name);
+        if (norm) {
+          match =
+            this.ui.countries.find(
+              (c) =>
+                c.norm === norm ||
+                norm.startsWith(c.norm) ||
+                c.norm.startsWith(norm) ||
+                norm.includes(c.norm)
+            ) ?? null;
+          if (!match) {
+            match = this.search.prefixSuggest(this.ui.countries, norm, 1)[0] ?? null;
+          }
+        }
+      }
+    }
+    if (!match) {
+      this.activeTab = 'countries';
+      this.searchOpen = true;
+      this.countrySearchTerm = '';
+      this.countrySuggestions = [];
+      this.forceUi();
+      return;
+    }
+    this.focusCountry(match);
   }
 
   returnToGlobe(): void {
@@ -4985,7 +5012,10 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   openSharedPost(post: CountryPost, event?: Event): void {
     event?.stopPropagation?.();
     if (!post?.id) return;
-    void this.router.navigate(['/post', post.id]);
+    const targetId = post.shared_post_id || post.id;
+    void this.router.navigate(['/globe'], {
+      queryParams: { post: targetId, tab: 'posts', panel: null },
+    });
   }
 
   private async loadLikes(postId: string): Promise<void> {
@@ -5671,12 +5701,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   // Menu / panels
   // -----------------------------
   toggleSearch(): void {
-    this.searchOpen = !this.searchOpen;
-    if (this.searchOpen) {
-      this.closeMenu();
-      this.closePanel();
-    }
-    this.forceUi();
+    void this.router.navigate(['/search']);
   }
 
   closeSearch(): void {

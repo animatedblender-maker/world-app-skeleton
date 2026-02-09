@@ -259,7 +259,7 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
         </div>
       </div>
     </div>
-    <app-bottom-tabs></app-bottom-tabs>
+    <app-bottom-tabs *ngIf="!activeConversation"></app-bottom-tabs>
 
     <div class="lightbox" *ngIf="lightboxUrl" (click)="closeImageLightbox()">
       <div class="lightbox-card" (click)="$event.stopPropagation()">

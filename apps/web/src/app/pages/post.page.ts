@@ -506,6 +506,8 @@ export class PostPageComponent implements OnInit {
     if (!shared) return;
     const targetId = shared.shared_post_id || shared.id;
     if (!targetId) return;
-    void this.router.navigate(['/post', targetId]);
+    void this.router.navigate(['/globe'], {
+      queryParams: { post: targetId, tab: 'posts', panel: null },
+    });
   }
 }

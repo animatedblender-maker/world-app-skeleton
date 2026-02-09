@@ -332,6 +332,114 @@ export class PostsService {
     return rows as PostRow[];
   }
 
+  async searchPosts(query: string, limit: number, viewerId: string | null): Promise<PostRow[]> {
+    const term = String(query ?? '').trim();
+    if (!term) return [];
+    const max = Math.max(1, Math.min(100, limit || 25));
+    const like = `%${term.toLowerCase()}%`;
+
+    const { rows } = await pool.query(
+      `
+      with q as (
+        select websearch_to_tsquery('simple', $1) as tsq
+      )
+      select
+        p.*,
+        (select count(*)::int from public.post_likes pl where pl.post_id = p.id) as like_count,
+        (select count(*)::int from public.post_comments pc where pc.post_id = p.id) as comment_count,
+        case
+          when $4::uuid is not null
+            and exists (
+              select 1
+              from public.post_likes pl
+              where pl.post_id = p.id and pl.user_id = $4::uuid
+            )
+          then true
+          else false
+        end as liked_by_me,
+        jsonb_build_object(
+          'user_id', pr.user_id,
+          'display_name', pr.display_name,
+          'username', pr.username,
+          'avatar_url', pr.avatar_url,
+          'country_name', pr.country_name,
+          'country_code', pr.country_code
+        ) as author,
+        case
+          when sp.id is null then null
+          else jsonb_build_object(
+            'id', sp.id,
+            'author_id', sp.author_id,
+            'category_id', sp.category_id,
+            'country_name', sp.country_name,
+            'country_code', sp.country_code,
+            'city_name', sp.city_name,
+            'title', sp.title,
+            'body', sp.body,
+            'media_type', sp.media_type,
+            'media_url', sp.media_url,
+            'thumb_url', sp.thumb_url,
+            'visibility', sp.visibility,
+            'like_count', (select count(*)::int from public.post_likes spl where spl.post_id = sp.id),
+            'comment_count', (select count(*)::int from public.post_comments spc where spc.post_id = sp.id),
+            'liked_by_me', case
+              when $4::uuid is not null
+                and exists (
+                  select 1
+                  from public.post_likes spl
+                  where spl.post_id = sp.id and spl.user_id = $4::uuid
+                )
+              then true
+              else false
+            end,
+            'created_at', sp.created_at,
+            'updated_at', sp.updated_at,
+            'author', jsonb_build_object(
+              'user_id', spr.user_id,
+              'display_name', spr.display_name,
+              'username', spr.username,
+              'avatar_url', spr.avatar_url,
+              'country_name', spr.country_name,
+              'country_code', spr.country_code
+            )
+          )
+        end as shared_post,
+        ts_rank_cd(
+          to_tsvector('simple', coalesce(p.title, '') || ' ' || coalesce(p.body, '')),
+          q.tsq
+        ) as rank
+      from public.posts p
+      cross join q
+      left join public.profiles pr on pr.user_id = p.author_id
+      left join public.posts sp on sp.id = p.shared_post_id
+      left join public.profiles spr on spr.user_id = sp.author_id
+      where (
+          to_tsvector('simple', coalesce(p.title, '') || ' ' || coalesce(p.body, '')) @@ q.tsq
+          or lower(coalesce(p.title, '')) like $2
+          or lower(coalesce(p.body, '')) like $2
+        )
+        and (
+          p.visibility = 'public'
+          or ($4::uuid is not null and p.author_id = $4::uuid)
+          or (
+            p.visibility = 'followers'
+            and $4::uuid is not null
+            and exists (
+              select 1
+              from public.user_follows f
+              where f.follower_id = $4::uuid and f.following_id = p.author_id
+            )
+          )
+        )
+      order by rank desc nulls last, p.created_at desc, p.id desc
+      limit $3
+      `,
+      [term, like, max, viewerId]
+    );
+
+    return rows as PostRow[];
+  }
+
   async postById(postId: string, viewerId: string | null): Promise<PostRow | null> {
     if (!postId) return null;
     return await this.postByIdForViewer(postId, viewerId);

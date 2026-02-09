@@ -108,6 +108,7 @@ export class DemoDatasetService {
   private postsByAuthor = new Map<string, CountryPost[]>();
   private postStates = new Map<string, PostState>();
   private countryFeedCache = new Map<string, { ts: number; posts: CountryPost[] }>();
+  private postSearchCache = new Map<string, CountryPost[]>();
   private postMediaMeta = new Map<
     string,
     { type: string; query: string | null; url: string | null; thumb_url: string | null }
@@ -173,6 +174,37 @@ export class DemoDatasetService {
     if (!post) return null;
     await this.hydrateMedia([post]);
     return post;
+  }
+
+  async searchPosts(query: string, limit = 20): Promise<CountryPost[]> {
+    const needle = String(query || '').trim().toLowerCase();
+    if (!needle) return [];
+    await this.ensurePostsLoaded();
+    const cached = this.postSearchCache.get(needle);
+    if (cached) {
+      if (limit <= 0) return cached;
+      const sliced = cached.slice(0, Math.max(1, limit));
+      await this.hydrateMedia(sliced);
+      return sliced;
+    }
+    const matches = this.posts.filter((post) => {
+      const title = String(post.title || '').toLowerCase();
+      const body = String(post.body || '').toLowerCase();
+      const caption = String(post.media_caption || '').toLowerCase();
+      return title.includes(needle) || body.includes(needle) || caption.includes(needle);
+    });
+    const sorted = matches.sort((a, b) => {
+      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    });
+    this.postSearchCache.set(needle, sorted);
+    if (this.postSearchCache.size > 40) {
+      const first = this.postSearchCache.keys().next().value;
+      if (first) this.postSearchCache.delete(first);
+    }
+    if (limit <= 0) return sorted;
+    const sliced = sorted.slice(0, Math.max(1, limit));
+    await this.hydrateMedia(sliced);
+    return sliced;
   }
 
   async listComments(postId: string, limit = 25): Promise<PostComment[]> {
