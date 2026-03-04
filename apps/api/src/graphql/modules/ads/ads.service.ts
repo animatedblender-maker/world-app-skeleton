@@ -380,6 +380,12 @@ export class AdsService {
         cr.duration_seconds,
         cr.created_at as creative_created_at,
         cr.updated_at as creative_updated_at,
+        case
+          when cardinality(c.target_country_codes) = 0 then 1
+          when $2::text is not null and $2::text = any(c.target_country_codes) then 0
+          when $3::text is not null and $3::text = any(c.target_country_codes) then 0
+          else 2
+        end as country_rank,
         coalesce(stats.impression_count, 0)::int as impression_count,
         coalesce(stats.click_count, 0)::int as click_count
       from public.ad_campaigns c
@@ -391,15 +397,11 @@ export class AdsService {
         and (c.start_at is null or c.start_at <= now())
         and (c.end_at is null or c.end_at >= now())
         and (
-          cardinality(c.target_country_codes) = 0
-          or $2::text = any(c.target_country_codes)
-          or $3::text = any(c.target_country_codes)
-        )
-        and (
           c.daily_budget_cents <= 0
           or coalesce(stats.day_serves, 0) < greatest(1, c.daily_budget_cents / 10)
         )
       order by
+        country_rank asc,
         coalesce(stats.day_serves, 0) asc,
         c.created_at asc,
         cr.created_at asc
