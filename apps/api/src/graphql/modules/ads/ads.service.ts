@@ -475,6 +475,165 @@ export class AdsService {
     };
   }
 
+  async debugServeVideoAd(input: ServeVideoAdInput): Promise<{
+    ok: boolean;
+    reason: string;
+    placement: string;
+    country_code: string | null;
+    content_country_code: string | null;
+    active_campaigns: number;
+    country_match_campaigns: number;
+    selected_campaign_id: string | null;
+  }> {
+    const placement = String(input.placement || '').trim().toLowerCase();
+    if (placement !== 'video' && placement !== 'reel') {
+      throw new Error('Unsupported ad placement.');
+    }
+    const requestedCountry = this.normalizeCountryCode(input.country_code ?? null);
+    const contentCountry = this.normalizeCountryCode(input.content_country_code ?? null);
+    const effectiveCountry = requestedCountry || contentCountry;
+
+    const { rows: countRows } = await pool.query<{
+      active_campaigns: number;
+      country_match_campaigns: number;
+    }>(
+      `
+      with campaign_stats as (
+        select
+          i.campaign_id,
+          count(*) filter (where i.served_at >= date_trunc('day', now()))::int as day_serves
+        from public.ad_impressions i
+        group by i.campaign_id
+      )
+      select
+        count(distinct c.id)::int as active_campaigns,
+        count(distinct c.id) filter (
+          where cardinality(c.target_country_codes) = 0
+            or ($2::text is not null and $2::text = any(c.target_country_codes))
+            or ($3::text is not null and $3::text = any(c.target_country_codes))
+        )::int as country_match_campaigns
+      from public.ad_campaigns c
+      join public.ad_creatives cr on cr.campaign_id = c.id
+      left join campaign_stats stats on stats.campaign_id = c.id
+      where c.status = 'active'
+        and c.placement = $1
+        and cr.media_kind = 'video'
+        and (c.start_at is null or c.start_at <= now())
+        and (c.end_at is null or c.end_at >= now())
+        and (
+          c.daily_budget_cents <= 0
+          or coalesce(stats.day_serves, 0) < greatest(1, c.daily_budget_cents / 10)
+        )
+      `,
+      [placement, effectiveCountry, contentCountry]
+    );
+    const activeCampaigns = Number(countRows[0]?.active_campaigns ?? 0);
+    const countryMatchCampaigns = Number(countRows[0]?.country_match_campaigns ?? 0);
+
+    const { rows } = await pool.query<AdSlotRow & { country_rank: number }>(
+      `
+      with campaign_stats as (
+        select
+          i.campaign_id,
+          count(*) filter (where i.served_at >= date_trunc('day', now()))::int as day_serves,
+          count(*) filter (where i.viewed_at is not null)::int as impression_count,
+          count(*) filter (where i.clicked_at is not null)::int as click_count
+        from public.ad_impressions i
+        group by i.campaign_id
+      )
+      select
+        c.id as campaign_id,
+        c.advertiser_user_id,
+        c.name as campaign_name,
+        c.status as campaign_status,
+        c.placement,
+        c.target_country_codes,
+        c.budget_cents,
+        c.daily_budget_cents,
+        c.start_at as campaign_start_at,
+        c.end_at as campaign_end_at,
+        c.created_at as campaign_created_at,
+        c.updated_at as campaign_updated_at,
+        cr.id as creative_id,
+        cr.title as creative_title,
+        cr.body as creative_body,
+        cr.media_kind,
+        cr.media_url,
+        cr.click_url,
+        cr.cta_label,
+        cr.duration_seconds,
+        cr.created_at as creative_created_at,
+        cr.updated_at as creative_updated_at,
+        case
+          when cardinality(c.target_country_codes) = 0 then 1
+          when $2::text is not null and $2::text = any(c.target_country_codes) then 0
+          when $3::text is not null and $3::text = any(c.target_country_codes) then 0
+          else 2
+        end as country_rank,
+        coalesce(stats.impression_count, 0)::int as impression_count,
+        coalesce(stats.click_count, 0)::int as click_count
+      from public.ad_campaigns c
+      join public.ad_creatives cr on cr.campaign_id = c.id
+      left join campaign_stats stats on stats.campaign_id = c.id
+      where c.status = 'active'
+        and c.placement = $1
+        and cr.media_kind = 'video'
+        and (c.start_at is null or c.start_at <= now())
+        and (c.end_at is null or c.end_at >= now())
+        and (
+          c.daily_budget_cents <= 0
+          or coalesce(stats.day_serves, 0) < greatest(1, c.daily_budget_cents / 10)
+        )
+      order by
+        country_rank asc,
+        coalesce(stats.day_serves, 0) asc,
+        c.created_at asc,
+        cr.created_at asc
+      limit 1
+      `,
+      [placement, effectiveCountry, contentCountry]
+    );
+    const selected = rows[0];
+
+    if (selected) {
+      const targetCodes = Array.isArray(selected.target_country_codes) ? selected.target_country_codes : [];
+      const exactMatch =
+        (!!effectiveCountry && targetCodes.includes(effectiveCountry)) ||
+        (!!contentCountry && targetCodes.includes(contentCountry));
+      const usedFallback = targetCodes.length > 0 && !exactMatch;
+      return {
+        ok: true,
+        reason: usedFallback
+          ? 'Selected a fallback campaign (no exact country match).'
+          : 'Selected campaign successfully.',
+        placement,
+        country_code: requestedCountry,
+        content_country_code: contentCountry,
+        active_campaigns: activeCampaigns,
+        country_match_campaigns: countryMatchCampaigns,
+        selected_campaign_id: selected.campaign_id,
+      };
+    }
+
+    let reason = 'No campaign selected.';
+    if (activeCampaigns === 0) {
+      reason = 'No active campaign eligible for this placement (status/schedule/budget/creative).';
+    } else if (countryMatchCampaigns === 0) {
+      reason = 'Active campaigns exist, but none match country and no global campaign is available.';
+    }
+
+    return {
+      ok: false,
+      reason,
+      placement,
+      country_code: requestedCountry,
+      content_country_code: contentCountry,
+      active_campaigns: activeCampaigns,
+      country_match_campaigns: countryMatchCampaigns,
+      selected_campaign_id: null,
+    };
+  }
+
   async logImpression(impressionToken: string, userId: string | null): Promise<boolean> {
     const { rowCount } = await pool.query(
       `

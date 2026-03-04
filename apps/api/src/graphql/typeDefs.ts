@@ -196,6 +196,17 @@ export const typeDefs = `#graphql
     ok: Boolean!
   }
 
+  type AdServeDebug {
+    ok: Boolean!
+    reason: String!
+    placement: String!
+    country_code: String
+    content_country_code: String
+    active_campaigns: Int!
+    country_match_campaigns: Int!
+    selected_campaign_id: ID
+  }
+
   input CreatePostInput {
     title: String
     body: String!
@@ -342,6 +353,12 @@ export const typeDefs = `#graphql
       content_country_code: String
       post_id: ID
     ): AdSlot
+    debugServeVideoAd(
+      placement: String!
+      country_code: String
+      content_country_code: String
+      post_id: ID
+    ): AdServeDebug!
   }
 
   type Mutation {

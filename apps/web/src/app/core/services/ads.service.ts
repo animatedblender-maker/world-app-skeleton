@@ -41,6 +41,17 @@ export type AdSlotModel = {
   creative: AdCreativeModel;
 };
 
+export type AdServeDebugModel = {
+  ok: boolean;
+  reason: string;
+  placement: string;
+  country_code: string | null;
+  content_country_code: string | null;
+  active_campaigns: number;
+  country_match_campaigns: number;
+  selected_campaign_id: string | null;
+};
+
 @Injectable({ providedIn: 'root' })
 export class AdsService {
   constructor(private gql: GqlService) {}
@@ -302,6 +313,43 @@ export class AdsService {
     `;
     const { serveVideoAd } = await this.gql.request<{ serveVideoAd: AdSlotModel | null }>(query, input);
     return serveVideoAd;
+  }
+
+  async debugServeVideoAd(input: {
+    placement: 'video' | 'reel';
+    country_code?: string | null;
+    content_country_code?: string | null;
+    post_id?: string | null;
+  }): Promise<AdServeDebugModel> {
+    const query = `
+      query DebugServeVideoAd(
+        $placement: String!
+        $country_code: String
+        $content_country_code: String
+        $post_id: ID
+      ) {
+        debugServeVideoAd(
+          placement: $placement
+          country_code: $country_code
+          content_country_code: $content_country_code
+          post_id: $post_id
+        ) {
+          ok
+          reason
+          placement
+          country_code
+          content_country_code
+          active_campaigns
+          country_match_campaigns
+          selected_campaign_id
+        }
+      }
+    `;
+    const { debugServeVideoAd } = await this.gql.request<{ debugServeVideoAd: AdServeDebugModel }>(
+      query,
+      input
+    );
+    return debugServeVideoAd;
   }
 
   async logImpression(impressionToken: string): Promise<boolean> {

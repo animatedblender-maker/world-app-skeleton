@@ -408,6 +408,7 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
   private adCountdownTimer: ReturnType<typeof setInterval> | null = null;
   private adImpressionLogged = false;
   private adPreparedForSrc: string | null = null;
+  private adDebugLoggedForSrc = false;
 
   constructor(private ads: AdsService) {}
 
@@ -761,6 +762,9 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
     } finally {
       this.adDecisionMade = true;
       this.isBuffering = false;
+      if (!this.activeAd) {
+        void this.logAdDebugIfEmpty();
+      }
       video.load();
       this.requestAutoplay(video);
     }
@@ -819,6 +823,24 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
     this.adSkipReady = false;
     this.adImpressionLogged = false;
     this.adPreparedForSrc = null;
+    this.adDebugLoggedForSrc = false;
     this.viewTracked = false;
+  }
+
+  private async logAdDebugIfEmpty(): Promise<void> {
+    if (!this.adsEnabled) return;
+    if (this.adDebugLoggedForSrc) return;
+    this.adDebugLoggedForSrc = true;
+    try {
+      const debug = await this.ads.debugServeVideoAd({
+        placement: this.adPlacement!,
+        country_code: this.adCountryCode,
+        content_country_code: this.adContentCountryCode,
+        post_id: this.adPostId,
+      });
+      console.info('[ads-debug]', debug);
+    } catch (error) {
+      console.info('[ads-debug] debugServeVideoAd failed', error);
+    }
   }
 }

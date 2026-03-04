@@ -46,6 +46,10 @@ export const adsResolvers = {
     serveVideoAd: async (_: any, args: ServeVideoAdInput, ctx: Context) => {
       return await svc().serveVideoAd(ctx.user?.id ?? null, args);
     },
+    debugServeVideoAd: async (_: any, args: ServeVideoAdInput, ctx: Context) => {
+      requireAuth(ctx);
+      return await svc().debugServeVideoAd(args);
+    },
   },
   Mutation: {
     createAdCampaign: async (_: any, args: { input: AdCampaignInput }, ctx: Context) => {
