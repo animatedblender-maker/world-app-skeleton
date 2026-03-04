@@ -271,6 +271,17 @@ export class AdsService {
     return (await this.campaignById(campaignId, userId))!;
   }
 
+  async deleteCampaign(campaignId: string, userId: string): Promise<boolean> {
+    const { rowCount } = await pool.query(
+      `
+      delete from public.ad_campaigns
+      where id = $1 and advertiser_user_id = $2
+      `,
+      [campaignId, userId]
+    );
+    return Number(rowCount ?? 0) > 0;
+  }
+
   async createCreative(campaignId: string, userId: string, input: AdCreativeInput): Promise<AdCreativeRow> {
     const campaign = await this.campaignById(campaignId, userId);
     if (!campaign) throw new Error('Campaign not found.');

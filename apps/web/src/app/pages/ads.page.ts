@@ -1,8 +1,10 @@
 import { CommonModule } from '@angular/common';
-import { Component, OnDestroy, OnInit } from '@angular/core';
+import { ChangeDetectorRef, Component, OnDestroy, OnInit } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { Router } from '@angular/router';
 
 import { AdsService, type AdCampaignModel } from '../core/services/ads.service';
+import { MediaService } from '../core/services/media.service';
 
 @Component({
   selector: 'app-ads-page',
@@ -10,6 +12,10 @@ import { AdsService, type AdCampaignModel } from '../core/services/ads.service';
   imports: [CommonModule, FormsModule],
   template: `
     <div class="ads-shell">
+      <div class="topbar-fixed">
+        <button type="button" class="icon-button ghost" (click)="goBack()">Back</button>
+      </div>
+
       <section class="ads-panel">
         <div class="hero">
           <div>
@@ -57,8 +63,8 @@ import { AdsService, type AdCampaignModel } from '../core/services/ads.service';
               <span>Optional schedule window for when the campaign is eligible to run.</span>
             </article>
             <article class="manual-item">
-              <strong>Creative video URL</strong>
-              <span>Required for the current MVP. It must be a direct hosted ad video URL.</span>
+              <strong>Creative upload</strong>
+              <span>Upload a video file here. Matterya hosts it and uses that file automatically.</span>
             </article>
             <article class="manual-item">
               <strong>Creative title / Ad copy</strong>
@@ -79,7 +85,7 @@ import { AdsService, type AdCampaignModel } from '../core/services/ads.service';
           <div class="composer-head">
             <div>
               <h2>New campaign</h2>
-              <p>Hosted creative URL for now. Billing and uploads come later.</p>
+              <p>Upload one video creative, then activate the campaign.</p>
             </div>
             <button type="submit" [disabled]="saving || !newCampaign.name || !newCreative.media_url">
               {{ saving ? 'Saving...' : 'Create' }}
@@ -142,15 +148,36 @@ import { AdsService, type AdCampaignModel } from '../core/services/ads.service';
               <span>End</span>
               <input type="datetime-local" name="endAt" [(ngModel)]="newCampaign.end_at" />
             </label>
-            <label class="wide">
-              <span>Creative video URL</span>
-              <input
-                name="mediaUrl"
-                [(ngModel)]="newCreative.media_url"
-                placeholder="https://..."
-                required
-              />
-            </label>
+            <div class="upload-row wide">
+              <div class="upload-copy">
+                <span>Upload creative video</span>
+                <small>Upload one ad video file. The hosted URL is generated automatically.</small>
+              </div>
+              <label class="upload-button">
+                <input
+                  type="file"
+                  accept="video/mp4,video/webm,video/quicktime,video/*"
+                  (change)="onCreativeFileSelected($event)"
+                />
+                {{ uploadingCreative ? 'Uploading...' : 'Upload video' }}
+              </label>
+            </div>
+            <div class="upload-note wide" *ngIf="creativeUploadName">
+              Uploaded: {{ creativeUploadName }}
+            </div>
+            <div class="creative-preview wide" *ngIf="newCreative.media_url">
+              <div class="preview-copy">
+                <span>Creative preview</span>
+                <small>This hosted file is the one used for pre-roll delivery.</small>
+              </div>
+              <video
+                class="preview-video"
+                [src]="newCreative.media_url"
+                controls
+                playsinline
+                preload="metadata"
+              ></video>
+            </div>
             <label>
               <span>Creative title</span>
               <input name="creativeTitle" [(ngModel)]="newCreative.title" />
@@ -204,6 +231,14 @@ import { AdsService, type AdCampaignModel } from '../core/services/ads.service';
                 <div class="meta">
                   <span>{{ campaign.placement }}</span>
                   <span>{{ campaign.status }}</span>
+                  <span
+                    class="state-pill"
+                    [class.live]="campaignPhase(campaign) === 'ongoing'"
+                    [class.scheduled]="campaignPhase(campaign) === 'scheduled'"
+                    [class.ended]="campaignPhase(campaign) === 'ended'"
+                  >
+                    {{ campaignPhaseLabel(campaign) }}
+                  </span>
                   <span *ngIf="campaign.target_country_codes.length">
                     {{ campaign.target_country_codes.join(', ') }}
                   </span>
@@ -221,6 +256,7 @@ import { AdsService, type AdCampaignModel } from '../core/services/ads.service';
               <span *ngIf="campaign.start_at">Starts {{ campaign.start_at | date: 'medium' }}</span>
               <span *ngIf="campaign.end_at">Ends {{ campaign.end_at | date: 'medium' }}</span>
             </div>
+            <div class="campaign-timer">{{ campaignTimerText(campaign) }}</div>
 
             <div class="creative-list">
               <div class="creative" *ngFor="let creative of campaign.creatives">
@@ -236,9 +272,38 @@ import { AdsService, type AdCampaignModel } from '../core/services/ads.service';
             </div>
 
             <div class="campaign-actions">
-              <button type="button" class="ghost" (click)="setStatus(campaign, 'draft')">Draft</button>
-              <button type="button" class="ghost" (click)="setStatus(campaign, 'active')">Activate</button>
-              <button type="button" class="ghost" (click)="setStatus(campaign, 'paused')">Pause</button>
+              <button
+                type="button"
+                class="ghost"
+                [disabled]="isCampaignBusy(campaign.id)"
+                (click)="setStatus(campaign, 'draft')"
+              >
+                Draft
+              </button>
+              <button
+                type="button"
+                class="ghost"
+                [disabled]="isCampaignBusy(campaign.id)"
+                (click)="setStatus(campaign, 'active')"
+              >
+                Activate
+              </button>
+              <button
+                type="button"
+                class="ghost"
+                [disabled]="isCampaignBusy(campaign.id)"
+                (click)="setStatus(campaign, 'paused')"
+              >
+                Pause
+              </button>
+              <button
+                type="button"
+                class="ghost danger"
+                [disabled]="isCampaignBusy(campaign.id)"
+                (click)="deleteCampaign(campaign)"
+              >
+                {{ deletingCampaignId === campaign.id ? 'Deleting...' : 'Delete' }}
+              </button>
             </div>
           </article>
         </section>
@@ -264,6 +329,20 @@ import { AdsService, type AdCampaignModel } from '../core/services/ads.service';
         margin: 0 auto;
         display: grid;
         gap: 18px;
+      }
+      .topbar-fixed {
+        position: fixed;
+        top: calc(env(safe-area-inset-top) + 10px);
+        right: 12px;
+        z-index: 60;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+      }
+      .topbar-fixed .icon-button.ghost {
+        background: rgba(255, 255, 255, 0.94);
+        border: 1px solid rgba(15, 23, 35, 0.12);
+        color: #102132;
       }
       .hero,
       .manual,
@@ -359,6 +438,78 @@ import { AdsService, type AdCampaignModel } from '../core/services/ads.service';
       label.wide {
         grid-column: 1 / -1;
       }
+      .upload-row {
+        border: 1px dashed rgba(15, 23, 35, 0.16);
+        border-radius: 18px;
+        background: #fbfcfe;
+        padding: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .upload-copy {
+        display: grid;
+        gap: 4px;
+      }
+      .upload-copy span {
+        font-size: 13px;
+        font-weight: 700;
+        color: #304254;
+      }
+      .upload-copy small,
+      .upload-note {
+        color: #607086;
+        font-size: 12px;
+        line-height: 1.4;
+      }
+      .upload-button {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 44px;
+        padding: 0 14px;
+        border-radius: 14px;
+        background: #0f1723;
+        color: #fff;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .upload-button input {
+        position: absolute;
+        inset: 0;
+        opacity: 0;
+        cursor: pointer;
+      }
+      .creative-preview {
+        border-radius: 18px;
+        background: #f7f9fc;
+        padding: 14px;
+        display: grid;
+        gap: 10px;
+      }
+      .preview-copy {
+        display: grid;
+        gap: 4px;
+      }
+      .preview-copy span {
+        font-size: 13px;
+        font-weight: 700;
+        color: #304254;
+      }
+      .preview-copy small {
+        color: #607086;
+        font-size: 12px;
+        line-height: 1.4;
+      }
+      .preview-video {
+        width: 100%;
+        display: block;
+        border-radius: 16px;
+        background: #000;
+        max-height: 280px;
+      }
       input,
       select,
       textarea,
@@ -396,6 +547,19 @@ import { AdsService, type AdCampaignModel } from '../core/services/ads.service';
       button.ghost {
         background: #edf2f8;
         color: #203041;
+      }
+      button.ghost.danger {
+        color: #922f2f;
+        background: #fdecec;
+      }
+      .icon-button {
+        min-width: 54px;
+        min-height: 48px;
+        padding: 10px 14px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
       }
       button:disabled {
         opacity: 0.6;
@@ -467,6 +631,11 @@ import { AdsService, type AdCampaignModel } from '../core/services/ads.service';
       .budget-row {
         margin-top: 12px;
       }
+      .campaign-timer {
+        margin-top: 8px;
+        color: #607086;
+        font-size: 13px;
+      }
       .creative-list {
         margin-top: 14px;
         display: grid;
@@ -493,6 +662,18 @@ import { AdsService, type AdCampaignModel } from '../core/services/ads.service';
       .campaign-actions {
         margin-top: 14px;
       }
+      .state-pill.live {
+        background: #e9fff4;
+        color: #0f7a47;
+      }
+      .state-pill.scheduled {
+        background: #eef4ff;
+        color: #1f4f93;
+      }
+      .state-pill.ended {
+        background: #f5f6f8;
+        color: #66768a;
+      }
       @media (max-width: 720px) {
         .manual-grid,
         .grid {
@@ -517,6 +698,10 @@ import { AdsService, type AdCampaignModel } from '../core/services/ads.service';
         .creative {
           flex-direction: column;
         }
+        .topbar-fixed {
+          top: calc(env(safe-area-inset-top) + 8px);
+          right: 10px;
+        }
       }
     `,
   ],
@@ -527,9 +712,16 @@ export class AdsPageComponent implements OnInit, OnDestroy {
   saving = false;
   error = '';
   success = '';
+  creativeUploadName = '';
+  uploadingCreative = false;
   countryCodesInput = '';
   private previousHtmlOverflow = '';
   private previousBodyOverflow = '';
+  private initialRefreshTimer: number | null = null;
+  private clockTimer: number | null = null;
+  busyCampaignIds = new Set<string>();
+  deletingCampaignId: string | null = null;
+  nowMs = Date.now();
   newCampaign = {
     name: '',
     placement: 'video' as 'video' | 'reel',
@@ -548,31 +740,67 @@ export class AdsPageComponent implements OnInit, OnDestroy {
     duration_seconds: 8,
   };
 
-  constructor(private ads: AdsService) {}
+  constructor(
+    private ads: AdsService,
+    private router: Router,
+    private media: MediaService,
+    private cdr: ChangeDetectorRef
+  ) {}
 
   ngOnInit(): void {
     this.enablePageScroll();
     void this.loadCampaigns();
+    if (typeof window !== 'undefined') {
+      this.clockTimer = window.setInterval(() => {
+        this.nowMs = Date.now();
+      }, 1000);
+    }
+    if (typeof window !== 'undefined') {
+      this.initialRefreshTimer = window.setTimeout(() => {
+        void this.loadCampaigns({ silent: true });
+      }, 900);
+    }
   }
 
   ngOnDestroy(): void {
+    if (this.initialRefreshTimer) {
+      window.clearTimeout(this.initialRefreshTimer);
+      this.initialRefreshTimer = null;
+    }
+    if (this.clockTimer) {
+      window.clearInterval(this.clockTimer);
+      this.clockTimer = null;
+    }
     this.restorePageScroll();
   }
 
-  async loadCampaigns(): Promise<void> {
-    this.loading = true;
+  async loadCampaigns(options?: { silent?: boolean }): Promise<void> {
+    const silent = !!options?.silent;
+    if (!silent) this.loading = true;
     this.error = '';
+    this.cdr.detectChanges();
     try {
-      this.campaigns = await this.ads.myCampaigns();
+      this.campaigns = await this.withTimeout(
+        this.ads.myCampaigns(),
+        12000,
+        'Loading campaigns timed out. Pull to refresh.'
+      );
+      this.cdr.detectChanges();
     } catch (error: any) {
       this.error = error?.message ?? 'Failed to load campaigns.';
+      this.cdr.detectChanges();
     } finally {
-      this.loading = false;
+      if (!silent) this.loading = false;
+      this.cdr.detectChanges();
     }
   }
 
   async createCampaign(): Promise<void> {
     if (this.saving) return;
+    if (!this.newCreative.media_url) {
+      this.error = 'Upload a creative video first.';
+      return;
+    }
     this.saving = true;
     this.error = '';
     this.success = '';
@@ -598,15 +826,27 @@ export class AdsPageComponent implements OnInit, OnDestroy {
       });
       this.resetForm();
       this.success = 'Campaign created.';
-      await this.loadCampaigns();
+      void this.loadCampaigns({ silent: true });
+      this.cdr.detectChanges();
     } catch (error: any) {
       this.error = error?.message ?? 'Failed to create campaign.';
+      this.cdr.detectChanges();
     } finally {
       this.saving = false;
+      this.cdr.detectChanges();
     }
   }
 
   async setStatus(campaign: AdCampaignModel, status: string): Promise<void> {
+    if (this.busyCampaignIds.has(campaign.id)) return;
+    if ((campaign.status || '').toLowerCase() === status.toLowerCase()) {
+      this.success = `Campaign already ${status}.`;
+      this.error = '';
+      return;
+    }
+    this.busyCampaignIds.add(campaign.id);
+    this.error = '';
+    this.success = '';
     try {
       const updated = await this.ads.updateCampaign(campaign.id, {
         name: campaign.name,
@@ -615,18 +855,125 @@ export class AdsPageComponent implements OnInit, OnDestroy {
         target_country_codes: campaign.target_country_codes,
         budget_cents: campaign.budget_cents,
         daily_budget_cents: campaign.daily_budget_cents,
-        start_at: campaign.start_at,
-        end_at: campaign.end_at,
+        start_at: this.toApiDate(campaign.start_at),
+        end_at: this.toApiDate(campaign.end_at),
       });
       this.campaigns = this.campaigns.map((item) => (item.id === updated.id ? updated : item));
+      this.success = `Campaign set to ${status}.`;
+      this.error = '';
+      this.cdr.detectChanges();
     } catch (error: any) {
       this.error = error?.message ?? 'Failed to update campaign.';
+      this.success = '';
+      this.cdr.detectChanges();
+    } finally {
+      this.busyCampaignIds.delete(campaign.id);
     }
+  }
+
+  async deleteCampaign(campaign: AdCampaignModel): Promise<void> {
+    if (this.busyCampaignIds.has(campaign.id)) return;
+    const ok = typeof window === 'undefined' ? true : window.confirm(`Delete "${campaign.name}"?`);
+    if (!ok) return;
+    this.busyCampaignIds.add(campaign.id);
+    this.deletingCampaignId = campaign.id;
+    this.error = '';
+    this.success = '';
+    this.cdr.detectChanges();
+    try {
+      const deleted = await this.ads.deleteCampaign(campaign.id);
+      if (!deleted) throw new Error('Delete was not applied.');
+      this.campaigns = this.campaigns.filter((item) => item.id !== campaign.id);
+      this.success = 'Campaign deleted.';
+      this.error = '';
+      this.cdr.detectChanges();
+    } catch (error: any) {
+      this.error = error?.message ?? 'Failed to delete campaign.';
+      this.success = '';
+      this.cdr.detectChanges();
+    } finally {
+      this.busyCampaignIds.delete(campaign.id);
+      this.deletingCampaignId = null;
+      this.cdr.detectChanges();
+    }
+  }
+
+  goBack(): void {
+    if (typeof window !== 'undefined' && window.history.length > 1) {
+      window.history.back();
+      return;
+    }
+    void this.router.navigate(['/globe']);
   }
 
   formatMoney(cents: number): string {
     const value = Number(cents ?? 0) / 100;
     return `EUR ${value.toFixed(2)}`;
+  }
+
+  async onCreativeFileSelected(event: Event): Promise<void> {
+    const input = event.target as HTMLInputElement | null;
+    const file = input?.files?.[0];
+    if (!file) return;
+    this.error = '';
+    this.success = '';
+    if (!String(file.type || '').startsWith('video/')) {
+      this.error = 'Creative upload must be a video file.';
+      if (input) input.value = '';
+      this.cdr.detectChanges();
+      return;
+    }
+    this.uploadingCreative = true;
+    this.cdr.detectChanges();
+    try {
+      const uploaded = await this.media.uploadAdMedia(file);
+      this.newCreative.media_url = uploaded.publicUrl;
+      this.creativeUploadName = file.name;
+      this.success = 'Creative video uploaded.';
+      this.cdr.detectChanges();
+    } catch (error: any) {
+      this.error = error?.message ?? 'Failed to upload creative video.';
+      this.cdr.detectChanges();
+    } finally {
+      this.uploadingCreative = false;
+      if (input) input.value = '';
+      this.cdr.detectChanges();
+    }
+  }
+
+  isCampaignBusy(campaignId: string): boolean {
+    return this.busyCampaignIds.has(campaignId);
+  }
+
+  campaignPhase(campaign: AdCampaignModel): 'scheduled' | 'ongoing' | 'ended' {
+    const startMs = this.parseDateMs(campaign.start_at);
+    const endMs = this.parseDateMs(campaign.end_at);
+    if (endMs && this.nowMs > endMs) return 'ended';
+    if (startMs && this.nowMs < startMs) return 'scheduled';
+    return 'ongoing';
+  }
+
+  campaignPhaseLabel(campaign: AdCampaignModel): string {
+    const phase = this.campaignPhase(campaign);
+    if (phase === 'scheduled') return 'Scheduled';
+    if (phase === 'ended') return 'Ended';
+    return 'Ongoing';
+  }
+
+  campaignTimerText(campaign: AdCampaignModel): string {
+    const startMs = this.parseDateMs(campaign.start_at);
+    const endMs = this.parseDateMs(campaign.end_at);
+    const phase = this.campaignPhase(campaign);
+    if (phase === 'scheduled' && startMs) {
+      return `Starts in ${this.formatCountdown(startMs - this.nowMs)}.`;
+    }
+    if (phase === 'ongoing' && endMs) {
+      return `Ends in ${this.formatCountdown(endMs - this.nowMs)}.`;
+    }
+    if (phase === 'ended' && endMs) {
+      return `Ended on ${new Date(endMs).toLocaleString()}.`;
+    }
+    return 'No end date set.';
   }
 
   private parseCountryCodes(raw: string): string[] {
@@ -643,12 +990,65 @@ export class AdsPageComponent implements OnInit, OnDestroy {
     return Number.isNaN(date.getTime()) ? null : date.toISOString();
   }
 
+  private toApiDate(value: string | null | undefined): string | null {
+    const raw = String(value ?? '').trim();
+    if (!raw) return null;
+    const epochMs = /^[0-9]{10,16}$/.test(raw) ? Number(raw) : Number.NaN;
+    const date = Number.isFinite(epochMs) ? new Date(epochMs) : new Date(raw);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  }
+
   private toCents(value: number): number {
     return Math.max(0, Math.round(Number(value ?? 0) * 100));
   }
 
+  private withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      let done = false;
+      const timer = setTimeout(() => {
+        if (done) return;
+        done = true;
+        reject(new Error(message));
+      }, timeoutMs);
+      promise.then(
+        (value) => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error) => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          reject(error);
+        }
+      );
+    });
+  }
+
+  private parseDateMs(value: string | null | undefined): number | null {
+    const raw = String(value ?? '').trim();
+    if (!raw) return null;
+    const epochMs = /^[0-9]{10,16}$/.test(raw) ? Number(raw) : Number.NaN;
+    const ms = Number.isFinite(epochMs) ? epochMs : Date.parse(raw);
+    return Number.isFinite(ms) ? ms : null;
+  }
+
+  private formatCountdown(ms: number): string {
+    const seconds = Math.max(0, Math.floor(ms / 1000));
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+    if (hours > 0) return `${hours}h ${minutes}m ${secs}s`;
+    return `${minutes}m ${secs}s`;
+  }
+
   private resetForm(): void {
     this.countryCodesInput = '';
+    this.creativeUploadName = '';
     this.newCampaign = {
       name: '',
       placement: 'video',

@@ -18,7 +18,7 @@ import type { Subscription } from 'rxjs';
     <button
       type="button"
       class="global-alert"
-      *ngIf="!isMessagesRoute && !isProfileRoute && !isReelsRoute && !isSearchRoute"
+      *ngIf="!isMessagesRoute && !isProfileRoute && !isReelsRoute && !isSearchRoute && !isAdsRoute"
       aria-label="Open alerts"
       (click)="openNotifications()"
     >
@@ -207,6 +207,7 @@ export class AppComponent {
   isProfileRoute = false;
   isReelsRoute = false;
   isSearchRoute = false;
+  isAdsRoute = false;
   showTravelButton = false;
   notificationsUnreadCount = 0;
   private notificationInsertSub?: Subscription;
@@ -252,6 +253,7 @@ export class AppComponent {
       parsed = new URL(url, window.location.origin);
     } catch {}
     const pathname = parsed?.pathname ?? url;
+    this.isAdsRoute = pathname.startsWith('/ads');
     const isGlobe =
       pathname === '/' || pathname.startsWith('/globe') || pathname.startsWith('/globe-cesium');
     const hasCountry = !!parsed?.searchParams?.get('country');
@@ -314,35 +316,12 @@ export class AppComponent {
       .then((data) => {
         if (!data?.version) return;
         const key = 'matterya_app_version';
-        const reloadKey = 'matterya_update_reload';
         let current: string | null = null;
-        let alreadyReloaded = false;
         try {
           current = window.localStorage.getItem(key);
-          alreadyReloaded = window.sessionStorage.getItem(reloadKey) === data.version;
         } catch {}
-        if (current && current !== data.version && !alreadyReloaded) {
-          try {
-            if ('serviceWorker' in navigator) {
-              navigator.serviceWorker.getRegistrations().then((regs) => {
-                regs.forEach((reg) => reg.unregister());
-              });
-            }
-            if ('caches' in window) {
-              caches.keys().then((keys) => keys.forEach((k) => caches.delete(k)));
-            }
-          } catch {}
-          try {
-            window.sessionStorage.setItem(reloadKey, data.version);
-          } catch {}
-          const url = new URL(window.location.href);
-          url.searchParams.set('v', data.version);
-          window.location.replace(url.toString());
-          return;
-        }
         try {
           window.localStorage.setItem(key, data.version);
-          window.sessionStorage.removeItem(reloadKey);
         } catch {}
       })
       .catch(() => {});

@@ -222,6 +222,18 @@ export class AdsService {
     return createAdCreative;
   }
 
+  async deleteCampaign(campaignId: string): Promise<boolean> {
+    const mutation = `
+      mutation DeleteAdCampaign($campaignId: ID!) {
+        deleteAdCampaign(campaign_id: $campaignId)
+      }
+    `;
+    const { deleteAdCampaign } = await this.gql.request<{ deleteAdCampaign: boolean }>(mutation, {
+      campaignId,
+    });
+    return !!deleteAdCampaign;
+  }
+
   async serveVideoAd(input: {
     placement: 'video' | 'reel';
     country_code?: string | null;

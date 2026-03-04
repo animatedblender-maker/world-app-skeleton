@@ -3670,6 +3670,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     opts?: { tab?: CountryTab; skipRouteUpdate?: boolean; focusPostId?: string; focusPost?: CountryPost | null }
   ): void {
     const tab = opts?.tab ?? 'posts';
+    const compact = this.isCompactViewport();
 
     this.selectedCountry = country;
     this.setAppBackground('feed');
@@ -3687,6 +3688,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.searchOpen = false;
 
     this.globeService.setInteractive(false);
+    if (compact) this.globeService.pauseRendering();
     this.globeService.setSoloCountry(country.id);
     this.globeService.setConnectionsCountryFilter(country.code ?? null);
     this.globeService.selectCountry(country.id);
@@ -3697,11 +3699,13 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.postsError = '';
     this.forceUi();
 
-    setTimeout(() => {
-      this.applyFocusView(country);
-      this.globeService.resize();
-    }, 0);
-    setTimeout(() => this.globeService.resize(), 60);
+    if (!compact) {
+      setTimeout(() => {
+        this.applyFocusView(country);
+        this.globeService.resize();
+      }, 0);
+      setTimeout(() => this.globeService.resize(), 60);
+    }
     void this.loadPostsForCountry(country);
     if (tab === 'following') {
       void this.loadFollowingFeed();
@@ -3727,6 +3731,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.countrySearchTerm = '';
     this.countrySuggestions = [];
 
+    this.globeService.resumeRendering();
     this.globeService.setSoloCountry(null);
     this.globeService.setConnectionsCountryFilter(null);
     this.globeService.resetView();
@@ -3756,6 +3761,11 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     setTimeout(() => this.globeService.resize(), 60);
 
     if (!opts?.skipRouteUpdate && hadState) this.updateRouteState();
+  }
+
+  private isCompactViewport(): boolean {
+    if (typeof window === 'undefined') return false;
+    return Math.max(window.innerWidth || 0, 0) <= 820;
   }
 
   goToMyCountry(): void {
@@ -3801,11 +3811,16 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.clearSelectedCountry({ skipRouteUpdate: true });
     this.pendingRouteState = null;
     this.lastSyncedRouteState = { country: null, tab: null, panel: null };
-    void this.router.navigate([], {
+    this.replaceUrlQueryParams({ country: null, tab: null, panel: null, resetGlobe: '1' });
+  }
+
+  private replaceUrlQueryParams(queryParams: Record<string, string | null>): void {
+    const tree = this.router.createUrlTree([], {
       relativeTo: this.route,
-      queryParams: { country: null, tab: null, panel: null, resetGlobe: '1' },
-      replaceUrl: true,
+      queryParams,
     });
+    const url = this.router.serializeUrl(tree);
+    window.history.replaceState(window.history.state, '', url);
   }
 
   private async loadPostsForCountry(country: CountryModel | null): Promise<void> {
@@ -5645,11 +5660,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       panel: next.panel ?? null,
     };
 
-    void this.router.navigate([], {
-      relativeTo: this.route,
-      queryParams,
-      replaceUrl: true,
-    });
+    this.replaceUrlQueryParams(queryParams);
   }
 
   private buildCurrentRouteState(): RouteState {

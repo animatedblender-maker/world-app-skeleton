@@ -386,6 +386,7 @@ export const typeDefs = `#graphql
     # Ads
     createAdCampaign(input: AdCampaignInput!): AdCampaign!
     updateAdCampaign(campaign_id: ID!, input: AdCampaignInput!): AdCampaign!
+    deleteAdCampaign(campaign_id: ID!): Boolean!
     createAdCreative(campaign_id: ID!, input: AdCreativeInput!): AdCreative!
     logAdImpression(impression_token: String!): AdEventResult!
     logAdClick(impression_token: String!): AdEventResult!

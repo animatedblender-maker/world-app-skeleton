@@ -67,6 +67,17 @@ export const adsResolvers = {
         });
       }
     },
+    deleteAdCampaign: async (_: any, args: { campaign_id: string }, ctx: Context) => {
+      const user = requireAuth(ctx);
+      if (!args?.campaign_id) throw new Error('campaign_id is required.');
+      try {
+        return await svc().deleteCampaign(args.campaign_id, user.id);
+      } catch (error: any) {
+        throw new GraphQLError(error?.message ?? 'Failed to delete ad campaign.', {
+          extensions: { code: 'BAD_USER_INPUT' },
+        });
+      }
+    },
     createAdCreative: async (
       _: any,
       args: { campaign_id: string; input: AdCreativeInput },

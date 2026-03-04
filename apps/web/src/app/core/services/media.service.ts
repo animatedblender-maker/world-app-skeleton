@@ -24,6 +24,30 @@ export class MediaService {
     return { path, publicUrl: data.publicUrl };
   }
 
+  async uploadAdMedia(file: File): Promise<{ path: string; publicUrl: string }> {
+    const { data: sessionData, error: sessionErr } = await supabase.auth.getSession();
+    if (sessionErr) throw sessionErr;
+    const userId = sessionData.session?.user?.id;
+    if (!userId) throw new Error('Not authenticated');
+
+    if (!String(file.type || '').startsWith('video/')) {
+      throw new Error('Ad creative must be a video file.');
+    }
+
+    const ext = (file.name.split('.').pop() || 'mp4').toLowerCase();
+    const path = `${userId}/ads/${crypto.randomUUID()}.${ext}`;
+
+    const { error } = await supabase.storage.from('posts').upload(path, file, {
+      upsert: false,
+      cacheControl: '3600',
+      contentType: file.type || 'video/mp4',
+    });
+    if (error) throw error;
+
+    const { data } = supabase.storage.from('posts').getPublicUrl(path);
+    return { path, publicUrl: data.publicUrl };
+  }
+
   async uploadMessageMedia(
     file: File,
     conversationId: string

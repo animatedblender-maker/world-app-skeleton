@@ -111,6 +111,7 @@ export class GlobeService {
 
   private labelsDataSource: any = null;
   private countriesDataSource: any = null;
+  private renderingPaused = false;
 
   init(globeEl: HTMLElement): void {
     this.overlayHost = globeEl;
@@ -179,6 +180,7 @@ export class GlobeService {
   }
 
   resize(): void {
+    if (this.renderingPaused) return;
     if (this.viewer) {
       try { this.viewer.resize(); } catch {}
     }
@@ -201,6 +203,41 @@ export class GlobeService {
     ctrl.enableTranslate = enabled;
     ctrl.enableTilt = enabled;
     ctrl.enableLook = enabled;
+  }
+
+  pauseRendering(): void {
+    this.renderingPaused = true;
+    if (this.raf) {
+      cancelAnimationFrame(this.raf);
+      this.raf = 0;
+    }
+    if (this.particleCanvas) {
+      this.particleCanvas.style.display = 'none';
+    }
+    if (this.viewer) {
+      try {
+        this.viewer.useDefaultRenderLoop = false;
+      } catch {}
+    }
+  }
+
+  resumeRendering(): void {
+    const wasPaused = this.renderingPaused;
+    this.renderingPaused = false;
+    if (this.particleCanvas) {
+      this.particleCanvas.style.display = '';
+    }
+    if (this.viewer) {
+      try {
+        this.viewer.useDefaultRenderLoop = true;
+        this.viewer.resize();
+        this.viewer.scene?.requestRender?.();
+      } catch {}
+    }
+    if (wasPaused) {
+      this.resizeParticles();
+      this.startOverlayLoop();
+    }
   }
 
   setData(payload: CountriesPayload): void {
@@ -459,6 +496,7 @@ export class GlobeService {
   }
 
   private drawOverlay(dtMs: number, nowMs: number) {
+    if (this.renderingPaused) return;
     if (!this.particleCanvas || !this.particleCtx) return;
     const ctx = this.particleCtx;
     const w = this.particleCanvas.width;
