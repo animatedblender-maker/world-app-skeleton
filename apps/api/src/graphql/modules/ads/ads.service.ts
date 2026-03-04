@@ -552,8 +552,8 @@ export class AdsService {
       target_country_codes: this.normalizeCountryCodeArray(input?.target_country_codes ?? []),
       budget_cents: Math.max(0, Math.floor(Number(input?.budget_cents ?? 0) || 0)),
       daily_budget_cents: Math.max(0, Math.floor(Number(input?.daily_budget_cents ?? 0) || 0)),
-      start_at: input?.start_at ? String(input.start_at) : null,
-      end_at: input?.end_at ? String(input.end_at) : null,
+      start_at: this.normalizeDateTimeValue(input?.start_at ?? null),
+      end_at: this.normalizeDateTimeValue(input?.end_at ?? null),
     };
   }
 
@@ -587,6 +587,17 @@ export class AdsService {
       if (code) unique.add(code);
     }
     return [...unique];
+  }
+
+  private normalizeDateTimeValue(value: string | null): string | null {
+    const raw = String(value ?? '').trim();
+    if (!raw) return null;
+    const epochMs = /^[0-9]{10,16}$/.test(raw) ? Number(raw) : Number.NaN;
+    const date = Number.isFinite(epochMs) ? new Date(epochMs) : new Date(raw);
+    if (Number.isNaN(date.getTime())) {
+      throw new Error(`Invalid datetime value: ${raw}`);
+    }
+    return date.toISOString();
   }
 
   private async listCampaignRows(query: string, params: any[]): Promise<AdCampaignRow[]> {
