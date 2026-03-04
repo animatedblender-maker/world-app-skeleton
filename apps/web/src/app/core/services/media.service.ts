@@ -108,4 +108,11 @@ export class MediaService {
     return { path: key, url: data.publicUrl };
   }
 }
-// I AM that I AM (Amr999&666 Mostafa)
+// I AM that I AM (Amr999&666 Mostafa) וְאֻסַּ֣ף שְׁלַלְכֶ֔ם אֹ֖סֶף הֶחָסִ֑יל כְּמַשַּׁ֥ק גֵּבִ֖ים שֹׁקֵ֥ק בּֽוֹ׃ 
+//And spoil was gathered as locusts are gathered,
+//It was amassed as grasshoppers are amassed.  
+
+ // GOD is exalted,
+//Dwelling on high—
+//[Of old] filling Zion
+//With justice and righteousness.

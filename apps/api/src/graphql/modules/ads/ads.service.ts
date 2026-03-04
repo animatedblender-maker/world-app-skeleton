@@ -413,33 +413,48 @@ export class AdsService {
     const row = rows[0];
     if (!row) return null;
 
-    const impressionToken = randomUUID();
+    let impressionToken = randomUUID();
     const safePostId = this.normalizeUuidOrNull(input.post_id ?? null);
-    await pool.query(
-      `
-      insert into public.ad_impressions (
-        campaign_id,
-        creative_id,
-        viewer_user_id,
-        placement,
-        country_code,
-        content_country_code,
-        post_id,
-        impression_token
-      )
-      values ($1, $2, $3, $4, $5, $6, $7, $8)
-      `,
-      [
-        row.campaign_id,
-        row.creative_id,
-        userId,
+    try {
+      await pool.query(
+        `
+        insert into public.ad_impressions (
+          campaign_id,
+          creative_id,
+          viewer_user_id,
+          placement,
+          country_code,
+          content_country_code,
+          post_id,
+          impression_token
+        )
+        values ($1, $2, $3, $4, $5, $6, $7, $8)
+        `,
+        [
+          row.campaign_id,
+          row.creative_id,
+          userId,
+          placement,
+          requestedCountry,
+          contentCountry,
+          safePostId,
+          impressionToken,
+        ]
+      );
+    } catch (error) {
+      // Do not block ad playback if impression write fails.
+      // Playback is higher priority than analytics.
+      console.error('[ads] failed to insert ad_impression', {
+        campaign_id: row.campaign_id,
+        creative_id: row.creative_id,
         placement,
         requestedCountry,
         contentCountry,
-        safePostId,
-        impressionToken,
-      ]
-    );
+        post_id: safePostId,
+        error,
+      });
+      impressionToken = randomUUID();
+    }
 
     return {
       impression_token: impressionToken,
