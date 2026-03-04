@@ -497,6 +497,10 @@ type CountryMood = {
                             <app-video-player
                               *ngIf="mediaTypes[0] === 'video'"
                               [src]="mediaUrls[0]"
+                              [adPlacement]="postIsReel(post) ? 'reel' : 'video'"
+                              [adCountryCode]="post.country_code"
+                              [adContentCountryCode]="post.country_code"
+                              [adPostId]="post.id"
                               [tapBehavior]="postIsReel(post) ? 'emit' : 'toggle'"
                               (viewed)="recordView(post)"
                               (videoTap)="onPostVideoTap(post)"
@@ -509,6 +513,10 @@ type CountryMood = {
                                   <app-video-player
                                     *ngIf="mediaTypes[idx] === 'video'"
                                     [src]="url"
+                                    [adPlacement]="postIsReel(post) ? 'reel' : 'video'"
+                                    [adCountryCode]="post.country_code"
+                                    [adContentCountryCode]="post.country_code"
+                                    [adPostId]="post.id"
                                     [tapBehavior]="postIsReel(post) ? 'emit' : 'toggle'"
                                     (viewed)="recordView(post)"
                                     (videoTap)="onPostVideoTap(post)"
@@ -951,8 +959,15 @@ type CountryMood = {
       z-index: 0;
       width: 100%;
       height: 100%;
-      background: #000;
+      background:
+        #000
+        url('/assets/matrix-mesh.jpg?v=1')
+        center center / cover
+        no-repeat;
       pointer-events: none;
+    }
+    :host.country-open .space-backdrop{
+      background: #000;
     }
     .globe-logo{
       position: fixed;

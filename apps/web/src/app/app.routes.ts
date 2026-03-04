@@ -58,6 +58,12 @@ export const routes: Routes = [
       import('./pages/search.page').then((m) => m.SearchPageComponent),
   },
   {
+    path: 'ads',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pages/ads.page').then((m) => m.AdsPageComponent),
+  },
+  {
     path: 'reels/:country',
     canActivate: [authGuard],
     loadComponent: () =>

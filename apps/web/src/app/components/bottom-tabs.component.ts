@@ -1,9 +1,10 @@
 import { CommonModule } from '@angular/common';
 import { Component, OnDestroy, OnInit } from '@angular/core';
-import { ActivatedRoute, NavigationEnd, Router } from '@angular/router';
+import { NavigationEnd, Router } from '@angular/router';
 import { Subscription } from 'rxjs';
-import { LocationService } from '../core/services/location.service';
+
 import { AuthService } from '../core/services/auth.service';
+import { LocationService } from '../core/services/location.service';
 import { NotificationsService } from '../core/services/notifications.service';
 
 type TabKey = 'home' | 'search' | 'messages' | 'profile';
@@ -16,7 +17,7 @@ type TabKey = 'home' | 'search' | 'messages' | 'profile';
     '[class.hidden]': 'tabsHidden',
   },
   template: `
-    <nav class="bottom-tabs" role="navigation" aria-label="Primary">
+    <nav class="bottom-tabs" [class.globe-mode]="globeMode" role="navigation" aria-label="Primary">
       <button
         type="button"
         class="tab-btn"
@@ -24,7 +25,7 @@ type TabKey = 'home' | 'search' | 'messages' | 'profile';
         [class.active]="active === 'home'"
         (click)="goHome()"
       >
-        <span class="tab-icon" aria-hidden="true">🏠</span>
+        <span class="tab-icon" aria-hidden="true">&#127968;</span>
       </button>
       <button
         type="button"
@@ -33,7 +34,7 @@ type TabKey = 'home' | 'search' | 'messages' | 'profile';
         [class.active]="active === 'search'"
         (click)="openSearch()"
       >
-        <span class="tab-icon" aria-hidden="true">🔍</span>
+        <span class="tab-icon" aria-hidden="true">&#128269;</span>
       </button>
       <button
         type="button"
@@ -42,19 +43,35 @@ type TabKey = 'home' | 'search' | 'messages' | 'profile';
         [class.active]="active === 'messages'"
         (click)="goMessages()"
       >
-        <span class="tab-icon" aria-hidden="true">💬</span>
+        <span class="tab-icon" aria-hidden="true">&#128172;</span>
         <span class="tab-badge" *ngIf="messagesUnreadCount > 0">{{ messagesUnreadCount }}</span>
       </button>
       <button
         type="button"
         class="tab-btn"
         aria-label="Profile"
-        [class.active]="active === 'profile'"
-        (click)="goProfile()"
+        [class.active]="active === 'profile' || profileMenuOpen"
+        (click)="toggleProfileMenu($event)"
       >
-        <span class="tab-icon" aria-hidden="true">👤</span>
+        <span class="tab-icon" aria-hidden="true">&#128100;</span>
       </button>
     </nav>
+
+    <button
+      *ngIf="profileMenuOpen"
+      type="button"
+      class="profile-menu-backdrop"
+      aria-label="Close profile menu"
+      (click)="closeProfileMenu()"
+    ></button>
+
+    <div class="profile-menu" *ngIf="profileMenuOpen">
+      <button type="button" class="profile-menu-item" (click)="openProfileFromMenu()">Profile</button>
+      <button type="button" class="profile-menu-item" (click)="openMessagesFromMenu()">Messages</button>
+      <button type="button" class="profile-menu-item" (click)="openAdsFromMenu()">Ads</button>
+      <button type="button" class="profile-menu-item muted" disabled>Settings</button>
+      <button type="button" class="profile-menu-item danger" (click)="logout()">Logout</button>
+    </div>
   `,
   styles: [
     `
@@ -82,6 +99,62 @@ type TabKey = 'home' | 'search' | 'messages' | 'profile';
         border-top: 1px solid rgba(7, 20, 40, 0.08);
         box-shadow: 0 -6px 20px rgba(12, 18, 24, 0.08);
       }
+      .bottom-tabs.globe-mode {
+        background: transparent;
+        border-top-color: transparent;
+        box-shadow: none;
+      }
+      .bottom-tabs.globe-mode .tab-btn {
+        color: rgba(236, 244, 255, 0.78);
+      }
+      .bottom-tabs.globe-mode .tab-btn:hover,
+      .bottom-tabs.globe-mode .tab-btn.active {
+        color: #ffffff;
+      }
+      .profile-menu-backdrop {
+        position: fixed;
+        inset: 0;
+        border: 0;
+        background: transparent;
+        pointer-events: auto;
+        z-index: 89;
+      }
+      .profile-menu {
+        position: fixed;
+        right: 12px;
+        bottom: calc(var(--tabs-height, 64px) + env(safe-area-inset-bottom) + 10px);
+        min-width: 176px;
+        padding: 8px;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.98);
+        border: 1px solid rgba(7, 20, 40, 0.08);
+        box-shadow: 0 18px 44px rgba(12, 18, 24, 0.18);
+        display: grid;
+        gap: 4px;
+        pointer-events: auto;
+        z-index: 91;
+      }
+      .profile-menu-item {
+        border: 0;
+        background: transparent;
+        text-align: left;
+        border-radius: 12px;
+        padding: 11px 12px;
+        font-size: 14px;
+        font-weight: 700;
+        color: #0b1a2c;
+        cursor: pointer;
+      }
+      .profile-menu-item:hover {
+        background: rgba(11, 26, 44, 0.06);
+      }
+      .profile-menu-item.muted {
+        color: rgba(11, 26, 44, 0.45);
+        cursor: default;
+      }
+      .profile-menu-item.danger {
+        color: #c53a3a;
+      }
       .tab-btn {
         border: 0;
         border-radius: 14px;
@@ -101,14 +174,11 @@ type TabKey = 'home' | 'search' | 'messages' | 'profile';
       .tab-btn.active {
         color: #0b1a2c;
       }
-      .tab-icon{
+      .tab-icon {
         font-size: 20px;
         line-height: 1;
       }
-      .tab-label{
-        display: none;
-      }
-      .tab-badge{
+      .tab-badge {
         position: absolute;
         top: 2px;
         right: 10px;
@@ -122,13 +192,17 @@ type TabKey = 'home' | 'search' | 'messages' | 'profile';
         display: grid;
         place-items: center;
         padding: 0 6px;
-        box-shadow: 0 0 0 2px rgba(6,10,16,0.8);
+        box-shadow: 0 0 0 2px rgba(6, 10, 16, 0.8);
       }
       @media (max-width: 640px) {
-        .tab-icon{
+        .profile-menu {
+          right: 10px;
+          min-width: 166px;
+        }
+        .tab-icon {
           font-size: 18px;
         }
-        .tab-badge{
+        .tab-badge {
           top: 2px;
           right: 6px;
           min-width: 16px;
@@ -143,6 +217,9 @@ export class BottomTabsComponent implements OnInit, OnDestroy {
   active: TabKey = 'home';
   messagesUnreadCount = 0;
   tabsHidden = false;
+  profileMenuOpen = false;
+  globeMode = false;
+
   private sub?: Subscription;
   private lastGlobeUrl = '/globe';
   private unreadPollTimer: number | null = null;
@@ -152,7 +229,6 @@ export class BottomTabsComponent implements OnInit, OnDestroy {
 
   constructor(
     private router: Router,
-    private route: ActivatedRoute,
     private location: LocationService,
     private auth: AuthService,
     private notifications: NotificationsService
@@ -166,6 +242,7 @@ export class BottomTabsComponent implements OnInit, OnDestroy {
         const url = event.urlAfterRedirects || event.url;
         this.syncActive(url);
         this.captureGlobeUrl(url);
+        this.profileMenuOpen = false;
       }
     });
     void this.refreshUnreadMessages();
@@ -183,6 +260,7 @@ export class BottomTabsComponent implements OnInit, OnDestroy {
   }
 
   goHome(): void {
+    this.profileMenuOpen = false;
     if (this.lastGlobeUrl) {
       void this.router.navigateByUrl(this.lastGlobeUrl);
       return;
@@ -195,18 +273,53 @@ export class BottomTabsComponent implements OnInit, OnDestroy {
   }
 
   openSearch(): void {
+    this.profileMenuOpen = false;
     if (this.active === 'search') return;
     void this.router.navigate(['/search']);
   }
 
   goMessages(): void {
+    this.profileMenuOpen = false;
     if (this.active === 'messages') return;
     void this.router.navigate(['/messages']);
   }
 
   goProfile(): void {
+    this.profileMenuOpen = false;
     if (this.active === 'profile') return;
     void this.router.navigate(['/me']);
+  }
+
+  toggleProfileMenu(event?: Event): void {
+    event?.stopPropagation();
+    this.profileMenuOpen = !this.profileMenuOpen;
+  }
+
+  closeProfileMenu(): void {
+    this.profileMenuOpen = false;
+  }
+
+  openProfileFromMenu(): void {
+    this.goProfile();
+  }
+
+  openMessagesFromMenu(): void {
+    this.goMessages();
+  }
+
+  openAdsFromMenu(): void {
+    this.profileMenuOpen = false;
+    void this.router.navigate(['/ads']);
+  }
+
+  async logout(): Promise<void> {
+    this.profileMenuOpen = false;
+    try {
+      await this.auth.logout();
+    } catch {
+      // ignore
+    }
+    void this.router.navigate(['/auth']);
   }
 
   private async refreshUnreadMessages(): Promise<void> {
@@ -231,6 +344,15 @@ export class BottomTabsComponent implements OnInit, OnDestroy {
   }
 
   private syncActive(url: string): void {
+    let parsed: URL | null = null;
+    try {
+      parsed = new URL(url, window.location.origin);
+    } catch {}
+    const pathname = parsed?.pathname ?? url;
+    const hasCountry = !!parsed?.searchParams?.get('country');
+    this.globeMode =
+      (pathname === '/' || pathname.startsWith('/globe') || pathname.startsWith('/globe-cesium')) &&
+      !hasCountry;
     if (url.startsWith('/messages')) {
       this.active = 'messages';
       return;
@@ -281,6 +403,7 @@ export class BottomTabsComponent implements OnInit, OnDestroy {
     if (Math.abs(delta) < 6) return;
     if (delta > 0 && current > 20) {
       this.tabsHidden = true;
+      this.profileMenuOpen = false;
     } else if (delta < 0) {
       this.tabsHidden = false;
     }

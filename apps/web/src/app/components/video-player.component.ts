@@ -6,10 +6,14 @@ import {
   EventEmitter,
   HostListener,
   Input,
+  OnChanges,
   OnDestroy,
   Output,
+  SimpleChanges,
   ViewChild,
 } from '@angular/core';
+
+import { AdsService, type AdSlotModel } from '../core/services/ads.service';
 
 @Component({
   selector: 'app-video-player',
@@ -24,8 +28,8 @@ import {
     >
       <video
         #videoEl
-        [src]="src"
-        [attr.poster]="poster || null"
+        [src]="currentSrc"
+        [attr.poster]="currentPoster"
         [attr.preload]="preload"
         playsinline
         (click)="onVideoTap(videoEl, $event)"
@@ -40,6 +44,32 @@ import {
         (playing)="setBuffering(false)"
       ></video>
       <div class="video-overlay"></div>
+      <div class="ad-layer" *ngIf="isAdMode && activeAd">
+        <div class="ad-pill">Sponsored</div>
+        <button
+          *ngIf="activeAd.creative.click_url"
+          class="ad-cta"
+          type="button"
+          (click)="openAdLink($event)"
+        >
+          {{ activeAd.creative.cta_label || 'Learn more' }}
+        </button>
+        <button
+          *ngIf="adSkipReady"
+          class="ad-skip"
+          type="button"
+          (click)="skipAd($event)"
+        >
+          Skip
+        </button>
+        <div class="ad-countdown" *ngIf="!adSkipReady && adSecondsLeft > 0">
+          Ad {{ adSecondsLeft }}s
+        </div>
+        <div class="ad-copy" *ngIf="activeAd.creative.title || activeAd.creative.body">
+          <strong *ngIf="activeAd.creative.title">{{ activeAd.creative.title }}</strong>
+          <span *ngIf="activeAd.creative.body">{{ activeAd.creative.body }}</span>
+        </div>
+      </div>
       <button
         *ngIf="showMute"
         class="mute-toggle"
@@ -191,6 +221,71 @@ import {
       .video-shell.is-playing .video-overlay {
         opacity: 0.3;
       }
+      .ad-layer {
+        position: absolute;
+        inset: 0;
+        z-index: 2;
+        pointer-events: none;
+      }
+      .ad-pill,
+      .ad-countdown,
+      .ad-skip,
+      .ad-cta {
+        position: absolute;
+        pointer-events: auto;
+        border-radius: 999px;
+        padding: 8px 12px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .ad-pill {
+        top: 12px;
+        left: 12px;
+        background: rgba(0, 0, 0, 0.66);
+        color: #fff;
+      }
+      .ad-countdown {
+        top: 12px;
+        right: 12px;
+        background: rgba(0, 0, 0, 0.66);
+        color: #fff;
+      }
+      .ad-skip {
+        top: 12px;
+        right: 12px;
+        border: 0;
+        background: rgba(255, 255, 255, 0.9);
+        color: #0c1520;
+        cursor: pointer;
+      }
+      .ad-cta {
+        right: 12px;
+        bottom: 12px;
+        border: 0;
+        background: rgba(255, 255, 255, 0.96);
+        color: #09121d;
+        cursor: pointer;
+      }
+      .ad-copy {
+        position: absolute;
+        left: 12px;
+        right: 110px;
+        bottom: 12px;
+        display: grid;
+        gap: 4px;
+        color: #fff;
+        text-shadow: 0 2px 10px rgba(0, 0, 0, 0.55);
+        pointer-events: none;
+      }
+      .ad-copy strong {
+        font-size: 13px;
+      }
+      .ad-copy span {
+        font-size: 12px;
+        line-height: 1.35;
+      }
       .center-play {
         position: absolute;
         inset: 0;
@@ -273,7 +368,7 @@ import {
     `,
   ],
 })
-export class VideoPlayerComponent implements AfterViewInit, OnDestroy {
+export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy {
   private static globalMuted = false;
   @Input({ required: true }) src!: string;
   @Input() poster: string | null = null;
@@ -281,6 +376,10 @@ export class VideoPlayerComponent implements AfterViewInit, OnDestroy {
   @Input() showMute = true;
   @Input() centerOverlayMode: 'always' | 'on-click' = 'on-click';
   @Input() tapBehavior: 'toggle' | 'emit' | 'none' = 'toggle';
+  @Input() adPlacement: 'video' | 'reel' | null = null;
+  @Input() adCountryCode: string | null = null;
+  @Input() adContentCountryCode: string | null = null;
+  @Input() adPostId: string | null = null;
   @Output() videoTap = new EventEmitter<void>();
   @Output() viewed = new EventEmitter<void>();
   @ViewChild('videoEl', { static: true }) videoRef!: ElementRef<HTMLVideoElement>;
@@ -301,6 +400,31 @@ export class VideoPlayerComponent implements AfterViewInit, OnDestroy {
   private isInView = false;
   private muteHandler: ((event: Event) => void) | null = null;
   private viewTracked = false;
+  activeAd: AdSlotModel | null = null;
+  isAdMode = false;
+  adDecisionMade = false;
+  adSecondsLeft = 0;
+  adSkipReady = false;
+  private adCountdownTimer: ReturnType<typeof setInterval> | null = null;
+  private adImpressionLogged = false;
+  private adPreparedForSrc: string | null = null;
+
+  constructor(private ads: AdsService) {}
+
+  get currentSrc(): string {
+    if (this.adsEnabled && !this.adDecisionMade) return '';
+    if (this.isAdMode && this.activeAd) return this.activeAd.creative.media_url;
+    return this.src;
+  }
+
+  get currentPoster(): string | null {
+    if (this.isAdMode) return null;
+    return this.poster || null;
+  }
+
+  get adsEnabled(): boolean {
+    return !!this.adPlacement;
+  }
 
   @HostListener('click', ['$event'])
   handleHostClick(event: Event): void {
@@ -315,10 +439,20 @@ export class VideoPlayerComponent implements AfterViewInit, OnDestroy {
   }
 
   get showCenterOverlay(): boolean {
+    if (this.isAdMode) return false;
     if (this.centerOverlayMode === 'on-click') {
       return this.centerOverlayVisible;
     }
     return !this.isPlaying;
+  }
+
+  ngOnChanges(changes: SimpleChanges): void {
+    if (changes['src'] && !changes['src'].firstChange) {
+      this.resetAdState();
+      if (this.videoRef?.nativeElement) {
+        void this.prepareAdIfNeeded(this.videoRef.nativeElement);
+      }
+    }
   }
 
   onVideoTap(video: HTMLVideoElement, event: Event): void {
@@ -336,6 +470,7 @@ export class VideoPlayerComponent implements AfterViewInit, OnDestroy {
 
   togglePlay(video: HTMLVideoElement, event: Event): void {
     event.stopPropagation();
+    if (this.adsEnabled && !this.adDecisionMade) return;
     this.triggerCenterOverlay();
     if (video.paused) {
       this.userPaused = false;
@@ -429,6 +564,10 @@ export class VideoPlayerComponent implements AfterViewInit, OnDestroy {
     this.isPlaying = true;
     this.userPaused = false;
     this.autoPaused = false;
+    if (this.isAdMode) {
+      this.markAdImpression();
+      this.startAdCountdown();
+    }
     this.revealControls();
   }
 
@@ -443,9 +582,16 @@ export class VideoPlayerComponent implements AfterViewInit, OnDestroy {
     this.isBuffering = false;
     this.controlsVisible = true;
     this.clearHideTimer();
+    if (this.isAdMode) {
+      this.finishAd();
+    }
   }
 
   onEnded(): void {
+    if (this.isAdMode) {
+      this.finishAd();
+      return;
+    }
     this.isPlaying = false;
     this.controlsVisible = true;
     this.currentTime = 0;
@@ -507,6 +653,7 @@ export class VideoPlayerComponent implements AfterViewInit, OnDestroy {
       this.applyGlobalMute(video, detail);
     };
     window.addEventListener('video-player-mute', this.muteHandler);
+    void this.prepareAdIfNeeded(video);
     this.observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
@@ -531,6 +678,7 @@ export class VideoPlayerComponent implements AfterViewInit, OnDestroy {
   ngOnDestroy(): void {
     this.observer?.disconnect();
     this.observer = null;
+    this.clearAdCountdown();
     if (this.centerTimer) {
       clearTimeout(this.centerTimer);
       this.centerTimer = null;
@@ -552,12 +700,14 @@ export class VideoPlayerComponent implements AfterViewInit, OnDestroy {
   private trackView(video: HTMLVideoElement): void {
     if (this.viewTracked) return;
     if (!this.isInView) return;
+    if (this.isAdMode) return;
     if (video.currentTime < 0.5) return;
     this.viewTracked = true;
     this.viewed.emit();
   }
 
   private requestAutoplay(video: HTMLVideoElement): void {
+    if (this.adsEnabled && !this.adDecisionMade) return;
     if (!this.isInView) return;
     if (this.userPaused) return;
     if (!video.paused && !video.ended) return;
@@ -565,5 +715,110 @@ export class VideoPlayerComponent implements AfterViewInit, OnDestroy {
     if (playAttempt && typeof playAttempt.catch === 'function') {
       playAttempt.catch(() => {});
     }
+  }
+
+  openAdLink(event: Event): void {
+    event.stopPropagation();
+    const url = this.activeAd?.creative?.click_url;
+    if (!url) return;
+    void this.ads.logClick(this.activeAd!.impression_token).catch(() => {});
+    window.open(url, '_blank', 'noopener');
+  }
+
+  skipAd(event: Event): void {
+    event.stopPropagation();
+    if (!this.adSkipReady) return;
+    this.finishAd();
+  }
+
+  private async prepareAdIfNeeded(video: HTMLVideoElement): Promise<void> {
+    if (!this.adsEnabled) {
+      this.adDecisionMade = true;
+      return;
+    }
+    const src = String(this.src || '').trim();
+    if (!src) {
+      this.adDecisionMade = true;
+      return;
+    }
+    if (this.adPreparedForSrc === src) return;
+    this.adPreparedForSrc = src;
+    this.isBuffering = true;
+    try {
+      this.activeAd = await this.ads.serveVideoAd({
+        placement: this.adPlacement!,
+        country_code: this.adCountryCode,
+        content_country_code: this.adContentCountryCode,
+        post_id: this.adPostId,
+      });
+      this.isAdMode = !!this.activeAd;
+      this.adSecondsLeft = Number(this.activeAd?.creative?.duration_seconds ?? 0);
+      this.adSkipReady = false;
+      this.adImpressionLogged = false;
+    } catch {
+      this.activeAd = null;
+      this.isAdMode = false;
+    } finally {
+      this.adDecisionMade = true;
+      this.isBuffering = false;
+      video.load();
+      this.requestAutoplay(video);
+    }
+  }
+
+  private markAdImpression(): void {
+    if (!this.activeAd || this.adImpressionLogged) return;
+    this.adImpressionLogged = true;
+    void this.ads.logImpression(this.activeAd.impression_token).catch(() => {});
+  }
+
+  private startAdCountdown(): void {
+    if (!this.isAdMode || !this.activeAd) return;
+    if (this.adCountdownTimer) return;
+    const skipAfter = Math.max(0, Number(this.activeAd.skip_after_seconds ?? 0));
+    this.adSkipReady = false;
+    this.adCountdownTimer = setInterval(() => {
+      const video = this.videoRef?.nativeElement;
+      if (!video || video.paused) return;
+      this.adSecondsLeft = Math.max(0, Math.ceil((video.duration || 0) - (video.currentTime || 0)));
+      this.adSkipReady = (video.currentTime || 0) >= skipAfter;
+      if (this.adSecondsLeft <= 0) {
+        this.clearAdCountdown();
+      }
+    }, 250);
+  }
+
+  private clearAdCountdown(): void {
+    if (this.adCountdownTimer) {
+      clearInterval(this.adCountdownTimer);
+      this.adCountdownTimer = null;
+    }
+  }
+
+  private finishAd(): void {
+    this.clearAdCountdown();
+    this.isAdMode = false;
+    this.adDecisionMade = true;
+    this.adSecondsLeft = 0;
+    this.adSkipReady = false;
+    this.currentTime = 0;
+    this.progressPercent = 0;
+    this.duration = 0;
+    const video = this.videoRef?.nativeElement;
+    if (!video) return;
+    video.load();
+    this.requestAutoplay(video);
+  }
+
+  private resetAdState(): void {
+    this.clearAdCountdown();
+    this.activeAd = null;
+    this.isAdMode = false;
+    this.adDecisionMade = !this.adsEnabled;
+    this.adSecondsLeft = 0;
+    this.adSkipReady = false;
+    this.adImpressionLogged = false;
+    this.adPreparedForSrc = null;
+    this.viewTracked = false;
   }
 }

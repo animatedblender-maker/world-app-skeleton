@@ -13,46 +13,50 @@ export type ConnectionPoint = {
   radius?: number;
 };
 
-type FireworkWord = {
-  text: string;
+type MatrixNode = {
   x: number;
   y: number;
-  life: number;
-  ttl: number;
-  size: number;
+  homeX: number;
+  homeY: number;
   vx: number;
   vy: number;
+  links: number[];
+  glow: number;
 };
 
-type FireworkShot = {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  life: number;
-  explodeAt: number;
-  trail: Array<{ x: number; y: number }>;
-  burstWords: FireworkWord[] | null;
-};
-
-type FireworkParticle = {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  life: number;
-  ttl: number;
-  size: number;
-};
-
-type FloatingWord = {
-  text: string;
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
+type MatrixPacket = {
+  fromX: number;
+  fromY: number;
+  toIndex: number;
+  progress: number;
+  speed: number;
   alpha: number;
+  label: string;
+};
+
+type MatrixRipple = {
+  fromIndex: number;
+  toIndex: number;
+  delayMs: number;
+  progress: number;
+  speed: number;
+  alpha: number;
+};
+
+type MatrixFieldRipple = {
+  originX: number;
+  originY: number;
+  radius: number;
+  speed: number;
+  alpha: number;
+  thickness: number;
+};
+
+type AmbientStar = {
+  x: number;
+  y: number;
   size: number;
+  alpha: number;
 };
 
 @Injectable({ providedIn: 'root' })
@@ -62,6 +66,8 @@ export class GlobeService {
   private overlayHost: HTMLElement | null = null;
   private particleCanvas: HTMLCanvasElement | null = null;
   private particleCtx: CanvasRenderingContext2D | null = null;
+  private matrixBackdropImage: HTMLImageElement | null = null;
+  private matrixBackdropReady = false;
   private raf = 0;
   private particleScale = 1;
   private canvasOffsetX = 0;
@@ -88,18 +94,18 @@ export class GlobeService {
   private onlineConnectionIds = new globalThis.Set<string>();
 
   private readonly MAX_NETWORK_NODES = 140;
-  private readonly FIREWORK_SPAWN_INTERVAL = 680;
-  private readonly FIREWORK_MIN_SPEED = 0.03;
-  private readonly FIREWORK_MAX_SPEED = 0.055;
-  private readonly FIREWORK_MIN_TIME = 1600;
-  private readonly FIREWORK_MAX_TIME = 2800;
-  private readonly FIREWORK_MAX = 18;
-  private readonly FIREWORK_TRAIL = 10;
+  private readonly MATRIX_NODE_COUNT = 84;
+  private readonly AMBIENT_STAR_COUNT = 140;
+  private readonly MATRIX_LINK_DISTANCE = 150;
+  private readonly MESSAGE_SPAWN_INTERVAL = 1200;
+  private readonly MESSAGE_MAX = 18;
   private readonly FLOATING_WORD_COUNT = 42;
-  private fireworkShots: FireworkShot[] = [];
-  private fireworkParticles: FireworkParticle[] = [];
-  private lastFireworkSpawn = 0;
-  private floatingWords: FloatingWord[] = [];
+  private matrixNodes: MatrixNode[] = [];
+  private ambientStars: AmbientStar[] = [];
+  private messagePackets: MatrixPacket[] = [];
+  private matrixRipples: MatrixRipple[] = [];
+  private matrixFieldRipples: MatrixFieldRipple[] = [];
+  private lastMessageSpawn = 0;
   private floatingWordPool: string[] = [];
   private fireworkWordGroups: string[][] = [];
 
@@ -109,6 +115,7 @@ export class GlobeService {
   init(globeEl: HTMLElement): void {
     this.overlayHost = globeEl;
     if (getComputedStyle(globeEl).position === 'static') globeEl.style.position = 'relative';
+    this.ensureMatrixBackdropImage();
 
     this.ensureCesium()
       .then((Cesium) => {
@@ -349,7 +356,6 @@ export class GlobeService {
       .map((w) => w.slice(0, 24));
     const deduped = Array.from(new globalThis.Set(cleaned));
     this.floatingWordPool = deduped.slice(0, 160);
-    this.floatingWords = [];
   }
 
   setFireworkWordGroups(groups: string[][]): void {
@@ -436,6 +442,7 @@ export class GlobeService {
     this.cssScaleY = this.canvasCssHeight ? this.canvasCssHeight / this.drawBufferHeight : 1;
     this.particleCanvas.width = Math.floor(canvasRect.width * dpr);
     this.particleCanvas.height = Math.floor(canvasRect.height * dpr);
+    this.seedMatrixNodes(this.particleCanvas.width, this.particleCanvas.height);
   }
 
   private startOverlayLoop() {
@@ -471,6 +478,7 @@ export class GlobeService {
     );
     const nodes = this.collectVisibleNodes(occluder, Cesium, w, h);
 
+    this.drawMatrix(ctx, w, h, dtMs, nodes);
     if (!nodes.length) return;
 
     // Online users as blue dots.
@@ -482,8 +490,20 @@ export class GlobeService {
       ctx.fill();
     }
 
-    this.spawnFirework(nodes, w, h, nowMs);
-    this.updateFireworks(ctx, w, h, dtMs);
+    this.drawGlobeConnections(ctx, nodes);
+    this.spawnMessagePacket(nodes, nowMs);
+    this.updateMessagePackets(ctx, dtMs);
+  }
+
+  private ensureMatrixBackdropImage(): void {
+    if (this.matrixBackdropImage) return;
+    const image = new Image();
+    image.decoding = 'async';
+    image.onload = () => {
+      this.matrixBackdropReady = true;
+    };
+    image.src = '/assets/matrix-mesh.jpg?v=1';
+    this.matrixBackdropImage = image;
   }
 
   private collectVisibleNodes(occluder: any, Cesium: any, w: number, h: number) {
@@ -509,164 +529,475 @@ export class GlobeService {
     return nodes;
   }
 
-  private spawnFirework(nodes: Array<{ x: number; y: number }>, w: number, h: number, nowMs: number): void {
-    if (!nodes.length) return;
-    if (this.fireworkShots.length >= this.FIREWORK_MAX) return;
-    if (nowMs - this.lastFireworkSpawn < this.FIREWORK_SPAWN_INTERVAL) return;
+  private drawMatrix(
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    dtMs: number,
+    globeNodes: Array<{ x: number; y: number; id: string }>
+  ): void {
+    if (!this.matrixNodes.length) {
+      this.seedMatrixNodes(w, h);
+    }
+    if (!this.matrixNodes.length) return;
 
-    const node = nodes[Math.floor(Math.random() * nodes.length)];
-    const cx = w * 0.5;
-    const cy = h * 0.5;
-    const dx = node.x - cx;
-    const dy = node.y - cy;
-    const baseAngle = Math.atan2(dy, dx);
-    const jitter = (Math.random() - 0.5) * 0.55;
-    const angle = baseAngle + jitter;
-    const speed = this.FIREWORK_MIN_SPEED + Math.random() * (this.FIREWORK_MAX_SPEED - this.FIREWORK_MIN_SPEED);
-    const shot: FireworkShot = {
-      x: node.x,
-      y: node.y,
-      vx: Math.cos(angle) * speed,
-      vy: Math.sin(angle) * speed,
-      life: 0,
-      explodeAt:
-        this.FIREWORK_MIN_TIME +
-        Math.random() * (this.FIREWORK_MAX_TIME - this.FIREWORK_MIN_TIME),
-      trail: [],
-      burstWords: null,
-    };
-    this.fireworkShots.push(shot);
-    this.lastFireworkSpawn = nowMs;
+    this.drawMatrixBackdrop(ctx, w, h);
+
+    const drift = dtMs * 0.001;
+    for (const node of this.matrixNodes) {
+      node.x += node.vx * drift;
+      node.y += node.vy * drift;
+      node.vx += (node.homeX - node.x) * 0.00028;
+      node.vy += (node.homeY - node.y) * 0.00028;
+      node.vx *= 0.996;
+      node.vy *= 0.996;
+      node.glow = Math.max(0, node.glow - dtMs * 0.0007);
+    }
+
+    const fieldBoostByNode = this.updateMatrixFieldRipples(dtMs);
+
+    for (const star of this.ambientStars) {
+      ctx.fillStyle = `rgba(190, 220, 255, ${star.alpha})`;
+      ctx.beginPath();
+      ctx.arc(star.x, star.y, star.size * (this.particleScale || 1), 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.lineWidth = Math.max(1, (this.particleScale || 1) * 0.5);
+    for (let i = 0; i < this.matrixNodes.length; i += 1) {
+      const node = this.matrixNodes[i];
+      for (const link of node.links) {
+        if (link <= i || !this.matrixNodes[link]) continue;
+        const other = this.matrixNodes[link];
+        const glowBoost = Math.max(fieldBoostByNode[i] ?? 0, fieldBoostByNode[link] ?? 0);
+        ctx.strokeStyle = `rgba(120, 180, 255, ${0.03 + glowBoost * 0.18})`;
+        ctx.lineWidth = Math.max(0.55, (this.particleScale || 1) * (0.32 + glowBoost * 0.85));
+        ctx.beginPath();
+        ctx.moveTo(node.x, node.y);
+        ctx.lineTo(other.x, other.y);
+        ctx.stroke();
+      }
+    }
+
+    for (let i = 0; i < this.matrixNodes.length; i += 1) {
+      const node = this.matrixNodes[i];
+      const fieldBoost = fieldBoostByNode[i] ?? 0;
+      const radius = Math.max(1.15, (this.particleScale || 1) * (0.74 + node.glow * 0.55));
+      ctx.fillStyle = `rgba(150, 205, 255, ${0.24 + node.glow * 0.18 + fieldBoost * 0.3})`;
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, radius + fieldBoost * (this.particleScale || 1) * 0.45, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    this.updateMatrixRipples(ctx, dtMs);
   }
 
-  private updateFireworks(ctx: CanvasRenderingContext2D, w: number, h: number, dtMs: number): void {
-    if (!this.fireworkShots.length && !this.fireworkParticles.length) return;
-    const trailColor = 'rgba(255,255,255,0.45)';
-    const headColor = 'rgba(255,255,255,0.85)';
-    const lineWidth = Math.max(1, (this.particleScale || 1) * 0.7);
+  private drawMatrixBackdrop(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+    if (!this.matrixBackdropReady || !this.matrixBackdropImage) return;
 
-    ctx.lineWidth = lineWidth;
-    const updated: FireworkShot[] = [];
+    const { image, cx, cy, globeRx, globeRy, drawW, drawH, drawX, drawY } =
+      this.getMatrixBackdropPlacement(w, h);
 
-    for (const shot of this.fireworkShots) {
-      if (!shot.burstWords) {
-        shot.life += dtMs;
-        shot.x += shot.vx * dtMs;
-        shot.y += shot.vy * dtMs;
-        shot.trail.push({ x: shot.x, y: shot.y });
-        if (shot.trail.length > this.FIREWORK_TRAIL) shot.trail.shift();
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, w, h);
+    ctx.ellipse(cx, cy, globeRx, globeRy, 0, 0, Math.PI * 2);
+    ctx.clip('evenodd');
+    ctx.globalAlpha = 0.32;
+    ctx.drawImage(image, drawX, drawY, drawW, drawH);
+    ctx.restore();
 
-        ctx.strokeStyle = trailColor;
-        ctx.beginPath();
-        for (let i = 0; i < shot.trail.length; i += 1) {
-          const p = shot.trail[i];
-          if (i === 0) ctx.moveTo(p.x, p.y);
-          else ctx.lineTo(p.x, p.y);
-        }
-        ctx.stroke();
+    ctx.save();
+    const vignette = ctx.createRadialGradient(cx, cy, globeRx * 0.9, cx, cy, Math.max(w, h) * 0.78);
+    vignette.addColorStop(0, 'rgba(0, 0, 0, 0)');
+    vignette.addColorStop(1, 'rgba(0, 0, 0, 0.22)');
+    ctx.fillStyle = vignette;
+    ctx.fillRect(0, 0, w, h);
+    ctx.restore();
+  }
 
-        ctx.fillStyle = headColor;
-        ctx.beginPath();
-        ctx.arc(shot.x, shot.y, Math.max(1.6, (this.particleScale || 1) * 0.9), 0, Math.PI * 2);
-        ctx.fill();
+  private getMatrixBackdropPlacement(w: number, h: number) {
+    const image = this.matrixBackdropImage!;
+    const cx = w * 0.5;
+    const cy = h * 0.52;
+    const globeRx = w * 0.24;
+    const globeRy = h * 0.255;
+    const coverScale = Math.max(w / image.width, h / image.height) * 1.02;
+    const drawW = image.width * coverScale;
+    const drawH = image.height * coverScale;
+    const drawX = (w - drawW) * 0.5;
+    const drawY = (h - drawH) * 0.5;
+    return { image, cx, cy, globeRx, globeRy, drawW, drawH, drawX, drawY };
+  }
 
-        if (shot.life >= shot.explodeAt) {
-          const group = this.pickFireworkGroup();
-          const words = group.length ? group : [];
-          const shuffled = [...words].sort(() => Math.random() - 0.5);
-          const count = Math.min(8, shuffled.length);
-          const burst: FireworkWord[] = [];
-          if (count > 0) {
-            const baseAngle = Math.atan2(shot.vy, shot.vx);
-            const spread = Math.PI / 4;
-            const step = count > 1 ? (spread * 2) / (count - 1) : 0;
-            for (let i = 0; i < count; i += 1) {
-              const offset = count > 1 ? -spread + step * i : 0;
-              const angle = baseAngle + offset + (Math.random() - 0.5) * 0.1;
-              const spd = 0.04 + Math.random() * 0.1;
-              burst.push({
-                text: shuffled[i],
-                x: shot.x,
-                y: shot.y,
-                life: 0,
-                ttl: 1300 + Math.random() * 700,
-                size: 12 + Math.random() * 8,
-                vx: Math.cos(angle) * spd,
-                vy: Math.sin(angle) * spd,
-              });
-            }
-            shot.burstWords = burst;
-          }
-        }
+  private drawGlobeConnections(ctx: CanvasRenderingContext2D, globeNodes: Array<{ x: number; y: number; id: string }>): void {
+    if (!globeNodes.length || !this.matrixNodes.length) return;
+    const sample = globeNodes.slice(0, Math.min(18, globeNodes.length));
+    ctx.lineWidth = Math.max(1, (this.particleScale || 1) * 0.45);
+    for (const node of sample) {
+      const targetIndex = this.findNearestMatrixNode(node.x, node.y);
+      if (targetIndex < 0) continue;
+      const target = this.matrixNodes[targetIndex];
+      ctx.strokeStyle = 'rgba(95, 165, 255, 0.06)';
+      ctx.beginPath();
+      ctx.moveTo(node.x, node.y);
+      ctx.lineTo(target.x, target.y);
+      ctx.stroke();
+    }
+  }
+
+  private spawnMessagePacket(nodes: Array<{ x: number; y: number }>, nowMs: number): void {
+    if (!nodes.length || !this.matrixNodes.length) return;
+    if (this.messagePackets.length >= this.MESSAGE_MAX) return;
+    if (nowMs - this.lastMessageSpawn < this.MESSAGE_SPAWN_INTERVAL) return;
+
+    const source = nodes[Math.floor(Math.random() * nodes.length)];
+    const targetIndex = this.findNearestMatrixNode(source.x, source.y);
+    if (targetIndex < 0) return;
+    this.messagePackets.push({
+      fromX: source.x,
+      fromY: source.y,
+      toIndex: targetIndex,
+      progress: 0,
+      speed: 0.00014 + Math.random() * 0.00008,
+      alpha: 0.66,
+      label: this.pickMessageLabel(),
+    });
+    this.lastMessageSpawn = nowMs;
+  }
+
+  private updateMessagePackets(ctx: CanvasRenderingContext2D, dtMs: number): void {
+    if (!this.messagePackets.length || !this.matrixNodes.length) return;
+    const alive: MatrixPacket[] = [];
+    for (const packet of this.messagePackets) {
+      const target = this.matrixNodes[packet.toIndex];
+      if (!target) continue;
+      packet.progress += packet.speed * dtMs;
+      const t = Math.min(1, packet.progress);
+      const eased = 1 - Math.pow(1 - t, 2.2);
+      const x = packet.fromX + (target.x - packet.fromX) * eased;
+      const y = packet.fromY + (target.y - packet.fromY) * eased;
+
+      ctx.strokeStyle = `rgba(110, 190, 255, ${0.08 * (1 - t)})`;
+      ctx.lineWidth = Math.max(0.7, (this.particleScale || 1) * 0.52);
+      ctx.beginPath();
+      ctx.moveTo(packet.fromX, packet.fromY);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+
+      ctx.fillStyle = `rgba(125, 205, 255, ${packet.alpha})`;
+      ctx.beginPath();
+      ctx.roundRect(
+        x - 4 * (this.particleScale || 1),
+        y - 2 * (this.particleScale || 1),
+        8 * (this.particleScale || 1),
+        4 * (this.particleScale || 1),
+        3 * (this.particleScale || 1)
+      );
+      ctx.fill();
+
+      if (packet.label && t > 0.14 && t < 0.92) {
+        ctx.font = `${Math.max(9, 9 * (this.particleScale || 1))}px "Montserrat", sans-serif`;
+        ctx.fillStyle = `rgba(190, 225, 255, ${0.62 * (1 - Math.abs(0.5 - t))})`;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(packet.label, x + 8 * (this.particleScale || 1), y);
       }
 
-      if (shot.burstWords) {
-        const alive: FireworkWord[] = [];
-        for (const word of shot.burstWords) {
-          word.life += dtMs;
-          word.x += word.vx * dtMs;
-          word.y += word.vy * dtMs;
-          const progress = Math.min(1, word.life / word.ttl);
-          const alpha = 1 - progress;
-          const size = word.size + progress * 6;
-          ctx.font = `${size}px "Montserrat", sans-serif`;
-          ctx.fillStyle = `rgba(255,255,255,${0.75 * alpha})`;
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.fillText(word.text, word.x, word.y);
-          if (word.life < word.ttl) {
-            alive.push(word);
-          } else {
-            const angle = Math.atan2(word.vy, word.vx);
-            const count = 8 + Math.floor(Math.random() * 8);
-            for (let i = 0; i < count; i += 1) {
-              const jitter = (Math.random() - 0.5) * Math.PI * 0.6;
-              const spd = 0.03 + Math.random() * 0.08;
-              this.fireworkParticles.push({
-                x: word.x,
-                y: word.y,
-                vx: Math.cos(angle + jitter) * spd,
-                vy: Math.sin(angle + jitter) * spd,
-                life: 0,
-                ttl: 650 + Math.random() * 650,
-                size: 1.2 + Math.random() * 1.8,
-              });
-            }
-          }
-        }
-        if (alive.length) {
-          shot.burstWords = alive;
-          updated.push(shot);
-        }
-      } else if (shot.life < shot.explodeAt) {
-        updated.push(shot);
+      if (t < 1) {
+        alive.push(packet);
+      } else {
+        target.glow = Math.min(1, target.glow + 0.9);
+        this.emitNodeRipple(packet.toIndex);
+      }
+    }
+    this.messagePackets = alive;
+  }
+
+  private updateMatrixRipples(ctx: CanvasRenderingContext2D, dtMs: number): void {
+    if (!this.matrixRipples.length || !this.matrixNodes.length) return;
+    const alive: MatrixRipple[] = [];
+    for (const ripple of this.matrixRipples) {
+      if (ripple.delayMs > 0) {
+        ripple.delayMs -= dtMs;
+        alive.push(ripple);
+        continue;
+      }
+      const from = this.matrixNodes[ripple.fromIndex];
+      const to = this.matrixNodes[ripple.toIndex];
+      if (!from || !to) continue;
+
+      ripple.progress += ripple.speed * dtMs;
+      const t = Math.min(1, ripple.progress);
+      const x = from.x + (to.x - from.x) * t;
+      const y = from.y + (to.y - from.y) * t;
+      const tailT = Math.max(0, t - 0.18);
+      const tailX = from.x + (to.x - from.x) * tailT;
+      const tailY = from.y + (to.y - from.y) * tailT;
+
+      ctx.strokeStyle = `rgba(145, 215, 255, ${0.34 * ripple.alpha * (1 - t * 0.45)})`;
+      ctx.lineWidth = Math.max(0.95, (this.particleScale || 1) * 0.8);
+      ctx.beginPath();
+      ctx.moveTo(tailX, tailY);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+
+      ctx.fillStyle = `rgba(195, 236, 255, ${0.58 * ripple.alpha * (1 - t * 0.35)})`;
+      ctx.beginPath();
+      ctx.arc(x, y, Math.max(1.6, (this.particleScale || 1) * 1.3), 0, Math.PI * 2);
+      ctx.fill();
+
+      if (t < 1) {
+        alive.push(ripple);
+      } else {
+        to.glow = Math.min(1, to.glow + 0.45);
+      }
+    }
+    this.matrixRipples = alive;
+  }
+
+  private updateMatrixFieldRipples(dtMs: number): number[] {
+    const boosts = new Array<number>(this.matrixNodes.length).fill(0);
+    if (!this.matrixFieldRipples.length || !this.matrixNodes.length) return boosts;
+
+    const alive: MatrixFieldRipple[] = [];
+    for (const ripple of this.matrixFieldRipples) {
+      ripple.radius += ripple.speed * dtMs;
+      ripple.alpha *= 0.996;
+      if (ripple.alpha < 0.02) continue;
+
+      for (let i = 0; i < this.matrixNodes.length; i += 1) {
+        const node = this.matrixNodes[i];
+        const dx = node.x - ripple.originX;
+        const dy = node.y - ripple.originY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        const delta = Math.abs(distance - ripple.radius);
+        if (delta > ripple.thickness) continue;
+        const intensity = (1 - delta / ripple.thickness) * ripple.alpha;
+        boosts[i] = Math.max(boosts[i], intensity);
+      }
+
+      alive.push(ripple);
+    }
+
+    this.matrixFieldRipples = alive;
+    return boosts;
+  }
+
+  private emitNodeRipple(nodeIndex: number): void {
+    const node = this.matrixNodes[nodeIndex];
+    if (!node) return;
+    this.matrixFieldRipples.push({
+      originX: node.x,
+      originY: node.y,
+      radius: 0,
+      speed: 0.03 + Math.random() * 0.012,
+      alpha: 0.42,
+      thickness: Math.max(44, 32 * (this.particleScale || 1)),
+    });
+
+    const distances = new Array<number>(this.matrixNodes.length).fill(Number.POSITIVE_INFINITY);
+    const queue: number[] = [nodeIndex];
+    distances[nodeIndex] = 0;
+    while (queue.length) {
+      const current = queue.shift()!;
+      const currentDistance = distances[current];
+      for (const linked of this.matrixNodes[current]?.links ?? []) {
+        if (!this.matrixNodes[linked]) continue;
+        if (distances[linked] <= currentDistance + 1) continue;
+        distances[linked] = currentDistance + 1;
+        queue.push(linked);
       }
     }
 
-    this.fireworkShots = updated;
+    const seen = new globalThis.Set<string>();
+    for (let i = 0; i < this.matrixNodes.length; i += 1) {
+      for (const linked of this.matrixNodes[i]?.links ?? []) {
+        const a = Math.min(i, linked);
+        const b = Math.max(i, linked);
+        const key = `${a}:${b}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
 
-    if (this.fireworkParticles.length) {
-      const nextParticles: FireworkParticle[] = [];
-      for (const particle of this.fireworkParticles) {
-        particle.life += dtMs;
-        particle.x += particle.vx * dtMs;
-        particle.y += particle.vy * dtMs;
-        const progress = Math.min(1, particle.life / particle.ttl);
-        const alpha = 1 - progress;
-        ctx.fillStyle = `rgba(255,255,255,${0.7 * alpha})`;
-        ctx.beginPath();
-        ctx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
-        ctx.fill();
-        if (particle.life < particle.ttl) nextParticles.push(particle);
+        const da = distances[a];
+        const db = distances[b];
+        if (!Number.isFinite(da) || !Number.isFinite(db) || da === db) continue;
+
+        const fromIndex = da < db ? a : b;
+        const toIndex = da < db ? b : a;
+        const depth = Math.min(da, db);
+        this.matrixRipples.push({
+          fromIndex,
+          toIndex,
+          delayMs: depth * 260,
+          progress: 0,
+          speed: 0.00018 + Math.random() * 0.00005,
+          alpha: 0.36,
+        });
       }
-      this.fireworkParticles = nextParticles;
     }
+  }
+
+  private findNearestMatrixNode(x: number, y: number): number {
+    let bestIndex = -1;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < this.matrixNodes.length; i += 1) {
+      const node = this.matrixNodes[i];
+      const dx = node.x - x;
+      const dy = node.y - y;
+      const dist = dx * dx + dy * dy;
+      if (dist < bestDistance) {
+        bestDistance = dist;
+        bestIndex = i;
+      }
+    }
+    return bestIndex;
+  }
+
+  private findDirectionalMatrixNode(x: number, y: number): number {
+    if (!this.matrixNodes.length || !this.particleCanvas) return -1;
+    const cx = this.particleCanvas.width * 0.5;
+    const cy = this.particleCanvas.height * 0.54;
+    const sx = x - cx;
+    const sy = y - cy;
+    const sourceRadius = Math.sqrt(sx * sx + sy * sy);
+    if (sourceRadius < 1) return this.findNearestMatrixNode(x, y);
+
+    const dirX = sx / sourceRadius;
+    const dirY = sy / sourceRadius;
+    let bestIndex = -1;
+    let bestScore = Number.POSITIVE_INFINITY;
+
+    for (let i = 0; i < this.matrixNodes.length; i += 1) {
+      const node = this.matrixNodes[i];
+      const nx = node.x - cx;
+      const ny = node.y - cy;
+      const projection = nx * dirX + ny * dirY;
+      if (projection <= sourceRadius + 18 * (this.particleScale || 1)) continue;
+      const perpendicular = Math.abs(nx * dirY - ny * dirX);
+      const radialDrift = Math.abs(Math.sqrt(nx * nx + ny * ny) - projection);
+      const score = perpendicular + radialDrift * 0.35;
+      if (score < bestScore) {
+        bestScore = score;
+        bestIndex = i;
+      }
+    }
+
+    return bestIndex >= 0 ? bestIndex : this.findNearestMatrixNode(x, y);
+  }
+
+  private seedMatrixNodes(w: number, h: number): void {
+    if (!w || !h) return;
+    if (!this.matrixBackdropReady || !this.matrixBackdropImage) {
+      this.matrixNodes = [];
+      return;
+    }
+    const next: MatrixNode[] = [];
+    const { image, cx, cy, globeRx, globeRy, drawW, drawH, drawX, drawY } =
+      this.getMatrixBackdropPlacement(w, h);
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = image.width;
+    tempCanvas.height = image.height;
+    const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
+    if (!tempCtx) return;
+    tempCtx.drawImage(image, 0, 0, image.width, image.height);
+    const pixelData = tempCtx.getImageData(0, 0, image.width, image.height).data;
+
+    const minGap = 18 * (this.particleScale || 1);
+    const sampleStep = Math.max(8, Math.round(Math.min(w, h) / 110));
+    const edgePad = Math.max(18, 16 * (this.particleScale || 1));
+    const candidates: Array<{ x: number; y: number; score: number }> = [];
+
+    const luminanceAt = (x: number, y: number): number => {
+      const ix = Math.max(0, Math.min(image.width - 1, Math.floor(((x - drawX) / drawW) * image.width)));
+      const iy = Math.max(0, Math.min(image.height - 1, Math.floor(((y - drawY) / drawH) * image.height)));
+      const offset = (iy * image.width + ix) * 4;
+      const r = pixelData[offset] ?? 0;
+      const g = pixelData[offset + 1] ?? 0;
+      const b = pixelData[offset + 2] ?? 0;
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+
+    const insideCutout = (x: number, y: number) => {
+      const dx = (x - cx) / globeRx;
+      const dy = (y - cy) / globeRy;
+      return dx * dx + dy * dy < 1.18 * 1.18;
+    };
+
+    for (let y = edgePad; y < h - edgePad; y += sampleStep) {
+      for (let x = edgePad; x < w - edgePad; x += sampleStep) {
+        if (insideCutout(x, y)) continue;
+        const lum = luminanceAt(x, y);
+        if (lum < 188) continue;
+        const centerBias = Math.min(1, Math.hypot((x - cx) / w, (y - cy) / h) * 2.2);
+        candidates.push({ x, y, score: lum + centerBias * 16 });
+      }
+    }
+
+    candidates.sort((a, b) => b.score - a.score);
+    for (const candidate of candidates) {
+      if (next.length >= 118) break;
+      let tooClose = false;
+      for (const existing of next) {
+        const dx = existing.x - candidate.x;
+        const dy = existing.y - candidate.y;
+        if (dx * dx + dy * dy < minGap * minGap) {
+          tooClose = true;
+          break;
+        }
+      }
+      if (tooClose) continue;
+      next.push({
+        x: candidate.x,
+        y: candidate.y,
+        homeX: candidate.x,
+        homeY: candidate.y,
+        vx: (Math.random() - 0.5) * 0.002,
+        vy: (Math.random() - 0.5) * 0.002,
+        links: [],
+        glow: Math.random() * 0.05,
+      });
+    }
+
+    const addLink = (a: number, b: number) => {
+      if (a === b || !next[a] || !next[b]) return;
+      if (!next[a].links.includes(b)) next[a].links.push(b);
+      if (!next[b].links.includes(a)) next[b].links.push(a);
+    };
+
+    for (let i = 0; i < next.length; i += 1) {
+      const distances: Array<{ index: number; dist: number }> = [];
+      for (let j = 0; j < next.length; j += 1) {
+        if (i === j) continue;
+        const dx = next[j].x - next[i].x;
+        const dy = next[j].y - next[i].y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > 96 * (this.particleScale || 1)) continue;
+        distances.push({ index: j, dist });
+      }
+      distances.sort((a, b) => a.dist - b.dist);
+      for (const target of distances.slice(0, 4)) {
+        addLink(i, target.index);
+      }
+    }
+
+    this.matrixNodes = next;
+    this.ambientStars = [];
+    this.messagePackets = [];
+    this.matrixRipples = [];
+    this.matrixFieldRipples = [];
   }
 
   private pickFireworkWord(): string {
     if (this.floatingWordPool.length) {
       return this.floatingWordPool[Math.floor(Math.random() * this.floatingWordPool.length)];
     }
+    return '';
+  }
+
+  private pickMessageLabel(): string {
+    const group = this.pickFireworkGroup();
+    if (group.length) return group.slice(0, 2).join(' ');
     return '';
   }
 
@@ -688,26 +1019,7 @@ export class GlobeService {
   }
 
   private seedFloatingWords(w: number, h: number): void {
-    const pool = this.floatingWordPool;
-    if (!pool.length) {
-      this.floatingWords = [];
-      return;
-    }
-
-    const count = Math.min(this.FLOATING_WORD_COUNT, pool.length);
-    this.floatingWords = [];
-    for (let i = 0; i < count; i += 1) {
-      const text = pool[Math.floor(Math.random() * pool.length)];
-      this.floatingWords.push({
-        text,
-        x: Math.random() * w,
-        y: Math.random() * h,
-        vx: (Math.random() - 0.5) * 0.02,
-        vy: (Math.random() - 0.5) * 0.02,
-        alpha: 0.16 + Math.random() * 0.18,
-        size: 11 + Math.random() * 10,
-      });
-    }
+    return;
   }
 
   // -----------------------------

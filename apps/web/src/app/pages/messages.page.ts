@@ -3090,6 +3090,6 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   }
 
   openSearch(): void {
-    void this.router.navigate(['/globe'], { queryParams: { search: '1' } });
+    void this.router.navigate(['/search']);
   }
 }

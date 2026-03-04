@@ -99,6 +99,10 @@ import type { CountryPost } from '../core/models/post.model';
                 *ngIf="mediaTypes[0] === 'video'"
                 [src]="mediaUrls[0]"
                 [poster]="post.thumb_url || null"
+                [adPlacement]="postIsReel(post) ? 'reel' : 'video'"
+                [adCountryCode]="post.country_code"
+                [adContentCountryCode]="post.country_code"
+                [adPostId]="post.id"
                 preload="metadata"
               ></app-video-player>
             </div>
@@ -465,6 +469,19 @@ export class PostPageComponent implements OnInit {
     return String(fallback || '').toLowerCase() === 'video' ? 'video' : 'image';
   }
 
+  postIsReel(post: CountryPost | null): boolean {
+    const raw = String(post?.media_url || '').trim();
+    if (!raw) return false;
+    if (raw.startsWith('{') || raw.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(raw) as any;
+        const reelFlag = parsed?.reel;
+        return reelFlag === true || reelFlag === 'true' || reelFlag === 1 || reelFlag === '1';
+      } catch {}
+    }
+    return false;
+  }
+
   async ngOnInit(): Promise<void> {
     const id = String(this.route.snapshot.paramMap.get('id') || '').trim();
     if (!id) {
@@ -495,7 +512,7 @@ export class PostPageComponent implements OnInit {
   }
 
   openSearch(): void {
-    void this.router.navigate(['/globe'], { queryParams: { search: '1' } });
+    void this.router.navigate(['/search']);
   }
 
   openSharedPost(shared: CountryPost, event?: Event): void {

@@ -145,6 +145,57 @@ export const typeDefs = `#graphql
     last_message: Message
   }
 
+  type AdAdvertiser {
+    user_id: ID!
+    display_name: String
+    website_url: String
+    created_at: String!
+    updated_at: String!
+  }
+
+  type AdCreative {
+    id: ID!
+    campaign_id: ID!
+    title: String
+    body: String
+    media_kind: String!
+    media_url: String!
+    click_url: String
+    cta_label: String
+    duration_seconds: Int!
+    created_at: String!
+    updated_at: String!
+  }
+
+  type AdCampaign {
+    id: ID!
+    advertiser_user_id: ID!
+    name: String!
+    status: String!
+    placement: String!
+    target_country_codes: [String!]!
+    budget_cents: Int!
+    daily_budget_cents: Int!
+    start_at: String
+    end_at: String
+    created_at: String!
+    updated_at: String!
+    impression_count: Int!
+    click_count: Int!
+    creatives: [AdCreative!]!
+  }
+
+  type AdSlot {
+    impression_token: String!
+    skip_after_seconds: Int!
+    campaign: AdCampaign!
+    creative: AdCreative!
+  }
+
+  type AdEventResult {
+    ok: Boolean!
+  }
+
   input CreatePostInput {
     title: String
     body: String!
@@ -162,6 +213,27 @@ export const typeDefs = `#graphql
     title: String
     body: String
     visibility: String
+  }
+
+  input AdCampaignInput {
+    name: String!
+    placement: String!
+    status: String
+    target_country_codes: [String!]
+    budget_cents: Int
+    daily_budget_cents: Int
+    start_at: String
+    end_at: String
+  }
+
+  input AdCreativeInput {
+    title: String
+    body: String
+    media_kind: String
+    media_url: String!
+    click_url: String
+    cta_label: String
+    duration_seconds: Int
   }
 
   type FollowCounts {
@@ -259,6 +331,17 @@ export const typeDefs = `#graphql
     # Notifications
     notifications(limit: Int, before: String): [Notification!]!
     notificationsUnreadCount: Int!
+
+    # Ads
+    myAdAdvertiser: AdAdvertiser!
+    myAdCampaigns: [AdCampaign!]!
+    adCampaignById(id: ID!): AdCampaign
+    serveVideoAd(
+      placement: String!
+      country_code: String
+      content_country_code: String
+      post_id: ID
+    ): AdSlot
   }
 
   type Mutation {
@@ -299,5 +382,12 @@ export const typeDefs = `#graphql
     # Notifications
     markNotificationRead(id: ID!): Boolean!
     markAllNotificationsRead: Int!
+
+    # Ads
+    createAdCampaign(input: AdCampaignInput!): AdCampaign!
+    updateAdCampaign(campaign_id: ID!, input: AdCampaignInput!): AdCampaign!
+    createAdCreative(campaign_id: ID!, input: AdCreativeInput!): AdCreative!
+    logAdImpression(impression_token: String!): AdEventResult!
+    logAdClick(impression_token: String!): AdEventResult!
   }
 `;

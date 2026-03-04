@@ -18,7 +18,7 @@ import type { Subscription } from 'rxjs';
     <button
       type="button"
       class="global-alert"
-      *ngIf="!isMessagesRoute && !isProfileRoute && !isReelsRoute"
+      *ngIf="!isMessagesRoute && !isProfileRoute && !isReelsRoute && !isSearchRoute"
       aria-label="Open alerts"
       (click)="openNotifications()"
     >
@@ -206,6 +206,7 @@ export class AppComponent {
   isMessagesRoute = false;
   isProfileRoute = false;
   isReelsRoute = false;
+  isSearchRoute = false;
   showTravelButton = false;
   notificationsUnreadCount = 0;
   private notificationInsertSub?: Subscription;
@@ -245,6 +246,7 @@ export class AppComponent {
     this.isMessagesRoute = url.startsWith('/messages');
     this.isProfileRoute = url.startsWith('/me') || url.startsWith('/user');
     this.isReelsRoute = url.startsWith('/reels');
+    this.isSearchRoute = url.startsWith('/search');
     let parsed: URL | null = null;
     try {
       parsed = new URL(url, window.location.origin);

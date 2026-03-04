@@ -517,6 +517,10 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
                       <app-video-player
                         *ngIf="mediaTypes[0] === 'video'"
                         [src]="mediaUrls[0]"
+                        [adPlacement]="postIsReel(post) ? 'reel' : 'video'"
+                        [adCountryCode]="post.country_code"
+                        [adContentCountryCode]="post.country_code"
+                        [adPostId]="post.id"
                         [tapBehavior]="postIsReel(post) ? 'emit' : 'toggle'"
                         (viewed)="recordView(post)"
                         (videoTap)="onPostVideoTap(post)"
@@ -529,6 +533,10 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
                             <app-video-player
                               *ngIf="mediaTypes[idx] === 'video'"
                               [src]="url"
+                              [adPlacement]="postIsReel(post) ? 'reel' : 'video'"
+                              [adCountryCode]="post.country_code"
+                              [adContentCountryCode]="post.country_code"
+                              [adPostId]="post.id"
                               [tapBehavior]="postIsReel(post) ? 'emit' : 'toggle'"
                               (viewed)="recordView(post)"
                               (videoTap)="onPostVideoTap(post)"
