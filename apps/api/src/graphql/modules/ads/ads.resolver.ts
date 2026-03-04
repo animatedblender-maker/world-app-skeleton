@@ -59,7 +59,13 @@ export const adsResolvers = {
     ) => {
       const user = requireAuth(ctx);
       if (!args?.campaign_id) throw new Error('campaign_id is required.');
-      return await svc().updateCampaign(args.campaign_id, user.id, args.input);
+      try {
+        return await svc().updateCampaign(args.campaign_id, user.id, args.input);
+      } catch (error: any) {
+        throw new GraphQLError(error?.message ?? 'Failed to update ad campaign.', {
+          extensions: { code: 'BAD_USER_INPUT' },
+        });
+      }
     },
     createAdCreative: async (
       _: any,

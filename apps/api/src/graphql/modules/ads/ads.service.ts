@@ -230,7 +230,16 @@ export class AdsService {
   ): Promise<AdCampaignRow & { creatives: AdCreativeRow[] }> {
     const existing = await this.campaignById(campaignId, userId);
     if (!existing) throw new Error('Campaign not found.');
-    const normalized = this.normalizeCampaignInput({ ...existing, ...input });
+    const normalized = this.normalizeCampaignInput({
+      name: input?.name ?? existing.name,
+      placement: input?.placement ?? existing.placement,
+      status: input?.status ?? existing.status,
+      target_country_codes: input?.target_country_codes ?? existing.target_country_codes,
+      budget_cents: input?.budget_cents ?? existing.budget_cents,
+      daily_budget_cents: input?.daily_budget_cents ?? existing.daily_budget_cents,
+      start_at: input?.start_at ?? existing.start_at,
+      end_at: input?.end_at ?? existing.end_at,
+    });
     await pool.query(
       `
       update public.ad_campaigns
@@ -495,7 +504,6 @@ export class AdsService {
         viewer_user_id
       )
       values ($1, $2, $3, $4)
-      on conflict do nothing
       `,
       [row.id, row.campaign_id, row.creative_id, row.viewer_user_id]
     );
