@@ -333,7 +333,7 @@ export class AdsService {
     | {
         impression_token: string;
         skip_after_seconds: number;
-        campaign: AdCampaignRow;
+        campaign: AdCampaignRow & { creatives: AdCreativeRow[] };
         creative: AdCreativeRow;
       }
     | null
@@ -394,6 +394,8 @@ export class AdsService {
       where c.status = 'active'
         and c.placement = $1
         and cr.media_kind = 'video'
+        and cr.media_url ~* '^https?://'
+        and cr.media_url ~* '\\.(mp4|webm|mov|m4v)(\\?.*)?(#.*)?$'
         and (c.start_at is null or c.start_at <= now())
         and (c.end_at is null or c.end_at >= now())
         and (
@@ -456,38 +458,43 @@ export class AdsService {
       impressionToken = randomUUID();
     }
 
+    const mappedCreative = this.mapCreativeRow({
+      id: row.creative_id,
+      campaign_id: row.campaign_id,
+      title: row.creative_title,
+      body: row.creative_body,
+      media_kind: row.media_kind,
+      media_url: row.media_url,
+      click_url: row.click_url,
+      cta_label: row.cta_label,
+      duration_seconds: row.duration_seconds,
+      created_at: row.creative_created_at,
+      updated_at: row.creative_updated_at,
+    });
+
     return {
       impression_token: impressionToken,
       skip_after_seconds: Math.min(5, Math.max(2, Math.floor(Number(row.duration_seconds ?? 8) / 2))),
-      campaign: this.mapCampaignRow({
-        id: row.campaign_id,
-        advertiser_user_id: row.advertiser_user_id,
-        name: row.campaign_name,
-        status: row.campaign_status,
-        placement: row.placement,
-        target_country_codes: row.target_country_codes,
-        budget_cents: row.budget_cents,
-        daily_budget_cents: row.daily_budget_cents,
-        start_at: row.campaign_start_at,
-        end_at: row.campaign_end_at,
-        created_at: row.campaign_created_at,
-        updated_at: row.campaign_updated_at,
-        impression_count: row.impression_count,
-        click_count: row.click_count,
-      }),
-      creative: this.mapCreativeRow({
-        id: row.creative_id,
-        campaign_id: row.campaign_id,
-        title: row.creative_title,
-        body: row.creative_body,
-        media_kind: row.media_kind,
-        media_url: row.media_url,
-        click_url: row.click_url,
-        cta_label: row.cta_label,
-        duration_seconds: row.duration_seconds,
-        created_at: row.creative_created_at,
-        updated_at: row.creative_updated_at,
-      }),
+      campaign: {
+        ...this.mapCampaignRow({
+          id: row.campaign_id,
+          advertiser_user_id: row.advertiser_user_id,
+          name: row.campaign_name,
+          status: row.campaign_status,
+          placement: row.placement,
+          target_country_codes: row.target_country_codes,
+          budget_cents: row.budget_cents,
+          daily_budget_cents: row.daily_budget_cents,
+          start_at: row.campaign_start_at,
+          end_at: row.campaign_end_at,
+          created_at: row.campaign_created_at,
+          updated_at: row.campaign_updated_at,
+          impression_count: row.impression_count,
+          click_count: row.click_count,
+        }),
+        creatives: [mappedCreative],
+      },
+      creative: mappedCreative,
     };
   }
 
@@ -534,6 +541,8 @@ export class AdsService {
       where c.status = 'active'
         and c.placement = $1
         and cr.media_kind = 'video'
+        and cr.media_url ~* '^https?://'
+        and cr.media_url ~* '\\.(mp4|webm|mov|m4v)(\\?.*)?(#.*)?$'
         and (c.start_at is null or c.start_at <= now())
         and (c.end_at is null or c.end_at >= now())
         and (
@@ -594,6 +603,8 @@ export class AdsService {
       where c.status = 'active'
         and c.placement = $1
         and cr.media_kind = 'video'
+        and cr.media_url ~* '^https?://'
+        and cr.media_url ~* '\\.(mp4|webm|mov|m4v)(\\?.*)?(#.*)?$'
         and (c.start_at is null or c.start_at <= now())
         and (c.end_at is null or c.end_at >= now())
         and (
@@ -752,6 +763,11 @@ export class AdsService {
     if (mediaKind !== 'video' && mediaKind !== 'image') {
       throw new Error('Creative media kind must be video or image.');
     }
+    if (mediaKind === 'video' && !this.isDirectVideoUrl(mediaUrl)) {
+      throw new Error(
+        'Creative video URL must be a direct HTTP(S) file URL ending in .mp4, .webm, .mov, or .m4v.'
+      );
+    }
     return {
       title: String(input?.title ?? '').trim() || null,
       body: String(input?.body ?? '').trim() || null,
@@ -761,6 +777,12 @@ export class AdsService {
       cta_label: String(input?.cta_label ?? '').trim() || null,
       duration_seconds: Math.max(3, Math.min(30, Math.floor(Number(input?.duration_seconds ?? 8) || 8))),
     };
+  }
+
+  private isDirectVideoUrl(url: string): boolean {
+    const value = String(url || '').trim();
+    if (!/^https?:\/\//i.test(value)) return false;
+    return /\.(mp4|webm|mov|m4v)(\?.*)?(#.*)?$/i.test(value);
   }
 
   private normalizeCountryCode(code: string | null): string | null {

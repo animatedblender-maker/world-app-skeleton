@@ -14,11 +14,14 @@ type PushSubscriptionPayload = {
 export class PushService {
   private readonly swUrl = '/sw.js';
   private registrationPromise: Promise<ServiceWorkerRegistration> | null = null;
+  private pushUnavailable = false;
+  private warnedUnavailable = false;
 
   constructor(private auth: AuthService) {}
 
   isSupported(): boolean {
     return (
+      !this.pushUnavailable &&
       typeof window !== 'undefined' &&
       'serviceWorker' in navigator &&
       'PushManager' in window &&
@@ -30,7 +33,11 @@ export class PushService {
     if (!this.isSupported()) return;
     if (!('Notification' in window)) return;
     if (Notification.permission !== 'granted') return;
-    await this.ensureSubscription();
+    try {
+      await this.ensureSubscription();
+    } catch (error) {
+      this.handlePushError(error);
+    }
   }
 
   async enableFromUserGesture(): Promise<void> {
@@ -43,7 +50,11 @@ export class PushService {
         : Notification.permission;
 
     if (permission !== 'granted') return;
-    await this.ensureSubscription();
+    try {
+      await this.ensureSubscription();
+    } catch (error) {
+      this.handlePushError(error);
+    }
   }
 
   private async ensureSubscription(): Promise<void> {
@@ -61,7 +72,10 @@ export class PushService {
 
   private async getRegistration(): Promise<ServiceWorkerRegistration> {
     if (!this.registrationPromise) {
-      this.registrationPromise = navigator.serviceWorker.register(this.swUrl);
+      this.registrationPromise = navigator.serviceWorker.register(this.swUrl).catch((error) => {
+        this.registrationPromise = null;
+        throw error;
+      });
     }
     return this.registrationPromise;
   }
@@ -96,5 +110,26 @@ export class PushService {
       outputArray[i] = rawData.charCodeAt(i);
     }
     return outputArray.buffer;
+  }
+
+  private handlePushError(error: any): void {
+    const message = String(error?.message ?? '');
+    const name = String(error?.name ?? '');
+    const pushServiceAbort =
+      name === 'AbortError' ||
+      message.toLowerCase().includes('push service error') ||
+      message.toLowerCase().includes('registration failed');
+
+    if (pushServiceAbort) {
+      this.pushUnavailable = true;
+      this.registrationPromise = null;
+      if (!this.warnedUnavailable) {
+        this.warnedUnavailable = true;
+        console.info('[push] disabled on this device/session:', message || name || 'AbortError');
+      }
+      return;
+    }
+
+    console.warn('[push] subscription failed:', error);
   }
 }

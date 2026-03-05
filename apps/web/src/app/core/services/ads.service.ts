@@ -281,19 +281,6 @@ export class AdsService {
             updated_at
             impression_count
             click_count
-            creatives {
-              id
-              campaign_id
-              title
-              body
-              media_kind
-              media_url
-              click_url
-              cta_label
-              duration_seconds
-              created_at
-              updated_at
-            }
           }
           creative {
             id

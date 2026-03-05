@@ -409,6 +409,8 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
   private adImpressionLogged = false;
   private adPreparedForSrc: string | null = null;
   private adDebugLoggedForSrc = false;
+  private adRetryCount = 0;
+  private adStartedAt = 0;
 
   constructor(private ads: AdsService) {}
 
@@ -476,7 +478,7 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
     if (video.paused) {
       this.userPaused = false;
       this.autoPaused = false;
-      void video.play();
+      this.safePlay(video);
     } else {
       this.userPaused = true;
       this.autoPaused = false;
@@ -566,6 +568,7 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
     this.userPaused = false;
     this.autoPaused = false;
     if (this.isAdMode) {
+      if (!this.adStartedAt) this.adStartedAt = Date.now();
       this.markAdImpression();
       this.startAdCountdown();
     }
@@ -584,12 +587,38 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
     this.controlsVisible = true;
     this.clearHideTimer();
     if (this.isAdMode) {
+      console.info('[ads-debug] ad media playback error', {
+        adUrl: this.activeAd?.creative?.media_url ?? null,
+        placement: this.adPlacement,
+        country: this.adCountryCode,
+        contentCountry: this.adContentCountryCode,
+      });
+      const video = this.videoRef?.nativeElement;
+      if (video && this.adRetryCount < 1) {
+        this.adRetryCount += 1;
+        setTimeout(() => {
+          video.load();
+          this.safePlay(video);
+        }, 40);
+        return;
+      }
       this.finishAd();
     }
   }
 
   onEnded(): void {
     if (this.isAdMode) {
+      const elapsed = this.adStartedAt ? Date.now() - this.adStartedAt : 0;
+      const video = this.videoRef?.nativeElement;
+      if (video && elapsed > 0 && elapsed < 500 && this.adRetryCount < 1) {
+        this.adRetryCount += 1;
+        setTimeout(() => {
+          video.currentTime = 0;
+          video.load();
+          this.safePlay(video);
+        }, 40);
+        return;
+      }
       this.finishAd();
       return;
     }
@@ -712,10 +741,7 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
     if (!this.isInView) return;
     if (this.userPaused) return;
     if (!video.paused && !video.ended) return;
-    const playAttempt = video.play();
-    if (playAttempt && typeof playAttempt.catch === 'function') {
-      playAttempt.catch(() => {});
-    }
+    this.safePlay(video);
   }
 
   openAdLink(event: Event): void {
@@ -756,6 +782,8 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
       this.adSecondsLeft = Number(this.activeAd?.creative?.duration_seconds ?? 0);
       this.adSkipReady = false;
       this.adImpressionLogged = false;
+      this.adRetryCount = 0;
+      this.adStartedAt = 0;
     } catch {
       this.activeAd = null;
       this.isAdMode = false;
@@ -805,6 +833,8 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
     this.adDecisionMade = true;
     this.adSecondsLeft = 0;
     this.adSkipReady = false;
+    this.adRetryCount = 0;
+    this.adStartedAt = 0;
     this.currentTime = 0;
     this.progressPercent = 0;
     this.duration = 0;
@@ -824,7 +854,18 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
     this.adImpressionLogged = false;
     this.adPreparedForSrc = null;
     this.adDebugLoggedForSrc = false;
+    this.adRetryCount = 0;
+    this.adStartedAt = 0;
     this.viewTracked = false;
+  }
+
+  private safePlay(video: HTMLVideoElement): void {
+    const playAttempt = video.play();
+    if (!playAttempt || typeof playAttempt.catch !== 'function') return;
+    playAttempt.catch((error: any) => {
+      const name = String(error?.name ?? '');
+      if (name === 'AbortError' || name === 'NotAllowedError') return;
+    });
   }
 
   private async logAdDebugIfEmpty(): Promise<void> {

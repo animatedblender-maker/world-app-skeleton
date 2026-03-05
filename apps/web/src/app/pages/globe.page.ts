@@ -2959,6 +2959,8 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   composerMediaMode: 'post' | 'video' | 'reel' = 'post';
   composerMediaError = '';
   postMediaIndex: Record<string, number> = {};
+  private mediaUrlsCache = new Map<string, string[]>();
+  private mediaTypesCache = new Map<string, Array<'image' | 'video'>>();
   postBusy = false;
   postFeedback = '';
   postComposerError = '';
@@ -4716,45 +4718,54 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   postMediaUrls(post: CountryPost): string[] {
     const raw = String(post?.media_url || '').trim();
     if (!raw) return [];
+    const cachedUrls = this.mediaUrlsCache.get(raw);
+    if (cachedUrls) return cachedUrls;
+    let urls: string[] = [];
     if (raw.startsWith('{') || raw.startsWith('[')) {
       try {
         const parsed = JSON.parse(raw) as any;
-        if (Array.isArray(parsed)) return parsed.filter(Boolean).map(String);
-        if (Array.isArray(parsed?.urls)) return parsed.urls.filter(Boolean);
-        if (parsed?.url) return [parsed.url];
+        if (Array.isArray(parsed)) urls = parsed.filter(Boolean).map(String);
+        else if (Array.isArray(parsed?.urls)) urls = parsed.urls.filter(Boolean).map(String);
+        else if (parsed?.url) urls = [String(parsed.url)];
       } catch {}
     }
-    return [raw];
+    if (!urls.length) urls = [raw];
+    this.mediaUrlsCache.set(raw, urls);
+    return urls;
   }
 
   postMediaTypes(post: CountryPost): Array<'image' | 'video'> {
     const raw = String(post?.media_url || '').trim();
     if (!raw) return [];
+    const typeKey = `${raw}::${String(post.media_type || '').toLowerCase()}`;
+    const cachedTypes = this.mediaTypesCache.get(typeKey);
+    if (cachedTypes) return cachedTypes;
+    let types: Array<'image' | 'video'> = [];
     if (raw.startsWith('{') || raw.startsWith('[')) {
       try {
         const parsed = JSON.parse(raw) as any;
         if (Array.isArray(parsed)) {
-          return parsed.map((url: string) => this.inferMediaTypeFromUrl(url, post.media_type));
-        }
-        if (Array.isArray(parsed?.types) && parsed.types.length) {
+          types = parsed.map((url: string) => this.inferMediaTypeFromUrl(url, post.media_type));
+        } else if (Array.isArray(parsed?.types) && parsed.types.length) {
           if (Array.isArray(parsed?.urls) && parsed.urls.length) {
-            return parsed.urls.map((url: string, idx: number) => {
+            types = parsed.urls.map((url: string, idx: number) => {
               const declared = parsed.types?.[idx];
               if (declared === 'video' || declared === 'image') return declared;
               return this.inferMediaTypeFromUrl(url, post.media_type);
             });
+          } else {
+            types = parsed.types.map((t: string) => (t === 'video' ? 'video' : 'image'));
           }
-          return parsed.types.map((t: string) => (t === 'video' ? 'video' : 'image'));
-        }
-        if (Array.isArray(parsed?.urls)) {
-          return parsed.urls.map((url: string) => this.inferMediaTypeFromUrl(url, post.media_type));
-        }
-        if (parsed?.url) {
-          return [this.inferMediaTypeFromUrl(parsed.url, post.media_type)];
+        } else if (Array.isArray(parsed?.urls)) {
+          types = parsed.urls.map((url: string) => this.inferMediaTypeFromUrl(url, post.media_type));
+        } else if (parsed?.url) {
+          types = [this.inferMediaTypeFromUrl(parsed.url, post.media_type)];
         }
       } catch {}
     }
-    return [this.inferMediaTypeFromUrl(raw, post.media_type)];
+    if (!types.length) types = [this.inferMediaTypeFromUrl(raw, post.media_type)];
+    this.mediaTypesCache.set(typeKey, types);
+    return types;
   }
 
   private inferMediaTypeFromUrl(url: string, fallback: string | null | undefined): 'image' | 'video' {
