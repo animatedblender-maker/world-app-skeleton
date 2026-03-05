@@ -84,12 +84,29 @@ import { MediaService } from '../core/services/media.service';
         <form class="composer" (ngSubmit)="createCampaign()" #campaignForm="ngForm">
           <div class="composer-head">
             <div>
-              <h2>New campaign</h2>
-              <p>Upload one video creative, then activate the campaign.</p>
+              <h2>{{ editingCampaignId ? 'Edit campaign' : 'New campaign' }}</h2>
+              <p>
+                {{
+                  editingCampaignId
+                    ? 'Update campaign settings and replace the video creative at any time.'
+                    : 'Upload one video creative, then activate the campaign.'
+                }}
+              </p>
             </div>
-            <button type="submit" [disabled]="saving || !newCampaign.name || !newCreative.media_url">
-              {{ saving ? 'Saving...' : 'Create' }}
-            </button>
+            <div class="composer-head-actions">
+              <button
+                type="button"
+                class="ghost"
+                *ngIf="editingCampaignId"
+                [disabled]="saving"
+                (click)="cancelEdit()"
+              >
+                Cancel
+              </button>
+              <button type="submit" [disabled]="saving || !newCampaign.name || !newCreative.media_url">
+                {{ saving ? 'Saving...' : editingCampaignId ? 'Save changes' : 'Create' }}
+              </button>
+            </div>
           </div>
 
           <div class="grid">
@@ -276,6 +293,14 @@ import { MediaService } from '../core/services/media.service';
                 type="button"
                 class="ghost"
                 [disabled]="isCampaignBusy(campaign.id)"
+                (click)="beginEdit(campaign)"
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                class="ghost"
+                [disabled]="isCampaignBusy(campaign.id)"
                 (click)="setStatus(campaign, 'draft')"
               >
                 Draft
@@ -421,6 +446,11 @@ import { MediaService } from '../core/services/media.service';
       .list-head p {
         margin-top: 4px;
         color: #607086;
+      }
+      .composer-head-actions {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
       }
       .grid {
         margin-top: 18px;
@@ -722,6 +752,8 @@ export class AdsPageComponent implements OnInit, OnDestroy {
   busyCampaignIds = new Set<string>();
   deletingCampaignId: string | null = null;
   nowMs = Date.now();
+  editingCampaignId: string | null = null;
+  editingCreativeId: string | null = null;
   newCampaign = {
     name: '',
     placement: 'video' as 'video' | 'reel',
@@ -805,27 +837,62 @@ export class AdsPageComponent implements OnInit, OnDestroy {
     this.error = '';
     this.success = '';
     try {
-      const campaign = await this.ads.createCampaign({
-        name: this.newCampaign.name,
-        placement: this.newCampaign.placement,
-        status: this.newCampaign.status,
-        target_country_codes: this.parseCountryCodes(this.countryCodesInput),
-        budget_cents: this.toCents(this.newCampaign.budget_eur),
-        daily_budget_cents: this.toCents(this.newCampaign.daily_budget_eur),
-        start_at: this.toIsoOrNull(this.newCampaign.start_at),
-        end_at: this.toIsoOrNull(this.newCampaign.end_at),
-      });
-      await this.ads.createCreative(campaign.id, {
-        title: this.newCreative.title,
-        body: this.newCreative.body,
-        media_kind: 'video',
-        media_url: this.newCreative.media_url,
-        click_url: this.newCreative.click_url || null,
-        cta_label: this.newCreative.cta_label || null,
-        duration_seconds: this.newCreative.duration_seconds,
-      });
+      if (this.editingCampaignId) {
+        const updatedCampaign = await this.ads.updateCampaign(this.editingCampaignId, {
+          name: this.newCampaign.name,
+          placement: this.newCampaign.placement,
+          status: this.newCampaign.status,
+          target_country_codes: this.parseCountryCodes(this.countryCodesInput),
+          budget_cents: this.toCents(this.newCampaign.budget_eur),
+          daily_budget_cents: this.toCents(this.newCampaign.daily_budget_eur),
+          start_at: this.toIsoOrNull(this.newCampaign.start_at),
+          end_at: this.toIsoOrNull(this.newCampaign.end_at),
+        });
+        if (this.editingCreativeId) {
+          await this.ads.updateCreative(this.editingCreativeId, {
+            title: this.newCreative.title,
+            body: this.newCreative.body,
+            media_kind: 'video',
+            media_url: this.newCreative.media_url,
+            click_url: this.newCreative.click_url || null,
+            cta_label: this.newCreative.cta_label || null,
+            duration_seconds: this.newCreative.duration_seconds,
+          });
+        } else {
+          await this.ads.createCreative(updatedCampaign.id, {
+            title: this.newCreative.title,
+            body: this.newCreative.body,
+            media_kind: 'video',
+            media_url: this.newCreative.media_url,
+            click_url: this.newCreative.click_url || null,
+            cta_label: this.newCreative.cta_label || null,
+            duration_seconds: this.newCreative.duration_seconds,
+          });
+        }
+        this.success = 'Campaign updated.';
+      } else {
+        const campaign = await this.ads.createCampaign({
+          name: this.newCampaign.name,
+          placement: this.newCampaign.placement,
+          status: this.newCampaign.status,
+          target_country_codes: this.parseCountryCodes(this.countryCodesInput),
+          budget_cents: this.toCents(this.newCampaign.budget_eur),
+          daily_budget_cents: this.toCents(this.newCampaign.daily_budget_eur),
+          start_at: this.toIsoOrNull(this.newCampaign.start_at),
+          end_at: this.toIsoOrNull(this.newCampaign.end_at),
+        });
+        await this.ads.createCreative(campaign.id, {
+          title: this.newCreative.title,
+          body: this.newCreative.body,
+          media_kind: 'video',
+          media_url: this.newCreative.media_url,
+          click_url: this.newCreative.click_url || null,
+          cta_label: this.newCreative.cta_label || null,
+          duration_seconds: this.newCreative.duration_seconds,
+        });
+        this.success = 'Campaign created.';
+      }
       this.resetForm();
-      this.success = 'Campaign created.';
       void this.loadCampaigns({ silent: true });
       this.cdr.detectChanges();
     } catch (error: any) {
@@ -896,6 +963,41 @@ export class AdsPageComponent implements OnInit, OnDestroy {
       this.deletingCampaignId = null;
       this.cdr.detectChanges();
     }
+  }
+
+  beginEdit(campaign: AdCampaignModel): void {
+    const creative = campaign.creatives?.[0] ?? null;
+    this.editingCampaignId = campaign.id;
+    this.editingCreativeId = creative?.id ?? null;
+    this.countryCodesInput = (campaign.target_country_codes || []).join(', ');
+    this.newCampaign = {
+      name: campaign.name || '',
+      placement: (campaign.placement as 'video' | 'reel') || 'video',
+      status: campaign.status || 'draft',
+      budget_eur: Number(campaign.budget_cents || 0) / 100,
+      daily_budget_eur: Number(campaign.daily_budget_cents || 0) / 100,
+      start_at: this.toLocalDateTime(campaign.start_at),
+      end_at: this.toLocalDateTime(campaign.end_at),
+    };
+    this.newCreative = {
+      title: creative?.title || '',
+      body: creative?.body || '',
+      media_url: creative?.media_url || '',
+      click_url: creative?.click_url || '',
+      cta_label: creative?.cta_label || 'Learn more',
+      duration_seconds: Number(creative?.duration_seconds || 8),
+    };
+    this.creativeUploadName = '';
+    this.success = '';
+    this.error = '';
+    this.cdr.detectChanges();
+  }
+
+  cancelEdit(): void {
+    this.resetForm();
+    this.success = '';
+    this.error = '';
+    this.cdr.detectChanges();
   }
 
   goBack(): void {
@@ -990,6 +1092,19 @@ export class AdsPageComponent implements OnInit, OnDestroy {
     return Number.isNaN(date.getTime()) ? null : date.toISOString();
   }
 
+  private toLocalDateTime(value: string | null | undefined): string {
+    const ms = this.parseDateMs(value);
+    if (!ms) return '';
+    const date = new Date(ms);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const yyyy = date.getFullYear();
+    const mm = pad(date.getMonth() + 1);
+    const dd = pad(date.getDate());
+    const hh = pad(date.getHours());
+    const min = pad(date.getMinutes());
+    return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
+  }
+
   private toApiDate(value: string | null | undefined): string | null {
     const raw = String(value ?? '').trim();
     if (!raw) return null;
@@ -1047,6 +1162,8 @@ export class AdsPageComponent implements OnInit, OnDestroy {
   }
 
   private resetForm(): void {
+    this.editingCampaignId = null;
+    this.editingCreativeId = null;
     this.countryCodesInput = '';
     this.creativeUploadName = '';
     this.newCampaign = {

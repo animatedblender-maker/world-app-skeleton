@@ -91,6 +91,21 @@ export const adsResolvers = {
       if (!args?.campaign_id) throw new Error('campaign_id is required.');
       return await svc().createCreative(args.campaign_id, user.id, args.input);
     },
+    updateAdCreative: async (
+      _: any,
+      args: { creative_id: string; input: AdCreativeInput },
+      ctx: Context
+    ) => {
+      const user = requireAuth(ctx);
+      if (!args?.creative_id) throw new Error('creative_id is required.');
+      try {
+        return await svc().updateCreative(args.creative_id, user.id, args.input);
+      } catch (error: any) {
+        throw new GraphQLError(error?.message ?? 'Failed to update ad creative.', {
+          extensions: { code: 'BAD_USER_INPUT' },
+        });
+      }
+    },
     logAdImpression: async (_: any, args: { impression_token: string }, ctx: Context) => {
       if (!args?.impression_token) throw new Error('impression_token is required.');
       return { ok: await svc().logImpression(args.impression_token, ctx.user?.id ?? null) };

@@ -233,6 +233,42 @@ export class AdsService {
     return createAdCreative;
   }
 
+  async updateCreative(
+    creativeId: string,
+    input: {
+      title?: string | null;
+      body?: string | null;
+      media_kind?: 'video' | 'image' | null;
+      media_url: string;
+      click_url?: string | null;
+      cta_label?: string | null;
+      duration_seconds?: number | null;
+    }
+  ): Promise<AdCreativeModel> {
+    const mutation = `
+      mutation UpdateAdCreative($creativeId: ID!, $input: AdCreativeInput!) {
+        updateAdCreative(creative_id: $creativeId, input: $input) {
+          id
+          campaign_id
+          title
+          body
+          media_kind
+          media_url
+          click_url
+          cta_label
+          duration_seconds
+          created_at
+          updated_at
+        }
+      }
+    `;
+    const { updateAdCreative } = await this.gql.request<{ updateAdCreative: AdCreativeModel }>(
+      mutation,
+      { creativeId, input }
+    );
+    return updateAdCreative;
+  }
+
   async deleteCampaign(campaignId: string): Promise<boolean> {
     const mutation = `
       mutation DeleteAdCampaign($campaignId: ID!) {

@@ -47,6 +47,14 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
       <div class="ad-layer" *ngIf="isAdMode && activeAd">
         <div class="ad-pill">Sponsored</div>
         <button
+          *ngIf="activeAd.creative.click_url"
+          class="ad-learn-more"
+          type="button"
+          (click)="openAdLink($event)"
+        >
+          {{ activeAd.creative.cta_label || 'Learn more' }}
+        </button>
+        <button
           *ngIf="adSkipReady"
           class="ad-skip"
           type="button"
@@ -54,26 +62,12 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
         >
           Skip
         </button>
-        <div class="ad-countdown" *ngIf="!adSkipReady && adSecondsLeft > 0">
-          Ad {{ adSecondsLeft }}s
-        </div>
-        <div class="ad-copy" *ngIf="activeAd.creative.title || activeAd.creative.body">
-          <div class="ad-copy-header">
-            <strong *ngIf="activeAd.creative.title">{{ activeAd.creative.title }}</strong>
-            <button
-              *ngIf="activeAd.creative.click_url"
-              class="ad-cta"
-              type="button"
-              (click)="openAdLink($event)"
-            >
-              {{ activeAd.creative.cta_label || 'Learn more' }}
-            </button>
-          </div>
-          <span *ngIf="activeAd.creative.body">{{ activeAd.creative.body }}</span>
+        <div class="ad-countdown" *ngIf="!adSkipReady && adSkipSecondsLeft > 0">
+          Skip in {{ adSkipSecondsLeft }}s
         </div>
       </div>
       <button
-        *ngIf="showMute"
+        *ngIf="showMute && !isAdMode"
         class="mute-toggle"
         type="button"
         [attr.aria-label]="isMuted ? 'Unmute video' : 'Mute video'"
@@ -231,8 +225,7 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
       }
       .ad-pill,
       .ad-countdown,
-      .ad-skip,
-      .ad-cta {
+      .ad-skip {
         position: absolute;
         pointer-events: auto;
         border-radius: 999px;
@@ -257,45 +250,28 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
       .ad-skip {
         bottom: 12px;
         right: 12px;
+        top: auto;
         border: 0;
         background: rgba(255, 255, 255, 0.9);
         color: #0c1520;
         cursor: pointer;
       }
-      .ad-cta {
-        position: static;
+      .ad-learn-more {
+        position: absolute;
+        top: 12px;
+        right: 12px;
         border: 0;
-        background: rgba(255, 255, 255, 0.96);
-        color: #09121d;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.92);
+        color: #0b1520;
         cursor: pointer;
         text-transform: none;
-        letter-spacing: 0.02em;
-        font-size: 11px;
-        padding: 6px 10px;
-      }
-      .ad-copy {
-        position: absolute;
-        left: 12px;
-        right: 12px;
-        bottom: 12px;
-        display: grid;
-        gap: 4px;
-        color: #fff;
-        text-shadow: 0 2px 10px rgba(0, 0, 0, 0.55);
-        pointer-events: none;
-      }
-      .ad-copy-header {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        pointer-events: auto;
-      }
-      .ad-copy strong {
-        font-size: 13px;
-      }
-      .ad-copy span {
+        letter-spacing: 0.01em;
         font-size: 12px;
-        line-height: 1.35;
+        font-weight: 700;
+        padding: 8px 12px;
+        line-height: 1;
+        box-shadow: 0 8px 18px rgba(0, 0, 0, 0.18);
       }
       .center-play {
         position: absolute;
@@ -381,6 +357,10 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
 })
 export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy {
   private static globalMuted = false;
+  private static nextInstanceId = 1;
+  private static activeAdPlayerId: string | null = null;
+  private static activeContentPlayerId: string | null = null;
+  private static adDebugEnabled: boolean | null = null;
   @Input({ required: true }) src!: string;
   @Input() poster: string | null = null;
   @Input() preload: 'none' | 'metadata' | 'auto' = 'metadata';
@@ -409,19 +389,26 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
   private autoPaused = false;
   private userPaused = false;
   private isInView = false;
+  private readonly playerInstanceId = `vp-${VideoPlayerComponent.nextInstanceId++}`;
   private muteHandler: ((event: Event) => void) | null = null;
+  private adFocusHandler: ((event: Event) => void) | null = null;
+  private contentFocusHandler: ((event: Event) => void) | null = null;
   private viewTracked = false;
   activeAd: AdSlotModel | null = null;
   isAdMode = false;
   adDecisionMade = false;
   adSecondsLeft = 0;
+  adSkipSecondsLeft = 0;
   adSkipReady = false;
+  private adSkipAfterSeconds = 0;
   private adCountdownTimer: ReturnType<typeof setInterval> | null = null;
   private adImpressionLogged = false;
   private adPreparedForSrc: string | null = null;
+  private adPreparing = false;
   private adDebugLoggedForSrc = false;
   private adRetryCount = 0;
   private adStartedAt = 0;
+  private adBlockedByAnother = false;
 
   constructor(private ads: AdsService) {}
 
@@ -464,12 +451,16 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
     if (changes['src'] && !changes['src'].firstChange) {
       this.resetAdState();
       if (this.videoRef?.nativeElement) {
-        void this.prepareAdIfNeeded(this.videoRef.nativeElement);
+        this.requestAutoplay(this.videoRef.nativeElement);
       }
     }
   }
 
   onVideoTap(video: HTMLVideoElement, event: Event): void {
+    if (this.isAdMode) {
+      event.stopPropagation();
+      return;
+    }
     if (this.tapBehavior === 'emit') {
       event.stopPropagation();
       this.videoTap.emit();
@@ -484,9 +475,13 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
 
   togglePlay(video: HTMLVideoElement, event: Event): void {
     event.stopPropagation();
+    if (this.isAdMode) return;
     if (this.adsEnabled && !this.adDecisionMade) return;
     this.triggerCenterOverlay();
     if (video.paused) {
+      if (this.isAdMode) {
+        this.adBlockedByAnother = false;
+      }
       this.userPaused = false;
       this.autoPaused = false;
       this.safePlay(video);
@@ -560,6 +555,14 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
     this.currentTime = video.currentTime || 0;
     this.duration = Number.isFinite(video.duration) ? video.duration : this.duration;
     this.progressPercent = this.duration ? (this.currentTime / this.duration) * 100 : 0;
+    if (this.isAdMode) {
+      this.adSecondsLeft = Math.max(0, Math.ceil((video.duration || 0) - (video.currentTime || 0)));
+      this.adSkipSecondsLeft = Math.max(
+        0,
+        Math.ceil(this.adSkipAfterSeconds - (video.currentTime || 0))
+      );
+      this.adSkipReady = (video.currentTime || 0) >= this.adSkipAfterSeconds;
+    }
     this.trackView(video);
   }
 
@@ -579,15 +582,23 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
     this.userPaused = false;
     this.autoPaused = false;
     if (this.isAdMode) {
+      this.setGlobalActiveAd(true);
       if (!this.adStartedAt) this.adStartedAt = Date.now();
       this.markAdImpression();
       this.startAdCountdown();
+    } else {
+      this.setGlobalActiveContent(true);
     }
     this.revealControls();
   }
 
   onPause(): void {
     this.isPlaying = false;
+    if (this.isAdMode) {
+      this.releaseGlobalActiveAdIfOwner();
+    } else {
+      this.releaseGlobalActiveContentIfOwner();
+    }
     this.controlsVisible = true;
     this.clearHideTimer();
   }
@@ -633,6 +644,7 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
       this.finishAd();
       return;
     }
+    this.releaseGlobalActiveContentIfOwner();
     this.isPlaying = false;
     this.controlsVisible = true;
     this.currentTime = 0;
@@ -693,14 +705,53 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
       VideoPlayerComponent.globalMuted = detail;
       this.applyGlobalMute(video, detail);
     };
+    this.adFocusHandler = (event: Event) => {
+      const detail = (event as CustomEvent<{ ownerId: string | null; active: boolean }>).detail;
+      if (!detail) return;
+      if (detail.active) {
+        if (!detail.ownerId || detail.ownerId === this.playerInstanceId) return;
+        if (!video.paused && !video.ended) {
+          this.autoPaused = true;
+          video.pause();
+        }
+        return;
+      }
+      this.adBlockedByAnother = false;
+      if (!this.isInView) return;
+      if (!video.paused || video.ended) return;
+      if (this.userPaused) return;
+      this.requestAutoplay(video);
+    };
+    this.contentFocusHandler = (event: Event) => {
+      const detail = (event as CustomEvent<{ ownerId: string | null; active: boolean }>).detail;
+      if (!detail) return;
+      if (detail.active) {
+        if (!detail.ownerId || detail.ownerId === this.playerInstanceId) return;
+        if (!video.paused && !video.ended) {
+          this.autoPaused = true;
+          video.pause();
+        }
+        return;
+      }
+      if (!this.isInView) return;
+      if (!video.paused || video.ended) return;
+      if (this.userPaused) return;
+      if (this.isAnotherContentActive()) return;
+      this.requestAutoplay(video);
+    };
     window.addEventListener('video-player-mute', this.muteHandler);
-    void this.prepareAdIfNeeded(video);
+    window.addEventListener('video-player-ad-focus', this.adFocusHandler);
+    window.addEventListener('video-player-content-focus', this.contentFocusHandler);
     this.observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
           if (entry.isIntersecting) {
             this.isInView = true;
-            this.requestAutoplay(video);
+            if (this.adsEnabled && !this.adDecisionMade) {
+              void this.prepareAdIfNeeded(video);
+            } else {
+              this.requestAutoplay(video);
+            }
             this.autoPaused = false;
           } else {
             this.isInView = false;
@@ -711,7 +762,7 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
           }
         }
       },
-      { threshold: 0.35 }
+      { threshold: 0.12 }
     );
     this.observer.observe(video);
   }
@@ -720,6 +771,8 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
     this.observer?.disconnect();
     this.observer = null;
     this.clearAdCountdown();
+    this.releaseGlobalActiveAdIfOwner();
+    this.releaseGlobalActiveContentIfOwner();
     if (this.centerTimer) {
       clearTimeout(this.centerTimer);
       this.centerTimer = null;
@@ -727,6 +780,14 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
     if (this.muteHandler) {
       window.removeEventListener('video-player-mute', this.muteHandler);
       this.muteHandler = null;
+    }
+    if (this.adFocusHandler) {
+      window.removeEventListener('video-player-ad-focus', this.adFocusHandler);
+      this.adFocusHandler = null;
+    }
+    if (this.contentFocusHandler) {
+      window.removeEventListener('video-player-content-focus', this.contentFocusHandler);
+      this.contentFocusHandler = null;
     }
   }
 
@@ -748,10 +809,15 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
   }
 
   private requestAutoplay(video: HTMLVideoElement): void {
-    if (this.adsEnabled && !this.adDecisionMade) return;
+    if (this.adsEnabled && !this.adDecisionMade) {
+      void this.prepareAdIfNeeded(video);
+      return;
+    }
     if (!this.isInView) return;
     if (this.userPaused) return;
+    if (this.isAnotherVideoActive()) return;
     if (!video.paused && !video.ended) return;
+    if (!this.tryClaimPlaybackSlot()) return;
     this.safePlay(video);
   }
 
@@ -779,7 +845,9 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
       this.adDecisionMade = true;
       return;
     }
+    if (this.adPreparing) return;
     if (this.adPreparedForSrc === src) return;
+    this.adPreparing = true;
     this.adPreparedForSrc = src;
     this.isBuffering = true;
     try {
@@ -791,19 +859,24 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
       });
       this.isAdMode = !!this.activeAd;
       this.adSecondsLeft = Number(this.activeAd?.creative?.duration_seconds ?? 0);
+      this.adSkipAfterSeconds = Math.max(5, Number(this.activeAd?.skip_after_seconds ?? 0));
+      this.adSkipSecondsLeft = this.adSkipAfterSeconds;
       this.adSkipReady = false;
       this.adImpressionLogged = false;
       this.adRetryCount = 0;
       this.adStartedAt = 0;
+      this.adBlockedByAnother = false;
     } catch {
       this.activeAd = null;
       this.isAdMode = false;
     } finally {
+      this.adPreparing = false;
       this.adDecisionMade = true;
       this.isBuffering = false;
       if (!this.activeAd) {
         void this.logAdDebugIfEmpty();
       }
+      this.applyGlobalMute(video, VideoPlayerComponent.globalMuted);
       video.load();
       this.requestAutoplay(video);
     }
@@ -818,13 +891,16 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
   private startAdCountdown(): void {
     if (!this.isAdMode || !this.activeAd) return;
     if (this.adCountdownTimer) return;
-    const skipAfter = Math.max(0, Number(this.activeAd.skip_after_seconds ?? 0));
     this.adSkipReady = false;
     this.adCountdownTimer = setInterval(() => {
       const video = this.videoRef?.nativeElement;
       if (!video || video.paused) return;
       this.adSecondsLeft = Math.max(0, Math.ceil((video.duration || 0) - (video.currentTime || 0)));
-      this.adSkipReady = (video.currentTime || 0) >= skipAfter;
+      this.adSkipSecondsLeft = Math.max(
+        0,
+        Math.ceil(this.adSkipAfterSeconds - (video.currentTime || 0))
+      );
+      this.adSkipReady = (video.currentTime || 0) >= this.adSkipAfterSeconds;
       if (this.adSecondsLeft <= 0) {
         this.clearAdCountdown();
       }
@@ -839,49 +915,154 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
   }
 
   private finishAd(): void {
+    const video = this.videoRef?.nativeElement;
+    if (video && !video.paused) {
+      video.pause();
+    }
+    this.releaseGlobalActiveAdIfOwner();
     this.clearAdCountdown();
     this.isAdMode = false;
     this.adDecisionMade = true;
     this.adSecondsLeft = 0;
+    this.adSkipSecondsLeft = 0;
     this.adSkipReady = false;
+    this.adSkipAfterSeconds = 0;
     this.adRetryCount = 0;
     this.adStartedAt = 0;
+    this.adBlockedByAnother = false;
     this.currentTime = 0;
     this.progressPercent = 0;
     this.duration = 0;
-    const video = this.videoRef?.nativeElement;
     if (!video) return;
+    video.removeAttribute('src');
     video.load();
+    this.applyGlobalMute(video, VideoPlayerComponent.globalMuted);
     this.requestAutoplay(video);
   }
 
   private resetAdState(): void {
+    this.releaseGlobalActiveAdIfOwner();
+    this.releaseGlobalActiveContentIfOwner();
     this.clearAdCountdown();
     this.activeAd = null;
     this.isAdMode = false;
     this.adDecisionMade = !this.adsEnabled;
     this.adSecondsLeft = 0;
+    this.adSkipSecondsLeft = 0;
     this.adSkipReady = false;
+    this.adSkipAfterSeconds = 0;
     this.adImpressionLogged = false;
     this.adPreparedForSrc = null;
+    this.adPreparing = false;
     this.adDebugLoggedForSrc = false;
     this.adRetryCount = 0;
     this.adStartedAt = 0;
+    this.adBlockedByAnother = false;
     this.viewTracked = false;
   }
 
-  private safePlay(video: HTMLVideoElement): void {
+  private safePlay(video: HTMLVideoElement, allowMutedRetry = true): void {
     const playAttempt = video.play();
     if (!playAttempt || typeof playAttempt.catch !== 'function') return;
     playAttempt.catch((error: any) => {
       const name = String(error?.name ?? '');
-      if (name === 'AbortError' || name === 'NotAllowedError') return;
+      if (name === 'AbortError') return;
+      if (name === 'NotAllowedError' && this.isAdMode && allowMutedRetry) {
+        video.muted = true;
+        this.isMuted = true;
+        this.safePlay(video, false);
+        return;
+      }
+      if (name === 'NotAllowedError') {
+        this.releasePlaybackSlotIfOwner();
+        return;
+      }
+      this.releasePlaybackSlotIfOwner();
     });
+  }
+
+  private isAnotherAdActive(): boolean {
+    const owner = VideoPlayerComponent.activeAdPlayerId;
+    return !!owner && owner !== this.playerInstanceId;
+  }
+
+  private isAnotherContentActive(): boolean {
+    const owner = VideoPlayerComponent.activeContentPlayerId;
+    return !!owner && owner !== this.playerInstanceId;
+  }
+
+  private isAnotherVideoActive(): boolean {
+    return this.isAnotherAdActive() || this.isAnotherContentActive();
+  }
+
+  private tryClaimPlaybackSlot(): boolean {
+    if (this.isAdMode) {
+      if (this.isAnotherVideoActive()) return false;
+      this.setGlobalActiveAd(true);
+      return true;
+    }
+    if (this.isAnotherVideoActive()) return false;
+    this.setGlobalActiveContent(true);
+    return true;
+  }
+
+  private releasePlaybackSlotIfOwner(): void {
+    if (this.isAdMode) {
+      this.releaseGlobalActiveAdIfOwner();
+      return;
+    }
+    this.releaseGlobalActiveContentIfOwner();
+  }
+
+  private setGlobalActiveAd(active: boolean): void {
+    if (!this.isAdMode || typeof window === 'undefined') return;
+    if (active) {
+      this.adBlockedByAnother = false;
+    }
+    VideoPlayerComponent.activeAdPlayerId = active ? this.playerInstanceId : null;
+    window.dispatchEvent(
+      new CustomEvent('video-player-ad-focus', {
+        detail: { ownerId: VideoPlayerComponent.activeAdPlayerId, active },
+      })
+    );
+  }
+
+  private releaseGlobalActiveAdIfOwner(): void {
+    if (typeof window === 'undefined') return;
+    if (VideoPlayerComponent.activeAdPlayerId !== this.playerInstanceId) return;
+    VideoPlayerComponent.activeAdPlayerId = null;
+    window.dispatchEvent(
+      new CustomEvent('video-player-ad-focus', {
+        detail: { ownerId: null, active: false },
+      })
+    );
+  }
+
+  private setGlobalActiveContent(active: boolean): void {
+    if (this.isAdMode || typeof window === 'undefined') return;
+    VideoPlayerComponent.activeContentPlayerId = active ? this.playerInstanceId : null;
+    window.dispatchEvent(
+      new CustomEvent('video-player-content-focus', {
+        detail: { ownerId: VideoPlayerComponent.activeContentPlayerId, active },
+      })
+    );
+  }
+
+  private releaseGlobalActiveContentIfOwner(): void {
+    if (typeof window === 'undefined') return;
+    if (VideoPlayerComponent.activeContentPlayerId !== this.playerInstanceId) return;
+    VideoPlayerComponent.activeContentPlayerId = null;
+    window.dispatchEvent(
+      new CustomEvent('video-player-content-focus', {
+        detail: { ownerId: null, active: false },
+      })
+    );
   }
 
   private async logAdDebugIfEmpty(): Promise<void> {
     if (!this.adsEnabled) return;
     if (this.adDebugLoggedForSrc) return;
+    if (!this.isAdDebugEnabled()) return;
     this.adDebugLoggedForSrc = true;
     try {
       const debug = await this.ads.debugServeVideoAd({
@@ -894,5 +1075,21 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
     } catch (error) {
       console.info('[ads-debug] debugServeVideoAd failed', error);
     }
+  }
+
+  private isAdDebugEnabled(): boolean {
+    if (typeof window === 'undefined') return false;
+    if (VideoPlayerComponent.adDebugEnabled !== null) {
+      return VideoPlayerComponent.adDebugEnabled;
+    }
+    try {
+      const qs = new URLSearchParams(window.location.search);
+      const queryEnabled = qs.get('ads_debug') === '1';
+      const localEnabled = window.localStorage.getItem('ads_debug') === '1';
+      VideoPlayerComponent.adDebugEnabled = queryEnabled || localEnabled;
+    } catch {
+      VideoPlayerComponent.adDebugEnabled = false;
+    }
+    return VideoPlayerComponent.adDebugEnabled;
   }
 }
