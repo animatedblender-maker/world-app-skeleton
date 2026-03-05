@@ -47,14 +47,6 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
       <div class="ad-layer" *ngIf="isAdMode && activeAd">
         <div class="ad-pill">Sponsored</div>
         <button
-          *ngIf="activeAd.creative.click_url"
-          class="ad-cta"
-          type="button"
-          (click)="openAdLink($event)"
-        >
-          {{ activeAd.creative.cta_label || 'Learn more' }}
-        </button>
-        <button
           *ngIf="adSkipReady"
           class="ad-skip"
           type="button"
@@ -66,7 +58,17 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
           Ad {{ adSecondsLeft }}s
         </div>
         <div class="ad-copy" *ngIf="activeAd.creative.title || activeAd.creative.body">
-          <strong *ngIf="activeAd.creative.title">{{ activeAd.creative.title }}</strong>
+          <div class="ad-copy-header">
+            <strong *ngIf="activeAd.creative.title">{{ activeAd.creative.title }}</strong>
+            <button
+              *ngIf="activeAd.creative.click_url"
+              class="ad-cta"
+              type="button"
+              (click)="openAdLink($event)"
+            >
+              {{ activeAd.creative.cta_label || 'Learn more' }}
+            </button>
+          </div>
           <span *ngIf="activeAd.creative.body">{{ activeAd.creative.body }}</span>
         </div>
       </div>
@@ -247,13 +249,13 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
         color: #fff;
       }
       .ad-countdown {
-        top: 12px;
+        bottom: 12px;
         right: 12px;
         background: rgba(0, 0, 0, 0.66);
         color: #fff;
       }
       .ad-skip {
-        top: 12px;
+        bottom: 12px;
         right: 12px;
         border: 0;
         background: rgba(255, 255, 255, 0.9);
@@ -261,23 +263,32 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
         cursor: pointer;
       }
       .ad-cta {
-        right: 12px;
-        bottom: 12px;
+        position: static;
         border: 0;
         background: rgba(255, 255, 255, 0.96);
         color: #09121d;
         cursor: pointer;
+        text-transform: none;
+        letter-spacing: 0.02em;
+        font-size: 11px;
+        padding: 6px 10px;
       }
       .ad-copy {
         position: absolute;
         left: 12px;
-        right: 110px;
+        right: 12px;
         bottom: 12px;
         display: grid;
         gap: 4px;
         color: #fff;
         text-shadow: 0 2px 10px rgba(0, 0, 0, 0.55);
         pointer-events: none;
+      }
+      .ad-copy-header {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        pointer-events: auto;
       }
       .ad-copy strong {
         font-size: 13px;

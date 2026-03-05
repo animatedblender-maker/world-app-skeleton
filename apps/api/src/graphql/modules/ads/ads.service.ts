@@ -345,6 +345,7 @@ export class AdsService {
     const requestedCountry = this.normalizeCountryCode(input.country_code ?? null);
     const contentCountry = this.normalizeCountryCode(input.content_country_code ?? null);
     const effectiveCountry = requestedCountry || contentCountry;
+    const postSelector = String(input.post_id ?? '').trim();
 
     const { rows } = await pool.query<AdSlotRow>(
       `
@@ -404,12 +405,15 @@ export class AdsService {
         )
       order by
         country_rank asc,
+        md5(
+          coalesce($4::text, '') || ':' || c.id::text || ':' || cr.id::text || ':' || to_char(now(), 'YYYYMMDD')
+        ) asc,
         coalesce(stats.day_serves, 0) asc,
         c.created_at asc,
         cr.created_at asc
       limit 1
       `,
-      [placement, effectiveCountry, contentCountry]
+      [placement, effectiveCountry, contentCountry, postSelector]
     );
 
     const row = rows[0];
@@ -515,6 +519,7 @@ export class AdsService {
     const requestedCountry = this.normalizeCountryCode(input.country_code ?? null);
     const contentCountry = this.normalizeCountryCode(input.content_country_code ?? null);
     const effectiveCountry = requestedCountry || contentCountry;
+    const postSelector = String(input.post_id ?? '').trim();
 
     const { rows: countRows } = await pool.query<{
       active_campaigns: number;
@@ -613,12 +618,15 @@ export class AdsService {
         )
       order by
         country_rank asc,
+        md5(
+          coalesce($4::text, '') || ':' || c.id::text || ':' || cr.id::text || ':' || to_char(now(), 'YYYYMMDD')
+        ) asc,
         coalesce(stats.day_serves, 0) asc,
         c.created_at asc,
         cr.created_at asc
       limit 1
       `,
-      [placement, effectiveCountry, contentCountry]
+      [placement, effectiveCountry, contentCountry, postSelector]
     );
     const selected = rows[0];
 
