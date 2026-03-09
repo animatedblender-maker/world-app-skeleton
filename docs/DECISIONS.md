@@ -1,4 +1,0 @@
-﻿# Decisions
-
-- TBD
-
