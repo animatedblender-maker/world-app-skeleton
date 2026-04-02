@@ -850,12 +850,12 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
     .wrap{
       position: fixed;
       inset: 0;
-      padding: 0 0 calc(var(--tabs-safe, 64px) + 48px);
+      padding: 18px 18px calc(var(--tabs-safe, 64px) + 36px);
       box-sizing: border-box;
       overflow-y: auto;
       overflow-x: hidden;
-      background: transparent;
-      color: rgba(255,255,255,0.92);
+      background: #f3f5f8;
+      color: rgba(10,12,18,0.92);
     }
     .wrap > .ocean-gradient,
     .wrap > .ocean-dots,
@@ -962,11 +962,13 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       margin:20px auto 0;
       width:100%;
       max-width:none;
-      border-radius:20px;
-      border:1px solid rgba(0,0,0,0.06);
-      background:rgba(255,255,255,0.95);
-      padding:16px;
-      box-shadow:0 20px 60px rgba(0,0,0,0.10);
+      border-radius:28px;
+      border:1px solid rgba(255,255,255,0.8);
+      background:rgba(255,255,255,0.74);
+      padding:18px;
+      box-shadow:0 18px 44px rgba(15,23,42,0.08), 0 1px 0 rgba(255,255,255,0.78) inset;
+      backdrop-filter: blur(24px) saturate(1.08);
+      -webkit-backdrop-filter: blur(24px) saturate(1.08);
     }
     .composer.profile-composer{ margin-bottom:20px; }
     .composer-row{ display:flex; gap:14px; align-items:flex-start; }
@@ -1007,25 +1009,27 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
     .composer-trigger{
       width:100%;
       margin-top:10px;
-      border-radius:16px;
-      border:1px solid rgba(0,0,0,0.08);
-      background:rgba(245,247,250,0.9);
+      border-radius:18px;
+      border:1px solid rgba(255,255,255,0.86);
+      background:rgba(247,249,252,0.92);
       text-align:left;
-      padding:12px;
+      padding:14px 16px;
       font-weight:600;
       color:rgba(10,12,18,0.65);
       cursor:pointer;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.72);
     }
     .composer-input,
     .composer-textarea{
       width:100%;
       margin-top:10px;
-      border-radius:16px;
-      border:1px solid rgba(0,0,0,0.08);
-      background:rgba(245,247,250,0.9);
-      padding:12px;
+      border-radius:18px;
+      border:1px solid rgba(255,255,255,0.86);
+      background:rgba(247,249,252,0.92);
+      padding:14px 16px;
       font-family:inherit;
       font-size:14px;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.72);
     }
     .composer-textarea{ min-height:90px; resize:vertical; }
     .composer-media{
@@ -1050,10 +1054,11 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
     }
     .composer-media-preview{
       margin-top:10px;
-      border-radius:18px;
+      border-radius:22px;
       overflow:hidden;
-      border:1px solid rgba(0,0,0,0.08);
-      background:#fff;
+      border:1px solid rgba(255,255,255,0.8);
+      background:rgba(255,255,255,0.78);
+      box-shadow:0 16px 36px rgba(15,23,42,0.08);
     }
     .composer-media-preview img,
     .composer-media-preview video{
@@ -1171,7 +1176,13 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       grid-template-columns: auto minmax(0, 1fr);
       gap:16px;
       align-items:flex-start;
-      padding: 6px 0 0;
+      padding: 18px;
+      border-radius: 32px;
+      border: 1px solid rgba(255,255,255,0.8);
+      background: rgba(255,255,255,0.74);
+      box-shadow: 0 18px 44px rgba(15,23,42,0.08), 0 1px 0 rgba(255,255,255,0.78) inset;
+      backdrop-filter: blur(24px) saturate(1.08);
+      -webkit-backdrop-filter: blur(24px) saturate(1.08);
     }
     .head-actions{
       position: absolute;
@@ -1460,7 +1471,7 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
     .composer-posts{
       width: 100%;
       max-width: none;
-      margin: 24px 0 0;
+      margin: 20px 0 0;
       border-radius: 0;
       padding: 0;
       background: transparent;
@@ -1489,7 +1500,7 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
     .post-list{
       display:flex;
       flex-direction:column;
-      gap:12px;
+      gap:16px;
       width: 100%;
       box-sizing: border-box;
       padding-bottom: calc(var(--tabs-safe, 64px) + 32px);
@@ -1497,12 +1508,14 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
     }
     .post-card{
       position:relative;
-      border-radius:0;
-      border:1px solid rgba(0,0,0,0.06);
-      background:rgba(255,255,255,0.98);
-      --post-pad-x: 16px;
+      border-radius:28px;
+      border:1px solid rgba(255,255,255,0.82);
+      background:rgba(255,255,255,0.78);
+      --post-pad-x: 18px;
       padding: var(--post-pad-x);
-      box-shadow:0 18px 60px rgba(0,0,0,0.15);
+      box-shadow:0 18px 44px rgba(15,23,42,0.08), 0 1px 0 rgba(255,255,255,0.76) inset;
+      backdrop-filter: blur(24px) saturate(1.05);
+      -webkit-backdrop-filter: blur(24px) saturate(1.05);
       box-sizing: border-box;
       width: 100%;
       overflow-x: hidden;
@@ -3935,7 +3948,6 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     return '';
   }
 }
-
 
 
 

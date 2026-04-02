@@ -5,9 +5,12 @@
   "type": "module",
   "scripts": {
     "build:web": "cd ../web && npm run build",
-    "cap:sync": "npm run build:web && npx cap sync",
-    "cap:ios": "npm run build:web && npx cap open ios",
-    "cap:android": "npm run build:web && npx cap open android"
+    "cap:sync": "CAP_SERVER_URL=https://matterya.com npx cap sync",
+    "cap:ios": "CAP_SERVER_URL=https://matterya.com npx cap open ios",
+    "cap:android": "CAP_SERVER_URL=https://matterya.com npx cap open android",
+    "cap:sync:local": "npm run build:web && npx cap sync",
+    "cap:ios:local": "npm run build:web && npx cap open ios",
+    "cap:android:local": "npm run build:web && npx cap open android"
   },
   "dependencies": {
     "@capacitor/core": "^6.0.0"

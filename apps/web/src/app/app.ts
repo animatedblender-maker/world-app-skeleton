@@ -345,11 +345,11 @@ export class AppComponent {
 
   openNotifications(): void {
     const url = this.router.url;
-    if (url.startsWith('/globe') || url === '/') {
-      void this.router.navigate([], {
-        queryParams: { panel: 'notifications', search: '0' },
-        queryParamsHandling: 'merge',
-      });
+    if (url.startsWith('/globe') || url === '/' || url.startsWith('/globe-cesium')) {
+      const target = new URL(url, window.location.origin);
+      target.searchParams.set('panel', 'notifications');
+      target.searchParams.set('search', '0');
+      void this.router.navigateByUrl(`${target.pathname}${target.search}${target.hash}`);
       return;
     }
     void this.router.navigate(['/globe'], {

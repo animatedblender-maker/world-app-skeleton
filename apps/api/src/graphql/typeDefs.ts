@@ -87,6 +87,15 @@ export const typeDefs = `#graphql
     created_at: String!
     updated_at: String!
     author: PostAuthor
+    # External news link fields
+    external_ref_type: String
+    external_ref_id: ID
+    link_url: String
+    link_title: String
+    link_source_name: String
+    link_published_at: String
+    link_image_url: String
+    link_snippet: String
   }
 
   type PostComment {
@@ -218,6 +227,14 @@ export const typeDefs = `#graphql
     media_url: String
     thumb_url: String
     shared_post_id: ID
+    external_ref_type: String
+    external_ref_id: ID
+    link_url: String
+    link_title: String
+    link_source_name: String
+    link_published_at: String
+    link_image_url: String
+    link_snippet: String
   }
 
   input UpdatePostInput {
@@ -299,6 +316,41 @@ export const typeDefs = `#graphql
     lastSeen: String!
   }
 
+  # ----------------------------
+  # External News (NEW)
+  # ----------------------------
+
+  type ExternalNewsItem {
+    id: ID!
+    provider: String!
+    provider_item_id: String!
+    title: String!
+    url: String!
+    source_name: String
+    published_at: String
+    country_codes: [String!]!
+    country_names: [String!]!
+    disaster_types: [String!]!
+    theme_names: [String!]!
+    format: String
+    language: String
+    snippet: String
+    image_url: String
+    comment_count: Int!
+    shared_post_count: Int!
+  }
+
+  type ExternalNewsComment {
+    id: ID!
+    news_item_id: ID!
+    parent_id: ID
+    author_id: ID!
+    body: String!
+    created_at: String!
+    updated_at: String!
+    author: PostAuthor
+  }
+
   type Query {
     # Countries
     countries: CountriesResult!
@@ -359,6 +411,11 @@ export const typeDefs = `#graphql
       content_country_code: String
       post_id: ID
     ): AdServeDebug!
+
+    # External News
+    countryConflictUpdates(country_code: String!, limit: Int, offset: Int): [ExternalNewsItem!]!
+    globalConflictUpdates(limit: Int, offset: Int): [ExternalNewsItem!]!
+    externalNewsComments(news_item_id: ID!, limit: Int, before: String): [ExternalNewsComment!]!
   }
 
   type Mutation {
@@ -408,5 +465,10 @@ export const typeDefs = `#graphql
     updateAdCreative(creative_id: ID!, input: AdCreativeInput!): AdCreative!
     logAdImpression(impression_token: String!): AdEventResult!
     logAdClick(impression_token: String!): AdEventResult!
+
+    # External News
+    addExternalNewsComment(news_item_id: ID!, body: String!, parent_id: ID): ExternalNewsComment!
+    shareExternalNewsToCountry(news_item_id: ID!, body: String, visibility: String): Post!
+    refreshCountryConflictUpdates(country_code: String!): [ExternalNewsItem!]!
   }
 `;

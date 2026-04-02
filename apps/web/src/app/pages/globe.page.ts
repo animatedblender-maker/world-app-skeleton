@@ -21,6 +21,7 @@ import { FollowService } from '../core/services/follow.service';
 import { NotificationsService, type NotificationItem } from '../core/services/notifications.service';
 import { NotificationEventsService } from '../core/services/notification-events.service';
 import { PushService } from '../core/services/push.service';
+import { NewsService } from '../core/services/news.service';
 import { SUPABASE_URL } from '../config/supabase.config';
 import {
   PostEventsService,
@@ -28,7 +29,13 @@ import {
   type PostUpdateEvent,
   type PostDeleteEvent,
 } from '../core/services/post-events.service';
-import { CountryPost, PostComment, PostLike } from '../core/models/post.model';
+import {
+  CountryPost,
+  PostComment,
+  PostLike,
+  ExternalNewsItem,
+  ExternalNewsComment,
+} from '../core/models/post.model';
 
 type Panel = 'presence' | 'posts' | 'notifications' | null;
 type CountryTab = 'posts' | 'stats' | 'media' | 'following';
@@ -803,6 +810,88 @@ type CountryMood = {
                   </div>
                   <div class="mood-insight" *ngIf="localMood.insight">{{ localMood.insight }}</div>
                 </div>
+                <div class="stats-card" *ngIf="selectedCountry">
+                  <div class="stats-title">Conflict updates</div>
+                  <div class="news-list" *ngIf="countryNews.length">
+                    <div class="news-item" *ngFor="let item of countryNews">
+                      <div class="news-header">
+                        <span class="news-source">{{ item.source_name || 'ReliefWeb' }}</span>
+                        <span class="news-date">{{ item.published_at ? (item.published_at | date:'short') : '' }}</span>
+                      </div>
+                      <div class="news-title">{{ item.title }}</div>
+                      <div class="news-tags" *ngIf="item.disaster_types.length || item.theme_names.length">
+                        <span class="tag" *ngFor="let tag of item.disaster_types.slice(0,3)">{{ tag }}</span>
+                        <span class="tag" *ngFor="let tag of item.theme_names.slice(0,3)">{{ tag }}</span>
+                      </div>
+                      <div class="news-actions">
+                        <button class="btn-link" (click)="openNewsSource(item)">Open source</button>
+                        <button class="btn-link" (click)="toggleNewsComments(item.id)">Comment ({{ item.comment_count }})</button>
+                        <button class="btn-link" (click)="shareNewsToCountry(item.id)">Share to country</button>
+                      </div>
+                      <div class="news-comments" *ngIf="newsCommentOpenById[item.id]">
+                        <div class="comment-list" *ngIf="newsCommentItemsById[item.id]">
+                          <div class="comment" *ngFor="let comment of newsCommentItemsById[item.id]">
+                            <div class="comment-author">{{ comment.author?.display_name || 'Anonymous' }}</div>
+                            <div class="comment-body">{{ comment.body }}</div>
+                          </div>
+                        </div>
+                        <textarea
+                          [(ngModel)]="newsCommentDraftById[item.id]"
+                          placeholder="Add a comment..."
+                          class="comment-input"
+                        ></textarea>
+                        <button class="btn-primary" (click)="addNewsComment(item.id)">Comment</button>
+                      </div>
+                      <div class="news-share-feedback" *ngIf="newsShareFeedbackById[item.id]">
+                        {{ newsShareFeedbackById[item.id] }}
+                      </div>
+                    </div>
+                  </div>
+                  <div class="news-loading" *ngIf="newsLoading">Loading updates...</div>
+                  <div class="news-error" *ngIf="newsError">{{ newsError }}</div>
+                  <div class="news-empty" *ngIf="!newsLoading && !newsError && !countryNews.length">No recent updates</div>
+                </div>
+                <div class="stats-card" *ngIf="!selectedCountry">
+                  <div class="stats-title">Global crisis updates</div>
+                  <div class="news-list" *ngIf="globalNews.length">
+                    <div class="news-item" *ngFor="let item of globalNews.slice(0,5)">
+                      <div class="news-header">
+                        <span class="news-source">{{ item.source_name || 'ReliefWeb' }}</span>
+                        <span class="news-date">{{ item.published_at ? (item.published_at | date:'short') : '' }}</span>
+                      </div>
+                      <div class="news-title">{{ item.title }}</div>
+                      <div class="news-tags" *ngIf="item.disaster_types.length || item.theme_names.length">
+                        <span class="tag" *ngFor="let tag of item.disaster_types.slice(0,3)">{{ tag }}</span>
+                        <span class="tag" *ngFor="let tag of item.theme_names.slice(0,3)">{{ tag }}</span>
+                      </div>
+                      <div class="news-actions">
+                        <button class="btn-link" (click)="openNewsSource(item)">Open source</button>
+                        <button class="btn-link" (click)="toggleNewsComments(item.id)">Comment ({{ item.comment_count }})</button>
+                        <button class="btn-link" (click)="shareNewsToCountry(item.id)">Share to country</button>
+                      </div>
+                      <div class="news-comments" *ngIf="newsCommentOpenById[item.id]">
+                        <div class="comment-list" *ngIf="newsCommentItemsById[item.id]">
+                          <div class="comment" *ngFor="let comment of newsCommentItemsById[item.id]">
+                            <div class="comment-author">{{ comment.author?.display_name || 'Anonymous' }}</div>
+                            <div class="comment-body">{{ comment.body }}</div>
+                          </div>
+                        </div>
+                        <textarea
+                          [(ngModel)]="newsCommentDraftById[item.id]"
+                          placeholder="Add a comment..."
+                          class="comment-input"
+                        ></textarea>
+                        <button class="btn-primary" (click)="addNewsComment(item.id)">Comment</button>
+                      </div>
+                      <div class="news-share-feedback" *ngIf="newsShareFeedbackById[item.id]">
+                        {{ newsShareFeedbackById[item.id] }}
+                      </div>
+                    </div>
+                  </div>
+                  <div class="news-loading" *ngIf="newsLoading">Loading updates...</div>
+                  <div class="news-error" *ngIf="newsError">{{ newsError }}</div>
+                  <div class="news-empty" *ngIf="!newsLoading && !newsError && !globalNews.length">No recent updates</div>
+                </div>
                 <div class="stats-card">
                   <div class="stats-title">Status</div>
                   <div class="stats-row"><span>Heartbeat</span><small id="heartbeatState">{{ heartbeatText || '--' }}</small></div>
@@ -1090,28 +1179,37 @@ type CountryMood = {
     }
     .tab-row{
       display:flex;
-      gap: 6px;
+      gap: 10px;
       flex-wrap: wrap;
     }
     .tab{
-      border: 1px solid transparent;
+      border: 1px solid rgba(255,255,255,0.1);
       border-radius: 999px;
-      padding: 6px 16px;
-      letter-spacing: 0.2em;
-      font-size: 10px;
+      padding: 10px 16px;
+      letter-spacing: 0.14em;
+      font-size: 11px;
       text-transform: uppercase;
-      color: rgba(255,255,255,0.7);
-      background: transparent;
+      font-weight: 800;
+      color: rgba(244,248,255,0.76);
+      background: rgba(9,18,31,0.42);
       cursor: pointer;
-      transition: background 0.2s ease, color 0.2s ease;
+      box-shadow: 0 10px 24px rgba(0,0,0,0.18);
+      backdrop-filter: blur(18px) saturate(1.08);
+      -webkit-backdrop-filter: blur(18px) saturate(1.08);
+      transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease, transform 0.16s ease, box-shadow 0.16s ease;
     }
     .tab:hover{
-      background: rgba(255,255,255,0.08);
-      color: rgba(255,255,255,0.9);
+      background: rgba(16,29,49,0.56);
+      color: rgba(255,255,255,0.96);
+      transform: translateY(-1px);
     }
     .tab.active{
-      background: rgba(255,255,255,0.12);
-      color: rgba(255,255,255,0.95);
+      border-color: rgba(156, 244, 225, 0.28);
+      background: linear-gradient(180deg, rgba(155, 245, 226, 0.18), rgba(122, 219, 255, 0.12));
+      color: rgba(255,255,255,0.98);
+      box-shadow:
+        0 16px 36px rgba(0,0,0,0.24),
+        0 0 0 1px rgba(156, 244, 225, 0.12) inset;
     }
     .search-control{
       position: relative;
@@ -1321,25 +1419,28 @@ type CountryMood = {
       min-height: 0;
       padding-bottom: 0;
       height: calc(100vh - var(--stage-top-pad));
+      background: #f3f5f8;
     }
       .stage.focus.feed-full .map-pane{
         display: none;
       }
       .stage.focus.feed-full .main-pane{
         width: 100%;
+        background: #f3f5f8;
       }
       .stage.focus.feed-full .main-card{
         width: 100%;
         max-width: none;
         border-radius: 0;
-        padding: 10px 8px 14px;
-        --card-pad-x: 8px;
+        padding: 12px 18px 20px;
+        --card-pad-x: 0px;
+        background: #f3f5f8;
       }
       .stage.focus.feed-full .post-card{
-        margin-left: calc(-1 * var(--card-pad-x));
-        margin-right: calc(-1 * var(--card-pad-x));
-        width: calc(100% + (var(--card-pad-x) * 2));
-        border-radius: 0;
+        margin-left: 0;
+        margin-right: 0;
+        width: 100%;
+        border-radius: 28px;
       }
 
     .map-pane{
@@ -1384,6 +1485,7 @@ type CountryMood = {
       width: 100%;
       box-sizing: border-box;
       position: relative;
+      background: #f3f5f8;
     }
 
     .white-card{
@@ -1402,9 +1504,10 @@ type CountryMood = {
       display:flex;
       flex-direction:column;
       gap:10px;
-      background: rgba(245, 247, 250, 0.92);
-      backdrop-filter: blur(12px);
-      padding: 10px 0 8px;
+      background: rgba(243,245,248,0.88);
+      backdrop-filter: blur(22px) saturate(1.05);
+      -webkit-backdrop-filter: blur(22px) saturate(1.05);
+      padding: 12px 0 10px;
       transition: opacity 0.22s ease, transform 0.22s ease;
     }
     .feed-top.hidden{
@@ -1453,22 +1556,36 @@ type CountryMood = {
       border-color: rgba(0,0,0,0.24);
     }
 
-    .tabs{ display:flex; gap: 8px; margin: 0; flex-wrap: wrap; }
+    .tabs{ display:flex; gap: 10px; margin: 0; flex-wrap: wrap; }
     .tab{
-      border: 1px solid rgba(0,0,0,0.10);
-      background: rgba(255,255,255,0.70);
-      color: rgba(10,12,18,0.86);
-      padding: 10px 12px;
-      border-radius: 14px;
-      font-weight: 900;
-      letter-spacing: .14em;
+      border: 1px solid rgba(255,255,255,0.54);
+      background: rgba(255,255,255,0.6);
+      color: rgba(16,22,34,0.78);
+      padding: 10px 16px;
+      border-radius: 999px;
+      font-weight: 800;
+      letter-spacing: .12em;
       font-size: 11px;
       cursor: pointer;
+      box-shadow:
+        0 12px 30px rgba(15,23,42,0.08),
+        0 1px 0 rgba(255,255,255,0.78) inset;
+      backdrop-filter: blur(18px) saturate(1.12);
+      -webkit-backdrop-filter: blur(18px) saturate(1.12);
+      transition: transform .16s ease, box-shadow .16s ease, background .16s ease, color .16s ease, border-color .16s ease;
+    }
+    .tabs .tab:hover{
+      transform: translateY(-1px);
+      background: rgba(255,255,255,0.82);
+      color: rgba(10,12,18,0.92);
     }
     .tab.active{
-      border-color: rgba(0,255,209,0.28);
-      background: rgba(0,255,209,0.10);
-      box-shadow: 0 0 0 1px rgba(0,255,209,0.12) inset;
+      border-color: rgba(171, 235, 225, 0.88);
+      background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(233,247,243,0.94));
+      color: rgba(11,18,29,0.96);
+      box-shadow:
+        0 14px 34px rgba(15,23,42,0.12),
+        0 0 0 1px rgba(168, 236, 221, 0.34) inset;
     }
 
     .tab-body{
@@ -1485,12 +1602,15 @@ type CountryMood = {
     }
     .placeholder{ border-radius: 18px; padding: 14px; }
     .placeholder.light{
-      border: 1px solid rgba(0,0,0,0.08);
-      background: rgba(255,255,255,0.82);
+      border: 1px solid rgba(255,255,255,0.72);
+      background: rgba(255,255,255,0.72);
+      box-shadow: 0 16px 38px rgba(15,23,42,0.06);
+      backdrop-filter: blur(22px) saturate(1.08);
+      -webkit-backdrop-filter: blur(22px) saturate(1.08);
     }
     .ph-title{ font-weight: 900; letter-spacing: .10em; font-size: 12px; text-transform: uppercase; }
     .ph-sub{ margin-top: 6px; opacity: .75; font-size: 12px; line-height: 1.4; }
-    .posts-pane{ display:flex; flex-direction:column; gap:8px; box-sizing:border-box; overflow-x:hidden; }
+    .posts-pane{ display:flex; flex-direction:column; gap:16px; box-sizing:border-box; overflow-x:hidden; }
     .posts-pane > *{
       width: 100%;
       margin-left: 0;
@@ -1498,11 +1618,13 @@ type CountryMood = {
       box-sizing:border-box;
     }
     .composer{
-      border-radius:20px;
-      border:1px solid rgba(0,0,0,0.06);
-      background:rgba(255,255,255,0.95);
-      padding:16px;
-      box-shadow:0 20px 60px rgba(0,0,0,0.10);
+      border-radius:28px;
+      border:1px solid rgba(255,255,255,0.8);
+      background:rgba(255,255,255,0.74);
+      padding:18px;
+      box-shadow:0 18px 44px rgba(15,23,42,0.08), 0 1px 0 rgba(255,255,255,0.78) inset;
+      backdrop-filter: blur(24px) saturate(1.08);
+      -webkit-backdrop-filter: blur(24px) saturate(1.08);
       box-sizing:border-box;
     }
     .composer-row{ display:flex; gap:14px; align-items:flex-start; }
@@ -1543,14 +1665,15 @@ type CountryMood = {
     .composer-trigger{
       width:100%;
       margin-top:10px;
-      border-radius:10px;
-      border:1px solid rgba(0,0,0,0.08);
-      background:rgba(245,247,250,0.9);
+      border-radius:18px;
+      border:1px solid rgba(255,255,255,0.86);
+      background:rgba(247,249,252,0.92);
       text-align:left;
-      padding:12px;
+      padding:14px 16px;
       font-weight:600;
       color:rgba(10,12,18,0.65);
       cursor:pointer;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.72);
     }
     .composer-note{
       margin-top:10px;
@@ -1561,13 +1684,14 @@ type CountryMood = {
     .composer-textarea{
       width:100%;
       margin-top:10px;
-      border-radius:10px;
-      border:1px solid rgba(0,0,0,0.08);
-      background:rgba(245,247,250,0.9);
-      padding:12px;
+      border-radius:18px;
+      border:1px solid rgba(255,255,255,0.86);
+      background:rgba(247,249,252,0.92);
+      padding:14px 16px;
       font-family:inherit;
       font-size:14px;
       color:rgba(10,12,18,0.9);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.72);
     }
     .composer-textarea{ min-height:90px; resize:vertical; }
     .composer-media{
@@ -1639,10 +1763,11 @@ type CountryMood = {
     }
     .composer-media-preview{
       margin-top:10px;
-      border-radius:12px;
+      border-radius:22px;
       overflow:hidden;
-      border:1px solid rgba(0,0,0,0.08);
-      background:#fff;
+      border:1px solid rgba(255,255,255,0.8);
+      background:rgba(255,255,255,0.78);
+      box-shadow:0 16px 36px rgba(15,23,42,0.08);
     }
     .composer-preview-strip{
       display:grid;
@@ -1674,7 +1799,7 @@ type CountryMood = {
     .posts-state{ font-size:13px; font-weight:700; opacity:0.7; }
     .posts-state.hint{ opacity:0.6; }
     .posts-state.error{ color:#ff6b81; }
-    .posts-list{ display:flex; flex-direction:column; gap:10px; box-sizing:border-box; padding-bottom: 10px; overflow-x:hidden; }
+    .posts-list{ display:flex; flex-direction:column; gap:16px; box-sizing:border-box; padding-bottom: 10px; overflow-x:hidden; }
     .posts-empty{ text-align:center; font-size:13px; opacity:0.65; }
     .load-more{
       align-self:center;
@@ -1690,12 +1815,14 @@ type CountryMood = {
     }
     .post-card{
       position:relative;
-      border-radius:20px;
-      border:1px solid rgba(0,0,0,0.06);
-      background:rgba(255,255,255,0.98);
-      --post-pad-x: 16px;
+      border-radius:28px;
+      border:1px solid rgba(255,255,255,0.82);
+      background:rgba(255,255,255,0.78);
+      --post-pad-x: 18px;
       padding: var(--post-pad-x);
-      box-shadow:0 18px 60px rgba(0,0,0,0.15);
+      box-shadow:0 18px 44px rgba(15,23,42,0.08), 0 1px 0 rgba(255,255,255,0.76) inset;
+      backdrop-filter: blur(24px) saturate(1.05);
+      -webkit-backdrop-filter: blur(24px) saturate(1.05);
       box-sizing:border-box;
       overflow-x:hidden;
     }
@@ -2930,6 +3057,16 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   moodLoading = false;
   moodError = '';
 
+  countryNews: ExternalNewsItem[] = [];
+  globalNews: ExternalNewsItem[] = [];
+  newsLoading = false;
+  newsError = '';
+  newsCommentOpenById: { [id: string]: boolean } = {};
+  newsCommentItemsById: { [id: string]: ExternalNewsComment[] } = {};
+  newsCommentDraftById: { [id: string]: string } = {};
+  newsShareFeedbackById: { [id: string]: string } = {};
+  newsShareBusyById: { [id: string]: boolean } = {};
+
   searchOpen = false;
   userSearchTerm = '';
   userSearchError = '';
@@ -3111,6 +3248,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     private notificationsService: NotificationsService,
     private notificationEvents: NotificationEventsService,
     private push: PushService,
+    private newsService: NewsService,
     private zone: NgZone,
     private cdr: ChangeDetectorRef
   ) {}
@@ -3557,6 +3695,26 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     }
   }
 
+  private async loadStatsNews(): Promise<void> {
+    if (this.newsLoading) return;
+    this.newsLoading = true;
+    this.newsError = '';
+    try {
+      if (this.selectedCountry?.code) {
+        this.countryNews = await this.newsService.countryConflictUpdates(this.selectedCountry.code);
+        this.globalNews = [];
+      } else {
+        this.globalNews = await this.newsService.globalConflictUpdates();
+        this.countryNews = [];
+      }
+    } catch (err: any) {
+      this.newsError = err?.message ?? 'Failed to load news.';
+    } finally {
+      this.newsLoading = false;
+      this.forceUi();
+    }
+  }
+
   moodPct(mood: CountryMood | null, key: 'positive' | 'neutral' | 'negative'): number {
     if (!mood?.total) return 0;
     const raw = (mood[key] / mood.total) * 100;
@@ -3646,6 +3804,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     }
     if (tab === 'stats') {
       void this.loadMoodStats();
+      void this.loadStatsNews();
     }
     if (!opts?.skipRouteUpdate && this.selectedCountry) this.updateRouteState();
     this.forceUi();
@@ -3714,6 +3873,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     }
     if (tab === 'stats') {
       void this.loadMoodStats();
+      void this.loadStatsNews();
     }
 
     if (!opts?.skipRouteUpdate) this.updateRouteState();
@@ -6076,5 +6236,91 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   private forceUi(): void {
     this.zone.run(() => this.cdr.detectChanges());
   }
-}
 
+  // -----------------------------
+  // News methods
+  // -----------------------------
+  openNewsSource(item: ExternalNewsItem): void {
+    if (item.url) {
+      window.open(item.url, '_blank');
+    }
+  }
+
+  toggleNewsComments(newsItemId: string): void {
+    const isOpen = this.newsCommentOpenById[newsItemId];
+    if (isOpen) {
+      this.newsCommentOpenById[newsItemId] = false;
+      this.newsCommentItemsById[newsItemId] = [];
+      this.newsCommentDraftById[newsItemId] = '';
+    } else {
+      this.newsCommentOpenById[newsItemId] = true;
+      if (!this.newsCommentItemsById[newsItemId]) {
+        void this.loadNewsComments(newsItemId);
+      }
+    }
+    this.forceUi();
+  }
+
+  private async loadNewsComments(newsItemId: string): Promise<void> {
+    try {
+      const comments = await this.newsService.comments(newsItemId);
+      this.newsCommentItemsById[newsItemId] = comments || [];
+    } catch (err: any) {
+      console.error('Failed to load news comments:', err);
+    }
+    this.forceUi();
+  }
+
+  async addNewsComment(newsItemId: string): Promise<void> {
+    const body = this.newsCommentDraftById[newsItemId]?.trim();
+    if (!body) return;
+
+    try {
+      const comment = await this.newsService.addComment(newsItemId, body);
+      if (comment) {
+        this.newsCommentItemsById[newsItemId] = [
+          comment,
+          ...(this.newsCommentItemsById[newsItemId] || [])
+        ];
+        this.newsCommentDraftById[newsItemId] = '';
+        const list = this.selectedCountry ? this.countryNews : this.globalNews;
+        const item = list.find((entry) => entry.id === newsItemId);
+        if (item) item.comment_count = Number(item.comment_count ?? 0) + 1;
+      }
+    } catch (err: any) {
+      console.error('Failed to add comment:', err);
+    }
+    this.forceUi();
+  }
+
+  async shareNewsToCountry(newsItemId: string): Promise<void> {
+    if (this.newsShareBusyById[newsItemId]) return;
+    this.newsShareBusyById[newsItemId] = true;
+    this.newsShareFeedbackById[newsItemId] = '';
+    this.forceUi();
+
+    try {
+      const post = await this.newsService.shareToCountry(newsItemId);
+      if (post) {
+        this.newsShareFeedbackById[newsItemId] = 'Shared to your country!';
+        // Optionally add to posts list
+        if (!this.posts.some(existing => existing.id === post.id)) {
+          this.posts = this.sortPostsDesc([post, ...this.posts]);
+        }
+        const list = this.selectedCountry ? this.countryNews : this.globalNews;
+        const item = list.find((entry) => entry.id === newsItemId);
+        if (item) item.shared_post_count = Number(item.shared_post_count ?? 0) + 1;
+      }
+    } catch (err: any) {
+      this.newsShareFeedbackById[newsItemId] = 'Share failed';
+      console.error('Failed to share news:', err);
+    } finally {
+      delete this.newsShareBusyById[newsItemId];
+      this.forceUi();
+      setTimeout(() => {
+        delete this.newsShareFeedbackById[newsItemId];
+        this.forceUi();
+      }, 2000);
+    }
+  }
+}

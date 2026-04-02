@@ -863,12 +863,21 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
       // Feed videos can be marked as reels even when only "video" campaigns are active.
       // Fall back to video placement so ad UI (Sponsored/Skip) can still render.
       if (!this.activeAd && placement === 'reel') {
-        this.activeAd = await this.ads.serveVideoAd({
-          placement: 'video',
-          country_code: countryCode,
-          content_country_code: contentCountryCode,
-          post_id: this.adPostId,
-        });
+        const fallbackAttempts = [
+          { country_code: countryCode, content_country_code: contentCountryCode },
+          { country_code: contentCountryCode, content_country_code: contentCountryCode },
+          { country_code: countryCode, content_country_code: countryCode },
+        ];
+
+        for (const attempt of fallbackAttempts) {
+          if (this.activeAd) break;
+          this.activeAd = await this.ads.serveVideoAd({
+            placement: 'video',
+            country_code: attempt.country_code,
+            content_country_code: attempt.content_country_code,
+            post_id: this.adPostId,
+          });
+        }
       }
       this.isAdMode = !!this.activeAd;
       this.adSecondsLeft = Number(this.activeAd?.creative?.duration_seconds ?? 0);

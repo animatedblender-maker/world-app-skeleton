@@ -78,6 +78,14 @@ export class PostsService {
                 country_name
                 country_code
               }
+              external_ref_type
+              external_ref_id
+              link_url
+              link_title
+              link_source_name
+              link_published_at
+              link_image_url
+              link_snippet
             }
           }
           `,
@@ -154,6 +162,14 @@ export class PostsService {
             country_name
             country_code
           }
+          external_ref_type
+          external_ref_id
+          link_url
+          link_title
+          link_source_name
+          link_published_at
+          link_image_url
+          link_snippet
         }
       }
     `;
@@ -224,6 +240,14 @@ export class PostsService {
             country_name
             country_code
           }
+          external_ref_type
+          external_ref_id
+          link_url
+          link_title
+          link_source_name
+          link_published_at
+          link_image_url
+          link_snippet
         }
       }
     `;
@@ -292,6 +316,14 @@ export class PostsService {
             country_name
             country_code
           }
+          external_ref_type
+          external_ref_id
+          link_url
+          link_title
+          link_source_name
+          link_published_at
+          link_image_url
+          link_snippet
         }
       }
     `;
@@ -366,6 +398,14 @@ export class PostsService {
             country_name
             country_code
           }
+          external_ref_type
+          external_ref_id
+          link_url
+          link_title
+          link_source_name
+          link_published_at
+          link_image_url
+          link_snippet
         }
       }
     `;
@@ -388,6 +428,14 @@ export class PostsService {
     mediaUrl?: string | null;
     thumbUrl?: string | null;
     sharedPostId?: string | null;
+    externalRefType?: string | null;
+    externalRefId?: string | null;
+    linkUrl?: string | null;
+    linkTitle?: string | null;
+    linkSourceName?: string | null;
+    linkPublishedAt?: string | null;
+    linkImageUrl?: string | null;
+    linkSnippet?: string | null;
   }): Promise<CountryPost> {
     if (!input.authorId) throw new Error('authorId is required to post.');
     const mutation = `
@@ -444,6 +492,14 @@ export class PostsService {
             country_name
             country_code
           }
+          external_ref_type
+          external_ref_id
+          link_url
+          link_title
+          link_source_name
+          link_published_at
+          link_image_url
+          link_snippet
         }
       }
     `;
@@ -459,6 +515,14 @@ export class PostsService {
       media_url: input.mediaUrl ?? null,
       thumb_url: input.thumbUrl ?? null,
       shared_post_id: input.sharedPostId ?? null,
+      external_ref_type: input.externalRefType ?? null,
+      external_ref_id: input.externalRefId ?? null,
+      link_url: input.linkUrl ?? null,
+      link_title: input.linkTitle ?? null,
+      link_source_name: input.linkSourceName ?? null,
+      link_published_at: input.linkPublishedAt ?? null,
+      link_image_url: input.linkImageUrl ?? null,
+      link_snippet: input.linkSnippet ?? null,
     };
 
     const { createPost } = await this.gql.request<{ createPost: any }>(mutation, {
@@ -933,6 +997,14 @@ export class PostsService {
             country_code: row.author.country_code,
           }
         : null,
+      external_ref_type: row.external_ref_type ?? null,
+      external_ref_id: row.external_ref_id ?? null,
+      link_url: row.link_url ?? null,
+      link_title: row.link_title ?? null,
+      link_source_name: row.link_source_name ?? null,
+      link_published_at: row.link_published_at ?? null,
+      link_image_url: row.link_image_url ?? null,
+      link_snippet: row.link_snippet ?? null,
     };
   }
 

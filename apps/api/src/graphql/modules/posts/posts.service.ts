@@ -34,6 +34,14 @@ type SharedPostRow = {
 type PostRow = SharedPostRow & {
   shared_post_id: string | null;
   shared_post: SharedPostRow | null;
+  external_ref_type: string | null;
+  external_ref_id: string | null;
+  link_url: string | null;
+  link_title: string | null;
+  link_source_name: string | null;
+  link_published_at: string | null;
+  link_image_url: string | null;
+  link_snippet: string | null;
 };
 
 type PostCommentRow = {
@@ -66,6 +74,14 @@ type CreatePostInput = {
   media_url?: string | null;
   thumb_url?: string | null;
   shared_post_id?: string | null;
+  external_ref_type?: string | null;
+  external_ref_id?: string | null;
+  link_url?: string | null;
+  link_title?: string | null;
+  link_source_name?: string | null;
+  link_published_at?: string | null;
+  link_image_url?: string | null;
+  link_snippet?: string | null;
 };
 
 export class PostsService {
@@ -463,9 +479,9 @@ export class PostsService {
     const { rows } = await pool.query(
       `
       insert into public.posts
-        (author_id, category_id, country_name, country_code, city_name, title, body, visibility, media_type, media_url, thumb_url, shared_post_id)
+        (author_id, category_id, country_name, country_code, city_name, title, body, visibility, media_type, media_url, thumb_url, shared_post_id, external_ref_type, external_ref_id, link_url, link_title, link_source_name, link_published_at, link_image_url, link_snippet)
       values
-        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
       returning id
       `,
       [
@@ -481,6 +497,14 @@ export class PostsService {
         mediaUrl,
         thumbUrl,
         sharedPostId,
+        input.external_ref_type ?? null,
+        input.external_ref_id ?? null,
+        input.link_url ?? null,
+        input.link_title ?? null,
+        input.link_source_name ?? null,
+        input.link_published_at ?? null,
+        input.link_image_url ?? null,
+        input.link_snippet ?? null,
       ]
     );
 

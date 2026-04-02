@@ -32,6 +32,15 @@ export type CountryPost = {
   country_code: string | null;
   city_name: string | null;
   author: PostAuthor | null;
+  // External news link fields
+  external_ref_type?: 'news' | null;
+  external_ref_id?: string | null;
+  link_url?: string | null;
+  link_title?: string | null;
+  link_source_name?: string | null;
+  link_published_at?: string | null;
+  link_image_url?: string | null;
+  link_snippet?: string | null;
 };
 
 export type PostComment = {
@@ -51,4 +60,35 @@ export type PostLike = {
   user_id: string;
   created_at: string;
   user: PostAuthor | null;
+};
+
+export type ExternalNewsItem = {
+  id: string;
+  provider: string;
+  provider_item_id: string;
+  title: string;
+  url: string;
+  source_name?: string | null;
+  published_at?: string | null;
+  country_codes: string[];
+  country_names: string[];
+  disaster_types: string[];
+  theme_names: string[];
+  format?: string | null;
+  language?: string | null;
+  snippet?: string | null;
+  image_url?: string | null;
+  comment_count: number;
+  shared_post_count: number;
+};
+
+export type ExternalNewsComment = {
+  id: string;
+  news_item_id: string;
+  parent_id?: string | null;
+  author_id: string;
+  body: string;
+  created_at: string;
+  updated_at: string;
+  author: PostAuthor | null;
 };

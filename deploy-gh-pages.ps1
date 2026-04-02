@@ -12,11 +12,20 @@
 
 param()
 
+$ErrorActionPreference = 'Stop'
+
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
 Set-Location $repoRoot
 
 $worktreeBranch = 'gh-pages'
-$worktreePath = Join-Path $env:TEMP 'gh-pages'
+$tempRoot = if ($env:TEMP) {
+  $env:TEMP
+} elseif ($env:TMPDIR) {
+  $env:TMPDIR
+} else {
+  '/tmp'
+}
+$worktreePath = Join-Path $tempRoot 'gh-pages-deploy'
 
 Write-Host "Preparing worktree [$worktreeBranch] at $worktreePath"
 if (Test-Path $worktreePath) {
@@ -25,11 +34,45 @@ if (Test-Path $worktreePath) {
 
 git worktree prune
 
-if (-not (git show-ref --verify --quiet refs/heads/$worktreeBranch)) {
-  git branch $worktreeBranch
+$existingWorktree = git worktree list --porcelain | ForEach-Object -Begin {
+  $path = $null
+  $branch = $null
+} -Process {
+  if ($_ -like 'worktree *') {
+    $path = $_.Substring(9)
+  } elseif ($_ -like 'branch *') {
+    $branch = $_.Substring(7)
+    if ($branch -eq "refs/heads/$worktreeBranch" -and $path -and $path -ne $repoRoot) {
+      $path
+    }
+  }
 }
 
-git worktree add -B $worktreeBranch $worktreePath
+if ($existingWorktree) {
+  foreach ($path in $existingWorktree) {
+    Write-Host "Removing existing worktree for [$worktreeBranch] at $path"
+    git worktree remove --force $path
+  }
+}
+
+git fetch origin $worktreeBranch --quiet 2>$null
+
+$localRef = "refs/heads/$worktreeBranch"
+$remoteRef = "refs/remotes/origin/$worktreeBranch"
+
+git show-ref --verify --quiet $localRef
+if ($LASTEXITCODE -eq 0) {
+  Write-Host "Using existing local branch [$worktreeBranch]"
+} else {
+  git show-ref --verify --quiet $remoteRef
+  if ($LASTEXITCODE -eq 0) {
+  git branch --track $worktreeBranch origin/$worktreeBranch
+  } else {
+    throw "Local branch '$worktreeBranch' is missing and origin/$worktreeBranch was not found."
+  }
+}
+
+git worktree add $worktreePath $worktreeBranch
 
 $distPath = Join-Path $repoRoot 'apps/web/dist/web'
 if (-not (Test-Path $distPath)) {
@@ -45,7 +88,7 @@ Write-Host "Cleaning existing contents in worktree"
 Get-ChildItem -Force $worktreePath | Where-Object { $_.Name -ne '.git' } | Remove-Item -Recurse -Force
 
 Write-Host "Publishing contents of $browserPath to worktree"
-Copy-Item -Recurse -Force "$browserPath\*" $worktreePath
+Copy-Item -Recurse -Force (Join-Path $browserPath '*') $worktreePath
 
 foreach ($extra in @('3rdpartylicenses.txt','prerendered-routes.json')) {
   $file = Join-Path $distPath $extra

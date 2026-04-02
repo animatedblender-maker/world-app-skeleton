@@ -92,20 +92,30 @@ type TabKey = 'home' | 'search' | 'messages' | 'profile';
         pointer-events: auto;
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 6px;
-        padding: 6px 12px calc(8px + env(safe-area-inset-bottom));
-        height: calc(var(--tabs-height, 64px) + env(safe-area-inset-bottom));
-        background: #ffffff;
-        border-top: 1px solid rgba(7, 20, 40, 0.08);
-        box-shadow: 0 -6px 20px rgba(12, 18, 24, 0.08);
+        gap: 8px;
+        width: min(560px, calc(100vw - 24px));
+        margin: 0 auto 10px;
+        padding: 8px 10px calc(10px + env(safe-area-inset-bottom));
+        min-height: calc(var(--tabs-height, 64px) + env(safe-area-inset-bottom) - 8px);
+        background: rgba(255, 255, 255, 0.78);
+        border: 1px solid rgba(255, 255, 255, 0.58);
+        border-radius: 24px;
+        box-shadow:
+          0 18px 48px rgba(15, 23, 42, 0.12),
+          0 1px 0 rgba(255, 255, 255, 0.72) inset;
+        backdrop-filter: blur(22px) saturate(1.18);
+        -webkit-backdrop-filter: blur(22px) saturate(1.18);
       }
       .bottom-tabs.globe-mode {
-        background: transparent;
-        border-top-color: transparent;
-        box-shadow: none;
+        background: rgba(8, 16, 28, 0.62);
+        border-color: rgba(151, 214, 255, 0.16);
+        box-shadow:
+          0 20px 56px rgba(0, 0, 0, 0.34),
+          0 0 0 1px rgba(111, 194, 255, 0.08) inset,
+          0 0 28px rgba(111, 194, 255, 0.08);
       }
       .bottom-tabs.globe-mode .tab-btn {
-        color: rgba(236, 244, 255, 0.78);
+        color: rgba(231, 241, 255, 0.72);
       }
       .bottom-tabs.globe-mode .tab-btn:hover,
       .bottom-tabs.globe-mode .tab-btn.active {
@@ -121,14 +131,16 @@ type TabKey = 'home' | 'search' | 'messages' | 'profile';
       }
       .profile-menu {
         position: fixed;
-        right: 12px;
-        bottom: calc(var(--tabs-height, 64px) + env(safe-area-inset-bottom) + 10px);
-        min-width: 176px;
+        right: max(12px, calc(50vw - min(280px, calc((100vw - 24px) / 2))));
+        bottom: calc(var(--tabs-height, 64px) + env(safe-area-inset-bottom) + 18px);
+        min-width: 188px;
         padding: 8px;
-        border-radius: 18px;
-        background: rgba(255, 255, 255, 0.98);
-        border: 1px solid rgba(7, 20, 40, 0.08);
-        box-shadow: 0 18px 44px rgba(12, 18, 24, 0.18);
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.84);
+        border: 1px solid rgba(255, 255, 255, 0.62);
+        box-shadow: 0 22px 52px rgba(12, 18, 24, 0.18);
+        backdrop-filter: blur(24px) saturate(1.14);
+        -webkit-backdrop-filter: blur(24px) saturate(1.14);
         display: grid;
         gap: 4px;
         pointer-events: auto;
@@ -157,12 +169,12 @@ type TabKey = 'home' | 'search' | 'messages' | 'profile';
       }
       .tab-btn {
         border: 0;
-        border-radius: 14px;
+        border-radius: 18px;
         background: transparent;
-        color: rgba(13, 22, 36, 0.7);
+        color: rgba(13, 22, 36, 0.64);
         cursor: pointer;
-        padding: 6px 4px;
-        transition: color 120ms ease;
+        padding: 9px 4px;
+        transition: color 120ms ease, background 140ms ease, transform 140ms ease, box-shadow 140ms ease;
         position: relative;
         display: grid;
         place-items: center;
@@ -170,9 +182,25 @@ type TabKey = 'home' | 'search' | 'messages' | 'profile';
       }
       .tab-btn:hover {
         color: #101724;
+        background: rgba(255, 255, 255, 0.34);
+        transform: translateY(-1px);
       }
       .tab-btn.active {
         color: #0b1a2c;
+        background: rgba(255, 255, 255, 0.7);
+        box-shadow:
+          0 10px 22px rgba(15, 23, 42, 0.08),
+          0 1px 0 rgba(255, 255, 255, 0.72) inset;
+      }
+      .bottom-tabs.globe-mode .tab-btn:hover {
+        background: rgba(255, 255, 255, 0.08);
+      }
+      .bottom-tabs.globe-mode .tab-btn.active {
+        color: #f7fffd;
+        background: linear-gradient(180deg, rgba(166, 255, 231, 0.2), rgba(123, 220, 255, 0.14));
+        box-shadow:
+          0 12px 28px rgba(0, 0, 0, 0.24),
+          0 0 0 1px rgba(152, 242, 228, 0.2) inset;
       }
       .tab-icon {
         font-size: 20px;
@@ -198,6 +226,11 @@ type TabKey = 'home' | 'search' | 'messages' | 'profile';
         .profile-menu {
           right: 10px;
           min-width: 166px;
+        }
+        .bottom-tabs {
+          width: calc(100vw - 16px);
+          margin-bottom: 8px;
+          border-radius: 22px;
         }
         .tab-icon {
           font-size: 18px;

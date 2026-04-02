@@ -1,0 +1,10 @@
+{
+	"appId": "com.worldapp.mobile",
+	"appName": "World App",
+	"webDir": "../web/dist/web/browser",
+	"server": {
+		"url": "https://matterya.com",
+		"cleartext": false
+	},
+	"packageClassList": []
+}

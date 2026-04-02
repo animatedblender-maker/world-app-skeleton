@@ -6,9 +6,13 @@
     "db:push": "supabase db push",
     "db:migration:new": "supabase migration new",
     "db:seed": "supabase db seed",
+    "demo:import:kaggle-reddit": "python3 scripts/import_kaggle_reddit_dataset.py",
     "mobile:sync": "npm --workspace apps/mobile run cap:sync",
     "mobile:ios": "npm --workspace apps/mobile run cap:ios",
-    "mobile:android": "npm --workspace apps/mobile run cap:android"
+    "mobile:android": "npm --workspace apps/mobile run cap:android",
+    "mobile:sync:local": "npm --workspace apps/mobile run cap:sync:local",
+    "mobile:ios:local": "npm --workspace apps/mobile run cap:ios:local",
+    "mobile:android:local": "npm --workspace apps/mobile run cap:android:local"
   },
   "workspaces": [
     "apps/*",
