@@ -848,8 +848,11 @@ type CountryMood = {
                     </div>
                   </div>
                   <div class="news-loading" *ngIf="newsLoading">Loading updates...</div>
-                  <div class="news-error" *ngIf="newsError">{{ newsError }}</div>
-                  <div class="news-empty" *ngIf="!newsLoading && !newsError && !countryNews.length">No recent updates</div>
+                  <div class="news-empty" *ngIf="newsPendingApproval">
+                    Live ReliefWeb updates will appear here as soon as provider access is approved.
+                  </div>
+                  <div class="news-error" *ngIf="newsError && !newsPendingApproval">{{ newsError }}</div>
+                  <div class="news-empty" *ngIf="!newsLoading && !newsError && !newsPendingApproval && !countryNews.length">No recent updates</div>
                 </div>
                 <div class="stats-card" *ngIf="!selectedCountry">
                   <div class="stats-title">Global crisis updates</div>
@@ -889,8 +892,11 @@ type CountryMood = {
                     </div>
                   </div>
                   <div class="news-loading" *ngIf="newsLoading">Loading updates...</div>
-                  <div class="news-error" *ngIf="newsError">{{ newsError }}</div>
-                  <div class="news-empty" *ngIf="!newsLoading && !newsError && !globalNews.length">No recent updates</div>
+                  <div class="news-empty" *ngIf="newsPendingApproval">
+                    Live ReliefWeb updates will appear here as soon as provider access is approved.
+                  </div>
+                  <div class="news-error" *ngIf="newsError && !newsPendingApproval">{{ newsError }}</div>
+                  <div class="news-empty" *ngIf="!newsLoading && !newsError && !newsPendingApproval && !globalNews.length">No recent updates</div>
                 </div>
                 <div class="stats-card">
                   <div class="stats-title">Status</div>
@@ -3061,6 +3067,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   globalNews: ExternalNewsItem[] = [];
   newsLoading = false;
   newsError = '';
+  newsPendingApproval = false;
   newsCommentOpenById: { [id: string]: boolean } = {};
   newsCommentItemsById: { [id: string]: ExternalNewsComment[] } = {};
   newsCommentDraftById: { [id: string]: string } = {};
@@ -3699,6 +3706,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     if (this.newsLoading) return;
     this.newsLoading = true;
     this.newsError = '';
+    this.newsPendingApproval = false;
     try {
       if (this.selectedCountry?.code) {
         this.countryNews = await this.newsService.countryConflictUpdates(this.selectedCountry.code);
@@ -3708,11 +3716,29 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
         this.countryNews = [];
       }
     } catch (err: any) {
-      this.newsError = err?.message ?? 'Failed to load news.';
+      const message = err?.message ?? 'Failed to load news.';
+      if (this.isNewsPendingApprovalError(message)) {
+        this.newsPendingApproval = true;
+        this.newsError = '';
+        this.countryNews = [];
+        this.globalNews = [];
+      } else {
+        this.newsError = message;
+      }
     } finally {
       this.newsLoading = false;
       this.forceUi();
     }
+  }
+
+  private isNewsPendingApprovalError(message: string | null | undefined): boolean {
+    const text = String(message ?? '').toLowerCase();
+    return (
+      text.includes('reliefweb_appname') ||
+      text.includes('approved appname') ||
+      text.includes('requires an approved appname') ||
+      text.includes('provider access is not configured')
+    );
   }
 
   moodPct(mood: CountryMood | null, key: 'positive' | 'neutral' | 'negative'): number {
