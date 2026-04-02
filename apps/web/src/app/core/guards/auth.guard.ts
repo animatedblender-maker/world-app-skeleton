@@ -22,21 +22,23 @@ export const authGuard: CanActivateFn = async (_route, state) => {
   // 2) Always allow profile setup route (so user can finish profile)
   if (url.startsWith('/profile-setup')) return true;
 
-  // 3) If profile incomplete, force setup (but don't block if API fails)
+  // 3) If profile is missing, prefer allowing navigation over trapping
+  //    established users in profile-setup due to environment/data drift.
   try {
     const { meProfile } = await profiles.meProfile();
-    // If we can load any profile, allow navigation (don't force setup).
     if (meProfile) return true;
 
-    // If meProfile is missing, try direct lookup by user id before forcing setup.
     if (!meProfile) {
       const byId = await profiles.profileById(user.id);
       if (byId.profileById) return true;
     }
 
-    return router.parseUrl('/profile-setup');
+    console.warn('[authGuard] profile lookup returned null for authenticated user, allowing navigation', {
+      userId: user.id,
+      url,
+    });
+    return true;
   } catch (e) {
-    // MVP choice: don't lock user out if API/profile query fails
     console.warn('[authGuard] meProfile failed, allowing navigation:', e);
     return true;
   }
