@@ -30,12 +30,15 @@ export class NotificationsService {
       `
       select
         n.*,
-        jsonb_build_object(
-          'user_id', pr.user_id,
-          'display_name', pr.display_name,
-          'username', pr.username,
-          'avatar_url', pr.avatar_url
-        ) as actor
+        case
+          when pr.user_id is null then null
+          else jsonb_build_object(
+            'user_id', pr.user_id,
+            'display_name', pr.display_name,
+            'username', pr.username,
+            'avatar_url', pr.avatar_url
+          )
+        end as actor
       from public.notifications n
       left join public.profiles pr on pr.user_id = n.actor_id
       where n.user_id = $1
