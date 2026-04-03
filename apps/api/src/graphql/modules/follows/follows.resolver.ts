@@ -28,18 +28,33 @@ export const followsResolvers = {
   Query: {
     followCounts: async (_: any, args: { user_id: string }) => {
       if (!args?.user_id) throw new Error('user_id is required');
-      return await svc().counts(args.user_id);
+      try {
+        return await svc().counts(args.user_id);
+      } catch (error) {
+        console.error('followCounts query failed', error);
+        return { followers: 0, following: 0 };
+      }
     },
 
     followingIds: async (_: any, __: any, ctx: Context) => {
       const user = requireAuth(ctx);
-      return await svc().followingIds(user.id);
+      try {
+        return await svc().followingIds(user.id);
+      } catch (error) {
+        console.error('followingIds query failed', error);
+        return [];
+      }
     },
 
     isFollowing: async (_: any, args: { user_id: string }, ctx: Context) => {
       const user = requireAuth(ctx);
       if (!args?.user_id) throw new Error('user_id is required');
-      return await svc().isFollowing(user.id, args.user_id);
+      try {
+        return await svc().isFollowing(user.id, args.user_id);
+      } catch (error) {
+        console.error('isFollowing query failed', error);
+        return false;
+      }
     },
   },
 
