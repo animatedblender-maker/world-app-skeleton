@@ -1,5 +1,7 @@
 import { Injectable } from '@angular/core';
+import { environment } from '../../../envirnoments/envirnoment';
 import { GqlService } from './gql.service';
+import { AuthService } from './auth.service';
 
 export type NotificationActor = {
   user_id: string;
@@ -61,17 +63,37 @@ mutation MarkAllNotificationsRead {
 
 @Injectable({ providedIn: 'root' })
 export class NotificationsService {
-  constructor(private gql: GqlService) {}
+  private endpoint = environment.graphqlEndpoint || 'http://localhost:3000/graphql';
+
+  constructor(
+    private gql: GqlService,
+    private auth: AuthService
+  ) {}
 
   async list(limit = 40, before?: string | null) {
-    return this.gql.request<{ notifications: NotificationItem[] }>(LIST_NOTIFICATIONS, {
-      limit,
-      before: before ?? null,
-    });
+    try {
+      return await this.gql.request<{ notifications: NotificationItem[] }>(LIST_NOTIFICATIONS, {
+        limit,
+        before: before ?? null,
+      });
+    } catch {
+      return await this.quietRequest<{ notifications: NotificationItem[] }>(LIST_NOTIFICATIONS, {
+        limit,
+        before: before ?? null,
+      }, { notifications: [] });
+    }
   }
 
   async unreadCount() {
-    return this.gql.request<{ notificationsUnreadCount: number }>(UNREAD_COUNT);
+    try {
+      return await this.gql.request<{ notificationsUnreadCount: number }>(UNREAD_COUNT);
+    } catch {
+      return await this.quietRequest<{ notificationsUnreadCount: number }>(
+        UNREAD_COUNT,
+        undefined,
+        { notificationsUnreadCount: 0 }
+      );
+    }
   }
 
   async markRead(id: string) {
@@ -80,5 +102,26 @@ export class NotificationsService {
 
   async markAllRead() {
     return this.gql.request<{ markAllNotificationsRead: number }>(MARK_ALL_READ);
+  }
+
+  private async quietRequest<T>(query: string, variables: any, fallback: T): Promise<T> {
+    try {
+      const token = await this.auth.getAccessToken();
+      const res = await fetch(this.endpoint, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json',
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ query, variables: variables ?? {} }),
+      });
+      const text = await res.text();
+      const json = text ? JSON.parse(text) : null;
+      if (!res.ok || json?.errors?.length || !json?.data) return fallback;
+      return json.data as T;
+    } catch {
+      return fallback;
+    }
   }
 }

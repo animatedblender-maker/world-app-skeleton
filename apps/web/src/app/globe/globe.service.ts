@@ -59,6 +59,24 @@ type AmbientStar = {
   alpha: number;
 };
 
+type MatrixRainColumn = {
+  x: number;
+  headY: number;
+  speed: number;
+  trail: number;
+};
+
+type MatrixWordDrop = {
+  text: string;
+  x: number;
+  y: number;
+  speed: number;
+  driftX: number;
+  alpha: number;
+  ageMs: number;
+  revealMs: number;
+};
+
 @Injectable({ providedIn: 'root' })
 export class GlobeService {
   private viewer: any = null;
@@ -99,13 +117,19 @@ export class GlobeService {
   private readonly MATRIX_LINK_DISTANCE = 150;
   private readonly MESSAGE_SPAWN_INTERVAL = 1200;
   private readonly MESSAGE_MAX = 18;
+  private readonly MATRIX_WORD_SPAWN_INTERVAL = 520;
   private readonly FLOATING_WORD_COUNT = 42;
+  private readonly MATRIX_GLYPHS =
+    '01ABCDEFGHIJKLMNOPQRSTUVWXYZアイウエオカキクケコサシスセソタチツテトナニヌネノ';
   private matrixNodes: MatrixNode[] = [];
   private ambientStars: AmbientStar[] = [];
   private messagePackets: MatrixPacket[] = [];
   private matrixRipples: MatrixRipple[] = [];
   private matrixFieldRipples: MatrixFieldRipple[] = [];
+  private matrixRainColumns: MatrixRainColumn[] = [];
+  private matrixWordDrops: MatrixWordDrop[] = [];
   private lastMessageSpawn = 0;
+  private lastMatrixWordSpawn = 0;
   private floatingWordPool: string[] = [];
   private fireworkWordGroups: string[][] = [];
 
@@ -580,6 +604,7 @@ export class GlobeService {
     if (!this.matrixNodes.length) return;
 
     this.drawMatrixBackdrop(ctx, w, h);
+    this.updateMatrixRain(ctx, w, h, dtMs);
 
     const drift = dtMs * 0.001;
     for (const node of this.matrixNodes) {
@@ -747,6 +772,7 @@ export class GlobeService {
       } else {
         target.glow = Math.min(1, target.glow + 0.9);
         this.emitNodeRipple(packet.toIndex);
+        this.spawnMatrixWordBurst(target.x, target.y, packet.label);
       }
     }
     this.messagePackets = alive;
@@ -1024,6 +1050,8 @@ export class GlobeService {
     this.messagePackets = [];
     this.matrixRipples = [];
     this.matrixFieldRipples = [];
+    this.matrixRainColumns = [];
+    this.matrixWordDrops = [];
   }
 
   private pickFireworkWord(): string {
@@ -1052,12 +1080,161 @@ export class GlobeService {
     return group.filter(Boolean);
   }
 
-  private drawFloatingWords(ctx: CanvasRenderingContext2D, w: number, h: number, dtMs: number): void {
-    return;
+  private seedMatrixRain(w: number, h: number): void {
+    if (!w || !h) return;
+    const scale = this.particleScale || 1;
+    const spacing = Math.max(11, 12 * scale);
+    const columns: MatrixRainColumn[] = [];
+    for (let x = spacing * 0.7; x < w - spacing * 0.7; x += spacing) {
+      columns.push({
+        x,
+        headY: -Math.random() * h,
+        speed: 0.026 + Math.random() * 0.03,
+        trail: 14 + Math.floor(Math.random() * 18),
+      });
+    }
+    this.matrixRainColumns = columns;
   }
 
-  private seedFloatingWords(w: number, h: number): void {
-    return;
+  private updateMatrixRain(
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    dtMs: number
+  ): void {
+    if (!this.matrixRainColumns.length) {
+      this.seedMatrixRain(w, h);
+    }
+    if (!this.matrixRainColumns.length) return;
+
+    const scale = this.particleScale || 1;
+    const glyphSize = Math.max(11, 12 * scale);
+    const lineHeight = Math.max(11, 11.25 * scale);
+    ctx.font = `${glyphSize}px "Menlo", "Consolas", monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    for (const column of this.matrixRainColumns) {
+      column.headY += column.speed * dtMs;
+      if (column.headY - column.trail * lineHeight > h + lineHeight) {
+        column.headY = -Math.random() * h * 0.55;
+        column.speed = 0.026 + Math.random() * 0.03;
+        column.trail = 14 + Math.floor(Math.random() * 18);
+      }
+
+      for (let i = 0; i < column.trail; i += 1) {
+        const y = column.headY - i * lineHeight;
+        if (y < -lineHeight || y > h + lineHeight || this.isInsideGlobeCutout(column.x, y, w, h)) continue;
+        const alpha = 0.06 + (1 - i / Math.max(1, column.trail - 1)) * 0.48;
+        ctx.fillStyle =
+          i === 0
+            ? `rgba(224, 255, 232, ${Math.min(0.88, alpha + 0.22)})`
+            : `rgba(63, 255, 120, ${Math.min(0.72, alpha)})`;
+        ctx.fillText(this.randomMatrixGlyph(), column.x, y);
+      }
+    }
+
+    if (this.matrixWordDrops.length) {
+      const alive: MatrixWordDrop[] = [];
+      const wordLineHeight = Math.max(10, 11.5 * scale);
+      ctx.font = `${Math.max(9, 9.5 * scale)}px "Menlo", "Consolas", monospace`;
+      ctx.textAlign = 'left';
+
+      for (const drop of this.matrixWordDrops) {
+        drop.x += drop.driftX * dtMs;
+        drop.y += drop.speed * dtMs;
+        drop.ageMs += dtMs;
+        drop.alpha *= 0.996;
+
+        const maxHeight = Math.max(1, drop.text.length) * wordLineHeight;
+        if (drop.alpha < 0.05 || drop.y > h + maxHeight + lineHeight) continue;
+
+        const baseX = drop.x + 4 * scale;
+        let visible = false;
+        const chars = drop.text.split('');
+        for (let i = 0; i < chars.length; i += 1) {
+          const y = drop.y + i * wordLineHeight;
+          if (y < -lineHeight || y > h + lineHeight || this.isInsideGlobeCutout(baseX, y, w, h)) continue;
+          const age = drop.ageMs - i * 85;
+          const reveal = Math.max(0, Math.min(1, age / drop.revealMs));
+          const glyph = reveal >= 1 ? chars[i] : this.randomMatrixGlyph();
+          const alpha = drop.alpha * (0.25 + reveal * 0.75) * (1 - (i / Math.max(2, chars.length + 2)) * 0.35);
+          ctx.fillStyle =
+            reveal >= 1
+              ? `rgba(198, 255, 228, ${alpha})`
+              : `rgba(110, 255, 172, ${alpha})`;
+          ctx.fillText(glyph, baseX, y);
+          visible = true;
+        }
+
+        if (visible) alive.push(drop);
+      }
+
+      this.matrixWordDrops = alive;
+    }
+
+    if (this.floatingWordPool.length && this.matrixWordDrops.length < this.FLOATING_WORD_COUNT) {
+      if (performance.now() - this.lastMatrixWordSpawn >= this.MATRIX_WORD_SPAWN_INTERVAL) {
+        this.spawnAmbientMatrixWord(w, h);
+        this.lastMatrixWordSpawn = performance.now();
+      }
+    }
+  }
+
+  private spawnAmbientMatrixWord(w: number, h: number): void {
+    const word = this.pickFireworkWord();
+    if (!word) return;
+
+    const x = Math.random() * (w * 0.7) + w * 0.15;
+    const y = -Math.random() * h * 0.15;
+    if (this.isInsideGlobeCutout(x, y + h * 0.2, w, h)) return;
+
+    this.matrixWordDrops.push({
+      text: word,
+      x,
+      y,
+      speed: 0.018 + Math.random() * 0.018,
+      driftX: (Math.random() - 0.5) * 0.0025,
+      alpha: 0.34 + Math.random() * 0.2,
+      ageMs: 0,
+      revealMs: 180 + Math.random() * 180,
+    });
+  }
+
+  private spawnMatrixWordBurst(x: number, y: number, label: string): void {
+    const words = label
+      .split(/\s+/)
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .slice(0, 2);
+
+    for (const [index, word] of words.entries()) {
+      this.matrixWordDrops.push({
+        text: word,
+        x: x + (index - 0.5) * 18 * (this.particleScale || 1),
+        y: y - 4 * (this.particleScale || 1),
+        speed: 0.014 + Math.random() * 0.012,
+        driftX: (Math.random() - 0.5) * 0.003,
+        alpha: 0.72,
+        ageMs: 0,
+        revealMs: 120 + Math.random() * 140,
+      });
+    }
+  }
+
+  private randomMatrixGlyph(): string {
+    const index = Math.floor(Math.random() * this.MATRIX_GLYPHS.length);
+    return this.MATRIX_GLYPHS.charAt(index) || '0';
+  }
+
+  private isInsideGlobeCutout(x: number, y: number, w: number, h: number): boolean {
+    const cx = w * 0.5;
+    const cy = h * 0.52;
+    const globeRx = w * 0.24;
+    const globeRy = h * 0.255;
+    const dx = (x - cx) / globeRx;
+    const dy = (y - cy) / globeRy;
+    return dx * dx + dy * dy < 1.02;
   }
 
   // -----------------------------
