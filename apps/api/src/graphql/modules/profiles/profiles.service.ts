@@ -1,4 +1,4 @@
-import { pool, withRequestContext } from '../../../db.js';
+import { pool, supabaseAdmin, withRequestContext } from '../../../db.js';
 
 type ProfileRow = {
   user_id: string;
@@ -26,16 +26,22 @@ type UpdateProfileInput = {
 
 export class ProfilesService {
   async getMeProfile(userId: string): Promise<ProfileRow | null> {
-    return await withRequestContext({ userId, role: 'authenticated' }, async (client) => {
-      const { rows } = await client.query(
-        `select * from public.profiles where user_id = $1 limit 1`,
-        [userId]
-      );
-      return (rows[0] as ProfileRow) ?? null;
-    });
+    return await this.getProfileById(userId);
   }
 
   async getProfileById(userId: string): Promise<ProfileRow | null> {
+    if (supabaseAdmin) {
+      const { data, error } = await supabaseAdmin
+        .from('profiles')
+        .select('*')
+        .eq('user_id', userId)
+        .limit(1)
+        .maybeSingle();
+
+      if (error) throw error;
+      return (data as ProfileRow | null) ?? null;
+    }
+
     return await withRequestContext({ role: 'anon' }, async (client) => {
       const { rows } = await client.query(
         `select * from public.profiles where user_id = $1 limit 1`,
@@ -46,6 +52,18 @@ export class ProfilesService {
   }
 
   async getProfileByUsername(username: string): Promise<ProfileRow | null> {
+    if (supabaseAdmin) {
+      const { data, error } = await supabaseAdmin
+        .from('profiles')
+        .select('*')
+        .ilike('username', username)
+        .limit(1)
+        .maybeSingle();
+
+      if (error) throw error;
+      return (data as ProfileRow | null) ?? null;
+    }
+
     return await withRequestContext({ role: 'anon' }, async (client) => {
       const { rows } = await client.query(
         `
@@ -114,6 +132,17 @@ export class ProfilesService {
     const iso = raw.toLowerCase();
     const pattern = `%${iso}%`;
     const max = Math.max(1, Math.min(100, limit));
+
+    if (supabaseAdmin) {
+      const { data, error } = await supabaseAdmin
+        .from('profiles')
+        .select('*')
+        .or(`username.ilike.${pattern},display_name.ilike.${pattern}`)
+        .limit(max);
+
+      if (error) throw error;
+      return (data as ProfileRow[] | null) ?? [];
+    }
 
     return await withRequestContext({ role: 'anon' }, async (client) => {
       const { rows } = await client.query(

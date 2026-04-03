@@ -1,5 +1,6 @@
 import pg from 'pg';
 import 'dotenv/config';
+import { createClient } from '@supabase/supabase-js';
 
 const { Pool } = pg;
 
@@ -9,9 +10,15 @@ const { Pool } = pg;
 export type PoolClient = pg.PoolClient;
 
 const DATABASE_URL = process.env.DATABASE_URL;
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 if (!DATABASE_URL) {
   console.warn('⚠️ DATABASE_URL is not set. Postgres queries will fail until you set it.');
+}
+
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+  console.warn('⚠️ Supabase admin client is not fully configured. Service-role reads may fail.');
 }
 
 export const pool = new Pool({
@@ -19,6 +26,13 @@ export const pool = new Pool({
   // optional: for Supabase you usually need SSL in production, but local dev varies
   ssl: process.env.PGSSLMODE === 'require' ? { rejectUnauthorized: false } : undefined,
 });
+
+export const supabaseAdmin =
+  SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
+    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      })
+    : null;
 
 type RequestRole = 'authenticated' | 'anon';
 
