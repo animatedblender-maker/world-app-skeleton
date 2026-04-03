@@ -27,16 +27,7 @@ export const messagesResolvers = {
     conversations: async (_: any, args: { limit?: number }, ctx: Context) => {
       const user = requireAuth(ctx);
       const limit = typeof args?.limit === 'number' ? args.limit : 20;
-      try {
-        return await svc().listConversations(user.id, limit);
-      } catch (error) {
-        console.error('[messages] listConversations failed', {
-          userId: user.id,
-          limit,
-          error,
-        });
-        return [];
-      }
+      return await svc().listConversations(user.id, limit);
     },
     conversationById: async (_: any, args: { conversation_id: string }, ctx: Context) => {
       const user = requireAuth(ctx);
@@ -56,15 +47,7 @@ export const messagesResolvers = {
     },
     messagesUnreadCount: async (_: any, _args: unknown, ctx: Context) => {
       const user = requireAuth(ctx);
-      try {
-        return await svc().unreadCount(user.id);
-      } catch (error) {
-        console.error('[messages] unreadCount failed', {
-          userId: user.id,
-          error,
-        });
-        return 0;
-      }
+      return await svc().unreadCount(user.id);
     },
   },
 

@@ -1,4 +1,4 @@
-import { pool, withRequestContext } from '../../../db.js';
+import { pool } from '../../../db.js';
 import { PushService } from '../../../push/push.service.js';
 
 type NotificationRow = {
@@ -26,75 +26,64 @@ export class NotificationsService {
     const beforeClause = before ? `and n.created_at < $3::timestamptz` : '';
     if (before) params.push(before);
 
-    return await withRequestContext({ userId, role: 'authenticated' }, async (client) => {
-      const { rows } = await client.query(
-        `
-        select
-          n.*,
-          case
-            when pr.user_id is null then null
-            else jsonb_build_object(
-              'user_id', pr.user_id,
-              'display_name', pr.display_name,
-              'username', pr.username,
-              'avatar_url', pr.avatar_url
-            )
-          end as actor
-        from public.notifications n
-        left join public.profiles pr on pr.user_id = n.actor_id
-        where n.user_id = $1
-          ${beforeClause}
-        order by n.created_at desc
-        limit $2
-        `,
-        params
-      );
+    const { rows } = await pool.query(
+      `
+      select
+        n.*,
+        jsonb_build_object(
+          'user_id', pr.user_id,
+          'display_name', pr.display_name,
+          'username', pr.username,
+          'avatar_url', pr.avatar_url
+        ) as actor
+      from public.notifications n
+      left join public.profiles pr on pr.user_id = n.actor_id
+      where n.user_id = $1
+        ${beforeClause}
+      order by n.created_at desc
+      limit $2
+      `,
+      params
+    );
 
-      return rows as NotificationRow[];
-    });
+    return rows as NotificationRow[];
   }
 
   async unreadCount(userId: string): Promise<number> {
-    return await withRequestContext({ userId, role: 'authenticated' }, async (client) => {
-      const { rows } = await client.query(
-        `
-        select count(*)::int as total
-        from public.notifications
-        where user_id = $1 and read_at is null
-        `,
-        [userId]
-      );
-      return rows[0]?.total ?? 0;
-    });
+    const { rows } = await pool.query(
+      `
+      select count(*)::int as total
+      from public.notifications
+      where user_id = $1 and read_at is null
+      `,
+      [userId]
+    );
+    return rows[0]?.total ?? 0;
   }
 
   async markRead(userId: string, id: string): Promise<boolean> {
-    return await withRequestContext({ userId, role: 'authenticated' }, async (client) => {
-      const { rows } = await client.query(
-        `
-        update public.notifications
-        set read_at = coalesce(read_at, now())
-        where id = $1 and user_id = $2
-        returning id
-        `,
-        [id, userId]
-      );
-      return !!rows[0]?.id;
-    });
+    const { rows } = await pool.query(
+      `
+      update public.notifications
+      set read_at = coalesce(read_at, now())
+      where id = $1 and user_id = $2
+      returning id
+      `,
+      [id, userId]
+    );
+    return !!rows[0]?.id;
   }
 
   async markAllRead(userId: string): Promise<number> {
-    return await withRequestContext({ userId, role: 'authenticated' }, async (client) => {
-      const { rowCount } = await client.query(
-        `
-        update public.notifications
-        set read_at = now()
-        where user_id = $1 and read_at is null
-        `,
-        [userId]
-      );
-      return rowCount ?? 0;
-    });
+    const { rowCount } = await pool.query(
+      `
+      update public.notifications
+      set read_at = now()
+      where user_id = $1 and read_at is null
+      `,
+      [userId]
+    );
+    return rowCount ?? 0;
   }
 
   async notifyFollow(targetId: string, followerId: string): Promise<void> {
