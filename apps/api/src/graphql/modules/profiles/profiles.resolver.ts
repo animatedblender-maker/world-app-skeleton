@@ -36,11 +36,13 @@ export const profilesResolvers = {
 
     meProfile: async (_: any, __: any, ctx: Context) => {
       const u = requireAuth(ctx);
+      console.log('PROFILE QUERY HIT', { field: 'meProfile', userId: u.id });
       return await svc().getMeProfile(u.id);
     },
 
     profileById: async (_: any, args: { user_id: string }) => {
       if (!args?.user_id) return null;
+      console.log('PROFILE QUERY HIT', { field: 'profileById', userId: args.user_id });
       return await svc().getProfileById(args.user_id);
     },
 
