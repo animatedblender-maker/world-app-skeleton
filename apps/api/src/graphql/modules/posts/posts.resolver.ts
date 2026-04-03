@@ -26,67 +26,31 @@ export const postsResolvers = {
   Query: {
     postsByCountry: async (_: any, args: { country_code: string; limit?: number }, ctx: Context) => {
       const limit = typeof args.limit === 'number' ? args.limit : 25;
-      console.log('RESOLVER HIT', {
-        field: 'postsByCountry',
-        country: args.country_code ?? '',
-        viewerId: ctx.user?.id ?? null,
-        limit,
-      });
-      try {
-        return await svc().postsByCountry(args.country_code ?? '', limit, ctx.user?.id ?? null);
-      } catch (error) {
-        console.error('postsByCountry query failed', error);
-        return [];
-      }
+      return await svc().postsByCountry(args.country_code ?? '', limit, ctx.user?.id ?? null);
     },
     postsByAuthor: async (_: any, args: { user_id: string; limit?: number }, ctx: Context) => {
       const limit = typeof args.limit === 'number' ? args.limit : 25;
-      try {
-        return await svc().postsByAuthor(args.user_id ?? '', limit, ctx.user?.id ?? null);
-      } catch (error) {
-        console.error('postsByAuthor query failed', error);
-        return [];
-      }
+      return await svc().postsByAuthor(args.user_id ?? '', limit, ctx.user?.id ?? null);
     },
     searchPosts: async (_: any, args: { query: string; limit?: number }, ctx: Context) => {
       const raw = (args?.query ?? '').trim();
       if (!raw) return [];
       const limit = typeof args.limit === 'number' ? args.limit : 25;
-      try {
-        return await svc().searchPosts(raw, limit, ctx.user?.id ?? null);
-      } catch (error) {
-        console.error('searchPosts query failed', error);
-        return [];
-      }
+      return await svc().searchPosts(raw, limit, ctx.user?.id ?? null);
     },
     postById: async (_: any, args: { post_id: string }, ctx: Context) => {
       if (!args?.post_id) throw new Error('post_id is required.');
-      try {
-        return await svc().postById(args.post_id, ctx.user?.id ?? null);
-      } catch (error) {
-        console.error('postById query failed', error);
-        return null;
-      }
+      return await svc().postById(args.post_id, ctx.user?.id ?? null);
     },
     commentsByPost: async (_: any, args: { post_id: string; limit?: number; before?: string | null }, ctx: Context) => {
       const limit = typeof args.limit === 'number' ? args.limit : 20;
       const before = args?.before ?? null;
-      try {
-        return await svc().commentsByPost(args.post_id ?? '', limit, before, ctx.user?.id ?? null);
-      } catch (error) {
-        console.error('commentsByPost query failed', error);
-        return [];
-      }
+      return await svc().commentsByPost(args.post_id ?? '', limit, before, ctx.user?.id ?? null);
     },
     postLikes: async (_: any, args: { post_id: string; limit?: number }, ctx: Context) => {
       if (!args?.post_id) throw new Error('post_id is required.');
       const limit = typeof args.limit === 'number' ? args.limit : 25;
-      try {
-        return await svc().likesByPost(args.post_id, limit, ctx.user?.id ?? null);
-      } catch (error) {
-        console.error('postLikes query failed', error);
-        return [];
-      }
+      return await svc().likesByPost(args.post_id, limit, ctx.user?.id ?? null);
     },
   },
 

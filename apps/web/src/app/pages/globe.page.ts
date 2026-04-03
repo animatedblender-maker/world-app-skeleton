@@ -1054,11 +1054,7 @@ type CountryMood = {
       z-index: 0;
       width: 100%;
       height: 100%;
-      background:
-        #000
-        url('/assets/matrix-mesh.jpg?v=1')
-        center center / cover
-        no-repeat;
+      background: #000;
       pointer-events: none;
     }
     :host.country-open .space-backdrop{

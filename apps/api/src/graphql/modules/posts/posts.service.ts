@@ -1,4 +1,4 @@
-import { pool, withRequestContext } from '../../../db.js';
+import { pool } from '../../../db.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 
 type PostAuthorRow = {
@@ -34,14 +34,6 @@ type SharedPostRow = {
 type PostRow = SharedPostRow & {
   shared_post_id: string | null;
   shared_post: SharedPostRow | null;
-  external_ref_type: string | null;
-  external_ref_id: string | null;
-  link_url: string | null;
-  link_title: string | null;
-  link_source_name: string | null;
-  link_published_at: string | null;
-  link_image_url: string | null;
-  link_snippet: string | null;
 };
 
 type PostCommentRow = {
@@ -74,14 +66,6 @@ type CreatePostInput = {
   media_url?: string | null;
   thumb_url?: string | null;
   shared_post_id?: string | null;
-  external_ref_type?: string | null;
-  external_ref_id?: string | null;
-  link_url?: string | null;
-  link_title?: string | null;
-  link_source_name?: string | null;
-  link_published_at?: string | null;
-  link_image_url?: string | null;
-  link_snippet?: string | null;
 };
 
 export class PostsService {
@@ -89,8 +73,7 @@ export class PostsService {
 
   async postsByCountry(code: string, limit: number, viewerId: string | null): Promise<PostRow[]> {
     const iso = (code || '').toUpperCase();
-    const { rows } = await this.queryAsViewer(
-      viewerId,
+    const { rows } = await pool.query(
       `
       select
         p.*,
@@ -183,8 +166,7 @@ export class PostsService {
   async postsByAuthor(authorId: string, limit: number, viewerId: string | null): Promise<PostRow[]> {
     const isOwner = !!viewerId && viewerId === authorId;
     if (isOwner) {
-      const { rows } = await this.queryAsViewer(
-        viewerId,
+      const { rows } = await pool.query(
         `
         select
           p.*,
@@ -261,8 +243,7 @@ export class PostsService {
       return rows as PostRow[];
     }
 
-    const { rows } = await this.queryAsViewer(
-      authorId,
+    const { rows } = await pool.query(
       `
       select
         p.*,
@@ -357,8 +338,7 @@ export class PostsService {
     const max = Math.max(1, Math.min(100, limit || 25));
     const like = `%${term.toLowerCase()}%`;
 
-    const { rows } = await this.queryAsViewer(
-      viewerId,
+    const { rows } = await pool.query(
       `
       with q as (
         select websearch_to_tsquery('simple', $1) as tsq
@@ -480,13 +460,12 @@ export class PostsService {
     // GraphQL Post.body is non-null, so never return null here.
     const bodyValue = body.length ? body : '';
 
-    const { rows } = await this.queryAsViewer(
-      authorId,
+    const { rows } = await pool.query(
       `
       insert into public.posts
-        (author_id, category_id, country_name, country_code, city_name, title, body, visibility, media_type, media_url, thumb_url, shared_post_id, external_ref_type, external_ref_id, link_url, link_title, link_source_name, link_published_at, link_image_url, link_snippet)
+        (author_id, category_id, country_name, country_code, city_name, title, body, visibility, media_type, media_url, thumb_url, shared_post_id)
       values
-        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
       returning id
       `,
       [
@@ -502,14 +481,6 @@ export class PostsService {
         mediaUrl,
         thumbUrl,
         sharedPostId,
-        input.external_ref_type ?? null,
-        input.external_ref_id ?? null,
-        input.link_url ?? null,
-        input.link_title ?? null,
-        input.link_source_name ?? null,
-        input.link_published_at ?? null,
-        input.link_image_url ?? null,
-        input.link_snippet ?? null,
       ]
     );
 
@@ -674,8 +645,7 @@ export class PostsService {
     const beforeClause = before ? `and c.created_at < $4::timestamptz` : '';
     if (before) params.push(before);
 
-    const { rows } = await this.queryAsViewer(
-      viewerId,
+    const { rows } = await pool.query(
       `
       select
         c.*,
@@ -936,8 +906,7 @@ export class PostsService {
   }
 
   private async postByIdForViewer(id: string, viewerId: string | null): Promise<PostRow | null> {
-    const { rows } = await this.queryAsViewer(
-      viewerId,
+    const { rows } = await pool.query(
       `
       select
         p.*,
@@ -1026,8 +995,7 @@ export class PostsService {
   }
 
   private async commentById(id: string, viewerId: string | null): Promise<PostCommentRow | null> {
-    const { rows } = await this.queryAsViewer(
-      viewerId,
+    const { rows } = await pool.query(
       `
       select
         c.*,
@@ -1095,8 +1063,7 @@ export class PostsService {
   private async resolveCategoryId(countryCode?: string | null): Promise<string> {
     const iso = (countryCode || 'GLOBAL').toUpperCase();
 
-    const byCountry = await this.queryAsViewer(
-      null,
+    const byCountry = await pool.query(
       `
       select id
       from public.categories
@@ -1110,8 +1077,7 @@ export class PostsService {
     const found = byCountry.rows[0]?.id;
     if (found) return found as string;
 
-    const global = await this.queryAsViewer(
-      null,
+    const global = await pool.query(
       `
       select id
       from public.categories
@@ -1125,12 +1091,5 @@ export class PostsService {
     if (globalId) return globalId as string;
 
     throw new Error('No categories available. Seed public.categories first.');
-  }
-
-  private async queryAsViewer(viewerId: string | null, text: string, values?: any[]) {
-    return await withRequestContext(
-      { userId: viewerId ?? undefined, role: viewerId ? 'authenticated' : 'anon' },
-      async (client) => await client.query(text, values)
-    );
   }
 }

@@ -54,7 +54,6 @@ const ALLOWED_ORIGINS = Array.from(
   .map((value) => value.trim().replace(/\/$/, ''))
   .filter(Boolean);
 const PORT = Number(process.env.PORT ?? 3000);
-const API_FINGERPRINT = 'api-fingerprint-2026-04-03-v3';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY;
@@ -168,13 +167,7 @@ app.use(
 );
 
 // ✅ health endpoint (typed _req to avoid implicit any)
-app.get('/health', (_req: Request, res: Response) =>
-  res.json({
-    ok: true,
-    fingerprint: API_FINGERPRINT,
-    renderCommit: process.env.RENDER_GIT_COMMIT ?? null,
-  })
-);
+app.get('/health', (_req: Request, res: Response) => res.json({ ok: true }));
 
 app.post('/push/subscribe', async (req: Request, res: Response) => {
   const user = await getUserFromRequest(req);
@@ -335,10 +328,6 @@ app.use('/graphql', (req: Request, res: Response) => {
 });
 
 server.listen(PORT, () => {
-  console.log('API FINGERPRINT', {
-    fingerprint: API_FINGERPRINT,
-    renderCommit: process.env.RENDER_GIT_COMMIT ?? null,
-  });
   console.log(`✅ GraphQL running at http://localhost:${PORT}/graphql`);
   console.log(`✅ WS signaling at  http://localhost:${PORT}/ws`);
   console.log(`✅ Health at        http://localhost:${PORT}/health`);

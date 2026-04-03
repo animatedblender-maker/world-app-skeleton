@@ -326,64 +326,6 @@ export class AdsService {
     return rows[0]!;
   }
 
-  async updateCreative(creativeId: string, userId: string, input: AdCreativeInput): Promise<AdCreativeRow> {
-    const existing = await this.creativeById(creativeId, userId);
-    if (!existing) throw new Error('Creative not found.');
-    const normalized = this.normalizeCreativeInput({
-      title: input?.title ?? existing.title,
-      body: input?.body ?? existing.body,
-      media_kind: input?.media_kind ?? existing.media_kind,
-      media_url: input?.media_url ?? existing.media_url,
-      click_url: input?.click_url ?? existing.click_url,
-      cta_label: input?.cta_label ?? existing.cta_label,
-      duration_seconds: input?.duration_seconds ?? existing.duration_seconds,
-    });
-    const { rows } = await pool.query<AdCreativeRow>(
-      `
-      update public.ad_creatives cr
-      set
-        title = $2,
-        body = $3,
-        media_kind = $4,
-        media_url = $5,
-        click_url = $6,
-        cta_label = $7,
-        duration_seconds = $8,
-        updated_at = now()
-      from public.ad_campaigns c
-      where cr.id = $1
-        and c.id = cr.campaign_id
-        and c.advertiser_user_id = $9
-      returning
-        cr.id,
-        cr.campaign_id,
-        cr.title,
-        cr.body,
-        cr.media_kind,
-        cr.media_url,
-        cr.click_url,
-        cr.cta_label,
-        cr.duration_seconds,
-        cr.created_at,
-        cr.updated_at
-      `,
-      [
-        creativeId,
-        normalized.title,
-        normalized.body,
-        normalized.media_kind,
-        normalized.media_url,
-        normalized.click_url,
-        normalized.cta_label,
-        normalized.duration_seconds,
-        userId,
-      ]
-    );
-    const updated = rows[0];
-    if (!updated) throw new Error('Creative not found.');
-    return this.mapCreativeRow(updated);
-  }
-
   async serveVideoAd(
     userId: string | null,
     input: ServeVideoAdInput
@@ -403,7 +345,6 @@ export class AdsService {
     const requestedCountry = this.normalizeCountryCode(input.country_code ?? null);
     const contentCountry = this.normalizeCountryCode(input.content_country_code ?? null);
     const effectiveCountry = requestedCountry || contentCountry;
-    const postSelector = String(input.post_id ?? '').trim();
 
     const { rows } = await pool.query<AdSlotRow>(
       `
@@ -463,15 +404,12 @@ export class AdsService {
         )
       order by
         country_rank asc,
-        md5(
-          coalesce($4::text, '') || ':' || c.id::text || ':' || cr.id::text || ':' || to_char(now(), 'YYYYMMDD')
-        ) asc,
         coalesce(stats.day_serves, 0) asc,
         c.created_at asc,
         cr.created_at asc
       limit 1
       `,
-      [placement, effectiveCountry, contentCountry, postSelector]
+      [placement, effectiveCountry, contentCountry]
     );
 
     const row = rows[0];
@@ -577,7 +515,6 @@ export class AdsService {
     const requestedCountry = this.normalizeCountryCode(input.country_code ?? null);
     const contentCountry = this.normalizeCountryCode(input.content_country_code ?? null);
     const effectiveCountry = requestedCountry || contentCountry;
-    const postSelector = String(input.post_id ?? '').trim();
 
     const { rows: countRows } = await pool.query<{
       active_campaigns: number;
@@ -676,15 +613,12 @@ export class AdsService {
         )
       order by
         country_rank asc,
-        md5(
-          coalesce($4::text, '') || ':' || c.id::text || ':' || cr.id::text || ':' || to_char(now(), 'YYYYMMDD')
-        ) asc,
         coalesce(stats.day_serves, 0) asc,
         c.created_at asc,
         cr.created_at asc
       limit 1
       `,
-      [placement, effectiveCountry, contentCountry, postSelector]
+      [placement, effectiveCountry, contentCountry]
     );
     const selected = rows[0];
 
@@ -797,32 +731,6 @@ export class AdsService {
       `,
       [userId]
     );
-  }
-
-  private async creativeById(creativeId: string, userId: string): Promise<AdCreativeRow | null> {
-    const { rows } = await pool.query<AdCreativeRow>(
-      `
-      select
-        cr.id,
-        cr.campaign_id,
-        cr.title,
-        cr.body,
-        cr.media_kind,
-        cr.media_url,
-        cr.click_url,
-        cr.cta_label,
-        cr.duration_seconds,
-        cr.created_at,
-        cr.updated_at
-      from public.ad_creatives cr
-      join public.ad_campaigns c on c.id = cr.campaign_id
-      where cr.id = $1 and c.advertiser_user_id = $2
-      limit 1
-      `,
-      [creativeId, userId]
-    );
-    const row = rows[0];
-    return row ? this.mapCreativeRow(row) : null;
   }
 
   private normalizeCampaignInput(input: AdCampaignInput): Required<AdCampaignInput> {

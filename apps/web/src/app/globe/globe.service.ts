@@ -121,6 +121,11 @@ export class GlobeService {
   private readonly FLOATING_WORD_COUNT = 42;
   private readonly MATRIX_GLYPHS =
     '01ABCDEFGHIJKLMNOPQRSTUVWXYZアイウエオカキクケコサシスセソタチツテトナニヌネノ';
+  private readonly FALLBACK_MATRIX_WORDS = [
+    'MATTERYA', 'WORLD', 'SIGNAL', 'PEOPLE', 'COUNTRY', 'VOICE', 'EARTH', 'NETWORK',
+    'GLOBAL', 'MOTION', 'TRAVEL', 'SYSTEM', 'HORIZON', 'ORBIT', 'PULSE', 'VECTOR',
+    'UNITY', 'FUTURE', 'MEDIA', 'STORY', 'PUBLIC', 'THREAD', 'PLANET', 'STREAM',
+  ];
   private matrixNodes: MatrixNode[] = [];
   private ambientStars: AmbientStar[] = [];
   private messagePackets: MatrixPacket[] = [];
@@ -1058,7 +1063,7 @@ export class GlobeService {
     if (this.floatingWordPool.length) {
       return this.floatingWordPool[Math.floor(Math.random() * this.floatingWordPool.length)];
     }
-    return '';
+    return this.FALLBACK_MATRIX_WORDS[Math.floor(Math.random() * this.FALLBACK_MATRIX_WORDS.length)];
   }
 
   private pickMessageLabel(): string {
@@ -1125,11 +1130,11 @@ export class GlobeService {
       for (let i = 0; i < column.trail; i += 1) {
         const y = column.headY - i * lineHeight;
         if (y < -lineHeight || y > h + lineHeight || this.isInsideGlobeCutout(column.x, y, w, h)) continue;
-        const alpha = 0.06 + (1 - i / Math.max(1, column.trail - 1)) * 0.48;
+        const alpha = 0.14 + (1 - i / Math.max(1, column.trail - 1)) * 0.62;
         ctx.fillStyle =
           i === 0
-            ? `rgba(224, 255, 232, ${Math.min(0.88, alpha + 0.22)})`
-            : `rgba(63, 255, 120, ${Math.min(0.72, alpha)})`;
+            ? `rgba(232, 255, 236, ${Math.min(0.95, alpha + 0.2)})`
+            : `rgba(78, 255, 124, ${Math.min(0.84, alpha)})`;
         ctx.fillText(this.randomMatrixGlyph(), column.x, y);
       }
     }
@@ -1173,7 +1178,7 @@ export class GlobeService {
       this.matrixWordDrops = alive;
     }
 
-    if (this.floatingWordPool.length && this.matrixWordDrops.length < this.FLOATING_WORD_COUNT) {
+    if (this.matrixWordDrops.length < this.FLOATING_WORD_COUNT) {
       if (performance.now() - this.lastMatrixWordSpawn >= this.MATRIX_WORD_SPAWN_INTERVAL) {
         this.spawnAmbientMatrixWord(w, h);
         this.lastMatrixWordSpawn = performance.now();
@@ -1195,7 +1200,7 @@ export class GlobeService {
       y,
       speed: 0.018 + Math.random() * 0.018,
       driftX: (Math.random() - 0.5) * 0.0025,
-      alpha: 0.34 + Math.random() * 0.2,
+      alpha: 0.5 + Math.random() * 0.18,
       ageMs: 0,
       revealMs: 180 + Math.random() * 180,
     });
