@@ -27,7 +27,12 @@ export const messagesResolvers = {
     conversations: async (_: any, args: { limit?: number }, ctx: Context) => {
       const user = requireAuth(ctx);
       const limit = typeof args?.limit === 'number' ? args.limit : 20;
-      return await svc().listConversations(user.id, limit);
+      try {
+        return await svc().listConversations(user.id, limit);
+      } catch (error) {
+        console.error('conversations query failed', error);
+        return [];
+      }
     },
     conversationById: async (_: any, args: { conversation_id: string }, ctx: Context) => {
       const user = requireAuth(ctx);
@@ -47,7 +52,12 @@ export const messagesResolvers = {
     },
     messagesUnreadCount: async (_: any, _args: unknown, ctx: Context) => {
       const user = requireAuth(ctx);
-      return await svc().unreadCount(user.id);
+      try {
+        return await svc().unreadCount(user.id);
+      } catch (error) {
+        console.error('messages unread count failed', error);
+        return 0;
+      }
     },
   },
 

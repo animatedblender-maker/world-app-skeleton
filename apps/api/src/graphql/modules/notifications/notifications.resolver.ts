@@ -28,12 +28,22 @@ export const notificationsResolvers = {
       const user = requireAuth(ctx);
       const limit = typeof args?.limit === 'number' ? args.limit : 40;
       const before = args?.before ?? null;
-      return await svc().listForUser(user.id, limit, before);
+      try {
+        return await svc().listForUser(user.id, limit, before);
+      } catch (error) {
+        console.error('notifications query failed', error);
+        return [];
+      }
     },
 
     notificationsUnreadCount: async (_: any, __: any, ctx: Context) => {
       const user = requireAuth(ctx);
-      return await svc().unreadCount(user.id);
+      try {
+        return await svc().unreadCount(user.id);
+      } catch (error) {
+        console.error('notifications unread count failed', error);
+        return 0;
+      }
     },
   },
 

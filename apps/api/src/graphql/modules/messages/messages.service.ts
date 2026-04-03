@@ -55,7 +55,7 @@ export class MessagesService {
           (
             select jsonb_agg(
               jsonb_build_object(
-                'user_id', pr.user_id,
+                'user_id', cm2.user_id,
                 'display_name', pr.display_name,
                 'username', pr.username,
                 'avatar_url', pr.avatar_url,
@@ -84,7 +84,7 @@ export class MessagesService {
             'created_at', m.created_at,
             'updated_at', m.updated_at,
             'sender', jsonb_build_object(
-              'user_id', pr2.user_id,
+              'user_id', m.sender_id,
               'display_name', pr2.display_name,
               'username', pr2.username,
               'avatar_url', pr2.avatar_url,
@@ -425,7 +425,7 @@ export class MessagesService {
           (
             select jsonb_agg(
               jsonb_build_object(
-                'user_id', pr.user_id,
+                'user_id', cm2.user_id,
                 'display_name', pr.display_name,
                 'username', pr.username,
                 'avatar_url', pr.avatar_url,
@@ -454,7 +454,7 @@ export class MessagesService {
             'created_at', m.created_at,
             'updated_at', m.updated_at,
             'sender', jsonb_build_object(
-              'user_id', pr2.user_id,
+              'user_id', m.sender_id,
               'display_name', pr2.display_name,
               'username', pr2.username,
               'avatar_url', pr2.avatar_url,
@@ -489,7 +489,7 @@ export class MessagesService {
       select
         m.*,
         jsonb_build_object(
-          'user_id', pr.user_id,
+          'user_id', m.sender_id,
           'display_name', pr.display_name,
           'username', pr.username,
           'avatar_url', pr.avatar_url,

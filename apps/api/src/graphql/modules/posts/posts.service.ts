@@ -1,4 +1,4 @@
-import { pool } from '../../../db.js';
+import { pool, withRequestContext } from '../../../db.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 
 type PostAuthorRow = {
@@ -89,7 +89,8 @@ export class PostsService {
 
   async postsByCountry(code: string, limit: number, viewerId: string | null): Promise<PostRow[]> {
     const iso = (code || '').toUpperCase();
-    const { rows } = await pool.query(
+    const { rows } = await this.queryAsViewer(
+      viewerId,
       `
       select
         p.*,
@@ -182,7 +183,8 @@ export class PostsService {
   async postsByAuthor(authorId: string, limit: number, viewerId: string | null): Promise<PostRow[]> {
     const isOwner = !!viewerId && viewerId === authorId;
     if (isOwner) {
-      const { rows } = await pool.query(
+      const { rows } = await this.queryAsViewer(
+        viewerId,
         `
         select
           p.*,
@@ -259,7 +261,8 @@ export class PostsService {
       return rows as PostRow[];
     }
 
-    const { rows } = await pool.query(
+    const { rows } = await this.queryAsViewer(
+      authorId,
       `
       select
         p.*,
@@ -354,7 +357,8 @@ export class PostsService {
     const max = Math.max(1, Math.min(100, limit || 25));
     const like = `%${term.toLowerCase()}%`;
 
-    const { rows } = await pool.query(
+    const { rows } = await this.queryAsViewer(
+      viewerId,
       `
       with q as (
         select websearch_to_tsquery('simple', $1) as tsq
@@ -476,7 +480,8 @@ export class PostsService {
     // GraphQL Post.body is non-null, so never return null here.
     const bodyValue = body.length ? body : '';
 
-    const { rows } = await pool.query(
+    const { rows } = await this.queryAsViewer(
+      authorId,
       `
       insert into public.posts
         (author_id, category_id, country_name, country_code, city_name, title, body, visibility, media_type, media_url, thumb_url, shared_post_id, external_ref_type, external_ref_id, link_url, link_title, link_source_name, link_published_at, link_image_url, link_snippet)
@@ -669,7 +674,8 @@ export class PostsService {
     const beforeClause = before ? `and c.created_at < $4::timestamptz` : '';
     if (before) params.push(before);
 
-    const { rows } = await pool.query(
+    const { rows } = await this.queryAsViewer(
+      viewerId,
       `
       select
         c.*,
@@ -930,7 +936,8 @@ export class PostsService {
   }
 
   private async postByIdForViewer(id: string, viewerId: string | null): Promise<PostRow | null> {
-    const { rows } = await pool.query(
+    const { rows } = await this.queryAsViewer(
+      viewerId,
       `
       select
         p.*,
@@ -1019,7 +1026,8 @@ export class PostsService {
   }
 
   private async commentById(id: string, viewerId: string | null): Promise<PostCommentRow | null> {
-    const { rows } = await pool.query(
+    const { rows } = await this.queryAsViewer(
+      viewerId,
       `
       select
         c.*,
@@ -1087,7 +1095,8 @@ export class PostsService {
   private async resolveCategoryId(countryCode?: string | null): Promise<string> {
     const iso = (countryCode || 'GLOBAL').toUpperCase();
 
-    const byCountry = await pool.query(
+    const byCountry = await this.queryAsViewer(
+      null,
       `
       select id
       from public.categories
@@ -1101,7 +1110,8 @@ export class PostsService {
     const found = byCountry.rows[0]?.id;
     if (found) return found as string;
 
-    const global = await pool.query(
+    const global = await this.queryAsViewer(
+      null,
       `
       select id
       from public.categories
@@ -1115,5 +1125,12 @@ export class PostsService {
     if (globalId) return globalId as string;
 
     throw new Error('No categories available. Seed public.categories first.');
+  }
+
+  private async queryAsViewer(viewerId: string | null, text: string, values?: any[]) {
+    return await withRequestContext(
+      { userId: viewerId ?? undefined, role: viewerId ? 'authenticated' : 'anon' },
+      async (client) => await client.query(text, values)
+    );
   }
 }
