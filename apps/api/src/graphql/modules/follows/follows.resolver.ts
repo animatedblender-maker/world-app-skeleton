@@ -38,6 +38,7 @@ export const followsResolvers = {
 
     followingIds: async (_: any, __: any, ctx: Context) => {
       const user = requireAuth(ctx);
+      console.log('RESOLVER HIT', { field: 'followingIds', userId: user.id });
       try {
         return await svc().followingIds(user.id);
       } catch (error) {

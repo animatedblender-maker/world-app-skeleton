@@ -28,6 +28,7 @@ export const notificationsResolvers = {
       const user = requireAuth(ctx);
       const limit = typeof args?.limit === 'number' ? args.limit : 40;
       const before = args?.before ?? null;
+      console.log('RESOLVER HIT', { field: 'notifications', userId: user.id, limit });
       try {
         return await svc().listForUser(user.id, limit, before);
       } catch (error) {
@@ -38,6 +39,7 @@ export const notificationsResolvers = {
 
     notificationsUnreadCount: async (_: any, __: any, ctx: Context) => {
       const user = requireAuth(ctx);
+      console.log('RESOLVER HIT', { field: 'notificationsUnreadCount', userId: user.id });
       try {
         return await svc().unreadCount(user.id);
       } catch (error) {

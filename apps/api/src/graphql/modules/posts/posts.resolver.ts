@@ -26,6 +26,12 @@ export const postsResolvers = {
   Query: {
     postsByCountry: async (_: any, args: { country_code: string; limit?: number }, ctx: Context) => {
       const limit = typeof args.limit === 'number' ? args.limit : 25;
+      console.log('RESOLVER HIT', {
+        field: 'postsByCountry',
+        country: args.country_code ?? '',
+        viewerId: ctx.user?.id ?? null,
+        limit,
+      });
       try {
         return await svc().postsByCountry(args.country_code ?? '', limit, ctx.user?.id ?? null);
       } catch (error) {
