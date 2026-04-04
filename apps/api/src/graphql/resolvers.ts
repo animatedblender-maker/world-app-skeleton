@@ -88,5 +88,6 @@ export const resolvers = {
     ...(notificationsResolvers.Mutation ?? {}),
     ...(messagesResolvers.Mutation ?? {}),
     ...(adsResolvers.Mutation ?? {}),
+    ...(newsResolvers.Mutation ?? {}),
   },
 };

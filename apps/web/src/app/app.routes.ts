@@ -75,6 +75,12 @@ export const routes: Routes = [
       import('./pages/post.page').then((m) => m.PostPageComponent),
   },
   {
+    path: 'news/:id',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pages/news.page').then((m) => m.NewsPageComponent),
+  },
+  {
     path: 'ops-portal-2026',
     canActivate: [authGuard],
     loadComponent: () =>

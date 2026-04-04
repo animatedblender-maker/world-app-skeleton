@@ -108,68 +108,32 @@ type CountryMood = {
       <div class="map-pane" *ngIf="selectedCountry">
         <div class="map-glass">
           <div class="left-rail">
-            <section class="left-card left-card-brand">
-              <div class="left-label">Appname</div>
-              <div class="left-token-cloud">
-                <span class="left-token" *ngFor="let token of desktopRailTokens">{{ token }}</span>
-              </div>
-              <div class="left-copy">
-                Reel RSS feed for {{ selectedCountry.name }} with ReliefWeb signal directly underneath.
-              </div>
-            </section>
-
             <section class="left-card">
               <div class="left-header">
                 <div>
-                  <div class="left-label">ReliefWeb RSS Feed</div>
-                  <div class="left-title">{{ selectedCountry.name }} emergency stream</div>
+                  <div class="left-label">Country News</div>
+                  <div class="left-title">{{ selectedCountry.name }} reports</div>
                 </div>
-                <button class="left-link" type="button" (click)="countryTab='stats'">Open stats</button>
               </div>
-              <div class="reel-list" *ngIf="primaryReliefNews.length; else noReels">
-                <article class="reel-item" *ngFor="let item of primaryReliefNews" (click)="openNewsSource(item)">
-                  <div class="reel-meta">
-                    <span class="reel-pill">ReliefWeb</span>
-                    <span>{{ item.source_name || 'ReliefWeb' }}</span>
+              <div class="news-rail-list" *ngIf="primaryReliefNews.length; else noReels">
+                <article class="news-rail-card" *ngFor="let item of primaryReliefNews" (click)="openNewsPage(item)">
+                  <div class="news-rail-media" *ngIf="item.image_url">
+                    <img [src]="item.image_url" [alt]="item.title" />
                   </div>
-                  <div class="reel-title">{{ item.title }}</div>
-                  <div class="reel-copy">{{ item.snippet || 'Tap to open the source report.' }}</div>
+                  <div class="news-rail-meta">
+                    <span>{{ item.source_name || 'ReliefWeb' }}</span>
+                    <span>{{ item.published_at ? (item.published_at | date:'MMM d') : '' }}</span>
+                  </div>
+                  <div class="news-rail-title">{{ item.title }}</div>
+                  <div class="news-rail-copy">{{ item.snippet || 'Open the dedicated news page to read, comment, like, or share it.' }}</div>
+                  <div class="news-rail-footer">
+                    <span>{{ item.comment_count }} comments</span>
+                    <span>{{ item.shared_post_count }} shares</span>
+                  </div>
                 </article>
               </div>
               <ng-template #noReels>
                 <div class="left-empty">No ReliefWeb reports yet for this country.</div>
-              </ng-template>
-            </section>
-
-            <section class="left-card">
-              <div class="left-header">
-                <div>
-                  <div class="left-label">ReliefWeb</div>
-                  <div class="left-title">Country updates</div>
-                </div>
-                <button
-                  class="left-link"
-                  type="button"
-                  *ngIf="countryNews.length"
-                  (click)="countryTab='stats'"
-                >
-                  Open stats
-                </button>
-              </div>
-              <div class="relief-list" *ngIf="secondaryReliefNews.length; else noReliefUpdates">
-                <article class="relief-item" *ngFor="let item of secondaryReliefNews">
-                  <div class="relief-source-row">
-                    <span class="relief-source">{{ item.source_name || 'ReliefWeb' }}</span>
-                    <span class="relief-date">{{ item.published_at ? (item.published_at | date:'MMM d') : '' }}</span>
-                  </div>
-                  <div class="relief-title">{{ item.title }}</div>
-                  <button class="left-link relief-open" type="button" (click)="openNewsSource(item)">Open source</button>
-                </article>
-              </div>
-              <ng-template #noReliefUpdates>
-                <div class="left-empty" *ngIf="newsLoading">Loading ReliefWeb updates...</div>
-                <div class="left-empty" *ngIf="!newsLoading && newsPendingApproval">ReliefWeb updates will appear here when provider access is approved.</div>
-                <div class="left-empty" *ngIf="!newsLoading && !newsPendingApproval && !countryNews.length">No ReliefWeb updates yet.</div>
               </ng-template>
             </section>
           </div>
@@ -875,40 +839,8 @@ type CountryMood = {
                 </div>
                 <div class="stats-card" *ngIf="selectedCountry">
                   <div class="stats-title">Conflict updates</div>
-                  <div class="news-list" *ngIf="countryNews.length">
-                    <div class="news-item" *ngFor="let item of countryNews">
-                      <div class="news-header">
-                        <span class="news-source">{{ item.source_name || 'ReliefWeb' }}</span>
-                        <span class="news-date">{{ item.published_at ? (item.published_at | date:'short') : '' }}</span>
-                      </div>
-                      <div class="news-title">{{ item.title }}</div>
-                      <div class="news-tags" *ngIf="item.disaster_types.length || item.theme_names.length">
-                        <span class="tag" *ngFor="let tag of item.disaster_types.slice(0,3)">{{ tag }}</span>
-                        <span class="tag" *ngFor="let tag of item.theme_names.slice(0,3)">{{ tag }}</span>
-                      </div>
-                      <div class="news-actions">
-                        <button class="btn-link" (click)="openNewsSource(item)">Open source</button>
-                        <button class="btn-link" (click)="toggleNewsComments(item.id)">Comment ({{ item.comment_count }})</button>
-                        <button class="btn-link" (click)="shareNewsToCountry(item.id)">Share to country</button>
-                      </div>
-                      <div class="news-comments" *ngIf="newsCommentOpenById[item.id]">
-                        <div class="comment-list" *ngIf="newsCommentItemsById[item.id]">
-                          <div class="comment" *ngFor="let comment of newsCommentItemsById[item.id]">
-                            <div class="comment-author">{{ comment.author?.display_name || 'Anonymous' }}</div>
-                            <div class="comment-body">{{ comment.body }}</div>
-                          </div>
-                        </div>
-                        <textarea
-                          [(ngModel)]="newsCommentDraftById[item.id]"
-                          placeholder="Add a comment..."
-                          class="comment-input"
-                        ></textarea>
-                        <button class="btn-primary" (click)="addNewsComment(item.id)">Comment</button>
-                      </div>
-                      <div class="news-share-feedback" *ngIf="newsShareFeedbackById[item.id]">
-                        {{ newsShareFeedbackById[item.id] }}
-                      </div>
-                    </div>
+                  <div class="news-summary-card" *ngIf="countryNews.length">
+                    News now lives in the left and right rails so each report has a proper card and its own detail page.
                   </div>
                   <div class="news-loading" *ngIf="newsLoading">Loading updates...</div>
                   <div class="news-empty" *ngIf="newsPendingApproval">
@@ -919,40 +851,8 @@ type CountryMood = {
                 </div>
                 <div class="stats-card" *ngIf="!selectedCountry">
                   <div class="stats-title">Global crisis updates</div>
-                  <div class="news-list" *ngIf="globalNews.length">
-                    <div class="news-item" *ngFor="let item of globalNews.slice(0,5)">
-                      <div class="news-header">
-                        <span class="news-source">{{ item.source_name || 'ReliefWeb' }}</span>
-                        <span class="news-date">{{ item.published_at ? (item.published_at | date:'short') : '' }}</span>
-                      </div>
-                      <div class="news-title">{{ item.title }}</div>
-                      <div class="news-tags" *ngIf="item.disaster_types.length || item.theme_names.length">
-                        <span class="tag" *ngFor="let tag of item.disaster_types.slice(0,3)">{{ tag }}</span>
-                        <span class="tag" *ngFor="let tag of item.theme_names.slice(0,3)">{{ tag }}</span>
-                      </div>
-                      <div class="news-actions">
-                        <button class="btn-link" (click)="openNewsSource(item)">Open source</button>
-                        <button class="btn-link" (click)="toggleNewsComments(item.id)">Comment ({{ item.comment_count }})</button>
-                        <button class="btn-link" (click)="shareNewsToCountry(item.id)">Share to country</button>
-                      </div>
-                      <div class="news-comments" *ngIf="newsCommentOpenById[item.id]">
-                        <div class="comment-list" *ngIf="newsCommentItemsById[item.id]">
-                          <div class="comment" *ngFor="let comment of newsCommentItemsById[item.id]">
-                            <div class="comment-author">{{ comment.author?.display_name || 'Anonymous' }}</div>
-                            <div class="comment-body">{{ comment.body }}</div>
-                          </div>
-                        </div>
-                        <textarea
-                          [(ngModel)]="newsCommentDraftById[item.id]"
-                          placeholder="Add a comment..."
-                          class="comment-input"
-                        ></textarea>
-                        <button class="btn-primary" (click)="addNewsComment(item.id)">Comment</button>
-                      </div>
-                      <div class="news-share-feedback" *ngIf="newsShareFeedbackById[item.id]">
-                        {{ newsShareFeedbackById[item.id] }}
-                      </div>
-                    </div>
+                  <div class="news-summary-card" *ngIf="globalNews.length">
+                    Global reports appear in the side rails when you are focused on a country.
                   </div>
                   <div class="news-loading" *ngIf="newsLoading">Loading updates...</div>
                   <div class="news-empty" *ngIf="newsPendingApproval">
@@ -978,6 +878,43 @@ type CountryMood = {
           </div>
         </div>
       </div>
+
+      <aside class="side-pane" *ngIf="selectedCountry">
+        <div class="map-glass side-glass">
+          <div class="left-rail right-rail">
+            <section class="left-card">
+              <div class="left-header">
+                <div>
+                  <div class="left-label">World Desk</div>
+                  <div class="left-title">ReliefWeb global watch</div>
+                </div>
+              </div>
+              <div class="news-rail-list" *ngIf="secondaryReliefNews.length; else noReliefUpdates">
+                <article class="news-rail-card" *ngFor="let item of secondaryReliefNews" (click)="openNewsPage(item)">
+                  <div class="news-rail-media" *ngIf="item.image_url">
+                    <img [src]="item.image_url" [alt]="item.title" />
+                  </div>
+                  <div class="news-rail-meta">
+                    <span>{{ item.source_name || 'ReliefWeb' }}</span>
+                    <span>{{ item.published_at ? (item.published_at | date:'MMM d') : '' }}</span>
+                  </div>
+                  <div class="news-rail-title">{{ item.title }}</div>
+                  <div class="news-rail-copy">{{ item.snippet || 'Open the dedicated news page to discuss and share it.' }}</div>
+                  <div class="news-rail-footer">
+                    <span>{{ item.like_count }} likes</span>
+                    <span>{{ item.shared_post_count }} shares</span>
+                  </div>
+                </article>
+              </div>
+              <ng-template #noReliefUpdates>
+                <div class="left-empty" *ngIf="newsLoading">Loading ReliefWeb updates...</div>
+                <div class="left-empty" *ngIf="!newsLoading && newsPendingApproval">ReliefWeb updates will appear here when provider access is approved.</div>
+                <div class="left-empty" *ngIf="!newsLoading && !newsPendingApproval && !secondaryReliefNews.length">No ReliefWeb updates yet.</div>
+              </ng-template>
+            </section>
+          </div>
+        </div>
+      </aside>
 
     </div>
 
@@ -1466,7 +1403,7 @@ type CountryMood = {
       padding-bottom: calc(var(--ui-edge-bottom) + var(--tabs-height, 64px));
       box-sizing: border-box;
       display: grid;
-      grid-template-columns: min(420px, 34vw) 1fr;
+      grid-template-columns: minmax(260px, 24vw) minmax(0, 1fr) minmax(260px, 24vw);
       grid-template-rows: minmax(0, 1fr);
       gap: var(--ui-gap);
       min-height: 0;
@@ -1477,17 +1414,17 @@ type CountryMood = {
 
     @media (min-width: 901px){
       .stage.focus{
-        grid-template-columns: min(420px, 34vw) minmax(0, 44vw);
+        grid-template-columns: minmax(280px, 23vw) minmax(0, 44vw) minmax(280px, 23vw);
         justify-content: center;
       }
       .stage.focus.feed-full{
-        grid-template-columns: min(420px, 34vw) minmax(0, 44vw);
+        grid-template-columns: minmax(280px, 23vw) minmax(0, 44vw) minmax(280px, 23vw);
         justify-content: center;
       }
     }
 
     .stage.focus.feed-full{
-      grid-template-columns: min(420px, 34vw) 1fr;
+      grid-template-columns: minmax(280px, 23vw) minmax(0, 44vw) minmax(280px, 23vw);
       grid-template-rows: minmax(0, 1fr);
       padding-top: var(--stage-top-pad);
       padding-left: var(--ui-edge-left);
@@ -1525,13 +1462,7 @@ type CountryMood = {
     .map-glass{
       position: relative;
       height: 100%;
-      border-radius: 22px;
-      border: 1px solid rgba(255,255,255,0.12);
-      background: rgba(10,12,20,0.18);
-      backdrop-filter: blur(10px);
-      box-shadow: 0 30px 90px rgba(0,0,0,0.45);
       overflow: hidden;
-      pointer-events: none;
     }
 
     .stage.focus .globe-bg{
@@ -3786,15 +3717,19 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     }
   }
 
-  private async loadStatsNews(): Promise<void> {
+  private async loadNewsRails(): Promise<void> {
     if (this.newsLoading) return;
     this.newsLoading = true;
     this.newsError = '';
     this.newsPendingApproval = false;
     try {
       if (this.selectedCountry?.code) {
-        this.countryNews = await this.newsService.countryConflictUpdates(this.selectedCountry.code);
-        this.globalNews = [];
+        const [countryNews, globalNews] = await Promise.all([
+          this.newsService.countryConflictUpdates(this.selectedCountry.code),
+          this.newsService.globalConflictUpdates(),
+        ]);
+        this.countryNews = countryNews;
+        this.globalNews = globalNews;
       } else {
         this.globalNews = await this.newsService.globalConflictUpdates();
         this.countryNews = [];
@@ -3914,7 +3849,6 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     }
     if (tab === 'stats') {
       void this.loadMoodStats();
-      void this.loadStatsNews();
     }
     if (!opts?.skipRouteUpdate && this.selectedCountry) this.updateRouteState();
     this.forceUi();
@@ -3978,12 +3912,12 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       setTimeout(() => this.globeService.resize(), 60);
     }
     void this.loadPostsForCountry(country);
+    void this.loadNewsRails();
     if (tab === 'following') {
       void this.loadFollowingFeed();
     }
     if (tab === 'stats') {
       void this.loadMoodStats();
-      void this.loadStatsNews();
     }
 
     if (!opts?.skipRouteUpdate) this.updateRouteState();
@@ -4014,6 +3948,10 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.panel = null;
     this.posts = [];
     this.postsError = '';
+    this.countryNews = [];
+    this.globalNews = [];
+    this.newsError = '';
+    this.newsPendingApproval = false;
     this.postComposerError = '';
     this.postFeedback = '';
     this.newPostBody = '';
@@ -4291,8 +4229,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   get secondaryReliefNews(): ExternalNewsItem[] {
-    const overflow = this.countryNews.slice(4, 8);
-    return overflow.length ? overflow : this.countryNews.slice(0, 4);
+    return this.globalNews.slice(0, 4);
   }
 
   get visibleMediaPosts(): CountryPost[] {
@@ -6372,10 +6309,9 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   // -----------------------------
   // News methods
   // -----------------------------
-  openNewsSource(item: ExternalNewsItem): void {
-    if (item.url) {
-      window.open(item.url, '_blank');
-    }
+  openNewsPage(item: ExternalNewsItem): void {
+    if (!item?.id) return;
+    void this.router.navigate(['/news', item.id]);
   }
 
   toggleNewsComments(newsItemId: string): void {

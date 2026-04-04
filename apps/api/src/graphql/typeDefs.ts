@@ -124,8 +124,21 @@ export const typeDefs = `#graphql
     language: String
     snippet: String
     image_url: String
+    like_count: Int!
+    liked_by_me: Boolean!
     comment_count: Int!
     shared_post_count: Int!
+  }
+
+  type ExternalNewsComment {
+    id: ID!
+    news_item_id: ID!
+    parent_id: ID
+    author_id: ID!
+    body: String!
+    created_at: String!
+    updated_at: String!
+    author: PostAuthor
   }
 
   type Notification {
@@ -351,6 +364,8 @@ export const typeDefs = `#graphql
     postLikes(post_id: ID!, limit: Int): [PostLike!]!
     countryConflictUpdates(country_code: String!, limit: Int, offset: Int): [ExternalNewsItem!]!
     globalConflictUpdates(limit: Int, offset: Int): [ExternalNewsItem!]!
+    externalNewsItem(news_item_id: ID!): ExternalNewsItem
+    externalNewsComments(news_item_id: ID!, limit: Int, before: String): [ExternalNewsComment!]!
     followCounts(user_id: ID!): FollowCounts!
     followingIds: [ID!]!
     isFollowing(user_id: ID!): Boolean!
@@ -400,6 +415,10 @@ export const typeDefs = `#graphql
     addComment(post_id: ID!, body: String!, parent_id: ID): PostComment!
     likeComment(comment_id: ID!): PostComment!
     unlikeComment(comment_id: ID!): PostComment!
+    addExternalNewsComment(news_item_id: ID!, body: String!, parent_id: ID): ExternalNewsComment!
+    likeExternalNews(news_item_id: ID!): ExternalNewsItem!
+    unlikeExternalNews(news_item_id: ID!): ExternalNewsItem!
+    shareExternalNewsToCountry(news_item_id: ID!, body: String, visibility: String): Post!
     reportPost(post_id: ID!, reason: String!): Boolean!
     followUser(target_id: ID!): Boolean!
     unfollowUser(target_id: ID!): Boolean!

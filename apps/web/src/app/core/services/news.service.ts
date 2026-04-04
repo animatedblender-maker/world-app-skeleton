@@ -31,6 +31,8 @@ export class NewsService {
           language
           snippet
           image_url
+          like_count
+          liked_by_me
           comment_count
           shared_post_count
         }
@@ -67,6 +69,8 @@ export class NewsService {
           language
           snippet
           image_url
+          like_count
+          liked_by_me
           comment_count
           shared_post_count
         }
@@ -81,6 +85,42 @@ export class NewsService {
     });
 
     return globalConflictUpdates ?? [];
+  }
+
+  async item(newsItemId: string): Promise<ExternalNewsItem | null> {
+    const query = `
+      query ExternalNewsItem($news_item_id: ID!) {
+        externalNewsItem(news_item_id: $news_item_id) {
+          id
+          provider
+          provider_item_id
+          title
+          url
+          source_name
+          published_at
+          country_codes
+          country_names
+          disaster_types
+          theme_names
+          format
+          language
+          snippet
+          image_url
+          like_count
+          liked_by_me
+          comment_count
+          shared_post_count
+        }
+      }
+    `;
+
+    const { externalNewsItem } = await this.gql.request<{
+      externalNewsItem: ExternalNewsItem | null;
+    }>(query, {
+      news_item_id: newsItemId,
+    });
+
+    return externalNewsItem ?? null;
   }
 
   async comments(
@@ -227,5 +267,77 @@ export class NewsService {
     });
 
     return shareExternalNewsToCountry;
+  }
+
+  async like(newsItemId: string): Promise<ExternalNewsItem> {
+    const mutation = `
+      mutation LikeExternalNews($news_item_id: ID!) {
+        likeExternalNews(news_item_id: $news_item_id) {
+          id
+          provider
+          provider_item_id
+          title
+          url
+          source_name
+          published_at
+          country_codes
+          country_names
+          disaster_types
+          theme_names
+          format
+          language
+          snippet
+          image_url
+          like_count
+          liked_by_me
+          comment_count
+          shared_post_count
+        }
+      }
+    `;
+
+    const { likeExternalNews } = await this.gql.request<{
+      likeExternalNews: ExternalNewsItem;
+    }>(mutation, {
+      news_item_id: newsItemId,
+    });
+
+    return likeExternalNews;
+  }
+
+  async unlike(newsItemId: string): Promise<ExternalNewsItem> {
+    const mutation = `
+      mutation UnlikeExternalNews($news_item_id: ID!) {
+        unlikeExternalNews(news_item_id: $news_item_id) {
+          id
+          provider
+          provider_item_id
+          title
+          url
+          source_name
+          published_at
+          country_codes
+          country_names
+          disaster_types
+          theme_names
+          format
+          language
+          snippet
+          image_url
+          like_count
+          liked_by_me
+          comment_count
+          shared_post_count
+        }
+      }
+    `;
+
+    const { unlikeExternalNews } = await this.gql.request<{
+      unlikeExternalNews: ExternalNewsItem;
+    }>(mutation, {
+      news_item_id: newsItemId,
+    });
+
+    return unlikeExternalNews;
   }
 }
