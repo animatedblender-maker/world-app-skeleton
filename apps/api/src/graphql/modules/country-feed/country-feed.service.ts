@@ -155,11 +155,19 @@ function tokenizeTrendText(value: string | null | undefined): string[] {
   const text = String(value ?? '')
     .toLowerCase()
     .replace(/https?:\/\/\S+/g, ' ')
-    .replace(/[^\p{L}\p{N}#\s-]/gu, ' ')
+    .replace(/[\u0000-\u001f]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   if (!text) return [];
-  return text.split(' ').filter(Boolean);
+  return text
+    .split(' ')
+    .map((token) =>
+      token.replace(
+        /^[^a-z0-9#\u00c0-\u024f\u0370-\u03ff\u0400-\u04ff\u0600-\u06ff]+|[^a-z0-9#\u00c0-\u024f\u0370-\u03ff\u0400-\u04ff\u0600-\u06ff-]+$/gi,
+        ''
+      )
+    )
+    .filter(Boolean);
 }
 
 function formatTrendLabel(word: string): string {
@@ -233,18 +241,21 @@ async function activeLocations(countryCode: string, ttlSeconds: number): Promise
     online_now: number;
   }>(
     `
-    with post_locs as (
+    with combined as (
       select
         nullif(trim(city_name), '') as name,
-        count(*)::int as post_count
+        count(*)::int as post_count,
+        0::int as online_now
       from public.posts
       where upper(coalesce(country_code, '')) = $1
         and created_at > now() - interval '7 days'
       group by 1
-    ),
-    online_locs as (
+
+      union all
+
       select
         nullif(trim(city_name), '') as name,
+        0::int as post_count,
         count(*)::int as online_now
       from public.user_presence
       where upper(coalesce(country_code, '')) = $1
@@ -253,14 +264,13 @@ async function activeLocations(countryCode: string, ttlSeconds: number): Promise
       group by 1
     )
     select
-      coalesce(post_locs.name, online_locs.name) as name,
-      coalesce(post_locs.post_count, 0) as post_count,
-      coalesce(online_locs.online_now, 0) as online_now
-    from post_locs
-    full outer join online_locs
-      on post_locs.name is not distinct from online_locs.name
-    where coalesce(post_locs.name, online_locs.name) is not null
-    order by coalesce(online_locs.online_now, 0) desc, coalesce(post_locs.post_count, 0) desc, coalesce(post_locs.name, online_locs.name) asc
+      name,
+      sum(post_count)::int as post_count,
+      sum(online_now)::int as online_now
+    from combined
+    where name is not null
+    group by name
+    order by sum(online_now) desc, sum(post_count) desc, name asc
     limit 5
     `,
     [countryCode, ttlSeconds]
