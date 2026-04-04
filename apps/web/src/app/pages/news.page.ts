@@ -1,7 +1,8 @@
 import { CommonModule } from '@angular/common';
-import { Component, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
+import { Subscription } from 'rxjs';
 
 import { BottomTabsComponent } from '../components/bottom-tabs.component';
 import type { ExternalNewsComment, ExternalNewsItem } from '../core/models/post.model';
@@ -50,7 +51,7 @@ import { NewsService } from '../core/services/news.service';
           <button class="action" type="button" (click)="toggleComments()">
             {{ commentsOpen ? 'Hide comments' : 'Comments' }} · {{ article.comment_count }}
           </button>
-          <a class="action source" [href]="article.url" target="_blank" rel="noreferrer">Go to source</a>
+          <a class="action source" [href]="sourceUrl(article)" target="_blank" rel="noreferrer">Go to source</a>
         </div>
 
         <div class="share-panel">
@@ -108,6 +109,9 @@ import { NewsService } from '../core/services/news.service';
         color: #16191f;
       }
       .news-shell {
+        height: 100dvh;
+        overflow-y: auto;
+        overflow-x: hidden;
         min-height: 100dvh;
         padding: 92px 18px calc(24px + var(--tabs-safe, 64px));
         display: flex;
@@ -294,7 +298,7 @@ import { NewsService } from '../core/services/news.service';
     `,
   ],
 })
-export class NewsPageComponent implements OnInit {
+export class NewsPageComponent implements OnInit, OnDestroy {
   item: ExternalNewsItem | null = null;
   comments: ExternalNewsComment[] = [];
   loading = true;
@@ -307,6 +311,7 @@ export class NewsPageComponent implements OnInit {
   shareBusy = false;
   shareFeedback = '';
   likeBusy = false;
+  private routeSub?: Subscription;
 
   constructor(
     private route: ActivatedRoute,
@@ -314,26 +319,15 @@ export class NewsPageComponent implements OnInit {
     private newsService: NewsService
   ) {}
 
-  async ngOnInit(): Promise<void> {
-    const id = String(this.route.snapshot.paramMap.get('id') ?? '').trim();
-    if (!id) {
-      this.loading = false;
-      this.error = 'News item not found.';
-      return;
-    }
+  ngOnInit(): void {
+    this.routeSub = this.route.paramMap.subscribe((params) => {
+      const id = String(params.get('id') ?? '').trim();
+      void this.loadArticle(id);
+    });
+  }
 
-    try {
-      this.item = await this.newsService.item(id);
-      if (!this.item) {
-        this.error = 'News item not found.';
-        return;
-      }
-      await this.loadComments();
-    } catch (error: any) {
-      this.error = error?.message ?? 'Failed to load this news item.';
-    } finally {
-      this.loading = false;
-    }
+  ngOnDestroy(): void {
+    this.routeSub?.unsubscribe();
   }
 
   goHome(): void {
@@ -343,6 +337,53 @@ export class NewsPageComponent implements OnInit {
   async loadComments(): Promise<void> {
     if (!this.item) return;
     this.comments = await this.newsService.comments(this.item.id);
+  }
+
+  private getRouteStateItem(expectedId: string): ExternalNewsItem | null {
+    const stateItem = history.state?.newsItem as ExternalNewsItem | undefined;
+    return stateItem?.id === expectedId ? stateItem : null;
+  }
+
+  private async loadArticle(id: string): Promise<void> {
+    this.error = '';
+    this.comments = [];
+    this.commentDraft = '';
+    this.commentError = '';
+    this.shareFeedback = '';
+
+    if (!id) {
+      this.item = null;
+      this.loading = false;
+      this.error = 'News item not found.';
+      return;
+    }
+
+    const stateItem = this.getRouteStateItem(id);
+    if (stateItem) {
+      this.item = stateItem;
+      this.loading = false;
+      void this.loadComments().catch(() => undefined);
+    } else {
+      this.item = null;
+      this.loading = true;
+    }
+
+    try {
+      const freshItem = await this.newsService.item(id);
+      if (!freshItem) {
+        this.item = null;
+        this.error = 'News item not found.';
+        return;
+      }
+      this.item = freshItem;
+      await this.loadComments();
+    } catch (error: any) {
+      if (!this.item) {
+        this.error = error?.message ?? 'Failed to load this news item.';
+      }
+    } finally {
+      this.loading = false;
+    }
   }
 
   toggleComments(): void {
@@ -401,5 +442,17 @@ export class NewsPageComponent implements OnInit {
     } finally {
       this.shareBusy = false;
     }
+  }
+
+  sourceUrl(article: ExternalNewsItem): string {
+    const raw = String(article?.url ?? '').trim();
+    if (/^https?:\/\/api\.reliefweb\.int\/v2\/reports\b/i.test(raw) && article?.provider_item_id) {
+      return `https://reliefweb.int/node/${encodeURIComponent(article.provider_item_id)}`;
+    }
+    if (raw) return raw;
+    if (article?.provider === 'reliefweb' && article?.provider_item_id) {
+      return `https://reliefweb.int/node/${encodeURIComponent(article.provider_item_id)}`;
+    }
+    return '#';
   }
 }

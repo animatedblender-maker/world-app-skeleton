@@ -43,38 +43,21 @@ type ExternalNewsCommentRow = {
   } | null;
 };
 
-type ReliefWebEntity = {
-  id?: number | string;
-  name?: string | null;
-  shortname?: string | null;
-  iso3?: string | null;
-  code?: string | null;
-};
-
-type ReliefWebFields = {
+type SerpApiNewsResult = {
   title?: string | null;
-  body?: string | null;
-  source?: ReliefWebEntity[] | null;
-  country?: ReliefWebEntity[] | null;
-  disaster_type?: ReliefWebEntity[] | null;
-  theme?: ReliefWebEntity[] | null;
-  format?: ReliefWebEntity[] | null;
-  language?: ReliefWebEntity[] | null;
-  date?: {
-    original?: string | null;
-    created?: string | null;
+  link?: string | null;
+  source?: {
+    name?: string | null;
+    icon?: string | null;
   } | null;
-  file?: Array<{ url?: string | null }> | null;
+  date?: string | null;
+  snippet?: string | null;
+  thumbnail?: string | null;
+  image?: string | null;
 };
 
-type ReliefWebReport = {
-  id?: number | string;
-  href?: string | null;
-  fields?: ReliefWebFields | null;
-};
-
-type ReliefWebResponse = {
-  data?: ReliefWebReport[];
+type SerpApiResponse = {
+  news_results?: SerpApiNewsResult[] | null;
 };
 
 type NewsCounts = {
@@ -84,29 +67,19 @@ type NewsCounts = {
   shared_post_count: number;
 };
 
-const RELIEFWEB_API_URL = process.env.RELIEFWEB_API_URL ?? 'https://api.reliefweb.int/v2/reports';
-const RELIEFWEB_APPNAME = (process.env.RELIEFWEB_APPNAME ?? '').trim();
-const RELIEFWEB_TIMEOUT_MS = Number(process.env.RELIEFWEB_TIMEOUT_MS ?? 8000);
-const RELIEFWEB_USER_AGENT =
-  process.env.RELIEFWEB_USER_AGENT ??
-  `Matterya/1.0 (${RELIEFWEB_APPNAME || 'reliefweb-client'})`;
+const SERPAPI_API_URL = process.env.SERPAPI_API_URL ?? 'https://serpapi.com/search.json';
+const SERPAPI_API_KEY = (process.env.SERPAPI_API_KEY ?? '').trim();
+const SERPAPI_TIMEOUT_MS = Number(process.env.SERPAPI_TIMEOUT_MS ?? 8000);
+const SERPAPI_ENGINE = (process.env.SERPAPI_ENGINE ?? 'google_news').trim() || 'google_news';
+const SERPAPI_QUERY = (process.env.SERPAPI_QUERY ?? 'news').trim() || 'news';
+const SERPAPI_GL = (process.env.SERPAPI_GL ?? 'eg').trim().toLowerCase() || 'eg';
+const SERPAPI_HL = (process.env.SERPAPI_HL ?? 'en').trim().toLowerCase() || 'en';
 
-function ensureReliefWebConfigured(): void {
-  if (!RELIEFWEB_APPNAME) {
-    throw new GraphQLError('provider access is not configured: missing RELIEFWEB_APPNAME', {
+function ensureSerpApiConfigured(): void {
+  if (!SERPAPI_API_KEY) {
+    throw new GraphQLError('provider access is not configured: missing SERPAPI_API_KEY', {
       extensions: { code: 'SERVICE_NOT_CONFIGURED' },
     });
-  }
-}
-
-function iso2ToCountryName(countryCode: string): string | null {
-  const code = String(countryCode ?? '').trim().toUpperCase();
-  if (!/^[A-Z]{2}$/.test(code)) return null;
-  try {
-    const display = new Intl.DisplayNames(['en'], { type: 'region' });
-    return display.of(code) ?? null;
-  } catch {
-    return null;
   }
 }
 
@@ -120,43 +93,67 @@ function plainTextSnippet(raw: string | null | undefined, max = 220): string | n
   return `${text.slice(0, max - 1).trim()}…`;
 }
 
-function entityNames(items: ReliefWebEntity[] | null | undefined): string[] {
-  return (items ?? [])
-    .map((item) => String(item?.name ?? item?.shortname ?? '').trim())
-    .filter(Boolean);
+function normalizeArticleUrl(value: string | null | undefined): string {
+  const url = String(value ?? '').trim();
+  return url;
 }
 
-function entityCodes(items: ReliefWebEntity[] | null | undefined): string[] {
-  return (items ?? [])
-    .map((item) => String(item?.iso3 ?? item?.code ?? '').trim().toUpperCase())
-    .filter(Boolean);
+function normalizeGl(value: string | null | undefined): string {
+  const gl = String(value ?? '').trim().toLowerCase();
+  return /^[a-z]{2}$/.test(gl) ? gl : SERPAPI_GL;
 }
 
-function mapReport(report: ReliefWebReport): ExternalNewsItem {
-  const fields = report.fields ?? {};
-  const id = String(report.id ?? '').trim();
-  const href = String(report.href ?? '').trim();
-  const title = String(fields.title ?? 'Untitled ReliefWeb report').trim();
-  const source = fields.source?.[0];
-  const format = fields.format?.[0];
-  const language = fields.language?.[0];
+function countryNameFromCode(countryCode: string): string | null {
+  const code = String(countryCode ?? '').trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(code)) return null;
+  try {
+    const display = new Intl.DisplayNames(['en'], { type: 'region' });
+    return display.of(code) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function articleIdFromUrl(value: string, gl: string): string {
+  return `${normalizeGl(gl)}:${Buffer.from(value, 'utf8').toString('base64url')}`;
+}
+
+function parseArticleId(value: string): { gl: string; urlToken: string } | null {
+  const trimmed = String(value ?? '').trim();
+  const separator = trimmed.indexOf(':');
+  if (separator <= 0) return null;
+  const gl = normalizeGl(trimmed.slice(0, separator));
+  const urlToken = trimmed.slice(separator + 1).trim();
+  if (!urlToken) return null;
+  return { gl, urlToken };
+}
+
+function mapSerpApiResult(result: SerpApiNewsResult, gl: string): ExternalNewsItem | null {
+  const url = normalizeArticleUrl(result.link);
+  if (!url) return null;
+  const title = String(result.title ?? 'Untitled news article').trim() || 'Untitled news article';
+  const normalizedGl = normalizeGl(gl);
+  const id = articleIdFromUrl(url, normalizedGl);
+  const sourceName = String(result.source?.name ?? 'Google News').trim() || 'Google News';
+  const imageUrl = String(result.thumbnail ?? result.image ?? result.source?.icon ?? '').trim() || null;
+  const countryName = countryNameFromCode(normalizedGl) ?? normalizedGl.toUpperCase();
 
   return {
     id,
-    provider: 'reliefweb',
+    provider: 'serpapi',
     provider_item_id: id,
     title,
-    url: href || `https://reliefweb.int/node/${id}`,
-    source_name: source?.shortname || source?.name || 'ReliefWeb',
-    published_at: fields.date?.original || fields.date?.created || null,
-    country_codes: entityCodes(fields.country),
-    country_names: entityNames(fields.country),
-    disaster_types: entityNames(fields.disaster_type),
-    theme_names: entityNames(fields.theme),
-    format: format?.name ?? null,
-    language: language?.code || language?.name || null,
-    snippet: plainTextSnippet(fields.body),
-    image_url: fields.file?.[0]?.url ?? null,
+    url,
+    source_name: sourceName,
+    published_at: String(result.date ?? '').trim() || null,
+    country_codes: [normalizedGl.toUpperCase()],
+    country_names: [countryName],
+    disaster_types: [],
+    theme_names: ['News'],
+    format: 'article',
+    language: SERPAPI_HL,
+    snippet: plainTextSnippet(result.snippet),
+    image_url: imageUrl,
     like_count: 0,
     liked_by_me: false,
     comment_count: 0,
@@ -164,78 +161,54 @@ function mapReport(report: ReliefWebReport): ExternalNewsItem {
   };
 }
 
-async function fetchReliefWebReports(
-  limit: number,
-  offset: number,
-  countryName?: string | null,
-  filter?: Record<string, unknown>
-): Promise<ExternalNewsItem[]> {
-  ensureReliefWebConfigured();
-
-  const payload: Record<string, unknown> = {
-    limit: Math.max(1, Math.min(limit || 10, 20)),
-    offset: Math.max(0, offset || 0),
-    sort: ['date.original:desc'],
-    fields: {
-      include: [
-        'title',
-        'body',
-        'source',
-        'country',
-        'disaster_type',
-        'theme',
-        'format',
-        'language',
-        'date.original',
-        'date.created',
-        'file.url',
-      ],
-    },
-  };
-
-  if (filter) {
-    payload['filter'] = filter;
-  } else if (countryName) {
-    payload['filter'] = {
-      field: 'country',
-      value: [countryName],
-      operator: 'OR',
-    };
-  }
+async function fetchSerpApiNews(limit: number, offset: number, gl = SERPAPI_GL): Promise<ExternalNewsItem[]> {
+  ensureSerpApiConfigured();
+  const safeLimit = Math.max(1, Math.min(limit || 10, 20));
+  const normalizedGl = normalizeGl(gl);
+  const page = Math.floor(Math.max(0, offset || 0) / safeLimit) + 1;
+  const params = new URLSearchParams({
+    engine: SERPAPI_ENGINE,
+    q: SERPAPI_QUERY,
+    gl: normalizedGl,
+    hl: SERPAPI_HL,
+    api_key: SERPAPI_API_KEY,
+    no_cache: 'true',
+    page: String(page),
+  });
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), RELIEFWEB_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), SERPAPI_TIMEOUT_MS);
 
   try {
-    const response = await fetch(`${RELIEFWEB_API_URL}?appname=${encodeURIComponent(RELIEFWEB_APPNAME)}`, {
-      method: 'POST',
+    const response = await fetch(`${SERPAPI_API_URL}?${params.toString()}`, {
+      method: 'GET',
       headers: {
-        'Content-Type': 'application/json',
         Accept: 'application/json',
-        'User-Agent': RELIEFWEB_USER_AGENT,
       },
-      body: JSON.stringify(payload),
       signal: controller.signal,
     });
 
     if (!response.ok) {
       const body = await response.text().catch(() => '');
       throw new GraphQLError(
-        `ReliefWeb request failed (${response.status}). ${body || 'Please verify RELIEFWEB_APPNAME on Render.'}`.trim(),
+        `SerpApi request failed (${response.status}). ${body || 'Please verify SERPAPI_API_KEY on Render.'}`.trim(),
         { extensions: { code: 'UPSTREAM_REQUEST_FAILED' } }
       );
     }
 
-    const json = (await response.json()) as ReliefWebResponse;
-    return (json.data ?? []).map(mapReport);
+    const json = (await response.json()) as SerpApiResponse;
+    const items = (json.news_results ?? [])
+      .map((item) => mapSerpApiResult(item, normalizedGl))
+      .filter((item): item is ExternalNewsItem => !!item);
+    return items.slice(0, safeLimit);
   } catch (error: any) {
     if (error instanceof GraphQLError) throw error;
     if (error?.name === 'AbortError') {
-      throw new GraphQLError('ReliefWeb request timed out.', {
+      throw new GraphQLError('SerpApi request timed out.', {
         extensions: { code: 'UPSTREAM_TIMEOUT' },
       });
     }
-    throw new GraphQLError(error?.message ?? 'Failed to load ReliefWeb updates.', {
+    throw new GraphQLError(error?.message ?? 'Failed to load news updates.', {
       extensions: { code: 'UPSTREAM_REQUEST_FAILED' },
     });
   } finally {
@@ -243,15 +216,12 @@ async function fetchReliefWebReports(
   }
 }
 
-async function fetchReliefWebReportById(newsItemId: string): Promise<ExternalNewsItem | null> {
+async function fetchSerpApiNewsById(newsItemId: string): Promise<ExternalNewsItem | null> {
   const id = String(newsItemId ?? '').trim();
   if (!id) return null;
-  const items = await fetchReliefWebReports(1, 0, null, {
-    field: 'id',
-    value: [id],
-    operator: 'OR',
-  });
-  return items[0] ?? null;
+  const parsed = parseArticleId(id);
+  const items = await fetchSerpApiNews(20, 0, parsed?.gl ?? SERPAPI_GL);
+  return items.find((item) => item.id === id) ?? null;
 }
 
 async function newsCountsById(newsItemIds: string[], viewerId: string | null): Promise<Map<string, NewsCounts>> {
@@ -365,21 +335,19 @@ export class NewsService {
   private posts = new PostsService();
 
   async countryConflictUpdates(countryCode: string, limit = 10, offset = 0, viewerId: string | null = null): Promise<ExternalNewsItem[]> {
-    const countryName = iso2ToCountryName(countryCode);
-    if (!countryName) return [];
-    const items = await fetchReliefWebReports(limit, offset, countryName);
+    const items = await fetchSerpApiNews(limit, offset, countryCode);
     const counts = await newsCountsById(items.map((item) => item.id), viewerId);
     return withCounts(items, counts);
   }
 
   async globalConflictUpdates(limit = 10, offset = 0, viewerId: string | null = null): Promise<ExternalNewsItem[]> {
-    const items = await fetchReliefWebReports(limit, offset);
+    const items = await fetchSerpApiNews(limit, offset);
     const counts = await newsCountsById(items.map((item) => item.id), viewerId);
     return withCounts(items, counts);
   }
 
   async externalNewsItem(newsItemId: string, viewerId: string | null = null): Promise<ExternalNewsItem | null> {
-    const item = await fetchReliefWebReportById(newsItemId);
+    const item = await fetchSerpApiNewsById(newsItemId);
     if (!item) return null;
     const counts = await newsCountsById([item.id], viewerId);
     return withCounts([item], counts)[0] ?? null;
@@ -551,7 +519,7 @@ export class NewsService {
     }
 
     const caption = String(body ?? '').trim();
-    const sourceLine = [item.source_name || 'ReliefWeb', item.url].filter(Boolean).join(' · ');
+    const sourceLine = [item.source_name || 'Google News', item.url].filter(Boolean).join(' · ');
     const postBody = [caption, sourceLine].filter(Boolean).join('\n\n') || sourceLine;
     const mediaUrl = item.image_url || null;
     const mediaType = mediaUrl ? 'image' : 'none';

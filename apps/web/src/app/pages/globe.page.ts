@@ -172,6 +172,14 @@ type CountryMood = {
           </div>
 
           <div class="tabs">
+            <button
+              class="tab mobile-news-toggle"
+              type="button"
+              *ngIf="selectedCountry"
+              (click)="toggleMobileNewsSheet()"
+            >
+              NEWS
+            </button>
             <button class="tab" [class.active]="countryTab==='posts'" (click)="setCountryTab('posts')">POSTS</button>
             <button class="tab" [class.active]="countryTab==='following'" (click)="setCountryTab('following')">FOLLOWING</button>
             <button class="tab" [class.active]="countryTab==='media'" (click)="setCountryTab('media')">MEDIA</button>
@@ -542,7 +550,7 @@ type CountryMood = {
                           </ng-container>
                           <ng-template #mediaGallery>
                             <div class="media-gallery">
-                              <div class="media-strip" (scroll)="onPostMediaScroll(post, $event)">
+                              <div class="media-strip" [id]="postMediaStripId(post)" (scroll)="onPostMediaScroll(post, $event)">
                                 <div class="media-item" *ngFor="let url of mediaUrls; let idx = index">
                                   <app-video-player
                                     *ngIf="mediaTypes[idx] === 'video'"
@@ -564,6 +572,26 @@ type CountryMood = {
                                   />
                                 </div>
                               </div>
+                              <button
+                                class="media-arrow prev"
+                                type="button"
+                                *ngIf="mediaUrls.length > 1"
+                                [disabled]="postMediaIndexValue(post) === 0"
+                                (click)="prevPostMedia(post, $event)"
+                                aria-label="Previous media"
+                              >
+                                ‹
+                              </button>
+                              <button
+                                class="media-arrow next"
+                                type="button"
+                                *ngIf="mediaUrls.length > 1"
+                                [disabled]="postMediaIndexValue(post) >= mediaUrls.length - 1"
+                                (click)="nextPostMedia(post, mediaUrls.length, $event)"
+                                aria-label="Next media"
+                              >
+                                ›
+                              </button>
                               <div class="media-dots">
                                 <span
                                   *ngFor="let _ of mediaUrls; let dotIndex = index"
@@ -915,6 +943,71 @@ type CountryMood = {
           </div>
         </div>
       </aside>
+
+      <div
+        class="mobile-news-backdrop"
+        *ngIf="selectedCountry && mobileNewsSheetOpen"
+        (click)="closeMobileNewsSheet()"
+      ></div>
+
+      <div class="mobile-news-sheet" *ngIf="selectedCountry && mobileNewsSheetOpen">
+        <div class="mobile-news-head">
+          <div class="mobile-news-title">News</div>
+          <button class="mobile-news-close" type="button" (click)="closeMobileNewsSheet()">Close</button>
+        </div>
+
+        <section class="left-card">
+          <div class="left-header">
+            <div>
+              <div class="left-label">Country News</div>
+              <div class="left-title">{{ selectedCountry.name }} reports</div>
+            </div>
+          </div>
+          <div class="news-rail-list" *ngIf="primaryReliefNews.length; else noMobileCountryNews">
+            <article class="news-rail-card" *ngFor="let item of primaryReliefNews" (click)="openNewsPage(item)">
+              <div class="news-rail-media" *ngIf="item.image_url">
+                <img [src]="item.image_url" [alt]="item.title" />
+              </div>
+              <div class="news-rail-meta">
+                <span>{{ item.source_name || 'ReliefWeb' }}</span>
+                <span>{{ item.published_at ? (item.published_at | date:'MMM d') : '' }}</span>
+              </div>
+              <div class="news-rail-title">{{ item.title }}</div>
+              <div class="news-rail-copy">{{ item.snippet || 'Open the dedicated news page to read, comment, like, or share it.' }}</div>
+            </article>
+          </div>
+          <ng-template #noMobileCountryNews>
+            <div class="left-empty">No ReliefWeb reports yet for this country.</div>
+          </ng-template>
+        </section>
+
+        <section class="left-card">
+          <div class="left-header">
+            <div>
+              <div class="left-label">World Desk</div>
+              <div class="left-title">ReliefWeb global watch</div>
+            </div>
+          </div>
+          <div class="news-rail-list" *ngIf="secondaryReliefNews.length; else noMobileWorldNews">
+            <article class="news-rail-card" *ngFor="let item of secondaryReliefNews" (click)="openNewsPage(item)">
+              <div class="news-rail-media" *ngIf="item.image_url">
+                <img [src]="item.image_url" [alt]="item.title" />
+              </div>
+              <div class="news-rail-meta">
+                <span>{{ item.source_name || 'ReliefWeb' }}</span>
+                <span>{{ item.published_at ? (item.published_at | date:'MMM d') : '' }}</span>
+              </div>
+              <div class="news-rail-title">{{ item.title }}</div>
+              <div class="news-rail-copy">{{ item.snippet || 'Open the dedicated news page to discuss and share it.' }}</div>
+            </article>
+          </div>
+          <ng-template #noMobileWorldNews>
+            <div class="left-empty" *ngIf="newsLoading">Loading ReliefWeb updates...</div>
+            <div class="left-empty" *ngIf="!newsLoading && newsPendingApproval">ReliefWeb updates will appear here when provider access is approved.</div>
+            <div class="left-empty" *ngIf="!newsLoading && !newsPendingApproval && !secondaryReliefNews.length">No ReliefWeb updates yet.</div>
+          </ng-template>
+        </section>
+      </div>
 
     </div>
 
@@ -1462,7 +1555,8 @@ type CountryMood = {
     .map-glass{
       position: relative;
       height: 100%;
-      overflow: hidden;
+      overflow-x: hidden;
+      overflow-y: auto;
     }
 
     .stage.focus .globe-bg{
@@ -1593,7 +1687,6 @@ type CountryMood = {
         0 14px 34px rgba(15,23,42,0.12),
         0 0 0 1px rgba(168, 236, 221, 0.34) inset;
     }
-
     .tab-body{
       flex: 1;
       min-height: 0;
@@ -1999,7 +2092,6 @@ type CountryMood = {
       width:100%;
       display:block;
       height:auto;
-      max-height:none;
       object-fit:contain;
       background:#000;
     }
@@ -2897,6 +2989,9 @@ type CountryMood = {
         grid-template-columns: 1fr;
         grid-template-rows: auto minmax(0, 1fr);
       }
+      .map-pane{
+        display:none;
+      }
       .stage.focus.feed-full .main-pane{
         width: 100%;
         margin: 0;
@@ -3118,6 +3213,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   composerMediaMode: 'post' | 'video' | 'reel' = 'post';
   composerMediaError = '';
   postMediaIndex: Record<string, number> = {};
+  mobileNewsSheetOpen = false;
   private mediaUrlsCache = new Map<string, string[]>();
   private mediaTypesCache = new Map<string, Array<'image' | 'video'>>();
   postBusy = false;
@@ -5028,16 +5124,31 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     return `translateX(-${idx * 100}%)`;
   }
 
-  nextPostMedia(post: CountryPost, total: number): void {
+  postMediaStripId(post: CountryPost): string {
+    return `post-media-strip-${post.id}`;
+  }
+
+  private scrollPostMediaTo(post: CountryPost, index: number): void {
+    const strip = document.getElementById(this.postMediaStripId(post));
+    if (!strip) return;
+    const width = strip.clientWidth || 0;
+    strip.scrollTo({ left: width * index, behavior: 'smooth' });
+  }
+
+  nextPostMedia(post: CountryPost, total: number, event?: Event): void {
+    event?.stopPropagation();
     const current = this.postMediaIndexValue(post);
     const next = Math.min(total - 1, current + 1);
     this.postMediaIndex[post.id] = next;
+    this.scrollPostMediaTo(post, next);
   }
 
-  prevPostMedia(post: CountryPost): void {
+  prevPostMedia(post: CountryPost, event?: Event): void {
+    event?.stopPropagation();
     const current = this.postMediaIndexValue(post);
     const next = Math.max(0, current - 1);
     this.postMediaIndex[post.id] = next;
+    this.scrollPostMediaTo(post, next);
   }
 
   onPostVideoTap(post: CountryPost): void {
@@ -6311,7 +6422,18 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   // -----------------------------
   openNewsPage(item: ExternalNewsItem): void {
     if (!item?.id) return;
-    void this.router.navigate(['/news', item.id]);
+    this.mobileNewsSheetOpen = false;
+    void this.router.navigate(['/news', item.id], {
+      state: { newsItem: item },
+    });
+  }
+
+  toggleMobileNewsSheet(): void {
+    this.mobileNewsSheetOpen = !this.mobileNewsSheetOpen;
+  }
+
+  closeMobileNewsSheet(): void {
+    this.mobileNewsSheetOpen = false;
   }
 
   toggleNewsComments(newsItemId: string): void {

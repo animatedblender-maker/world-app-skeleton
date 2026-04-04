@@ -102,21 +102,71 @@ import type { CountryPost } from '../core/models/post.model';
         <ng-container *ngIf="postMediaUrls(post) as mediaUrls">
           <ng-container *ngIf="postMediaTypes(post) as mediaTypes">
             <div class="post-media" *ngIf="mediaUrls.length">
-              <img
-                *ngIf="mediaTypes[0] === 'image'"
-                [src]="mediaUrls[0]"
-                alt="post media"
-              />
-              <app-video-player
-                *ngIf="mediaTypes[0] === 'video'"
-                [src]="mediaUrls[0]"
-                [poster]="post.thumb_url || null"
-                [adPlacement]="postIsReel(post) ? 'reel' : 'video'"
-                [adCountryCode]="post.country_code"
-                [adContentCountryCode]="post.country_code"
-                [adPostId]="post.id"
-                preload="metadata"
-              ></app-video-player>
+              <ng-container *ngIf="mediaUrls.length <= 1; else postGallery">
+                <img
+                  *ngIf="mediaTypes[0] === 'image'"
+                  [src]="mediaUrls[0]"
+                  alt="post media"
+                />
+                <app-video-player
+                  *ngIf="mediaTypes[0] === 'video'"
+                  [src]="mediaUrls[0]"
+                  [poster]="post.thumb_url || null"
+                  [adPlacement]="postIsReel(post) ? 'reel' : 'video'"
+                  [adCountryCode]="post.country_code"
+                  [adContentCountryCode]="post.country_code"
+                  [adPostId]="post.id"
+                  preload="metadata"
+                ></app-video-player>
+              </ng-container>
+              <ng-template #postGallery>
+                <div class="media-gallery">
+                  <div class="media-strip" id="post-page-media-strip" (scroll)="onMediaScroll($event)">
+                    <div class="media-item" *ngFor="let url of mediaUrls; let idx = index">
+                      <app-video-player
+                        *ngIf="mediaTypes[idx] === 'video'"
+                        [src]="url"
+                        [poster]="post.thumb_url || null"
+                        [adPlacement]="postIsReel(post) ? 'reel' : 'video'"
+                        [adCountryCode]="post.country_code"
+                        [adContentCountryCode]="post.country_code"
+                        [adPostId]="post.id"
+                        preload="metadata"
+                      ></app-video-player>
+                      <img
+                        *ngIf="mediaTypes[idx] === 'image'"
+                        [src]="url"
+                        alt="post media"
+                      />
+                    </div>
+                  </div>
+                  <button
+                    class="media-arrow prev"
+                    type="button"
+                    [disabled]="mediaIndex === 0"
+                    (click)="prevMedia($event)"
+                    aria-label="Previous media"
+                  >
+                    ‹
+                  </button>
+                  <button
+                    class="media-arrow next"
+                    type="button"
+                    [disabled]="mediaIndex >= mediaUrls.length - 1"
+                    (click)="nextMedia(mediaUrls.length, $event)"
+                    aria-label="Next media"
+                  >
+                    ›
+                  </button>
+                  <div class="media-dots">
+                    <span
+                      *ngFor="let _ of mediaUrls; let dotIndex = index"
+                      [class.active]="dotIndex === mediaIndex"
+                    ></span>
+                    <span class="media-count">{{ mediaIndex + 1 }}/{{ mediaUrls.length }}</span>
+                  </div>
+                </div>
+              </ng-template>
             </div>
             <div class="post-caption" *ngIf="mediaUrls.length && postCaptionText(post)">
               {{ postCaptionText(post) }}
@@ -320,6 +370,7 @@ import type { CountryPost } from '../core/models/post.model';
         color: rgba(233, 242, 255, 0.8);
       }
       .shared-media {
+        --shared-media-max-height: min(56vh, 680px);
         margin-top: 10px;
         border-radius: 12px;
         overflow: hidden;
@@ -327,8 +378,11 @@ import type { CountryPost } from '../core/models/post.model';
       }
       .shared-media img {
         width: 100%;
+        max-height: var(--shared-media-max-height);
         height: auto;
         display: block;
+        object-fit: contain;
+        margin: 0 auto;
       }
       .shared-video {
         position: relative;
@@ -343,8 +397,11 @@ import type { CountryPost } from '../core/models/post.model';
       }
       .shared-video img {
         width: 100%;
+        max-height: var(--shared-media-max-height);
         height: auto;
         display: block;
+        object-fit: contain;
+        margin: 0 auto;
       }
       .shared-video-tag {
         position: absolute;
@@ -364,6 +421,7 @@ import type { CountryPost } from '../core/models/post.model';
         opacity: 0.9;
       }
       .post-media {
+        --post-media-max-height: min(72vh, 820px);
         margin-top: 14px;
         border-radius: 16px;
         overflow: hidden;
@@ -372,11 +430,108 @@ import type { CountryPost } from '../core/models/post.model';
       .post-media app-video-player {
         display: block;
         width: 100%;
+        max-height: var(--post-media-max-height);
+        --player-max-height: var(--post-media-max-height);
       }
       .post-media img {
         width: 100%;
+        max-height: var(--post-media-max-height);
         height: auto;
         display: block;
+        object-fit: contain;
+        margin: 0 auto;
+      }
+      .media-gallery {
+        position: relative;
+        width: 100%;
+        background: #000;
+        padding-bottom: 34px;
+        box-sizing: border-box;
+      }
+      .media-strip {
+        display: flex;
+        width: 100%;
+        overflow-x: auto;
+        scroll-snap-type: x mandatory;
+        scroll-behavior: smooth;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+      }
+      .media-strip::-webkit-scrollbar {
+        display: none;
+      }
+      .media-item {
+        min-width: 100%;
+        flex: 0 0 100%;
+        scroll-snap-align: center;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 180px;
+      }
+      .media-item app-video-player {
+        display: block;
+        width: 100%;
+      }
+      .media-arrow {
+        position: absolute;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 42px;
+        height: 42px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        background: rgba(0, 0, 0, 0.55);
+        color: #fff;
+        font-size: 28px;
+        line-height: 1;
+        display: grid;
+        place-items: center;
+        z-index: 3;
+        cursor: pointer;
+      }
+      .media-arrow.prev {
+        left: 10px;
+      }
+      .media-arrow.next {
+        right: 10px;
+      }
+      .media-arrow:disabled {
+        opacity: 0.35;
+        cursor: default;
+      }
+      .media-dots {
+        position: absolute;
+        bottom: 10px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 6px;
+        padding: 4px 8px;
+        border-radius: 999px;
+        background: rgba(0, 0, 0, 0.4);
+        z-index: 2;
+        align-items: center;
+      }
+      .media-dots span {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.5);
+        display: inline-block;
+      }
+      .media-dots span.active {
+        background: #fff;
+      }
+      .media-dots .media-count {
+        width: auto;
+        height: auto;
+        border-radius: 12px;
+        padding: 1px 6px;
+        font-size: 10px;
+        font-weight: 800;
+        background: rgba(255, 255, 255, 0.16);
+        color: #fff;
       }
       .post-actions {
         display: flex;
@@ -400,6 +555,7 @@ export class PostPageComponent implements OnInit {
   post: CountryPost | null = null;
   loading = true;
   error = '';
+  mediaIndex = 0;
   private mediaUrlsCache = new Map<string, string[]>();
   private mediaTypesCache = new Map<string, Array<'image' | 'video'>>();
 
@@ -511,6 +667,36 @@ export class PostPageComponent implements OnInit {
       } catch {}
     }
     return false;
+  }
+
+  onMediaScroll(event: Event): void {
+    const target = event?.target as HTMLElement | null;
+    if (!target) return;
+    const width = target.clientWidth || 1;
+    const max = Math.max(0, target.children.length - 1);
+    const idx = Math.round(target.scrollLeft / width);
+    this.mediaIndex = Math.min(Math.max(idx, 0), max);
+  }
+
+  private scrollMediaTo(index: number): void {
+    const strip = document.getElementById('post-page-media-strip');
+    if (!strip) return;
+    const width = strip.clientWidth || 0;
+    strip.scrollTo({ left: width * index, behavior: 'smooth' });
+  }
+
+  nextMedia(total: number, event?: Event): void {
+    event?.stopPropagation();
+    const next = Math.min(total - 1, this.mediaIndex + 1);
+    this.mediaIndex = next;
+    this.scrollMediaTo(next);
+  }
+
+  prevMedia(event?: Event): void {
+    event?.stopPropagation();
+    const next = Math.max(0, this.mediaIndex - 1);
+    this.mediaIndex = next;
+    this.scrollMediaTo(next);
   }
 
   async ngOnInit(): Promise<void> {

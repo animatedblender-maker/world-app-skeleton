@@ -542,7 +542,7 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
                     </ng-container>
                     <ng-template #mediaGallery>
                       <div class="media-gallery">
-                        <div class="media-strip" (scroll)="onPostMediaScroll(post, $event)">
+                        <div class="media-strip" [id]="postMediaStripId(post)" (scroll)="onPostMediaScroll(post, $event)">
                           <div class="media-item" *ngFor="let url of mediaUrls; let idx = index">
                             <app-video-player
                               *ngIf="mediaTypes[idx] === 'video'"
@@ -564,6 +564,26 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
                             />
                           </div>
                         </div>
+                        <button
+                          class="media-arrow prev"
+                          type="button"
+                          *ngIf="mediaUrls.length > 1"
+                          [disabled]="postMediaIndexValue(post) === 0"
+                          (click)="prevPostMedia(post, $event)"
+                          aria-label="Previous media"
+                        >
+                          ‹
+                        </button>
+                        <button
+                          class="media-arrow next"
+                          type="button"
+                          *ngIf="mediaUrls.length > 1"
+                          [disabled]="postMediaIndexValue(post) >= mediaUrls.length - 1"
+                          (click)="nextPostMedia(post, mediaUrls.length, $event)"
+                          aria-label="Next media"
+                        >
+                          ›
+                        </button>
                         <div class="media-dots">
                           <span
                             *ngFor="let _ of mediaUrls; let dotIndex = index"
@@ -1642,12 +1662,20 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
     .shared-title{ margin-top:10px; font-weight:800; font-size:12px; letter-spacing:.06em; text-transform:uppercase; }
     .shared-body{ margin-top:6px; font-size:13px; line-height:1.4; color:rgba(10,12,18,0.8); }
     .shared-media{
+      --shared-media-max-height: min(56vh, 680px);
       margin-top:10px;
       border-radius:12px;
       overflow:hidden;
       background:#000;
     }
-    .shared-media img{ width:100%; height:auto; display:block; }
+    .shared-media img{
+      width:100%;
+      max-height: var(--shared-media-max-height);
+      height:auto;
+      display:block;
+      object-fit:contain;
+      margin:0 auto;
+    }
     .shared-video{
       position:relative;
       display:grid;
@@ -1659,7 +1687,14 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       letter-spacing:.08em;
       text-transform:uppercase;
     }
-    .shared-video img{ width:100%; height:auto; display:block; }
+    .shared-video img{
+      width:100%;
+      max-height: var(--shared-media-max-height);
+      height:auto;
+      display:block;
+      object-fit:contain;
+      margin:0 auto;
+    }
     .shared-video-tag{
       position:absolute;
       right:8px;
@@ -1701,6 +1736,7 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       opacity:0.75;
     }
     .post-media{
+      --post-media-max-height: min(72vh, 820px);
       margin-top:12px;
       margin-left: calc(-1 * var(--post-pad-x));
       margin-right: calc(-1 * var(--post-pad-x));
@@ -1710,15 +1746,21 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       background:#fff;
       width: calc(100% + (var(--post-pad-x) * 2));
     }
-    .post-media app-video-player{ display:block; width:100%; }
+    .post-media app-video-player{
+      display:block;
+      width:100%;
+      max-height: var(--post-media-max-height);
+      --player-max-height: var(--post-media-max-height);
+    }
     .post-media img,
     .post-media video{
       width:100%;
       display:block;
-      max-height:none;
+      max-height: var(--post-media-max-height);
       height:auto;
       object-fit:contain;
       background:#000;
+      margin: 0 auto;
     }
     .media-gallery{
       position:relative;
@@ -1741,8 +1783,35 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       min-width:100%;
       flex:0 0 100%;
       scroll-snap-align: center;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      min-height:180px;
     }
     .media-item app-video-player{ display:block; width:100%; }
+    .media-arrow{
+      position:absolute;
+      top:50%;
+      transform:translateY(-50%);
+      width:42px;
+      height:42px;
+      border-radius:999px;
+      border:1px solid rgba(255,255,255,0.2);
+      background:rgba(0,0,0,0.55);
+      color:#fff;
+      font-size:28px;
+      line-height:1;
+      display:grid;
+      place-items:center;
+      z-index:3;
+      cursor:pointer;
+    }
+    .media-arrow.prev{ left:10px; }
+    .media-arrow.next{ right:10px; }
+    .media-arrow:disabled{
+      opacity:0.35;
+      cursor:default;
+    }
     .media-dots{
       position:absolute;
       bottom:10px;
@@ -2737,16 +2806,31 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     return `translateX(-${idx * 100}%)`;
   }
 
-  nextPostMedia(post: CountryPost, total: number): void {
+  postMediaStripId(post: CountryPost): string {
+    return `profile-post-media-strip-${post.id}`;
+  }
+
+  private scrollPostMediaTo(post: CountryPost, index: number): void {
+    const strip = document.getElementById(this.postMediaStripId(post));
+    if (!strip) return;
+    const width = strip.clientWidth || 0;
+    strip.scrollTo({ left: width * index, behavior: 'smooth' });
+  }
+
+  nextPostMedia(post: CountryPost, total: number, event?: Event): void {
+    event?.stopPropagation();
     const current = this.postMediaIndexValue(post);
     const next = Math.min(total - 1, current + 1);
     this.postMediaIndex[post.id] = next;
+    this.scrollPostMediaTo(post, next);
   }
 
-  prevPostMedia(post: CountryPost): void {
+  prevPostMedia(post: CountryPost, event?: Event): void {
+    event?.stopPropagation();
     const current = this.postMediaIndexValue(post);
     const next = Math.max(0, current - 1);
     this.postMediaIndex[post.id] = next;
+    this.scrollPostMediaTo(post, next);
   }
 
   onPostVideoTap(post: CountryPost): void {
