@@ -457,3 +457,194 @@ html.app-bg-feed{
     height: auto;
   }
 }
+
+app-globe-page .left-rail{
+  min-width:0;
+  min-height:0;
+  height:100%;
+}
+app-globe-page .left-rail{
+  display:grid;
+  gap:14px;
+  align-content:start;
+  height:100%;
+  overflow:auto;
+  padding:18px;
+}
+app-globe-page .map-glass{
+  pointer-events:auto;
+}
+app-globe-page .left-card{
+  position:relative;
+  overflow:hidden;
+  border-radius:26px;
+  padding:18px 18px 20px;
+  background:
+    radial-gradient(circle at top right, rgba(67,197,255,0.16), transparent 42%),
+    linear-gradient(180deg, rgba(255,255,255,0.96), rgba(246,249,252,0.92));
+  border:1px solid rgba(6,22,40,0.08);
+  box-shadow:0 20px 60px rgba(18,34,60,0.08);
+  color:rgba(9,16,28,0.9);
+}
+app-globe-page .left-card::after{
+  content:'';
+  position:absolute;
+  right:-40px;
+  bottom:-40px;
+  width:120px;
+  height:120px;
+  border-radius:50%;
+  background:radial-gradient(circle, rgba(0,166,255,0.10), transparent 68%);
+  pointer-events:none;
+}
+app-globe-page .left-label{
+  font-size:11px;
+  font-weight:900;
+  letter-spacing:0.16em;
+  text-transform:uppercase;
+  color:rgba(28,82,122,0.72);
+}
+app-globe-page .left-title{
+  margin-top:10px;
+  font-size:24px;
+  line-height:1;
+  font-weight:900;
+  letter-spacing:-0.04em;
+}
+app-globe-page .left-copy,
+app-globe-page .left-empty{
+  margin-top:12px;
+  font-size:13px;
+  line-height:1.55;
+  color:rgba(16,24,36,0.68);
+}
+app-globe-page .left-token-cloud{
+  display:grid;
+  grid-template-columns:repeat(2, minmax(0, 1fr));
+  gap:8px;
+  margin-top:14px;
+}
+app-globe-page .left-token{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-height:34px;
+  padding:0 12px;
+  border-radius:16px;
+  background:rgba(10,22,38,0.86);
+  color:rgba(233,246,255,0.95);
+  font-size:12px;
+  font-weight:700;
+  letter-spacing:0.08em;
+  font-family:'JetBrains Mono','SFMono-Regular','Consolas',monospace;
+}
+app-globe-page .left-header{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:12px;
+}
+app-globe-page .left-link{
+  border:0;
+  background:transparent;
+  color:rgba(0,95,145,0.88);
+  font-size:11px;
+  font-weight:900;
+  letter-spacing:0.14em;
+  text-transform:uppercase;
+  cursor:pointer;
+}
+app-globe-page .reel-list,
+app-globe-page .relief-list,
+app-globe-page .left-card-stats{
+  display:grid;
+  gap:10px;
+}
+app-globe-page .reel-item,
+app-globe-page .relief-item,
+app-globe-page .side-stat{
+  border-radius:18px;
+  padding:12px 14px;
+  background:rgba(255,255,255,0.68);
+  border:1px solid rgba(9,20,35,0.08);
+}
+app-globe-page .reel-item{
+  cursor:pointer;
+}
+app-globe-page .reel-meta,
+app-globe-page .relief-source-row{
+  display:flex;
+  justify-content:space-between;
+  gap:10px;
+  align-items:center;
+}
+app-globe-page .reel-pill,
+app-globe-page .relief-source,
+app-globe-page .relief-date{
+  font-size:10px;
+  font-weight:900;
+  letter-spacing:0.14em;
+  text-transform:uppercase;
+  color:rgba(14,44,72,0.62);
+}
+app-globe-page .reel-title,
+app-globe-page .relief-title{
+  margin-top:8px;
+  font-size:15px;
+  line-height:1.35;
+  font-weight:800;
+  color:rgba(7,15,26,0.92);
+}
+app-globe-page .reel-copy{
+  margin-top:6px;
+  font-size:12px;
+  line-height:1.45;
+  color:rgba(16,24,36,0.66);
+}
+app-globe-page .relief-open{
+  margin-top:10px;
+  padding:0;
+}
+app-globe-page .side-stat{
+  align-items:baseline;
+}
+app-globe-page .side-stat span{
+  font-size:12px;
+  letter-spacing:0.12em;
+  text-transform:uppercase;
+  color:rgba(14,44,72,0.6);
+}
+app-globe-page .side-stat strong{
+  font-size:28px;
+  line-height:1;
+  font-weight:900;
+  letter-spacing:-0.05em;
+  color:rgba(7,15,26,0.92);
+}
+app-globe-page .side-presence-row{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  margin-top:12px;
+  flex-wrap:wrap;
+}
+app-globe-page .side-country-pill,
+app-globe-page .side-clock{
+  display:inline-flex;
+  align-items:center;
+  min-height:34px;
+  padding:0 12px;
+  border-radius:999px;
+  font-size:12px;
+  font-weight:800;
+  letter-spacing:0.12em;
+  text-transform:uppercase;
+}
+app-globe-page .side-country-pill{
+  background:rgba(0,162,255,0.14);
+  color:rgba(0,95,145,0.88);
+}
+app-globe-page .side-clock{
+  background:rgba(8,18,30,0.08);
+  color:rgba(16,24,36,0.72);
+}

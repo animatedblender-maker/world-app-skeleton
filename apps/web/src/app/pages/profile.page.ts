@@ -370,7 +370,14 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
               *ngFor="let post of profilePosts; trackBy: trackProfilePostById"
             >
               <div class="post-author">
-                <div class="author-core">
+                <div
+                  class="author-core"
+                  [class.clickable]="!!post.author"
+                  role="button"
+                  tabindex="0"
+                  (click)="openUserProfile(post.author); $event.stopPropagation()"
+                  (keyup.enter)="openUserProfile(post.author); $event.stopPropagation()"
+                >
                   <div class="author-avatar">
                     <img
                       *ngIf="post.author?.avatar_url"
@@ -476,7 +483,14 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
                           {{ (shared.author?.display_name || shared.author?.username || 'User').slice(0, 2).toUpperCase() }}
                         </div>
                       </div>
-                      <div class="shared-info">
+                      <div
+                        class="shared-info"
+                        [class.clickable]="!!shared.author"
+                        role="button"
+                        tabindex="0"
+                        (click)="openUserProfile(shared.author); $event.stopPropagation()"
+                        (keyup.enter)="openUserProfile(shared.author); $event.stopPropagation()"
+                      >
                         <div class="shared-name">{{ shared.author?.display_name || shared.author?.username || 'Member' }}</div>
                         <div class="shared-meta">
                           @{{ shared.author?.username || 'user' }} Â· {{ shared.created_at | date: 'mediumDate' }}
@@ -909,8 +923,8 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
     .card{
       position: relative;
       z-index:1;
-      width: 100%;
-      margin: 0;
+      width: min(60vw, 960px);
+      margin: 0 auto;
       border-radius: 0;
       padding: 0;
       background: transparent;
@@ -1532,6 +1546,9 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       gap:12px;
       flex:1;
     }
+    .author-core.clickable{
+      cursor:pointer;
+    }
     .author-avatar{
       width:48px;
       height:48px;
@@ -1602,6 +1619,9 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
     .shared-card:hover{
       transform:translateY(-1px);
       box-shadow:0 10px 24px rgba(0,0,0,0.12);
+    }
+    .shared-info.clickable{
+      cursor:pointer;
     }
     .shared-author{ display:flex; gap:10px; align-items:center; }
     .shared-avatar{
@@ -1690,6 +1710,7 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       background:#fff;
       width: calc(100% + (var(--post-pad-x) * 2));
     }
+    .post-media app-video-player{ display:block; width:100%; }
     .post-media img,
     .post-media video{
       width:100%;
@@ -1721,6 +1742,7 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       flex:0 0 100%;
       scroll-snap-align: center;
     }
+    .media-item app-video-player{ display:block; width:100%; }
     .media-dots{
       position:absolute;
       bottom:10px;
@@ -2091,13 +2113,13 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       letter-spacing:0.06em;
     }
     @media (max-width: 900px){
-      .card{ padding:20px; }
+      .card{ width:100%; margin:0; padding:20px; }
     }
     @media (max-width: 700px){
       .wrap{
         padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-left)) 20px max(12px, env(safe-area-inset-right));
       }
-      .card{ padding:16px; border-radius:18px; }
+      .card{ width:100%; margin:0; padding:16px; border-radius:18px; }
       .head{
         gap:12px;
         align-items:flex-start;
@@ -3096,9 +3118,9 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
 
       const upload = await this.media.uploadAvatar(uploadFile);
       if (!upload.url) throw new Error('Upload returned no URL.');
+      if (!upload.path) throw new Error('Upload returned no avatar path.');
 
-      // Keep the same logic as profile creation: save the public URL
-      this.draftAvatarUploadUrl = upload.url;
+      this.draftAvatarUploadUrl = upload.path;
       this.draftAvatarUrl = upload.url;
       this.avatarImage = this.draftAvatarUrl;
       if (this.avatarPreviewUrl) {
@@ -3276,10 +3298,15 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
   private normalizeAvatarUrl(url: string | null | undefined): string {
     const raw = String(url || '').trim();
     if (!raw) return '';
-    if (/^https?:\/\//i.test(raw) || raw.startsWith('data:') || raw.startsWith('blob:') || raw.startsWith('/')) {
+    if (raw.startsWith('data:') || raw.startsWith('blob:') || raw.startsWith('/')) {
       return raw;
     }
-    if (raw.includes('/storage/v1/object/')) return raw;
+    const storageMatch = raw.match(/\/storage\/v1\/object\/(?:sign|public)\/avatars\/([^?#]+)/i);
+    if (storageMatch?.[1]) {
+      const normalizedPath = decodeURIComponent(storageMatch[1]).replace(/^\/+/, '');
+      return `${SUPABASE_URL}/storage/v1/object/public/avatars/${normalizedPath}`;
+    }
+    if (/^https?:\/\//i.test(raw)) return raw;
     const normalized = raw.replace(/^\/+/, '');
     return `${SUPABASE_URL}/storage/v1/object/public/avatars/${normalized}`;
   }
@@ -3948,7 +3975,3 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     return '';
   }
 }
-
-
-
-

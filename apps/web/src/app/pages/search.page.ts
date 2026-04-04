@@ -1195,10 +1195,15 @@ export class SearchPageComponent implements OnInit, OnDestroy {
   normalizeAvatarUrl(url: string | null | undefined): string {
     const raw = String(url || '').trim();
     if (!raw) return '';
-    if (/^https?:\/\//i.test(raw) || raw.startsWith('data:') || raw.startsWith('blob:') || raw.startsWith('/')) {
+    if (raw.startsWith('data:') || raw.startsWith('blob:') || raw.startsWith('/')) {
       return raw;
     }
-    if (raw.includes('/storage/v1/object/')) return raw;
+    const storageMatch = raw.match(/\/storage\/v1\/object\/(?:sign|public)\/avatars\/([^?#]+)/i);
+    if (storageMatch?.[1]) {
+      const normalizedPath = decodeURIComponent(storageMatch[1]).replace(/^\/+/, '');
+      return `${SUPABASE_URL}/storage/v1/object/public/avatars/${normalizedPath}`;
+    }
+    if (/^https?:\/\//i.test(raw)) return raw;
     const normalized = raw.replace(/^\/+/, '');
     return `${SUPABASE_URL}/storage/v1/object/public/avatars/${normalized}`;
   }

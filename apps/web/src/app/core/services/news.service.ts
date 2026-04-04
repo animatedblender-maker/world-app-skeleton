@@ -214,14 +214,6 @@ export class NewsService {
             country_name
             country_code
           }
-          external_ref_type
-          external_ref_id
-          link_url
-          link_title
-          link_source_name
-          link_published_at
-          link_image_url
-          link_snippet
         }
       }
     `;

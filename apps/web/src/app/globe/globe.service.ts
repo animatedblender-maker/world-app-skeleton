@@ -536,30 +536,11 @@ export class GlobeService {
   }
 
   private drawProjectiles(ctx: CanvasRenderingContext2D, w: number, h: number, dtMs: number, nowMs: number) {
-    if (!this.viewer || !this.Cesium) return;
-
-    const Cesium = this.Cesium;
-    const occluder = new Cesium.EllipsoidalOccluder(
-      this.viewer.scene.globe.ellipsoid,
-      this.viewer.scene.camera.positionWC
-    );
-    const nodes = this.collectVisibleNodes(occluder, Cesium, w, h);
-
-    this.drawMatrix(ctx, w, h, dtMs, nodes);
-    if (!nodes.length) return;
-
-    // Online users as blue dots.
-    const dotRadius = Math.max(2.2, (this.particleScale || 1) * 1.6);
-    ctx.fillStyle = 'rgba(80, 170, 255, 0.95)';
-    for (const node of nodes) {
-      ctx.beginPath();
-      ctx.arc(node.x, node.y, dotRadius, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    this.drawGlobeConnections(ctx, nodes);
-    this.spawnMessagePacket(nodes, nowMs);
-    this.updateMessagePackets(ctx, dtMs);
+    void ctx;
+    void w;
+    void h;
+    void dtMs;
+    void nowMs;
   }
 
   private ensureMatrixBackdropImage(): void {

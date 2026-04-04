@@ -108,6 +108,26 @@ export const typeDefs = `#graphql
     user: PostAuthor
   }
 
+  type ExternalNewsItem {
+    id: ID!
+    provider: String!
+    provider_item_id: String!
+    title: String!
+    url: String!
+    source_name: String
+    published_at: String
+    country_codes: [String!]!
+    country_names: [String!]!
+    disaster_types: [String!]!
+    theme_names: [String!]!
+    format: String
+    language: String
+    snippet: String
+    image_url: String
+    comment_count: Int!
+    shared_post_count: Int!
+  }
+
   type Notification {
     id: ID!
     user_id: ID!
@@ -329,6 +349,8 @@ export const typeDefs = `#graphql
     postById(post_id: ID!): Post
     commentsByPost(post_id: ID!, limit: Int, before: String): [PostComment!]!
     postLikes(post_id: ID!, limit: Int): [PostLike!]!
+    countryConflictUpdates(country_code: String!, limit: Int, offset: Int): [ExternalNewsItem!]!
+    globalConflictUpdates(limit: Int, offset: Int): [ExternalNewsItem!]!
     followCounts(user_id: ID!): FollowCounts!
     followingIds: [ID!]!
     isFollowing(user_id: ID!): Boolean!

@@ -96,7 +96,7 @@ type CountryMood = {
     </div>
 
       <div class="space-backdrop" aria-hidden="true"></div>
-      <button class="globe-logo" *ngIf="!selectedCountry" type="button" (click)="returnToGlobe()">
+      <button class="globe-logo" type="button" (click)="returnToGlobe()">
         <img src="/logo.png?v=3" alt="Matterya logo" />
       </button>
 
@@ -107,6 +107,72 @@ type CountryMood = {
     <div class="stage" [class.focus]="!!selectedCountry" [class.feed-full]="countryFeedFull">
       <div class="map-pane" *ngIf="selectedCountry">
         <div class="map-glass">
+          <div class="left-rail">
+            <section class="left-card left-card-brand">
+              <div class="left-label">Appname</div>
+              <div class="left-token-cloud">
+                <span class="left-token" *ngFor="let token of desktopRailTokens">{{ token }}</span>
+              </div>
+              <div class="left-copy">
+                Reel RSS feed for {{ selectedCountry.name }} with ReliefWeb signal directly underneath.
+              </div>
+            </section>
+
+            <section class="left-card">
+              <div class="left-header">
+                <div>
+                  <div class="left-label">ReliefWeb RSS Feed</div>
+                  <div class="left-title">{{ selectedCountry.name }} emergency stream</div>
+                </div>
+                <button class="left-link" type="button" (click)="countryTab='stats'">Open stats</button>
+              </div>
+              <div class="reel-list" *ngIf="primaryReliefNews.length; else noReels">
+                <article class="reel-item" *ngFor="let item of primaryReliefNews" (click)="openNewsSource(item)">
+                  <div class="reel-meta">
+                    <span class="reel-pill">ReliefWeb</span>
+                    <span>{{ item.source_name || 'ReliefWeb' }}</span>
+                  </div>
+                  <div class="reel-title">{{ item.title }}</div>
+                  <div class="reel-copy">{{ item.snippet || 'Tap to open the source report.' }}</div>
+                </article>
+              </div>
+              <ng-template #noReels>
+                <div class="left-empty">No ReliefWeb reports yet for this country.</div>
+              </ng-template>
+            </section>
+
+            <section class="left-card">
+              <div class="left-header">
+                <div>
+                  <div class="left-label">ReliefWeb</div>
+                  <div class="left-title">Country updates</div>
+                </div>
+                <button
+                  class="left-link"
+                  type="button"
+                  *ngIf="countryNews.length"
+                  (click)="countryTab='stats'"
+                >
+                  Open stats
+                </button>
+              </div>
+              <div class="relief-list" *ngIf="secondaryReliefNews.length; else noReliefUpdates">
+                <article class="relief-item" *ngFor="let item of secondaryReliefNews">
+                  <div class="relief-source-row">
+                    <span class="relief-source">{{ item.source_name || 'ReliefWeb' }}</span>
+                    <span class="relief-date">{{ item.published_at ? (item.published_at | date:'MMM d') : '' }}</span>
+                  </div>
+                  <div class="relief-title">{{ item.title }}</div>
+                  <button class="left-link relief-open" type="button" (click)="openNewsSource(item)">Open source</button>
+                </article>
+              </div>
+              <ng-template #noReliefUpdates>
+                <div class="left-empty" *ngIf="newsLoading">Loading ReliefWeb updates...</div>
+                <div class="left-empty" *ngIf="!newsLoading && newsPendingApproval">ReliefWeb updates will appear here when provider access is approved.</div>
+                <div class="left-empty" *ngIf="!newsLoading && !newsPendingApproval && !countryNews.length">No ReliefWeb updates yet.</div>
+              </ng-template>
+            </section>
+          </div>
         </div>
       </div>
 
@@ -117,9 +183,6 @@ type CountryMood = {
           <div class="main-head">
             <div class="mh-text">
               <div class="mh-title-row">
-                <button class="feed-logo" type="button" (click)="returnToGlobe()" aria-label="Back to globe">
-                  <img src="/logo.png?v=3" alt="Matterya logo" />
-                </button>
                 <div class="mh-title">COUNTRY FEED</div>
                 <button
                   *ngIf="selectedCountry"
@@ -915,6 +978,7 @@ type CountryMood = {
           </div>
         </div>
       </div>
+
     </div>
 
     <div
@@ -1064,7 +1128,7 @@ type CountryMood = {
       position: fixed;
       top: var(--ui-edge-top);
       left: var(--ui-edge-left);
-      z-index: 6;
+      z-index: 9;
       pointer-events: auto;
       width: var(--node-size);
       height: var(--node-size);
@@ -1411,23 +1475,32 @@ type CountryMood = {
       justify-items: stretch;
     }
 
+    @media (min-width: 901px){
+      .stage.focus{
+        grid-template-columns: min(420px, 34vw) minmax(0, 44vw);
+        justify-content: center;
+      }
+      .stage.focus.feed-full{
+        grid-template-columns: min(420px, 34vw) minmax(0, 44vw);
+        justify-content: center;
+      }
+    }
+
     .stage.focus.feed-full{
-      grid-template-columns: 1fr;
+      grid-template-columns: min(420px, 34vw) 1fr;
       grid-template-rows: minmax(0, 1fr);
       padding-top: var(--stage-top-pad);
-      padding-left: 0;
-      padding-right: 0;
-      gap: 0;
+      padding-left: var(--ui-edge-left);
+      padding-right: var(--ui-edge-right);
+      gap: var(--ui-gap);
       min-height: 0;
-      padding-bottom: 0;
-      height: calc(100vh - var(--stage-top-pad));
+      padding-bottom: calc(var(--ui-edge-bottom) + var(--tabs-height, 64px));
+      height: calc(100vh - var(--stage-top-pad) - var(--tabs-height, 64px));
       background: #f3f5f8;
     }
-      .stage.focus.feed-full .map-pane{
-        display: none;
-      }
       .stage.focus.feed-full .main-pane{
-        width: 100%;
+        width: 44vw;
+        margin: 0 auto;
         background: #f3f5f8;
       }
       .stage.focus.feed-full .main-card{
@@ -1480,7 +1553,7 @@ type CountryMood = {
           padding: 16px;
           --card-pad-x: 16px;
           --feed-top-space: 132px;
-          box-shadow: 0 30px 90px rgba(0,0,0,0.40);
+          box-shadow: none;
           overflow: hidden;
           display:flex;
           flex-direction: column;
@@ -1492,7 +1565,7 @@ type CountryMood = {
 
     .white-card{
       background: rgba(245, 247, 250, 0.92);
-      border: 1px solid rgba(0,0,0,0.08);
+      border: 0;
       backdrop-filter: blur(14px);
       color: rgba(10,12,18,0.90);
     }
@@ -1986,6 +2059,10 @@ type CountryMood = {
       position:relative;
       width: calc(100% + (var(--post-pad-x) * 2));
     }
+    .post-media app-video-player{
+      display:block;
+      width:100%;
+    }
     .post-media img,
     .post-media video{
       width:100%;
@@ -2016,6 +2093,10 @@ type CountryMood = {
       min-width:100%;
       flex:0 0 100%;
       scroll-snap-align: center;
+    }
+    .media-item app-video-player{
+      display:block;
+      width:100%;
     }
     .media-dots{
       position:absolute;
@@ -2885,6 +2966,10 @@ type CountryMood = {
         grid-template-columns: 1fr;
         grid-template-rows: auto minmax(0, 1fr);
       }
+      .stage.focus.feed-full .main-pane{
+        width: 100%;
+        margin: 0;
+      }
       .map-glass{
         height: min(240px, 32vh);
       }
@@ -3023,6 +3108,9 @@ type CountryMood = {
 })
 export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     buildTag = 'v2026-02-07-3';
+  readonly desktopRailAppName = 'matteryacountrynews54gg8VybLPOF0sk5z';
+  readonly desktopRailTokens =
+    this.desktopRailAppName.match(/.{1,6}/g) ?? [this.desktopRailAppName];
   feedHeaderHidden = false;
   private feedLastScrollTop = 0;
   private globalFireworkSeeded = false;
@@ -4190,6 +4278,21 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
 
   get mediaPosts(): CountryPost[] {
     return this.posts.filter((post) => !!post.media_url && post.media_type !== 'none');
+  }
+
+  get featuredReels(): CountryPost[] {
+    return this.posts
+      .filter((post) => !!post.media_url && this.postIsReel(post))
+      .slice(0, 4);
+  }
+
+  get primaryReliefNews(): ExternalNewsItem[] {
+    return this.countryNews.slice(0, 4);
+  }
+
+  get secondaryReliefNews(): ExternalNewsItem[] {
+    const overflow = this.countryNews.slice(4, 8);
+    return overflow.length ? overflow : this.countryNews.slice(0, 4);
   }
 
   get visibleMediaPosts(): CountryPost[] {
@@ -6167,9 +6270,11 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
 
       const r = await this.media.uploadAvatar(cropped);
       const url = (r as any)?.url;
+      const path = (r as any)?.path;
       if (!url) throw new Error('Upload succeeded but returned no URL.');
+      if (!path) throw new Error('Upload succeeded but returned no avatar path.');
 
-      this.draftAvatarUrl = url;
+      this.draftAvatarUrl = path;
       this.preloadImage(url);
 
       this.draftNormX = 0;
@@ -6247,10 +6352,15 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   private normalizeAvatarUrl(url: string | null | undefined): string {
     const raw = String(url || '').trim();
     if (!raw) return '';
-    if (/^https?:\/\//i.test(raw) || raw.startsWith('data:') || raw.startsWith('blob:') || raw.startsWith('/')) {
+    if (raw.startsWith('data:') || raw.startsWith('blob:') || raw.startsWith('/')) {
       return raw;
     }
-    if (raw.includes('/storage/v1/object/')) return raw;
+    const storageMatch = raw.match(/\/storage\/v1\/object\/(?:sign|public)\/avatars\/([^?#]+)/i);
+    if (storageMatch?.[1]) {
+      const normalizedPath = decodeURIComponent(storageMatch[1]).replace(/^\/+/, '');
+      return `${SUPABASE_URL}/storage/v1/object/public/avatars/${normalizedPath}`;
+    }
+    if (/^https?:\/\//i.test(raw)) return raw;
     const normalized = raw.replace(/^\/+/, '');
     return `${SUPABASE_URL}/storage/v1/object/public/avatars/${normalized}`;
   }

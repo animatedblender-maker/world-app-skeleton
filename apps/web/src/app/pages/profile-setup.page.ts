@@ -220,7 +220,7 @@ export class ProfileSetupPageComponent implements OnInit {
 
     try {
       const res = await this.media.uploadAvatar(file);
-      this.avatarUrl = res.url;
+      this.avatarUrl = res.path;
     } catch (err: any) {
       this.msg = `Avatar upload failed: ${err?.message ?? err}`;
     } finally {

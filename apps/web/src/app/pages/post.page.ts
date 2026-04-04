@@ -29,7 +29,13 @@ import type { CountryPost } from '../core/models/post.model';
               {{ (post.author?.display_name || post.author?.username || 'U').slice(0, 2).toUpperCase() }}
             </div>
           </div>
-          <div class="author-meta">
+          <div
+            class="author-meta clickable"
+            role="button"
+            tabindex="0"
+            (click)="openAuthorProfile(post.author, post.author_id)"
+            (keyup.enter)="openAuthorProfile(post.author, post.author_id)"
+          >
             <div class="author-name">{{ post.author?.display_name || post.author?.username || 'Member' }}</div>
             <div class="author-sub">
               {{ post.country_name || post.country_code || '' }}
@@ -59,7 +65,13 @@ import type { CountryPost } from '../core/models/post.model';
                   {{ (shared.author?.display_name || shared.author?.username || 'User').slice(0, 2).toUpperCase() }}
                 </div>
               </div>
-              <div class="shared-info">
+              <div
+                class="shared-info clickable"
+                role="button"
+                tabindex="0"
+                (click)="openAuthorProfile(shared.author, shared.author_id); $event.stopPropagation()"
+                (keyup.enter)="openAuthorProfile(shared.author, shared.author_id); $event.stopPropagation()"
+              >
                 <div class="shared-name">{{ shared.author?.display_name || shared.author?.username || 'Member' }}</div>
                 <div class="shared-meta">
                   @{{ shared.author?.username || 'user' }} Â· {{ shared.created_at | date: 'mediumDate' }}
@@ -209,6 +221,10 @@ import type { CountryPost } from '../core/models/post.model';
         flex: 1;
         min-width: 0;
       }
+      .author-meta.clickable,
+      .shared-info.clickable {
+        cursor: pointer;
+      }
       .author-name {
         font-weight: 700;
       }
@@ -352,6 +368,10 @@ import type { CountryPost } from '../core/models/post.model';
         border-radius: 16px;
         overflow: hidden;
         background: #000;
+      }
+      .post-media app-video-player {
+        display: block;
+        width: 100%;
       }
       .post-media img {
         width: 100%;
@@ -524,6 +544,15 @@ export class PostPageComponent implements OnInit {
 
   openSearch(): void {
     void this.router.navigate(['/search']);
+  }
+
+  openAuthorProfile(
+    author: CountryPost['author'] | null | undefined,
+    fallbackId?: string | null
+  ): void {
+    const slug = fallbackId || author?.user_id || author?.username?.trim();
+    if (!slug) return;
+    void this.router.navigate(['/user', slug]);
   }
 
   openSharedPost(shared: CountryPost, event?: Event): void {

@@ -4,6 +4,9 @@ import { GqlService } from './gql.service';
 import { CountryPost, PostComment, PostLike } from '../models/post.model';
 import { PostEventsService } from './post-events.service';
 import { DemoDatasetService } from './demo-dataset.service';
+import { SUPABASE_URL } from '../../config/supabase.config';
+
+const DICEBEAR_BASE = 'https://api.dicebear.com/7.x/identicon/svg?seed=';
 
 @Injectable({ providedIn: 'root' })
 export class PostsService {
@@ -78,14 +81,6 @@ export class PostsService {
                 country_name
                 country_code
               }
-              external_ref_type
-              external_ref_id
-              link_url
-              link_title
-              link_source_name
-              link_published_at
-              link_image_url
-              link_snippet
             }
           }
           `,
@@ -162,14 +157,6 @@ export class PostsService {
             country_name
             country_code
           }
-          external_ref_type
-          external_ref_id
-          link_url
-          link_title
-          link_source_name
-          link_published_at
-          link_image_url
-          link_snippet
         }
       }
     `;
@@ -240,14 +227,6 @@ export class PostsService {
             country_name
             country_code
           }
-          external_ref_type
-          external_ref_id
-          link_url
-          link_title
-          link_source_name
-          link_published_at
-          link_image_url
-          link_snippet
         }
       }
     `;
@@ -316,14 +295,6 @@ export class PostsService {
             country_name
             country_code
           }
-          external_ref_type
-          external_ref_id
-          link_url
-          link_title
-          link_source_name
-          link_published_at
-          link_image_url
-          link_snippet
         }
       }
     `;
@@ -398,14 +369,6 @@ export class PostsService {
             country_name
             country_code
           }
-          external_ref_type
-          external_ref_id
-          link_url
-          link_title
-          link_source_name
-          link_published_at
-          link_image_url
-          link_snippet
         }
       }
     `;
@@ -492,14 +455,6 @@ export class PostsService {
             country_name
             country_code
           }
-          external_ref_type
-          external_ref_id
-          link_url
-          link_title
-          link_source_name
-          link_published_at
-          link_image_url
-          link_snippet
         }
       }
     `;
@@ -515,14 +470,6 @@ export class PostsService {
       media_url: input.mediaUrl ?? null,
       thumb_url: input.thumbUrl ?? null,
       shared_post_id: input.sharedPostId ?? null,
-      external_ref_type: input.externalRefType ?? null,
-      external_ref_id: input.externalRefId ?? null,
-      link_url: input.linkUrl ?? null,
-      link_title: input.linkTitle ?? null,
-      link_source_name: input.linkSourceName ?? null,
-      link_published_at: input.linkPublishedAt ?? null,
-      link_image_url: input.linkImageUrl ?? null,
-      link_snippet: input.linkSnippet ?? null,
     };
 
     const { createPost } = await this.gql.request<{ createPost: any }>(mutation, {
@@ -992,7 +939,11 @@ export class PostsService {
             user_id: row.author.user_id,
             display_name: row.author.display_name,
             username: row.author.username,
-            avatar_url: row.author.avatar_url,
+            avatar_url: this.resolveAvatarUrl(
+              row.author.avatar_url,
+              row.author.user_id,
+              row.author.username
+            ),
             country_name: row.author.country_name,
             country_code: row.author.country_code,
           }
@@ -1024,7 +975,11 @@ export class PostsService {
             user_id: row.author.user_id,
             display_name: row.author.display_name,
             username: row.author.username,
-            avatar_url: row.author.avatar_url,
+            avatar_url: this.resolveAvatarUrl(
+              row.author.avatar_url,
+              row.author.user_id,
+              row.author.username
+            ),
             country_name: row.author.country_name,
             country_code: row.author.country_code,
           }
@@ -1041,12 +996,43 @@ export class PostsService {
             user_id: row.user.user_id,
             display_name: row.user.display_name,
             username: row.user.username,
-            avatar_url: row.user.avatar_url,
+            avatar_url: this.resolveAvatarUrl(
+              row.user.avatar_url,
+              row.user.user_id,
+              row.user.username
+            ),
             country_name: row.user.country_name,
             country_code: row.user.country_code,
           }
         : null,
     };
+  }
+
+  private resolveAvatarUrl(
+    url: string | null | undefined,
+    userId: string | null | undefined,
+    username: string | null | undefined
+  ): string {
+    const normalized = this.normalizeAvatarUrl(url);
+    if (normalized) return normalized;
+    const seed = String(username || userId || '').trim();
+    return seed ? `${DICEBEAR_BASE}${encodeURIComponent(seed)}` : '';
+  }
+
+  private normalizeAvatarUrl(url: string | null | undefined): string {
+    const raw = String(url || '').trim();
+    if (!raw) return '';
+    if (raw.startsWith('data:') || raw.startsWith('blob:') || raw.startsWith('/')) {
+      return raw;
+    }
+    const storageMatch = raw.match(/\/storage\/v1\/object\/(?:sign|public)\/avatars\/([^?#]+)/i);
+    if (storageMatch?.[1]) {
+      const normalizedPath = decodeURIComponent(storageMatch[1]).replace(/^\/+/, '');
+      return `${SUPABASE_URL}/storage/v1/object/public/avatars/${normalizedPath}`;
+    }
+    if (/^https?:\/\//i.test(raw)) return raw;
+    const normalized = raw.replace(/^\/+/, '');
+    return `${SUPABASE_URL}/storage/v1/object/public/avatars/${normalized}`;
   }
 
   private mergePosts(real: CountryPost[], demo: CountryPost[], limit: number): CountryPost[] {
