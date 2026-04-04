@@ -46,14 +46,19 @@ type ExternalNewsCommentRow = {
 type SerpApiNewsResult = {
   title?: string | null;
   link?: string | null;
-  source?: {
-    name?: string | null;
-    icon?: string | null;
-  } | null;
+  source?:
+    | string
+    | {
+        name?: string | null;
+        icon?: string | null;
+      }
+    | null;
+  source_logo?: string | null;
   date?: string | null;
   snippet?: string | null;
   thumbnail?: string | null;
   image?: string | null;
+  stories?: SerpApiNewsResult[] | null;
 };
 
 type SerpApiResponse = {
@@ -100,6 +105,24 @@ function normalizeArticleUrl(value: string | null | undefined): string {
   return url;
 }
 
+function sourceNameFromResult(source: SerpApiNewsResult['source']): string {
+  if (typeof source === 'string') {
+    const value = source.trim();
+    return value || 'Google News';
+  }
+  const value = String(source?.name ?? '').trim();
+  return value || 'Google News';
+}
+
+function sourceIconFromResult(result: SerpApiNewsResult): string | null {
+  if (typeof result.source === 'object' && result.source?.icon) {
+    const icon = String(result.source.icon).trim();
+    if (icon) return icon;
+  }
+  const logo = String(result.source_logo ?? '').trim();
+  return logo || null;
+}
+
 function normalizeGl(value: string | null | undefined): string {
   const gl = String(value ?? '').trim().toLowerCase();
   return /^[a-z]{2}$/.test(gl) ? gl : SERPAPI_GL;
@@ -136,8 +159,8 @@ function mapSerpApiResult(result: SerpApiNewsResult, gl: string): ExternalNewsIt
   const title = String(result.title ?? 'Untitled news article').trim() || 'Untitled news article';
   const normalizedGl = normalizeGl(gl);
   const id = articleIdFromUrl(url, normalizedGl);
-  const sourceName = String(result.source?.name ?? 'Google News').trim() || 'Google News';
-  const imageUrl = String(result.thumbnail ?? result.image ?? result.source?.icon ?? '').trim() || null;
+  const sourceName = sourceNameFromResult(result.source);
+  const imageUrl = String(result.thumbnail ?? result.image ?? sourceIconFromResult(result) ?? '').trim() || null;
   const countryName = countryNameFromCode(normalizedGl) ?? normalizedGl.toUpperCase();
 
   return {
@@ -161,6 +184,26 @@ function mapSerpApiResult(result: SerpApiNewsResult, gl: string): ExternalNewsIt
     comment_count: 0,
     shared_post_count: 0,
   };
+}
+
+function flattenSerpApiResults(items: SerpApiNewsResult[] | null | undefined): SerpApiNewsResult[] {
+  const flattened: SerpApiNewsResult[] = [];
+  for (const item of items ?? []) {
+    const directLink = normalizeArticleUrl(item?.link);
+    if (directLink) {
+      flattened.push(item);
+    }
+    for (const story of item?.stories ?? []) {
+      if (normalizeArticleUrl(story?.link)) {
+        flattened.push({
+          ...story,
+          thumbnail: story.thumbnail ?? item.thumbnail ?? item.image ?? null,
+          image: story.image ?? item.image ?? null,
+        });
+      }
+    }
+  }
+  return flattened;
 }
 
 async function fetchSerpApiNews(limit: number, offset: number, gl = SERPAPI_GL): Promise<ExternalNewsItem[]> {
@@ -200,7 +243,7 @@ async function fetchSerpApiNews(limit: number, offset: number, gl = SERPAPI_GL):
     }
 
     const json = (await response.json()) as SerpApiResponse;
-    const rawItems = json.news_results ?? json.top_stories ?? [];
+    const rawItems = flattenSerpApiResults([...(json.news_results ?? []), ...(json.top_stories ?? [])]);
     const items = rawItems
       .map((item) => mapSerpApiResult(item, normalizedGl))
       .filter((item): item is ExternalNewsItem => !!item);
