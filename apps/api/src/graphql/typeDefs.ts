@@ -326,6 +326,60 @@ export const typeDefs = `#graphql
     computed_at: String!
   }
 
+  type TrendTopic {
+    label: String!
+    post_count: Int!
+  }
+
+  type LocationActivity {
+    name: String!
+    post_count: Int!
+    online_now: Int!
+  }
+
+  type CountryPulse {
+    country_code: String!
+    trending: [TrendTopic!]!
+    mood: CountryMood!
+    active_locations: [LocationActivity!]!
+  }
+
+  type CountryRecommendation {
+    kind: String!
+    label: String!
+    reason: String!
+    user_id: ID
+    username: String
+    avatar_url: String
+  }
+
+  type ForeignPresenceCountry {
+    country_code: String!
+    country_name: String!
+    online_now: Int!
+    posts_last_24h: Int!
+    score: Int!
+  }
+
+  type LocalForeignPresence {
+    local_online_now: Int!
+    foreign_online_now: Int!
+    local_posts_last_24h: Int!
+    foreign_posts_last_24h: Int!
+    top_foreign_countries: [ForeignPresenceCountry!]!
+  }
+
+  type CountryIntelligence {
+    country_code: String!
+    country_name: String
+    online_now: Int!
+    total_users: Int!
+    posts_last_24h: Int!
+    insight_summary: String!
+    recommendations: [CountryRecommendation!]!
+    presence: LocalForeignPresence!
+  }
+
   type HeartbeatResult {
     ok: Boolean!
     ttlSeconds: Int!
@@ -354,6 +408,8 @@ export const typeDefs = `#graphql
     # Mood / Trends
     globalMood: CountryMood!
     countryMood(country_code: String!): CountryMood!
+    countryPulse(country_code: String!): CountryPulse!
+    countryIntelligence(country_code: String!): CountryIntelligence!
 
     # Posts / social
     postsByCountry(country_code: String!, limit: Int): [Post!]!

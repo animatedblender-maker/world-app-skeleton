@@ -7,6 +7,7 @@ import { followsResolvers } from './modules/follows/follows.resolver.js';
 import { notificationsResolvers } from './modules/notifications/notifications.resolver.js';
 import { messagesResolvers } from './modules/messages/messages.resolver.js';
 import { insightsResolvers } from './modules/insights/insights.resolver.js';
+import { countryFeedResolvers } from './modules/country-feed/country-feed.resolver.js';
 import { adsResolvers } from './modules/ads/ads.resolver.js';
 import { newsResolvers } from './modules/news/news.resolver.js';
 
@@ -62,6 +63,7 @@ export const resolvers = {
     ...(notificationsResolvers.Query ?? {}),
     ...(messagesResolvers.Query ?? {}),
     ...(insightsResolvers.Query ?? {}),
+    ...(countryFeedResolvers.Query ?? {}),
     ...(adsResolvers.Query ?? {}),
     ...(newsResolvers.Query ?? {}),
   },

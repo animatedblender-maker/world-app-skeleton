@@ -21,7 +21,6 @@ import { FollowService } from '../core/services/follow.service';
 import { NotificationsService, type NotificationItem } from '../core/services/notifications.service';
 import { NotificationEventsService } from '../core/services/notification-events.service';
 import { PushService } from '../core/services/push.service';
-import { NewsService } from '../core/services/news.service';
 import { SUPABASE_URL } from '../config/supabase.config';
 import {
   PostEventsService,
@@ -33,8 +32,6 @@ import {
   CountryPost,
   PostComment,
   PostLike,
-  ExternalNewsItem,
-  ExternalNewsComment,
 } from '../core/models/post.model';
 
 type Panel = 'presence' | 'posts' | 'notifications' | null;
@@ -54,6 +51,53 @@ type CountryMood = {
   topics: string[];
   insight: string;
   computed_at: string;
+};
+type TrendTopic = {
+  label: string;
+  post_count: number;
+};
+type LocationActivity = {
+  name: string;
+  post_count: number;
+  online_now: number;
+};
+type CountryPulseData = {
+  country_code: string;
+  trending: TrendTopic[];
+  mood: CountryMood;
+  active_locations: LocationActivity[];
+};
+type CountryRecommendation = {
+  kind: string;
+  label: string;
+  reason: string;
+  user_id?: string | null;
+  username?: string | null;
+  avatar_url?: string | null;
+};
+type ForeignPresenceCountry = {
+  country_code: string;
+  country_name: string;
+  online_now: number;
+  posts_last_24h: number;
+  score: number;
+};
+type LocalForeignPresence = {
+  local_online_now: number;
+  foreign_online_now: number;
+  local_posts_last_24h: number;
+  foreign_posts_last_24h: number;
+  top_foreign_countries: ForeignPresenceCountry[];
+};
+type CountryIntelligenceData = {
+  country_code: string;
+  country_name?: string | null;
+  online_now: number;
+  total_users: number;
+  posts_last_24h: number;
+  insight_summary: string;
+  recommendations: CountryRecommendation[];
+  presence: LocalForeignPresence;
 };
 
 @Component({
@@ -111,30 +155,56 @@ type CountryMood = {
             <section class="left-card">
               <div class="left-header">
                 <div>
-                  <div class="left-label">Country News</div>
-                  <div class="left-title">{{ selectedCountry.name }} reports</div>
+                  <div class="left-label">Country Pulse</div>
+                  <div class="left-title">{{ selectedCountry.name }} pulse</div>
                 </div>
               </div>
-              <div class="news-rail-list" *ngIf="primaryReliefNews.length; else noReels">
-                <article class="news-rail-card" *ngFor="let item of primaryReliefNews" (click)="openNewsPage(item)">
-                  <div class="news-rail-media" *ngIf="item.image_url">
-                    <img [src]="item.image_url" [alt]="item.title" />
+              <div class="side-loading" *ngIf="sideDataLoading">Loading country pulse...</div>
+              <div class="side-error" *ngIf="!sideDataLoading && sideDataError">{{ sideDataError }}</div>
+              <ng-container *ngIf="!sideDataLoading && !sideDataError">
+                <div class="side-section">
+                  <div class="side-section-label">Trending Topics</div>
+                  <div class="topic-row" *ngIf="countryPulse?.trending?.length; else noTrends">
+                    <span class="topic-chip" *ngFor="let topic of countryPulse?.trending">
+                      {{ topic.label }}
+                      <small>{{ topic.post_count }}</small>
+                    </span>
                   </div>
-                  <div class="news-rail-meta">
-                    <span>{{ item.source_name || 'ReliefWeb' }}</span>
-                    <span>{{ item.published_at ? (item.published_at | date:'MMM d') : '' }}</span>
+                  <ng-template #noTrends>
+                    <div class="left-empty">Not enough recent posting yet to surface trends.</div>
+                  </ng-template>
+                </div>
+
+                <div class="side-section" *ngIf="countryPulse?.mood as pulseMood">
+                  <div class="side-section-label">Mood Indicator</div>
+                  <div class="mood-bars compact">
+                    <div class="mood-seg positive" [style.width.%]="moodPct(pulseMood,'positive')"></div>
+                    <div class="mood-seg neutral" [style.width.%]="moodPct(pulseMood,'neutral')"></div>
+                    <div class="mood-seg negative" [style.width.%]="moodPct(pulseMood,'negative')"></div>
                   </div>
-                  <div class="news-rail-title">{{ item.title }}</div>
-                  <div class="news-rail-copy">{{ item.snippet || 'Open the dedicated news page to read, comment, like, or share it.' }}</div>
-                  <div class="news-rail-footer">
-                    <span>{{ item.comment_count }} comments</span>
-                    <span>{{ item.shared_post_count }} shares</span>
+                  <div class="mood-legend compact">
+                    <span class="positive">Positive {{ moodPct(pulseMood,'positive') }}%</span>
+                    <span class="neutral">Neutral {{ moodPct(pulseMood,'neutral') }}%</span>
+                    <span class="negative">Negative {{ moodPct(pulseMood,'negative') }}%</span>
                   </div>
-                </article>
-              </div>
-              <ng-template #noReels>
-                <div class="left-empty">No ReliefWeb reports yet for this country.</div>
-              </ng-template>
+                </div>
+
+                <div class="side-section">
+                  <div class="side-section-label">Active Locations</div>
+                  <div class="side-list" *ngIf="countryPulse?.active_locations?.length; else noLocations">
+                    <div class="side-list-row" *ngFor="let location of countryPulse?.active_locations">
+                      <div>
+                        <div class="side-list-title">{{ location.name }}</div>
+                        <div class="side-list-copy">{{ location.post_count }} posts</div>
+                      </div>
+                      <div class="side-badge">{{ location.online_now }} online</div>
+                    </div>
+                  </div>
+                  <ng-template #noLocations>
+                    <div class="left-empty">City activity will show up as people post and come online.</div>
+                  </ng-template>
+                </div>
+              </ng-container>
             </section>
           </div>
         </div>
@@ -172,14 +242,6 @@ type CountryMood = {
           </div>
 
           <div class="tabs">
-            <button
-              class="tab mobile-news-toggle"
-              type="button"
-              *ngIf="selectedCountry"
-              (click)="toggleMobileNewsSheet()"
-            >
-              NEWS
-            </button>
             <button class="tab" [class.active]="countryTab==='posts'" (click)="setCountryTab('posts')">POSTS</button>
             <button class="tab" [class.active]="countryTab==='following'" (click)="setCountryTab('following')">FOLLOWING</button>
             <button class="tab" [class.active]="countryTab==='media'" (click)="setCountryTab('media')">MEDIA</button>
@@ -836,7 +898,7 @@ type CountryMood = {
                     <span class="neutral">Neutral {{ moodPct(globalMood,'neutral') }}%</span>
                     <span class="negative">Negative {{ moodPct(globalMood,'negative') }}%</span>
                   </div>
-                  <div class="topic-row" *ngIf="globalMood.topics?.length">
+                  <div class="topic-row" *ngIf="globalMood.topics.length">
                     <span class="topic-chip" *ngFor="let topic of globalMood.topics">{{ topic }}</span>
                   </div>
                   <div class="mood-insight" *ngIf="globalMood.insight">{{ globalMood.insight }}</div>
@@ -860,34 +922,41 @@ type CountryMood = {
                     <span class="neutral">Neutral {{ moodPct(localMood,'neutral') }}%</span>
                     <span class="negative">Negative {{ moodPct(localMood,'negative') }}%</span>
                   </div>
-                  <div class="topic-row" *ngIf="localMood.topics?.length">
+                  <div class="topic-row" *ngIf="localMood.topics.length">
                     <span class="topic-chip" *ngFor="let topic of localMood.topics">{{ topic }}</span>
                   </div>
                   <div class="mood-insight" *ngIf="localMood.insight">{{ localMood.insight }}</div>
                 </div>
                 <div class="stats-card" *ngIf="selectedCountry">
-                  <div class="stats-title">Conflict updates</div>
-                  <div class="news-summary-card" *ngIf="countryNews.length">
-                    News now lives in the left and right rails so each report has a proper card and its own detail page.
+                  <div class="stats-title">Country pulse</div>
+                  <div class="stats-row">
+                    <span>Trending topics</span>
+                    <b>{{ countryPulse?.trending?.length ?? 0 }}</b>
                   </div>
-                  <div class="news-loading" *ngIf="newsLoading">Loading updates...</div>
-                  <div class="news-empty" *ngIf="newsPendingApproval">
-                    Live ReliefWeb updates will appear here as soon as provider access is approved.
+                  <div class="stats-row">
+                    <span>Active locations</span>
+                    <b>{{ countryPulse?.active_locations?.length ?? 0 }}</b>
                   </div>
-                  <div class="news-error" *ngIf="newsError && !newsPendingApproval">{{ newsError }}</div>
-                  <div class="news-empty" *ngIf="!newsLoading && !newsError && !newsPendingApproval && !countryNews.length">No recent updates</div>
+                  <div class="topic-row" *ngIf="countryPulse?.trending?.length">
+                    <span class="topic-chip" *ngFor="let topic of countryPulse?.trending | slice:0:4">
+                      {{ topic.label }}
+                    </span>
+                  </div>
+                  <div class="mood-insight" *ngIf="countryIntelligence?.insight_summary">
+                    {{ countryIntelligence?.insight_summary }}
+                  </div>
                 </div>
-                <div class="stats-card" *ngIf="!selectedCountry">
-                  <div class="stats-title">Global crisis updates</div>
-                  <div class="news-summary-card" *ngIf="globalNews.length">
-                    Global reports appear in the side rails when you are focused on a country.
+                <div class="stats-card" *ngIf="selectedCountry && countryIntelligence?.presence as presence">
+                  <div class="stats-title">Local vs foreign presence</div>
+                  <div class="stats-row"><span>Local online now</span><b>{{ presence.local_online_now }}</b></div>
+                  <div class="stats-row"><span>Foreign online now</span><b>{{ presence.foreign_online_now }}</b></div>
+                  <div class="stats-row"><span>Local posts, 24h</span><b>{{ presence.local_posts_last_24h }}</b></div>
+                  <div class="stats-row"><span>Foreign posts, 24h</span><b>{{ presence.foreign_posts_last_24h }}</b></div>
+                  <div class="topic-row" *ngIf="presence.top_foreign_countries.length">
+                    <span class="topic-chip" *ngFor="let place of presence.top_foreign_countries | slice:0:3">
+                      {{ place.country_name || place.country_code }}
+                    </span>
                   </div>
-                  <div class="news-loading" *ngIf="newsLoading">Loading updates...</div>
-                  <div class="news-empty" *ngIf="newsPendingApproval">
-                    Live ReliefWeb updates will appear here as soon as provider access is approved.
-                  </div>
-                  <div class="news-error" *ngIf="newsError && !newsPendingApproval">{{ newsError }}</div>
-                  <div class="news-empty" *ngIf="!newsLoading && !newsError && !newsPendingApproval && !globalNews.length">No recent updates</div>
                 </div>
                 <div class="stats-card">
                   <div class="stats-title">Status</div>
@@ -913,101 +982,95 @@ type CountryMood = {
             <section class="left-card">
               <div class="left-header">
                 <div>
-                  <div class="left-label">World Desk</div>
-                  <div class="left-title">ReliefWeb global watch</div>
+                  <div class="left-label">Country Intelligence</div>
+                  <div class="left-title">{{ selectedCountry.name }} overview</div>
                 </div>
               </div>
-              <div class="news-rail-list" *ngIf="secondaryReliefNews.length; else noReliefUpdates">
-                <article class="news-rail-card" *ngFor="let item of secondaryReliefNews" (click)="openNewsPage(item)">
-                  <div class="news-rail-media" *ngIf="item.image_url">
-                    <img [src]="item.image_url" [alt]="item.title" />
+              <div class="side-loading" *ngIf="sideDataLoading">Loading intelligence...</div>
+              <div class="side-error" *ngIf="!sideDataLoading && sideDataError">{{ sideDataError }}</div>
+              <ng-container *ngIf="!sideDataLoading && !sideDataError && countryIntelligence as intel">
+                <div class="side-section">
+                  <div class="side-section-label">Country Stats</div>
+                  <div class="stats-grid">
+                    <div class="stats-tile">
+                      <span>Online now</span>
+                      <b>{{ intel.online_now }}</b>
+                    </div>
+                    <div class="stats-tile">
+                      <span>Total users</span>
+                      <b>{{ intel.total_users }}</b>
+                    </div>
+                    <div class="stats-tile">
+                      <span>Posts 24h</span>
+                      <b>{{ intel.posts_last_24h }}</b>
+                    </div>
+                    <div class="stats-tile">
+                      <span>Signal</span>
+                      <b>{{ countryPulse?.trending?.length || 0 }}</b>
+                    </div>
                   </div>
-                  <div class="news-rail-meta">
-                    <span>{{ item.source_name || 'ReliefWeb' }}</span>
-                    <span>{{ item.published_at ? (item.published_at | date:'MMM d') : '' }}</span>
+                </div>
+
+                <div class="side-section">
+                  <div class="side-section-label">AI Insight Summary</div>
+                  <div class="insight-card">{{ intel.insight_summary }}</div>
+                </div>
+
+                <div class="side-section">
+                  <div class="side-section-label">Local vs Foreign Presence</div>
+                  <div class="presence-grid">
+                    <div class="presence-stat">
+                      <span>Locals online</span>
+                      <b>{{ intel.presence.local_online_now }}</b>
+                    </div>
+                    <div class="presence-stat">
+                      <span>Foreign online</span>
+                      <b>{{ intel.presence.foreign_online_now }}</b>
+                    </div>
+                    <div class="presence-stat">
+                      <span>Local posts 24h</span>
+                      <b>{{ intel.presence.local_posts_last_24h }}</b>
+                    </div>
+                    <div class="presence-stat">
+                      <span>Foreign posts 24h</span>
+                      <b>{{ intel.presence.foreign_posts_last_24h }}</b>
+                    </div>
                   </div>
-                  <div class="news-rail-title">{{ item.title }}</div>
-                  <div class="news-rail-copy">{{ item.snippet || 'Open the dedicated news page to discuss and share it.' }}</div>
-                  <div class="news-rail-footer">
-                    <span>{{ item.like_count }} likes</span>
-                    <span>{{ item.shared_post_count }} shares</span>
+                  <div class="side-list" *ngIf="intel.presence.top_foreign_countries.length">
+                    <div class="side-list-row" *ngFor="let foreign of intel.presence.top_foreign_countries">
+                      <div>
+                        <div class="side-list-title">{{ foreign.country_name }}</div>
+                        <div class="side-list-copy">{{ foreign.online_now }} online · {{ foreign.posts_last_24h }} posts</div>
+                      </div>
+                      <div class="side-badge">{{ foreign.score }}</div>
+                    </div>
                   </div>
-                </article>
-              </div>
-              <ng-template #noReliefUpdates>
-                <div class="left-empty" *ngIf="newsLoading">Loading ReliefWeb updates...</div>
-                <div class="left-empty" *ngIf="!newsLoading && newsPendingApproval">ReliefWeb updates will appear here when provider access is approved.</div>
-                <div class="left-empty" *ngIf="!newsLoading && !newsPendingApproval && !secondaryReliefNews.length">No ReliefWeb updates yet.</div>
-              </ng-template>
+                </div>
+
+                <div class="side-section">
+                  <div class="side-section-label">Recommendations</div>
+                  <div class="side-list" *ngIf="intel.recommendations.length; else noRecs">
+                    <div class="side-list-row" *ngFor="let rec of intel.recommendations">
+                      <div class="rec-ident">
+                        <img *ngIf="rec.avatar_url" [src]="rec.avatar_url" [alt]="rec.label" class="rec-avatar" />
+                        <div class="rec-avatar fallback" *ngIf="!rec.avatar_url">{{ rec.label.slice(0,1).toUpperCase() }}</div>
+                        <div>
+                          <div class="side-list-title">{{ rec.label }}</div>
+                          <div class="side-list-copy">{{ rec.reason }}</div>
+                        </div>
+                      </div>
+                      <button class="side-link" type="button" *ngIf="rec.username" (click)="openUserProfile(rec.username!); $event.stopPropagation()">View</button>
+                    </div>
+                  </div>
+                  <ng-template #noRecs>
+                    <div class="left-empty">Recommendations will appear as more people participate here.</div>
+                  </ng-template>
+                </div>
+              </ng-container>
             </section>
           </div>
         </div>
       </aside>
-
-      <div
-        class="mobile-news-backdrop"
-        *ngIf="selectedCountry && mobileNewsSheetOpen"
-        (click)="closeMobileNewsSheet()"
-      ></div>
-
-      <div class="mobile-news-sheet" *ngIf="selectedCountry && mobileNewsSheetOpen">
-        <div class="mobile-news-head">
-          <div class="mobile-news-title">News</div>
-          <button class="mobile-news-close" type="button" (click)="closeMobileNewsSheet()">Close</button>
-        </div>
-
-        <section class="left-card">
-          <div class="left-header">
-            <div>
-              <div class="left-label">Country News</div>
-              <div class="left-title">{{ selectedCountry.name }} reports</div>
-            </div>
-          </div>
-          <div class="news-rail-list" *ngIf="primaryReliefNews.length; else noMobileCountryNews">
-            <article class="news-rail-card" *ngFor="let item of primaryReliefNews" (click)="openNewsPage(item)">
-              <div class="news-rail-media" *ngIf="item.image_url">
-                <img [src]="item.image_url" [alt]="item.title" />
-              </div>
-              <div class="news-rail-meta">
-                <span>{{ item.source_name || 'ReliefWeb' }}</span>
-                <span>{{ item.published_at ? (item.published_at | date:'MMM d') : '' }}</span>
-              </div>
-              <div class="news-rail-title">{{ item.title }}</div>
-              <div class="news-rail-copy">{{ item.snippet || 'Open the dedicated news page to read, comment, like, or share it.' }}</div>
-            </article>
-          </div>
-          <ng-template #noMobileCountryNews>
-            <div class="left-empty">No ReliefWeb reports yet for this country.</div>
-          </ng-template>
-        </section>
-
-        <section class="left-card">
-          <div class="left-header">
-            <div>
-              <div class="left-label">World Desk</div>
-              <div class="left-title">ReliefWeb global watch</div>
-            </div>
-          </div>
-          <div class="news-rail-list" *ngIf="secondaryReliefNews.length; else noMobileWorldNews">
-            <article class="news-rail-card" *ngFor="let item of secondaryReliefNews" (click)="openNewsPage(item)">
-              <div class="news-rail-media" *ngIf="item.image_url">
-                <img [src]="item.image_url" [alt]="item.title" />
-              </div>
-              <div class="news-rail-meta">
-                <span>{{ item.source_name || 'ReliefWeb' }}</span>
-                <span>{{ item.published_at ? (item.published_at | date:'MMM d') : '' }}</span>
-              </div>
-              <div class="news-rail-title">{{ item.title }}</div>
-              <div class="news-rail-copy">{{ item.snippet || 'Open the dedicated news page to discuss and share it.' }}</div>
-            </article>
-          </div>
-          <ng-template #noMobileWorldNews>
-            <div class="left-empty" *ngIf="newsLoading">Loading ReliefWeb updates...</div>
-            <div class="left-empty" *ngIf="!newsLoading && newsPendingApproval">ReliefWeb updates will appear here when provider access is approved.</div>
-            <div class="left-empty" *ngIf="!newsLoading && !newsPendingApproval && !secondaryReliefNews.length">No ReliefWeb updates yet.</div>
-          </ng-template>
-        </section>
-      </div>
 
     </div>
 
@@ -1500,9 +1563,10 @@ type CountryMood = {
       grid-template-rows: minmax(0, 1fr);
       gap: var(--ui-gap);
       min-height: 0;
-      height: calc(100vh - var(--stage-top-pad) - var(--tabs-height, 64px));
+      height: 100dvh;
       align-items: stretch;
       justify-items: stretch;
+      background: #f3f5f8;
     }
 
     @media (min-width: 901px){
@@ -1525,7 +1589,7 @@ type CountryMood = {
       gap: var(--ui-gap);
       min-height: 0;
       padding-bottom: calc(var(--ui-edge-bottom) + var(--tabs-height, 64px));
-      height: calc(100vh - var(--stage-top-pad) - var(--tabs-height, 64px));
+      height: 100dvh;
       background: #f3f5f8;
     }
       .stage.focus.feed-full .main-pane{
@@ -3172,17 +3236,10 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   localMood: CountryMood | null = null;
   moodLoading = false;
   moodError = '';
-
-  countryNews: ExternalNewsItem[] = [];
-  globalNews: ExternalNewsItem[] = [];
-  newsLoading = false;
-  newsError = '';
-  newsPendingApproval = false;
-  newsCommentOpenById: { [id: string]: boolean } = {};
-  newsCommentItemsById: { [id: string]: ExternalNewsComment[] } = {};
-  newsCommentDraftById: { [id: string]: string } = {};
-  newsShareFeedbackById: { [id: string]: string } = {};
-  newsShareBusyById: { [id: string]: boolean } = {};
+  countryPulse: CountryPulseData | null = null;
+  countryIntelligence: CountryIntelligenceData | null = null;
+  sideDataLoading = false;
+  sideDataError = '';
 
   searchOpen = false;
   userSearchTerm = '';
@@ -3213,7 +3270,6 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   composerMediaMode: 'post' | 'video' | 'reel' = 'post';
   composerMediaError = '';
   postMediaIndex: Record<string, number> = {};
-  mobileNewsSheetOpen = false;
   private mediaUrlsCache = new Map<string, string[]>();
   private mediaTypesCache = new Map<string, Array<'image' | 'video'>>();
   postBusy = false;
@@ -3366,7 +3422,6 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     private notificationsService: NotificationsService,
     private notificationEvents: NotificationEventsService,
     private push: PushService,
-    private newsService: NewsService,
     private zone: NgZone,
     private cdr: ChangeDetectorRef
   ) {}
@@ -3813,48 +3868,63 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     }
   }
 
-  private async loadNewsRails(): Promise<void> {
-    if (this.newsLoading) return;
-    this.newsLoading = true;
-    this.newsError = '';
-    this.newsPendingApproval = false;
+  private async loadCountryColumns(): Promise<void> {
+    const code = String(this.selectedCountry?.code ?? '').trim().toUpperCase();
+    if (!code || this.sideDataLoading) return;
+    this.sideDataLoading = true;
+    this.sideDataError = '';
     try {
-      if (this.selectedCountry?.code) {
-        const [countryNews, globalNews] = await Promise.all([
-          this.newsService.countryConflictUpdates(this.selectedCountry.code),
-          this.newsService.globalConflictUpdates(),
-        ]);
-        this.countryNews = countryNews;
-        this.globalNews = globalNews;
-      } else {
-        this.globalNews = await this.newsService.globalConflictUpdates();
-        this.countryNews = [];
-      }
+      const query = `query CountryColumns($code: String!) {
+        countryPulse(country_code: $code) {
+          country_code
+          trending { label post_count }
+          mood { country_code positive neutral negative total topics insight computed_at }
+          active_locations { name post_count online_now }
+        }
+        countryIntelligence(country_code: $code) {
+          country_code
+          country_name
+          online_now
+          total_users
+          posts_last_24h
+          insight_summary
+          recommendations {
+            kind
+            label
+            reason
+            user_id
+            username
+            avatar_url
+          }
+          presence {
+            local_online_now
+            foreign_online_now
+            local_posts_last_24h
+            foreign_posts_last_24h
+            top_foreign_countries {
+              country_code
+              country_name
+              online_now
+              posts_last_24h
+              score
+            }
+          }
+        }
+      }`;
+      const data = await this.gql.query<{
+        countryPulse: CountryPulseData;
+        countryIntelligence: CountryIntelligenceData;
+      }>(query, { code });
+      this.countryPulse = data.countryPulse ?? null;
+      this.countryIntelligence = data.countryIntelligence ?? null;
     } catch (err: any) {
-      const message = err?.message ?? 'Failed to load news.';
-      if (this.isNewsPendingApprovalError(message)) {
-        this.newsPendingApproval = true;
-        this.newsError = '';
-        this.countryNews = [];
-        this.globalNews = [];
-      } else {
-        this.newsError = message;
-      }
+      this.sideDataError = err?.message ?? 'Failed to load country context.';
     } finally {
-      this.newsLoading = false;
+      this.sideDataLoading = false;
       this.forceUi();
     }
   }
 
-  private isNewsPendingApprovalError(message: string | null | undefined): boolean {
-    const text = String(message ?? '').toLowerCase();
-    return (
-      text.includes('reliefweb_appname') ||
-      text.includes('approved appname') ||
-      text.includes('requires an approved appname') ||
-      text.includes('provider access is not configured')
-    );
-  }
 
   moodPct(mood: CountryMood | null, key: 'positive' | 'neutral' | 'negative'): number {
     if (!mood?.total) return 0;
@@ -4008,7 +4078,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       setTimeout(() => this.globeService.resize(), 60);
     }
     void this.loadPostsForCountry(country);
-    void this.loadNewsRails();
+    void this.loadCountryColumns();
     if (tab === 'following') {
       void this.loadFollowingFeed();
     }
@@ -4044,10 +4114,10 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.panel = null;
     this.posts = [];
     this.postsError = '';
-    this.countryNews = [];
-    this.globalNews = [];
-    this.newsError = '';
-    this.newsPendingApproval = false;
+    this.countryPulse = null;
+    this.countryIntelligence = null;
+    this.sideDataLoading = false;
+    this.sideDataError = '';
     this.postComposerError = '';
     this.postFeedback = '';
     this.newPostBody = '';
@@ -4318,14 +4388,6 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     return this.posts
       .filter((post) => !!post.media_url && this.postIsReel(post))
       .slice(0, 4);
-  }
-
-  get primaryReliefNews(): ExternalNewsItem[] {
-    return this.countryNews.slice(0, 4);
-  }
-
-  get secondaryReliefNews(): ExternalNewsItem[] {
-    return this.globalNews.slice(0, 4);
   }
 
   get visibleMediaPosts(): CountryPost[] {
@@ -5653,6 +5715,12 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     void this.router.navigate(['/user', slug]);
   }
 
+  openUserProfile(slug: string | null | undefined): void {
+    const normalized = String(slug ?? '').trim();
+    if (!normalized) return;
+    void this.router.navigate(['/user', normalized]);
+  }
+
   openReels(post: CountryPost): void {
     if (!post) return;
     const code =
@@ -6417,100 +6485,4 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.zone.run(() => this.cdr.detectChanges());
   }
 
-  // -----------------------------
-  // News methods
-  // -----------------------------
-  openNewsPage(item: ExternalNewsItem): void {
-    if (!item?.id) return;
-    this.mobileNewsSheetOpen = false;
-    void this.router.navigate(['/news', item.id], {
-      state: { newsItem: item },
-    });
-  }
-
-  toggleMobileNewsSheet(): void {
-    this.mobileNewsSheetOpen = !this.mobileNewsSheetOpen;
-  }
-
-  closeMobileNewsSheet(): void {
-    this.mobileNewsSheetOpen = false;
-  }
-
-  toggleNewsComments(newsItemId: string): void {
-    const isOpen = this.newsCommentOpenById[newsItemId];
-    if (isOpen) {
-      this.newsCommentOpenById[newsItemId] = false;
-      this.newsCommentItemsById[newsItemId] = [];
-      this.newsCommentDraftById[newsItemId] = '';
-    } else {
-      this.newsCommentOpenById[newsItemId] = true;
-      if (!this.newsCommentItemsById[newsItemId]) {
-        void this.loadNewsComments(newsItemId);
-      }
-    }
-    this.forceUi();
-  }
-
-  private async loadNewsComments(newsItemId: string): Promise<void> {
-    try {
-      const comments = await this.newsService.comments(newsItemId);
-      this.newsCommentItemsById[newsItemId] = comments || [];
-    } catch (err: any) {
-      console.error('Failed to load news comments:', err);
-    }
-    this.forceUi();
-  }
-
-  async addNewsComment(newsItemId: string): Promise<void> {
-    const body = this.newsCommentDraftById[newsItemId]?.trim();
-    if (!body) return;
-
-    try {
-      const comment = await this.newsService.addComment(newsItemId, body);
-      if (comment) {
-        this.newsCommentItemsById[newsItemId] = [
-          comment,
-          ...(this.newsCommentItemsById[newsItemId] || [])
-        ];
-        this.newsCommentDraftById[newsItemId] = '';
-        const list = this.selectedCountry ? this.countryNews : this.globalNews;
-        const item = list.find((entry) => entry.id === newsItemId);
-        if (item) item.comment_count = Number(item.comment_count ?? 0) + 1;
-      }
-    } catch (err: any) {
-      console.error('Failed to add comment:', err);
-    }
-    this.forceUi();
-  }
-
-  async shareNewsToCountry(newsItemId: string): Promise<void> {
-    if (this.newsShareBusyById[newsItemId]) return;
-    this.newsShareBusyById[newsItemId] = true;
-    this.newsShareFeedbackById[newsItemId] = '';
-    this.forceUi();
-
-    try {
-      const post = await this.newsService.shareToCountry(newsItemId);
-      if (post) {
-        this.newsShareFeedbackById[newsItemId] = 'Shared to your country!';
-        // Optionally add to posts list
-        if (!this.posts.some(existing => existing.id === post.id)) {
-          this.posts = this.sortPostsDesc([post, ...this.posts]);
-        }
-        const list = this.selectedCountry ? this.countryNews : this.globalNews;
-        const item = list.find((entry) => entry.id === newsItemId);
-        if (item) item.shared_post_count = Number(item.shared_post_count ?? 0) + 1;
-      }
-    } catch (err: any) {
-      this.newsShareFeedbackById[newsItemId] = 'Share failed';
-      console.error('Failed to share news:', err);
-    } finally {
-      delete this.newsShareBusyById[newsItemId];
-      this.forceUi();
-      setTimeout(() => {
-        delete this.newsShareFeedbackById[newsItemId];
-        this.forceUi();
-      }, 2000);
-    }
-  }
 }
