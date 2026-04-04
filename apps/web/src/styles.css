@@ -246,7 +246,8 @@ app-globe-page .map-glass{
   min-height: 0;
   display: flex;
   flex-direction: column;
-  overflow-y: auto;
+  height: 100%;
+  overflow-y: hidden;
   overflow-x: hidden;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
@@ -255,11 +256,14 @@ app-globe-page .map-glass{
 
 app-globe-page .left-rail{
   min-width: 0;
-  min-height: max-content;
-  flex: 0 0 auto;
-  max-height: none;
-  height: auto;
-  overflow: visible;
+  min-height: 0;
+  flex: 1 1 auto;
+  max-height: 100%;
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   padding: 12px;
   display: grid;
   gap: 12px;
@@ -397,6 +401,7 @@ app-globe-page .media-arrow:disabled{
 
 app-globe-page .tab-body,
 app-globe-page .map-glass,
+app-globe-page .left-rail,
 app-profile-page .wrap,
 app-news-page .news-shell{
   scrollbar-width: none;
@@ -405,6 +410,7 @@ app-news-page .news-shell{
 
 app-globe-page .tab-body::-webkit-scrollbar,
 app-globe-page .map-glass::-webkit-scrollbar,
+app-globe-page .left-rail::-webkit-scrollbar,
 app-profile-page .wrap::-webkit-scrollbar,
 app-news-page .news-shell::-webkit-scrollbar{
   display: none;

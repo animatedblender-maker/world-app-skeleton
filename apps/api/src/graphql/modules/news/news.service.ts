@@ -58,6 +58,7 @@ type SerpApiNewsResult = {
 
 type SerpApiResponse = {
   news_results?: SerpApiNewsResult[] | null;
+  top_stories?: SerpApiNewsResult[] | null;
 };
 
 type NewsCounts = {
@@ -70,10 +71,11 @@ type NewsCounts = {
 const SERPAPI_API_URL = process.env.SERPAPI_API_URL ?? 'https://serpapi.com/search.json';
 const SERPAPI_API_KEY = (process.env.SERPAPI_API_KEY ?? '').trim();
 const SERPAPI_TIMEOUT_MS = Number(process.env.SERPAPI_TIMEOUT_MS ?? 8000);
-const SERPAPI_ENGINE = (process.env.SERPAPI_ENGINE ?? 'google_news').trim() || 'google_news';
+const SERPAPI_ENGINE = (process.env.SERPAPI_ENGINE ?? 'google').trim() || 'google';
 const SERPAPI_QUERY = (process.env.SERPAPI_QUERY ?? 'news').trim() || 'news';
 const SERPAPI_GL = (process.env.SERPAPI_GL ?? 'eg').trim().toLowerCase() || 'eg';
 const SERPAPI_HL = (process.env.SERPAPI_HL ?? 'en').trim().toLowerCase() || 'en';
+const SERPAPI_TBM = (process.env.SERPAPI_TBM ?? 'nws').trim().toLowerCase() || 'nws';
 
 function ensureSerpApiConfigured(): void {
   if (!SERPAPI_API_KEY) {
@@ -171,6 +173,7 @@ async function fetchSerpApiNews(limit: number, offset: number, gl = SERPAPI_GL):
     q: SERPAPI_QUERY,
     gl: normalizedGl,
     hl: SERPAPI_HL,
+    tbm: SERPAPI_TBM,
     api_key: SERPAPI_API_KEY,
     no_cache: 'true',
     page: String(page),
@@ -197,7 +200,8 @@ async function fetchSerpApiNews(limit: number, offset: number, gl = SERPAPI_GL):
     }
 
     const json = (await response.json()) as SerpApiResponse;
-    const items = (json.news_results ?? [])
+    const rawItems = json.news_results ?? json.top_stories ?? [];
+    const items = rawItems
       .map((item) => mapSerpApiResult(item, normalizedGl))
       .filter((item): item is ExternalNewsItem => !!item);
     return items.slice(0, safeLimit);
