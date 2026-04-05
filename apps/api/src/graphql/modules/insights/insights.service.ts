@@ -250,9 +250,9 @@ async function fetchTexts(countryCode?: string | null): Promise<string[]> {
   whereSql += `${whereSql ? ' and' : ' where'} p.created_at > now() - interval '24 hours'`;
   params.push(MAX_TEXTS);
   const postLimitParam = params.length;
-  const postsRes = await pool.query<{ title: string | null; body: string | null; media_caption: string | null }>(
+  const postsRes = await pool.query<{ title: string | null; body: string | null }>(
     `
-    select p.title, p.body, p.media_caption
+    select p.title, p.body
     from public.posts p
     ${whereSql}
     order by p.created_at desc
@@ -265,8 +265,7 @@ async function fetchTexts(countryCode?: string | null): Promise<string[]> {
   for (const row of postsRes.rows) {
     const title = row.title ? String(row.title).trim() : '';
     const body = String(row.body ?? '').trim();
-    const caption = String(row.media_caption ?? '').trim();
-    const combined = [title, body, caption].filter(Boolean).join(' ').trim();
+    const combined = [title, body].filter(Boolean).join(' ').trim();
     if (combined) texts.push(combined);
   }
   return texts.slice(0, MAX_TEXTS);

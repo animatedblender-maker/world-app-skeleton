@@ -267,7 +267,7 @@ import { CountryPost, PostComment } from '../core/models/post.model';
       }
       .reels-back {
         pointer-events: auto;
-        align-self: flex-end;
+        align-self: flex-start;
         border: 1px solid rgba(255, 255, 255, 0.15);
         background: rgba(10, 12, 18, 0.65);
         color: #fff;
@@ -651,6 +651,45 @@ import { CountryPost, PostComment } from '../core/models/post.model';
         font-size: 12px;
         opacity: 0.7;
         text-align: center;
+      }
+      @media (min-width: 961px) {
+        .reels-root {
+          padding: 24px 0;
+          box-sizing: border-box;
+        }
+        .reels-header {
+          top: 24px;
+          left: 50%;
+          right: auto;
+          width: min(430px, calc(100vw - 48px));
+          transform: translateX(-50%);
+          z-index: 8;
+        }
+        .reels-feed {
+          width: min(430px, calc(100vw - 48px));
+          margin: 0 auto;
+          padding: 84px 0 24px;
+        }
+        .reel {
+          height: calc(100dvh - 48px);
+          min-height: 760px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 0 0 24px;
+          box-sizing: border-box;
+        }
+        .reel-frame {
+          width: 100%;
+          height: 100%;
+          max-height: calc(100dvh - 108px);
+          border-radius: 28px;
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          box-shadow: 0 28px 80px rgba(0, 0, 0, 0.42);
+        }
+        .reel-meta {
+          max-width: min(24vw, 320px);
+        }
       }
       @media (max-width: 720px) {
         .reel-actions {
