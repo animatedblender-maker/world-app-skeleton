@@ -465,6 +465,10 @@ async function recommendations(countryCode: string, viewerId: string | null): Pr
       from public.user_presence up
       where up.is_online = true
         and up.last_seen_at > (now() - interval '90 seconds')
+    ),
+    real_supabase_users as (
+      select au.id as user_id
+      from auth.users au
     )
     select
       pr.user_id,
@@ -479,6 +483,7 @@ async function recommendations(countryCode: string, viewerId: string | null): Pr
       coalesce(f.followers_count, 0)::int as followers_count,
       pr.city_name
     from public.profiles pr
+    join real_supabase_users rsu on rsu.user_id = pr.user_id
     left join recent_posts_7d r7 on r7.author_id = pr.user_id
     left join recent_posts_30d r30 on r30.author_id = pr.user_id
     left join online_locals ol on ol.user_id = pr.user_id

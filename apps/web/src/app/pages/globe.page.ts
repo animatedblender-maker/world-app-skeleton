@@ -1051,8 +1051,8 @@ type CountryIntelligenceData = {
 
                 <div class="side-section">
                   <div class="side-section-label">Suggested People</div>
-                  <div class="side-list" *ngIf="intel.recommendations.length; else noRecs">
-                    <div class="side-list-row" *ngFor="let rec of intel.recommendations">
+                  <div class="side-list" *ngIf="displayRecommendations(intel).length; else noRecs">
+                    <div class="side-list-row" *ngFor="let rec of displayRecommendations(intel)">
                       <div class="rec-ident">
                         <img
                           *ngIf="recommendationAvatarUrl(rec)"
@@ -5834,6 +5834,70 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
 
   recommendationAvatarUrl(rec: CountryRecommendation | null | undefined): string {
     return this.normalizeAvatarUrl(rec?.avatar_url ?? '');
+  }
+
+  private isSupabaseProfileId(value: string | null | undefined): boolean {
+    const trimmed = String(value ?? '').trim();
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(trimmed);
+  }
+
+  private isRealRecommendation(rec: CountryRecommendation | null | undefined): boolean {
+    const userId = String(rec?.user_id ?? '').trim();
+    return this.isSupabaseProfileId(userId);
+  }
+
+  private recommendationPriority(rec: CountryRecommendation | null | undefined): number {
+    if (!rec) return -1;
+    const reason = String(rec.reason ?? '').trim().toLowerCase();
+    let score = this.isRealRecommendation(rec) ? 100 : 0;
+    if (String(rec.username ?? '').trim()) score += 25;
+    if (this.recommendationAvatarUrl(rec)) score += 12;
+    if (reason.includes('online now')) score += 14;
+    if (reason.includes('recent post') || reason.includes('posts this month')) score += 10;
+    if (reason.includes('active in')) score += 8;
+    if (reason.includes('followers on matterya')) score += 4;
+    return score;
+  }
+
+  private sortRecommendations(items: CountryRecommendation[]): CountryRecommendation[] {
+    return [...items].sort((a, b) => {
+      const diff = this.recommendationPriority(b) - this.recommendationPriority(a);
+      if (diff !== 0) return diff;
+      const aLabel = String(a.label ?? '').trim().toLowerCase();
+      const bLabel = String(b.label ?? '').trim().toLowerCase();
+      return aLabel.localeCompare(bLabel);
+    });
+  }
+
+  displayRecommendations(intel: CountryIntelligenceData | null | undefined): CountryRecommendation[] {
+    const items: CountryRecommendation[] = this.sortRecommendations(intel?.recommendations ?? []).slice(0, 4);
+    const seen = new Set<string>();
+    for (const rec of items) {
+      const userId = String(rec?.user_id ?? '').trim();
+      if (userId) seen.add(userId);
+    }
+
+    for (const post of this.posts) {
+      if (items.length >= 4) break;
+      const authorId = String(post?.author_id ?? post?.author?.user_id ?? '').trim();
+      if (!authorId || seen.has(authorId) || authorId === this.meId) continue;
+      if (!this.isSupabaseProfileId(authorId)) continue;
+      if (this.followingIds.has(authorId)) continue;
+      const label = String(post?.author?.display_name ?? post?.author?.username ?? 'Member').trim();
+      const username = String(post?.author?.username ?? '').trim() || null;
+      const avatarUrl = String(post?.author?.avatar_url ?? '').trim() || null;
+      const cityName = String(post?.city_name ?? post?.author?.country_name ?? '').trim();
+      items.push({
+        kind: 'profile',
+        label: label || 'Member',
+        reason: cityName ? `Active in ${cityName}` : 'Active in this country feed',
+        user_id: authorId,
+        username,
+        avatar_url: avatarUrl,
+      });
+      seen.add(authorId);
+    }
+    return this.sortRecommendations(items).slice(0, 4);
   }
 
   handleRecommendationAvatarError(rec: CountryRecommendation | null | undefined): void {
