@@ -584,12 +584,10 @@ export class CountryFeedService {
 
   async countryIntelligence(countryCode: string, viewerId: string | null): Promise<CountryIntelligence> {
     const iso = normalizeCountryCode(countryCode);
-    const [stats, mood, posts24h, presence] = await Promise.all([
-      this.presence.countryStats(iso),
-      getCountryMood(iso),
-      postsLast24h(iso),
-      localForeignPresence(iso, this.presence.getTTL()),
-    ]);
+    const stats = await this.presence.countryStats(iso);
+    const mood = await getCountryMood(iso);
+    const posts24h = await postsLast24h(iso);
+    const presence = await localForeignPresence(iso, this.presence.getTTL());
     let recs: CountryRecommendation[] = [];
     try {
       recs = await recommendations(iso, viewerId);

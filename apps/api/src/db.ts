@@ -18,4 +18,7 @@ export const pool = new Pool({
   connectionString: DATABASE_URL,
   // optional: for Supabase you usually need SSL in production, but local dev varies
   ssl: process.env.PGSSLMODE === 'require' ? { rejectUnauthorized: false } : undefined,
+  max: Number(process.env.DB_POOL_MAX ?? 4),
+  idleTimeoutMillis: Number(process.env.DB_IDLE_TIMEOUT_MS ?? 10000),
+  connectionTimeoutMillis: Number(process.env.DB_CONNECT_TIMEOUT_MS ?? 5000),
 });
