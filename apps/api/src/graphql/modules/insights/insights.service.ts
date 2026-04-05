@@ -21,8 +21,8 @@ export type CountryMood = MoodCounts & {
 type SentimentLabel = 'positive' | 'neutral' | 'negative';
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const MAX_TEXTS = 220;
-const MAX_TEXT_LEN = 420;
+const MAX_TEXTS = 180;
+const MAX_TEXT_LEN = 1600;
 
 const cache = new Map<string, { at: number; value: CountryMood }>();
 let cachedCountryCodes: string[] | null = null;
@@ -156,7 +156,7 @@ function formatTopic(word: string): string {
   return word.length > 1 ? word[0].toUpperCase() + word.slice(1) : word.toUpperCase();
 }
 
-function buildInsight(counts: MoodCounts, topics: string[]): string {
+function buildInsight(counts: MoodCounts): string {
   if (!counts.total) {
     return 'Not enough recent posts to summarize yet.';
   }
@@ -169,11 +169,10 @@ function buildInsight(counts: MoodCounts, topics: string[]): string {
     delta < -0.12 ? 'tense' :
     'mixed';
 
-  const topTopics = topics.slice(0, 4).map(formatTopic);
-  if (topTopics.length) {
-    return `Overall mood feels ${mood}. Top themes: ${topTopics.join(', ')}.`;
+  if (counts.total < 8) {
+    return `Overall mood feels ${mood}, based on a small number of recent full posts.`;
   }
-  return `Overall mood feels ${mood}, with a wide mix of conversations.`;
+  return `Overall mood feels ${mood}, based on recent full posts from this country feed.`;
 }
 
 async function classifySentiment(texts: string[]): Promise<SentimentLabel[]> {
@@ -248,11 +247,12 @@ async function fetchTexts(countryCode?: string | null): Promise<string[]> {
     params.push(countryCode);
     whereSql = `where p.country_code = $${params.length}`;
   }
-  params.push(Math.floor(MAX_TEXTS * 0.6));
+  whereSql += `${whereSql ? ' and' : ' where'} p.created_at > now() - interval '24 hours'`;
+  params.push(MAX_TEXTS);
   const postLimitParam = params.length;
-  const postsRes = await pool.query<{ title: string | null; body: string }>(
+  const postsRes = await pool.query<{ title: string | null; body: string | null; media_caption: string | null }>(
     `
-    select p.title, p.body
+    select p.title, p.body, p.media_caption
     from public.posts p
     ${whereSql}
     order by p.created_at desc
@@ -261,36 +261,13 @@ async function fetchTexts(countryCode?: string | null): Promise<string[]> {
     params
   );
 
-  const commentParams: any[] = [];
-  let commentsWhere = '';
-  if (countryCode) {
-    commentParams.push(countryCode);
-    commentsWhere = `where p.country_code = $${commentParams.length}`;
-  }
-  commentParams.push(Math.floor(MAX_TEXTS * 0.4));
-  const commentLimitParam = commentParams.length;
-  const commentsRes = await pool.query<{ body: string }>(
-    `
-    select c.body
-    from public.post_comments c
-    join public.posts p on p.id = c.post_id
-    ${commentsWhere}
-    order by c.created_at desc
-    limit $${commentLimitParam}
-    `,
-    commentParams
-  );
-
   const texts: string[] = [];
   for (const row of postsRes.rows) {
     const title = row.title ? String(row.title).trim() : '';
     const body = String(row.body ?? '').trim();
-    const combined = `${title} ${body}`.trim();
+    const caption = String(row.media_caption ?? '').trim();
+    const combined = [title, body, caption].filter(Boolean).join(' ').trim();
     if (combined) texts.push(combined);
-  }
-  for (const row of commentsRes.rows) {
-    const body = String(row.body ?? '').trim();
-    if (body) texts.push(body);
   }
   return texts.slice(0, MAX_TEXTS);
 }
@@ -364,7 +341,7 @@ export async function getCountryMood(countryCode?: string | null): Promise<Count
   }
 
   const topics = extractTopics(texts, 10);
-  const insight = buildInsight(counts, topics);
+  const insight = buildInsight(counts);
   const mood: CountryMood = {
     country_code: countryCode ? countryCode.toUpperCase() : 'GLOBAL',
     ...counts,

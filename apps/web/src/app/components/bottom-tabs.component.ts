@@ -17,6 +17,18 @@ type TabKey = 'home' | 'search' | 'messages' | 'profile';
     '[class.hidden]': 'tabsHidden',
   },
   template: `
+    <button
+      type="button"
+      class="desktop-menu-trigger"
+      [class.globe-mode]="globeMode"
+      [class.active]="profileMenuOpen"
+      aria-label="Open menu"
+      (click)="toggleProfileMenu($event)"
+    >
+      <span class="desktop-menu-icon" aria-hidden="true">...</span>
+      <span class="desktop-menu-badge" *ngIf="messagesUnreadCount > 0">{{ messagesUnreadCount }}</span>
+    </button>
+
     <nav class="bottom-tabs" [class.globe-mode]="globeMode" role="navigation" aria-label="Primary">
       <button
         type="button"
@@ -65,9 +77,11 @@ type TabKey = 'home' | 'search' | 'messages' | 'profile';
       (click)="closeProfileMenu()"
     ></button>
 
-    <div class="profile-menu" *ngIf="profileMenuOpen">
-      <button type="button" class="profile-menu-item" (click)="openProfileFromMenu()">Profile</button>
+    <div class="profile-menu" [class.desktop]="isDesktop" *ngIf="profileMenuOpen">
+      <button type="button" class="profile-menu-item" (click)="goHome()">Feed</button>
+      <button type="button" class="profile-menu-item" (click)="openSearch()">Search</button>
       <button type="button" class="profile-menu-item" (click)="openMessagesFromMenu()">Messages</button>
+      <button type="button" class="profile-menu-item" (click)="openProfileFromMenu()">Profile</button>
       <button type="button" class="profile-menu-item" (click)="openAdsFromMenu()">Ads</button>
       <button type="button" class="profile-menu-item muted" disabled>Settings</button>
       <button type="button" class="profile-menu-item danger" (click)="logout()">Logout</button>
@@ -87,6 +101,52 @@ type TabKey = 'home' | 'search' | 'messages' | 'profile';
       :host.hidden {
         transform: translateY(calc(var(--tabs-height, 64px) + env(safe-area-inset-bottom) + 6px));
         opacity: 0;
+      }
+      .desktop-menu-trigger {
+        pointer-events: auto;
+        position: fixed;
+        top: calc(env(safe-area-inset-top) + 14px);
+        right: 56px;
+        width: 34px;
+        height: 34px;
+        border-radius: 12px;
+        border: 0;
+        background: transparent;
+        color: #f4f7ff;
+        display: none;
+        place-items: center;
+        cursor: pointer;
+        z-index: 121;
+        padding: 0;
+        transition: opacity 0.2s ease, transform 0.2s ease;
+      }
+      .desktop-menu-trigger.globe-mode {
+        color: #f4f7ff;
+      }
+      .desktop-menu-trigger.active {
+        opacity: 0.92;
+      }
+      .desktop-menu-icon {
+        font-size: 18px;
+        line-height: 1;
+        letter-spacing: 0.06em;
+        font-weight: 900;
+      }
+      .desktop-menu-badge {
+        position: absolute;
+        top: -4px;
+        right: -4px;
+        min-width: 12px;
+        height: 12px;
+        border-radius: 999px;
+        background: rgba(56, 158, 255, 0.95);
+        color: #041629;
+        font-size: 7px;
+        font-weight: 900;
+        display: grid;
+        place-items: center;
+        padding: 0 4px;
+        box-shadow: 0 0 0 2px rgba(6,10,16,0.8);
       }
       .bottom-tabs {
         pointer-events: auto;
@@ -145,6 +205,12 @@ type TabKey = 'home' | 'search' | 'messages' | 'profile';
         gap: 4px;
         pointer-events: auto;
         z-index: 91;
+      }
+      .profile-menu.desktop {
+        top: calc(env(safe-area-inset-top) + 54px);
+        right: 16px;
+        bottom: auto;
+        min-width: 210px;
       }
       .profile-menu-item {
         border: 0;
@@ -222,7 +288,23 @@ type TabKey = 'home' | 'search' | 'messages' | 'profile';
         padding: 0 6px;
         box-shadow: 0 0 0 2px rgba(6, 10, 16, 0.8);
       }
+      @media (min-width: 641px) {
+        :host {
+          bottom: auto;
+          transform: none !important;
+          opacity: 1 !important;
+        }
+        .desktop-menu-trigger {
+          display: grid;
+        }
+        .bottom-tabs {
+          display: none;
+        }
+      }
       @media (max-width: 640px) {
+        .desktop-menu-trigger {
+          display: none;
+        }
         .profile-menu {
           right: 10px;
           min-width: 166px;
@@ -252,6 +334,7 @@ export class BottomTabsComponent implements OnInit, OnDestroy {
   tabsHidden = false;
   profileMenuOpen = false;
   globeMode = false;
+  isDesktop = false;
 
   private sub?: Subscription;
   private lastGlobeUrl = '/globe';
@@ -259,6 +342,7 @@ export class BottomTabsComponent implements OnInit, OnDestroy {
   private unreadRefreshInFlight = false;
   private lastScrollTop = 0;
   private scrollHandler = (event: Event) => this.handleScroll(event);
+  private resizeHandler = () => this.syncViewportMode();
 
   constructor(
     private router: Router,
@@ -268,6 +352,7 @@ export class BottomTabsComponent implements OnInit, OnDestroy {
   ) {}
 
   ngOnInit(): void {
+    this.syncViewportMode();
     this.syncActive(this.router.url);
     this.captureGlobeUrl(this.router.url);
     this.sub = this.router.events.subscribe((event) => {
@@ -281,6 +366,7 @@ export class BottomTabsComponent implements OnInit, OnDestroy {
     void this.refreshUnreadMessages();
     this.unreadPollTimer = window.setInterval(() => this.refreshUnreadMessages(), 20000);
     window.addEventListener('scroll', this.scrollHandler, true);
+    window.addEventListener('resize', this.resizeHandler);
   }
 
   ngOnDestroy(): void {
@@ -290,6 +376,7 @@ export class BottomTabsComponent implements OnInit, OnDestroy {
       this.unreadPollTimer = null;
     }
     window.removeEventListener('scroll', this.scrollHandler, true);
+    window.removeEventListener('resize', this.resizeHandler);
   }
 
   goHome(): void {
@@ -425,6 +512,10 @@ export class BottomTabsComponent implements OnInit, OnDestroy {
   }
 
   private handleScroll(event: Event): void {
+    if (this.isDesktop) {
+      this.tabsHidden = false;
+      return;
+    }
     const target = event.target as HTMLElement | Document | Window | null;
     let current = 0;
     if (target && (target as HTMLElement).scrollTop != null) {
@@ -441,5 +532,9 @@ export class BottomTabsComponent implements OnInit, OnDestroy {
       this.tabsHidden = false;
     }
     this.lastScrollTop = current;
+  }
+
+  private syncViewportMode(): void {
+    this.isDesktop = typeof window !== 'undefined' && window.innerWidth >= 641;
   }
 }

@@ -4,6 +4,7 @@ import { supabase } from '../../supabase/supabase.client';
 import type { CountryModel } from '../../data/countries.service';
 import type { ConnectionPoint } from '../../globe/globe.service';
 import { FakeDataService } from './fake-data.service';
+import { GraphqlService } from './graphql.service';
 import { PresenceOverridesService, type PresenceOverridesMap } from './presence-overrides.service';
 import type { Profile } from './profile.service';
 
@@ -57,7 +58,8 @@ function mulberry32(seed: number) {
 export class PresenceService {
   constructor(
     private fakeData: FakeDataService,
-    private overridesService: PresenceOverridesService
+    private overridesService: PresenceOverridesService,
+    private gql: GraphqlService
   ) {}
 
   private countries: CountryModel[] = [];
@@ -83,6 +85,8 @@ export class PresenceService {
   private currentCountryCode: string | null = null;
   private currentCountryName: string | null = null;
   private currentCityName: string | null = null;
+  private viewingCountryCode: string | null = null;
+  private viewingCountryName: string | null = null;
 
   // UI updates
   private renderTimer: any = null;
@@ -91,6 +95,8 @@ export class PresenceService {
   // totals refresh (new registrations)
   private refreshProfilesTimer: any = null;
   private readonly PROFILES_REFRESH_MS = 120_000;
+  private heartbeatTimer: any = null;
+  private readonly HEARTBEAT_MS = 25_000;
 
   // fake online refresh
   private fakeOnlineTimer: any = null;
@@ -128,6 +134,8 @@ export class PresenceService {
     this.currentCountryCode = opts.meCountryCode ?? null;
     this.currentCountryName = opts.meCountryName ?? null;
     this.currentCityName = opts.meCityName ?? null;
+    this.viewingCountryCode = this.currentCountryCode;
+    this.viewingCountryName = this.currentCountryName;
 
     // totals
     await this.fakeData.ensureInitialized(this.countries);
@@ -146,6 +154,9 @@ export class PresenceService {
 
     // periodic UI refresh
     this.renderTimer = setInterval(() => this.emit(), this.RENDER_MS);
+    this.heartbeatTimer = setInterval(() => {
+      void this.syncBackendHeartbeat();
+    }, this.HEARTBEAT_MS);
 
     // periodic totals refresh
     this.refreshProfilesTimer = setInterval(() => {
@@ -161,6 +172,8 @@ export class PresenceService {
 
     if (this.refreshProfilesTimer) clearInterval(this.refreshProfilesTimer);
     this.refreshProfilesTimer = null;
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    this.heartbeatTimer = null;
 
     if (this.fakeOnlineTimer) clearInterval(this.fakeOnlineTimer);
     this.fakeOnlineTimer = null;
@@ -188,8 +201,20 @@ export class PresenceService {
     this.currentCountryCode = countryCode ?? null;
     this.currentCountryName = countryName ?? null;
     this.currentCityName = cityName ?? null;
+    if (!this.viewingCountryCode) {
+      this.viewingCountryCode = this.currentCountryCode;
+      this.viewingCountryName = this.currentCountryName;
+    }
 
     await this.trackMe();
+    await this.syncBackendHeartbeat();
+    this.emit();
+  }
+
+  async setViewingCountry(countryCode: string | null, countryName?: string | null): Promise<void> {
+    this.viewingCountryCode = countryCode ?? this.currentCountryCode ?? null;
+    this.viewingCountryName = countryName ?? this.currentCountryName ?? null;
+    await this.syncBackendHeartbeat();
     this.emit();
   }
 
@@ -363,6 +388,7 @@ export class PresenceService {
       this.onHeartbeatCb?.(`presence: ${String(status)}`);
       if (status === 'SUBSCRIBED') {
         await this.trackMe();
+        await this.syncBackendHeartbeat();
         this.rebuildOnlineMapFromState();
         this.emit();
       }
@@ -385,6 +411,26 @@ export class PresenceService {
     };
 
     await this.channel.track(meta);
+  }
+
+  private async syncBackendHeartbeat(): Promise<void> {
+    if (!this.meId) return;
+
+    const iso = String(this.viewingCountryCode ?? this.currentCountryCode ?? '')
+      .trim()
+      .toUpperCase();
+    if (!iso) return;
+
+    try {
+      await this.gql.mutate<{ heartbeat: { ok: boolean } }>(
+        `mutation PresenceHeartbeat($iso: String) {
+          heartbeat(iso: $iso) { ok ttlSeconds lastSeen }
+        }`,
+        { iso }
+      );
+    } catch {
+      // Realtime presence should keep working even if the backend heartbeat misses.
+    }
   }
 
   private rebuildOnlineMapFromState(): void {

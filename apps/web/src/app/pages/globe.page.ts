@@ -951,7 +951,7 @@ type CountryIntelligenceData = {
                   <div class="stats-row"><span>Local online now</span><b>{{ presence.local_online_now }}</b></div>
                   <div class="stats-row"><span>Foreign online now</span><b>{{ presence.foreign_online_now }}</b></div>
                   <div class="stats-row"><span>Local posts, 24h</span><b>{{ presence.local_posts_last_24h }}</b></div>
-                  <div class="stats-row"><span>Foreign posts, 24h</span><b>{{ presence.foreign_posts_last_24h }}</b></div>
+                  <div class="stats-row"><span>Foreign shares, 24h</span><b>{{ presence.foreign_posts_last_24h }}</b></div>
                   <div class="topic-row" *ngIf="presence.top_foreign_countries.length">
                     <span class="topic-chip" *ngFor="let place of presence.top_foreign_countries | slice:0:3">
                       {{ place.country_name || place.country_code }}
@@ -1032,7 +1032,7 @@ type CountryIntelligenceData = {
                       <b>{{ intel.presence.local_posts_last_24h }}</b>
                     </div>
                     <div class="presence-stat">
-                      <span>Foreign posts 24h</span>
+                      <span>Foreign shares 24h</span>
                       <b>{{ intel.presence.foreign_posts_last_24h }}</b>
                     </div>
                   </div>
@@ -1040,7 +1040,7 @@ type CountryIntelligenceData = {
                     <div class="side-list-row" *ngFor="let foreign of intel.presence.top_foreign_countries">
                       <div>
                         <div class="side-list-title">{{ foreign.country_name }}</div>
-                        <div class="side-list-copy">{{ foreign.online_now }} online · {{ foreign.posts_last_24h }} posts</div>
+                        <div class="side-list-copy">{{ foreign.online_now }} online · {{ foreign.posts_last_24h }} shares</div>
                       </div>
                       <div class="side-badge">{{ foreign.score }}</div>
                     </div>
@@ -3346,6 +3346,8 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   private notificationUpdateSub?: Subscription;
   private notificationPollTimer: number | null = null;
   private notificationClockTimer: number | null = null;
+  private sideDataRefreshTimer: number | null = null;
+  private sideDataDebounceTimer: number | null = null;
 
   private lastPresenceSnap: PresenceSnapshot | null = null;
 
@@ -3811,6 +3813,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.notificationEvents.stop();
     this.stopNotificationPolling();
     this.stopNotificationClock();
+    this.stopSideDataRefresh();
     if (this.bellPulseTimer) {
       window.clearTimeout(this.bellPulseTimer);
       this.bellPulseTimer = null;
@@ -3825,18 +3828,33 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     if (!this.selectedCountry?.code) {
       this.localTotal = null;
       this.localOnline = null;
+      this.syncLiveCountryIntelligence();
       return;
     }
     const snap: any = this.lastPresenceSnap as any;
     if (!snap) {
       this.localTotal = null;
       this.localOnline = null;
+      this.syncLiveCountryIntelligence();
       return;
     }
     const cc = String(this.selectedCountry.code).toUpperCase();
     const entry = snap.byCountry?.[cc];
     this.localTotal = entry?.total ?? 0;
     this.localOnline = entry?.online ?? 0;
+    this.syncLiveCountryIntelligence();
+  }
+
+  private syncLiveCountryIntelligence(): void {
+    if (!this.countryIntelligence) return;
+    const nextOnline = this.localOnline;
+    const nextTotal = this.localTotal;
+    if (nextOnline == null && nextTotal == null) return;
+    this.countryIntelligence = {
+      ...this.countryIntelligence,
+      online_now: nextOnline ?? this.countryIntelligence.online_now,
+      total_users: nextTotal ?? this.countryIntelligence.total_users,
+    };
   }
 
   private async loadMoodStats(): Promise<void> {
@@ -3917,11 +3935,42 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       }>(query, { code });
       this.countryPulse = data.countryPulse ?? null;
       this.countryIntelligence = data.countryIntelligence ?? null;
+      this.syncLiveCountryIntelligence();
     } catch (err: any) {
       this.sideDataError = err?.message ?? 'Failed to load country context.';
     } finally {
       this.sideDataLoading = false;
       this.forceUi();
+    }
+  }
+
+  private scheduleCountryColumnsRefresh(delayMs = 600): void {
+    if (!this.selectedCountry?.code) return;
+    if (this.sideDataDebounceTimer) {
+      window.clearTimeout(this.sideDataDebounceTimer);
+    }
+    this.sideDataDebounceTimer = window.setTimeout(() => {
+      this.sideDataDebounceTimer = null;
+      void this.loadCountryColumns();
+    }, delayMs);
+  }
+
+  private startSideDataRefresh(): void {
+    this.stopSideDataRefresh();
+    if (!this.selectedCountry?.code) return;
+    this.sideDataRefreshTimer = window.setInterval(() => {
+      void this.loadCountryColumns();
+    }, 15000);
+  }
+
+  private stopSideDataRefresh(): void {
+    if (this.sideDataRefreshTimer) {
+      window.clearInterval(this.sideDataRefreshTimer);
+      this.sideDataRefreshTimer = null;
+    }
+    if (this.sideDataDebounceTimer) {
+      window.clearTimeout(this.sideDataDebounceTimer);
+      this.sideDataDebounceTimer = null;
     }
   }
 
@@ -4077,8 +4126,10 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       }, 0);
       setTimeout(() => this.globeService.resize(), 60);
     }
+    void this.presence.setViewingCountry(country.code ?? null, country.name ?? null);
     void this.loadPostsForCountry(country);
     void this.loadCountryColumns();
+    this.startSideDataRefresh();
     if (tab === 'following') {
       void this.loadFollowingFeed();
     }
@@ -4118,6 +4169,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.countryIntelligence = null;
     this.sideDataLoading = false;
     this.sideDataError = '';
+    this.stopSideDataRefresh();
     this.postComposerError = '';
     this.postFeedback = '';
     this.newPostBody = '';
@@ -4135,6 +4187,10 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
 
     setTimeout(() => this.globeService.resize(), 0);
     setTimeout(() => this.globeService.resize(), 60);
+    void this.presence.setViewingCountry(
+      (this.profile as any)?.country_code ?? null,
+      this.profile?.country_name ?? null
+    );
 
     if (!opts?.skipRouteUpdate && hadState) this.updateRouteState();
   }
@@ -4550,6 +4606,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       return;
     }
     this.posts = this.sortPostsDesc([post, ...this.posts]);
+    this.scheduleCountryColumnsRefresh(250);
     this.forceUi();
   }
 
@@ -4560,10 +4617,16 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     if (currentCode !== eventCode) return;
     if (!this.selectedCountry) return;
     void this.loadPostsForCountry(this.selectedCountry);
+    this.scheduleCountryColumnsRefresh(250);
   }
 
   private handleCountryPostUpdated(post: CountryPost): void {
     this.applyPostUpdate(post);
+    const currentCode = this.selectedCountry?.code?.toUpperCase() ?? null;
+    const postCode = post.country_code?.toUpperCase() ?? null;
+    if (currentCode && postCode && currentCode === postCode) {
+      this.scheduleCountryColumnsRefresh(300);
+    }
   }
 
   private handleCountryPostUpdateEvent(event: PostUpdateEvent): void {
@@ -4573,6 +4636,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     if (currentCode !== eventCode) return;
     if (!this.selectedCountry) return;
     void this.loadPostsForCountry(this.selectedCountry);
+    this.scheduleCountryColumnsRefresh(300);
   }
 
   private handleCountryPostDeleteEvent(event: PostDeleteEvent): void {
@@ -4586,6 +4650,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       if (this.editingPostId === event.id) this.cancelPostEdit();
       if (this.openPostMenuId === event.id) this.openPostMenuId = null;
       if (this.confirmDeletePostId === event.id) this.confirmDeletePostId = null;
+      this.scheduleCountryColumnsRefresh(300);
       this.forceUi();
     }
   }

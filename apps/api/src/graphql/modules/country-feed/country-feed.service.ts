@@ -305,26 +305,31 @@ async function localForeignPresence(countryCode: string, ttlSeconds: number): Pr
   }>(
     `
     with online_users as (
-      select pr.user_id, upper(coalesce(pr.country_code, '')) as author_country
+      select
+        pr.user_id,
+        upper(coalesce(pr.country_code, '')) as home_country,
+        upper(coalesce(up.country_code, '')) as viewing_country
       from public.user_presence up
       join public.profiles pr on pr.user_id = up.user_id
       where up.is_online = true
         and up.last_seen_at > (now() - ($2 || ' seconds')::interval)
+        and upper(coalesce(up.country_code, '')) = $1
     ),
-    feed_posts as (
-      select pr.user_id, upper(coalesce(pr.country_code, '')) as author_country
+    feed_activity as (
+      select
+        pr.user_id,
+        upper(coalesce(pr.country_code, '')) as home_country,
+        (p.shared_post_id is not null) as is_share
       from public.posts p
       join public.profiles pr on pr.user_id = p.author_id
       where upper(coalesce(p.country_code, '')) = $1
         and p.created_at > now() - interval '24 hours'
     )
     select
-      count(*) filter (where online_users.author_country = $1)::text as local_online_now,
-      count(*) filter (where online_users.author_country <> $1 and online_users.author_country <> '')::text as foreign_online_now,
-      count(*) filter (where feed_posts.author_country = $1)::text as local_posts_last_24h,
-      count(*) filter (where feed_posts.author_country <> $1 and feed_posts.author_country <> '')::text as foreign_posts_last_24h
-    from online_users
-    full outer join feed_posts on false
+      (select count(*)::text from online_users where home_country = $1) as local_online_now,
+      (select count(*)::text from online_users where home_country <> $1 and home_country <> '') as foreign_online_now,
+      (select count(*)::text from feed_activity where home_country = $1) as local_posts_last_24h,
+      (select count(*)::text from feed_activity where home_country <> $1 and home_country <> '' and is_share = true) as foreign_posts_last_24h
     `,
     [countryCode, ttlSeconds]
   );
@@ -347,11 +352,12 @@ async function localForeignPresence(countryCode: string, ttlSeconds: number): Pr
       join public.profiles pr on pr.user_id = up.user_id
       where up.is_online = true
         and up.last_seen_at > (now() - ($2 || ' seconds')::interval)
+        and upper(coalesce(up.country_code, '')) = $1
         and upper(coalesce(pr.country_code, '')) <> $1
         and upper(coalesce(pr.country_code, '')) <> ''
       group by 1
     ),
-    posts_by_country as (
+    shares_by_country as (
       select
         upper(coalesce(pr.country_code, '')) as country_code,
         max(pr.country_name) as country_name,
@@ -360,21 +366,22 @@ async function localForeignPresence(countryCode: string, ttlSeconds: number): Pr
       join public.profiles pr on pr.user_id = p.author_id
       where upper(coalesce(p.country_code, '')) = $1
         and p.created_at > now() - interval '24 hours'
+        and p.shared_post_id is not null
         and upper(coalesce(pr.country_code, '')) <> $1
         and upper(coalesce(pr.country_code, '')) <> ''
       group by 1
     )
     select
-      coalesce(online_by_country.country_code, posts_by_country.country_code) as country_code,
-      coalesce(online_by_country.country_name, posts_by_country.country_name) as country_name,
+      coalesce(online_by_country.country_code, shares_by_country.country_code) as country_code,
+      coalesce(online_by_country.country_name, shares_by_country.country_name) as country_name,
       coalesce(online_by_country.online_now, 0) as online_now,
-      coalesce(posts_by_country.posts_last_24h, 0) as posts_last_24h
+      coalesce(shares_by_country.posts_last_24h, 0) as posts_last_24h
     from online_by_country
-    full outer join posts_by_country
-      on posts_by_country.country_code = online_by_country.country_code
-    order by (coalesce(online_by_country.online_now, 0) * 3 + coalesce(posts_by_country.posts_last_24h, 0) * 2) desc,
+    full outer join shares_by_country
+      on shares_by_country.country_code = online_by_country.country_code
+    order by (coalesce(online_by_country.online_now, 0) * 3 + coalesce(shares_by_country.posts_last_24h, 0) * 2) desc,
              coalesce(online_by_country.online_now, 0) desc,
-             coalesce(posts_by_country.posts_last_24h, 0) desc
+             coalesce(shares_by_country.posts_last_24h, 0) desc
     limit 5
     `,
     [countryCode, ttlSeconds]
