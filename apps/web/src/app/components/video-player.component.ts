@@ -136,6 +136,24 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
       :host(.reel-player) .video-shell {
         height: 100%;
       }
+      :host(.reel-player) .ad-layer {
+        z-index: 12;
+      }
+      :host(.reel-player) .ad-pill,
+      :host(.reel-player) .ad-learn-more {
+        top: 16px;
+      }
+      :host(.reel-player) .ad-pill {
+        left: 16px;
+      }
+      :host(.reel-player) .ad-learn-more {
+        right: 16px;
+      }
+      :host(.reel-player) .ad-skip,
+      :host(.reel-player) .ad-countdown {
+        bottom: 16px;
+        right: 16px;
+      }
       :host(.reel-player) video {
         height: 100%;
         max-height: none;
@@ -273,6 +291,7 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
         padding: 8px 12px;
         line-height: 1;
         box-shadow: 0 8px 18px rgba(0, 0, 0, 0.18);
+        z-index: 13;
       }
       .center-play {
         position: absolute;

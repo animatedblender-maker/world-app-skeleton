@@ -158,10 +158,11 @@ type CountryIntelligenceData = {
                   <div class="left-label">Country Pulse</div>
                   <div class="left-title">{{ selectedCountry.name }} pulse</div>
                 </div>
+                <div class="side-sync" *ngIf="sideDataRefreshing">Updating…</div>
               </div>
-              <div class="side-loading" *ngIf="sideDataLoading">Loading country pulse...</div>
-              <div class="side-error" *ngIf="!sideDataLoading && sideDataError">{{ sideDataError }}</div>
-              <ng-container *ngIf="!sideDataLoading && !sideDataError">
+              <div class="side-loading" *ngIf="sideDataLoading && !countryPulse">Loading country pulse...</div>
+              <div class="side-error" *ngIf="sideDataError && !countryPulse">{{ sideDataError }}</div>
+              <ng-container *ngIf="countryPulse || (!sideDataLoading && !sideDataError)">
                 <div class="side-section">
                   <div class="side-section-label">Trending Topics</div>
                   <div class="topic-row" *ngIf="countryPulse?.trending?.length; else noTrends">
@@ -985,10 +986,11 @@ type CountryIntelligenceData = {
                   <div class="left-label">Country Intelligence</div>
                   <div class="left-title">{{ selectedCountry.name }} overview</div>
                 </div>
+                <div class="side-sync" *ngIf="sideDataRefreshing">Updating…</div>
               </div>
-              <div class="side-loading" *ngIf="sideDataLoading">Loading intelligence...</div>
-              <div class="side-error" *ngIf="!sideDataLoading && sideDataError">{{ sideDataError }}</div>
-              <ng-container *ngIf="!sideDataLoading && !sideDataError && countryIntelligence as intel">
+              <div class="side-loading" *ngIf="sideDataLoading && !countryIntelligence">Loading intelligence...</div>
+              <div class="side-error" *ngIf="sideDataError && !countryIntelligence">{{ sideDataError }}</div>
+              <ng-container *ngIf="countryIntelligence as intel">
                 <div class="side-section">
                   <div class="side-section-label">Country Stats</div>
                   <div class="stats-grid">
@@ -1012,7 +1014,7 @@ type CountryIntelligenceData = {
                 </div>
 
                 <div class="side-section">
-                  <div class="side-section-label">AI Insight Summary</div>
+                  <div class="side-section-label">Insight Summary</div>
                   <div class="insight-card">{{ intel.insight_summary }}</div>
                 </div>
 
@@ -1048,7 +1050,7 @@ type CountryIntelligenceData = {
                 </div>
 
                 <div class="side-section">
-                  <div class="side-section-label">Recommendations</div>
+                  <div class="side-section-label">Suggested People</div>
                   <div class="side-list" *ngIf="intel.recommendations.length; else noRecs">
                     <div class="side-list-row" *ngFor="let rec of intel.recommendations">
                       <div class="rec-ident">
@@ -3239,6 +3241,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   countryPulse: CountryPulseData | null = null;
   countryIntelligence: CountryIntelligenceData | null = null;
   sideDataLoading = false;
+  sideDataRefreshing = false;
   sideDataError = '';
 
   searchOpen = false;
@@ -3888,9 +3891,15 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
 
   private async loadCountryColumns(): Promise<void> {
     const code = String(this.selectedCountry?.code ?? '').trim().toUpperCase();
-    if (!code || this.sideDataLoading) return;
-    this.sideDataLoading = true;
-    this.sideDataError = '';
+    if (!code) return;
+    const hasExistingData = !!this.countryPulse || !!this.countryIntelligence;
+    if (this.sideDataLoading || this.sideDataRefreshing) return;
+    if (hasExistingData) {
+      this.sideDataRefreshing = true;
+    } else {
+      this.sideDataLoading = true;
+      this.sideDataError = '';
+    }
     try {
       const query = `query CountryColumns($code: String!) {
         countryPulse(country_code: $code) {
@@ -3935,11 +3944,15 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       }>(query, { code });
       this.countryPulse = data.countryPulse ?? null;
       this.countryIntelligence = data.countryIntelligence ?? null;
+      this.sideDataError = '';
       this.syncLiveCountryIntelligence();
     } catch (err: any) {
-      this.sideDataError = err?.message ?? 'Failed to load country context.';
+      if (!hasExistingData) {
+        this.sideDataError = err?.message ?? 'Failed to load country context.';
+      }
     } finally {
       this.sideDataLoading = false;
+      this.sideDataRefreshing = false;
       this.forceUi();
     }
   }
@@ -4168,6 +4181,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.countryPulse = null;
     this.countryIntelligence = null;
     this.sideDataLoading = false;
+    this.sideDataRefreshing = false;
     this.sideDataError = '';
     this.stopSideDataRefresh();
     this.postComposerError = '';
