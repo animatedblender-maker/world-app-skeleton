@@ -498,16 +498,24 @@ async function recommendations(countryCode: string, viewerId: string | null): Pr
             and uf.following_id = pr.user_id
         )
       )
+      and (
+        coalesce(r7.posts_last_7d, 0) > 0
+        or coalesce(ol.online_now, false) = true
+        or coalesce(r30.posts_last_30d, 0) > 0
+        or coalesce(go.global_online_now, false) = true
+        or coalesce(gr30.global_posts_last_30d, 0) > 0
+        or coalesce(f.followers_count, 0) > 0
+      )
     order by
-      case
-        when upper(coalesce(pr.country_code, '')) = $1 and coalesce(r7.posts_last_7d, 0) > 0 then 1
-        when upper(coalesce(pr.country_code, '')) = $1 and coalesce(ol.online_now, false) = true then 2
-        when upper(coalesce(pr.country_code, '')) = $1 and coalesce(r30.posts_last_30d, 0) > 0 then 3
-        when upper(coalesce(pr.country_code, '')) = $1 then 4
-        when coalesce(go.global_online_now, false) = true then 5
-        when coalesce(gr30.global_posts_last_30d, 0) > 0 then 6
-        else 7
-      end asc,
+      (
+        coalesce(r7.posts_last_7d, 0) * 120
+        + (case when coalesce(ol.online_now, false) then 70 else 0 end)
+        + coalesce(r30.posts_last_30d, 0) * 18
+        + (case when coalesce(go.global_online_now, false) then 12 else 0 end)
+        + coalesce(gr30.global_posts_last_30d, 0) * 4
+        + least(coalesce(f.followers_count, 0), 40)
+      ) desc,
+      (upper(coalesce(pr.country_code, '')) = $1) desc,
       coalesce(r7.posts_last_7d, 0) desc,
       coalesce(ol.online_now, false) desc,
       coalesce(r30.posts_last_30d, 0) desc,
@@ -542,6 +550,9 @@ async function recommendations(countryCode: string, viewerId: string | null): Pr
       }
       if (row.global_posts_last_30d > 0) {
         return `${row.global_posts_last_30d} posts this month on Matterya`;
+      }
+      if (row.followers_count > 0) {
+        return `${row.followers_count} followers on Matterya`;
       }
       return 'Active on Matterya';
     })(),

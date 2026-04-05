@@ -476,6 +476,10 @@ app-globe-page .rec-ident{
   gap: 10px;
 }
 
+app-globe-page .rec-ident > div:last-child{
+  min-width: 0;
+}
+
 app-globe-page .rec-avatar{
   width: 36px;
   height: 36px;
@@ -491,6 +495,25 @@ app-globe-page .rec-avatar.fallback{
   color: rgba(15,23,42,0.92);
   font-size: 14px;
   font-weight: 900;
+}
+
+app-globe-page .side-actions{
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+app-globe-page .side-profile-link{
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+app-globe-page .side-profile-link:hover{
+  text-decoration: underline;
 }
 
 app-globe-page .side-link{

@@ -1054,14 +1054,48 @@ type CountryIntelligenceData = {
                   <div class="side-list" *ngIf="intel.recommendations.length; else noRecs">
                     <div class="side-list-row" *ngFor="let rec of intel.recommendations">
                       <div class="rec-ident">
-                        <img *ngIf="rec.avatar_url" [src]="rec.avatar_url" [alt]="rec.label" class="rec-avatar" />
-                        <div class="rec-avatar fallback" *ngIf="!rec.avatar_url">{{ rec.label.slice(0,1).toUpperCase() }}</div>
+                        <img
+                          *ngIf="recommendationAvatarUrl(rec)"
+                          [src]="recommendationAvatarUrl(rec)"
+                          [alt]="rec.label"
+                          class="rec-avatar"
+                          (error)="handleRecommendationAvatarError(rec)"
+                        />
+                        <div class="rec-avatar fallback" *ngIf="!recommendationAvatarUrl(rec)">{{ rec.label.slice(0,1).toUpperCase() }}</div>
                         <div>
-                          <div class="side-list-title">{{ rec.label }}</div>
+                          <button
+                            class="side-list-title side-profile-link"
+                            type="button"
+                            *ngIf="recommendationSlug(rec) as slug; else recTitleStatic"
+                            (click)="openUserProfile(slug); $event.stopPropagation()"
+                          >
+                            {{ rec.label }}
+                          </button>
+                          <ng-template #recTitleStatic>
+                            <div class="side-list-title">{{ rec.label }}</div>
+                          </ng-template>
                           <div class="side-list-copy">{{ rec.reason }}</div>
                         </div>
                       </div>
-                      <button class="side-link" type="button" *ngIf="rec.username" (click)="openUserProfile(rec.username!); $event.stopPropagation()">View</button>
+                      <div class="side-actions">
+                        <button
+                          class="side-link"
+                          type="button"
+                          *ngIf="canFollowRecommendation(rec)"
+                          [disabled]="followBusyFor(rec.user_id!)"
+                          (click)="toggleFollowAuthor(rec.user_id!); $event.stopPropagation()"
+                        >
+                          {{ isFollowingAuthor(rec.user_id!) ? 'Following' : 'Follow' }}
+                        </button>
+                        <button
+                          class="side-link"
+                          type="button"
+                          *ngIf="recommendationSlug(rec) as slug"
+                          (click)="openUserProfile(slug); $event.stopPropagation()"
+                        >
+                          View
+                        </button>
+                      </div>
                     </div>
                   </div>
                   <ng-template #noRecs>
@@ -1114,7 +1148,7 @@ type CountryIntelligenceData = {
             (click)="openNotification(notif)"
           >
             <div class="notif-avatar">
-              <img *ngIf="notif.actor?.avatar_url" [src]="notif.actor?.avatar_url" alt="avatar" />
+              <img *ngIf="notif.actor?.avatar_url" [src]="normalizeAvatarUrl(notif.actor?.avatar_url)" alt="avatar" />
               <span *ngIf="!notif.actor?.avatar_url">
                 {{ (notif.actor?.display_name || notif.actor?.username || 'U').slice(0, 2).toUpperCase() }}
               </span>
@@ -5792,6 +5826,27 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     return !!authorId && this.followingIds.has(authorId);
   }
 
+  recommendationSlug(rec: CountryRecommendation | null | undefined): string {
+    const username = String(rec?.username ?? '').trim();
+    if (username) return username;
+    return String(rec?.user_id ?? '').trim();
+  }
+
+  recommendationAvatarUrl(rec: CountryRecommendation | null | undefined): string {
+    return this.normalizeAvatarUrl(rec?.avatar_url ?? '');
+  }
+
+  handleRecommendationAvatarError(rec: CountryRecommendation | null | undefined): void {
+    if (!rec) return;
+    rec.avatar_url = null;
+    this.forceUi();
+  }
+
+  canFollowRecommendation(rec: CountryRecommendation | null | undefined): boolean {
+    const userId = String(rec?.user_id ?? '').trim();
+    return !!this.meId && !!userId && userId !== this.meId;
+  }
+
   isAuthorSelf(authorId?: string | null): boolean {
     return !!authorId && this.meId === authorId;
   }
@@ -6555,7 +6610,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     img.src = url;
   }
 
-  private normalizeAvatarUrl(url: string | null | undefined): string {
+  normalizeAvatarUrl(url: string | null | undefined): string {
     const raw = String(url || '').trim();
     if (!raw) return '';
     if (raw.startsWith('data:') || raw.startsWith('blob:') || raw.startsWith('/')) {
