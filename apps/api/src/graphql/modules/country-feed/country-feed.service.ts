@@ -416,6 +416,8 @@ async function recommendations(countryCode: string, viewerId: string | null): Pr
     posts_last_7d: number;
     posts_last_30d: number;
     online_now: boolean;
+    global_posts_last_30d: number;
+    global_online_now: boolean;
     followers_count: number;
     city_name: string | null;
   }>(
@@ -447,6 +449,22 @@ async function recommendations(countryCode: string, viewerId: string | null): Pr
       where up.is_online = true
         and up.last_seen_at > (now() - interval '90 seconds')
         and upper(coalesce(pr.country_code, '')) = $1
+    ),
+    global_recent_posts_30d as (
+      select
+        p.author_id,
+        count(*)::int as global_posts_last_30d
+      from public.posts p
+      where p.created_at > now() - interval '30 days'
+      group by p.author_id
+    ),
+    global_online as (
+      select
+        up.user_id,
+        true as global_online_now
+      from public.user_presence up
+      where up.is_online = true
+        and up.last_seen_at > (now() - interval '90 seconds')
     )
     select
       pr.user_id,
@@ -456,24 +474,22 @@ async function recommendations(countryCode: string, viewerId: string | null): Pr
       coalesce(r7.posts_last_7d, 0)::int as posts_last_7d,
       coalesce(r30.posts_last_30d, 0)::int as posts_last_30d,
       coalesce(ol.online_now, false) as online_now,
+      coalesce(gr30.global_posts_last_30d, 0)::int as global_posts_last_30d,
+      coalesce(go.global_online_now, false) as global_online_now,
       coalesce(f.followers_count, 0)::int as followers_count,
       pr.city_name
     from public.profiles pr
     left join recent_posts_7d r7 on r7.author_id = pr.user_id
     left join recent_posts_30d r30 on r30.author_id = pr.user_id
     left join online_locals ol on ol.user_id = pr.user_id
+    left join global_recent_posts_30d gr30 on gr30.author_id = pr.user_id
+    left join global_online go on go.user_id = pr.user_id
     left join (
       select following_id, count(*)::int as followers_count
       from public.user_follows
       group by following_id
     ) f on f.following_id = pr.user_id
-    where upper(coalesce(pr.country_code, '')) = $1
-      and (
-        coalesce(r7.posts_last_7d, 0) > 0
-        or coalesce(r30.posts_last_30d, 0) > 0
-        or coalesce(ol.online_now, false) = true
-      )
-      and ($2::uuid is null or pr.user_id <> $2::uuid)
+    where ($2::uuid is null or pr.user_id <> $2::uuid)
       and (
         $2::uuid is null or not exists (
           select 1
@@ -483,33 +499,52 @@ async function recommendations(countryCode: string, viewerId: string | null): Pr
         )
       )
     order by
+      case
+        when upper(coalesce(pr.country_code, '')) = $1 and coalesce(r7.posts_last_7d, 0) > 0 then 1
+        when upper(coalesce(pr.country_code, '')) = $1 and coalesce(ol.online_now, false) = true then 2
+        when upper(coalesce(pr.country_code, '')) = $1 and coalesce(r30.posts_last_30d, 0) > 0 then 3
+        when upper(coalesce(pr.country_code, '')) = $1 then 4
+        when coalesce(go.global_online_now, false) = true then 5
+        when coalesce(gr30.global_posts_last_30d, 0) > 0 then 6
+        else 7
+      end asc,
       coalesce(r7.posts_last_7d, 0) desc,
       coalesce(ol.online_now, false) desc,
       coalesce(r30.posts_last_30d, 0) desc,
+      coalesce(go.global_online_now, false) desc,
+      coalesce(gr30.global_posts_last_30d, 0) desc,
       coalesce(f.followers_count, 0) desc,
       pr.created_at desc
-    limit 4
+    limit 6
     `,
     params
   );
 
-  return rows.map((row) => ({
+  return rows.slice(0, 4).map((row) => ({
     kind: 'profile',
     label: row.display_name || row.username || 'Member',
-    reason:
-      row.posts_last_7d > 0
-        ? row.city_name
+    reason: (() => {
+      if (row.posts_last_7d > 0) {
+        return row.city_name
           ? `${row.posts_last_7d} recent posts from ${row.city_name}`
-          : `${row.posts_last_7d} recent posts in this country`
-        : row.online_now
-          ? row.city_name
-            ? `Online now from ${row.city_name}`
-            : 'Online now in this country'
-          : row.posts_last_30d > 0
-            ? row.city_name
-              ? `${row.posts_last_30d} posts this month from ${row.city_name}`
-              : `${row.posts_last_30d} posts this month in this country`
-            : 'Active in this country',
+          : `${row.posts_last_7d} recent posts in this country`;
+      }
+      if (row.online_now) {
+        return row.city_name ? `Online now from ${row.city_name}` : 'Online now in this country';
+      }
+      if (row.posts_last_30d > 0) {
+        return row.city_name
+          ? `${row.posts_last_30d} posts this month from ${row.city_name}`
+          : `${row.posts_last_30d} posts this month in this country`;
+      }
+      if (row.global_online_now) {
+        return 'Online now on Matterya';
+      }
+      if (row.global_posts_last_30d > 0) {
+        return `${row.global_posts_last_30d} posts this month on Matterya`;
+      }
+      return 'Active on Matterya';
+    })(),
     user_id: row.user_id,
     username: row.username ?? null,
     avatar_url: row.avatar_url ?? null,

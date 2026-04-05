@@ -3054,6 +3054,9 @@ type CountryIntelligenceData = {
       .stage.focus{
         grid-template-columns: 1fr;
         grid-template-rows: auto minmax(0, 1fr);
+        padding-left: 0;
+        padding-right: 0;
+        gap: 0;
       }
       .map-pane{
         display:none;
@@ -3062,11 +3065,19 @@ type CountryIntelligenceData = {
         width: 100%;
         margin: 0;
       }
+      .stage.focus.feed-full{
+        padding-left: 0;
+        padding-right: 0;
+        gap: 0;
+      }
       .map-glass{
         height: min(240px, 32vh);
       }
       .main-card{
-        border-radius: 22px;
+        border-radius: 0;
+        padding-left: 0;
+        padding-right: 0;
+        --card-pad-x: 0px;
       }
     }
         @media (max-width: 720px){

@@ -2186,9 +2186,13 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
     }
     @media (max-width: 700px){
       .wrap{
-        padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-left)) 20px max(12px, env(safe-area-inset-right));
+        padding:
+          max(0px, env(safe-area-inset-top))
+          0
+          calc(var(--tabs-safe, 64px) + 20px)
+          0;
       }
-      .card{ width:100%; margin:0; padding:16px; border-radius:18px; }
+      .card{ width:100%; margin:0; padding:0; border-radius:0; }
       .head{
         gap:12px;
         align-items:flex-start;
