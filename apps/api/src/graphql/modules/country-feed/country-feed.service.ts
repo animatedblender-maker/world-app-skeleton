@@ -579,13 +579,23 @@ export class CountryFeedService {
 
   async countryIntelligence(countryCode: string, viewerId: string | null): Promise<CountryIntelligence> {
     const iso = normalizeCountryCode(countryCode);
-    const [stats, mood, posts24h, presence, recs] = await Promise.all([
+    const [stats, mood, posts24h, presence] = await Promise.all([
       this.presence.countryStats(iso),
       getCountryMood(iso),
       postsLast24h(iso),
       localForeignPresence(iso, this.presence.getTTL()),
-      recommendations(iso, viewerId),
     ]);
+    let recs: CountryRecommendation[] = [];
+    try {
+      recs = await recommendations(iso, viewerId);
+    } catch (err) {
+      console.error('countryIntelligence recommendations failed', {
+        countryCode: iso,
+        viewerId,
+        err,
+      });
+      recs = [];
+    }
 
     return {
       country_code: iso,
