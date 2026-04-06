@@ -1,7 +1,7 @@
 import { CommonModule } from '@angular/common';
 import { Component, OnDestroy, OnInit } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { ActivatedRoute, Router } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
 
 import { CountriesService, type CountryModel } from '../data/countries.service';
@@ -14,20 +14,64 @@ import { environment } from '../../envirnoments/envirnoment';
 
 const ADMIN_KEY = 'worldapp-admin-2026';
 const ADMIN_STORAGE = 'worldapp.adminKey.v1';
-const CRON_STORAGE = 'worldapp.insightsCronSecret.v1';
 const EMPTY_OVERRIDE: PresenceOverride = Object.freeze({ total: null, online: null });
+
+type AdminTab = 'overview' | 'insights' | 'reports' | 'ads' | 'presence';
+
+type AdminOverview = {
+  total_profiles: number;
+  online_users: number;
+  posts_last_24h: number;
+  reports_last_7d: number;
+  active_campaigns: number;
+  total_campaigns: number;
+};
+
+type AdminSettings = {
+  insight_window_hours: number;
+  insight_min_posts: number;
+  insight_cache_minutes: number;
+  ollama_enabled: boolean;
+  ollama_model: string;
+};
+
+type ReportedPostItem = {
+  report_id: string;
+  created_at: string;
+  reason: string;
+  post_id: string;
+  post_excerpt: string;
+  country_code: string | null;
+  reporter_id: string;
+  reporter_name: string | null;
+  author_id: string | null;
+  author_name: string | null;
+};
+
+type AdsSummary = {
+  active_campaigns: number;
+  draft_campaigns: number;
+  paused_campaigns: number;
+  total_creatives: number;
+  total_budget_cents: number;
+};
+
+type AdminBootstrap = {
+  overview: AdminOverview;
+  settings: AdminSettings;
+  reports: ReportedPostItem[];
+  ads: AdsSummary;
+};
 
 @Component({
   selector: 'app-admin-presence-page',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, RouterLink],
   template: `
     <div class="admin-shell">
       <div class="card lock-card" *ngIf="locked">
-        <div class="card-title">Admin access</div>
-        <div class="card-sub">
-          Enter the key or open this page with <code>?key=YOUR_KEY</code>.
-        </div>
+        <div class="card-title">Admin Hub</div>
+        <div class="card-sub">Enter the admin key or open this page with <code>?key=YOUR_KEY</code>.</div>
         <div class="lock-row">
           <input
             type="password"
@@ -40,85 +84,217 @@ const EMPTY_OVERRIDE: PresenceOverride = Object.freeze({ total: null, online: nu
         <div class="card-error" *ngIf="keyError">{{ keyError }}</div>
       </div>
 
-      <div class="card" *ngIf="!locked">
-        <div class="card-head">
+      <ng-container *ngIf="!locked">
+        <div class="hero">
           <div>
-            <div class="card-title">Presence overrides</div>
-            <div class="card-sub">
-              Override totals and online counts per country. Empty means auto.
-            </div>
+            <div class="eyebrow">Ops Portal</div>
+            <h1>Admin Hub</h1>
+            <p>Phase 1 centralizes the feed controls we already have: insights, reported posts, ads health, and presence overrides.</p>
           </div>
-          <div class="head-actions">
-            <button class="ghost" type="button" (click)="resetAll()">Reset all</button>
+          <div class="hero-actions">
+            <button class="ghost" type="button" (click)="refreshBootstrap()" [disabled]="loadingBootstrap">
+              {{ loadingBootstrap ? 'Refreshing…' : 'Refresh data' }}
+            </button>
             <button type="button" (click)="goBack()">Back to globe</button>
           </div>
         </div>
 
-        <div class="tools">
-          <input
-            type="text"
-            placeholder="Filter countries"
-            [(ngModel)]="filter"
-            (ngModelChange)="applyFilter()"
-          />
-          <div class="tools-meta">
-            Active overrides: <b>{{ overrideCount }}</b>
+        <div class="tabs">
+          <button type="button" [class.active]="activeTab==='overview'" (click)="activeTab='overview'">Overview</button>
+          <button type="button" [class.active]="activeTab==='insights'" (click)="activeTab='insights'">Insights</button>
+          <button type="button" [class.active]="activeTab==='reports'" (click)="activeTab='reports'">Reported Posts</button>
+          <button type="button" [class.active]="activeTab==='ads'" (click)="activeTab='ads'">Ads</button>
+          <button type="button" [class.active]="activeTab==='presence'" (click)="activeTab='presence'">Presence</button>
+        </div>
+
+        <div class="card status-card" *ngIf="bootstrapError">{{ bootstrapError }}</div>
+
+        <div class="panel-grid" *ngIf="activeTab==='overview'">
+          <div class="metric-card">
+            <div class="metric-label">Profiles</div>
+            <div class="metric-value">{{ overview.total_profiles }}</div>
+            <div class="metric-sub">Saved user profiles in Supabase.</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Online Now</div>
+            <div class="metric-value">{{ overview.online_users }}</div>
+            <div class="metric-sub">Presence seen in the last 90 seconds.</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Posts 24h</div>
+            <div class="metric-value">{{ overview.posts_last_24h }}</div>
+            <div class="metric-sub">Recent posting activity across the app.</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Reports 7d</div>
+            <div class="metric-value">{{ overview.reports_last_7d }}</div>
+            <div class="metric-sub">Reported posts waiting for moderation review.</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Active Campaigns</div>
+            <div class="metric-value">{{ overview.active_campaigns }}</div>
+            <div class="metric-sub">Out of {{ overview.total_campaigns }} total campaigns.</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Insight Window</div>
+            <div class="metric-value">{{ settings.insight_window_hours }}h</div>
+            <div class="metric-sub">Current summary lookback period.</div>
           </div>
         </div>
 
-        <div class="grid-head">
-          <div>Country</div>
-          <div>Total</div>
-          <div>Online</div>
-          <div></div>
+        <div class="card" *ngIf="activeTab==='insights'">
+          <div class="card-head">
+            <div>
+              <div class="card-title">Insights Settings</div>
+              <div class="card-sub">Control how country summaries are computed and when Ollama is used.</div>
+            </div>
+          </div>
+
+          <div class="settings-grid">
+            <label>
+              <span>Insight window hours</span>
+              <input type="number" min="1" max="720" [(ngModel)]="settingsDraft.insight_window_hours" />
+            </label>
+            <label>
+              <span>Minimum posts needed</span>
+              <input type="number" min="1" max="1000" [(ngModel)]="settingsDraft.insight_min_posts" />
+            </label>
+            <label>
+              <span>Cache minutes</span>
+              <input type="number" min="1" max="1440" [(ngModel)]="settingsDraft.insight_cache_minutes" />
+            </label>
+            <label>
+              <span>Ollama model</span>
+              <input type="text" [(ngModel)]="settingsDraft.ollama_model" placeholder="qwen3.5:397b-cloud" />
+            </label>
+            <label class="toggle">
+              <input type="checkbox" [(ngModel)]="settingsDraft.ollama_enabled" />
+              <span>Use Ollama for summary generation</span>
+            </label>
+          </div>
+
+          <div class="actions-row">
+            <button type="button" (click)="saveSettings()" [disabled]="savingSettings">
+              {{ savingSettings ? 'Saving…' : 'Save settings' }}
+            </button>
+            <button class="ghost" type="button" (click)="runDailyInsights()" [disabled]="cronRunning">
+              {{ cronRunning ? 'Running…' : 'Rebuild country insights' }}
+            </button>
+          </div>
+          <div class="card-sub" *ngIf="settingsStatus">{{ settingsStatus }}</div>
         </div>
 
-        <div class="grid-row" *ngFor="let country of filteredCountries">
-          <div class="country-cell">
-            <div class="country-name">{{ country.name }}</div>
-            <div class="country-code">{{ country.code }}</div>
+        <div class="card" *ngIf="activeTab==='reports'">
+          <div class="card-head">
+            <div>
+              <div class="card-title">Reported Posts</div>
+              <div class="card-sub">Newest reports first. Phase 1 is a moderation inbox, not a full resolver yet.</div>
+            </div>
+            <button class="ghost" type="button" (click)="reloadReports()" [disabled]="loadingReports">
+              {{ loadingReports ? 'Refreshing…' : 'Refresh reports' }}
+            </button>
           </div>
-          <input
-            type="number"
-            min="0"
-            step="1"
-            placeholder="auto"
-            [ngModel]="overrideFor(country.code).total"
-            (ngModelChange)="setOverrideValue(country.code, 'total', $event)"
-          />
-          <input
-            type="number"
-            min="0"
-            step="1"
-            placeholder="auto"
-            [ngModel]="overrideFor(country.code).online"
-            (ngModelChange)="setOverrideValue(country.code, 'online', $event)"
-          />
-          <button class="ghost" type="button" (click)="clearOverride(country.code)">
-            Clear
-          </button>
-        </div>
-      </div>
 
-      <div class="card cron-card" *ngIf="!locked">
-        <div class="card-head">
-          <div>
-            <div class="card-title">Daily insights</div>
-            <div class="card-sub">Run the manual country insights refresh.</div>
+          <div class="report-list" *ngIf="reports.length; else noReports">
+            <div class="report-item" *ngFor="let item of reports">
+              <div class="report-head">
+                <div>
+                  <div class="report-title">{{ item.post_excerpt || 'Untitled post' }}</div>
+                  <div class="report-meta">
+                    {{ item.country_code || 'GLOBAL' }} · reported {{ item.created_at | date:'medium' }}
+                  </div>
+                </div>
+                <a [routerLink]="['/post', item.post_id]">Open post</a>
+              </div>
+              <div class="report-reason">{{ item.reason }}</div>
+              <div class="report-users">
+                <span>Reporter: {{ item.reporter_name || item.reporter_id }}</span>
+                <span>Author: {{ item.author_name || item.author_id || 'Unknown' }}</span>
+              </div>
+            </div>
+          </div>
+          <ng-template #noReports>
+            <div class="empty-state">No reported posts right now.</div>
+          </ng-template>
+        </div>
+
+        <div class="panel-grid" *ngIf="activeTab==='ads'">
+          <div class="metric-card">
+            <div class="metric-label">Active Campaigns</div>
+            <div class="metric-value">{{ ads.active_campaigns }}</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Draft Campaigns</div>
+            <div class="metric-value">{{ ads.draft_campaigns }}</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Paused Campaigns</div>
+            <div class="metric-value">{{ ads.paused_campaigns }}</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Creatives</div>
+            <div class="metric-value">{{ ads.total_creatives }}</div>
+          </div>
+          <div class="metric-card wide">
+            <div class="metric-label">Budget</div>
+            <div class="metric-value">{{ formatCurrency(ads.total_budget_cents) }}</div>
+            <div class="metric-sub">Phase 1 gives visibility; full ad management can grow from here.</div>
           </div>
         </div>
-        <div class="cron-row">
-          <input
-            type="password"
-            placeholder="Cron secret"
-            [(ngModel)]="cronSecretInput"
-          />
-          <button type="button" (click)="runDailyInsights()" [disabled]="cronRunning">
-            {{ cronRunning ? 'Running…' : 'Run now' }}
-          </button>
+
+        <div class="card" *ngIf="activeTab==='presence'">
+          <div class="card-head">
+            <div>
+              <div class="card-title">Presence Overrides</div>
+              <div class="card-sub">Override totals and online counts per country. Empty means auto.</div>
+            </div>
+            <div class="head-actions">
+              <button class="ghost" type="button" (click)="resetAll()">Reset all</button>
+            </div>
+          </div>
+
+          <div class="tools">
+            <input
+              type="text"
+              placeholder="Filter countries"
+              [(ngModel)]="filter"
+              (ngModelChange)="applyFilter()"
+            />
+            <div class="tools-meta">Active overrides: <b>{{ overrideCount }}</b></div>
+          </div>
+
+          <div class="grid-head">
+            <div>Country</div>
+            <div>Total</div>
+            <div>Online</div>
+            <div></div>
+          </div>
+
+          <div class="grid-row" *ngFor="let country of filteredCountries">
+            <div class="country-cell">
+              <div class="country-name">{{ country.name }}</div>
+              <div class="country-code">{{ country.code }}</div>
+            </div>
+            <input
+              type="number"
+              min="0"
+              step="1"
+              placeholder="auto"
+              [ngModel]="overrideFor(country.code).total"
+              (ngModelChange)="setOverrideValue(country.code, 'total', $event)"
+            />
+            <input
+              type="number"
+              min="0"
+              step="1"
+              placeholder="auto"
+              [ngModel]="overrideFor(country.code).online"
+              (ngModelChange)="setOverrideValue(country.code, 'online', $event)"
+            />
+            <button class="ghost" type="button" (click)="clearOverride(country.code)">Clear</button>
+          </div>
         </div>
-        <div class="card-sub" *ngIf="cronStatus">{{ cronStatus }}</div>
-      </div>
+      </ng-container>
     </div>
   `,
   styles: [
@@ -126,49 +302,137 @@ const EMPTY_OVERRIDE: PresenceOverride = Object.freeze({ total: null, online: nu
       :host {
         display: block;
         min-height: 100vh;
-        background: radial-gradient(circle at top, rgba(0, 60, 70, 0.28), transparent 60%),
+        background:
+          radial-gradient(circle at top left, rgba(0, 255, 209, 0.15), transparent 30%),
+          radial-gradient(circle at top right, rgba(0, 151, 255, 0.12), transparent 28%),
           linear-gradient(180deg, #050a12 0%, #071723 100%);
         color: #e7f7ff;
         font-family: 'Sora', 'Space Grotesk', 'Avenir', sans-serif;
       }
       .admin-shell {
-        max-width: 1100px;
+        max-width: 1180px;
         margin: 0 auto;
         padding: 36px 20px 72px;
       }
+      .hero {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 16px;
+        margin-bottom: 20px;
+      }
+      .eyebrow {
+        font-size: 11px;
+        letter-spacing: 0.24em;
+        text-transform: uppercase;
+        opacity: 0.6;
+      }
+      h1 {
+        margin: 8px 0 10px;
+        font-size: 34px;
+        line-height: 1.05;
+      }
+      p {
+        margin: 0;
+        max-width: 640px;
+        opacity: 0.78;
+      }
+      .hero-actions,
+      .head-actions,
+      .actions-row,
+      .lock-row {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .tabs {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-bottom: 18px;
+      }
+      .tabs button,
+      button {
+        border-radius: 12px;
+        border: none;
+        background: rgba(0, 255, 209, 0.18);
+        color: #c9fff2;
+        padding: 10px 14px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .tabs button {
+        background: rgba(255, 255, 255, 0.08);
+        color: rgba(255, 255, 255, 0.82);
+      }
+      .tabs button.active {
+        background: rgba(0, 255, 209, 0.18);
+        color: #c9fff2;
+      }
+      button.ghost {
+        background: rgba(255, 255, 255, 0.08);
+        color: rgba(255, 255, 255, 0.82);
+      }
+      .panel-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 16px;
+      }
+      .metric-card,
       .card {
         background: rgba(8, 18, 28, 0.92);
         border: 1px solid rgba(255, 255, 255, 0.08);
         border-radius: 18px;
         padding: 22px;
-        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.4);
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.32);
       }
-      .lock-card {
-        max-width: 520px;
-        margin: 12vh auto 0;
+      .metric-card.wide {
+        grid-column: span 2;
       }
-      .cron-card {
+      .metric-label,
+      .country-code {
+        font-size: 11px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        opacity: 0.6;
+      }
+      .metric-value {
+        margin-top: 8px;
+        font-size: 34px;
+        font-weight: 800;
+        line-height: 1;
+      }
+      .metric-sub,
+      .card-sub,
+      .tools-meta {
+        margin-top: 8px;
+        font-size: 13px;
+        opacity: 0.72;
+      }
+      .status-card,
+      .empty-state {
+        margin-bottom: 18px;
+        font-size: 14px;
+      }
+      .card + .card,
+      .panel-grid + .card {
         margin-top: 18px;
       }
       .card-title {
         font-size: 20px;
         font-weight: 700;
-        letter-spacing: 0.01em;
       }
-      .card-sub {
-        margin-top: 6px;
-        opacity: 0.7;
-        font-size: 13px;
-      }
-      .card-sub code {
-        background: rgba(255, 255, 255, 0.06);
-        padding: 2px 6px;
-        border-radius: 6px;
-      }
-      .lock-row {
-        margin-top: 18px;
+      .card-head {
         display: flex;
-        gap: 10px;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: flex-start;
+        flex-wrap: wrap;
+      }
+      .lock-card {
+        max-width: 520px;
+        margin: 12vh auto 0;
       }
       input[type='text'],
       input[type='password'],
@@ -183,41 +447,69 @@ const EMPTY_OVERRIDE: PresenceOverride = Object.freeze({ total: null, online: nu
         width: 100%;
         box-sizing: border-box;
       }
-      input[type='number'] {
-        text-align: right;
-      }
       input:focus {
         border-color: rgba(0, 255, 209, 0.6);
         box-shadow: 0 0 0 3px rgba(0, 255, 209, 0.12);
       }
-      button {
-        border-radius: 12px;
-        border: none;
-        background: rgba(0, 255, 209, 0.18);
-        color: #c9fff2;
-        padding: 10px 14px;
-        font-weight: 700;
-        cursor: pointer;
+      .settings-grid {
+        margin-top: 18px;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 14px;
       }
-      button.ghost {
-        background: rgba(255, 255, 255, 0.08);
-        color: rgba(255, 255, 255, 0.8);
+      .settings-grid label {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        font-size: 13px;
       }
-      .card-error {
-        margin-top: 12px;
-        color: #ff9f9f;
-        font-size: 12px;
+      .toggle {
+        justify-content: flex-end;
       }
-      .card-head {
+      .toggle input {
+        width: auto;
+      }
+      .report-list {
+        margin-top: 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .report-item {
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 14px;
+        padding: 14px;
+        background: rgba(255, 255, 255, 0.03);
+      }
+      .report-head {
         display: flex;
         justify-content: space-between;
-        gap: 16px;
+        gap: 12px;
         align-items: flex-start;
+      }
+      .report-title,
+      .country-name {
+        font-size: 15px;
+        font-weight: 700;
+      }
+      .report-meta,
+      .report-users {
+        margin-top: 6px;
+        font-size: 12px;
+        opacity: 0.7;
+      }
+      .report-reason {
+        margin-top: 10px;
+        font-size: 14px;
+      }
+      .report-users {
+        display: flex;
+        gap: 14px;
         flex-wrap: wrap;
       }
-      .head-actions {
-        display: flex;
-        gap: 8px;
+      a {
+        color: #92fff0;
+        text-decoration: none;
       }
       .tools {
         margin-top: 18px;
@@ -226,22 +518,8 @@ const EMPTY_OVERRIDE: PresenceOverride = Object.freeze({ total: null, online: nu
         align-items: center;
         flex-wrap: wrap;
       }
-      .cron-row {
-        margin-top: 14px;
-        display: flex;
-        gap: 10px;
-        align-items: center;
-        flex-wrap: wrap;
-      }
-      .cron-row input {
-        flex: 1 1 240px;
-      }
       .tools input {
         max-width: 320px;
-      }
-      .tools-meta {
-        opacity: 0.7;
-        font-size: 13px;
       }
       .grid-head,
       .grid-row {
@@ -266,25 +544,26 @@ const EMPTY_OVERRIDE: PresenceOverride = Object.freeze({ total: null, online: nu
         flex-direction: column;
         gap: 2px;
       }
-      .country-name {
-        font-size: 14px;
-        font-weight: 600;
+      .card-error {
+        margin-top: 12px;
+        color: #ff9f9f;
+        font-size: 12px;
       }
-      .country-code {
-        font-size: 11px;
-        opacity: 0.6;
-        letter-spacing: 0.2em;
+      code {
+        background: rgba(255, 255, 255, 0.06);
+        padding: 2px 6px;
+        border-radius: 6px;
       }
-      @media (max-width: 720px) {
+      @media (max-width: 780px) {
+        .hero {
+          flex-direction: column;
+        }
+        .metric-card.wide {
+          grid-column: span 1;
+        }
         .grid-head,
         .grid-row {
           grid-template-columns: 1fr 1fr;
-        }
-        .grid-head div:nth-child(3),
-        .grid-head div:nth-child(4),
-        .grid-row input:nth-child(3),
-        .grid-row button {
-          grid-column: span 1;
         }
         .grid-row {
           grid-template-areas:
@@ -316,16 +595,45 @@ export class AdminPresencePageComponent implements OnInit, OnDestroy {
   locked = true;
   keyInput = '';
   keyError = '';
-  filter = '';
-  cronSecretInput = '';
-  cronRunning = false;
-  cronStatus = '';
+  activeTab: AdminTab = 'overview';
 
+  loadingBootstrap = false;
+  bootstrapError = '';
+  loadingReports = false;
+  savingSettings = false;
+  cronRunning = false;
+  settingsStatus = '';
+
+  overview: AdminOverview = {
+    total_profiles: 0,
+    online_users: 0,
+    posts_last_24h: 0,
+    reports_last_7d: 0,
+    active_campaigns: 0,
+    total_campaigns: 0,
+  };
+  settings: AdminSettings = {
+    insight_window_hours: 24,
+    insight_min_posts: 3,
+    insight_cache_minutes: 5,
+    ollama_enabled: true,
+    ollama_model: '',
+  };
+  settingsDraft: AdminSettings = { ...this.settings };
+  reports: ReportedPostItem[] = [];
+  ads: AdsSummary = {
+    active_campaigns: 0,
+    draft_campaigns: 0,
+    paused_campaigns: 0,
+    total_creatives: 0,
+    total_budget_cents: 0,
+  };
+
+  filter = '';
   countries: CountryModel[] = [];
   filteredCountries: CountryModel[] = [];
   overrides: PresenceOverridesMap = {};
   overrideCount = 0;
-
   private overridesSub?: Subscription;
 
   constructor(
@@ -340,15 +648,13 @@ export class AdminPresencePageComponent implements OnInit, OnDestroy {
     this.overrideCount = Object.keys(this.overrides).length;
     this.unlockFromStorage();
     this.unlockFromQuery();
-    this.loadCronSecret();
-
     this.overridesSub = this.overridesService.observe().subscribe((next) => {
       this.overrides = next || {};
       this.overrideCount = Object.keys(this.overrides).length;
       this.applyFilter();
     });
-
     void this.loadCountries();
+    if (!this.locked) void this.refreshBootstrap();
   }
 
   ngOnDestroy(): void {
@@ -366,6 +672,70 @@ export class AdminPresencePageComponent implements OnInit, OnDestroy {
     this.locked = false;
     this.keyError = '';
     this.keyInput = '';
+    void this.refreshBootstrap();
+  }
+
+  async refreshBootstrap(): Promise<void> {
+    if (this.locked) return;
+    this.loadingBootstrap = true;
+    this.bootstrapError = '';
+    try {
+      const data = await this.adminRequest<AdminBootstrap>('/admin/bootstrap');
+      this.overview = data.overview;
+      this.settings = data.settings;
+      this.settingsDraft = { ...data.settings };
+      this.reports = data.reports;
+      this.ads = data.ads;
+    } catch (err: any) {
+      this.bootstrapError = err?.message ?? 'Failed to load admin data.';
+    } finally {
+      this.loadingBootstrap = false;
+    }
+  }
+
+  async saveSettings(): Promise<void> {
+    this.savingSettings = true;
+    this.settingsStatus = '';
+    try {
+      const data = await this.adminRequest<{ settings: AdminSettings }>('/admin/settings', {
+        method: 'POST',
+        body: JSON.stringify(this.settingsDraft),
+      });
+      this.settings = data.settings;
+      this.settingsDraft = { ...data.settings };
+      this.settingsStatus = 'Settings saved.';
+    } catch (err: any) {
+      this.settingsStatus = err?.message ?? 'Failed to save settings.';
+    } finally {
+      this.savingSettings = false;
+    }
+  }
+
+  async runDailyInsights(): Promise<void> {
+    this.cronRunning = true;
+    this.settingsStatus = 'Running country insights rebuild…';
+    try {
+      const data = await this.adminRequest<{ processed: number; failed: number }>('/admin/insights/run', {
+        method: 'POST',
+      });
+      this.settingsStatus = `Done. Countries processed: ${Number(data.processed ?? 0)}, failed: ${Number(data.failed ?? 0)}.`;
+    } catch (err: any) {
+      this.settingsStatus = err?.message ?? 'Failed to run insights.';
+    } finally {
+      this.cronRunning = false;
+    }
+  }
+
+  async reloadReports(): Promise<void> {
+    this.loadingReports = true;
+    try {
+      const data = await this.adminRequest<{ reports: ReportedPostItem[] }>('/admin/reports?limit=40');
+      this.reports = data.reports || [];
+    } catch (err: any) {
+      this.bootstrapError = err?.message ?? 'Failed to load reports.';
+    } finally {
+      this.loadingReports = false;
+    }
   }
 
   resetAll(): void {
@@ -374,12 +744,11 @@ export class AdminPresencePageComponent implements OnInit, OnDestroy {
 
   applyFilter(): void {
     const term = this.filter.trim().toLowerCase();
-    const list = this.countries;
     if (!term) {
-      this.filteredCountries = list;
+      this.filteredCountries = this.countries;
       return;
     }
-    this.filteredCountries = list.filter((country) => {
+    this.filteredCountries = this.countries.filter((country) => {
       const name = country.name.toLowerCase();
       const code = (country.code || '').toLowerCase();
       return name.includes(term) || code.includes(term);
@@ -394,7 +763,6 @@ export class AdminPresencePageComponent implements OnInit, OnDestroy {
   setOverrideValue(code: string | null, field: 'total' | 'online', value: any): void {
     const key = String(code ?? '').toUpperCase();
     if (!key) return;
-
     const current = this.overrides[key] ?? {};
     const next: PresenceOverride = { ...current, [field]: value };
     this.overridesService.setOverride(key, next);
@@ -410,36 +778,12 @@ export class AdminPresencePageComponent implements OnInit, OnDestroy {
     void this.router.navigate(['/globe']);
   }
 
-  async runDailyInsights(): Promise<void> {
-    const secret = this.cronSecretInput.trim();
-    if (!secret) {
-      this.cronStatus = 'Enter the cron secret first.';
-      return;
-    }
-    this.persistCronSecret(secret);
-    this.cronRunning = true;
-    this.cronStatus = 'Running…';
-    try {
-      const res = await fetch(`${environment.apiBaseUrl}/insights/run-daily`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-cron-secret': secret,
-        },
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        this.cronStatus = `Failed: ${data?.error ?? res.status}`;
-      } else {
-        const processed = Number(data?.processed ?? 0);
-        const failed = Number(data?.failed ?? 0);
-      this.cronStatus = `Done. Countries: ${processed}, Failed: ${failed}`;
-      }
-    } catch (err: any) {
-      this.cronStatus = `Failed: ${err?.message ?? 'unknown error'}`;
-    } finally {
-      this.cronRunning = false;
-    }
+  formatCurrency(cents: number): string {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      maximumFractionDigits: 2,
+    }).format((Number(cents) || 0) / 100);
   }
 
   private async loadCountries(): Promise<void> {
@@ -475,22 +819,27 @@ export class AdminPresencePageComponent implements OnInit, OnDestroy {
     } catch {}
   }
 
-  private loadCronSecret(): void {
-    try {
-      const stored = localStorage.getItem(CRON_STORAGE);
-      if (stored) this.cronSecretInput = stored;
-    } catch {}
-  }
-
   private persistKey(key: string): void {
     try {
       localStorage.setItem(ADMIN_STORAGE, key);
     } catch {}
   }
 
-  private persistCronSecret(secret: string): void {
-    try {
-      localStorage.setItem(CRON_STORAGE, secret);
-    } catch {}
+  private async adminRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const key = localStorage.getItem(ADMIN_STORAGE) || ADMIN_KEY;
+    const headers = new Headers(init.headers || {});
+    headers.set('x-admin-key', key);
+    if (init.body && !headers.has('Content-Type')) {
+      headers.set('Content-Type', 'application/json');
+    }
+    const res = await fetch(`${environment.apiBaseUrl}${path}`, {
+      ...init,
+      headers,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(String(data?.error || `Request failed (${res.status})`));
+    }
+    return data as T;
   }
 }

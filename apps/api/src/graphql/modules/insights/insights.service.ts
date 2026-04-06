@@ -3,6 +3,7 @@ import { GraphQLError } from 'graphql';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getAdminSettings } from '../../../admin/admin.service.js';
 
 type MoodCounts = {
   positive: number;
@@ -29,7 +30,7 @@ type PostTextRow = {
   created_at: string;
 };
 
-const CACHE_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_TEXTS = 180;
 const MAX_TEXT_LEN = 1600;
 const OLLAMA_PROMPT_TEXT_LIMIT = 12000;
@@ -461,7 +462,7 @@ async function loadDemoPosts(): Promise<PostTextRow[]> {
   return cachedDemoPostsPromise;
 }
 
-async function fetchTexts(countryCode?: string | null): Promise<string[]> {
+async function fetchTexts(countryCode: string | null | undefined, windowHours: number): Promise<string[]> {
   const normalizedCountry = String(countryCode ?? '').trim().toUpperCase();
   const params: any[] = [];
   let whereSql = '';
@@ -469,7 +470,8 @@ async function fetchTexts(countryCode?: string | null): Promise<string[]> {
     params.push(countryCode);
     whereSql = `where p.country_code = $${params.length}`;
   }
-  whereSql += `${whereSql ? ' and' : ' where'} p.created_at > now() - interval '24 hours'`;
+  params.push(windowHours);
+  whereSql += `${whereSql ? ' and' : ' where'} p.created_at > now() - ($${params.length}::int * interval '1 hour')`;
   params.push(MAX_TEXTS);
   const postLimitParam = params.length;
   const postsRes = await pool.query<{ title: string | null; body: string | null; created_at: string }>(
@@ -498,7 +500,7 @@ async function fetchTexts(countryCode?: string | null): Promise<string[]> {
     if (normalizedCountry && demoCountry !== normalizedCountry) continue;
     const createdMs = Date.parse(createdAt);
     if (!Number.isFinite(createdMs)) continue;
-    if (createdMs < Date.now() - 24 * 60 * 60 * 1000) continue;
+    if (createdMs < Date.now() - windowHours * 60 * 60 * 1000) continue;
     rows.push({ text, created_at: createdAt });
   }
 
@@ -544,12 +546,19 @@ async function loadCountryCodesFromGeoJson(): Promise<string[]> {
 }
 
 export async function getCountryMood(countryCode?: string | null): Promise<CountryMood> {
+  const settings = await getAdminSettings().catch(() => null);
+  const cacheTtlMs = Math.max(
+    60_000,
+    Number(settings?.insight_cache_minutes ?? DEFAULT_CACHE_TTL_MS / 60000) * 60_000
+  );
   const key = countryCode ? `cc:${countryCode.toUpperCase()}` : 'global';
   const cached = cache.get(key);
-  if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.value;
+  if (cached && Date.now() - cached.at < cacheTtlMs) return cached.value;
 
-  const texts = await fetchTexts(countryCode ?? null);
-  if (!texts.length) {
+  const windowHours = Math.max(1, Number(settings?.insight_window_hours ?? 24));
+  const minPosts = Math.max(1, Number(settings?.insight_min_posts ?? 3));
+  const texts = await fetchTexts(countryCode ?? null, windowHours);
+  if (texts.length < minPosts) {
     const empty: CountryMood = {
       country_code: countryCode ? countryCode.toUpperCase() : 'GLOBAL',
       positive: 0,
@@ -557,7 +566,7 @@ export async function getCountryMood(countryCode?: string | null): Promise<Count
       negative: 0,
       total: 0,
       topics: [],
-      insight: 'Not enough recent posts to summarize yet.',
+      insight: `Not enough recent posts to summarize yet. Need at least ${minPosts} posts in the last ${windowHours} hours.`,
       computed_at: new Date().toISOString(),
     };
     cache.set(key, { at: Date.now(), value: empty });
@@ -580,7 +589,13 @@ export async function getCountryMood(countryCode?: string | null): Promise<Count
 
   const topics = extractTopics(texts, 10);
   const insight =
-    (await generateInsightWithOllama(countryCode ? countryCode.toUpperCase() : 'GLOBAL', counts, texts)) ||
+    ((settings?.ollama_enabled ?? true)
+      ? await generateInsightWithOllama(
+          countryCode ? countryCode.toUpperCase() : 'GLOBAL',
+          counts,
+          texts
+        )
+      : null) ||
     buildInsight(counts, texts, topics);
   const mood: CountryMood = {
     country_code: countryCode ? countryCode.toUpperCase() : 'GLOBAL',
@@ -592,6 +607,10 @@ export async function getCountryMood(countryCode?: string | null): Promise<Count
 
   cache.set(key, { at: Date.now(), value: mood });
   return mood;
+}
+
+export function clearCountryMoodCache(): void {
+  cache.clear();
 }
 
 export async function runAllCountryMoods(): Promise<{ processed: number; failed: number }> {

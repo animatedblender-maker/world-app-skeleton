@@ -27,6 +27,14 @@ import { resolvers } from './graphql/resolvers.js';
 import { PushService } from './push/push.service.js';
 import { pool } from './db.js';
 import { runDailyInsights } from './insights/daily-insights.js';
+import {
+  getAdminOverview,
+  getAdminSettings,
+  updateAdminSettings,
+  listReportedPosts,
+  getAdsAdminSummary,
+} from './admin/admin.service.js';
+import { clearCountryMoodCache } from './graphql/modules/insights/insights.service.js';
 
 type AuthedUser = {
   id: string;
@@ -60,6 +68,7 @@ const LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY;
 const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET;
 const LIVEKIT_URL = process.env.LIVEKIT_URL;
 const INSIGHTS_CRON_SECRET = process.env.INSIGHTS_CRON_SECRET || '';
+const ADMIN_PORTAL_KEY = process.env.ADMIN_PORTAL_KEY || 'worldapp-admin-2026';
 
 if (!SUPABASE_URL) {
   console.warn('⚠️ SUPABASE_URL not set. JWT verification will fail until you set it.');
@@ -152,6 +161,11 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
 const socketsByUser = new Map<string, Set<any>>();
 
+function hasAdminAccess(req: Request): boolean {
+  const key = String(req.headers['x-admin-key'] ?? req.query.key ?? '').trim();
+  return !!ADMIN_PORTAL_KEY && key === ADMIN_PORTAL_KEY;
+}
+
 app.use(express.json({ limit: '200kb' }));
 app.use(
   cors({
@@ -168,6 +182,80 @@ app.use(
 
 // ✅ health endpoint (typed _req to avoid implicit any)
 app.get('/health', (_req: Request, res: Response) => res.json({ ok: true }));
+
+app.get('/admin/bootstrap', async (req: Request, res: Response) => {
+  if (!hasAdminAccess(req)) return res.status(401).json({ error: 'unauthorized' });
+  try {
+    const [overview, settings, reports, ads] = await Promise.all([
+      getAdminOverview(),
+      getAdminSettings(),
+      listReportedPosts(20),
+      getAdsAdminSummary(),
+    ]);
+    return res.json({ ok: true, overview, settings, reports, ads });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'failed' });
+  }
+});
+
+app.get('/admin/settings', async (req: Request, res: Response) => {
+  if (!hasAdminAccess(req)) return res.status(401).json({ error: 'unauthorized' });
+  try {
+    return res.json({ ok: true, settings: await getAdminSettings() });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'failed' });
+  }
+});
+
+app.post('/admin/settings', async (req: Request, res: Response) => {
+  if (!hasAdminAccess(req)) return res.status(401).json({ error: 'unauthorized' });
+  try {
+    const settings = await updateAdminSettings(req.body ?? {});
+    clearCountryMoodCache();
+    return res.json({ ok: true, settings });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'failed' });
+  }
+});
+
+app.get('/admin/reports', async (req: Request, res: Response) => {
+  if (!hasAdminAccess(req)) return res.status(401).json({ error: 'unauthorized' });
+  try {
+    const limit = Number(req.query.limit ?? 40);
+    return res.json({ ok: true, reports: await listReportedPosts(limit) });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'failed' });
+  }
+});
+
+app.get('/admin/overview', async (req: Request, res: Response) => {
+  if (!hasAdminAccess(req)) return res.status(401).json({ error: 'unauthorized' });
+  try {
+    return res.json({ ok: true, overview: await getAdminOverview() });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'failed' });
+  }
+});
+
+app.get('/admin/ads/summary', async (req: Request, res: Response) => {
+  if (!hasAdminAccess(req)) return res.status(401).json({ error: 'unauthorized' });
+  try {
+    return res.json({ ok: true, ads: await getAdsAdminSummary() });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'failed' });
+  }
+});
+
+app.post('/admin/insights/run', async (req: Request, res: Response) => {
+  if (!hasAdminAccess(req)) return res.status(401).json({ error: 'unauthorized' });
+  try {
+    clearCountryMoodCache();
+    const result = await runDailyInsights();
+    return res.json({ ok: true, ...result });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'failed' });
+  }
+});
 
 app.post('/push/subscribe', async (req: Request, res: Response) => {
   const user = await getUserFromRequest(req);
