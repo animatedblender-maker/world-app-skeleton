@@ -35,8 +35,10 @@ const MAX_TEXTS = 180;
 const MAX_TEXT_LEN = 1600;
 const OLLAMA_PROMPT_TEXT_LIMIT = 12000;
 const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS || 20000);
+const OLLAMA_RETRY_DELAY_MS = 1200;
 
 const cache = new Map<string, { at: number; value: CountryMood }>();
+const inFlightMoodRequests = new Map<string, Promise<CountryMood>>();
 let cachedCountryCodes: string[] | null = null;
 
 let sentimentPipeline: any | null = null;
@@ -72,6 +74,50 @@ function normalizeText(value: string): string {
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function uniqueNormalizedWordCount(value: string): number {
+  const normalized = normalizeText(value);
+  if (!normalized) return 0;
+  return new Set(normalized.split(' ').filter(Boolean)).size;
+}
+
+function repeatedFragmentRatio(value: string): number {
+  const normalized = normalizeText(value);
+  if (!normalized) return 1;
+  const words = normalized.split(' ').filter(Boolean);
+  if (!words.length) return 1;
+  return new Set(words).size / words.length;
+}
+
+function looksLowSignalPost(value: string): boolean {
+  const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+  if (!text) return true;
+  if (text.length < 28) return true;
+  if (uniqueNormalizedWordCount(text) < 5) return true;
+  if (repeatedFragmentRatio(text) < 0.45) return true;
+  if (/^(reel test|soon soon|it'?s time|happy birthday to the creator)$/i.test(text)) return true;
+  return false;
+}
+
+function cleanTextsForSummary(texts: string[], maxPosts: number): string[] {
+  const seen = new Set<string>();
+  const cleaned: string[] = [];
+  for (const raw of texts) {
+    const text = String(raw ?? '').replace(/\s+/g, ' ').trim();
+    if (!text) continue;
+    if (looksLowSignalPost(text)) continue;
+    const dedupeKey = normalizeText(text);
+    if (!dedupeKey || seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    cleaned.push(text);
+    if (cleaned.length >= maxPosts) break;
+  }
+  return cleaned;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 const STOPWORDS = new Set(
@@ -298,36 +344,49 @@ async function generateInsightWithOllama(
         prompt,
       });
     }
-    const res = await fetch(`${baseUrl}/chat`, {
+    const body = JSON.stringify({
+      model,
+      stream: false,
+      messages: [
+        {
+          role: 'system',
+          content:
+            'Summarize discussion themes from user posts. Be grounded, concise, and avoid mentioning AI or uncertainty unless the data is genuinely sparse. Ignore obvious spam, duplicates, one-liners, and off-topic fragments when forming the summary.',
+        },
+        { role: 'user', content: prompt },
+      ],
+      options: {
+        temperature: 0.35,
+      },
+    });
+    let res = await fetch(`${baseUrl}/chat`, {
       method: 'POST',
       headers,
       signal: controller.signal,
-      body: JSON.stringify({
-        model,
-        stream: false,
-        messages: [
-          {
-            role: 'system',
-            content:
-              'Summarize discussion themes from user posts. Be grounded, concise, and avoid mentioning AI or uncertainty unless the data is genuinely sparse.',
-          },
-          { role: 'user', content: prompt },
-        ],
-        options: {
-          temperature: 0.35,
-        },
-      }),
+      body,
     });
+    if (res.status === 429) {
+      if (ollamaDebugEnabled()) {
+        console.log('[ollama-debug] retrying-after-429', { countryCode });
+      }
+      await delay(OLLAMA_RETRY_DELAY_MS);
+      res = await fetch(`${baseUrl}/chat`, {
+        method: 'POST',
+        headers,
+        signal: controller.signal,
+        body,
+      });
+    }
     if (!res.ok) {
-      const body = await res.text().catch(() => '');
+      const errorBody = await res.text().catch(() => '');
       if (ollamaDebugEnabled()) {
         console.log('[ollama-debug] upstream-error', {
           countryCode,
           status: res.status,
-          body,
+          body: errorBody,
         });
       }
-      throw new Error(`Ollama summary failed: ${res.status} ${body}`);
+      throw new Error(`Ollama summary failed: ${res.status} ${errorBody}`);
     }
     const json: any = await res.json();
     if (ollamaDebugEnabled()) {
@@ -599,79 +658,92 @@ export async function getCountryMood(countryCode?: string | null): Promise<Count
   const key = countryCode ? `cc:${countryCode.toUpperCase()}` : 'global';
   const cached = cache.get(key);
   if (cached && Date.now() - cached.at < cacheTtlMs) return cached.value;
+  const pending = inFlightMoodRequests.get(key);
+  if (pending) return pending;
 
-  const windowHours = Math.max(1, Number(settings?.insight_window_hours ?? 24));
-  const minPosts = Math.max(1, Number(settings?.insight_min_posts ?? 3));
-  const maxPosts = Math.max(10, Number((settings as any)?.insight_max_posts ?? 250));
-  const maxLookbackHours = Math.max(
-    windowHours,
-    Number((settings as any)?.insight_max_lookback_hours ?? 24 * 30)
-  );
-  const texts = await fetchTexts(countryCode ?? null, windowHours, maxLookbackHours, maxPosts);
-  if (!texts.length) {
-    const empty: CountryMood = {
+  const work = (async () => {
+    const windowHours = Math.max(1, Number(settings?.insight_window_hours ?? 24));
+    const minPosts = Math.max(1, Number(settings?.insight_min_posts ?? 3));
+    const maxPosts = Math.max(10, Number((settings as any)?.insight_max_posts ?? 250));
+    const maxLookbackHours = Math.max(
+      windowHours,
+      Number((settings as any)?.insight_max_lookback_hours ?? 24 * 30)
+    );
+    const rawTexts = await fetchTexts(countryCode ?? null, windowHours, maxLookbackHours, maxPosts);
+    const texts = cleanTextsForSummary(rawTexts, maxPosts);
+    if (!texts.length) {
+      const empty: CountryMood = {
+        country_code: countryCode ? countryCode.toUpperCase() : 'GLOBAL',
+        positive: 0,
+        neutral: 0,
+        negative: 0,
+        total: 0,
+        topics: [],
+        insight: `Not enough posts are available to summarize yet. Try a wider lookback window or wait for more posts.`,
+        computed_at: new Date().toISOString(),
+      };
+      cache.set(key, { at: Date.now(), value: empty });
+      return empty;
+    }
+
+    let scores: SentimentScores[] = [];
+    try {
+      scores = await classifySentiment(texts);
+    } catch (err: any) {
+      throw new GraphQLError(`Sentiment failed: ${err?.message ?? 'unknown'}`);
+    }
+
+    const counts: MoodCounts = { positive: 0, neutral: 0, negative: 0, total: scores.length };
+    for (const score of scores) {
+      counts.positive += score.positive;
+      counts.neutral += score.neutral;
+      counts.negative += score.negative;
+    }
+
+    const topics = extractTopics(texts, 10);
+    const ollamaInsight =
+      (settings?.ollama_enabled ?? true)
+        ? await generateInsightWithOllama(
+            countryCode ? countryCode.toUpperCase() : 'GLOBAL',
+            counts,
+            texts
+          )
+        : null;
+    const fallbackInsight = buildInsight(counts, texts, topics);
+    const insight = ollamaInsight || fallbackInsight;
+    if (ollamaDebugEnabled()) {
+      console.log('[ollama-debug] final-summary', {
+        countryCode: countryCode ? countryCode.toUpperCase() : 'GLOBAL',
+        source: ollamaInsight ? 'ollama' : 'fallback',
+        summary: insight,
+      });
+    }
+    const mood: CountryMood = {
       country_code: countryCode ? countryCode.toUpperCase() : 'GLOBAL',
-      positive: 0,
-      neutral: 0,
-      negative: 0,
-      total: 0,
-      topics: [],
-      insight: `Not enough posts are available to summarize yet. Try a wider lookback window or wait for more posts.`,
+      ...counts,
+      topics,
+      insight:
+        texts.length < minPosts
+          ? `${insight} This read is based on a limited sample of available posts.`
+          : insight,
       computed_at: new Date().toISOString(),
     };
-    cache.set(key, { at: Date.now(), value: empty });
-    return empty;
-  }
 
-  let scores: SentimentScores[] = [];
+    cache.set(key, { at: Date.now(), value: mood });
+    return mood;
+  })();
+
+  inFlightMoodRequests.set(key, work);
   try {
-    scores = await classifySentiment(texts);
-  } catch (err: any) {
-    throw new GraphQLError(`Sentiment failed: ${err?.message ?? 'unknown'}`);
+    return await work;
+  } finally {
+    inFlightMoodRequests.delete(key);
   }
-
-  const counts: MoodCounts = { positive: 0, neutral: 0, negative: 0, total: scores.length };
-  for (const score of scores) {
-    counts.positive += score.positive;
-    counts.neutral += score.neutral;
-    counts.negative += score.negative;
-  }
-
-  const topics = extractTopics(texts, 10);
-  const ollamaInsight =
-    (settings?.ollama_enabled ?? true)
-      ? await generateInsightWithOllama(
-          countryCode ? countryCode.toUpperCase() : 'GLOBAL',
-          counts,
-          texts
-        )
-      : null;
-  const fallbackInsight = buildInsight(counts, texts, topics);
-  const insight = ollamaInsight || fallbackInsight;
-  if (ollamaDebugEnabled()) {
-    console.log('[ollama-debug] final-summary', {
-      countryCode: countryCode ? countryCode.toUpperCase() : 'GLOBAL',
-      source: ollamaInsight ? 'ollama' : 'fallback',
-      summary: insight,
-    });
-  }
-  const mood: CountryMood = {
-    country_code: countryCode ? countryCode.toUpperCase() : 'GLOBAL',
-    ...counts,
-    topics,
-    insight:
-      texts.length < minPosts
-        ? `${insight} This read is based on a limited sample of available posts.`
-        : insight,
-    computed_at: new Date().toISOString(),
-  };
-
-  cache.set(key, { at: Date.now(), value: mood });
-  return mood;
 }
 
 export function clearCountryMoodCache(): void {
   cache.clear();
+  inFlightMoodRequests.clear();
 }
 
 export async function runAllCountryMoods(): Promise<{ processed: number; failed: number }> {

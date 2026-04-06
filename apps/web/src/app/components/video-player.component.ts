@@ -137,7 +137,7 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
         height: 100%;
       }
       :host(.reel-player) .ad-layer {
-        z-index: 12;
+        z-index: 60;
       }
       :host(.reel-player) .ad-pill,
       :host(.reel-player) .ad-learn-more {
@@ -195,6 +195,7 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
         background: #050505;
         overflow: hidden;
         max-height: var(--player-max-height, none);
+        isolation: isolate;
       }
       .video-shell:fullscreen,
       .video-shell:-webkit-full-screen,
@@ -211,6 +212,8 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
         z-index: 9999;
       }
       video {
+        position: relative;
+        z-index: 0;
         width: 100%;
         display: block;
         max-height: var(--player-max-height, none);
@@ -228,6 +231,7 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
       .video-overlay {
         position: absolute;
         inset: 0;
+        z-index: 1;
         background: linear-gradient(180deg, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0) 45%, rgba(0, 0, 0, 0.65));
         opacity: 0.7;
         transition: opacity 200ms ease;
@@ -239,7 +243,7 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
       .ad-layer {
         position: absolute;
         inset: 0;
-        z-index: 6;
+        z-index: 50;
         pointer-events: none;
       }
       .ad-pill,
@@ -247,6 +251,7 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
       .ad-skip {
         position: absolute;
         pointer-events: auto;
+        z-index: 51;
         border-radius: 999px;
         padding: 8px 12px;
         font-size: 12px;
@@ -291,7 +296,7 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
         padding: 8px 12px;
         line-height: 1;
         box-shadow: 0 8px 18px rgba(0, 0, 0, 0.18);
-        z-index: 13;
+        z-index: 51;
       }
       .center-play {
         position: absolute;
@@ -307,7 +312,7 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
         box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
         cursor: pointer;
         transition: transform 180ms ease, background 180ms ease;
-        z-index: 4;
+        z-index: 15;
       }
       .center-play:hover {
         transform: scale(1.05);
@@ -339,7 +344,7 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
         display: grid;
         place-items: center;
         cursor: pointer;
-        z-index: 3;
+        z-index: 20;
       }
       .buffering {
         position: absolute;
@@ -347,7 +352,7 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
         display: grid;
         place-items: center;
         pointer-events: none;
-        z-index: 5;
+        z-index: 25;
       }
       .spinner {
         width: 42px;
