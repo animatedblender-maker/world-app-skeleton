@@ -1052,7 +1052,7 @@ type CountryIntelligenceData = {
                 <div class="side-section">
                   <div class="side-section-label">Suggested People</div>
                   <div class="side-list" *ngIf="displayRecommendations(intel).length; else noRecs">
-                    <div class="side-list-row" *ngFor="let rec of displayRecommendations(intel)">
+                    <div class="side-list-row" *ngFor="let rec of visibleRecommendations(intel)">
                       <div class="rec-ident">
                         <img
                           *ngIf="recommendationAvatarUrl(rec)"
@@ -1097,17 +1097,17 @@ type CountryIntelligenceData = {
                         </button>
                       </div>
                     </div>
-                    <button class="side-link side-more" type="button" (click)="openPeopleDirectory()">
-                      Show more
+                    <button
+                      class="side-link side-more"
+                      type="button"
+                      *ngIf="hasMoreRecommendations(intel) || recommendationsExpanded"
+                      (click)="toggleRecommendationsExpanded()"
+                    >
+                      {{ recommendationsExpanded ? 'Show less' : 'Show more' }}
                     </button>
                   </div>
                   <ng-template #noRecs>
-                    <div class="left-empty">
-                      Recommendations will appear as more people participate here.
-                      <button class="side-link side-more" type="button" (click)="openPeopleDirectory()">
-                        Show more
-                      </button>
-                    </div>
+                    <div class="left-empty">Recommendations will appear as more people participate here.</div>
                   </ng-template>
                 </div>
               </ng-container>
@@ -3296,6 +3296,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   sideDataLoading = false;
   sideDataRefreshing = false;
   sideDataError = '';
+  recommendationsExpanded = false;
 
   searchOpen = false;
   userSearchTerm = '';
@@ -3995,6 +3996,10 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
         countryPulse: CountryPulseData;
         countryIntelligence: CountryIntelligenceData;
       }>(query, { code });
+      const nextCountryCode = String(data.countryIntelligence?.country_code ?? code).trim().toUpperCase();
+      if (nextCountryCode !== String(this.countryIntelligence?.country_code ?? '').trim().toUpperCase()) {
+        this.recommendationsExpanded = false;
+      }
       this.countryPulse = data.countryPulse ?? null;
       this.countryIntelligence = data.countryIntelligence ?? null;
       this.sideDataError = '';
@@ -4236,6 +4241,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.sideDataLoading = false;
     this.sideDataRefreshing = false;
     this.sideDataError = '';
+    this.recommendationsExpanded = false;
     this.stopSideDataRefresh();
     this.postComposerError = '';
     this.postFeedback = '';
@@ -5907,6 +5913,20 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     return this.sortRecommendations(items).slice(0, 7);
   }
 
+  visibleRecommendations(intel: CountryIntelligenceData | null | undefined): CountryRecommendation[] {
+    const items = this.displayRecommendations(intel);
+    return this.recommendationsExpanded ? items : items.slice(0, 3);
+  }
+
+  hasMoreRecommendations(intel: CountryIntelligenceData | null | undefined): boolean {
+    return this.displayRecommendations(intel).length > 3;
+  }
+
+  toggleRecommendationsExpanded(): void {
+    this.recommendationsExpanded = !this.recommendationsExpanded;
+    this.forceUi();
+  }
+
   handleRecommendationAvatarError(rec: CountryRecommendation | null | undefined): void {
     if (!rec) return;
     rec.avatar_url = null;
@@ -5929,10 +5949,6 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     const slug = fallbackId || author?.user_id || author?.username?.trim();
     if (!slug) return;
     void this.router.navigate(['/user', slug]);
-  }
-
-  openPeopleDirectory(): void {
-    void this.router.navigate(['/people']);
   }
 
   openUserProfile(slug: string | null | undefined): void {

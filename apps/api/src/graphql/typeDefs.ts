@@ -317,9 +317,9 @@ export const typeDefs = `#graphql
 
   type CountryMood {
     country_code: String!
-    positive: Int!
-    neutral: Int!
-    negative: Int!
+    positive: Float!
+    neutral: Float!
+    negative: Float!
     total: Int!
     topics: [String!]!
     insight: String!
