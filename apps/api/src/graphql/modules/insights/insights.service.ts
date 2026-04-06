@@ -266,6 +266,11 @@ function buildSummaryPrompt(countryCode: string, counts: MoodCounts, texts: stri
   ].join('\n');
 }
 
+function ollamaDebugEnabled(): boolean {
+  const value = String(process.env.OLLAMA_DEBUG || '').trim().toLowerCase();
+  return value === '1' || value === 'true' || value === 'yes' || value === 'on';
+}
+
 async function generateInsightWithOllama(
   countryCode: string,
   counts: MoodCounts,
@@ -285,6 +290,14 @@ async function generateInsightWithOllama(
   const timeout = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT_MS);
   try {
     const prompt = buildSummaryPrompt(countryCode, counts, texts);
+    if (ollamaDebugEnabled()) {
+      console.log('[ollama-debug] request', {
+        countryCode,
+        totalTexts: texts.length,
+        previewTexts: texts.slice(0, 12),
+        prompt,
+      });
+    }
     const res = await fetch(`${baseUrl}/chat`, {
       method: 'POST',
       headers,
@@ -307,16 +320,36 @@ async function generateInsightWithOllama(
     });
     if (!res.ok) {
       const body = await res.text().catch(() => '');
+      if (ollamaDebugEnabled()) {
+        console.log('[ollama-debug] upstream-error', {
+          countryCode,
+          status: res.status,
+          body,
+        });
+      }
       throw new Error(`Ollama summary failed: ${res.status} ${body}`);
     }
     const json: any = await res.json();
+    if (ollamaDebugEnabled()) {
+      console.log('[ollama-debug] raw-response', {
+        countryCode,
+        response: json,
+      });
+    }
     const content = String(json?.message?.content ?? json?.response ?? '').trim();
     if (!content) return null;
-    return content
+    const cleaned = content
       .replace(/<think>[\s\S]*?<\/think>/gi, ' ')
       .replace(/thinking process:[\s\S]*$/i, ' ')
       .replace(/\s+/g, ' ')
       .trim();
+    if (ollamaDebugEnabled()) {
+      console.log('[ollama-debug] cleaned-summary', {
+        countryCode,
+        cleaned,
+      });
+    }
+    return cleaned;
   } catch {
     return null;
   } finally {
