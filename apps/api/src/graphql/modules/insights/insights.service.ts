@@ -638,15 +638,23 @@ export async function getCountryMood(countryCode?: string | null): Promise<Count
   }
 
   const topics = extractTopics(texts, 10);
-  const insight =
-    ((settings?.ollama_enabled ?? true)
+  const ollamaInsight =
+    (settings?.ollama_enabled ?? true)
       ? await generateInsightWithOllama(
           countryCode ? countryCode.toUpperCase() : 'GLOBAL',
           counts,
           texts
         )
-      : null) ||
-    buildInsight(counts, texts, topics);
+      : null;
+  const fallbackInsight = buildInsight(counts, texts, topics);
+  const insight = ollamaInsight || fallbackInsight;
+  if (ollamaDebugEnabled()) {
+    console.log('[ollama-debug] final-summary', {
+      countryCode: countryCode ? countryCode.toUpperCase() : 'GLOBAL',
+      source: ollamaInsight ? 'ollama' : 'fallback',
+      summary: insight,
+    });
+  }
   const mood: CountryMood = {
     country_code: countryCode ? countryCode.toUpperCase() : 'GLOBAL',
     ...counts,

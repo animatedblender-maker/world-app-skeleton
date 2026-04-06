@@ -1051,7 +1051,7 @@ type CountryIntelligenceData = {
 
                 <div class="side-section">
                   <div class="side-section-label">Suggested People</div>
-                  <div class="side-list" *ngIf="displayRecommendations(intel).length; else noRecs">
+                  <div class="side-list suggested-scroll" *ngIf="displayRecommendations(intel).length; else noRecs">
                     <div class="side-list-row" *ngFor="let rec of visibleRecommendations(intel)">
                       <div class="rec-ident">
                         <img
@@ -2703,7 +2703,6 @@ type CountryIntelligenceData = {
       color: #ff6b81;
       font-weight: 700;
     }
-
     .node-backdrop{ position: fixed; inset: 0; z-index: 11900; background: transparent; }
 
     .lightbox{
