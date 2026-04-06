@@ -32,6 +32,8 @@ type PostTextRow = {
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_TEXTS = 180;
 const MAX_TEXT_LEN = 1600;
+const OLLAMA_PROMPT_TEXT_LIMIT = 12000;
+const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS || 20000);
 
 const cache = new Map<string, { at: number; value: CountryMood }>();
 let cachedCountryCodes: string[] | null = null;
@@ -221,6 +223,102 @@ function buildInsight(counts: MoodCounts, texts: string[], topics: string[]): st
     return `${topicSummary}. The overall tone feels ${mood}, based on a small number of recent full posts.`;
   }
   return `${topicSummary}. Overall tone feels ${mood} across recent full posts in this country feed.`;
+}
+
+function sampleTextsForSummary(texts: string[]): string[] {
+  if (texts.length <= 24) return texts;
+  const head = texts.slice(0, 12);
+  const midStart = Math.max(12, Math.floor(texts.length / 2) - 6);
+  const middle = texts.slice(midStart, midStart + 6);
+  const tail = texts.slice(-6);
+  const seen = new Set<string>();
+  return [...head, ...middle, ...tail].filter((text) => {
+    const key = text.trim();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function buildSummaryPrompt(countryCode: string, counts: MoodCounts, texts: string[]): string {
+  const sampled = sampleTextsForSummary(texts);
+  let totalLen = 0;
+  const clipped: string[] = [];
+  for (const text of sampled) {
+    const normalized = clampText(String(text ?? '').replace(/\s+/g, ' ').trim());
+    if (!normalized) continue;
+    if (totalLen + normalized.length > OLLAMA_PROMPT_TEXT_LIMIT) break;
+    clipped.push(normalized);
+    totalLen += normalized.length;
+  }
+
+  return [
+    'You are summarizing what people in a country feed are talking about.',
+    'Use only the posts provided below.',
+    'Focus on the major discussion themes, not on sentiment labels.',
+    'Estimate rough discussion share percentages by theme based on the posts.',
+    'Do not invent topics that are not in the posts.',
+    'Do not mention AI, models, sentiment classifiers, or that this is generated.',
+    'Return one compact paragraph in plain English, 45 to 90 words.',
+    `Country context: ${countryCode}.`,
+    `Recent post count: ${counts.total}.`,
+    'Posts:',
+    ...clipped.map((text, index) => `${index + 1}. ${text}`),
+  ].join('\n');
+}
+
+async function generateInsightWithOllama(
+  countryCode: string,
+  counts: MoodCounts,
+  texts: string[]
+): Promise<string | null> {
+  const baseUrl = String(process.env.OLLAMA_BASE_URL || '').trim().replace(/\/+$/, '');
+  const model = String(process.env.OLLAMA_MODEL || '').trim();
+  if (!baseUrl || !model) return null;
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  const apiKey = String(process.env.OLLAMA_API_KEY || '').trim();
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT_MS);
+  try {
+    const prompt = buildSummaryPrompt(countryCode, counts, texts);
+    const res = await fetch(`${baseUrl}/chat`, {
+      method: 'POST',
+      headers,
+      signal: controller.signal,
+      body: JSON.stringify({
+        model,
+        stream: false,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'Summarize discussion themes from user posts. Be grounded, concise, and avoid mentioning AI or uncertainty unless the data is genuinely sparse.',
+          },
+          { role: 'user', content: prompt },
+        ],
+        options: {
+          temperature: 0.2,
+        },
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`Ollama summary failed: ${res.status} ${body}`);
+    }
+    const json: any = await res.json();
+    const content = String(json?.message?.content ?? json?.response ?? '').trim();
+    if (!content) return null;
+    return content.replace(/\s+/g, ' ').trim();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function clampScore(value: number): number {
@@ -481,7 +579,9 @@ export async function getCountryMood(countryCode?: string | null): Promise<Count
   }
 
   const topics = extractTopics(texts, 10);
-  const insight = buildInsight(counts, texts, topics);
+  const insight =
+    (await generateInsightWithOllama(countryCode ? countryCode.toUpperCase() : 'GLOBAL', counts, texts)) ||
+    buildInsight(counts, texts, topics);
   const mood: CountryMood = {
     country_code: countryCode ? countryCode.toUpperCase() : 'GLOBAL',
     ...counts,

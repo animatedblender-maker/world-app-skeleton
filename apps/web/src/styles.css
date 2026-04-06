@@ -543,6 +543,29 @@ app-globe-page .left-empty .side-more{
   display: inline-flex;
 }
 
+@media (max-width: 900px){
+  app-globe-page .stage.focus,
+  app-globe-page .stage.focus.feed-full{
+    width: 100vw;
+    min-width: 100vw;
+    min-height: 100dvh;
+    height: 100dvh;
+    padding-bottom: 0;
+  }
+
+  app-globe-page .stage.focus.feed-full .main-pane,
+  app-globe-page .stage.focus.feed-full .main-card{
+    width: 100vw;
+    min-width: 100vw;
+    min-height: 100dvh;
+    height: 100dvh;
+  }
+
+  app-globe-page .stage.focus.feed-full .main-card{
+    padding-bottom: calc(var(--tabs-safe, 64px) + 8px);
+  }
+}
+
 app-globe-page .news-rail-list{
   display: grid;
   gap: 12px;
