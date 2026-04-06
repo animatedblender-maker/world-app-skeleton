@@ -1097,9 +1097,17 @@ type CountryIntelligenceData = {
                         </button>
                       </div>
                     </div>
+                    <button class="side-link side-more" type="button" (click)="openPeopleDirectory()">
+                      Show more
+                    </button>
                   </div>
                   <ng-template #noRecs>
-                    <div class="left-empty">Recommendations will appear as more people participate here.</div>
+                    <div class="left-empty">
+                      Recommendations will appear as more people participate here.
+                      <button class="side-link side-more" type="button" (click)="openPeopleDirectory()">
+                        Show more
+                      </button>
+                    </div>
                   </ng-template>
                 </div>
               </ng-container>
@@ -5870,7 +5878,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   displayRecommendations(intel: CountryIntelligenceData | null | undefined): CountryRecommendation[] {
-    const items: CountryRecommendation[] = this.sortRecommendations(intel?.recommendations ?? []).slice(0, 4);
+    const items: CountryRecommendation[] = this.sortRecommendations(intel?.recommendations ?? []).slice(0, 7);
     const seen = new Set<string>();
     for (const rec of items) {
       const userId = String(rec?.user_id ?? '').trim();
@@ -5878,11 +5886,10 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     }
 
     for (const post of this.posts) {
-      if (items.length >= 4) break;
+      if (items.length >= 7) break;
       const authorId = String(post?.author_id ?? post?.author?.user_id ?? '').trim();
       if (!authorId || seen.has(authorId) || authorId === this.meId) continue;
       if (!this.isSupabaseProfileId(authorId)) continue;
-      if (this.followingIds.has(authorId)) continue;
       const label = String(post?.author?.display_name ?? post?.author?.username ?? 'Member').trim();
       const username = String(post?.author?.username ?? '').trim() || null;
       const avatarUrl = String(post?.author?.avatar_url ?? '').trim() || null;
@@ -5897,7 +5904,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       });
       seen.add(authorId);
     }
-    return this.sortRecommendations(items).slice(0, 4);
+    return this.sortRecommendations(items).slice(0, 7);
   }
 
   handleRecommendationAvatarError(rec: CountryRecommendation | null | undefined): void {
@@ -5922,6 +5929,10 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     const slug = fallbackId || author?.user_id || author?.username?.trim();
     if (!slug) return;
     void this.router.navigate(['/user', slug]);
+  }
+
+  openPeopleDirectory(): void {
+    void this.router.navigate(['/people']);
   }
 
   openUserProfile(slug: string | null | undefined): void {

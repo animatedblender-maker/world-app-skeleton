@@ -400,6 +400,7 @@ export const typeDefs = `#graphql
     profileById(user_id: ID!): Profile
     profileByUsername(username: String!): Profile
     searchProfiles(query: String!, limit: Int): [Profile!]!
+    browseProfiles(limit: Int, offset: Int): [Profile!]!
 
     # Presence stats
     globalStats: GlobalStats!

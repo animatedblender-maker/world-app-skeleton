@@ -58,6 +58,12 @@ export const routes: Routes = [
       import('./pages/search.page').then((m) => m.SearchPageComponent),
   },
   {
+    path: 'people',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pages/people.page').then((m) => m.PeoplePageComponent),
+  },
+  {
     path: 'ads',
     canActivate: [authGuard],
     loadComponent: () =>

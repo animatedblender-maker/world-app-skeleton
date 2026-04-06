@@ -534,6 +534,15 @@ app-globe-page .side-link:hover{
   background: rgba(248,250,252,1);
 }
 
+app-globe-page .side-more{
+  align-self: flex-start;
+  margin-top: 10px;
+}
+
+app-globe-page .left-empty .side-more{
+  display: inline-flex;
+}
+
 app-globe-page .news-rail-list{
   display: grid;
   gap: 12px;

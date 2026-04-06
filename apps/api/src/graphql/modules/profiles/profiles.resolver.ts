@@ -53,6 +53,9 @@ export const profilesResolvers = {
       if (!raw) return [];
       return await svc().searchProfiles(raw, args?.limit ?? 6);
     },
+    browseProfiles: async (_: any, args: { limit?: number; offset?: number }) => {
+      return await svc().browseProfiles(args?.limit ?? 80, args?.offset ?? 0);
+    },
   },
 
   Mutation: {

@@ -127,4 +127,20 @@ export class ProfilesService {
 
     return rows as ProfileRow[];
   }
+
+  async browseProfiles(limit: number, offset: number): Promise<ProfileRow[]> {
+    const max = Math.max(1, Math.min(200, limit));
+    const start = Math.max(0, offset);
+    const { rows } = await pool.query(
+      `
+      select *
+      from public.profiles
+      order by updated_at desc nulls last, created_at desc, username nulls last
+      limit $1
+      offset $2
+      `,
+      [max, start]
+    );
+    return rows as ProfileRow[];
+  }
 }

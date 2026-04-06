@@ -132,6 +132,24 @@ query SearchProfiles($query: String!, $limit: Int) {
 }
 `;
 
+const BROWSE_PROFILES = `
+query BrowseProfiles($limit: Int, $offset: Int) {
+  browseProfiles(limit: $limit, offset: $offset) {
+    user_id
+    email
+    display_name
+    username
+    avatar_url
+    country_name
+    country_code
+    city_name
+    bio
+    created_at
+    updated_at
+  }
+}
+`;
+
 @Injectable({ providedIn: 'root' })
 export class ProfileService {
   constructor(
@@ -232,6 +250,17 @@ export class ProfileService {
       });
     } catch {
       return { searchProfiles: [] };
+    }
+  }
+
+  async browseProfilesReal(limit = 80, offset = 0) {
+    try {
+      return await this.gql.request<{ browseProfiles: Profile[] }>(BROWSE_PROFILES, {
+        limit: limit <= 0 ? undefined : limit,
+        offset: Math.max(0, offset),
+      });
+    } catch {
+      return { browseProfiles: [] };
     }
   }
 

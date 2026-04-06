@@ -495,22 +495,6 @@ async function recommendations(countryCode: string, viewerId: string | null): Pr
       group by following_id
     ) f on f.following_id = pr.user_id
     where ($2::uuid is null or pr.user_id <> $2::uuid)
-      and (
-        $2::uuid is null or not exists (
-          select 1
-          from public.user_follows uf
-          where uf.follower_id = $2::uuid
-            and uf.following_id = pr.user_id
-        )
-      )
-      and (
-        coalesce(r7.posts_last_7d, 0) > 0
-        or coalesce(ol.online_now, false) = true
-        or coalesce(r30.posts_last_30d, 0) > 0
-        or coalesce(go.global_online_now, false) = true
-        or coalesce(gr30.global_posts_last_30d, 0) > 0
-        or coalesce(f.followers_count, 0) > 0
-      )
     order by
       (
         coalesce(r7.posts_last_7d, 0) * 120
@@ -528,12 +512,12 @@ async function recommendations(countryCode: string, viewerId: string | null): Pr
       coalesce(gr30.global_posts_last_30d, 0) desc,
       coalesce(f.followers_count, 0) desc,
       pr.created_at desc
-    limit 6
+    limit 7
     `,
     params
   );
 
-  return rows.slice(0, 4).map((row) => ({
+  return rows.slice(0, 7).map((row) => ({
     kind: 'profile',
     label: row.display_name || row.username || 'Member',
     reason: (() => {

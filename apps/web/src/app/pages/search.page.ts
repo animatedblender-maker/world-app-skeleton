@@ -10,6 +10,7 @@ import { AuthService } from '../core/services/auth.service';
 import { PostsService } from '../core/services/posts.service';
 import { ProfileService, type Profile } from '../core/services/profile.service';
 import { FollowService } from '../core/services/follow.service';
+import { FakeDataService } from '../core/services/fake-data.service';
 import { VideoPlayerComponent } from '../components/video-player.component';
 import { BottomTabsComponent } from '../components/bottom-tabs.component';
 import { SUPABASE_URL } from '../config/supabase.config';
@@ -40,7 +41,8 @@ import type { CountryPost, PostComment, PostLike } from '../core/models/post.mod
       <div class="search-body">
         <div class="search-state" *ngIf="searchBusy">Searching...</div>
         <div class="search-state error" *ngIf="!searchBusy && searchError">{{ searchError }}</div>
-        <div class="search-state" *ngIf="!searchBusy && !searchTerm">Type to search posts, people, or countries.</div>
+        <div class="search-state" *ngIf="!searchBusy && !searchTerm && !browsePeopleMode">Type to search posts, people, or countries.</div>
+        <div class="search-state" *ngIf="!searchBusy && !searchTerm && browsePeopleMode">Browsing people across Matterya.</div>
 
         <section class="results-section" *ngIf="countryResults.length">
           <div class="section-title">Countries</div>
@@ -58,7 +60,7 @@ import type { CountryPost, PostComment, PostLike } from '../core/models/post.mod
         </section>
 
         <section class="results-section" *ngIf="peopleResults.length">
-          <div class="section-title">People</div>
+          <div class="section-title">{{ browsePeopleMode ? 'People Directory' : 'People' }}</div>
           <div class="people-list">
             <div class="person-card" *ngFor="let person of peopleResults">
               <button
@@ -92,9 +94,18 @@ import type { CountryPost, PostComment, PostLike } from '../core/models/post.mod
               </button>
             </div>
           </div>
+          <button
+            class="load-more-btn"
+            type="button"
+            *ngIf="browsePeopleMode && hasMorePeople && !searchBusy"
+            (click)="loadMorePeople()"
+            [disabled]="loadingMorePeople"
+          >
+            {{ loadingMorePeople ? 'Loading...' : 'Load more people' }}
+          </button>
         </section>
 
-        <section class="results-section">
+        <section class="results-section" *ngIf="!browsePeopleMode || !!searchTerm || postResults.length">
           <div class="section-title">Posts</div>
           <div class="posts-state" *ngIf="!searchBusy && searchTerm && !postResults.length">
             No posts found.
@@ -643,6 +654,19 @@ import type { CountryPost, PostComment, PostLike } from '../core/models/post.mod
         box-shadow: none;
       }
       .follow-chip:disabled { opacity: 0.6; cursor: not-allowed; }
+      .load-more-btn {
+        margin-top: 12px;
+        border: 1px solid rgba(0, 0, 0, 0.12);
+        border-radius: 999px;
+        padding: 10px 16px;
+        background: rgba(255, 255, 255, 0.96);
+        color: rgba(10, 12, 18, 0.82);
+        font-size: 12px;
+        font-weight: 900;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        cursor: pointer;
+      }
       .post-body { margin-top: 12px; font-size: 14px; line-height: 1.4; color: rgba(10, 12, 18, 0.85); }
       .post-shared { margin-top: 12px; }
       .shared-label {
@@ -1004,6 +1028,9 @@ export class SearchPageComponent implements OnInit, OnDestroy {
   searchTerm = '';
   searchBusy = false;
   searchError = '';
+  browsePeopleMode = false;
+  loadingMorePeople = false;
+  hasMorePeople = false;
   countries: CountryModel[] = [];
   countryResults: CountryModel[] = [];
   peopleResults: Profile[] = [];
@@ -1042,6 +1069,7 @@ export class SearchPageComponent implements OnInit, OnDestroy {
   private followingIds = new Set<string>();
   private followBusyMap = new Map<string, boolean>();
   private readonly POST_TEXT_PREVIEW = 140;
+  private readonly PEOPLE_PAGE_SIZE = 80;
   private searchSeq = 0;
 
   constructor(
@@ -1052,7 +1080,8 @@ export class SearchPageComponent implements OnInit, OnDestroy {
     private auth: AuthService,
     private postsService: PostsService,
     private profiles: ProfileService,
-    private followService: FollowService
+    private followService: FollowService,
+    private fakeData: FakeDataService
   ) {}
 
   async ngOnInit(): Promise<void> {
@@ -1069,9 +1098,12 @@ export class SearchPageComponent implements OnInit, OnDestroy {
     await this.loadCountries();
 
     const q = String(this.route.snapshot.queryParamMap.get('q') || '').trim();
+    this.browsePeopleMode = this.route.snapshot.queryParamMap.get('browse') === 'people';
     if (q) {
       this.searchTerm = q;
       void this.runSearch(q);
+    } else if (this.browsePeopleMode) {
+      void this.loadPeopleDirectory(true);
     }
   }
 
@@ -1113,7 +1145,12 @@ export class SearchPageComponent implements OnInit, OnDestroy {
       this.searchBusy = false;
       this.searchError = '';
       this.countryResults = [];
-      this.peopleResults = [];
+      if (this.browsePeopleMode) {
+        void this.loadPeopleDirectory(true);
+      } else {
+        this.peopleResults = [];
+        this.hasMorePeople = false;
+      }
       this.postResults = [];
       return;
     }
@@ -1147,6 +1184,54 @@ export class SearchPageComponent implements OnInit, OnDestroy {
         this.searchBusy = false;
       }
     }
+  }
+
+  async loadMorePeople(): Promise<void> {
+    if (!this.browsePeopleMode || this.loadingMorePeople || !this.hasMorePeople) return;
+    await this.loadPeopleDirectory(false);
+  }
+
+  private async loadPeopleDirectory(reset: boolean): Promise<void> {
+    const pageIndex = reset ? 0 : Math.floor(this.peopleResults.length / this.PEOPLE_PAGE_SIZE);
+    const offset = pageIndex * this.PEOPLE_PAGE_SIZE;
+    if (reset) {
+      this.peopleResults = [];
+    }
+    this.loadingMorePeople = true;
+    this.searchBusy = reset;
+    this.searchError = '';
+    try {
+      const [real, fake] = await Promise.all([
+        this.profiles.browseProfilesReal(this.PEOPLE_PAGE_SIZE, offset),
+        this.fakeData.getProfiles(this.countries),
+      ]);
+      const fakeSlice = fake.slice(offset, offset + this.PEOPLE_PAGE_SIZE);
+      const merged = this.mergePeople(reset ? [] : this.peopleResults, real.browseProfiles ?? [], fakeSlice);
+      this.peopleResults = merged;
+      this.hasMorePeople =
+        (real.browseProfiles?.length ?? 0) >= this.PEOPLE_PAGE_SIZE || fake.length > offset + this.PEOPLE_PAGE_SIZE;
+    } catch (e: any) {
+      this.searchError = e?.message ?? 'Failed to load people.';
+      this.hasMorePeople = false;
+    } finally {
+      this.loadingMorePeople = false;
+      this.searchBusy = false;
+    }
+  }
+
+  private mergePeople(base: Profile[], real: Profile[], fake: Profile[]): Profile[] {
+    const next: Profile[] = [];
+    const seen = new Set<string>();
+    const push = (profile: Profile) => {
+      const key = String(profile.user_id || profile.username || '').trim();
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      next.push(profile);
+    };
+    base.forEach(push);
+    real.forEach(push);
+    fake.forEach(push);
+    return next;
   }
 
   goHome(): void {
