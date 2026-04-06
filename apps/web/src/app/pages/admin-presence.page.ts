@@ -15,6 +15,15 @@ import { environment } from '../../envirnoments/envirnoment';
 const ADMIN_KEY = 'worldapp-admin-2026';
 const ADMIN_STORAGE = 'worldapp.adminKey.v1';
 const EMPTY_OVERRIDE: PresenceOverride = Object.freeze({ total: null, online: null });
+const DEFAULT_SETTINGS: AdminSettings = {
+  insight_window_hours: 24,
+  insight_min_posts: 3,
+  insight_cache_minutes: 5,
+  insight_max_posts: 250,
+  insight_max_lookback_hours: 720,
+  ollama_enabled: true,
+  ollama_model: 'qwen3.5:397b-cloud',
+};
 
 type AdminTab = 'overview' | 'insights' | 'reports' | 'ads' | 'presence';
 
@@ -31,6 +40,8 @@ type AdminSettings = {
   insight_window_hours: number;
   insight_min_posts: number;
   insight_cache_minutes: number;
+  insight_max_posts: number;
+  insight_max_lookback_hours: number;
   ollama_enabled: boolean;
   ollama_model: string;
 };
@@ -62,6 +73,31 @@ type AdminBootstrap = {
   reports: ReportedPostItem[];
   ads: AdsSummary;
 };
+
+function clampInt(value: any, fallback: number, min: number, max: number): number {
+  const next = Number(value);
+  if (!Number.isFinite(next)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(next)));
+}
+
+function normalizeSettings(input: Partial<AdminSettings> | null | undefined): AdminSettings {
+  const raw = input || {};
+  return {
+    insight_window_hours: clampInt(raw.insight_window_hours, DEFAULT_SETTINGS.insight_window_hours, 1, 720),
+    insight_min_posts: clampInt(raw.insight_min_posts, DEFAULT_SETTINGS.insight_min_posts, 1, 1000),
+    insight_cache_minutes: clampInt(raw.insight_cache_minutes, DEFAULT_SETTINGS.insight_cache_minutes, 1, 1440),
+    insight_max_posts: clampInt(raw.insight_max_posts, DEFAULT_SETTINGS.insight_max_posts, 10, 1000),
+    insight_max_lookback_hours: clampInt(
+      raw.insight_max_lookback_hours,
+      DEFAULT_SETTINGS.insight_max_lookback_hours,
+      1,
+      24 * 365
+    ),
+    ollama_enabled:
+      typeof raw.ollama_enabled === 'boolean' ? raw.ollama_enabled : DEFAULT_SETTINGS.ollama_enabled,
+    ollama_model: String(raw.ollama_model || DEFAULT_SETTINGS.ollama_model).trim() || DEFAULT_SETTINGS.ollama_model,
+  };
+}
 
 @Component({
   selector: 'app-admin-presence-page',
@@ -164,6 +200,14 @@ type AdminBootstrap = {
               <input type="number" min="1" max="1440" [(ngModel)]="settingsDraft.insight_cache_minutes" />
             </label>
             <label>
+              <span>Max posts for summary</span>
+              <input type="number" min="10" max="1000" [(ngModel)]="settingsDraft.insight_max_posts" />
+            </label>
+            <label>
+              <span>Max lookback hours</span>
+              <input type="number" min="1" max="8760" [(ngModel)]="settingsDraft.insight_max_lookback_hours" />
+            </label>
+            <label>
               <span>Ollama model</span>
               <input type="text" [(ngModel)]="settingsDraft.ollama_model" placeholder="qwen3.5:397b-cloud" />
             </label>
@@ -176,6 +220,9 @@ type AdminBootstrap = {
           <div class="actions-row">
             <button type="button" (click)="saveSettings()" [disabled]="savingSettings">
               {{ savingSettings ? 'Saving…' : 'Save settings' }}
+            </button>
+            <button class="ghost" type="button" (click)="resetSettingsDraft()" [disabled]="savingSettings || cronRunning">
+              Reset form
             </button>
             <button class="ghost" type="button" (click)="runDailyInsights()" [disabled]="cronRunning">
               {{ cronRunning ? 'Running…' : 'Rebuild country insights' }}
@@ -613,13 +660,9 @@ export class AdminPresencePageComponent implements OnInit, OnDestroy {
     total_campaigns: 0,
   };
   settings: AdminSettings = {
-    insight_window_hours: 24,
-    insight_min_posts: 3,
-    insight_cache_minutes: 5,
-    ollama_enabled: true,
-    ollama_model: '',
+    ...DEFAULT_SETTINGS,
   };
-  settingsDraft: AdminSettings = { ...this.settings };
+  settingsDraft: AdminSettings = { ...DEFAULT_SETTINGS };
   reports: ReportedPostItem[] = [];
   ads: AdsSummary = {
     active_campaigns: 0,
@@ -682,8 +725,8 @@ export class AdminPresencePageComponent implements OnInit, OnDestroy {
     try {
       const data = await this.adminRequest<AdminBootstrap>('/admin/bootstrap');
       this.overview = data.overview;
-      this.settings = data.settings;
-      this.settingsDraft = { ...data.settings };
+      this.settings = normalizeSettings(data.settings);
+      this.settingsDraft = { ...this.settings };
       this.reports = data.reports;
       this.ads = data.ads;
     } catch (err: any) {
@@ -697,13 +740,15 @@ export class AdminPresencePageComponent implements OnInit, OnDestroy {
     this.savingSettings = true;
     this.settingsStatus = '';
     try {
+      const payload = normalizeSettings(this.settingsDraft);
       const data = await this.adminRequest<{ settings: AdminSettings }>('/admin/settings', {
         method: 'POST',
-        body: JSON.stringify(this.settingsDraft),
+        body: JSON.stringify(payload),
       });
-      this.settings = data.settings;
-      this.settingsDraft = { ...data.settings };
+      this.settings = normalizeSettings(data.settings);
+      this.settingsDraft = { ...this.settings };
       this.settingsStatus = 'Settings saved.';
+      await this.refreshBootstrap();
     } catch (err: any) {
       this.settingsStatus = err?.message ?? 'Failed to save settings.';
     } finally {
@@ -719,6 +764,7 @@ export class AdminPresencePageComponent implements OnInit, OnDestroy {
         method: 'POST',
       });
       this.settingsStatus = `Done. Countries processed: ${Number(data.processed ?? 0)}, failed: ${Number(data.failed ?? 0)}.`;
+      await this.refreshBootstrap();
     } catch (err: any) {
       this.settingsStatus = err?.message ?? 'Failed to run insights.';
     } finally {
@@ -786,6 +832,11 @@ export class AdminPresencePageComponent implements OnInit, OnDestroy {
     }).format((Number(cents) || 0) / 100);
   }
 
+  resetSettingsDraft(): void {
+    this.settingsDraft = { ...this.settings };
+    this.settingsStatus = 'Settings reset to the latest saved values.';
+  }
+
   private async loadCountries(): Promise<void> {
     try {
       const data = await this.countriesService.loadCountries();
@@ -832,14 +883,26 @@ export class AdminPresencePageComponent implements OnInit, OnDestroy {
     if (init.body && !headers.has('Content-Type')) {
       headers.set('Content-Type', 'application/json');
     }
-    const res = await fetch(`${environment.apiBaseUrl}${path}`, {
-      ...init,
-      headers,
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(String(data?.error || `Request failed (${res.status})`));
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 45000);
+    try {
+      const res = await fetch(`${environment.apiBaseUrl}${path}`, {
+        ...init,
+        headers,
+        signal: controller.signal,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(String(data?.error || `Request failed (${res.status})`));
+      }
+      return data as T;
+    } catch (err: any) {
+      if (String(err?.name) === 'AbortError') {
+        throw new Error('Request timed out. The backend may still be processing.');
+      }
+      throw err;
+    } finally {
+      window.clearTimeout(timeout);
     }
-    return data as T;
   }
 }

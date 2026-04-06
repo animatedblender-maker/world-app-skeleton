@@ -4,6 +4,8 @@ export type AdminSettings = {
   insight_window_hours: number;
   insight_min_posts: number;
   insight_cache_minutes: number;
+  insight_max_posts: number;
+  insight_max_lookback_hours: number;
   ollama_enabled: boolean;
   ollama_model: string;
 };
@@ -42,6 +44,8 @@ const DEFAULT_SETTINGS: AdminSettings = {
   insight_window_hours: 24,
   insight_min_posts: 3,
   insight_cache_minutes: 5,
+  insight_max_posts: 250,
+  insight_max_lookback_hours: 24 * 30,
   ollama_enabled: true,
   ollama_model: String(process.env.OLLAMA_MODEL || '').trim(),
 };
@@ -60,6 +64,13 @@ function normalizeSettings(value: any): AdminSettings {
     insight_window_hours: toInt(raw.insight_window_hours, DEFAULT_SETTINGS.insight_window_hours, 1, 24 * 30),
     insight_min_posts: toInt(raw.insight_min_posts, DEFAULT_SETTINGS.insight_min_posts, 1, 1000),
     insight_cache_minutes: toInt(raw.insight_cache_minutes, DEFAULT_SETTINGS.insight_cache_minutes, 1, 24 * 60),
+    insight_max_posts: toInt(raw.insight_max_posts, DEFAULT_SETTINGS.insight_max_posts, 10, 1000),
+    insight_max_lookback_hours: toInt(
+      raw.insight_max_lookback_hours,
+      DEFAULT_SETTINGS.insight_max_lookback_hours,
+      1,
+      24 * 365
+    ),
     ollama_enabled:
       typeof raw.ollama_enabled === 'boolean' ? raw.ollama_enabled : DEFAULT_SETTINGS.ollama_enabled,
     ollama_model: String(raw.ollama_model || DEFAULT_SETTINGS.ollama_model || '').trim(),

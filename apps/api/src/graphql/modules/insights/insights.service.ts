@@ -191,9 +191,11 @@ function buildInsight(counts: MoodCounts, texts: string[], topics: string[]): st
   const negPct = counts.negative / counts.total;
   const delta = posPct - negPct;
   const mood =
-    delta > 0.12 ? 'optimistic' :
-    delta < -0.12 ? 'tense' :
-    'mixed';
+    delta > 0.18 ? 'cautiously upbeat' :
+    delta > 0.08 ? 'measured but hopeful' :
+    delta < -0.18 ? 'tense and frustrated' :
+    delta < -0.08 ? 'worried and unsettled' :
+    'mixed and watchful';
 
   const leadTopics = topics
     .slice(0, 3)
@@ -209,21 +211,14 @@ function buildInsight(counts: MoodCounts, texts: string[], topics: string[]): st
 
   const topicSummary = leadTopics.length
     ? leadTopics
-        .map((entry, index) => {
-          const prefix =
-            index === 0 ? 'Most people are talking about' :
-            index === 1 ? 'followed by' :
-            'and';
-          return `${prefix} ${entry.topic} (${entry.pct}%)`;
-        })
+        .map((entry) => `${entry.topic} (${entry.pct}%)`)
         .join(', ')
-        .replace(', and ', ', and ')
-    : 'People are discussing a wide mix of topics';
+    : 'a broad mix of issues';
 
   if (counts.total < 8) {
-    return `${topicSummary}. The overall tone feels ${mood}, based on a small number of recent full posts.`;
+    return `People in this feed are mostly discussing ${topicSummary}. The mood feels ${mood}, although this read is based on a relatively small sample of recent posts.`;
   }
-  return `${topicSummary}. Overall tone feels ${mood} across recent full posts in this country feed.`;
+  return `People in this feed are mainly discussing ${topicSummary}. Overall, the country conversation feels ${mood} across recent posts.`;
 }
 
 function sampleTextsForSummary(texts: string[]): string[] {
@@ -254,15 +249,18 @@ function buildSummaryPrompt(countryCode: string, counts: MoodCounts, texts: stri
   }
 
   return [
-    'You are summarizing what people in a country feed are talking about.',
+    'You are writing a concise country desk brief based on social posts from a country feed.',
     'Use only the posts provided below.',
-    'Focus on the major discussion themes, not on sentiment labels.',
+    'Read the full meaning of each post, not isolated keywords.',
+    'Explain what people are actually discussing, what they seem hopeful, worried, angry, or relieved about, and why.',
     'Estimate rough discussion share percentages by theme based on the posts.',
     'Do not invent topics that are not in the posts.',
     'Do not mention AI, models, sentiment classifiers, or that this is generated.',
-    'Return one compact paragraph in plain English, 45 to 90 words.',
+    'Write like a human spokesperson or analyst summarizing the public conversation in this country.',
+    'Return one compact paragraph in plain English, 70 to 130 words.',
     `Country context: ${countryCode}.`,
     `Recent post count: ${counts.total}.`,
+    `Mood distribution hint: positive ${Math.round((counts.positive / Math.max(1, counts.total)) * 100)}%, neutral ${Math.round((counts.neutral / Math.max(1, counts.total)) * 100)}%, negative ${Math.round((counts.negative / Math.max(1, counts.total)) * 100)}%.`,
     'Posts:',
     ...clipped.map((text, index) => `${index + 1}. ${text}`),
   ].join('\n');
@@ -303,7 +301,7 @@ async function generateInsightWithOllama(
           { role: 'user', content: prompt },
         ],
         options: {
-          temperature: 0.2,
+          temperature: 0.35,
         },
       }),
     });
@@ -314,7 +312,11 @@ async function generateInsightWithOllama(
     const json: any = await res.json();
     const content = String(json?.message?.content ?? json?.response ?? '').trim();
     if (!content) return null;
-    return content.replace(/\s+/g, ' ').trim();
+    return content
+      .replace(/<think>[\s\S]*?<\/think>/gi, ' ')
+      .replace(/thinking process:[\s\S]*$/i, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
   } catch {
     return null;
   } finally {
@@ -462,7 +464,12 @@ async function loadDemoPosts(): Promise<PostTextRow[]> {
   return cachedDemoPostsPromise;
 }
 
-async function fetchTexts(countryCode: string | null | undefined, windowHours: number): Promise<string[]> {
+async function fetchTexts(
+  countryCode: string | null | undefined,
+  preferredWindowHours: number,
+  maxLookbackHours: number,
+  maxPosts: number
+): Promise<string[]> {
   const normalizedCountry = String(countryCode ?? '').trim().toUpperCase();
   const params: any[] = [];
   let whereSql = '';
@@ -470,9 +477,9 @@ async function fetchTexts(countryCode: string | null | undefined, windowHours: n
     params.push(countryCode);
     whereSql = `where p.country_code = $${params.length}`;
   }
-  params.push(windowHours);
+  params.push(maxLookbackHours);
   whereSql += `${whereSql ? ' and' : ' where'} p.created_at > now() - ($${params.length}::int * interval '1 hour')`;
-  params.push(MAX_TEXTS);
+  params.push(Math.min(MAX_TEXTS, maxPosts));
   const postLimitParam = params.length;
   const postsRes = await pool.query<{ title: string | null; body: string | null; created_at: string }>(
     `
@@ -500,13 +507,18 @@ async function fetchTexts(countryCode: string | null | undefined, windowHours: n
     if (normalizedCountry && demoCountry !== normalizedCountry) continue;
     const createdMs = Date.parse(createdAt);
     if (!Number.isFinite(createdMs)) continue;
-    if (createdMs < Date.now() - windowHours * 60 * 60 * 1000) continue;
+    if (createdMs < Date.now() - maxLookbackHours * 60 * 60 * 1000) continue;
     rows.push({ text, created_at: createdAt });
   }
 
   return rows
     .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
-    .slice(0, MAX_TEXTS)
+    .filter((row, index) => {
+      if (index < Math.min(40, maxPosts)) return true;
+      const ageMs = Date.now() - Date.parse(row.created_at);
+      return ageMs <= preferredWindowHours * 60 * 60 * 1000;
+    })
+    .slice(0, maxPosts)
     .map((row) => row.text);
 }
 
@@ -557,8 +569,13 @@ export async function getCountryMood(countryCode?: string | null): Promise<Count
 
   const windowHours = Math.max(1, Number(settings?.insight_window_hours ?? 24));
   const minPosts = Math.max(1, Number(settings?.insight_min_posts ?? 3));
-  const texts = await fetchTexts(countryCode ?? null, windowHours);
-  if (texts.length < minPosts) {
+  const maxPosts = Math.max(10, Number((settings as any)?.insight_max_posts ?? 250));
+  const maxLookbackHours = Math.max(
+    windowHours,
+    Number((settings as any)?.insight_max_lookback_hours ?? 24 * 30)
+  );
+  const texts = await fetchTexts(countryCode ?? null, windowHours, maxLookbackHours, maxPosts);
+  if (!texts.length) {
     const empty: CountryMood = {
       country_code: countryCode ? countryCode.toUpperCase() : 'GLOBAL',
       positive: 0,
@@ -566,7 +583,7 @@ export async function getCountryMood(countryCode?: string | null): Promise<Count
       negative: 0,
       total: 0,
       topics: [],
-      insight: `Not enough recent posts to summarize yet. Need at least ${minPosts} posts in the last ${windowHours} hours.`,
+      insight: `Not enough posts are available to summarize yet. Try a wider lookback window or wait for more posts.`,
       computed_at: new Date().toISOString(),
     };
     cache.set(key, { at: Date.now(), value: empty });
@@ -601,7 +618,10 @@ export async function getCountryMood(countryCode?: string | null): Promise<Count
     country_code: countryCode ? countryCode.toUpperCase() : 'GLOBAL',
     ...counts,
     topics,
-    insight,
+    insight:
+      texts.length < minPosts
+        ? `${insight} This read is based on a limited sample of available posts.`
+        : insight,
     computed_at: new Date().toISOString(),
   };
 
