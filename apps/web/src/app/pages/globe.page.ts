@@ -6196,7 +6196,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   isUserOnline(userId: string | null): boolean {
-    if (!userId) return false;
+    if (!userId) return false; 
     return this.onlineIds.has(userId);
   }
 

@@ -893,6 +893,10 @@ export class PostsService {
   }
 
   async reportPost(postId: string, reason: string): Promise<boolean> {
+    if (environment.useDemoDataset && (await this.demoData.isDemoPostId(postId))) {
+      throw new Error('Only live posts can be reported right now.');
+    }
+
     const mutation = `
       mutation ReportPost($postId: ID!, $reason: String!) {
         reportPost(post_id: $postId, reason: $reason)

@@ -30,6 +30,21 @@ type PostTextRow = {
   created_at: string;
 };
 
+type OllamaInsightResult = {
+  summary: string | null;
+  reason:
+    | 'disabled'
+    | 'missing-config'
+    | '429'
+    | 'http-error'
+    | 'timeout'
+    | 'network-error'
+    | 'empty-content'
+    | 'cleaned-empty'
+    | 'ok';
+  status?: number;
+};
+
 const DEFAULT_CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_TEXTS = 180;
 const MAX_TEXT_LEN = 1600;
@@ -267,6 +282,22 @@ function buildInsight(counts: MoodCounts, texts: string[], topics: string[]): st
   return `People in this feed are mainly discussing ${topicSummary}. Overall, the country conversation feels ${mood} across recent posts.`;
 }
 
+function buildOllamaUnavailableInsight(reason: OllamaInsightResult['reason']): string {
+  if (reason === '429') {
+    return 'Insight summary is temporarily unavailable because the summary service is rate-limited. Please try rebuilding again after the limit resets.';
+  }
+  if (reason === 'missing-config') {
+    return 'Insight summary is unavailable because the summary service is not configured.';
+  }
+  if (reason === 'timeout') {
+    return 'Insight summary is temporarily unavailable because the summary service timed out.';
+  }
+  if (reason === 'empty-content' || reason === 'cleaned-empty') {
+    return 'Insight summary is temporarily unavailable because the summary service returned no usable text.';
+  }
+  return 'Insight summary is temporarily unavailable. Please try rebuilding it again shortly.';
+}
+
 function sampleTextsForSummary(texts: string[]): string[] {
   if (texts.length <= 24) return texts;
   const head = texts.slice(0, 12);
@@ -321,10 +352,12 @@ async function generateInsightWithOllama(
   countryCode: string,
   counts: MoodCounts,
   texts: string[]
-): Promise<string | null> {
+): Promise<OllamaInsightResult> {
   const baseUrl = String(process.env.OLLAMA_BASE_URL || '').trim().replace(/\/+$/, '');
   const model = String(process.env.OLLAMA_MODEL || '').trim();
-  if (!baseUrl || !model) return null;
+  if (!baseUrl || !model) {
+    return { summary: null, reason: 'missing-config' };
+  }
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -386,7 +419,11 @@ async function generateInsightWithOllama(
           body: errorBody,
         });
       }
-      throw new Error(`Ollama summary failed: ${res.status} ${errorBody}`);
+      return {
+        summary: null,
+        reason: res.status === 429 ? '429' : 'http-error',
+        status: res.status,
+      };
     }
     const json: any = await res.json();
     if (ollamaDebugEnabled()) {
@@ -396,7 +433,9 @@ async function generateInsightWithOllama(
       });
     }
     const content = String(json?.message?.content ?? json?.response ?? '').trim();
-    if (!content) return null;
+    if (!content) {
+      return { summary: null, reason: 'empty-content' };
+    }
     const cleaned = content
       .replace(/<think>[\s\S]*?<\/think>/gi, ' ')
       .replace(/thinking process:[\s\S]*$/i, ' ')
@@ -408,9 +447,15 @@ async function generateInsightWithOllama(
         cleaned,
       });
     }
-    return cleaned;
-  } catch {
-    return null;
+    if (!cleaned) {
+      return { summary: null, reason: 'cleaned-empty' };
+    }
+    return { summary: cleaned, reason: 'ok' };
+  } catch (err: any) {
+    if (String(err?.name) === 'AbortError') {
+      return { summary: null, reason: 'timeout' };
+    }
+    return { summary: null, reason: 'network-error' };
   } finally {
     clearTimeout(timeout);
   }
@@ -701,20 +746,26 @@ export async function getCountryMood(countryCode?: string | null): Promise<Count
     }
 
     const topics = extractTopics(texts, 10);
-    const ollamaInsight =
+    const ollamaResult =
       (settings?.ollama_enabled ?? true)
         ? await generateInsightWithOllama(
             countryCode ? countryCode.toUpperCase() : 'GLOBAL',
             counts,
             texts
           )
-        : null;
-    const fallbackInsight = buildInsight(counts, texts, topics);
+        : { summary: null, reason: 'disabled' as const };
+    const ollamaInsight = ollamaResult.summary;
+    const fallbackInsight =
+      (settings?.ollama_enabled ?? true)
+        ? buildOllamaUnavailableInsight(ollamaResult.reason)
+        : buildInsight(counts, texts, topics);
     const insight = ollamaInsight || fallbackInsight;
     if (ollamaDebugEnabled()) {
       console.log('[ollama-debug] final-summary', {
         countryCode: countryCode ? countryCode.toUpperCase() : 'GLOBAL',
         source: ollamaInsight ? 'ollama' : 'fallback',
+        reason: ollamaResult.reason,
+        status: ollamaResult.status ?? null,
         summary: insight,
       });
     }
