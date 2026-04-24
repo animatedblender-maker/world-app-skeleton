@@ -336,7 +336,7 @@ function buildSummaryPrompt(countryCode: string, counts: MoodCounts, texts: stri
     'Write like a human spokesperson or analyst summarizing the public conversation in this country.',
     'Return one compact paragraph in plain English, 70 to 130 words.',
     `Country context: ${countryCode}.`,
-    `Recent post count: ${counts.total}.`,
+    `Recent post count: ${texts.length}.`,
     `Mood distribution hint: positive ${Math.round((counts.positive / Math.max(1, counts.total)) * 100)}%, neutral ${Math.round((counts.neutral / Math.max(1, counts.total)) * 100)}%, negative ${Math.round((counts.negative / Math.max(1, counts.total)) * 100)}%.`,
     'Posts:',
     ...clipped.map((text, index) => `${index + 1}. ${text}`),
@@ -637,15 +637,17 @@ async function fetchTexts(
     if (combined) rows.push({ text: combined, created_at: String(row.created_at) });
   }
 
-  const demoRows = await loadDemoPosts();
-  for (const row of demoRows) {
-    const [demoCountry, createdAt, text] = String(row.text ?? '').split('\u0000');
-    if (!text || !createdAt) continue;
-    if (normalizedCountry && demoCountry !== normalizedCountry) continue;
-    const createdMs = Date.parse(createdAt);
-    if (!Number.isFinite(createdMs)) continue;
-    if (createdMs < Date.now() - maxLookbackHours * 60 * 60 * 1000) continue;
-    rows.push({ text, created_at: createdAt });
+  if (!normalizedCountry) {
+    const demoRows = await loadDemoPosts();
+    for (const row of demoRows) {
+      const [demoCountry, createdAt, text] = String(row.text ?? '').split('\u0000');
+      if (!text || !createdAt) continue;
+      if (normalizedCountry && demoCountry !== normalizedCountry) continue;
+      const createdMs = Date.parse(createdAt);
+      if (!Number.isFinite(createdMs)) continue;
+      if (createdMs < Date.now() - maxLookbackHours * 60 * 60 * 1000) continue;
+      rows.push({ text, created_at: createdAt });
+    }
   }
 
   return rows
