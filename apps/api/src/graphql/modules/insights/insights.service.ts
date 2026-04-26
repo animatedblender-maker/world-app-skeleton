@@ -47,9 +47,9 @@ type OllamaInsightResult = {
 
 const DEFAULT_CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_TEXTS = 180;
-const MAX_TEXT_LEN = 1600;
-const OLLAMA_PROMPT_TEXT_LIMIT = 12000;
-const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS || 20000);
+const MAX_TEXT_LEN = 900;
+const OLLAMA_PROMPT_TEXT_LIMIT = 5000;
+const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS || 45000);
 const OLLAMA_RETRY_DELAY_MS = 1200;
 
 const cache = new Map<string, { at: number; value: CountryMood }>();
@@ -299,13 +299,11 @@ function buildOllamaUnavailableInsight(reason: OllamaInsightResult['reason']): s
 }
 
 function sampleTextsForSummary(texts: string[]): string[] {
-  if (texts.length <= 24) return texts;
-  const head = texts.slice(0, 12);
-  const midStart = Math.max(12, Math.floor(texts.length / 2) - 6);
-  const middle = texts.slice(midStart, midStart + 6);
-  const tail = texts.slice(-6);
+  if (texts.length <= 6) return texts;
+  const head = texts.slice(0, 3);
+  const tail = texts.slice(-3);
   const seen = new Set<string>();
-  return [...head, ...middle, ...tail].filter((text) => {
+  return [...head, ...tail].filter((text) => {
     const key = text.trim();
     if (!key || seen.has(key)) return false;
     seen.add(key);
