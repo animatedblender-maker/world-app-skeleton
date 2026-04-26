@@ -43,6 +43,7 @@ type OllamaInsightResult = {
     | 'cleaned-empty'
     | 'ok';
   status?: number;
+  error?: string | null;
 };
 
 const DEFAULT_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -354,7 +355,7 @@ async function generateInsightWithOllama(
   const baseUrl = String(process.env.OLLAMA_BASE_URL || '').trim().replace(/\/+$/, '');
   const model = String(process.env.OLLAMA_MODEL || '').trim();
   if (!baseUrl || !model) {
-    return { summary: null, reason: 'missing-config' };
+    return { summary: null, reason: 'missing-config', error: null };
   }
 
   const headers: Record<string, string> = {
@@ -421,6 +422,7 @@ async function generateInsightWithOllama(
         summary: null,
         reason: res.status === 429 ? '429' : 'http-error',
         status: res.status,
+        error: errorBody || null,
       };
     }
     const json: any = await res.json();
@@ -432,7 +434,7 @@ async function generateInsightWithOllama(
     }
     const content = String(json?.message?.content ?? json?.response ?? '').trim();
     if (!content) {
-      return { summary: null, reason: 'empty-content' };
+      return { summary: null, reason: 'empty-content', error: null };
     }
     const cleaned = content
       .replace(/<think>[\s\S]*?<\/think>/gi, ' ')
@@ -446,14 +448,22 @@ async function generateInsightWithOllama(
       });
     }
     if (!cleaned) {
-      return { summary: null, reason: 'cleaned-empty' };
+      return { summary: null, reason: 'cleaned-empty', error: null };
     }
-    return { summary: cleaned, reason: 'ok' };
+    return { summary: cleaned, reason: 'ok', error: null };
   } catch (err: any) {
     if (String(err?.name) === 'AbortError') {
-      return { summary: null, reason: 'timeout' };
+      return {
+        summary: null,
+        reason: 'timeout',
+        error: String(err?.message ?? err?.name ?? 'AbortError'),
+      };
     }
-    return { summary: null, reason: 'network-error' };
+    return {
+      summary: null,
+      reason: 'network-error',
+      error: String(err?.message ?? err?.cause?.message ?? err?.name ?? 'unknown'),
+    };
   } finally {
     clearTimeout(timeout);
   }
@@ -753,7 +763,7 @@ export async function getCountryMood(countryCode?: string | null): Promise<Count
             counts,
             texts
           )
-        : { summary: null, reason: 'disabled' as const };
+        : { summary: null, reason: 'disabled' as const, error: null };
     const ollamaInsight = ollamaResult.summary;
     const fallbackInsight =
       (settings?.ollama_enabled ?? true)
@@ -766,6 +776,7 @@ export async function getCountryMood(countryCode?: string | null): Promise<Count
         source: ollamaInsight ? 'ollama' : 'fallback',
         reason: ollamaResult.reason,
         status: ollamaResult.status ?? null,
+        error: ollamaResult.error ?? null,
         summary: insight,
       });
     }
