@@ -11,17 +11,31 @@ export type AdminSettings = {
 };
 
 export type ReportedPostItem = {
-  report_id: string;
-  created_at: string;
-  reason: string;
   post_id: string;
+  latest_report_at: string;
+  report_count: number;
+  open_report_count: number;
+  ticket_status: 'open' | 'in_review' | 'actioned' | 'ignored';
+  reasons: string[];
   post_excerpt: string;
   country_code: string | null;
-  reporter_id: string;
-  reporter_name: string | null;
   author_id: string | null;
   author_name: string | null;
+  post_visibility: string | null;
+  moderation_status: 'active' | 'sensitive' | 'hidden' | 'deleted';
+  moderation_note: string | null;
+  moderated_at: string | null;
+  moderation_actor: string | null;
 };
+
+export type ModerationAction =
+  | 'in_review'
+  | 'ignore'
+  | 'mark_sensitive'
+  | 'clear_sensitive'
+  | 'hide_post'
+  | 'delete_post'
+  | 'restore_post';
 
 export type AdminOverview = {
   total_profiles: number;
@@ -51,6 +65,7 @@ const DEFAULT_SETTINGS: AdminSettings = {
 };
 
 let settingsTableEnsured = false;
+let moderationSchemaEnsured = false;
 
 function toInt(value: any, fallback: number, min: number, max: number): number {
   const next = Number(value);
@@ -89,6 +104,72 @@ async function ensureSettingsTable(): Promise<void> {
   settingsTableEnsured = true;
 }
 
+async function ensureModerationSchema(): Promise<void> {
+  if (moderationSchemaEnsured) return;
+  await pool.query(`
+    alter table public.posts
+      add column if not exists moderation_status text not null default 'active',
+      add column if not exists moderation_note text,
+      add column if not exists moderated_at timestamptz,
+      add column if not exists moderation_actor text
+  `);
+  await pool.query(`
+    do $$
+    begin
+      if not exists (
+        select 1
+        from pg_constraint
+        where conname = 'posts_moderation_status_check'
+      ) then
+        alter table public.posts
+          add constraint posts_moderation_status_check
+          check (moderation_status = any (array['active','sensitive','hidden','deleted']));
+      end if;
+    end$$;
+  `);
+  await pool.query(`
+    alter table public.post_reports
+      add column if not exists status text not null default 'open',
+      add column if not exists moderator_note text,
+      add column if not exists moderator_actor text,
+      add column if not exists resolution_action text,
+      add column if not exists resolved_at timestamptz
+  `);
+  await pool.query(`
+    do $$
+    begin
+      if not exists (
+        select 1
+        from pg_constraint
+        where conname = 'post_reports_status_check'
+      ) then
+        alter table public.post_reports
+          add constraint post_reports_status_check
+          check (status = any (array['open','in_review','actioned','ignored']));
+      end if;
+      if not exists (
+        select 1
+        from pg_constraint
+        where conname = 'post_reports_resolution_action_check'
+      ) then
+        alter table public.post_reports
+          add constraint post_reports_resolution_action_check
+          check (
+            resolution_action is null
+            or resolution_action = any (
+              array['ignore','mark_sensitive','clear_sensitive','hide_post','delete_post','restore_post']
+            )
+          );
+      end if;
+    end$$;
+  `);
+  await pool.query(`
+    create index if not exists post_reports_post_status_created_idx
+      on public.post_reports (post_id, status, created_at desc)
+  `);
+  moderationSchemaEnsured = true;
+}
+
 export async function getAdminSettings(): Promise<AdminSettings> {
   await ensureSettingsTable();
   const { rows } = await pool.query<{ value: any }>(
@@ -120,6 +201,7 @@ export async function updateAdminSettings(patch: Partial<AdminSettings>): Promis
 }
 
 export async function getAdminOverview(): Promise<AdminOverview> {
+  await ensureModerationSchema();
   const [
     profilesRes,
     onlineRes,
@@ -171,30 +253,170 @@ export async function getAdminOverview(): Promise<AdminOverview> {
 }
 
 export async function listReportedPosts(limit = 40): Promise<ReportedPostItem[]> {
+  await ensureModerationSchema();
   const safeLimit = Math.max(1, Math.min(200, Number(limit) || 40));
   const { rows } = await pool.query<ReportedPostItem>(
     `
+    with report_rollup as (
+      select
+        r.post_id,
+        max(r.created_at) as latest_report_at,
+        count(*)::int as report_count,
+        count(*) filter (where r.status in ('open', 'in_review'))::int as open_report_count,
+        count(*) filter (where r.status = 'open')::int as open_count,
+        count(*) filter (where r.status = 'in_review')::int as in_review_count,
+        count(*) filter (where r.status = 'actioned')::int as actioned_count,
+        count(*) filter (where r.status = 'ignored')::int as ignored_count
+      from public.post_reports r
+      group by r.post_id
+    ),
+    latest_reasons as (
+      select
+        q.post_id,
+        array_agg(q.reason order by q.created_at desc) as reasons
+      from (
+        select
+          r.post_id,
+          r.reason,
+          r.created_at,
+          row_number() over (partition by r.post_id order by r.created_at desc) as rn
+        from public.post_reports r
+      ) q
+      where q.rn <= 5
+      group by q.post_id
+    )
     select
-      r.id::text as report_id,
-      r.created_at::text as created_at,
-      r.reason,
-      r.post_id::text as post_id,
+      rr.post_id::text as post_id,
+      rr.latest_report_at::text as latest_report_at,
+      rr.report_count,
+      rr.open_report_count,
+      case
+        when rr.open_count > 0 then 'open'
+        when rr.in_review_count > 0 then 'in_review'
+        when rr.actioned_count > 0 then 'actioned'
+        else 'ignored'
+      end::text as ticket_status,
+      coalesce(lr.reasons, array[]::text[]) as reasons,
       left(trim(concat(coalesce(p.title, ''), ' ', coalesce(p.body, ''))), 180) as post_excerpt,
       p.country_code,
-      r.reporter_id::text as reporter_id,
-      rr.display_name as reporter_name,
       p.author_id::text as author_id,
-      ap.display_name as author_name
-    from public.post_reports r
-    join public.posts p on p.id = r.post_id
-    left join public.profiles rr on rr.user_id = r.reporter_id
+      ap.display_name as author_name,
+      p.visibility as post_visibility,
+      coalesce(p.moderation_status, 'active')::text as moderation_status,
+      p.moderation_note,
+      p.moderated_at::text as moderated_at,
+      p.moderation_actor
+    from report_rollup rr
+    join public.posts p on p.id = rr.post_id
+    left join latest_reasons lr on lr.post_id = rr.post_id
     left join public.profiles ap on ap.user_id = p.author_id
-    order by r.created_at desc
+    order by rr.latest_report_at desc
     limit $1
     `,
     [safeLimit]
   );
   return rows;
+}
+
+export async function moderateReportedPost(
+  postId: string,
+  action: ModerationAction,
+  note?: string | null,
+  actor?: string | null
+): Promise<ReportedPostItem | null> {
+  await ensureModerationSchema();
+  const safePostId = String(postId || '').trim();
+  if (!safePostId) throw new Error('post_id is required');
+  const allowedActions = new Set<ModerationAction>([
+    'in_review',
+    'ignore',
+    'mark_sensitive',
+    'clear_sensitive',
+    'hide_post',
+    'delete_post',
+    'restore_post',
+  ]);
+  if (!allowedActions.has(action)) throw new Error('invalid_action');
+  const safeActor = String(actor || '').trim() || 'admin';
+  const safeNote = String(note || '').trim() || null;
+  const client = await pool.connect();
+  try {
+    await client.query('begin');
+
+    if (action === 'in_review') {
+      await client.query(
+        `
+        update public.post_reports
+        set
+          status = 'in_review',
+          moderator_actor = $2,
+          moderator_note = coalesce($3, moderator_note)
+        where post_id = $1
+          and status = 'open'
+        `,
+        [safePostId, safeActor, safeNote]
+      );
+    } else if (action === 'ignore') {
+      await client.query(
+        `
+        update public.post_reports
+        set
+          status = 'ignored',
+          moderator_actor = $2,
+          moderator_note = coalesce($3, moderator_note),
+          resolution_action = 'ignore',
+          resolved_at = now()
+        where post_id = $1
+          and status in ('open', 'in_review')
+        `,
+        [safePostId, safeActor, safeNote]
+      );
+    } else {
+      const nextStatus =
+        action === 'mark_sensitive' ? 'sensitive' :
+        action === 'clear_sensitive' || action === 'restore_post' ? 'active' :
+        action === 'hide_post' ? 'hidden' :
+        'deleted';
+
+      await client.query(
+        `
+        update public.posts
+        set
+          moderation_status = $2,
+          moderation_note = $3,
+          moderated_at = now(),
+          moderation_actor = $4
+        where id = $1
+        `,
+        [safePostId, nextStatus, safeNote, safeActor]
+      );
+
+      await client.query(
+        `
+        update public.post_reports
+        set
+          status = 'actioned',
+          moderator_actor = $2,
+          moderator_note = coalesce($3, moderator_note),
+          resolution_action = $4,
+          resolved_at = now()
+        where post_id = $1
+          and status in ('open', 'in_review')
+        `,
+        [safePostId, safeActor, safeNote, action]
+      );
+    }
+
+    await client.query('commit');
+  } catch (err) {
+    await client.query('rollback');
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  const reports = await listReportedPosts(200);
+  return reports.find((item) => item.post_id === safePostId) ?? null;
 }
 
 export async function getAdsAdminSummary(): Promise<AdsAdminSummary> {

@@ -33,6 +33,7 @@ import {
   updateAdminSettings,
   listReportedPosts,
   getAdsAdminSummary,
+  moderateReportedPost,
 } from './admin/admin.service.js';
 import { clearCountryMoodCache } from './graphql/modules/insights/insights.service.js';
 
@@ -223,6 +224,22 @@ app.get('/admin/reports', async (req: Request, res: Response) => {
   try {
     const limit = Number(req.query.limit ?? 40);
     return res.json({ ok: true, reports: await listReportedPosts(limit) });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'failed' });
+  }
+});
+
+app.post('/admin/reports/:postId/action', async (req: Request, res: Response) => {
+  if (!hasAdminAccess(req)) return res.status(401).json({ error: 'unauthorized' });
+  try {
+    const postId = String(req.params.postId || '').trim();
+    const action = String(req.body?.action || '').trim();
+    const note = req.body?.note ?? null;
+    const actor = req.body?.actor ?? req.headers['x-admin-actor'] ?? null;
+    if (!postId) return res.status(400).json({ error: 'missing_post_id' });
+    if (!action) return res.status(400).json({ error: 'missing_action' });
+    const report = await moderateReportedPost(postId, action as any, note, String(actor ?? ''));
+    return res.json({ ok: true, report });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message ?? 'failed' });
   }

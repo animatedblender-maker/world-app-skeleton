@@ -47,17 +47,31 @@ type AdminSettings = {
 };
 
 type ReportedPostItem = {
-  report_id: string;
-  created_at: string;
-  reason: string;
   post_id: string;
+  latest_report_at: string;
+  report_count: number;
+  open_report_count: number;
+  ticket_status: 'open' | 'in_review' | 'actioned' | 'ignored';
+  reasons: string[];
   post_excerpt: string;
   country_code: string | null;
-  reporter_id: string;
-  reporter_name: string | null;
   author_id: string | null;
   author_name: string | null;
+  post_visibility: string | null;
+  moderation_status: 'active' | 'sensitive' | 'hidden' | 'deleted';
+  moderation_note: string | null;
+  moderated_at: string | null;
+  moderation_actor: string | null;
 };
+
+type ModerationAction =
+  | 'in_review'
+  | 'ignore'
+  | 'mark_sensitive'
+  | 'clear_sensitive'
+  | 'hide_post'
+  | 'delete_post'
+  | 'restore_post';
 
 type AdsSummary = {
   active_campaigns: number;
@@ -235,7 +249,7 @@ function normalizeSettings(input: Partial<AdminSettings> | null | undefined): Ad
           <div class="card-head">
             <div>
               <div class="card-title">Reported Posts</div>
-              <div class="card-sub">Newest reports first. Phase 1 is a moderation inbox, not a full resolver yet.</div>
+              <div class="card-sub">Grouped by post so moderators can review, ignore, or act on the whole ticket.</div>
             </div>
             <button class="ghost" type="button" (click)="reloadReports()" [disabled]="loadingReports">
               {{ loadingReports ? 'Refreshing…' : 'Refresh reports' }}
@@ -248,16 +262,69 @@ function normalizeSettings(input: Partial<AdminSettings> | null | undefined): Ad
                 <div>
                   <div class="report-title">{{ item.post_excerpt || 'Untitled post' }}</div>
                   <div class="report-meta">
-                    {{ item.country_code || 'GLOBAL' }} · reported {{ item.created_at | date:'medium' }}
+                    {{ item.country_code || 'GLOBAL' }} · latest report {{ item.latest_report_at | date:'medium' }}
                   </div>
                 </div>
-                <a [routerLink]="['/post', item.post_id]">Open post</a>
+                <div class="report-badges">
+                  <span class="report-badge" [class.warn]="item.ticket_status==='open' || item.ticket_status==='in_review'">
+                    {{ ticketStatusLabel(item.ticket_status) }}
+                  </span>
+                  <span class="report-badge" [class.soft]="item.moderation_status==='active'">
+                    {{ moderationStatusLabel(item.moderation_status) }}
+                  </span>
+                </div>
               </div>
-              <div class="report-reason">{{ item.reason }}</div>
               <div class="report-users">
-                <span>Reporter: {{ item.reporter_name || item.reporter_id }}</span>
+                <span>{{ item.report_count }} reports</span>
+                <span>{{ item.open_report_count }} open</span>
+                <span>Visibility: {{ item.post_visibility || 'public' }}</span>
                 <span>Author: {{ item.author_name || item.author_id || 'Unknown' }}</span>
               </div>
+              <div class="report-reasons">
+                <div class="report-reason" *ngFor="let reason of item.reasons; let idx = index">
+                  <b>#{{ idx + 1 }}</b> {{ reason }}
+                </div>
+              </div>
+              <div class="report-note" *ngIf="item.moderation_note">
+                Last moderator note: {{ item.moderation_note }}
+              </div>
+              <div class="report-users">
+                <span *ngIf="item.moderated_at">Last action {{ item.moderated_at | date:'medium' }}</span>
+                <span *ngIf="item.moderation_actor">by {{ item.moderation_actor }}</span>
+              </div>
+              <textarea
+                class="report-note-input"
+                [ngModel]="reportActionNotes[item.post_id] || ''"
+                (ngModelChange)="reportActionNotes[item.post_id] = $event"
+                placeholder="Moderator note"
+              ></textarea>
+              <div class="report-actions">
+                <button type="button" class="ghost" (click)="runModerationAction(item, 'in_review')" [disabled]="isReportBusy(item.post_id)">
+                  In review
+                </button>
+                <button type="button" class="ghost" (click)="runModerationAction(item, 'ignore')" [disabled]="isReportBusy(item.post_id)">
+                  Ignore
+                </button>
+                <button type="button" (click)="runModerationAction(item, 'mark_sensitive')" [disabled]="isReportBusy(item.post_id)">
+                  Mark sensitive
+                </button>
+                <button type="button" class="ghost" (click)="runModerationAction(item, 'clear_sensitive')" [disabled]="isReportBusy(item.post_id)">
+                  Clear sensitive
+                </button>
+                <button type="button" class="ghost" (click)="runModerationAction(item, 'hide_post')" [disabled]="isReportBusy(item.post_id)">
+                  Hide
+                </button>
+                <button type="button" class="danger" (click)="runModerationAction(item, 'delete_post')" [disabled]="isReportBusy(item.post_id)">
+                  Delete from platform
+                </button>
+                <button type="button" class="ghost" (click)="runModerationAction(item, 'restore_post')" [disabled]="isReportBusy(item.post_id)">
+                  Restore
+                </button>
+                <a *ngIf="item.moderation_status !== 'hidden' && item.moderation_status !== 'deleted'" [routerLink]="['/post', item.post_id]">
+                  Open post
+                </a>
+              </div>
+              <div class="card-sub" *ngIf="reportActionStatus[item.post_id]">{{ reportActionStatus[item.post_id] }}</div>
             </div>
           </div>
           <ng-template #noReports>
@@ -545,14 +612,60 @@ function normalizeSettings(input: Partial<AdminSettings> | null | undefined): Ad
         font-size: 12px;
         opacity: 0.7;
       }
-      .report-reason {
+      .report-badges,
+      .report-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .report-badge {
+        border-radius: 999px;
+        padding: 6px 10px;
+        background: rgba(0, 255, 209, 0.18);
+        color: #c9fff2;
+        font-size: 11px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        font-weight: 700;
+      }
+      .report-badge.soft {
+        background: rgba(255,255,255,0.08);
+        color: rgba(255,255,255,0.82);
+      }
+      .report-badge.warn {
+        background: rgba(255, 183, 77, 0.18);
+        color: #ffd58a;
+      }
+      .report-reasons {
         margin-top: 10px;
+        display: grid;
+        gap: 8px;
+      }
+      .report-reason {
         font-size: 14px;
+      }
+      .report-note {
+        margin-top: 10px;
+        font-size: 13px;
+        color: rgba(201, 255, 242, 0.92);
+      }
+      .report-note-input {
+        margin-top: 12px;
+        min-height: 74px;
+        resize: vertical;
       }
       .report-users {
         display: flex;
         gap: 14px;
         flex-wrap: wrap;
+      }
+      .report-actions {
+        margin-top: 12px;
+      }
+      .danger {
+        background: rgba(255, 97, 97, 0.18);
+        color: #ffd5d5;
       }
       a {
         color: #92fff0;
@@ -664,6 +777,9 @@ export class AdminPresencePageComponent implements OnInit, OnDestroy {
   };
   settingsDraft: AdminSettings = { ...DEFAULT_SETTINGS };
   reports: ReportedPostItem[] = [];
+  reportActionNotes: Record<string, string> = {};
+  reportActionBusy: Record<string, boolean> = {};
+  reportActionStatus: Record<string, string> = {};
   ads: AdsSummary = {
     active_campaigns: 0,
     draft_campaigns: 0,
@@ -784,6 +900,36 @@ export class AdminPresencePageComponent implements OnInit, OnDestroy {
     }
   }
 
+  async runModerationAction(item: ReportedPostItem, action: ModerationAction): Promise<void> {
+    const postId = String(item.post_id || '').trim();
+    if (!postId || this.reportActionBusy[postId]) return;
+    this.reportActionBusy[postId] = true;
+    this.reportActionStatus[postId] = '';
+    try {
+      const data = await this.adminRequest<{ report: ReportedPostItem | null }>(`/admin/reports/${postId}/action`, {
+        method: 'POST',
+        body: JSON.stringify({
+          action,
+          note: this.reportActionNotes[postId] || '',
+          actor: 'admin-portal',
+        }),
+      });
+      if (data.report) {
+        this.reports = this.reports.map((entry) => (entry.post_id === postId ? data.report! : entry));
+      }
+      this.reportActionStatus[postId] = `Done: ${this.moderationActionLabel(action)}.`;
+      await this.refreshBootstrap();
+    } catch (err: any) {
+      this.reportActionStatus[postId] = err?.message ?? 'Failed to update moderation.';
+    } finally {
+      this.reportActionBusy[postId] = false;
+    }
+  }
+
+  isReportBusy(postId: string): boolean {
+    return !!this.reportActionBusy[postId];
+  }
+
   resetAll(): void {
     this.overridesService.clearAll();
   }
@@ -835,6 +981,18 @@ export class AdminPresencePageComponent implements OnInit, OnDestroy {
   resetSettingsDraft(): void {
     this.settingsDraft = { ...this.settings };
     this.settingsStatus = 'Settings reset to the latest saved values.';
+  }
+
+  ticketStatusLabel(value: ReportedPostItem['ticket_status']): string {
+    return value.replace(/_/g, ' ');
+  }
+
+  moderationStatusLabel(value: ReportedPostItem['moderation_status']): string {
+    return value.replace(/_/g, ' ');
+  }
+
+  moderationActionLabel(value: ModerationAction): string {
+    return value.replace(/_/g, ' ');
   }
 
   private async loadCountries(): Promise<void> {

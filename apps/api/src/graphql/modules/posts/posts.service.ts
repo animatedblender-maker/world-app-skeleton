@@ -139,8 +139,10 @@ export class PostsService {
       from public.posts p
       left join public.profiles pr on pr.user_id = p.author_id
       left join public.posts sp on sp.id = p.shared_post_id
+        and coalesce(sp.moderation_status, 'active') not in ('hidden', 'deleted')
       left join public.profiles spr on spr.user_id = sp.author_id
       where upper(coalesce(p.country_code, '')) = $1
+        and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
         and (
           p.visibility in ('public', 'country')
           or ($3::uuid is not null and p.author_id = $3::uuid)
@@ -232,8 +234,10 @@ export class PostsService {
         from public.posts p
         left join public.profiles pr on pr.user_id = p.author_id
         left join public.posts sp on sp.id = p.shared_post_id
+          and coalesce(sp.moderation_status, 'active') not in ('hidden', 'deleted')
         left join public.profiles spr on spr.user_id = sp.author_id
         where p.author_id = $1
+          and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
         order by p.created_at desc
         limit $3
         `,
@@ -309,8 +313,10 @@ export class PostsService {
       from public.posts p
       left join public.profiles pr on pr.user_id = p.author_id
       left join public.posts sp on sp.id = p.shared_post_id
+        and coalesce(sp.moderation_status, 'active') not in ('hidden', 'deleted')
       left join public.profiles spr on spr.user_id = sp.author_id
       where p.author_id = $1
+        and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
         and (
           p.visibility in ('public', 'country')
           or (
@@ -412,12 +418,14 @@ export class PostsService {
       cross join q
       left join public.profiles pr on pr.user_id = p.author_id
       left join public.posts sp on sp.id = p.shared_post_id
+        and coalesce(sp.moderation_status, 'active') not in ('hidden', 'deleted')
       left join public.profiles spr on spr.user_id = sp.author_id
       where (
           to_tsvector('simple', coalesce(p.title, '') || ' ' || coalesce(p.body, '')) @@ q.tsq
           or lower(coalesce(p.title, '')) like $2
           or lower(coalesce(p.body, '')) like $2
         )
+        and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
         and (
           p.visibility = 'public'
           or ($4::uuid is not null and p.author_id = $4::uuid)
@@ -972,8 +980,10 @@ export class PostsService {
       from public.posts p
       left join public.profiles pr on pr.user_id = p.author_id
       left join public.posts sp on sp.id = p.shared_post_id
+        and coalesce(sp.moderation_status, 'active') not in ('hidden', 'deleted')
       left join public.profiles spr on spr.user_id = sp.author_id
       where p.id = $1
+        and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
         and (
           p.visibility in ('public', 'country')
           or ($2::uuid is not null and p.author_id = $2::uuid)
