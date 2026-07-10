@@ -1,5 +1,10 @@
 import Foundation
 
+struct MediaPlaybackConfiguration: Sendable {
+    let url: URL
+    let headers: [String: String]?
+}
+
 enum SupabaseStorageAccess {
     static func isPostsBucketURL(_ url: URL) -> Bool {
         let value = url.absoluteString
@@ -12,6 +17,16 @@ enum SupabaseStorageAccess {
             value = value.replacingOccurrences(of: "/object/public/posts/", with: "/object/authenticated/posts/")
         } else if value.contains("/object/sign/posts/") {
             return url
+        } else if value.contains("/object/authenticated/posts/") {
+            return url
+        }
+        return URL(string: value)
+    }
+
+    static func publicURL(from url: URL) -> URL? {
+        var value = url.absoluteString
+        if value.contains("/object/authenticated/posts/") {
+            value = value.replacingOccurrences(of: "/object/authenticated/posts/", with: "/object/public/posts/")
         }
         return URL(string: value)
     }
@@ -48,17 +63,21 @@ enum MediaURLResolver {
         if let payload = post.mediaPayload {
             let pairs = zip(payload.urls, payload.types)
             for (url, type) in pairs where type.lowercased() == "image" {
-                if let resolved = resolve(url) { return resolved }
+                if let resolved = resolve(url), !isVideoURL(resolved) { return resolved }
             }
-            if let first = payload.urls.first {
-                return resolve(first)
+            for url in payload.urls {
+                if let resolved = resolve(url), !isVideoURL(resolved) { return resolved }
             }
         }
-        return resolve(post.mediaURL) ?? resolve(post.thumbURL)
+
+        if let media = resolve(post.mediaURL), !isVideoURL(media) { return media }
+        if let thumb = resolve(post.thumbURL), !isVideoURL(thumb) { return thumb }
+        return nil
     }
 
     static func posterURL(for post: CountryPost) -> URL? {
-        resolve(post.thumbURL) ?? imageURL(for: post)
+        if let thumb = resolve(post.thumbURL), !isVideoURL(thumb) { return thumb }
+        return imageURL(for: post)
     }
 
     static func resolve(_ raw: String?) -> URL? {
@@ -91,12 +110,38 @@ enum MediaURLResolver {
         return nil
     }
 
+    static func isVideoURL(_ url: URL) -> Bool {
+        let lower = url.absoluteString.lowercased()
+        return lower.range(
+            of: #"\.(mp4|webm|mov|m4v|avi|mkv)(\?|#|$)"#,
+            options: .regularExpression
+        ) != nil || lower.contains("/video") || lower.contains("video%")
+    }
+
     static func playbackURL(from url: URL) async -> URL {
-        guard SupabaseStorageAccess.isPostsBucketURL(url),
-              let authenticated = SupabaseStorageAccess.authenticatedURL(from: url) else {
-            return url
+        await playbackConfiguration(for: url).url
+    }
+
+    static func playbackConfiguration(for url: URL) async -> MediaPlaybackConfiguration {
+        guard SupabaseStorageAccess.isPostsBucketURL(url) else {
+            return MediaPlaybackConfiguration(url: url, headers: nil)
         }
-        return authenticated
+
+        if let headers = await SupabaseStorageAccess.requestHeaders(),
+           let authenticated = SupabaseStorageAccess.authenticatedURL(from: url) {
+            return MediaPlaybackConfiguration(url: authenticated, headers: headers)
+        }
+
+        let publicURL = SupabaseStorageAccess.publicURL(from: url) ?? url
+        return MediaPlaybackConfiguration(url: publicURL, headers: nil)
+    }
+
+    static func playbackFallbackConfiguration(for url: URL) -> MediaPlaybackConfiguration? {
+        guard SupabaseStorageAccess.isPostsBucketURL(url),
+              let publicURL = SupabaseStorageAccess.publicURL(from: url),
+              publicURL != url
+        else { return nil }
+        return MediaPlaybackConfiguration(url: publicURL, headers: nil)
     }
 }
 

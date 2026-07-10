@@ -22,6 +22,8 @@ struct VideoPlayerView: View {
     @State private var loopObserver: NSObjectProtocol?
     @State private var statusObserver: NSKeyValueObservation?
     @State private var loadFailed = false
+    @State private var didRetryWithPublicURL = false
+    @State private var configuredURL: URL?
 
     private var shouldShowAd: Bool {
         adsEnabled && isActive && !adFinished && placement != nil
@@ -75,72 +77,35 @@ struct VideoPlayerView: View {
         }
         .onChange(of: adFinished) { _, finished in
             if finished {
-                Task { await ensurePlayer() }
+                Task { await ensurePlayer(forceRebuild: true) }
             }
         }
+        .onChange(of: url) { _, _ in
+            Task { await ensurePlayer(forceRebuild: true) }
+        }
         .onDisappear {
-            teardownPlayerObservers()
-            player?.pause()
+            teardownPlayer()
         }
     }
 
     @MainActor
-    private func ensurePlayer() async {
+    private func ensurePlayer(forceRebuild: Bool = false) async {
         guard isActive else {
             player?.pause()
             return
         }
         guard adFinished || !shouldShowAd else { return }
 
+        if forceRebuild || configuredURL != url {
+            teardownPlayer()
+            configuredURL = url
+            didRetryWithPublicURL = false
+        }
+
         if player == nil {
             loadFailed = false
-            let playbackURL = await MediaURLResolver.playbackURL(from: url)
-            let item: AVPlayerItem
-            if SupabaseStorageAccess.isPostsBucketURL(playbackURL),
-               let headers = await SupabaseStorageAccess.requestHeaders() {
-                let asset = AVURLAsset(
-                    url: playbackURL,
-                    options: ["AVURLAssetHTTPHeaderFieldsKey": headers]
-                )
-                item = AVPlayerItem(asset: asset)
-            } else {
-                item = AVPlayerItem(url: playbackURL)
-            }
-            let newPlayer = AVPlayer(playerItem: item)
-            newPlayer.isMuted = muted
-            newPlayer.automaticallyWaitsToMinimizeStalling = false
-            newPlayer.actionAtItemEnd = loops ? .none : .pause
-
-            statusObserver = item.observe(\.status, options: [.new, .initial]) { item, _ in
-                Task { @MainActor in
-                    switch item.status {
-                    case .readyToPlay:
-                        loadFailed = false
-                        if isActive {
-                            newPlayer.play()
-                            reportViewIfNeeded()
-                        }
-                    case .failed:
-                        loadFailed = true
-                        player = nil
-                    default:
-                        break
-                    }
-                }
-            }
-
-            if loops {
-                loopObserver = NotificationCenter.default.addObserver(
-                    forName: .AVPlayerItemDidPlayToEndTime,
-                    object: item,
-                    queue: .main
-                ) { _ in
-                    newPlayer.seek(to: .zero)
-                    newPlayer.play()
-                }
-            }
-
-            player = newPlayer
+            let configuration = await MediaURLResolver.playbackConfiguration(for: url)
+            installPlayer(using: configuration)
         }
 
         player?.isMuted = muted
@@ -148,6 +113,79 @@ struct VideoPlayerView: View {
             player?.play()
             reportViewIfNeeded()
         }
+    }
+
+    @MainActor
+    private func installPlayer(using configuration: MediaPlaybackConfiguration) {
+        let item = makePlayerItem(for: configuration)
+        let newPlayer = AVPlayer(playerItem: item)
+        newPlayer.isMuted = muted
+        newPlayer.automaticallyWaitsToMinimizeStalling = false
+        newPlayer.actionAtItemEnd = loops ? .none : .pause
+
+        statusObserver = item.observe(\.status, options: [.new, .initial]) { item, _ in
+            Task { @MainActor in
+                switch item.status {
+                case .readyToPlay:
+                    loadFailed = false
+                    if isActive {
+                        newPlayer.play()
+                        reportViewIfNeeded()
+                    }
+                case .failed:
+                    await handlePlaybackFailure(for: configuration.url)
+                default:
+                    break
+                }
+            }
+        }
+
+        if loops {
+            loopObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                object: item,
+                queue: .main
+            ) { _ in
+                newPlayer.seek(to: .zero)
+                newPlayer.play()
+            }
+        }
+
+        player = newPlayer
+    }
+
+    @MainActor
+    private func handlePlaybackFailure(for failedURL: URL) async {
+        if !didRetryWithPublicURL,
+           let fallback = MediaURLResolver.playbackFallbackConfiguration(for: failedURL) {
+            didRetryWithPublicURL = true
+            teardownPlayerObservers()
+            player = nil
+            installPlayer(using: fallback)
+            return
+        }
+        loadFailed = true
+        player = nil
+    }
+
+    private func makePlayerItem(for configuration: MediaPlaybackConfiguration) -> AVPlayerItem {
+        if let headers = configuration.headers {
+            let asset = AVURLAsset(
+                url: configuration.url,
+                options: ["AVURLAssetHTTPHeaderFieldsKey": headers]
+            )
+            return AVPlayerItem(asset: asset)
+        }
+        return AVPlayerItem(url: configuration.url)
+    }
+
+    private func teardownPlayer() {
+        teardownPlayerObservers()
+        player?.pause()
+        player = nil
+        configuredURL = nil
+        didRetryWithPublicURL = false
+        loadFailed = false
     }
 
     private func configureAudioSession() {

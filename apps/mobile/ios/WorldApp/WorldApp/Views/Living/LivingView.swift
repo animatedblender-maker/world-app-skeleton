@@ -470,7 +470,11 @@ struct LivingView: View {
         errorMessage = nil
         defer { isLoading = false }
 
-        allVideos = await PostsService.shared.loadLivingVideos()
+        let videos = await PostsService.shared.loadLivingVideos()
+        allVideos = videos.filter { $0.playableVideoURL != nil }
+        if allVideos.isEmpty, !videos.isEmpty {
+            errorMessage = "Videos were found but their media links could not be opened."
+        }
         channels = await loadChannels(from: allVideos)
     }
 

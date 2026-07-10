@@ -62,16 +62,21 @@ final class ImageCache {
     }
 
     private static func fetchData(from url: URL, session: URLSession) async throws -> (Data, URLResponse) {
-        var request = URLRequest(url: url)
-        if SupabaseStorageAccess.isPostsBucketURL(url),
-           let headers = await SupabaseStorageAccess.requestHeaders(),
-           let authenticated = SupabaseStorageAccess.authenticatedURL(from: url) {
-            request.url = authenticated
+        let configuration = await MediaURLResolver.playbackConfiguration(for: url)
+        var request = URLRequest(url: configuration.url)
+        if let headers = configuration.headers {
             for (key, value) in headers {
                 request.setValue(value, forHTTPHeaderField: key)
             }
         }
-        return try await session.data(for: request)
+        let (data, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse,
+           !(200...299).contains(http.statusCode),
+           let fallback = MediaURLResolver.playbackFallbackConfiguration(for: configuration.url) {
+            var fallbackRequest = URLRequest(url: fallback.url)
+            return try await session.data(for: fallbackRequest)
+        }
+        return (data, response)
     }
 
     private static func downsample(data: Data, maxPixelSize: CGFloat) -> UIImage? {

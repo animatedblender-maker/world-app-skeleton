@@ -26,10 +26,10 @@ struct ReelsTabView: View {
                 ContentUnavailableView(
                     "No videos yet",
                     systemImage: "video",
-                    description: Text("Check back soon for reels from around the world.")
+                    description: Text("Share a reel or video and it will appear here.")
                 )
             } else {
-                horizontalReelsFeed
+                verticalReelsFeed
             }
 
             MenuToolbarButton(tint: .white)
@@ -44,15 +44,17 @@ struct ReelsTabView: View {
         }
         .task {
             await loadReels()
-            scrollPosition = activeIndex
-            recordView(at: activeIndex)
+        }
+        .onChange(of: appState.selectedTab) { _, tab in
+            guard tab == .reels else { return }
+            Task { await loadReelsIfNeeded() }
         }
     }
 
-    private var horizontalReelsFeed: some View {
+    private var verticalReelsFeed: some View {
         GeometryReader { geometry in
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 0) {
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVStack(spacing: 0) {
                     ForEach(Array(posts.enumerated()), id: \.element.id) { index, post in
                         ReelsTabCard(
                             post: post,
@@ -73,7 +75,13 @@ struct ReelsTabView: View {
                 activeIndex = newValue
                 recordView(at: newValue)
             }
+            .onAppear {
+                if scrollPosition == nil {
+                    scrollPosition = activeIndex
+                }
+            }
         }
+        .ignoresSafeArea()
     }
 
     private func recordView(at index: Int) {
@@ -82,22 +90,26 @@ struct ReelsTabView: View {
         Task { await PostsService.shared.recordView(post) }
     }
 
+    private func loadReelsIfNeeded() async {
+        guard posts.isEmpty else { return }
+        await loadReels()
+    }
+
     private func loadReels() async {
         isLoading = posts.isEmpty
         errorMessage = nil
         defer { isLoading = false }
 
-        let pool = await PostsService.shared.loadReelsPool()
-        let viewerCountry = appState.currentProfile?.countryCode
-        posts = ReelsRankingEngine.rank(
-            pool,
-            viewerCountry: viewerCountry,
+        posts = await PostsService.shared.loadReelsFeed(
+            viewerCountry: appState.currentProfile?.countryCode,
             followingIDs: appState.followingIDs
         )
+
         if activeIndex >= posts.count {
             activeIndex = 0
-            scrollPosition = 0
         }
+        scrollPosition = activeIndex
+        recordView(at: activeIndex)
     }
 
     private func toggleLike(_ post: CountryPost) async {
@@ -158,9 +170,14 @@ private struct ReelsTabCard: View {
                 )
             } else {
                 Color.black
-                Image(systemName: "video.slash")
-                    .font(.largeTitle)
-                    .foregroundStyle(.white.opacity(0.5))
+                VStack(spacing: 8) {
+                    Image(systemName: "video.slash")
+                        .font(.largeTitle)
+                        .foregroundStyle(.white.opacity(0.5))
+                    Text("Video unavailable")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.65))
+                }
             }
 
             LinearGradient(

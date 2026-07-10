@@ -68,6 +68,23 @@ final class PostsService {
         return mergeFeedSources([following, global], limit: maxPosts)
     }
 
+    func loadReelsFeed(
+        followingLimitPerAuthor: Int = 10,
+        globalLimit: Int = 40,
+        viewerCountry: String? = nil,
+        followingIDs: Set<String> = []
+    ) async -> [CountryPost] {
+        let pool = await loadReelsPool(
+            followingLimitPerAuthor: followingLimitPerAuthor,
+            globalLimit: globalLimit
+        )
+        let reels = pool.filter { $0.isReel && !$0.isStory && $0.playableVideoURL != nil }
+        let source = reels.isEmpty
+            ? pool.filter { $0.hasVideo && !$0.isStory && $0.playableVideoURL != nil }
+            : reels
+        return ReelsRankingEngine.rank(source, viewerCountry: viewerCountry, followingIDs: followingIDs)
+    }
+
     func loadReelsPool(followingLimitPerAuthor: Int = 10, globalLimit: Int = 40) async -> [CountryPost] {
         let followingIDs = await follow.followingIDs()
 
@@ -75,7 +92,7 @@ final class PostsService {
         var seen = Set<String>()
 
         func appendVideos(_ batch: [CountryPost]) {
-            for post in batch where post.hasVideo && !seen.contains(post.id) {
+            for post in batch where post.hasVideo && !post.isStory && !seen.contains(post.id) {
                 videos.append(post)
                 seen.insert(post.id)
             }
@@ -110,7 +127,7 @@ final class PostsService {
             followingLimitPerAuthor: followingLimitPerAuthor,
             globalLimit: globalLimit
         )
-        return pool.filter { $0.hasVideo && !$0.isReel && !$0.isStory }
+        return pool.filter { $0.hasVideo && !$0.isReel && !$0.isStory && $0.playableVideoURL != nil }
     }
 
     func searchPosts(_ query: String, limit: Int = 20) async throws -> [CountryPost] {

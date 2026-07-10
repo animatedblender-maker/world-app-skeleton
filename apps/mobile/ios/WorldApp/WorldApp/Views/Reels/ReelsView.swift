@@ -24,8 +24,8 @@ struct ReelsView: View {
                 ContentUnavailableView("No videos yet", systemImage: "video", description: Text("No reels for \(country.name) yet."))
             } else {
                 GeometryReader { geometry in
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        LazyHStack(spacing: 0) {
+                    ScrollView(.vertical, showsIndicators: false) {
+                        LazyVStack(spacing: 0) {
                             ForEach(Array(posts.enumerated()), id: \.element.id) { index, post in
                                 ReelCard(
                                     post: post,

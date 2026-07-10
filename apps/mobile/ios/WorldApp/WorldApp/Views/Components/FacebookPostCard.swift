@@ -223,19 +223,19 @@ struct FacebookPostCard: View {
     private var media: some View {
         if let aspect = FacebookMediaLayout.aspectRatio(for: post, context: mediaContext) {
             Group {
-                if post.hasVideo, mediaContext == .feed {
-                    feedVideoPoster
-                } else if post.hasVideo, let url = post.playableVideoURL {
+                if post.hasVideo, let url = post.playableVideoURL {
                     InFrameVideoPlayer(
                         url: url,
                         posterURL: post.posterImageURL,
-                        placement: mediaContext == .reel ? "reel" : nil,
+                        placement: post.isReel ? "reel" : nil,
                         countryCode: post.countryCode,
                         contentCountryCode: post.countryCode,
                         postID: post.id,
                         muted: true,
                         onViewed: { Task { await PostsService.shared.recordView(post) } }
                     )
+                } else if post.hasVideo {
+                    feedVideoPoster
                 } else if let url = post.feedImageURL {
                     CachedAsyncImage(
                         url: url,

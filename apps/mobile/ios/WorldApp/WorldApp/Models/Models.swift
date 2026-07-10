@@ -39,21 +39,44 @@ struct PostMediaPayload: Sendable {
 
         if raw.hasPrefix("{") || raw.hasPrefix("[") {
             guard let data = raw.data(using: .utf8),
-                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                  let json = try? JSONSerialization.jsonObject(with: data)
             else { return nil }
+
+            if let array = json as? [String] {
+                let urls = array.filter { !$0.isEmpty }
+                guard !urls.isEmpty else { return nil }
+                return PostMediaPayload(
+                    urls: urls,
+                    types: urls.map { inferMediaType(from: $0) },
+                    isReel: false,
+                    isStory: false,
+                    expiresAt: nil
+                )
+            }
+
+            guard let object = json as? [String: Any] else { return nil }
 
             let urls: [String]
             if let list = object["urls"] as? [String] {
                 urls = list.filter { !$0.isEmpty }
-            } else if let single = object["url"] as? String {
+            } else if let single = object["url"] as? String, !single.isEmpty {
                 urls = [single]
             } else {
                 urls = []
             }
 
             let types: [String]
-            if let list = object["types"] as? [String] {
-                types = list
+            if let list = object["types"] as? [String], !list.isEmpty {
+                if list.count == urls.count {
+                    types = list
+                } else {
+                    types = urls.enumerated().map { index, url in
+                        if index < list.count, !list[index].isEmpty {
+                            return list[index]
+                        }
+                        return inferMediaType(from: url)
+                    }
+                }
             } else {
                 types = urls.map { inferMediaType(from: $0) }
             }
@@ -127,7 +150,10 @@ struct PostMediaPayload: Sendable {
 
     private static func inferMediaType(from url: String) -> String {
         let lower = url.lowercased()
-        if lower.hasSuffix(".mp4") || lower.hasSuffix(".mov") || lower.hasSuffix(".webm") || lower.contains("video") {
+        if lower.range(
+            of: #"\.(mp4|webm|mov|m4v|avi|mkv)(\?|#|$)"#,
+            options: .regularExpression
+        ) != nil || lower.contains("/video") || lower.contains("video%") {
             return "video"
         }
         return "image"
@@ -309,8 +335,10 @@ struct CountryPost: Identifiable, Hashable, Sendable {
             return payload.types.contains { $0.lowercased() == "video" }
         }
         guard let url = primaryMediaURL?.lowercased() else { return false }
-        return url.hasSuffix(".mp4") || url.hasSuffix(".mov") || url.hasSuffix(".webm")
-            || url.contains("/video") || url.contains("video%")
+        return url.range(
+            of: #"\.(mp4|webm|mov|m4v|avi|mkv)(\?|#|$)"#,
+            options: .regularExpression
+        ) != nil || url.contains("/video") || url.contains("video%")
     }
 
     var hasImage: Bool {
