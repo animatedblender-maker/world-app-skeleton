@@ -10,6 +10,7 @@ import { insightsResolvers } from './modules/insights/insights.resolver.js';
 import { countryFeedResolvers } from './modules/country-feed/country-feed.resolver.js';
 import { adsResolvers } from './modules/ads/ads.resolver.js';
 import { newsResolvers } from './modules/news/news.resolver.js';
+import { streamingResolvers } from './modules/streaming/streaming.resolver.js';
 
 async function reverseGeocodeNominatim(lat: number, lng: number) {
   const baseUrl = process.env.NOMINATIM_URL ?? 'https://nominatim.openstreetmap.org/reverse';
@@ -66,6 +67,7 @@ export const resolvers = {
     ...(countryFeedResolvers.Query ?? {}),
     ...(adsResolvers.Query ?? {}),
     ...(newsResolvers.Query ?? {}),
+    ...(streamingResolvers.Query ?? {}),
   },
 
   Mutation: {
@@ -91,5 +93,6 @@ export const resolvers = {
     ...(messagesResolvers.Mutation ?? {}),
     ...(adsResolvers.Mutation ?? {}),
     ...(newsResolvers.Mutation ?? {}),
+    ...(streamingResolvers.Mutation ?? {}),
   },
 };

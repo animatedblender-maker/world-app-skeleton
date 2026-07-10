@@ -84,6 +84,7 @@ export const typeDefs = `#graphql
     like_count: Int!
     comment_count: Int!
     liked_by_me: Boolean!
+    saved_by_me: Boolean!
     created_at: String!
     updated_at: String!
     author: PostAuthor
@@ -386,6 +387,68 @@ export const typeDefs = `#graphql
     lastSeen: String!
   }
 
+  type StreamingConnection {
+    platform: String!
+    is_linked: Boolean!
+    sharing_enabled: Boolean!
+    linked_at: String
+  }
+
+  type NowPlayingItem {
+    id: ID!
+    platform: String!
+    title: String!
+    subtitle: String
+    moment_label: String
+    progress_ms: Int!
+    duration_ms: Int!
+    progress: Float!
+    progress_label: String!
+    is_sharing: Boolean!
+    updated_at: String!
+  }
+
+  type FriendStreamingActivity {
+    user_id: ID!
+    display_name: String
+    username: String
+    avatar_url: String
+    platform: String!
+    title: String!
+    detail: String!
+    is_live: Boolean!
+  }
+
+  type MomentRoomComment {
+    id: ID!
+    author_id: ID!
+    author_name: String!
+    body: String!
+    reactions: Int!
+    created_at: String!
+  }
+
+  type MomentRoomItem {
+    room_key: String!
+    platform: String!
+    show_title: String!
+    episode_label: String!
+    timestamp_label: String!
+    active_friends: Int!
+    heat: Float!
+    preview_comments: [MomentRoomComment!]!
+  }
+
+  input UpdateNowPlayingInput {
+    platform: String!
+    title: String!
+    subtitle: String
+    moment_label: String
+    progress_ms: Int!
+    duration_ms: Int!
+    is_sharing: Boolean
+  }
+
   type Query {
     # Countries
     countries: CountriesResult!
@@ -415,6 +478,7 @@ export const typeDefs = `#graphql
     # Posts / social
     postsByCountry(country_code: String!, limit: Int): [Post!]!
     postsByAuthor(user_id: ID!, limit: Int): [Post!]!
+    savedPosts(limit: Int): [Post!]!
     searchPosts(query: String!, limit: Int): [Post!]!
     postById(post_id: ID!): Post
     commentsByPost(post_id: ID!, limit: Int, before: String): [PostComment!]!
@@ -453,6 +517,13 @@ export const typeDefs = `#graphql
       content_country_code: String
       post_id: ID
     ): AdServeDebug!
+
+    # Streaming hub
+    myStreamingConnections: [StreamingConnection!]!
+    myNowPlaying: [NowPlayingItem!]!
+    friendsStreamingActivity(limit: Int): [FriendStreamingActivity!]!
+    momentRooms(limit: Int): [MomentRoomItem!]!
+    momentRoomComments(room_key: String!, limit: Int): [MomentRoomComment!]!
   }
 
   type Mutation {
@@ -469,9 +540,12 @@ export const typeDefs = `#graphql
     deletePost(post_id: ID!): Boolean!
     likePost(post_id: ID!): Post!
     unlikePost(post_id: ID!): Post!
+    savePost(post_id: ID!): Post!
+    unsavePost(post_id: ID!): Post!
     addComment(post_id: ID!, body: String!, parent_id: ID): PostComment!
     likeComment(comment_id: ID!): PostComment!
     unlikeComment(comment_id: ID!): PostComment!
+    reportComment(comment_id: ID!, reason: String!): Boolean!
     addExternalNewsComment(news_item_id: ID!, body: String!, parent_id: ID): ExternalNewsComment!
     likeExternalNews(news_item_id: ID!): ExternalNewsItem!
     unlikeExternalNews(news_item_id: ID!): ExternalNewsItem!
@@ -505,5 +579,13 @@ export const typeDefs = `#graphql
     createAdCreative(campaign_id: ID!, input: AdCreativeInput!): AdCreative!
     logAdImpression(impression_token: String!): AdEventResult!
     logAdClick(impression_token: String!): AdEventResult!
+
+    # Streaming hub
+    linkStreamingPlatform(platform: String!): StreamingConnection!
+    unlinkStreamingPlatform(platform: String!): Boolean!
+    setPlatformSharing(platform: String!, enabled: Boolean!): StreamingConnection!
+    updateNowPlaying(input: UpdateNowPlayingInput!): NowPlayingItem!
+    clearNowPlaying(platform: String!): Boolean!
+    addMomentRoomComment(room_key: String!, body: String!): MomentRoomComment!
   }
 `;
