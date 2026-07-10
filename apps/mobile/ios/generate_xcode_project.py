@@ -308,6 +308,7 @@ for config_id, name, is_target in [
         add("\t\t\t\tENABLE_PREVIEWS = YES;")
         add("\t\t\t\tGENERATE_INFOPLIST_FILE = YES;")
         add("\t\t\t\tINFOPLIST_KEY_CFBundleDisplayName = Matterya;")
+        add("\t\t\t\tINFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;")
         add("\t\t\t\tINFOPLIST_KEY_NSLocationWhenInUseUsageDescription = \"Matterya uses your location to set your country during profile setup.\";")
         add("\t\t\t\tINFOPLIST_KEY_NSCameraUsageDescription = \"Matterya uses your camera for video calls and photos.\";")
         add("\t\t\t\tINFOPLIST_KEY_NSMicrophoneUsageDescription = \"Matterya uses your microphone for voice and video calls.\";")
