@@ -1,0 +1,156 @@
+import Foundation
+import UIKit
+
+enum MediaError: LocalizedError {
+    case notAuthenticated
+    case uploadFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .notAuthenticated: "Not authenticated."
+        case .uploadFailed(let msg): msg
+        }
+    }
+}
+
+@MainActor
+final class MediaService {
+    static let shared = MediaService()
+
+    private init() {}
+
+    func uploadAdMedia(data: Data, fileExtension: String, mimeType: String) async throws -> (path: String, publicURL: String) {
+        guard mimeType.hasPrefix("video/") else {
+            throw MediaError.uploadFailed("Ad creative must be a video file.")
+        }
+        guard let userID = AuthService.shared.currentUser?.id else { throw MediaError.notAuthenticated }
+        let ext = fileExtension.lowercased().isEmpty ? "mp4" : fileExtension.lowercased()
+        let path = "\(userID)/ads/\(UUID().uuidString).\(ext)"
+        try await upload(bucket: "posts", path: path, data: data, mimeType: mimeType)
+        let publicURL = "\(AppConfig.supabaseURL)/storage/v1/object/public/posts/\(path)"
+        return (path, publicURL)
+    }
+
+    func uploadPostMedia(data: Data, fileExtension: String, mimeType: String) async throws -> (path: String, publicURL: String) {
+        guard let userID = AuthService.shared.currentUser?.id else { throw MediaError.notAuthenticated }
+        let path = "\(userID)/\(UUID().uuidString).\(fileExtension)"
+        try await upload(bucket: "posts", path: path, data: data, mimeType: mimeType)
+        let publicURL = "\(AppConfig.supabaseURL)/storage/v1/object/public/posts/\(path)"
+        return (path, publicURL)
+    }
+
+    func uploadAvatar(data: Data, fileExtension: String, mimeType: String) async throws -> (path: String, url: String) {
+        guard let userID = AuthService.shared.currentUser?.id else { throw MediaError.notAuthenticated }
+        if mimeType == "image/gif" { throw MediaError.uploadFailed("GIF avatars are disabled.") }
+        let path = "\(userID)/\(UUID().uuidString).\(fileExtension)"
+        try await upload(bucket: "avatars", path: path, data: data, mimeType: mimeType, upsert: true)
+        return (path, Self.publicAvatarURL(for: path))
+    }
+
+    static func normalizedAvatarURL(_ url: String?) -> String? {
+        guard let raw = url?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+        if raw.hasPrefix("data:") || raw.hasPrefix("blob:") { return raw }
+
+        let objectPrefix = "\(AppConfig.supabaseURL)/storage/v1/object/"
+        let signMarker = "\(objectPrefix)sign/avatars/"
+        if let range = raw.range(of: signMarker) {
+            let path = String(raw[range.upperBound...]).split(separator: "?").first.map(String.init) ?? ""
+            let decoded = path.removingPercentEncoding ?? path
+            return publicAvatarURL(for: decoded)
+        }
+
+        let publicMarker = "\(objectPrefix)public/avatars/"
+        if raw.hasPrefix(publicMarker) {
+            return String(raw.split(separator: "?").first ?? Substring(raw))
+        }
+
+        if raw.hasPrefix("http://") || raw.hasPrefix("https://") {
+            return String(raw.split(separator: "?").first ?? Substring(raw))
+        }
+
+        return publicAvatarURL(for: raw.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+    }
+
+    private static func publicAvatarURL(for path: String) -> String {
+        let cleaned = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return "\(AppConfig.supabaseURL)/storage/v1/object/public/avatars/\(cleaned)"
+    }
+
+    private var signedMessageURLCache: [String: (url: String, expiresAt: Date)] = [:]
+
+    func signedMessageURL(path: String) async throws -> String {
+        if let cached = signedMessageURLCache[path], cached.expiresAt > Date() {
+            return cached.url
+        }
+        let url = try await createSignedURL(bucket: "messages", path: path)
+        signedMessageURLCache[path] = (url, Date().addingTimeInterval(55 * 60))
+        return url
+    }
+
+    func uploadMessageMedia(data: Data, conversationID: String, fileName: String, mimeType: String) async throws -> (path: String, name: String, mime: String, size: Int) {
+        guard let userID = AuthService.shared.currentUser?.id else { throw MediaError.notAuthenticated }
+        let ext = (fileName as NSString).pathExtension.lowercased()
+        let safeExt = ext.isEmpty ? "bin" : ext
+        let path = "\(userID)/\(conversationID)/\(UUID().uuidString).\(safeExt)"
+        try await upload(bucket: "messages", path: path, data: data, mimeType: mimeType)
+        return (path, fileName, mimeType, data.count)
+    }
+
+    private func upload(bucket: String, path: String, data: Data, mimeType: String, upsert: Bool = false) async throws {
+        let token: String
+        do {
+            token = try await AuthService.shared.ensureValidToken()
+        } catch {
+            throw MediaError.notAuthenticated
+        }
+        guard let url = URL(string: "\(AppConfig.supabaseURL)/storage/v1/object/\(bucket)/\(path)") else {
+            throw MediaError.uploadFailed("Invalid upload URL.")
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.httpBody = data
+        request.setValue(mimeType, forHTTPHeaderField: "Content-Type")
+        request.setValue(AppConfig.supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if upsert {
+            request.setValue("true", forHTTPHeaderField: "x-upsert")
+        }
+
+        let (responseData, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            let msg = String(data: responseData, encoding: .utf8) ?? "Upload failed."
+            throw MediaError.uploadFailed(msg)
+        }
+    }
+
+    private func createSignedURL(bucket: String, path: String) async throws -> String {
+        let token: String
+        do {
+            token = try await AuthService.shared.ensureValidToken()
+        } catch {
+            throw MediaError.notAuthenticated
+        }
+        guard let url = URL(string: "\(AppConfig.supabaseURL)/storage/v1/object/sign/\(bucket)/\(path)") else {
+            throw MediaError.uploadFailed("Invalid sign URL.")
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(AppConfig.supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["expiresIn": 3600])
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let signed = json["signedURL"] as? String
+        else {
+            throw MediaError.uploadFailed("Failed to sign avatar URL.")
+        }
+
+        if signed.hasPrefix("http") { return signed }
+        return "\(AppConfig.supabaseURL)/storage/v1\(signed)"
+    }
+}

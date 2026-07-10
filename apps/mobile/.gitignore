@@ -1,3 +1,7 @@
 node_modules/
-ios/
 android/
+
+# Native iOS — track source in git, ignore local Xcode/build output
+ios/build/
+ios/**/xcuserdata/
+ios/**/DerivedData/

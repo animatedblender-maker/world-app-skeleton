@@ -1,0 +1,12 @@
+{
+  "images" : [
+    {
+      "filename" : "earth_daymap.png",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}
