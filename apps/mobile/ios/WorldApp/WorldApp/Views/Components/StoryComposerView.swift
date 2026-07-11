@@ -15,6 +15,7 @@ struct StoryComposerView: View {
     @State private var uploadPhase: MediaUploadPhase = .idle
     @State private var uploadProgress: UploadProgress?
     @State private var isPreparingVideo = false
+    @State private var compressionProgress: Double = 0
     @State private var errorMessage: String?
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var selectedVideo: PhotosPickerItem?
@@ -128,11 +129,15 @@ struct StoryComposerView: View {
 
             if isPreparingVideo {
                 VStack(spacing: 10) {
-                    ProgressView().tint(.white)
-                    Text("Preparing video…")
+                    ProgressView(value: compressionProgress)
+                        .tint(.white)
+                        .frame(maxWidth: 220)
+                    Text("Compressing video · \(compressionPercentText)")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.white.opacity(0.85))
+                        .monospacedDigit()
                 }
+                .padding(.horizontal, 24)
             } else if let previewVideoURL, isVideo {
                 VideoPlayerView(
                     url: previewVideoURL,
@@ -163,6 +168,10 @@ struct StoryComposerView: View {
             }
 
         }
+    }
+
+    private var compressionPercentText: String {
+        "\(Int((compressionProgress * 100).rounded()))%"
     }
 
     private func pickerChip(_ title: String, icon: String) -> some View {
@@ -201,7 +210,11 @@ struct StoryComposerView: View {
         selectedPhoto = nil
         clearVideoPreview()
         isPreparingVideo = true
-        defer { isPreparingVideo = false }
+        compressionProgress = 0
+        defer {
+            isPreparingVideo = false
+            compressionProgress = 0
+        }
 
         do {
             guard let data = try await item.loadTransferable(type: Data.self) else { return }
@@ -210,7 +223,15 @@ struct StoryComposerView: View {
                 .appendingPathComponent("story-source-\(UUID().uuidString).\(format.extension)")
             try data.write(to: sourceURL)
 
-            let preparedURL = try await VideoCompressionService.shared.prepareVideoForUpload(sourceURL: sourceURL)
+            let compressionHandler: @Sendable (Double) -> Void = { progress in
+                Task { @MainActor in
+                    compressionProgress = progress
+                }
+            }
+            let preparedURL = try await VideoCompressionService.shared.prepareVideoForUpload(
+                sourceURL: sourceURL,
+                onProgress: compressionHandler
+            )
             if preparedURL != sourceURL {
                 try? FileManager.default.removeItem(at: sourceURL)
             }

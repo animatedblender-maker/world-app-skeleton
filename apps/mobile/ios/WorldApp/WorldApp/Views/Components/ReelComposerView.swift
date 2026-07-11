@@ -16,6 +16,7 @@ struct ReelComposerView: View {
     @State private var uploadPhase: MediaUploadPhase = .idle
     @State private var uploadProgress: UploadProgress?
     @State private var isPreparingVideo = false
+    @State private var compressionProgress: Double = 0
     @State private var errorMessage: String?
     @State private var selectedVideo: PhotosPickerItem?
     @State private var uploadVideoURL: URL?
@@ -82,9 +83,10 @@ struct ReelComposerView: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white)
                 if isPreparingVideo {
-                    Text("Compressing video for upload…")
+                    Text("Compressing video · \(compressionPercentText)")
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.65))
+                        .monospacedDigit()
                 } else if preparedVideoSizeBytes > 0 {
                     Text("Ready · \(VideoCompressionService.formattedSize(preparedVideoSizeBytes))")
                         .font(.caption)
@@ -113,12 +115,15 @@ struct ReelComposerView: View {
 
             if isPreparingVideo {
                 VStack(spacing: 12) {
-                    ProgressView()
+                    ProgressView(value: compressionProgress)
                         .tint(.white)
-                    Text("Preparing video…")
+                        .frame(maxWidth: 220)
+                    Text("Compressing video · \(compressionPercentText)")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.white.opacity(0.85))
+                        .monospacedDigit()
                 }
+                .padding(.horizontal, 24)
             } else if let previewVideoURL {
                 VideoPlayerView(
                     url: previewVideoURL,
@@ -216,10 +221,16 @@ struct ReelComposerView: View {
         .background(.black.opacity(0.92))
     }
 
+    private var compressionPercentText: String {
+        "\(Int((compressionProgress * 100).rounded()))%"
+    }
+
     private var statusLabel: String {
         if !canPostHere { return "Home country only" }
         if busy {
             switch uploadPhase {
+            case .compressing:
+                return uploadProgress.map { "Compressing \($0.percentText)" } ?? "Compressing video…"
             case .uploading:
                 return uploadProgress.map { "Uploading \($0.percentText)" } ?? "Uploading video…"
             case .publishing:
@@ -243,9 +254,13 @@ struct ReelComposerView: View {
     private func loadVideo(_ item: PhotosPickerItem?) async {
         guard let item else { return }
         isPreparingVideo = true
+        compressionProgress = 0
         errorMessage = nil
         clearSelectedVideo(keepPreparingFlag: true)
-        defer { isPreparingVideo = false }
+        defer {
+            isPreparingVideo = false
+            compressionProgress = 0
+        }
 
         do {
             guard let data = try await item.loadTransferable(type: Data.self) else {
@@ -256,7 +271,15 @@ struct ReelComposerView: View {
                 .appendingPathComponent("composer-source-\(UUID().uuidString).\(format.extension)")
             try data.write(to: sourceURL)
 
-            let preparedURL = try await VideoCompressionService.shared.prepareVideoForUpload(sourceURL: sourceURL)
+            let compressionHandler: @Sendable (Double) -> Void = { progress in
+                Task { @MainActor in
+                    compressionProgress = progress
+                }
+            }
+            let preparedURL = try await VideoCompressionService.shared.prepareVideoForUpload(
+                sourceURL: sourceURL,
+                onProgress: compressionHandler
+            )
             if preparedURL != sourceURL {
                 try? FileManager.default.removeItem(at: sourceURL)
             }

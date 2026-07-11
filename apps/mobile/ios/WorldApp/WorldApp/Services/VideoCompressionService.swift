@@ -27,12 +27,16 @@ final class VideoCompressionService {
 
     private init() {}
 
-    func prepareVideoForUpload(sourceURL: URL) async throws -> URL {
+    func prepareVideoForUpload(
+        sourceURL: URL,
+        onProgress: (@Sendable (Double) -> Void)? = nil
+    ) async throws -> URL {
         let sourceSize = fileSize(at: sourceURL)
         let ext = sourceURL.pathExtension.lowercased()
         if sourceSize > 0,
            sourceSize <= Self.skipCompressionBelowBytes,
            ext == "mp4" || ext == "m4v" {
+            onProgress?(1)
             return sourceURL
         }
 
@@ -42,12 +46,25 @@ final class VideoCompressionService {
             AVAssetExportPresetMediumQuality,
         ]
 
+        onProgress?(0)
+
         var lastError = "Video compression failed."
-        for preset in presets {
+        let presetCount = Double(presets.count)
+        for (index, preset) in presets.enumerated() {
+            let baseProgress = Double(index) / presetCount
+            let slice = 1 / presetCount
             do {
-                let outputURL = try await export(assetURL: sourceURL, presetName: preset)
+                let outputURL = try await export(
+                    assetURL: sourceURL,
+                    presetName: preset,
+                    onProgress: { sessionProgress in
+                        let overall = baseProgress + (Double(sessionProgress) * slice)
+                        onProgress?(min(1, overall))
+                    }
+                )
                 let outputSize = fileSize(at: outputURL)
                 if outputSize <= Self.maxUploadBytes {
+                    onProgress?(1)
                     return outputURL
                 }
                 try? FileManager.default.removeItem(at: outputURL)
@@ -60,7 +77,11 @@ final class VideoCompressionService {
         throw VideoCompressionError.exportFailed(lastError)
     }
 
-    private func export(assetURL: URL, presetName: String) async throws -> URL {
+    private func export(
+        assetURL: URL,
+        presetName: String,
+        onProgress: (@Sendable (Double) -> Void)? = nil
+    ) async throws -> URL {
         let asset = AVURLAsset(url: assetURL)
         guard let session = AVAssetExportSession(asset: asset, presetName: presetName) else {
             throw VideoCompressionError.exportFailed("Could not prepare this video.")
@@ -77,9 +98,19 @@ final class VideoCompressionService {
         session.shouldOptimizeForNetworkUse = true
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            var progressObservation: NSKeyValueObservation?
+            if let onProgress {
+                onProgress(0)
+                progressObservation = session.observe(\.progress, options: [.new]) { exportSession, _ in
+                    onProgress(Double(exportSession.progress))
+                }
+            }
+
             session.exportAsynchronously {
+                progressObservation?.invalidate()
                 switch session.status {
                 case .completed:
+                    onProgress?(1)
                     continuation.resume()
                 case .cancelled:
                     continuation.resume(throwing: VideoCompressionError.exportFailed("Video compression was cancelled."))

@@ -26,6 +26,7 @@ struct UploadProgress: Sendable, Equatable {
 
 enum MediaUploadPhase: Equatable {
     case idle
+    case compressing
     case uploading
     case publishing
 }

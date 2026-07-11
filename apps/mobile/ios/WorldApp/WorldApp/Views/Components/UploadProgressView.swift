@@ -11,7 +11,7 @@ struct UploadProgressView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.white)
                 Spacer()
-                if let progress, phase == .uploading {
+                if let progress, phase == .uploading || phase == .compressing {
                     Text(progress.percentText)
                         .font(.caption.weight(.bold))
                         .foregroundStyle(.white.opacity(0.9))
@@ -19,13 +19,15 @@ struct UploadProgressView: View {
                 }
             }
 
-            if phase == .uploading, let progress {
+            if phase == .uploading || phase == .compressing, let progress {
                 ProgressView(value: progress.fractionCompleted)
-                    .tint(Theme.facebookBlue)
-                Text(progress.bytesText)
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.72))
-                    .monospacedDigit()
+                    .tint(phase == .compressing ? .white : Theme.facebookBlue)
+                if phase == .uploading {
+                    Text(progress.bytesText)
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.72))
+                        .monospacedDigit()
+                }
             } else if phase == .publishing {
                 ProgressView()
                     .tint(.white)
@@ -39,6 +41,8 @@ struct UploadProgressView: View {
         switch phase {
         case .idle:
             return "Preparing…"
+        case .compressing:
+            return "Compressing video"
         case .uploading:
             return "Uploading video"
         case .publishing:
