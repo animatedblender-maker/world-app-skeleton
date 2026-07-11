@@ -336,8 +336,33 @@ final class AppState {
             return
         }
         composerCountry = home
-        showCreateMenu = false
+        withAnimation(.easeOut(duration: 0.24)) {
+            showCreateMenu = false
+        }
         activeCreateSheet = sheet
+    }
+
+    func sharePostToCountryFeed(_ post: CountryPost) async -> String {
+        guard isAuthenticated else { return "Sign in to share." }
+        guard let profile = currentProfile,
+              let countryCode = profile.countryCode?.uppercased(), !countryCode.isEmpty,
+              let countryName = profile.countryName, !countryName.isEmpty
+        else {
+            return "Set your home country to share."
+        }
+
+        do {
+            _ = try await PostsService.shared.sharePostToCountryFeed(
+                post: post,
+                countryName: countryName,
+                countryCode: countryCode,
+                cityName: profile.cityName
+            )
+            NotificationCenter.default.post(name: .userPostsDidChange, object: nil)
+            return "Shared to your country feed."
+        } catch {
+            return error.localizedDescription
+        }
     }
 
     func refreshStories() async {

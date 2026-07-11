@@ -152,6 +152,7 @@ private struct ReelsTabCard: View {
     @State private var showComments = false
     @State private var comments: [PostComment] = []
     @State private var commentError: String?
+    @State private var shareFeedback: String?
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -230,6 +231,14 @@ private struct ReelsTabCard: View {
                     }
 
                     actionButton(
+                        icon: "arrowshape.turn.up.right",
+                        label: "Share",
+                        tint: .white
+                    ) {
+                        Task { await shareToFeed() }
+                    }
+
+                    actionButton(
                         icon: "arrow.up.right",
                         label: "Open",
                         tint: .white,
@@ -238,6 +247,19 @@ private struct ReelsTabCard: View {
                 }
                 .padding(.trailing, 16)
                 .padding(.bottom, Theme.tabBarHeight + 12)
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            if let shareFeedback {
+                Text(shareFeedback)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.black.opacity(0.55), in: Capsule())
+                    .padding(.top, 56)
+                    .padding(.trailing, 72)
+                    .transition(.opacity)
             }
         }
         .sheet(isPresented: $showComments) {
@@ -284,6 +306,19 @@ private struct ReelsTabCard: View {
             }
         }
         .buttonStyle(.plain)
+    }
+
+    private func shareToFeed() async {
+        let message = await appState.sharePostToCountryFeed(post)
+        withAnimation(.easeInOut(duration: 0.2)) {
+            shareFeedback = message
+        }
+        try? await Task.sleep(for: .seconds(2))
+        if shareFeedback == message {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                shareFeedback = nil
+            }
+        }
     }
 
     private func actionButton(

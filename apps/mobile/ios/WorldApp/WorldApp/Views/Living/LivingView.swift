@@ -27,6 +27,8 @@ struct LivingView: View {
     @State private var errorMessage: String?
     @State private var inlineComments: [PostComment] = []
     @State private var commentError: String?
+    @State private var showWatchComments = false
+    @State private var shareFeedback: String?
 
     private let gridColumns = [
         GridItem(.flexible(), spacing: 12),
@@ -301,7 +303,7 @@ struct LivingView: View {
                 watchMeta(for: post)
                 watchActions(for: post)
 
-                if post.commentCount > 0 || !inlineComments.isEmpty {
+                if showWatchComments || post.commentCount > 0 || !inlineComments.isEmpty {
                     Divider()
                         .padding(.top, 8)
 
@@ -337,6 +339,8 @@ struct LivingView: View {
                     watchingPost = nil
                     inlineComments = []
                     commentError = nil
+                    showWatchComments = false
+                    shareFeedback = nil
                 }
             } label: {
                 HStack(spacing: 6) {
@@ -401,35 +405,54 @@ struct LivingView: View {
 
     @ViewBuilder
     private func watchActions(for post: CountryPost) -> some View {
-        HStack(spacing: 22) {
-            Button {
-                Task { await toggleLike(post) }
-            } label: {
-                Image(systemName: post.likedByMe ? "heart.fill" : "heart")
-                    .font(.system(size: 22))
-                    .foregroundStyle(post.likedByMe ? Theme.like : Theme.ink)
-            }
-            .buttonStyle(.plain)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 22) {
+                Button {
+                    Task { await toggleLike(post) }
+                } label: {
+                    Image(systemName: post.likedByMe ? "heart.fill" : "heart")
+                        .font(.system(size: 22))
+                        .foregroundStyle(post.likedByMe ? Theme.like : Theme.ink)
+                }
+                .buttonStyle(.plain)
 
-            Button {
-                Task { await appState.toggleSavePost(post) }
-            } label: {
-                Image(systemName: appState.isPostSaved(post.id) ? "bookmark.fill" : "bookmark")
-                    .font(.system(size: 21))
-                    .foregroundStyle(appState.isPostSaved(post.id) ? Theme.facebookBlue : Theme.ink)
-            }
-            .buttonStyle(.plain)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showWatchComments.toggle()
+                    }
+                } label: {
+                    Image(systemName: showWatchComments ? "bubble.right.fill" : "bubble.right")
+                        .font(.system(size: 22))
+                        .foregroundStyle(showWatchComments ? Theme.facebookBlue : Theme.ink)
+                }
+                .buttonStyle(.plain)
 
-            Button {
-                appState.navigate(to: .post(post.id))
-            } label: {
-                Image(systemName: "bubble.right")
-                    .font(.system(size: 22))
-                    .foregroundStyle(Theme.ink)
-            }
-            .buttonStyle(.plain)
+                Button {
+                    Task { await appState.toggleSavePost(post) }
+                } label: {
+                    Image(systemName: appState.isPostSaved(post.id) ? "bookmark.fill" : "bookmark")
+                        .font(.system(size: 21))
+                        .foregroundStyle(appState.isPostSaved(post.id) ? Theme.facebookBlue : Theme.ink)
+                }
+                .buttonStyle(.plain)
 
-            Spacer()
+                Button {
+                    Task { await shareVideoToFeed(post) }
+                } label: {
+                    Image(systemName: "arrowshape.turn.up.right")
+                        .font(.system(size: 21, weight: .semibold))
+                        .foregroundStyle(Theme.ink)
+                }
+                .buttonStyle(.plain)
+
+                Spacer()
+            }
+
+            if let shareFeedback {
+                Text(shareFeedback)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.accent)
+            }
         }
         .padding(.horizontal, Theme.pagePadding)
         .padding(.bottom, 6)
@@ -547,8 +570,19 @@ struct LivingView: View {
     private func presentVideo(_ post: CountryPost) async {
         inlineComments = []
         commentError = nil
+        showWatchComments = false
+        shareFeedback = nil
         withAnimation(.easeInOut(duration: 0.2)) {
             watchingPost = post
+        }
+    }
+
+    private func shareVideoToFeed(_ post: CountryPost) async {
+        let message = await appState.sharePostToCountryFeed(post)
+        shareFeedback = message
+        try? await Task.sleep(for: .seconds(2))
+        if shareFeedback == message {
+            shareFeedback = nil
         }
     }
 

@@ -287,12 +287,15 @@ struct FacebookPostCard: View {
             }
             .buttonStyle(.plain)
 
-            Button(action: onOpenPost) {
-                Image(systemName: "paperplane")
-                    .font(.system(size: 22))
+            Button {
+                Task { await shareToFeed() }
+            } label: {
+                Image(systemName: "arrowshape.turn.up.right")
+                    .font(.system(size: 21, weight: .semibold))
                     .foregroundStyle(Theme.ink)
             }
             .buttonStyle(.plain)
+            .disabled(actionBusy)
 
             Button {
                 Task { await appState.toggleSavePost(post) }
@@ -404,6 +407,13 @@ struct FacebookPostCard: View {
         } catch {
             actionMessage = error.localizedDescription
         }
+    }
+
+    private func shareToFeed() async {
+        actionBusy = true
+        defer { actionBusy = false }
+        let message = await appState.sharePostToCountryFeed(post)
+        actionMessage = message
     }
 
     private func reportPost(reason: String) async {

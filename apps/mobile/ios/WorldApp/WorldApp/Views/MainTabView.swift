@@ -32,6 +32,7 @@ struct MainTabView: View {
             .overlay {
                 AppMenuOverlay()
                 NotificationsOverlay()
+                CreateMenuOverlay()
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(appState.navigationPath.isEmpty ? .hidden : .visible, for: .navigationBar)
@@ -62,12 +63,6 @@ struct MainTabView: View {
             }
         }
         .ignoresSafeArea(.keyboard)
-        .sheet(isPresented: Binding(
-            get: { appState.showCreateMenu },
-            set: { appState.showCreateMenu = $0 }
-        )) {
-            CreateMenuSheet()
-        }
         .sheet(item: Binding(
             get: { appState.activeCreateSheet },
             set: { appState.activeCreateSheet = $0 }

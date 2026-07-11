@@ -359,6 +359,29 @@ final class PostsService {
         }
     }
 
+    func sharePostToCountryFeed(
+        post: CountryPost,
+        countryName: String,
+        countryCode: String,
+        cityName: String? = nil
+    ) async throws -> CountryPost {
+        let originalID = post.sharedPostID ?? post.id
+        struct Response: Decodable { let createPost: GraphQLPost }
+        var input: [String: Any] = [
+            "body": "",
+            "country_name": countryName,
+            "country_code": countryCode.uppercased(),
+            "visibility": "country",
+            "media_type": "none",
+            "shared_post_id": originalID,
+        ]
+        if let cityName { input["city_name"] = cityName }
+
+        let mutation = "mutation($input: CreatePostInput!) { createPost(input: $input) { \(postFields) } }"
+        let result: Response = try await gql.authenticatedRequest(query: mutation, variables: ["input": input])
+        return result.createPost.toModel
+    }
+
     func createPost(
         authorID: String,
         body: String,
