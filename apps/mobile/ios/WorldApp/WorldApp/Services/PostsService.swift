@@ -200,12 +200,12 @@ final class PostsService {
         countryName: String,
         countryCode: String,
         cityName: String? = nil,
-        videoData: Data,
+        videoFileURL: URL,
         mimeType: String = "video/mp4",
         fileExtension: String = "mp4"
     ) async throws -> CountryPost {
         let upload = try await MediaService.shared.uploadPostMedia(
-            data: videoData,
+            fileURL: videoFileURL,
             fileExtension: fileExtension,
             mimeType: mimeType
         )
@@ -232,12 +232,12 @@ final class PostsService {
         countryCode: String,
         cityName: String? = nil,
         title: String? = nil,
-        videoData: Data,
+        videoFileURL: URL,
         mimeType: String = "video/mp4",
         fileExtension: String = "mp4"
     ) async throws -> CountryPost {
         let upload = try await MediaService.shared.uploadPostMedia(
-            data: videoData,
+            fileURL: videoFileURL,
             fileExtension: fileExtension,
             mimeType: mimeType
         )
@@ -264,15 +264,27 @@ final class PostsService {
         countryName: String,
         countryCode: String,
         cityName: String? = nil,
-        mediaData: Data,
+        mediaData: Data? = nil,
+        mediaFileURL: URL? = nil,
         mimeType: String,
         fileExtension: String
     ) async throws -> CountryPost {
-        let upload = try await MediaService.shared.uploadPostMedia(
-            data: mediaData,
-            fileExtension: fileExtension,
-            mimeType: mimeType
-        )
+        let upload: (path: String, publicURL: String)
+        if let mediaFileURL {
+            upload = try await MediaService.shared.uploadPostMedia(
+                fileURL: mediaFileURL,
+                fileExtension: fileExtension,
+                mimeType: mimeType
+            )
+        } else if let mediaData {
+            upload = try await MediaService.shared.uploadPostMedia(
+                data: mediaData,
+                fileExtension: fileExtension,
+                mimeType: mimeType
+            )
+        } else {
+            throw MediaError.uploadFailed("Missing story media.")
+        }
         let mediaType = mimeType.hasPrefix("video/") ? "video" : "image"
         let expiresAt = Date().addingTimeInterval(86_400)
         let storyBody = PostStoryMarker.buildBody(caption: body, expiresAt: expiresAt)

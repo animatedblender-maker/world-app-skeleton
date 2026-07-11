@@ -13,15 +13,17 @@ struct ReelComposerView: View {
 
     @State private var caption = ""
     @State private var busy = false
+    @State private var isPreparingVideo = false
     @State private var errorMessage: String?
     @State private var selectedVideo: PhotosPickerItem?
-    @State private var videoData: Data?
+    @State private var uploadVideoURL: URL?
     @State private var previewImage: UIImage?
     @State private var previewVideoURL: URL?
+    @State private var preparedVideoSizeBytes = 0
     @State private var videoMimeType = "video/mp4"
     @State private var videoFileExtension = "mp4"
 
-    private var canSubmit: Bool { videoData != nil }
+    private var canSubmit: Bool { uploadVideoURL != nil && !isPreparingVideo }
 
     private var canPostHere: Bool {
         guard let code = appState.currentProfile?.countryCode?.uppercased() else { return false }
@@ -77,9 +79,19 @@ struct ReelComposerView: View {
                 Text("Publishing to \(country.name)")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white)
-                Text(publishAsReel ? "Vertical video works best" : "Shows in feed and Living")
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.65))
+                if isPreparingVideo {
+                    Text("Compressing video for upload…")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.65))
+                } else if preparedVideoSizeBytes > 0 {
+                    Text("Ready · \(VideoCompressionService.formattedSize(preparedVideoSizeBytes))")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.65))
+                } else {
+                    Text(publishAsReel ? "Vertical video works best" : "Shows in feed and Living")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.65))
+                }
             }
             Spacer()
         }
@@ -97,7 +109,15 @@ struct ReelComposerView: View {
                         .stroke(Color.white.opacity(0.12), lineWidth: 0.5)
                 )
 
-            if let previewVideoURL {
+            if isPreparingVideo {
+                VStack(spacing: 12) {
+                    ProgressView()
+                        .tint(.white)
+                    Text("Preparing video…")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.85))
+                }
+            } else if let previewVideoURL {
                 VideoPlayerView(
                     url: previewVideoURL,
                     posterURL: nil,
@@ -139,7 +159,7 @@ struct ReelComposerView: View {
         }
         .overlay(alignment: .bottomTrailing) {
             PhotosPicker(selection: $selectedVideo, matching: .videos) {
-                Text(videoData == nil ? "Select video" : "Change video")
+                Text(uploadVideoURL == nil ? "Select video" : "Change video")
                     .font(.caption.weight(.bold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 14)
@@ -175,7 +195,7 @@ struct ReelComposerView: View {
             } label: {
                 HStack(spacing: 8) {
                     if busy { ProgressView().tint(.white).scaleEffect(0.85) }
-                    Text(busy ? "Publishing…" : (publishAsReel ? "Publish reel" : "Publish video"))
+                    Text(busy ? "Uploading…" : (publishAsReel ? "Publish reel" : "Publish video"))
                         .font(.subheadline.weight(.semibold))
                 }
                 .foregroundStyle(.white)
@@ -184,7 +204,7 @@ struct ReelComposerView: View {
                 .background(canSubmit && !busy && canPostHere ? Theme.facebookBlue : Color.white.opacity(0.25), in: Capsule())
             }
             .buttonStyle(.plain)
-            .disabled(busy || !canSubmit || !canPostHere)
+            .disabled(busy || isPreparingVideo || !canSubmit || !canPostHere)
         }
         .padding(.horizontal, Theme.pagePadding)
         .padding(.vertical, 14)
@@ -202,23 +222,32 @@ struct ReelComposerView: View {
 
     private func loadVideo(_ item: PhotosPickerItem?) async {
         guard let item else { return }
+        isPreparingVideo = true
+        errorMessage = nil
+        clearSelectedVideo(keepPreparingFlag: true)
+        defer { isPreparingVideo = false }
+
         do {
             guard let data = try await item.loadTransferable(type: Data.self) else {
                 throw MediaError.uploadFailed("Could not read video.")
             }
             let format = Self.videoFormat(for: item)
-            if let previousPreview = previewVideoURL {
-                try? FileManager.default.removeItem(at: previousPreview)
-            }
-            let previewURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("composer-preview-\(UUID().uuidString).\(format.extension)")
-            try data.write(to: previewURL)
+            let sourceURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("composer-source-\(UUID().uuidString).\(format.extension)")
+            try data.write(to: sourceURL)
 
-            videoData = data
-            videoMimeType = format.mimeType
-            videoFileExtension = format.extension
-            previewVideoURL = previewURL
-            previewImage = await generateThumbnail(from: data)
+            let preparedURL = try await VideoCompressionService.shared.prepareVideoForUpload(sourceURL: sourceURL)
+            if preparedURL != sourceURL {
+                try? FileManager.default.removeItem(at: sourceURL)
+            }
+
+            let sizeBytes = (try? preparedURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            uploadVideoURL = preparedURL
+            previewVideoURL = preparedURL
+            preparedVideoSizeBytes = sizeBytes
+            videoMimeType = "video/mp4"
+            videoFileExtension = "mp4"
+            previewImage = await generateThumbnail(from: preparedURL)
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -226,15 +255,22 @@ struct ReelComposerView: View {
         }
     }
 
-    private func clearSelectedVideo() {
-        if let previewVideoURL {
+    private func clearSelectedVideo(keepPreparingFlag: Bool = false) {
+        if let uploadVideoURL {
+            try? FileManager.default.removeItem(at: uploadVideoURL)
+        }
+        if previewVideoURL != uploadVideoURL, let previewVideoURL {
             try? FileManager.default.removeItem(at: previewVideoURL)
         }
-        videoData = nil
+        uploadVideoURL = nil
         previewImage = nil
         previewVideoURL = nil
+        preparedVideoSizeBytes = 0
         videoMimeType = "video/mp4"
         videoFileExtension = "mp4"
+        if !keepPreparingFlag {
+            isPreparingVideo = false
+        }
     }
 
     private static func videoFormat(for item: PhotosPickerItem) -> (extension: String, mimeType: String) {
@@ -247,10 +283,7 @@ struct ReelComposerView: View {
         return ("mp4", "video/mp4")
     }
 
-    private func generateThumbnail(from data: Data) async -> UIImage? {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mp4")
-        try? data.write(to: url)
-        defer { try? FileManager.default.removeItem(at: url) }
+    private func generateThumbnail(from url: URL) async -> UIImage? {
         let asset = AVURLAsset(url: url)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
@@ -261,7 +294,7 @@ struct ReelComposerView: View {
     private func submit() async {
         guard let profile = appState.currentProfile,
               let authorID = AuthService.shared.currentUser?.id,
-              let videoData,
+              let uploadVideoURL,
               canPostHere else { return }
 
         busy = true
@@ -278,7 +311,7 @@ struct ReelComposerView: View {
                     countryName: country.name,
                     countryCode: country.iso,
                     cityName: profile.cityName,
-                    videoData: videoData,
+                    videoFileURL: uploadVideoURL,
                     mimeType: videoMimeType,
                     fileExtension: videoFileExtension
                 )
@@ -289,7 +322,7 @@ struct ReelComposerView: View {
                     countryName: country.name,
                     countryCode: country.iso,
                     cityName: profile.cityName,
-                    videoData: videoData,
+                    videoFileURL: uploadVideoURL,
                     mimeType: videoMimeType,
                     fileExtension: videoFileExtension
                 )

@@ -12,17 +12,21 @@ struct StoryComposerView: View {
 
     @State private var caption = ""
     @State private var busy = false
+    @State private var isPreparingVideo = false
     @State private var errorMessage: String?
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var selectedVideo: PhotosPickerItem?
     @State private var mediaData: Data?
+    @State private var uploadMediaFileURL: URL?
     @State private var mediaMime = "image/jpeg"
     @State private var mediaExtension = "jpg"
     @State private var previewImage: UIImage?
     @State private var previewVideoURL: URL?
     @State private var isVideo = false
 
-    private var canSubmit: Bool { mediaData != nil }
+    private var canSubmit: Bool {
+        (mediaData != nil || uploadMediaFileURL != nil) && !isPreparingVideo
+    }
 
     private var canPostHere: Bool {
         guard let code = appState.currentProfile?.countryCode?.uppercased() else { return false }
@@ -86,7 +90,7 @@ struct StoryComposerView: View {
                         .background(canSubmit && !busy && canPostHere ? Theme.accentBright : Color.white.opacity(0.2), in: Capsule())
                     }
                     .buttonStyle(.plain)
-                    .disabled(busy || !canSubmit || !canPostHere)
+                    .disabled(busy || isPreparingVideo || !canSubmit || !canPostHere)
                 }
                 .padding(Theme.pagePadding)
             }
@@ -119,7 +123,14 @@ struct StoryComposerView: View {
                 .fill(Color.white.opacity(0.08))
                 .frame(height: 380)
 
-            if let previewVideoURL, isVideo {
+            if isPreparingVideo {
+                VStack(spacing: 10) {
+                    ProgressView().tint(.white)
+                    Text("Preparing video…")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.85))
+                }
+            } else if let previewVideoURL, isVideo {
                 VideoPlayerView(
                     url: previewVideoURL,
                     posterURL: nil,
@@ -170,6 +181,7 @@ struct StoryComposerView: View {
         do {
             guard let raw = try await item.loadTransferable(type: Data.self) else { return }
             guard let image = UIImage(data: raw), let jpeg = image.jpegData(compressionQuality: 0.9) else { return }
+            uploadMediaFileURL = nil
             mediaData = jpeg
             mediaMime = "image/jpeg"
             mediaExtension = "jpg"
@@ -185,29 +197,46 @@ struct StoryComposerView: View {
         guard let item else { return }
         selectedPhoto = nil
         clearVideoPreview()
+        isPreparingVideo = true
+        defer { isPreparingVideo = false }
+
         do {
             guard let data = try await item.loadTransferable(type: Data.self) else { return }
             let format = Self.videoFormat(for: item)
-            let previewURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("story-preview-\(UUID().uuidString).\(format.extension)")
-            try data.write(to: previewURL)
-            mediaData = data
-            mediaMime = format.mimeType
-            mediaExtension = format.extension
-            previewVideoURL = previewURL
-            previewImage = await generateThumbnail(from: data)
+            let sourceURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("story-source-\(UUID().uuidString).\(format.extension)")
+            try data.write(to: sourceURL)
+
+            let preparedURL = try await VideoCompressionService.shared.prepareVideoForUpload(sourceURL: sourceURL)
+            if preparedURL != sourceURL {
+                try? FileManager.default.removeItem(at: sourceURL)
+            }
+
+            mediaData = nil
+            uploadMediaFileURL = preparedURL
+            mediaMime = "video/mp4"
+            mediaExtension = "mp4"
+            previewVideoURL = preparedURL
+            previewImage = await generateThumbnail(from: preparedURL)
             isVideo = true
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
+            clearVideoPreview()
         }
     }
 
     private func clearVideoPreview() {
-        if let previewVideoURL {
+        if let uploadMediaFileURL {
+            try? FileManager.default.removeItem(at: uploadMediaFileURL)
+        }
+        if previewVideoURL != uploadMediaFileURL, let previewVideoURL {
             try? FileManager.default.removeItem(at: previewVideoURL)
         }
+        uploadMediaFileURL = nil
         previewVideoURL = nil
+        mediaData = nil
+        isVideo = false
     }
 
     private static func videoFormat(for item: PhotosPickerItem) -> (extension: String, mimeType: String) {
@@ -220,10 +249,7 @@ struct StoryComposerView: View {
         return ("mp4", "video/mp4")
     }
 
-    private func generateThumbnail(from data: Data) async -> UIImage? {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mp4")
-        try? data.write(to: url)
-        defer { try? FileManager.default.removeItem(at: url) }
+    private func generateThumbnail(from url: URL) async -> UIImage? {
         let asset = AVURLAsset(url: url)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
@@ -234,8 +260,8 @@ struct StoryComposerView: View {
     private func submit() async {
         guard let profile = appState.currentProfile,
               let authorID = AuthService.shared.currentUser?.id,
-              let mediaData,
-              canPostHere else { return }
+              canPostHere,
+              mediaData != nil || uploadMediaFileURL != nil else { return }
 
         busy = true
         errorMessage = nil
@@ -249,6 +275,7 @@ struct StoryComposerView: View {
                 countryCode: country.iso,
                 cityName: profile.cityName,
                 mediaData: mediaData,
+                mediaFileURL: uploadMediaFileURL,
                 mimeType: mediaMime,
                 fileExtension: mediaExtension
             )

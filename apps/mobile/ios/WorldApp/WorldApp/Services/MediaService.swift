@@ -17,6 +17,14 @@ enum MediaError: LocalizedError {
 final class MediaService {
     static let shared = MediaService()
 
+    private let uploadSession: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = 60 * 20
+        configuration.timeoutIntervalForResource = 60 * 30
+        configuration.waitsForConnectivity = true
+        return URLSession(configuration: configuration)
+    }()
+
     private init() {}
 
     func uploadAdMedia(data: Data, fileExtension: String, mimeType: String) async throws -> (path: String, publicURL: String) {
@@ -35,6 +43,18 @@ final class MediaService {
         guard let userID = AuthService.shared.currentUser?.id else { throw MediaError.notAuthenticated }
         let path = "\(userID)/\(UUID().uuidString).\(fileExtension)"
         try await upload(bucket: "posts", path: path, data: data, mimeType: mimeType)
+        let publicURL = "\(AppConfig.supabaseURL)/storage/v1/object/public/posts/\(path)"
+        return (path, publicURL)
+    }
+
+    func uploadPostMedia(
+        fileURL: URL,
+        fileExtension: String,
+        mimeType: String
+    ) async throws -> (path: String, publicURL: String) {
+        guard let userID = AuthService.shared.currentUser?.id else { throw MediaError.notAuthenticated }
+        let path = "\(userID)/\(UUID().uuidString).\(fileExtension)"
+        try await upload(bucket: "posts", path: path, fileURL: fileURL, mimeType: mimeType)
         let publicURL = "\(AppConfig.supabaseURL)/storage/v1/object/public/posts/\(path)"
         return (path, publicURL)
     }
@@ -97,6 +117,36 @@ final class MediaService {
     }
 
     private func upload(bucket: String, path: String, data: Data, mimeType: String, upsert: Bool = false) async throws {
+        try await performUpload(
+            bucket: bucket,
+            path: path,
+            mimeType: mimeType,
+            upsert: upsert
+        ) { request in
+            let (responseData, response) = try await uploadSession.upload(for: request, from: data)
+            return (responseData, response)
+        }
+    }
+
+    private func upload(bucket: String, path: String, fileURL: URL, mimeType: String, upsert: Bool = false) async throws {
+        try await performUpload(
+            bucket: bucket,
+            path: path,
+            mimeType: mimeType,
+            upsert: upsert
+        ) { request in
+            let (responseData, response) = try await uploadSession.upload(for: request, fromFile: fileURL)
+            return (responseData, response)
+        }
+    }
+
+    private func performUpload(
+        bucket: String,
+        path: String,
+        mimeType: String,
+        upsert: Bool,
+        send: (URLRequest) async throws -> (Data, URLResponse)
+    ) async throws {
         let token: String
         do {
             token = try await AuthService.shared.ensureValidToken()
@@ -109,7 +159,6 @@ final class MediaService {
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.httpBody = data
         request.setValue(mimeType, forHTTPHeaderField: "Content-Type")
         request.setValue(AppConfig.supabaseAnonKey, forHTTPHeaderField: "apikey")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -117,10 +166,18 @@ final class MediaService {
             request.setValue("true", forHTTPHeaderField: "x-upsert")
         }
 
-        let (responseData, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            let msg = String(data: responseData, encoding: .utf8) ?? "Upload failed."
-            throw MediaError.uploadFailed(msg)
+        do {
+            let (responseData, response) = try await send(request)
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                let msg = String(data: responseData, encoding: .utf8) ?? "Upload failed."
+                throw MediaError.uploadFailed(msg)
+            }
+        } catch let error as URLError where error.code == .timedOut {
+            throw MediaError.uploadFailed("Upload timed out. Try a shorter video or stronger Wi‑Fi.")
+        } catch let error as MediaError {
+            throw error
+        } catch {
+            throw MediaError.uploadFailed(error.localizedDescription)
         }
     }
 
