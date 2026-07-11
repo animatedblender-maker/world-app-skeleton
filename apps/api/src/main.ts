@@ -25,6 +25,7 @@ dotenv.config({ path: path.join(__dirname, '..', '.env') });
 import { typeDefs } from './graphql/typeDefs.js';
 import { resolvers } from './graphql/resolvers.js';
 import { PushService } from './push/push.service.js';
+import { ApnsService } from './push/apns.service.js';
 import { pool } from './db.js';
 import { runDailyInsights } from './insights/daily-insights.js';
 import {
@@ -158,6 +159,7 @@ const yoga = createYoga<Context>({
 
 const app = express();
 const push = new PushService();
+const apns = new ApnsService();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
 const socketsByUser = new Map<string, Set<any>>();
@@ -299,6 +301,46 @@ app.post('/push/unsubscribe', async (req: Request, res: Response) => {
   return res.json({ ok: true });
 });
 
+app.post('/push/ios/register', async (req: Request, res: Response) => {
+  const user = await getUserFromRequest(req);
+  if (!user?.id) return res.status(401).json({ error: 'unauthenticated' });
+
+  const deviceToken = String(req.body?.deviceToken ?? '').trim();
+  const bundleId = req.body?.bundleId ? String(req.body.bundleId) : null;
+  const kind = String(req.body?.kind ?? 'alert');
+  const environment = req.body?.environment ? String(req.body.environment) : null;
+  if (!deviceToken) return res.status(400).json({ error: 'missing_device_token' });
+
+  try {
+    await apns.upsertToken(user.id, deviceToken, bundleId, kind, environment);
+    return res.json({ ok: true });
+  } catch (err: any) {
+    return res.status(400).json({ error: err?.message ?? 'register_failed' });
+  }
+});
+
+app.post('/push/ios/unregister', async (req: Request, res: Response) => {
+  const user = await getUserFromRequest(req);
+  if (!user?.id) return res.status(401).json({ error: 'unauthenticated' });
+
+  const deviceToken = String(req.body?.deviceToken ?? '').trim();
+  if (!deviceToken) return res.status(400).json({ error: 'missing_device_token' });
+  await apns.removeToken(user.id, deviceToken);
+  return res.json({ ok: true });
+});
+
+app.post('/push/ios/test', async (req: Request, res: Response) => {
+  const user = await getUserFromRequest(req);
+  if (!user?.id) return res.status(401).json({ error: 'unauthenticated' });
+
+  await apns.sendToUser(user.id, {
+    title: 'Matterya',
+    body: 'Push notifications are working.',
+    data: { type: 'test' },
+  });
+  return res.json({ ok: true });
+});
+
 app.post('/livekit/token', async (req: Request, res: Response) => {
   const user = await getUserFromRequest(req);
   if (!user?.id) return res.status(401).json({ error: 'unauthenticated' });
@@ -389,15 +431,33 @@ wss.on('connection', async (socket, req) => {
           if (name) callerName = name;
         } catch {}
         const notifyTargets = memberIds.filter((memberId) => memberId !== user.id);
+        const callId = msg?.callId ? String(msg.callId) : null;
+        const roomName = msg?.roomName ? String(msg.roomName) : null;
         await Promise.all(
-          notifyTargets.map((memberId) =>
-            push.sendToUser(memberId, {
-              title: callerName,
-              body: `Incoming ${kind.toLowerCase()}.`,
-              url: `/messages?c=${conversationId}&call=${callParam}&from=${user.id}`,
-              tag: `call:${conversationId}`,
-            })
-          )
+          notifyTargets.map(async (memberId) => {
+            await Promise.all([
+              apns.sendToUser(memberId, {
+                title: callerName,
+                body: `Incoming ${kind.toLowerCase()}.`,
+                category: 'call',
+                priority: 10,
+                data: {
+                  type: 'call',
+                  conversationId,
+                  from: user.id,
+                  callType: callParam,
+                  callId,
+                  roomName,
+                },
+              }),
+              push.sendToUser(memberId, {
+                title: callerName,
+                body: `Incoming ${kind.toLowerCase()}.`,
+                url: `/messages?c=${conversationId}&call=${callParam}&from=${user.id}`,
+                tag: `call:${conversationId}`,
+              }),
+            ]);
+          })
         );
       }
 

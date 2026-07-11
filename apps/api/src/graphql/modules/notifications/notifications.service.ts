@@ -1,5 +1,6 @@
 import { pool } from '../../../db.js';
 import { PushService } from '../../../push/push.service.js';
+import { ApnsService } from '../../../push/apns.service.js';
 
 type NotificationRow = {
   id: string;
@@ -20,6 +21,7 @@ type NotificationRow = {
 
 export class NotificationsService {
   private push = new PushService();
+  private apns = new ApnsService();
   async listForUser(userId: string, limit: number, before?: string | null): Promise<NotificationRow[]> {
     const safeLimit = Math.max(1, Math.min(100, limit || 40));
     const params: Array<string | number> = [userId, safeLimit];
@@ -97,12 +99,19 @@ export class NotificationsService {
       `,
       [targetId, followerId]
     );
-    await this.push.sendToUser(targetId, {
-      title: 'New notification',
-      body: 'Someone followed you.',
-      url: `/user/${followerId}`,
-      tag: `follow:${followerId}`,
-    });
+    await Promise.all([
+      this.push.sendToUser(targetId, {
+        title: 'New notification',
+        body: 'Someone followed you.',
+        url: `/user/${followerId}`,
+        tag: `follow:${followerId}`,
+      }),
+      this.apns.sendToUser(targetId, {
+        title: 'New notification',
+        body: 'Someone followed you.',
+        data: { type: 'follow', entityId: followerId },
+      }),
+    ]);
   }
 
   async notifyPostLike(targetId: string, actorId: string, postId: string): Promise<void> {
@@ -116,12 +125,19 @@ export class NotificationsService {
       `,
       [targetId, actorId, postId]
     );
-    await this.push.sendToUser(targetId, {
-      title: 'New notification',
-      body: 'Your post got a like.',
-      url: `/?post=${postId}`,
-      tag: `post:${postId}`,
-    });
+    await Promise.all([
+      this.push.sendToUser(targetId, {
+        title: 'New notification',
+        body: 'Your post got a like.',
+        url: `/?post=${postId}`,
+        tag: `post:${postId}`,
+      }),
+      this.apns.sendToUser(targetId, {
+        title: 'New notification',
+        body: 'Your post got a like.',
+        data: { type: 'like', postId, entityId: postId },
+      }),
+    ]);
   }
 
   async notifyPostComment(targetId: string, actorId: string, postId: string): Promise<void> {
@@ -135,12 +151,19 @@ export class NotificationsService {
       `,
       [targetId, actorId, postId]
     );
-    await this.push.sendToUser(targetId, {
-      title: 'New notification',
-      body: 'New comment on your post.',
-      url: `/?post=${postId}`,
-      tag: `post:${postId}`,
-    });
+    await Promise.all([
+      this.push.sendToUser(targetId, {
+        title: 'New notification',
+        body: 'New comment on your post.',
+        url: `/?post=${postId}`,
+        tag: `post:${postId}`,
+      }),
+      this.apns.sendToUser(targetId, {
+        title: 'New notification',
+        body: 'New comment on your post.',
+        data: { type: 'comment', postId, entityId: postId },
+      }),
+    ]);
   }
 
   async notifyCommentLike(targetId: string, actorId: string, postId: string): Promise<void> {
@@ -154,12 +177,19 @@ export class NotificationsService {
       `,
       [targetId, actorId, postId]
     );
-    await this.push.sendToUser(targetId, {
-      title: 'New notification',
-      body: 'Someone liked your comment.',
-      url: `/?post=${postId}`,
-      tag: `post:${postId}`,
-    });
+    await Promise.all([
+      this.push.sendToUser(targetId, {
+        title: 'New notification',
+        body: 'Someone liked your comment.',
+        url: `/?post=${postId}`,
+        tag: `post:${postId}`,
+      }),
+      this.apns.sendToUser(targetId, {
+        title: 'New notification',
+        body: 'Someone liked your comment.',
+        data: { type: 'comment_like', postId, entityId: postId },
+      }),
+    ]);
   }
 
   async notifyCommentReply(targetId: string, actorId: string, postId: string): Promise<void> {
@@ -173,12 +203,19 @@ export class NotificationsService {
       `,
       [targetId, actorId, postId]
     );
-    await this.push.sendToUser(targetId, {
-      title: 'New notification',
-      body: 'New reply on your comment.',
-      url: `/?post=${postId}`,
-      tag: `post:${postId}`,
-    });
+    await Promise.all([
+      this.push.sendToUser(targetId, {
+        title: 'New notification',
+        body: 'New reply on your comment.',
+        url: `/?post=${postId}`,
+        tag: `post:${postId}`,
+      }),
+      this.apns.sendToUser(targetId, {
+        title: 'New notification',
+        body: 'New reply on your comment.',
+        data: { type: 'comment_reply', postId, entityId: postId },
+      }),
+    ]);
   }
 
   async notifyMessage(
@@ -199,11 +236,18 @@ export class NotificationsService {
     );
     const title = meta?.senderName?.trim() || 'New message';
     const preview = meta?.preview?.trim() || 'You received a new message.';
-    await this.push.sendToUser(targetId, {
-      title,
-      body: preview,
-      url: `/messages?c=${conversationId}`,
-      tag: `message:${conversationId}`,
-    });
+    await Promise.all([
+      this.push.sendToUser(targetId, {
+        title,
+        body: preview,
+        url: `/messages?c=${conversationId}`,
+        tag: `message:${conversationId}`,
+      }),
+      this.apns.sendToUser(targetId, {
+        title,
+        body: preview,
+        data: { type: 'message', conversationId },
+      }),
+    ]);
   }
 }
