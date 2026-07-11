@@ -97,20 +97,30 @@ final class VideoCompressionService {
         session.outputFileType = .mp4
         session.shouldOptimizeForNetworkUse = true
 
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            var progressObservation: NSKeyValueObservation?
-            if let onProgress {
-                onProgress(0)
-                progressObservation = session.observe(\.progress, options: [.new]) { exportSession, _ in
-                    onProgress(Double(exportSession.progress))
+        let progressTask: Task<Void, Never>? = onProgress.map { handler in
+            Task { @MainActor in
+                handler(0)
+                while !Task.isCancelled {
+                    handler(Double(session.progress))
+                    switch session.status {
+                    case .completed, .failed, .cancelled:
+                        return
+                    default:
+                        break
+                    }
+                    try? await Task.sleep(for: .milliseconds(100))
                 }
             }
+        }
 
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             session.exportAsynchronously {
-                progressObservation?.invalidate()
+                progressTask?.cancel()
                 switch session.status {
                 case .completed:
-                    onProgress?(1)
+                    if let onProgress {
+                        Task { @MainActor in onProgress(1) }
+                    }
                     continuation.resume()
                 case .cancelled:
                     continuation.resume(throwing: VideoCompressionError.exportFailed("Video compression was cancelled."))

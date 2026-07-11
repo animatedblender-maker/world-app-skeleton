@@ -129,10 +129,15 @@ struct StoryComposerView: View {
 
             if isPreparingVideo {
                 VStack(spacing: 10) {
-                    ProgressView(value: compressionProgress)
-                        .tint(.white)
-                        .frame(maxWidth: 220)
-                    Text("Compressing video · \(compressionPercentText)")
+                    if compressionProgress > 0 {
+                        ProgressView(value: compressionProgress, total: 1)
+                            .tint(.white)
+                            .frame(maxWidth: 220)
+                    } else {
+                        ProgressView()
+                            .tint(.white)
+                    }
+                    Text(compressionProgress > 0 ? "Compressing video · \(compressionPercentText)" : "Preparing video…")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.white.opacity(0.85))
                         .monospacedDigit()

@@ -115,10 +115,15 @@ struct ReelComposerView: View {
 
             if isPreparingVideo {
                 VStack(spacing: 12) {
-                    ProgressView(value: compressionProgress)
-                        .tint(.white)
-                        .frame(maxWidth: 220)
-                    Text("Compressing video · \(compressionPercentText)")
+                    if compressionProgress > 0 {
+                        ProgressView(value: compressionProgress, total: 1)
+                            .tint(.white)
+                            .frame(maxWidth: 220)
+                    } else {
+                        ProgressView()
+                            .tint(.white)
+                    }
+                    Text(compressionProgress > 0 ? "Compressing video · \(compressionPercentText)" : "Preparing video…")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.white.opacity(0.85))
                         .monospacedDigit()
@@ -272,8 +277,9 @@ struct ReelComposerView: View {
             try data.write(to: sourceURL)
 
             let compressionHandler: @Sendable (Double) -> Void = { progress in
+                let value = progress
                 Task { @MainActor in
-                    compressionProgress = progress
+                    compressionProgress = value
                 }
             }
             let preparedURL = try await VideoCompressionService.shared.prepareVideoForUpload(

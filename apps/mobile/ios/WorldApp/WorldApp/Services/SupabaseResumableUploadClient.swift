@@ -83,7 +83,7 @@ final class SupabaseResumableUploadClient: @unchecked Sendable {
             throw MediaError.uploadFailed(storageErrorMessage(from: responseData, statusCode: http.statusCode))
         }
         guard let location = http.value(forHTTPHeaderField: "Location"),
-              let uploadURL = URL(string: location)
+              let uploadURL = resolveUploadLocation(location, relativeTo: endpoint)
         else {
             throw MediaError.uploadFailed("Supabase did not return an upload location.")
         }
@@ -138,6 +138,13 @@ final class SupabaseResumableUploadClient: @unchecked Sendable {
         }
 
         emitProgress(bytesSent: fileSize, totalBytes: fileSize, handler: onProgress)
+    }
+
+    private func resolveUploadLocation(_ location: String, relativeTo endpoint: URL) -> URL? {
+        if let absolute = URL(string: location), absolute.scheme != nil {
+            return absolute
+        }
+        return URL(string: location, relativeTo: endpoint)?.absoluteURL
     }
 
     private func tusMetadata(_ pairs: [(String, String)]) -> String {

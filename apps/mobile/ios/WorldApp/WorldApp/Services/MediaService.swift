@@ -17,8 +17,6 @@ enum MediaError: LocalizedError {
 final class MediaService {
     static let shared = MediaService()
 
-    private static let resumableUploadThresholdBytes = 6 * 1024 * 1024
-
     private let uploadSession: URLSession = {
         let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = 60 * 20
@@ -162,22 +160,6 @@ final class MediaService {
         upsert: Bool = false,
         onProgress: (@Sendable (UploadProgress) -> Void)? = nil
     ) async throws {
-        let fileSize = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-        let useResumable = mimeType.hasPrefix("video/") || fileSize > Self.resumableUploadThresholdBytes
-
-        if useResumable {
-            let token = try await AuthService.shared.ensureValidToken()
-            try await SupabaseResumableUploadClient.shared.upload(
-                bucket: bucket,
-                path: path,
-                fileURL: fileURL,
-                mimeType: mimeType,
-                accessToken: token,
-                onProgress: onProgress
-            )
-            return
-        }
-
         let request = try await makeUploadRequest(bucket: bucket, path: path, mimeType: mimeType, upsert: upsert)
         let (responseData, http) = try await StorageUploadClient.shared.upload(
             request: request,
