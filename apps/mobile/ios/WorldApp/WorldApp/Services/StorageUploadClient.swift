@@ -35,11 +35,13 @@ final class StorageUploadClient: NSObject, URLSessionTaskDelegate, URLSessionDat
 
     private let lock = NSLock()
     private var handlers: [Int: UploadHandler] = [:]
+    private var progressObservations: [Int: NSKeyValueObservation] = [:]
 
     private struct UploadHandler {
         let continuation: CheckedContinuation<(Data, HTTPURLResponse), Error>
         var receivedData: Data
         let onProgress: (@Sendable (UploadProgress) -> Void)?
+        let expectedFileSize: Int64
     }
 
     private lazy var session: URLSession = {
@@ -59,17 +61,75 @@ final class StorageUploadClient: NSObject, URLSessionTaskDelegate, URLSessionDat
         fileURL: URL,
         onProgress: (@Sendable (UploadProgress) -> Void)? = nil
     ) async throws -> (Data, HTTPURLResponse) {
-        try await withCheckedThrowingContinuation { continuation in
+        let expectedFileSize = Int64((try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+
+        return try await withCheckedThrowingContinuation { continuation in
             let task = session.uploadTask(with: request, fromFile: fileURL)
+
             lock.lock()
             handlers[task.taskIdentifier] = UploadHandler(
                 continuation: continuation,
                 receivedData: Data(),
-                onProgress: onProgress
+                onProgress: onProgress,
+                expectedFileSize: expectedFileSize
             )
             lock.unlock()
+
+            if let onProgress {
+                emitProgress(
+                    fractionCompleted: 0,
+                    bytesSent: 0,
+                    totalBytes: expectedFileSize,
+                    handler: onProgress
+                )
+
+                let observation = task.progress.observe(\.fractionCompleted, options: [.new]) { [weak self] progress, _ in
+                    guard let self else { return }
+                    let total = expectedFileSize > 0
+                        ? expectedFileSize
+                        : max(progress.totalUnitCount, 1)
+                    let sent = expectedFileSize > 0
+                        ? Int64(Double(expectedFileSize) * progress.fractionCompleted)
+                        : progress.completedUnitCount
+                    self.lock.lock()
+                    let handler = self.handlers[task.taskIdentifier]?.onProgress
+                    self.lock.unlock()
+                    guard let handler else { return }
+                    self.emitProgress(
+                        fractionCompleted: min(1, max(0, progress.fractionCompleted)),
+                        bytesSent: sent,
+                        totalBytes: total,
+                        handler: handler
+                    )
+                }
+
+                lock.lock()
+                progressObservations[task.taskIdentifier] = observation
+                lock.unlock()
+            }
+
             task.resume()
         }
+    }
+
+    nonisolated private func emitProgress(
+        fractionCompleted: Double,
+        bytesSent: Int64,
+        totalBytes: Int64,
+        handler: @Sendable (UploadProgress) -> Void
+    ) {
+        let progress = UploadProgress(
+            fractionCompleted: fractionCompleted,
+            bytesSent: bytesSent,
+            totalBytes: max(totalBytes, bytesSent, 1)
+        )
+        handler(progress)
+    }
+
+    nonisolated private func cleanup(taskID: Int) {
+        lock.lock()
+        progressObservations.removeValue(forKey: taskID)
+        lock.unlock()
     }
 
     nonisolated func urlSession(
@@ -79,16 +139,20 @@ final class StorageUploadClient: NSObject, URLSessionTaskDelegate, URLSessionDat
         totalBytesSent: Int64,
         totalBytesExpectedToSend: Int64
     ) {
-        guard totalBytesExpectedToSend > 0 else { return }
-        let progress = UploadProgress(
-            fractionCompleted: min(1, Double(totalBytesSent) / Double(totalBytesExpectedToSend)),
-            bytesSent: totalBytesSent,
-            totalBytes: totalBytesExpectedToSend
-        )
         lock.lock()
         let handler = handlers[task.taskIdentifier]
         lock.unlock()
-        handler?.onProgress?(progress)
+        guard let onProgress = handler?.onProgress else { return }
+
+        let expected = handler?.expectedFileSize ?? 0
+        let total = totalBytesExpectedToSend > 0 ? totalBytesExpectedToSend : (expected > 0 ? expected : 1)
+        let fraction = min(1, Double(totalBytesSent) / Double(total))
+        emitProgress(
+            fractionCompleted: fraction,
+            bytesSent: totalBytesSent,
+            totalBytes: total,
+            handler: onProgress
+        )
     }
 
     nonisolated func urlSession(
@@ -109,6 +173,8 @@ final class StorageUploadClient: NSObject, URLSessionTaskDelegate, URLSessionDat
         task: URLSessionTask,
         didCompleteWithError error: Error?
     ) {
+        cleanup(taskID: task.taskIdentifier)
+
         lock.lock()
         guard let handler = handlers.removeValue(forKey: task.taskIdentifier) else {
             lock.unlock()
@@ -116,7 +182,20 @@ final class StorageUploadClient: NSObject, URLSessionTaskDelegate, URLSessionDat
         }
         let responseData = handler.receivedData
         let continuation = handler.continuation
+        let onProgress = handler.onProgress
+        let expectedFileSize = handler.expectedFileSize
         lock.unlock()
+
+        if let onProgress {
+            if error == nil {
+                emitProgress(
+                    fractionCompleted: 1,
+                    bytesSent: expectedFileSize > 0 ? expectedFileSize : 1,
+                    totalBytes: expectedFileSize > 0 ? expectedFileSize : 1,
+                    handler: onProgress
+                )
+            }
+        }
 
         if let error {
             if let urlError = error as? URLError, urlError.code == .timedOut {

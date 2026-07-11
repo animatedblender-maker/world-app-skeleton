@@ -784,7 +784,11 @@ struct NotificationItem: Identifiable, Hashable, Sendable {
     let createdAt: String
     let actor: PostAuthor?
 
-    var isUnread: Bool { readAt == nil }
+    var isUnread: Bool {
+        guard let readAt else { return true }
+        return readAt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var isMessageType: Bool { type.lowercased() == "message" }
 
     var postID: String? {
@@ -792,9 +796,41 @@ struct NotificationItem: Identifiable, Hashable, Sendable {
         return entityID
     }
 
+    var resolvedPostID: String? {
+        let normalizedType = type.lowercased()
+        guard let rawID = entityID?.trimmingCharacters(in: .whitespacesAndNewlines), !rawID.isEmpty else {
+            return nil
+        }
+        switch normalizedType {
+        case "like", "comment", "comment_like", "comment_reply", "post":
+            return rawID
+        default:
+            return entityType?.lowercased() == "post" ? rawID : nil
+        }
+    }
+
     var conversationID: String? {
-        guard entityType?.lowercased() == "conversation" else { return nil }
-        return entityID
+        if entityType?.lowercased() == "conversation", let entityID {
+            return entityID
+        }
+        if type.lowercased() == "message", let entityID {
+            return entityID
+        }
+        return nil
+    }
+
+    func markedAsRead(at timestamp: String = ISO8601DateFormatter().string(from: Date())) -> NotificationItem {
+        NotificationItem(
+            id: id,
+            userID: userID,
+            actorID: actorID,
+            type: type,
+            entityType: entityType,
+            entityID: entityID,
+            readAt: timestamp,
+            createdAt: createdAt,
+            actor: actor
+        )
     }
 }
 

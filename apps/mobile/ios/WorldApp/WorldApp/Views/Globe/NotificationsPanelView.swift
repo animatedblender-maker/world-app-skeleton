@@ -40,31 +40,7 @@ struct NotificationsPanelView: View {
                             Button {
                                 Task { await appState.openNotification(notification) }
                             } label: {
-                                HStack(alignment: .top, spacing: 10) {
-                                    AvatarView(
-                                        url: notification.actor?.avatarURL,
-                                        seed: notification.actor?.userID ?? notification.id,
-                                        size: 36
-                                    )
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(notificationTitle(notification))
-                                            .font(.subheadline.weight(notification.isUnread ? .bold : .regular))
-                                            .foregroundStyle(Theme.ink)
-                                            .multilineTextAlignment(.leading)
-                                        Text(RelativeTime.format(notification.createdAt))
-                                            .font(.caption2)
-                                            .foregroundStyle(Theme.inkMuted)
-                                    }
-                                    Spacer()
-                                    if notification.isUnread {
-                                        UnreadDot(size: 10)
-                                    }
-                                }
-                                .padding(12)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                        .fill(notification.isUnread ? Theme.accentSoft : Theme.surfaceMuted)
-                                )
+                                notificationRow(notification)
                             }
                             .buttonStyle(.plain)
                         }
@@ -79,6 +55,66 @@ struct NotificationsPanelView: View {
         .task {
             await appState.refreshNotifications()
         }
+    }
+
+    @ViewBuilder
+    private func notificationRow(_ notification: NotificationItem) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .fill(notification.isUnread ? Theme.danger : Color.clear)
+                .frame(width: 4)
+                .padding(.vertical, 4)
+
+            HStack(alignment: .top, spacing: 10) {
+                ZStack(alignment: .topTrailing) {
+                    AvatarView(
+                        url: notification.actor?.avatarURL,
+                        seed: notification.actor?.userID ?? notification.id,
+                        size: 36
+                    )
+                    if notification.isUnread {
+                        Circle()
+                            .fill(Theme.danger)
+                            .frame(width: 11, height: 11)
+                            .overlay(
+                                Circle()
+                                    .stroke(Theme.surface, lineWidth: 2)
+                            )
+                            .offset(x: 3, y: -3)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(notificationTitle(notification))
+                        .font(.subheadline.weight(notification.isUnread ? .bold : .regular))
+                        .foregroundStyle(Theme.ink)
+                        .multilineTextAlignment(.leading)
+                    Text(RelativeTime.format(notification.createdAt))
+                        .font(.caption2)
+                        .foregroundStyle(Theme.inkMuted)
+                }
+
+                Spacer(minLength: 0)
+
+                if notification.isUnread {
+                    Text("NEW")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 4)
+                        .background(Theme.danger, in: Capsule())
+                }
+            }
+            .padding(12)
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(notification.isUnread ? Theme.danger.opacity(0.10) : Theme.surfaceMuted)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(notification.isUnread ? Theme.danger.opacity(0.35) : Theme.border, lineWidth: 0.5)
+        )
     }
 
     private var panelBackground: some View {
@@ -103,6 +139,7 @@ struct NotificationsPanelView: View {
         case "comment": return "\(actor) commented on your post"
         case "comment_like": return "\(actor) liked your comment"
         case "comment_reply": return "\(actor) replied to your comment"
+        case "message": return "\(actor) sent you a message"
         default: return "\(actor) interacted with you"
         }
     }

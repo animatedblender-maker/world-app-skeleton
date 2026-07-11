@@ -393,25 +393,66 @@ final class AppState {
     }
 
     func markNotificationRead(_ notification: NotificationItem) async {
+        applyLocalNotificationRead(notification)
         try? await notificationsService.markRead(notification.id)
-        await refreshNotifications()
+        await refreshUnreadCounts()
     }
 
     func markAllNotificationsRead() async {
+        notifications = notifications.map { $0.markedAsRead() }
+        notificationsUnreadCount = 0
         try? await notificationsService.markAllRead()
         await refreshNotifications()
     }
 
     func openNotification(_ notification: NotificationItem) async {
-        await markNotificationRead(notification)
-        if let postID = notification.postID {
-            navigate(to: .post(postID))
-        } else if let actor = notification.actor, let username = actor.username {
-            navigate(to: .publicProfile(username: username))
-        } else if notification.isMessageType, let conversationID = notification.conversationID {
+        globePanel = nil
+        showAppMenu = false
+        applyLocalNotificationRead(notification)
+
+        let type = notification.type.lowercased()
+
+        if type == "message", let conversationID = notification.conversationID {
+            try? await notificationsService.markRead(notification.id)
             pendingConversationID = conversationID
             selectedTab = .messages
+            navigationPath.removeAll()
+            await refreshUnreadCounts()
+            return
         }
+
+        if type == "follow" {
+            try? await notificationsService.markRead(notification.id)
+            if let username = notification.actor?.username?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               !username.isEmpty {
+                selectedTab = .feed
+                navigationPath.removeAll()
+                navigate(to: .publicProfile(username: username))
+            }
+            await refreshNotifications()
+            return
+        }
+
+        if let postID = notification.resolvedPostID {
+            try? await notificationsService.markRead(notification.id)
+            selectedTab = .feed
+            navigationPath.removeAll()
+            navigate(to: .post(postID))
+            await refreshNotifications()
+            return
+        }
+
+        try? await notificationsService.markRead(notification.id)
+        await refreshNotifications()
+    }
+
+    private func applyLocalNotificationRead(_ notification: NotificationItem) {
+        guard notification.isUnread else { return }
+        notifications = notifications.map { item in
+            item.id == notification.id ? item.markedAsRead() : item
+        }
+        notificationsUnreadCount = max(0, notificationsUnreadCount - 1)
     }
 
     private func startPresence() {
