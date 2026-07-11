@@ -42,7 +42,6 @@ struct FeedView: View {
             }
             .screenBackground()
 
-            NotificationsOverlay()
         }
         .toolbar(.hidden, for: .navigationBar)
         .refreshable {

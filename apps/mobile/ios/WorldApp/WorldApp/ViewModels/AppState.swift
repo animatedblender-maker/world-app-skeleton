@@ -324,6 +324,12 @@ final class AppState {
         navigationPath.removeAll()
     }
 
+    func openNotificationsFromMenu() {
+        showAppMenu = false
+        globePanel = .notifications
+        Task { await refreshNotifications() }
+    }
+
     func presentCreateSheet(_ sheet: CreateContentSheet) async {
         guard let home = await resolveHomeCountry() else {
             errorMessage = "Set your home country in profile before posting."

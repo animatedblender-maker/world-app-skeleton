@@ -31,6 +31,7 @@ struct MainTabView: View {
             }
             .overlay {
                 AppMenuOverlay()
+                NotificationsOverlay()
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(appState.navigationPath.isEmpty ? .hidden : .visible, for: .navigationBar)

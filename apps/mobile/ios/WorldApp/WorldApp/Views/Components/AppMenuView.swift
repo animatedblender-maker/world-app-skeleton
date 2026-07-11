@@ -75,6 +75,13 @@ private struct AppMenuPanel: View {
             Theme.divider.frame(height: 0.5)
 
             VStack(spacing: 0) {
+                menuRow(
+                    "Notifications",
+                    icon: "bell",
+                    showsUnreadDot: appState.effectiveNotificationsUnreadCount > 0
+                ) {
+                    appState.openNotificationsFromMenu()
+                }
                 menuRow("Discover People", icon: "person.2") {
                     appState.openFromMenu(.people)
                 }
@@ -119,11 +126,17 @@ private struct AppMenuPanel: View {
         .frame(maxHeight: .infinity)
         .background(Theme.surface)
         .shadow(color: .black.opacity(0.12), radius: 24, x: 8)
+        .onChange(of: appState.showAppMenu) { _, isOpen in
+            if isOpen {
+                Task { await appState.refreshUnreadCounts() }
+            }
+        }
     }
 
     private func menuRow(
         _ title: String,
         icon: String,
+        showsUnreadDot: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -134,6 +147,9 @@ private struct AppMenuPanel: View {
                 Text(title)
                     .font(.body.weight(.regular))
                 Spacer()
+                if showsUnreadDot {
+                    UnreadDot(size: 9)
+                }
             }
             .foregroundStyle(Theme.ink)
             .contentShape(Rectangle())

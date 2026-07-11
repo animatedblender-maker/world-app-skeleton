@@ -18,7 +18,6 @@ struct GlobeView: View {
                 Spacer(minLength: 0)
             }
 
-            NotificationsOverlay()
         }
         .toolbar(.hidden, for: .navigationBar)
     }
