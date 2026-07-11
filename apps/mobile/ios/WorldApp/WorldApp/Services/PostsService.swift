@@ -202,13 +202,17 @@ final class PostsService {
         cityName: String? = nil,
         videoFileURL: URL,
         mimeType: String = "video/mp4",
-        fileExtension: String = "mp4"
+        fileExtension: String = "mp4",
+        onUploadProgress: (@Sendable (UploadProgress) -> Void)? = nil,
+        onPublishing: (@Sendable () -> Void)? = nil
     ) async throws -> CountryPost {
         let upload = try await MediaService.shared.uploadPostMedia(
             fileURL: videoFileURL,
             fileExtension: fileExtension,
-            mimeType: mimeType
+            mimeType: mimeType,
+            onProgress: onUploadProgress
         )
+        onPublishing?()
         let mediaURL = PostMediaPayload.encode(
             urls: [upload.publicURL],
             types: ["video"],
@@ -234,13 +238,17 @@ final class PostsService {
         title: String? = nil,
         videoFileURL: URL,
         mimeType: String = "video/mp4",
-        fileExtension: String = "mp4"
+        fileExtension: String = "mp4",
+        onUploadProgress: (@Sendable (UploadProgress) -> Void)? = nil,
+        onPublishing: (@Sendable () -> Void)? = nil
     ) async throws -> CountryPost {
         let upload = try await MediaService.shared.uploadPostMedia(
             fileURL: videoFileURL,
             fileExtension: fileExtension,
-            mimeType: mimeType
+            mimeType: mimeType,
+            onProgress: onUploadProgress
         )
+        onPublishing?()
         let mediaURL = PostMediaPayload.encode(
             urls: [upload.publicURL],
             types: ["video"],
@@ -267,14 +275,17 @@ final class PostsService {
         mediaData: Data? = nil,
         mediaFileURL: URL? = nil,
         mimeType: String,
-        fileExtension: String
+        fileExtension: String,
+        onUploadProgress: (@Sendable (UploadProgress) -> Void)? = nil,
+        onPublishing: (@Sendable () -> Void)? = nil
     ) async throws -> CountryPost {
         let upload: (path: String, publicURL: String)
         if let mediaFileURL {
             upload = try await MediaService.shared.uploadPostMedia(
                 fileURL: mediaFileURL,
                 fileExtension: fileExtension,
-                mimeType: mimeType
+                mimeType: mimeType,
+                onProgress: onUploadProgress
             )
         } else if let mediaData {
             upload = try await MediaService.shared.uploadPostMedia(
@@ -285,6 +296,7 @@ final class PostsService {
         } else {
             throw MediaError.uploadFailed("Missing story media.")
         }
+        onPublishing?()
         let mediaType = mimeType.hasPrefix("video/") ? "video" : "image"
         let expiresAt = Date().addingTimeInterval(86_400)
         let storyBody = PostStoryMarker.buildBody(caption: body, expiresAt: expiresAt)

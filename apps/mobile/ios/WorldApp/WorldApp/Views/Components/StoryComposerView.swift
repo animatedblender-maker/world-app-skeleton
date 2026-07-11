@@ -12,6 +12,8 @@ struct StoryComposerView: View {
 
     @State private var caption = ""
     @State private var busy = false
+    @State private var uploadPhase: MediaUploadPhase = .idle
+    @State private var uploadProgress: UploadProgress?
     @State private var isPreparingVideo = false
     @State private var errorMessage: String?
     @State private var selectedPhoto: PhotosPickerItem?
@@ -76,18 +78,19 @@ struct StoryComposerView: View {
 
                     Spacer()
 
+                    if busy, uploadPhase != .idle, isVideo {
+                        UploadProgressView(phase: uploadPhase, progress: uploadProgress)
+                    }
+
                     Button {
                         Task { await submit() }
                     } label: {
-                        HStack(spacing: 8) {
-                            if busy { ProgressView().tint(.white).scaleEffect(0.85) }
-                            Text(busy ? "Sharing…" : "Share to story")
-                                .font(.headline.weight(.semibold))
-                        }
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .background(canSubmit && !busy && canPostHere ? Theme.accentBright : Color.white.opacity(0.2), in: Capsule())
+                        Text(busy ? "Sharing…" : "Share to story")
+                            .font(.headline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .background(canSubmit && !busy && canPostHere ? Theme.accentBright : Color.white.opacity(0.2), in: Capsule())
                     }
                     .buttonStyle(.plain)
                     .disabled(busy || isPreparingVideo || !canSubmit || !canPostHere)
@@ -264,8 +267,28 @@ struct StoryComposerView: View {
               mediaData != nil || uploadMediaFileURL != nil else { return }
 
         busy = true
+        if isVideo {
+            uploadPhase = .uploading
+            let totalBytes = Int64((try? uploadMediaFileURL?.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+            uploadProgress = UploadProgress(fractionCompleted: 0, bytesSent: 0, totalBytes: totalBytes)
+        }
         errorMessage = nil
-        defer { busy = false }
+        defer {
+            busy = false
+            uploadPhase = .idle
+            uploadProgress = nil
+        }
+
+        let progressHandler: @Sendable (UploadProgress) -> Void = { progress in
+            Task { @MainActor in
+                uploadProgress = progress
+            }
+        }
+        let publishingHandler: @Sendable () -> Void = {
+            Task { @MainActor in
+                uploadPhase = .publishing
+            }
+        }
 
         do {
             let post = try await PostsService.shared.createStory(
@@ -277,7 +300,9 @@ struct StoryComposerView: View {
                 mediaData: mediaData,
                 mediaFileURL: uploadMediaFileURL,
                 mimeType: mediaMime,
-                fileExtension: mediaExtension
+                fileExtension: mediaExtension,
+                onUploadProgress: isVideo ? progressHandler : nil,
+                onPublishing: isVideo ? publishingHandler : nil
             )
             onPosted?(post)
             await appState.refreshStories()

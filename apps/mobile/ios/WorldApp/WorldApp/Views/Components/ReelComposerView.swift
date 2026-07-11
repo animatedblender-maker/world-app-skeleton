@@ -13,6 +13,8 @@ struct ReelComposerView: View {
 
     @State private var caption = ""
     @State private var busy = false
+    @State private var uploadPhase: MediaUploadPhase = .idle
+    @State private var uploadProgress: UploadProgress?
     @State private var isPreparingVideo = false
     @State private var errorMessage: String?
     @State private var selectedVideo: PhotosPickerItem?
@@ -185,30 +187,48 @@ struct ReelComposerView: View {
     }
 
     private var publishBar: some View {
-        HStack {
-            Text(canPostHere ? "Ready to publish" : "Home country only")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(canPostHere ? .white : Theme.danger)
-            Spacer()
-            Button {
-                Task { await submit() }
-            } label: {
-                HStack(spacing: 8) {
-                    if busy { ProgressView().tint(.white).scaleEffect(0.85) }
-                    Text(busy ? "Uploading…" : (publishAsReel ? "Publish reel" : "Publish video"))
-                        .font(.subheadline.weight(.semibold))
-                }
-                .foregroundStyle(.white)
-                .padding(.horizontal, 20)
-                .padding(.vertical, 12)
-                .background(canSubmit && !busy && canPostHere ? Theme.facebookBlue : Color.white.opacity(0.25), in: Capsule())
+        VStack(spacing: 12) {
+            if busy, uploadPhase != .idle {
+                UploadProgressView(phase: uploadPhase, progress: uploadProgress)
             }
-            .buttonStyle(.plain)
-            .disabled(busy || isPreparingVideo || !canSubmit || !canPostHere)
+
+            HStack {
+                Text(statusLabel)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(canPostHere ? .white : Theme.danger)
+                Spacer()
+                Button {
+                    Task { await submit() }
+                } label: {
+                    Text(busy ? "Working…" : (publishAsReel ? "Publish reel" : "Publish video"))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 12)
+                        .background(canSubmit && !busy && canPostHere ? Theme.facebookBlue : Color.white.opacity(0.25), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(busy || isPreparingVideo || !canSubmit || !canPostHere)
+            }
         }
         .padding(.horizontal, Theme.pagePadding)
         .padding(.vertical, 14)
         .background(.black.opacity(0.92))
+    }
+
+    private var statusLabel: String {
+        if !canPostHere { return "Home country only" }
+        if busy {
+            switch uploadPhase {
+            case .uploading:
+                return uploadProgress.map { "Uploading \($0.percentText)" } ?? "Uploading video…"
+            case .publishing:
+                return "Publishing post…"
+            case .idle:
+                return "Starting upload…"
+            }
+        }
+        return "Ready to publish"
     }
 
     private func errorBanner(_ message: String) -> some View {
@@ -298,8 +318,25 @@ struct ReelComposerView: View {
               canPostHere else { return }
 
         busy = true
+        uploadPhase = .uploading
+        uploadProgress = UploadProgress(fractionCompleted: 0, bytesSent: 0, totalBytes: Int64(preparedVideoSizeBytes))
         errorMessage = nil
-        defer { busy = false }
+        defer {
+            busy = false
+            uploadPhase = .idle
+            uploadProgress = nil
+        }
+
+        let progressHandler: @Sendable (UploadProgress) -> Void = { progress in
+            Task { @MainActor in
+                uploadProgress = progress
+            }
+        }
+        let publishingHandler: @Sendable () -> Void = {
+            Task { @MainActor in
+                uploadPhase = .publishing
+            }
+        }
 
         do {
             let trimmedCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -313,7 +350,9 @@ struct ReelComposerView: View {
                     cityName: profile.cityName,
                     videoFileURL: uploadVideoURL,
                     mimeType: videoMimeType,
-                    fileExtension: videoFileExtension
+                    fileExtension: videoFileExtension,
+                    onUploadProgress: progressHandler,
+                    onPublishing: publishingHandler
                 )
             } else {
                 post = try await PostsService.shared.createLivingVideo(
@@ -324,7 +363,9 @@ struct ReelComposerView: View {
                     cityName: profile.cityName,
                     videoFileURL: uploadVideoURL,
                     mimeType: videoMimeType,
-                    fileExtension: videoFileExtension
+                    fileExtension: videoFileExtension,
+                    onUploadProgress: progressHandler,
+                    onPublishing: publishingHandler
                 )
             }
             onPosted?(post)

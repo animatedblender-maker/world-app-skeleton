@@ -50,11 +50,12 @@ final class MediaService {
     func uploadPostMedia(
         fileURL: URL,
         fileExtension: String,
-        mimeType: String
+        mimeType: String,
+        onProgress: (@Sendable (UploadProgress) -> Void)? = nil
     ) async throws -> (path: String, publicURL: String) {
         guard let userID = AuthService.shared.currentUser?.id else { throw MediaError.notAuthenticated }
         let path = "\(userID)/\(UUID().uuidString).\(fileExtension)"
-        try await upload(bucket: "posts", path: path, fileURL: fileURL, mimeType: mimeType)
+        try await upload(bucket: "posts", path: path, fileURL: fileURL, mimeType: mimeType, onProgress: onProgress)
         let publicURL = "\(AppConfig.supabaseURL)/storage/v1/object/public/posts/\(path)"
         return (path, publicURL)
     }
@@ -128,15 +129,23 @@ final class MediaService {
         }
     }
 
-    private func upload(bucket: String, path: String, fileURL: URL, mimeType: String, upsert: Bool = false) async throws {
-        try await performUpload(
-            bucket: bucket,
-            path: path,
-            mimeType: mimeType,
-            upsert: upsert
-        ) { request in
-            let (responseData, response) = try await uploadSession.upload(for: request, fromFile: fileURL)
-            return (responseData, response)
+    private func upload(
+        bucket: String,
+        path: String,
+        fileURL: URL,
+        mimeType: String,
+        upsert: Bool = false,
+        onProgress: (@Sendable (UploadProgress) -> Void)? = nil
+    ) async throws {
+        let request = try await makeUploadRequest(bucket: bucket, path: path, mimeType: mimeType, upsert: upsert)
+        let (responseData, http) = try await StorageUploadClient.shared.upload(
+            request: request,
+            fileURL: fileURL,
+            onProgress: onProgress
+        )
+        guard (200...299).contains(http.statusCode) else {
+            let msg = String(data: responseData, encoding: .utf8) ?? "Upload failed."
+            throw MediaError.uploadFailed(msg)
         }
     }
 
@@ -147,6 +156,28 @@ final class MediaService {
         upsert: Bool,
         send: (URLRequest) async throws -> (Data, URLResponse)
     ) async throws {
+        let request = try await makeUploadRequest(bucket: bucket, path: path, mimeType: mimeType, upsert: upsert)
+        do {
+            let (responseData, response) = try await send(request)
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                let msg = String(data: responseData, encoding: .utf8) ?? "Upload failed."
+                throw MediaError.uploadFailed(msg)
+            }
+        } catch let error as URLError where error.code == .timedOut {
+            throw MediaError.uploadFailed("Upload timed out. Try a shorter video or stronger Wi‑Fi.")
+        } catch let error as MediaError {
+            throw error
+        } catch {
+            throw MediaError.uploadFailed(error.localizedDescription)
+        }
+    }
+
+    private func makeUploadRequest(
+        bucket: String,
+        path: String,
+        mimeType: String,
+        upsert: Bool
+    ) async throws -> URLRequest {
         let token: String
         do {
             token = try await AuthService.shared.ensureValidToken()
@@ -165,20 +196,7 @@ final class MediaService {
         if upsert {
             request.setValue("true", forHTTPHeaderField: "x-upsert")
         }
-
-        do {
-            let (responseData, response) = try await send(request)
-            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-                let msg = String(data: responseData, encoding: .utf8) ?? "Upload failed."
-                throw MediaError.uploadFailed(msg)
-            }
-        } catch let error as URLError where error.code == .timedOut {
-            throw MediaError.uploadFailed("Upload timed out. Try a shorter video or stronger Wi‑Fi.")
-        } catch let error as MediaError {
-            throw error
-        } catch {
-            throw MediaError.uploadFailed(error.localizedDescription)
-        }
+        return request
     }
 
     private func createSignedURL(bucket: String, path: String) async throws -> String {
