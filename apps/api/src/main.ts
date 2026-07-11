@@ -144,7 +144,7 @@ const yoga = createYoga<Context>({
         typeof graphQLError?.extensions?.code === 'string' ? graphQLError.extensions.code : '';
       const passthrough =
         graphQLError !== null &&
-        ['HANDLE_TAKEN', 'UNAUTHENTICATED'].includes(code);
+        ['HANDLE_TAKEN', 'UNAUTHENTICATED', 'BAD_USER_INPUT'].includes(code);
       if (passthrough && graphQLError) {
         return graphQLError;
       }

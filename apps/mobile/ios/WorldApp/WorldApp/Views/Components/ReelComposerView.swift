@@ -1,6 +1,7 @@
 import AVFoundation
 import PhotosUI
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ReelComposerView: View {
     @Environment(\.dismiss) private var dismiss
@@ -16,6 +17,9 @@ struct ReelComposerView: View {
     @State private var selectedVideo: PhotosPickerItem?
     @State private var videoData: Data?
     @State private var previewImage: UIImage?
+    @State private var previewVideoURL: URL?
+    @State private var videoMimeType = "video/mp4"
+    @State private var videoFileExtension = "mp4"
 
     private var canSubmit: Bool { videoData != nil }
 
@@ -93,7 +97,19 @@ struct ReelComposerView: View {
                         .stroke(Color.white.opacity(0.12), lineWidth: 0.5)
                 )
 
-            if let previewImage {
+            if let previewVideoURL {
+                VideoPlayerView(
+                    url: previewVideoURL,
+                    posterURL: nil,
+                    adsEnabled: false,
+                    isActive: true,
+                    loops: true,
+                    muted: false,
+                    showsControls: true
+                )
+                .frame(height: 420)
+                .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            } else if let previewImage {
                 Image(uiImage: previewImage)
                     .resizable()
                     .scaledToFill()
@@ -108,6 +124,17 @@ struct ReelComposerView: View {
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.white.opacity(0.85))
                 }
+            }
+        }
+        .overlay(alignment: .topLeading) {
+            if previewVideoURL != nil {
+                Label("Preview before publishing", systemImage: "play.circle.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.black.opacity(0.45), in: Capsule())
+                    .padding(14)
             }
         }
         .overlay(alignment: .bottomTrailing) {
@@ -179,14 +206,45 @@ struct ReelComposerView: View {
             guard let data = try await item.loadTransferable(type: Data.self) else {
                 throw MediaError.uploadFailed("Could not read video.")
             }
+            let format = Self.videoFormat(for: item)
+            if let previousPreview = previewVideoURL {
+                try? FileManager.default.removeItem(at: previousPreview)
+            }
+            let previewURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("composer-preview-\(UUID().uuidString).\(format.extension)")
+            try data.write(to: previewURL)
+
             videoData = data
+            videoMimeType = format.mimeType
+            videoFileExtension = format.extension
+            previewVideoURL = previewURL
             previewImage = await generateThumbnail(from: data)
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
-            videoData = nil
-            previewImage = nil
+            clearSelectedVideo()
         }
+    }
+
+    private func clearSelectedVideo() {
+        if let previewVideoURL {
+            try? FileManager.default.removeItem(at: previewVideoURL)
+        }
+        videoData = nil
+        previewImage = nil
+        previewVideoURL = nil
+        videoMimeType = "video/mp4"
+        videoFileExtension = "mp4"
+    }
+
+    private static func videoFormat(for item: PhotosPickerItem) -> (extension: String, mimeType: String) {
+        if item.supportedContentTypes.contains(where: { $0.conforms(to: .mpeg4Movie) }) {
+            return ("mp4", "video/mp4")
+        }
+        if item.supportedContentTypes.contains(where: { $0.conforms(to: .quickTimeMovie) }) {
+            return ("mov", "video/quicktime")
+        }
+        return ("mp4", "video/mp4")
     }
 
     private func generateThumbnail(from data: Data) async -> UIImage? {
@@ -220,7 +278,9 @@ struct ReelComposerView: View {
                     countryName: country.name,
                     countryCode: country.iso,
                     cityName: profile.cityName,
-                    videoData: videoData
+                    videoData: videoData,
+                    mimeType: videoMimeType,
+                    fileExtension: videoFileExtension
                 )
             } else {
                 post = try await PostsService.shared.createLivingVideo(
@@ -229,7 +289,9 @@ struct ReelComposerView: View {
                     countryName: country.name,
                     countryCode: country.iso,
                     cityName: profile.cityName,
-                    videoData: videoData
+                    videoData: videoData,
+                    mimeType: videoMimeType,
+                    fileExtension: videoFileExtension
                 )
             }
             onPosted?(post)

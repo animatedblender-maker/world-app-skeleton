@@ -8,7 +8,7 @@ struct NotificationsPanelView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("NOTIFICATIONS")
                     .sectionLabel()
-                Text("Unread: \(appState.notificationsUnreadCount)")
+                Text("Unread: \(appState.effectiveNotificationsUnreadCount)")
                     .font(.caption)
                     .foregroundStyle(Theme.inkMuted)
             }
@@ -57,9 +57,7 @@ struct NotificationsPanelView: View {
                                     }
                                     Spacer()
                                     if notification.isUnread {
-                                        Circle()
-                                            .fill(Theme.accentBright)
-                                            .frame(width: 8, height: 8)
+                                        UnreadDot(size: 10)
                                     }
                                 }
                                 .padding(12)

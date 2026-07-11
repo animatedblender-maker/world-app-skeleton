@@ -16,6 +16,10 @@ final class AppState {
     var messagesUnreadCount = 0
     var notificationsUnreadCount = 0
     var notifications: [NotificationItem] = []
+
+    var effectiveNotificationsUnreadCount: Int {
+        max(notificationsUnreadCount, notifications.filter(\.isUnread).count)
+    }
     var followingIDs: Set<String> = []
     var savedPostIDs: Set<String> = []
     var savedPosts: [CountryPost] = []

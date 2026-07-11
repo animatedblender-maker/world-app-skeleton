@@ -78,10 +78,11 @@ struct BottomTabBar: View {
                     .symbolVariant(selected ? .fill : .none)
 
                 if tab == .messages, appState.messagesUnreadCount > 0 {
-                    Circle()
-                        .fill(Theme.danger)
-                        .frame(width: 8, height: 8)
-                        .offset(x: 4, y: -2)
+                    UnreadBadge(count: appState.messagesUnreadCount, size: 16)
+                        .offset(x: 6, y: -6)
+                } else if tab == .feed, appState.effectiveNotificationsUnreadCount > 0 {
+                    UnreadDot(size: 9)
+                        .offset(x: 5, y: -2)
                 }
             }
         }

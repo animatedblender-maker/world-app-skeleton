@@ -41,7 +41,11 @@ export const postsResolvers = {
   Mutation: {
     createPost: async (_: any, args: any, ctx: any) => {
       const user = requireAuth(ctx);
-      if (!args?.input?.body) throw new Error('Body is required.');
+      if (args?.input?.body === undefined || args?.input?.body === null) {
+        throw new GraphQLError('Body is required.', {
+          extensions: { code: 'BAD_USER_INPUT' },
+        });
+      }
       return await svc().createPost(user.id, args.input);
     },
     updatePost: async (_: any, args: any, ctx: any) => {

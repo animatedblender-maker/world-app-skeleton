@@ -37,17 +37,16 @@ struct MatteryaTopBar: View {
                     toggleNotifications()
                 } label: {
                     ZStack(alignment: .topTrailing) {
-                        Image(systemName: "bell")
+                        Image(systemName: appState.effectiveNotificationsUnreadCount > 0 ? "bell.badge.fill" : "bell")
                             .font(.system(size: 22, weight: .light))
                             .foregroundStyle(Theme.ink)
-                        if appState.notificationsUnreadCount > 0 {
-                            Circle()
-                                .fill(Theme.danger)
-                                .frame(width: 7, height: 7)
-                                .offset(x: 4, y: -2)
+                            .symbolRenderingMode(.monochrome)
+                        if appState.effectiveNotificationsUnreadCount > 0 {
+                            UnreadBadge(count: appState.effectiveNotificationsUnreadCount, size: 17)
+                                .offset(x: 7, y: -7)
                         }
                     }
-                    .frame(width: 32, height: 32)
+                    .frame(width: 36, height: 36)
                 }
                 .buttonStyle(.plain)
 
