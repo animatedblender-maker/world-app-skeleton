@@ -17,6 +17,8 @@ enum MediaError: LocalizedError {
 final class MediaService {
     static let shared = MediaService()
 
+    private static let resumableUploadThresholdBytes = 6 * 1024 * 1024
+
     private let uploadSession: URLSession = {
         let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = 60 * 20
@@ -31,10 +33,33 @@ final class MediaService {
         guard mimeType.hasPrefix("video/") else {
             throw MediaError.uploadFailed("Ad creative must be a video file.")
         }
+        let ext = fileExtension.lowercased().isEmpty ? "mp4" : fileExtension.lowercased()
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ad-upload-\(UUID().uuidString).\(ext)")
+        try data.write(to: tempURL)
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+        return try await uploadAdMedia(fileURL: tempURL, fileExtension: ext, mimeType: mimeType)
+    }
+
+    func uploadAdMedia(
+        fileURL: URL,
+        fileExtension: String,
+        mimeType: String,
+        onProgress: (@Sendable (UploadProgress) -> Void)? = nil
+    ) async throws -> (path: String, publicURL: String) {
+        guard mimeType.hasPrefix("video/") else {
+            throw MediaError.uploadFailed("Ad creative must be a video file.")
+        }
         guard let userID = AuthService.shared.currentUser?.id else { throw MediaError.notAuthenticated }
         let ext = fileExtension.lowercased().isEmpty ? "mp4" : fileExtension.lowercased()
         let path = "\(userID)/ads/\(UUID().uuidString).\(ext)"
-        try await upload(bucket: "posts", path: path, data: data, mimeType: mimeType)
+        try await upload(
+            bucket: "posts",
+            path: path,
+            fileURL: fileURL,
+            mimeType: mimeType,
+            onProgress: onProgress
+        )
         let publicURL = "\(AppConfig.supabaseURL)/storage/v1/object/public/posts/\(path)"
         return (path, publicURL)
     }
@@ -137,6 +162,22 @@ final class MediaService {
         upsert: Bool = false,
         onProgress: (@Sendable (UploadProgress) -> Void)? = nil
     ) async throws {
+        let fileSize = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        let useResumable = mimeType.hasPrefix("video/") || fileSize > Self.resumableUploadThresholdBytes
+
+        if useResumable {
+            let token = try await AuthService.shared.ensureValidToken()
+            try await SupabaseResumableUploadClient.shared.upload(
+                bucket: bucket,
+                path: path,
+                fileURL: fileURL,
+                mimeType: mimeType,
+                accessToken: token,
+                onProgress: onProgress
+            )
+            return
+        }
+
         let request = try await makeUploadRequest(bucket: bucket, path: path, mimeType: mimeType, upsert: upsert)
         let (responseData, http) = try await StorageUploadClient.shared.upload(
             request: request,
@@ -184,7 +225,7 @@ final class MediaService {
         } catch {
             throw MediaError.notAuthenticated
         }
-        guard let url = URL(string: "\(AppConfig.supabaseURL)/storage/v1/object/\(bucket)/\(path)") else {
+        guard let url = Self.storageObjectURL(bucket: bucket, path: path) else {
             throw MediaError.uploadFailed("Invalid upload URL.")
         }
 
@@ -206,7 +247,7 @@ final class MediaService {
         } catch {
             throw MediaError.notAuthenticated
         }
-        guard let url = URL(string: "\(AppConfig.supabaseURL)/storage/v1/object/sign/\(bucket)/\(path)") else {
+        guard let url = Self.storageSignURL(bucket: bucket, path: path) else {
             throw MediaError.uploadFailed("Invalid sign URL.")
         }
 
@@ -227,5 +268,24 @@ final class MediaService {
 
         if signed.hasPrefix("http") { return signed }
         return "\(AppConfig.supabaseURL)/storage/v1\(signed)"
+    }
+
+    private static func encodedStoragePath(_ path: String) -> String {
+        path
+            .split(separator: "/")
+            .map { segment in
+                segment.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? String(segment)
+            }
+            .joined(separator: "/")
+    }
+
+    private static func storageObjectURL(bucket: String, path: String) -> URL? {
+        let encodedPath = encodedStoragePath(path)
+        return URL(string: "\(AppConfig.supabaseURL)/storage/v1/object/\(bucket)/\(encodedPath)")
+    }
+
+    private static func storageSignURL(bucket: String, path: String) -> URL? {
+        let encodedPath = encodedStoragePath(path)
+        return URL(string: "\(AppConfig.supabaseURL)/storage/v1/object/sign/\(bucket)/\(encodedPath)")
     }
 }
