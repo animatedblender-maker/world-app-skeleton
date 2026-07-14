@@ -15,6 +15,8 @@ struct YouTubeWatchView: View {
     @State private var inlineComments: [PostComment] = []
     @State private var commentError: String?
     @State private var commentsExpanded = false
+    @State private var dismissDragOffset: CGFloat = 0
+    @State private var isPullingToMinimize = false
 
     init(
         post: CountryPost,
@@ -66,6 +68,17 @@ struct YouTubeWatchView: View {
     }
 
     private var playerSection: some View {
+        playerContent
+            .contentShape(Rectangle())
+            .matteryaPullDownDismissTransform(offset: dismissDragOffset)
+            .matteryaPullDownToDismiss(
+                offset: $dismissDragOffset,
+                isDragging: $isPullingToMinimize,
+                onDismiss: onBack
+            )
+    }
+
+    private var playerContent: some View {
         ZStack(alignment: .topLeading) {
             if let url = currentPost.playableVideoURL {
                 YouTubeWatchPlayer {
@@ -84,6 +97,7 @@ struct YouTubeWatchView: View {
                         startTime: YouTubeCatalogService.shared.playbackPosition(for: currentPost.id),
                         onViewed: { Task { await PostsService.shared.recordView(currentPost) } }
                     )
+                    .allowsHitTesting(!isPullingToMinimize)
                 }
             } else {
                 YouTubeWatchPlayer {
@@ -94,6 +108,22 @@ struct YouTubeWatchView: View {
                         embedsFrame: false
                     )
                 }
+            }
+
+            if isPullingToMinimize, dismissDragOffset > 28 {
+                VStack {
+                    Spacer()
+                    Label("Release to minimize", systemImage: "chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.9))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Theme.ink.opacity(0.5), in: Capsule())
+                        .transition(.opacity)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .allowsHitTesting(false)
             }
 
             Button(action: onBack) {
@@ -108,6 +138,7 @@ struct YouTubeWatchView: View {
             .buttonStyle(.plain)
             .safeAreaPadding(.top, 6)
             .padding(.horizontal, Theme.pagePadding + 4)
+            .allowsHitTesting(!isPullingToMinimize)
         }
     }
 
