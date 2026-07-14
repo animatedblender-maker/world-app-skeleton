@@ -32,16 +32,35 @@ struct ReelsVerticalFeed: View {
 
     @State private var scrollPosition: Int?
     @State private var lastCountryCode: String?
+    @State private var isNormalizingLoop = false
+
+    private var usesInfiniteLoop: Bool { posts.count > 1 }
+
+    private var loopedPosts: [CountryPost] {
+        guard usesInfiniteLoop else { return posts }
+        return posts + posts + posts
+    }
+
+    private func realIndex(from loopIndex: Int) -> Int {
+        guard usesInfiniteLoop else { return loopIndex }
+        let count = posts.count
+        return ((loopIndex % count) + count) % count
+    }
+
+    private func loopIndex(for realIndex: Int) -> Int {
+        guard usesInfiniteLoop else { return realIndex }
+        return posts.count + realIndex
+    }
 
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .top) {
                 ScrollView(.vertical, showsIndicators: false) {
                     LazyVStack(spacing: 0) {
-                        ForEach(Array(posts.enumerated()), id: \.element.id) { index, post in
+                        ForEach(Array(loopedPosts.enumerated()), id: \.offset) { index, post in
                             ReelsPagerCard(
                                 post: post,
-                                isActive: activeIndex == index,
+                                isActive: activeIndex == realIndex(from: index),
                                 bottomInset: bottomInset,
                                 showsOpenPostAction: showsOpenPostAction,
                                 viewerCountryCode: viewerCountryCode,
@@ -59,25 +78,35 @@ struct ReelsVerticalFeed: View {
                 .scrollDisabled(!isScrollEnabled)
                 .scrollPosition(id: $scrollPosition)
                 .onChange(of: scrollPosition) { _, newValue in
-                    guard let newValue, newValue != activeIndex else { return }
+                    guard let newValue, !isNormalizingLoop else { return }
+                    let resolved = realIndex(from: newValue)
+                    guard resolved != activeIndex else {
+                        normalizeLoopPosition(newValue)
+                        return
+                    }
                     let previousCode = posts.indices.contains(activeIndex)
                         ? posts[activeIndex].countryCode?.uppercased()
                         : lastCountryCode
-                    activeIndex = newValue
+                    activeIndex = resolved
                     ReelsHaptics.snap()
-                    recordView(at: newValue)
-                    prefetchIfNeeded(at: newValue)
-                    announceCountryChange(at: newValue, previousCode: previousCode)
+                    recordView(at: resolved)
+                    prefetchIfNeeded(at: resolved)
+                    announceCountryChange(at: resolved, previousCode: previousCode)
+                    normalizeLoopPosition(newValue)
                 }
                 .onChange(of: activeIndex) { _, newValue in
-                    if scrollPosition != newValue {
-                        scrollPosition = newValue
+                    let target = loopIndex(for: newValue)
+                    if scrollPosition != target {
+                        scrollPosition = target
                     }
                     prefetchIfNeeded(at: newValue)
                 }
+                .onChange(of: posts.count) { _, _ in
+                    syncLoopScrollPosition()
+                }
                 .onAppear {
                     if scrollPosition == nil {
-                        scrollPosition = activeIndex
+                        scrollPosition = loopIndex(for: activeIndex)
                     }
                     recordView(at: activeIndex)
                     prefetchIfNeeded(at: activeIndex)
@@ -102,6 +131,47 @@ struct ReelsVerticalFeed: View {
     private func openPost(_ post: CountryPost) {
         appState.reelsViewerContext = nil
         appState.openPostInFeed(postID: post.id)
+    }
+
+    private func normalizeLoopPosition(_ position: Int) {
+        guard usesInfiniteLoop else { return }
+        let span = posts.count
+        let adjusted: Int?
+        if position < span {
+            adjusted = position + span
+        } else if position >= span * 2 {
+            adjusted = position - span
+        } else {
+            adjusted = nil
+        }
+        guard let adjusted, scrollPosition != adjusted else { return }
+        isNormalizingLoop = true
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            scrollPosition = adjusted
+        }
+        Task { @MainActor in
+            isNormalizingLoop = false
+        }
+    }
+
+    private func syncLoopScrollPosition() {
+        guard usesInfiniteLoop else {
+            scrollPosition = activeIndex
+            return
+        }
+        let target = loopIndex(for: activeIndex)
+        guard scrollPosition != target else { return }
+        isNormalizingLoop = true
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            scrollPosition = target
+        }
+        Task { @MainActor in
+            isNormalizingLoop = false
+        }
     }
 
     private func prefetchIfNeeded(at index: Int) {
@@ -164,7 +234,6 @@ private struct ReelsProgressRail: View {
         HStack(spacing: 3) {
             ForEach(0..<window, id: \.self) { index in
                 let isActive = index == activeIndex % 12
-                let post = posts.indices.contains(index) ? posts[index] : nil
                 Capsule()
                     .fill(segmentColor(isActive: isActive))
                     .frame(height: 2.5)
@@ -456,6 +525,10 @@ struct ReelsPagerCard: View {
     }
 }
 
+private struct ReelsCommentTarget: Identifiable {
+    let id: String
+}
+
 struct ReelsScrollViewer: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
@@ -490,13 +563,14 @@ struct ReelsScrollViewer: View {
     }
 
     var body: some View {
-        NavigationStack {
-            reelsContent
-                .navigationDestination(item: $commentsPostID) { postID in
-                    PostCommentsPageView(postID: postID)
-                        .withAppState(appState)
-                }
-        }
+        reelsContent
+            .sheet(item: Binding(
+                get: { commentsPostID.map(ReelsCommentTarget.init(id:)) },
+                set: { commentsPostID = $0?.id }
+            )) { target in
+                ReelsCommentsSheet(postID: target.id)
+                    .withAppState(appState)
+            }
     }
 
     private var reelsContent: some View {
@@ -518,7 +592,7 @@ struct ReelsScrollViewer: View {
                         showsOpenPostAction: false,
                         showsProgressRail: false,
                         viewerCountryCode: appState.currentProfile?.countryCode,
-                        isScrollEnabled: !isPullingToDismiss,
+                        isScrollEnabled: true,
                         onNearEnd: { Task { await loadMoreReels() } },
                         onNearStart: { Task { await loadEarlierReels() } },
                         onCountryVisit: { code in
@@ -775,7 +849,7 @@ struct ReelsScrollViewer: View {
             if !retry.posts.isEmpty { return }
         }
 
-        guard recyclePass < 2 else { return }
+        guard recyclePass < 4 else { return }
         recyclePass += 1
         let recycled = await PostsService.shared.loadReelsFeedPage(
             excludingIDs: Set(posts.map(\.id)),
@@ -807,10 +881,27 @@ struct ReelsScrollViewer: View {
             followingIDs: appState.followingIDs,
             head: Array(posts.prefix(4))
         )
-        guard !prepend.isEmpty else { return }
+        if !prepend.isEmpty {
+            posts.insert(contentsOf: prepend, at: 0)
+            activeIndex += prepend.count
+            return
+        }
 
-        posts.insert(contentsOf: prepend, at: 0)
-        activeIndex += prepend.count
+        // No newer sparks yet — recycle from the tail so scrolling backward stays endless.
+        let recycled = await PostsService.shared.loadReelsFeedPage(
+            excludingIDs: Set(posts.map(\.id)),
+            cursor: nil,
+            batchSize: 10,
+            fetchLimit: 64,
+            viewerCountry: appState.currentProfile?.countryCode,
+            followingIDs: appState.followingIDs,
+            tail: Array(posts.prefix(4)),
+            allowRecycle: true
+        )
+        if !recycled.posts.isEmpty {
+            posts.insert(contentsOf: recycled.posts, at: 0)
+            activeIndex += recycled.posts.count
+        }
     }
 }
 
@@ -818,11 +909,14 @@ private struct ReelsSwipeHint: View {
     var body: some View {
         VStack {
             Spacer()
-            VStack(spacing: 8) {
-                Image(systemName: "chevron.up")
-                    .font(.title3.weight(.bold))
-                    .foregroundStyle(.white.opacity(0.9))
-                Text("Swipe the world · drag down to close")
+                VStack(spacing: 8) {
+                HStack(spacing: 14) {
+                    Image(systemName: "chevron.down")
+                    Image(systemName: "chevron.up")
+                }
+                .font(.title3.weight(.bold))
+                .foregroundStyle(.white.opacity(0.9))
+                Text("Swipe up or down · drag down hard to close")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white.opacity(0.9))
             }

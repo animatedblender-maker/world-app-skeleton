@@ -54,8 +54,8 @@ enum ReelsTwistHaptics {
 }
 
 enum MatteryaPullDownDismiss {
-    static let dismissDistance: CGFloat = 120
-    static let predictedDismissDistance: CGFloat = 240
+    static let dismissDistance: CGFloat = 160
+    static let predictedDismissDistance: CGFloat = 300
 
     static func shouldDismiss(_ value: DragGesture.Value) -> Bool {
         value.translation.height > dismissDistance
@@ -69,7 +69,7 @@ enum MatteryaPullDownDismiss {
     ) {
         let vertical = value.translation.height
         let horizontal = abs(value.translation.width)
-        guard vertical > 0, vertical > horizontal * 0.85 else {
+        guard vertical > 28, vertical > horizontal * 0.85 else {
             if isDragging, vertical <= 4 {
                 isDragging = false
                 offset = 0
