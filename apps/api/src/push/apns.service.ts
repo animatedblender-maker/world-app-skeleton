@@ -87,6 +87,33 @@ function apnsHostForEnvironment(environment: string | null | undefined): string 
   return useProduction ? 'api.push.apple.com' : 'api.sandbox.push.apple.com';
 }
 
+function alternateApnsEnvironments(environment: string | null | undefined): string[] {
+  const normalized = String(environment ?? '').trim().toLowerCase();
+  if (normalized === 'production') return ['production', 'sandbox'];
+  if (normalized === 'sandbox' || normalized === 'development') return ['sandbox', 'production'];
+  return APNS_PRODUCTION ? ['production', 'sandbox'] : ['sandbox', 'production'];
+}
+
+async function sendApnsWithEnvironmentFallback(
+  deviceToken: string,
+  topic: string,
+  body: Record<string, unknown>,
+  priority: number,
+  pushType: 'alert' | 'voip' | 'background',
+  environment: string | null
+): Promise<string> {
+  let lastError: unknown = null;
+  for (const env of alternateApnsEnvironments(environment)) {
+    try {
+      await sendApns(deviceToken, topic, body, priority, pushType, env);
+      return env;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError ?? 'send_failed'));
+}
+
 async function sendApns(
   deviceToken: string,
   topic: string,
@@ -297,21 +324,36 @@ export class ApnsService {
       const callData = sanitizeApnsData({
         ...data,
         type: 'call',
+        category: 'call',
         title: payload.title,
       });
 
+      let voipDelivered = 0;
       const voipRows = rows.filter((row) => row.kind === 'voip');
       if (!voipRows.length) {
         console.warn(
-          `Call push for user ${userId} has no VoIP device token; falling back to silent background wake only.`
+          `Call push for user ${userId} has no VoIP device token registered. User must open Matterya on iPhone so Settings → Calling shows VoIP ready.`
         );
       } else {
         for (const row of voipRows) {
           const bundle = row.bundle_id ?? APNS_BUNDLE_ID;
           attempted += 1;
           try {
-            await sendApns(row.device_token, `${bundle}.voip`, callData, 10, 'voip', row.apns_environment);
+            const usedEnv = await sendApnsWithEnvironmentFallback(
+              row.device_token,
+              `${bundle}.voip`,
+              callData,
+              10,
+              'voip',
+              row.apns_environment
+            );
             delivered += 1;
+            voipDelivered += 1;
+            if (usedEnv !== (row.apns_environment ?? '').toLowerCase()) {
+              console.warn(
+                `APNs voip delivered via ${usedEnv} for token registered as ${row.apns_environment ?? 'unknown'}`
+              );
+            }
           } catch (err: any) {
             const error = String(err?.message ?? err ?? 'send_failed');
             console.warn(`APNs voip send failed (${bundle}.voip, ${row.apns_environment ?? 'default'}):`, error);
@@ -320,23 +362,48 @@ export class ApnsService {
         }
       }
 
-      // Visible alert pushes do not wake the app on iOS until the user taps them.
-      // Send a silent background push so CallKit can take over the screen immediately.
       const alertRows = rows.filter((row) => row.kind !== 'voip');
       for (const row of alertRows) {
         const topic = row.bundle_id ?? APNS_BUNDLE_ID;
+
+        // Always try a silent wake so CallKit can present without the user tapping a banner.
         const silentBody = {
           aps: { 'content-available': 1 },
           ...callData,
         };
         attempted += 1;
         try {
-          await sendApns(row.device_token, topic, silentBody, 5, 'background', row.apns_environment);
+          await sendApnsWithEnvironmentFallback(row.device_token, topic, silentBody, 5, 'background', row.apns_environment);
           delivered += 1;
         } catch (err: any) {
           const error = String(err?.message ?? err ?? 'send_failed');
           console.warn(`APNs call wake send failed (${topic}, ${row.apns_environment ?? 'default'}):`, error);
           failures.push({ deviceToken: row.device_token, kind: 'alert', error });
+        }
+
+        // If VoIP did not reach the device, also send a visible call alert (tap-to-answer fallback).
+        if (voipDelivered < 1) {
+          const visibleBody = {
+            aps: {
+              alert: {
+                title: payload.title,
+                body: payload.body ?? 'Incoming call',
+              },
+              sound: 'default',
+              category: 'call',
+              'interruption-level': 'time-sensitive',
+            },
+            ...callData,
+          };
+          attempted += 1;
+          try {
+            await sendApnsWithEnvironmentFallback(row.device_token, topic, visibleBody, 10, 'alert', row.apns_environment);
+            delivered += 1;
+          } catch (err: any) {
+            const error = String(err?.message ?? err ?? 'send_failed');
+            console.warn(`APNs call alert fallback failed (${topic}, ${row.apns_environment ?? 'default'}):`, error);
+            failures.push({ deviceToken: row.device_token, kind: 'alert', error });
+          }
         }
       }
 

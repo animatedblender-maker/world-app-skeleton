@@ -218,12 +218,15 @@ final class VoIPPushService: NSObject, PKPushRegistryDelegate {
         )
 
         if staged {
-            Task {
+            Task { @MainActor in
                 await CallSessionManager.shared.finalizeIncomingCallPresentation(
                     conversationID: callPayload.conversationID,
                     from: callPayload.from,
                     reportToCallKit: false
                 )
+                if UIApplication.shared.applicationState == .active {
+                    CallSessionManager.shared.presentInAppIncomingUI()
+                }
             }
         } else if useCallKit {
             logger.warning("Could not stage incoming call after VoIP push")

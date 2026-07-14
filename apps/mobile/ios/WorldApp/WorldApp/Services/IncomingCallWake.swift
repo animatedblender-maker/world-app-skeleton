@@ -124,7 +124,12 @@ enum IncomingCallWake {
         }
 
         let type = ((merged["type"] as? String) ?? (merged["category"] as? String) ?? "").lowercased()
-        guard type == "call" || type == "incoming_call" else { return nil }
+        let apsCategory = (merged["aps"] as? [String: Any])?["category"] as? String
+        let isCall =
+            type == "call"
+            || type == "incoming_call"
+            || apsCategory?.lowercased() == "call"
+        guard isCall else { return nil }
 
         guard
             let conversationID =

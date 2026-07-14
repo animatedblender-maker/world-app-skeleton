@@ -316,7 +316,7 @@ for config_id, name, is_target in [
         )
         if entitlements_for_config:
             add(f"\t\t\t\tCODE_SIGN_ENTITLEMENTS = {entitlements_for_config};")
-        add("\t\t\t\tCURRENT_PROJECT_VERSION = 18;")
+        add("\t\t\t\tCURRENT_PROJECT_VERSION = 19;")
         add(f'\t\t\t\tDEVELOPMENT_TEAM = {development_team()};')
         add("\t\t\t\tENABLE_PREVIEWS = YES;")
         add("\t\t\t\tGENERATE_INFOPLIST_FILE = YES;")

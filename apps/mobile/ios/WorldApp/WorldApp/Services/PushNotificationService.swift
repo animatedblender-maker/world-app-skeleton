@@ -103,11 +103,24 @@ final class PushNotificationService: NSObject, UNUserNotificationCenterDelegate 
             if normalized == "production" { return "production" }
             if normalized == "development" || normalized == "sandbox" { return "sandbox" }
         }
+        if let entitlement = entitlementApsEnvironment {
+            return entitlement
+        }
         #if DEBUG
         return "sandbox"
         #else
         return "production"
         #endif
+    }
+
+    private var entitlementApsEnvironment: String? {
+        guard let raw = Bundle.main.object(forInfoDictionaryKey: "Entitlements") as? [String: Any],
+              let value = raw["aps-environment"] as? String
+        else { return nil }
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalized == "production" { return "production" }
+        if normalized == "development" { return "sandbox" }
+        return nil
     }
 
     func configure() {
@@ -542,8 +555,7 @@ final class PushNotificationService: NSObject, UNUserNotificationCenterDelegate 
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
         let payload = normalizedPayload(notification.request.content.userInfo)
-        let type = ((payload["type"] as? String) ?? (payload["category"] as? String) ?? "").lowercased()
-        let isCall = type == "call" || type == "incoming_call"
+        let isCall = Self.isCallPayload(payload)
         let useInAppCallUI = await inAppCallUIForForegroundNotification(isCall: isCall)
         _ = await routePushPayload(payload, presentInAppUI: useInAppCallUI)
         if isCall {
@@ -557,25 +569,36 @@ final class PushNotificationService: NSObject, UNUserNotificationCenterDelegate 
         didReceive response: UNNotificationResponse
     ) async {
         let payload = normalizedPayload(response.notification.request.content.userInfo)
-        let type = ((payload["type"] as? String) ?? (payload["category"] as? String) ?? "").lowercased()
-        let isCall = type == "call" || type == "incoming_call"
-        let useInAppCallUI = await inAppCallUIForForegroundNotification(isCall: isCall)
+        let isCall = Self.isCallPayload(payload)
+        let useInAppCallUI = await inAppCallUIForForegroundNotification(isCall: isCall, preferCallKit: true)
         _ = await routePushPayload(payload, presentInAppUI: useInAppCallUI)
     }
 
     @MainActor
-    private func inAppCallUIForForegroundNotification(isCall: Bool) -> Bool {
+    private func inAppCallUIForForegroundNotification(isCall: Bool, preferCallKit: Bool = false) -> Bool {
         guard isCall else { return false }
-        return !CallSessionManager.shouldUseCallKitForIncomingRing
+        if preferCallKit { return false }
+        return UIApplication.shared.applicationState == .active
+            && !CallSessionManager.shouldUseCallKitForIncomingRing
+    }
+
+    nonisolated private static func isCallPayload(_ payload: [String: Any]) -> Bool {
+        let type = ((payload["type"] as? String) ?? (payload["category"] as? String) ?? "").lowercased()
+        if type == "call" || type == "incoming_call" { return true }
+        if let aps = payload["aps"] as? [String: Any] {
+            let category = (aps["category"] as? String)?.lowercased()
+            if category == "call" { return true }
+        }
+        return false
     }
 
     @MainActor
     private func routePushPayload(_ payload: [String: Any], presentInAppUI: Bool = false) async -> Bool {
-        let type = ((payload["type"] as? String) ?? (payload["category"] as? String) ?? "").lowercased()
-
-        if type == "call" || type == "incoming_call" {
+        if Self.isCallPayload(payload) {
             return await routeIncomingCallPayload(payload, presentInAppUI: presentInAppUI)
         }
+
+        let type = ((payload["type"] as? String) ?? (payload["category"] as? String) ?? "").lowercased()
 
         if type == "message", let conversationID = stringValue(payload["conversationId"]) {
             NotificationCenter.default.post(
@@ -640,14 +663,6 @@ final class PushNotificationService: NSObject, UNUserNotificationCenterDelegate 
         if let me = AuthService.shared.currentUser?.id, from == me { return true }
 
         CallSessionManager.shared.bootstrapForIncomingCall()
-
-        if !presentInAppUI {
-            await CallKitManager.shared.reportIncomingCall(
-                conversationID: conversationID,
-                callerName: displayName,
-                hasVideo: callType == "video"
-            )
-        }
 
         guard CallSessionManager.shared.stageIncomingCall(
             conversationID: conversationID,
