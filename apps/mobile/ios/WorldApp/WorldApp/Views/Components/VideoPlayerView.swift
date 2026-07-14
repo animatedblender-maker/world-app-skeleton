@@ -16,6 +16,8 @@ struct VideoPlayerView: View {
     var showsControls: Bool = false
     var allowsFullscreen: Bool = false
     var startTime: Double? = nil
+    /// When false, teardown won't write a lower position over an existing resume point (mini player).
+    var persistsPositionOnTeardown: Bool = true
     var onViewed: (() -> Void)? = nil
 
     @State private var adFinished = false
@@ -35,6 +37,7 @@ struct VideoPlayerView: View {
     @State private var durationSeconds: Double = 0
     @State private var showChrome = true
     @State private var chromeTask: Task<Void, Never>?
+    @State private var lastNotedPlaybackSecond: Int = -1
 
     private var shouldShowAd: Bool {
         adsEnabled && isActive && !adFinished && placement != nil
@@ -176,6 +179,8 @@ struct VideoPlayerView: View {
         let time = CMTime(seconds: seconds, preferredTimescale: 600)
         player.seek(to: time)
         currentSeconds = seconds
+        lastNotedPlaybackSecond = -1
+        trackPlaybackPositionIfNeeded()
         scheduleChromeHide()
     }
 
@@ -281,6 +286,7 @@ struct VideoPlayerView: View {
                     updateDuration(from: item)
                 }
                 isPlaying = player.rate > 0.01
+                trackPlaybackPositionIfNeeded()
             }
         }
         timeObserverPlayer = player
@@ -339,8 +345,21 @@ struct VideoPlayerView: View {
         return YouTubeCatalogService.shared.playbackPosition(for: postID)
     }
 
+    private func trackPlaybackPositionIfNeeded() {
+        guard let postID, currentSeconds >= 0.5 else { return }
+        let wholeSecond = Int(currentSeconds.rounded(.down))
+        guard wholeSecond != lastNotedPlaybackSecond else { return }
+        lastNotedPlaybackSecond = wholeSecond
+        YouTubeCatalogService.shared.notePlaybackPosition(
+            currentSeconds,
+            for: postID,
+            duration: durationSeconds > 0 ? durationSeconds : nil
+        )
+    }
+
     private func persistPlaybackPosition() {
         guard let postID else { return }
+        guard persistsPositionOnTeardown else { return }
         YouTubeCatalogService.shared.savePlaybackPosition(
             currentSeconds,
             for: postID,

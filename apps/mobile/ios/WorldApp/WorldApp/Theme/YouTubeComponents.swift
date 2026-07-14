@@ -387,7 +387,9 @@ struct YouTubeMiniPlayerBar: View {
                         isActive: isPlaying,
                         loops: false,
                         muted: true,
-                        showsControls: false
+                        showsControls: false,
+                        startTime: YouTubeCatalogService.shared.playbackPosition(for: post.id),
+                        persistsPositionOnTeardown: false
                     )
                 } else {
                     YouTubeVideoThumbnail(post: post, maxPixelSize: 120, showsPlayIcon: false, frameStyle: .card)

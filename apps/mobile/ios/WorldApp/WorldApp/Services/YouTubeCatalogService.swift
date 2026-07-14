@@ -106,10 +106,13 @@ final class YouTubeCatalogService {
     private let legacyHistoryKey = "youtube.watch_history_v1"
     private let playbackPositionsKey = "matterya.play.playback_positions_v1"
     private var playbackPositions: [String: Double] = [:]
+    private var livePlaybackPositions: [String: Double] = [:]
+    private var lastDiskPersistAt: [String: Date] = [:]
 
     private init() {
         if let stored = UserDefaults.standard.dictionary(forKey: playbackPositionsKey) as? [String: Double] {
             playbackPositions = stored
+            livePlaybackPositions = stored
         }
     }
 
@@ -248,22 +251,45 @@ final class YouTubeCatalogService {
     }
 
     func playbackPosition(for postID: String) -> Double {
-        playbackPositions[postID] ?? 0
+        livePlaybackPositions[postID] ?? playbackPositions[postID] ?? 0
+    }
+
+    /// Updates in-memory position during playback; persists to disk on a short throttle.
+    func notePlaybackPosition(_ seconds: Double, for postID: String, duration: Double? = nil) {
+        let clamped = max(0, seconds)
+        guard clamped >= 0.5 else { return }
+
+        livePlaybackPositions[postID] = clamped
+
+        let now = Date()
+        if let last = lastDiskPersistAt[postID], now.timeIntervalSince(last) < 2 {
+            return
+        }
+        lastDiskPersistAt[postID] = now
+        savePlaybackPosition(clamped, for: postID, duration: duration)
     }
 
     func savePlaybackPosition(_ seconds: Double, for postID: String, duration: Double? = nil) {
         let clamped = max(0, seconds)
+        let prior = playbackPosition(for: postID)
+
         if clamped < 1 {
+            // Mini-player teardown can fire before seek completes; don't wipe a saved resume point.
+            guard prior < 1 else { return }
             playbackPositions.removeValue(forKey: postID)
+            livePlaybackPositions.removeValue(forKey: postID)
             persistPlaybackPositions()
             return
         }
         if let duration, duration > 0, clamped >= duration - 2 {
             playbackPositions.removeValue(forKey: postID)
+            livePlaybackPositions.removeValue(forKey: postID)
             persistPlaybackPositions()
             return
         }
+
         playbackPositions[postID] = clamped
+        livePlaybackPositions[postID] = clamped
         persistPlaybackPositions()
     }
 
