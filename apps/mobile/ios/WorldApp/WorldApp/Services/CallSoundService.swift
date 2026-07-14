@@ -11,8 +11,12 @@ final class CallSoundService {
         case tryingToReach
     }
 
+    private static let incomingRingResource = "MatteryaCallRing"
+    private static let incomingRingExtension = "mp3"
+
     private var engine: AVAudioEngine?
     private var player = AVAudioPlayerNode()
+    private var ringtonePlayer: AVAudioPlayer?
     private var loopTask: Task<Void, Never>?
     private var activePattern: Pattern?
 
@@ -25,6 +29,11 @@ final class CallSoundService {
         stop()
         activePattern = pattern
         configureSession()
+
+        if pattern == .incomingRing, startIncomingRingtone() {
+            return
+        }
+
         loopTask = Task {
             while !Task.isCancelled {
                 await playBurst(for: pattern)
@@ -38,10 +47,33 @@ final class CallSoundService {
         loopTask?.cancel()
         loopTask = nil
         activePattern = nil
+        ringtonePlayer?.stop()
+        ringtonePlayer = nil
         player.stop()
         engine?.stop()
         engine?.reset()
         engine = nil
+    }
+
+    private func startIncomingRingtone() -> Bool {
+        guard let url = Bundle.main.url(
+            forResource: Self.incomingRingResource,
+            withExtension: Self.incomingRingExtension
+        ) else {
+            return false
+        }
+
+        do {
+            let audioPlayer = try AVAudioPlayer(contentsOf: url)
+            audioPlayer.numberOfLoops = -1
+            audioPlayer.volume = 1
+            audioPlayer.prepareToPlay()
+            guard audioPlayer.play() else { return false }
+            ringtonePlayer = audioPlayer
+            return true
+        } catch {
+            return false
+        }
     }
 
     private func configureSession() {
@@ -60,7 +92,6 @@ final class CallSoundService {
     private func playBurst(for pattern: Pattern) async {
         switch pattern {
         case .incomingRing:
-            // Matterya signature: bright rising triad
             await playTone(frequency: 392, duration: 0.11, volume: 0.36)
             try? await Task.sleep(nanoseconds: 55_000_000)
             await playTone(frequency: 523.25, duration: 0.11, volume: 0.38)

@@ -85,6 +85,7 @@
 		98E1D9D368E44D1C8882F2A8 /* WorldApp/Services/GlobeCityCoordinateCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F4EDC4C86154889A9EA0FEE /* WorldApp/Services/GlobeCityCoordinateCache.swift */; };
 		990536AF72DD457894CB78C7 /* WorldApp/Views/Components/StoriesViewerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C518634E4284516ADD9668B /* WorldApp/Views/Components/StoriesViewerView.swift */; };
 		A1216EFD7191496E9E70742E /* WorldApp/Resources/MatteryaCall.caf in Resources */ = {isa = PBXBuildFile; fileRef = 22E469ADC5CF43F6A729A7E5 /* WorldApp/Resources/MatteryaCall.caf */; };
+		E8F41A2B3C4D5E6F708192A3 /* WorldApp/Resources/MatteryaCallRing.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = F9A52B3C4D5E6F708192A3B4 /* WorldApp/Resources/MatteryaCallRing.mp3 */; };
 		A39DB437444145F79F8B569F /* WorldApp/Services/IncomingCallWake.swift in Sources */ = {isa = PBXBuildFile; fileRef = 861735B9550140679624A0AA /* WorldApp/Services/IncomingCallWake.swift */; };
 		A3EC4073466E4B77A1C0D3EE /* WorldApp/Views/Globe/NotificationsPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5F318863F254866B1544D03 /* WorldApp/Views/Globe/NotificationsPanelView.swift */; };
 		A837AD86B1E441AFB26C566C /* WorldApp/Resources/GlobeTextures/earth_daymap.jpg in Resources */ = {isa = PBXBuildFile; fileRef = B229E91DA64F475AB5E364D6 /* WorldApp/Resources/GlobeTextures/earth_daymap.jpg */; };
@@ -157,7 +158,8 @@
 		1947F58E6131424181410154 /* WorldApp/Services/PushNotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/PushNotificationService.swift; sourceTree = "<group>"; };
 		2060B080BD4E4783B61222C1 /* WorldApp/Views/Profile/PublicProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Profile/PublicProfileView.swift; sourceTree = "<group>"; };
 		2243AE4ECE0A441C8986F65C /* WorldApp/Views/Ads/AdPrerollView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Ads/AdPrerollView.swift; sourceTree = "<group>"; };
-		22E469ADC5CF43F6A729A7E5 /* WorldApp/Resources/MatteryaCall.caf */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = WorldApp/Resources/MatteryaCall.caf; sourceTree = "<group>"; };
+		22E469ADC5CF43F6A729A7E5 /* WorldApp/Resources/MatteryaCall.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = WorldApp/Resources/MatteryaCall.caf; sourceTree = "<group>"; };
+		F9A52B3C4D5E6F708192A3B4 /* WorldApp/Resources/MatteryaCallRing.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = WorldApp/Resources/MatteryaCallRing.mp3; sourceTree = "<group>"; };
 		22EAB13F97CD412B8CA6A9BF /* WorldApp/Services/PresenceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/PresenceService.swift; sourceTree = "<group>"; };
 		2CD6B7EAB2CF43299DC00C65 /* WorldApp/Config/AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Config/AppConfig.swift; sourceTree = "<group>"; };
 		2DB5DCED7B8D4A3982D95A04 /* WorldApp/Services/GlobePresenceGeo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/GlobePresenceGeo.swift; sourceTree = "<group>"; };
@@ -430,6 +432,7 @@
 				64FBEADC3B2045E99011CA11 /* WorldApp/Resources/GlobeTextures/stars.jpg */,
 				599D25AB2191486DA6B9FFDA /* WorldApp/Resources/GlobeTextures/stars.png */,
 				22E469ADC5CF43F6A729A7E5 /* WorldApp/Resources/MatteryaCall.caf */,
+				F9A52B3C4D5E6F708192A3B4 /* WorldApp/Resources/MatteryaCallRing.mp3 */,
 				B06C9D7EC185498CB6985F21 /* WorldApp/Resources/countries_map.json */,
 				6BE8ECD7BE204A809CFFE7A2 /* WorldApp/Assets.xcassets */,
 				62FD26A10F094E5AB5D0C5F8 /* WorldApp/Debug.entitlements */,
@@ -548,6 +551,7 @@
 				DD1002CBB9504F76A981B22A /* WorldApp/Resources/GlobeTextures/stars.jpg in Resources */,
 				43E8AE77742941D7BFCFC063 /* WorldApp/Resources/GlobeTextures/stars.png in Resources */,
 				A1216EFD7191496E9E70742E /* WorldApp/Resources/MatteryaCall.caf in Resources */,
+				E8F41A2B3C4D5E6F708192A3 /* WorldApp/Resources/MatteryaCallRing.mp3 in Resources */,
 				1B3E9EDF496241DEB2C5C5CB /* WorldApp/Resources/countries_map.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
