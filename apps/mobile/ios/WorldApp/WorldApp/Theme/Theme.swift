@@ -18,10 +18,14 @@ enum Theme {
     static let landFill = Color(red: 0.910, green: 0.894, blue: 0.863)
     static let landSelected = Color(red: 0.878, green: 0.839, blue: 0.776)
     static let oceanWash = Color(red: 0.820, green: 0.878, blue: 0.922)
+    /// Full-screen Sparks accents on dark video — same warm ink as the rest of Matterya.
+    static let reelsAccent = accentBright
     static let danger = Color(red: 0.918, green: 0.000, blue: 0.043)
     static let like = Color(red: 0.918, green: 0.000, blue: 0.043)
     static let commentBubble = Color(red: 0.941, green: 0.949, blue: 0.961)
     static let facebookBlue = Color(red: 0.094, green: 0.467, blue: 0.949)
+    /// Filled/active icon tint — warm off-white, never blue.
+    static let iconFill = Color(red: 0.965, green: 0.953, blue: 0.937)
     static let success = Color(red: 0.000, green: 0.690, blue: 0.314)
     static let buttonMuted = Color(red: 0.941, green: 0.941, blue: 0.941)
     static let globeGlass = Color.white.opacity(0.94)
@@ -122,6 +126,85 @@ extension View {
     }
 }
 
+/// User-facing names for short vertical videos (not "Reels").
+enum MatteryaCopy {
+    /// Keeps the product name on one line in headers and chips.
+    private static let nbsp = "\u{00A0}"
+    private static let hubsBrand = "Matterya\(nbsp)Hubs"
+
+    static let sparks = "Sparks"
+    static let spark = "Spark"
+    static let matteryaSparks = "Matterya\(nbsp)Sparks"
+    static let sparksForYou = "Sparks for you"
+    static let newSpark = "New spark"
+    static let newVideo = "New video"
+    static let publishSpark = "Publish spark"
+    static let publishVideo = "Publish video"
+    static let savedSparks = "Saved sparks"
+    static let browseSparks = "Browse Sparks"
+    static let watchAllSparks = "Watch all"
+    static let sparksFromCountry = "Sparks from"
+    static let noSparksYet = "No sparks yet"
+    static let noSparksForCountry = "No sparks for"
+    static let saveSparksHint = "Save sparks while watching or publish your own."
+    static let savedSparksSubtitle = "Sparks you bookmarked"
+    static let publishSparkHint = "Vertical video works best"
+    static let publishVideoHint = "Shows in feed and \(hubsBrand)"
+    static let matteryaHubs = hubsBrand
+    static let newOnHubs = "New on \(hubsBrand)"
+    static let watchOnHubs = "Watch on \(hubsBrand)"
+    static let publishedOnHubs = "Published on \(hubsBrand)"
+    static let openingHubs = "Opening \(hubsBrand)…"
+    static let loadingHubs = "Loading \(hubsBrand)…"
+    static let hubsUnavailable = "\(hubsBrand) unavailable"
+    static let exploreHubs = "Explore \(hubsBrand)"
+    static let searchHubs = "Search \(hubsBrand)"
+    static let searchHubsHint = "Find videos and creators on \(hubsBrand)"
+    static let moreOnHubs = "More on \(hubsBrand)"
+    static let yourChannelOnHubs = "Your channel on \(hubsBrand)"
+    static let verifiedHubsChannel = "Verified \(hubsBrand) channel"
+    static let longFormOnHubs = "Long-form on \(hubsBrand)"
+    static let sparksOnHubs = "Short vertical video on \(hubsBrand)"
+    static let hubsPublishHint = "Try another category, follow creators, or publish on \(hubsBrand)."
+    static let hubsLoadError = "Couldn't load \(hubsBrand) right now. Pull to refresh or check your connection."
+    static let hubsNoChannelVideos = "This creator hub has no videos on \(hubsBrand) yet."
+    static let hubsVideoUnavailable = "This video isn't available on \(hubsBrand)."
+    static let postToYourFeed = "Post to your country feed"
+    static let shareToYourFeed = "Share to your country feed"
+    static let browsingForeignFeed = "Browsing another country"
+    static let shareFromForeignHint = "Tap share on any post to add it to your home feed. You can only write posts in your own country."
+    static let homeCountryOnlyPost = "You can only publish in your home country."
+    static let follow = "Follow"
+    static let following = "Following"
+    static let followers = "followers"
+    static let creator = "Creator"
+    static let creators = "Creators"
+    static let viewCreatorHub = "View creator hub"
+    static let shareCreatorHub = "Share creator hub"
+    static let aboutThisHub = "About this hub"
+    static let featuredCreators = "Featured creators"
+}
+
+extension View {
+    /// Prevents awkward wraps in short Matterya Hubs labels.
+    func matteryaBrandLine(minScale: CGFloat = 0.88) -> some View {
+        lineLimit(1)
+            .minimumScaleFactor(minScale)
+            .allowsTightening(true)
+    }
+
+    func postHeadlineStyle(lineLimit: Int = 4) -> some View {
+        font(.system(.title3, design: .serif))
+            .fontWeight(.regular)
+            .foregroundStyle(Theme.ink)
+            .multilineTextAlignment(.leading)
+            .lineLimit(lineLimit)
+            .minimumScaleFactor(0.9)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 struct PrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -170,5 +253,12 @@ struct PremiumTextField: View {
                     .stroke(Theme.border, lineWidth: 0.5)
             )
         }
+    }
+}
+
+extension View {
+    /// Sheets and full-screen covers do not reliably inherit `@Observable` environment values.
+    func withAppState(_ appState: AppState) -> some View {
+        environment(appState)
     }
 }

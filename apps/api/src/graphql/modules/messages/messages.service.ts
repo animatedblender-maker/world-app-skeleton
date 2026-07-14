@@ -101,6 +101,8 @@ export class MessagesService {
       from public.conversations c
       join public.conversation_members cm on cm.conversation_id = c.id
       where cm.user_id = $1
+        and cm.deleted_at is null
+        and cm.archived_at is null
       order by coalesce(c.last_message_at, c.updated_at, c.created_at) desc
       limit $2
       `,
@@ -309,6 +311,15 @@ export class MessagesService {
       const isCallLog = preview.startsWith('__call__|');
       const isReaction = preview.startsWith('__react__|');
 
+      await client.query(
+        `
+        update public.conversation_members
+        set archived_at = null, deleted_at = null
+        where conversation_id = $1 and user_id <> $2
+        `,
+        [conversationId, userId]
+      );
+
       if (!isCallLog && !isReaction) {
         for (const row of otherMembers.rows) {
           try {
@@ -385,6 +396,32 @@ export class MessagesService {
     return await this.conversationById(conversationId, userId);
   }
 
+  async archiveConversation(conversationId: string, userId: string): Promise<boolean> {
+    await this.ensureMember(conversationId, userId);
+    const { rowCount } = await pool.query(
+      `
+      update public.conversation_members
+      set archived_at = now(), deleted_at = null
+      where conversation_id = $1 and user_id = $2
+      `,
+      [conversationId, userId]
+    );
+    return (rowCount ?? 0) > 0;
+  }
+
+  async deleteConversation(conversationId: string, userId: string): Promise<boolean> {
+    await this.ensureMember(conversationId, userId);
+    const { rowCount } = await pool.query(
+      `
+      update public.conversation_members
+      set deleted_at = now(), archived_at = null
+      where conversation_id = $1 and user_id = $2
+      `,
+      [conversationId, userId]
+    );
+    return (rowCount ?? 0) > 0;
+  }
+
   async unreadCount(userId: string): Promise<number> {
     const { rows } = await pool.query<{ count: string }>(
       `
@@ -392,6 +429,8 @@ export class MessagesService {
       from public.messages m
       join public.conversation_members cm on cm.conversation_id = m.conversation_id
       where cm.user_id = $1
+        and cm.deleted_at is null
+        and cm.archived_at is null
         and m.sender_id <> $1
         and (cm.last_read_at is null or m.created_at > cm.last_read_at)
       `,

@@ -1,27 +1,116 @@
 import Foundation
+import OSLog
 import PushKit
+import UIKit
 
-@MainActor
+struct IncomingCallPushPayload: Sendable {
+    let conversationID: String
+    let from: String
+    let callType: String
+    let callID: String?
+    let roomName: String?
+    let displayName: String
+}
+
 final class VoIPPushService: NSObject, PKPushRegistryDelegate {
-    static let shared = VoIPPushService()
+    nonisolated(unsafe) static let shared = VoIPPushService()
 
+    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.matterya.worldapp", category: "VoIP")
     private var registry: PKPushRegistry?
+    private var refreshTask: Task<Void, Never>?
+
+    private(set) var lastStatusMessage: String?
+
+    var isRegistryActive: Bool {
+        registry != nil
+    }
 
     private override init() {
         super.init()
     }
 
+    var isSupportedOnThisDevice: Bool {
+        #if targetEnvironment(simulator)
+        return false
+        #else
+        if ProcessInfo.processInfo.isiOSAppOnMac {
+            return false
+        }
+        return true
+        #endif
+    }
+
     func bootstrap() {
-        guard registry == nil else { return }
-        let pushRegistry = PKPushRegistry(queue: .main)
-        pushRegistry.delegate = self
-        pushRegistry.desiredPushTypes = [.voIP]
-        registry = pushRegistry
+        runOnMain {
+            self.bootstrapOnMain()
+        }
+    }
+
+    func refreshRegistry() {
+        runOnMain {
+            self.refreshRegistryOnMain()
+        }
+    }
+
+    @MainActor
+    func bootstrapOnMain() {
+        bootstrapOnMainUnlocked()
+    }
+
+    @MainActor
+    func refreshRegistryOnMain() {
+        refreshRegistryOnMainUnlocked()
+    }
+
+    @MainActor
+    func teardownOnMain() {
+        teardownOnMainUnlocked()
+    }
+
+    func ensureToken(maxAttempts: Int = 15) async {
+        guard isSupportedOnThisDevice else {
+            await setStatusMessage(unsupportedDeviceMessage)
+            return
+        }
+
+        await bootstrapOnMain()
+
+        if await hasVoIPToken() {
+            await setStatusMessage(nil)
+            return
+        }
+
+        if await PushNotificationService.shared.notificationsAuthorized() {
+            await MainActor.run {
+                UIApplication.shared.registerForRemoteNotifications()
+            }
+        }
+
+        for attempt in 0..<maxAttempts {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            if await hasVoIPToken() {
+                await setStatusMessage(nil)
+                return
+            }
+            if attempt == 3 || attempt == 8 || attempt == 13 {
+                await refreshRegistryOnMain()
+            }
+        }
+
+        if !(await hasVoIPToken()) {
+            await setStatusMessage(
+                "Apple has not issued a VoIP token. Delete Matterya from your iPhone, rebuild in Xcode (Signing & Capabilities: Push Notifications + Background Modes → Voice over IP + Remote notifications), then install again on a real iPhone — not Simulator or Mac."
+            )
+            await MainActor.run {
+                Self.shared.logger.error("Timed out waiting for VoIP push token (registry active: \(Self.shared.isRegistryActive))")
+            }
+        }
     }
 
     func teardown() {
-        registry?.desiredPushTypes = []
-        registry = nil
+        runOnMain {
+            self.teardownOnMainUnlocked()
+        }
     }
 
     nonisolated func pushRegistry(
@@ -32,6 +121,7 @@ final class VoIPPushService: NSObject, PKPushRegistryDelegate {
         guard type == .voIP else { return }
         let token = pushCredentials.token.map { String(format: "%02x", $0) }.joined()
         Task { @MainActor in
+            Self.shared.logger.info("Received VoIP push token")
             await PushNotificationService.shared.registerVoIPToken(token)
         }
     }
@@ -53,74 +143,222 @@ final class VoIPPushService: NSObject, PKPushRegistryDelegate {
             }
         }
 
-        guard
-            let conversationID = Self.payloadString(dictionary, key: "conversationId"),
-            let from = Self.payloadString(dictionary, key: "from")
-        else {
+        guard let callPayload = Self.parseIncomingCallPayload(dictionary) else {
+            Task { @MainActor in
+                Self.shared.logger.error("VoIP push missing call fields: \(dictionary.keys.joined(separator: ","), privacy: .public)")
+            }
             completion()
             return
         }
 
-        let callType = Self.payloadString(dictionary, key: "callType") ?? "audio"
-        let callID = Self.payloadString(dictionary, key: "callId")
-        let roomName = Self.payloadString(dictionary, key: "roomName")
-        let displayName = Self.payloadString(dictionary, key: "title") ?? "Incoming call"
+        let finish: @Sendable () -> Void = {
+            completion()
+        }
 
-        let handlePush = {
-            MainActor.assumeIsolated {
-                if let me = AuthService.shared.currentUser?.id, from == me {
-                    completion()
-                    return
-                }
-
-                CallSessionManager.shared.bootstrapForIncomingCall()
-
-                // Apple requires every VoIP push to be surfaced through CallKit immediately.
-                CallKitManager.shared.reportIncomingCall(
-                    conversationID: conversationID,
-                    callerName: displayName,
-                    hasVideo: callType == "video"
-                ) { _ in
-                    completion()
-                }
-
-                let staged = CallSessionManager.shared.stageIncomingCall(
-                    conversationID: conversationID,
-                    from: from,
-                    callType: callType,
-                    callID: callID,
-                    roomName: roomName,
-                    callerName: displayName
-                )
-
-                if staged {
-                    Task {
-                        await CallSessionManager.shared.finalizeIncomingCallPresentation(
-                            conversationID: conversationID,
-                            from: from,
-                            reportToCallKit: false
-                        )
-                    }
-                } else {
-                    CallKitManager.shared.endCall(for: conversationID)
-                }
-            }
+        let handlePush = { @MainActor in
+            Self.shared.handleIncomingVoIPPush(callPayload, finish: finish)
         }
 
         if Thread.isMainThread {
-            handlePush()
+            MainActor.assumeIsolated {
+                handlePush()
+            }
         } else {
-            DispatchQueue.main.sync(execute: handlePush)
+            DispatchQueue.main.sync {
+                MainActor.assumeIsolated {
+                    handlePush()
+                }
+            }
         }
     }
 
     nonisolated func pushRegistry(
         _ registry: PKPushRegistry,
         didInvalidatePushTokenFor type: PKPushType
-    ) {}
+    ) {
+        guard type == .voIP else { return }
+        Task { @MainActor in
+            Self.shared.logger.warning("VoIP push token invalidated; refreshing PushKit registry")
+            Self.shared.refreshRegistryOnMain()
+            await PushNotificationService.shared.syncWithServer(force: true)
+        }
+    }
 
-    nonisolated private static func payloadString(_ payload: [String: Any], key: String) -> String? {
-        guard let value = payload[key] else { return nil }
+    @MainActor
+    private func handleIncomingVoIPPush(_ callPayload: IncomingCallPushPayload, finish: @escaping @Sendable () -> Void) {
+        logger.info("Incoming VoIP call push for conversation \(callPayload.conversationID, privacy: .public)")
+
+        if let me = AuthService.shared.currentUser?.id, callPayload.from == me {
+            finish()
+            return
+        }
+
+        CallSessionManager.shared.bootstrapForIncomingCall()
+
+        let useCallKit = CallSessionManager.shouldUseCallKitForIncomingRing
+        if useCallKit {
+            CallKitManager.shared.reportIncomingCall(
+                conversationID: callPayload.conversationID,
+                callerName: callPayload.displayName,
+                hasVideo: callPayload.callType == "video"
+            ) { _ in
+                finish()
+            }
+        } else {
+            finish()
+        }
+
+        let staged = CallSessionManager.shared.stageIncomingCall(
+            conversationID: callPayload.conversationID,
+            from: callPayload.from,
+            callType: callPayload.callType,
+            callID: callPayload.callID,
+            roomName: callPayload.roomName,
+            callerName: callPayload.displayName
+        )
+
+        if staged {
+            Task {
+                await CallSessionManager.shared.finalizeIncomingCallPresentation(
+                    conversationID: callPayload.conversationID,
+                    from: callPayload.from,
+                    reportToCallKit: false
+                )
+            }
+        } else if useCallKit {
+            logger.warning("Could not stage incoming call after VoIP push")
+            CallKitManager.shared.requestEndCall(for: callPayload.conversationID)
+        }
+    }
+
+    @MainActor
+    private func bootstrapOnMainUnlocked() {
+        guard isSupportedOnThisDevice else {
+            lastStatusMessage = unsupportedDeviceMessage
+            logger.warning("VoIP push unavailable on this device build")
+            return
+        }
+        if let registry {
+            registry.delegate = self
+            registry.desiredPushTypes = [.voIP]
+            return
+        }
+        let pushRegistry = PKPushRegistry(queue: .main)
+        pushRegistry.delegate = self
+        pushRegistry.desiredPushTypes = [.voIP]
+        registry = pushRegistry
+        lastStatusMessage = nil
+        logger.info("PushKit VoIP registry started")
+        scheduleTokenRefreshIfNeeded()
+    }
+
+    @MainActor
+    private func refreshRegistryOnMainUnlocked() {
+        guard isSupportedOnThisDevice else {
+            lastStatusMessage = unsupportedDeviceMessage
+            return
+        }
+        teardownOnMainUnlocked()
+        bootstrapOnMainUnlocked()
+    }
+
+    @MainActor
+    private func teardownOnMainUnlocked() {
+        refreshTask?.cancel()
+        refreshTask = nil
+        registry?.delegate = nil
+        registry?.desiredPushTypes = []
+        registry = nil
+    }
+
+    @MainActor
+    private func scheduleTokenRefreshIfNeeded() {
+        refreshTask?.cancel()
+        refreshTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            guard !Task.isCancelled else { return }
+            guard !PushNotificationService.shared.hasVoIPToken else { return }
+            Self.shared.refreshRegistryOnMain()
+        }
+    }
+
+    @MainActor
+    private func hasVoIPToken() -> Bool {
+        PushNotificationService.shared.hasVoIPToken
+    }
+
+    @MainActor
+    private func setStatusMessage(_ message: String?) {
+        lastStatusMessage = message
+    }
+
+    private var unsupportedDeviceMessage: String {
+        #if targetEnvironment(simulator)
+        return "VoIP is unavailable in the iOS Simulator. Install Matterya on a real iPhone."
+        #else
+        if ProcessInfo.processInfo.isiOSAppOnMac {
+            return "VoIP calls do not work when running the iPhone app on Mac. Install on a real iPhone."
+        }
+        return "VoIP push is unavailable on this device."
+        #endif
+    }
+
+    private func runOnMain(_ work: @escaping @MainActor () -> Void) {
+        if Thread.isMainThread {
+            MainActor.assumeIsolated(work)
+        } else {
+            DispatchQueue.main.sync {
+                MainActor.assumeIsolated(work)
+            }
+        }
+    }
+
+    nonisolated private static func parseIncomingCallPayload(_ payload: [String: Any]) -> IncomingCallPushPayload? {
+        let merged = mergePayloadDictionaries(payload)
+
+        guard
+            let conversationID = payloadString(merged, keys: ["conversationId", "conversationID", "conversation_id"]),
+            let from = payloadString(merged, keys: ["from", "callerId", "callerID", "caller_id", "senderId", "sender_id"])
+        else {
+            return nil
+        }
+
+        let callType = payloadString(merged, keys: ["callType", "call_type", "kind"]) ?? "audio"
+        return IncomingCallPushPayload(
+            conversationID: conversationID,
+            from: from,
+            callType: callType == "video" ? "video" : "audio",
+            callID: payloadString(merged, keys: ["callId", "callID", "call_id", "sessionId", "session_id"]),
+            roomName: payloadString(merged, keys: ["roomName", "room_name", "room"]),
+            displayName: payloadString(merged, keys: ["title", "callerName", "caller_name", "name"]) ?? "Incoming call"
+        )
+    }
+
+    nonisolated private static func mergePayloadDictionaries(_ payload: [String: Any]) -> [String: Any] {
+        var merged = payload
+        if let custom = payload["custom"] as? [String: Any] {
+            for (key, value) in custom {
+                merged[key] = value
+            }
+        }
+        if let data = payload["data"] as? [String: Any] {
+            for (key, value) in data {
+                merged[key] = value
+            }
+        }
+        return merged
+    }
+
+    nonisolated private static func payloadString(_ payload: [String: Any], keys: [String]) -> String? {
+        for key in keys {
+            if let value = payload[key], let parsed = normalizedString(value) {
+                return parsed
+            }
+        }
+        return nil
+    }
+
+    nonisolated private static func normalizedString(_ value: Any) -> String? {
         if let string = value as? String {
             let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty ? nil : trimmed

@@ -6,6 +6,8 @@ enum PostCardStyle {
 }
 
 struct PostCardView: View {
+    @Environment(AppState.self) private var appState
+
     let post: CountryPost
     var style: PostCardStyle = .embedded
     var onLikeToggle: (() -> Void)?
@@ -59,11 +61,21 @@ struct PostCardView: View {
                 }
             }
             Spacer()
-            Button {} label: {
+            Menu {
+                Button {
+                    appState.presentShareSheet(for: post)
+                } label: {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                }
+                Button {
+                    appState.openPost(post)
+                } label: {
+                    Label("Open post", systemImage: "doc.text")
+                }
+            } label: {
                 Image(systemName: "ellipsis")
                     .foregroundStyle(Theme.ink)
             }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, Theme.pagePadding)
         .padding(.vertical, 10)
@@ -111,19 +123,33 @@ struct PostCardView: View {
             } label: {
                 Image(systemName: commentsExpanded ? "bubble.right.fill" : "bubble.right")
                     .font(.system(size: 24))
-                    .foregroundStyle(commentsExpanded ? Theme.facebookBlue : Theme.ink)
+                    .foregroundStyle(commentsExpanded ? Theme.ink : Theme.inkMuted)
             }
             .buttonStyle(.plain)
 
-            Image(systemName: "paperplane")
-                .font(.system(size: 24))
-                .foregroundStyle(Theme.ink)
+            Button {
+                appState.presentShareSheet(for: post)
+            } label: {
+                Image(systemName: "paperplane")
+                    .font(.system(size: 24))
+                    .foregroundStyle(Theme.ink)
+            }
+            .buttonStyle(.plain)
 
             Spacer()
 
-            Image(systemName: "bookmark")
-                .font(.system(size: 22))
-                .foregroundStyle(Theme.ink)
+            Button {
+                Task {
+                    if let error = await appState.toggleSavePost(post) {
+                        commentError = error
+                    }
+                }
+            } label: {
+                Image(systemName: appState.isPostSaved(post.id) ? "bookmark.fill" : "bookmark")
+                    .font(.system(size: 22))
+                    .foregroundStyle(appState.isPostSaved(post.id) ? Theme.ink : Theme.inkMuted)
+            }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, Theme.pagePadding)
         .padding(.top, 10)
@@ -217,5 +243,107 @@ struct AvatarView: View {
     private var initials: String {
         let cleaned = seed.replacingOccurrences(of: "user_", with: "")
         return String(cleaned.prefix(1)).uppercased()
+    }
+}
+
+struct ExpandableProfileAvatar: View {
+    let url: String?
+    let seed: String
+    let size: CGFloat
+    var displayName: String? = nil
+
+    @State private var showPreview = false
+
+    private var hasRemoteImage: Bool {
+        guard let normalized = MediaService.normalizedAvatarURL(url),
+              URL(string: normalized) != nil
+        else { return false }
+        return true
+    }
+
+    var body: some View {
+        Button {
+            showPreview = true
+        } label: {
+            AvatarView(url: url, seed: seed, size: size)
+        }
+        .buttonStyle(.plain)
+        .disabled(!hasRemoteImage)
+        .accessibilityLabel(displayName.map { "View \($0)'s profile photo" } ?? "View profile photo")
+        .fullScreenCover(isPresented: $showPreview) {
+            AvatarPreviewScreen(url: url, seed: seed, displayName: displayName)
+        }
+    }
+}
+
+private struct AvatarPreviewScreen: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let url: String?
+    let seed: String
+    var displayName: String? = nil
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.94)
+                .ignoresSafeArea()
+                .onTapGesture { dismiss() }
+
+            VStack(spacing: 0) {
+                HStack {
+                    Spacer()
+                    Button(action: { dismiss() }) {
+                        Image(systemName: "xmark")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.92))
+                            .frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 8)
+                .padding(.top, 8)
+
+                Spacer()
+
+                if let imageURL = normalizedURL {
+                    CachedAsyncImage(
+                        url: imageURL,
+                        maxPixelSize: 1200,
+                        contentMode: .fill,
+                        placeholder: AnyView(
+                            ProgressView()
+                                .tint(.white)
+                        )
+                    )
+                    .aspectRatio(1, contentMode: .fit)
+                    .frame(maxWidth: 360)
+                    .padding(.horizontal, 24)
+                    .clipShape(Circle())
+                    .overlay {
+                        Circle()
+                            .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                    }
+                    .shadow(color: .black.opacity(0.35), radius: 24, y: 12)
+                } else {
+                    AvatarView(url: url, seed: seed, size: 200)
+                }
+
+                if let displayName, !displayName.isEmpty {
+                    Text(displayName)
+                        .font(.system(.title3, design: .serif))
+                        .foregroundStyle(.white.opacity(0.92))
+                        .padding(.top, 20)
+                }
+
+                Spacer()
+            }
+        }
+    }
+
+    private var normalizedURL: URL? {
+        guard let raw = MediaService.normalizedAvatarURL(url),
+              let url = URL(string: raw)
+        else { return nil }
+        return url
     }
 }

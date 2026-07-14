@@ -30,6 +30,14 @@ export const presenceResolvers = {
       // ✅ allow public country stats (you can lock later)
       return await svc().countryStats(args.iso);
     },
+
+    globePresenceDots: async (
+      _: any,
+      args: { precision?: number | null; maxPoints?: number | null },
+      _ctx: Context
+    ) => {
+      return await svc().globePresenceDots(args?.precision ?? 3, args?.maxPoints ?? 4096);
+    },
   },
 
   Mutation: {

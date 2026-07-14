@@ -12,6 +12,7 @@ struct GraphQLPost: Decodable {
     let mediaURL: String?
     let thumbURL: String?
     let sharedPostID: String?
+    let sharedPost: GraphQLSharedPost?
     let visibility: String
     let likeCount: Int
     let commentCount: Int
@@ -31,6 +32,7 @@ struct GraphQLPost: Decodable {
         case mediaURL = "media_url"
         case thumbURL = "thumb_url"
         case sharedPostID = "shared_post_id"
+        case sharedPost = "shared_post"
         case likeCount = "like_count"
         case commentCount = "comment_count"
         case likedByMe = "liked_by_me"
@@ -52,6 +54,7 @@ struct GraphQLPost: Decodable {
         mediaURL = try container.decodeIfPresent(String.self, forKey: .mediaURL)
         thumbURL = try container.decodeIfPresent(String.self, forKey: .thumbURL)
         sharedPostID = try container.decodeIfPresent(String.self, forKey: .sharedPostID)
+        sharedPost = try container.decodeIfPresent(GraphQLSharedPost.self, forKey: .sharedPost)
         visibility = try container.decodeIfPresent(String.self, forKey: .visibility) ?? "public"
         likeCount = try container.decodeLossyInt(forKey: .likeCount)
         commentCount = try container.decodeLossyInt(forKey: .commentCount)
@@ -71,12 +74,45 @@ struct GraphQLPost: Decodable {
             id: id, title: title, body: body,
             mediaType: mediaType, mediaURL: mediaURL, thumbURL: thumbURL,
             sharedPostID: sharedPostID,
+            sharedPost: sharedPost?.toPreview,
             visibility: PostVisibility(rawValue: visibility) ?? .public,
             likeCount: likeCount, commentCount: commentCount, viewCount: 0,
             likedByMe: likedByMe, savedByMe: savedByMe ?? false,
             createdAt: createdAt, updatedAt: updatedAt,
             authorID: authorID, countryName: countryName, countryCode: countryCode,
             cityName: cityName, author: author?.toModel
+        )
+    }
+}
+
+struct GraphQLSharedPost: Decodable {
+    let id: String
+    let title: String?
+    let body: String
+    let mediaType: String?
+    let mediaURL: String?
+    let thumbURL: String?
+    let authorID: String
+    let author: GraphQLAuthor?
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, body, author
+        case mediaType = "media_type"
+        case mediaURL = "media_url"
+        case thumbURL = "thumb_url"
+        case authorID = "author_id"
+    }
+
+    var toPreview: SharedPostPreview {
+        SharedPostPreview(
+            id: id,
+            title: title,
+            body: body,
+            mediaType: mediaType,
+            mediaURL: mediaURL,
+            thumbURL: thumbURL,
+            authorID: authorID,
+            author: author?.toModel
         )
     }
 }
@@ -136,7 +172,9 @@ struct GraphQLComment: Decodable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
         postID = try container.decode(String.self, forKey: .postID)
-        parentID = try container.decodeIfPresent(String.self, forKey: .parentID)
+        let rawParentID = try container.decodeIfPresent(String.self, forKey: .parentID)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        parentID = (rawParentID?.isEmpty == false) ? rawParentID : nil
         authorID = try container.decode(String.self, forKey: .authorID)
         body = try container.decode(String.self, forKey: .body)
         likeCount = try container.decodeIfPresent(Int.self, forKey: .likeCount) ?? 0

@@ -118,7 +118,7 @@ enum HandDrawnStroke {
             CGSize(width: -0.25, height: 0.15),
         ]
         for (index, offset) in offsets.enumerated() {
-            var stroke = StrokeStyle(
+            let stroke = StrokeStyle(
                 lineWidth: width - CGFloat(index) * 0.15,
                 lineCap: .round,
                 lineJoin: .round

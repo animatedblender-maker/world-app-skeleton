@@ -1,6 +1,8 @@
 import AVFoundation
 import CallKit
 import Foundation
+import LiveKit
+import UIKit
 
 final class CallKitManager: NSObject, CXProviderDelegate {
     static let shared = CallKitManager()
@@ -10,6 +12,7 @@ final class CallKitManager: NSObject, CXProviderDelegate {
     private var callUUIDByConversationID: [String: UUID] = [:]
     private var conversationIDByCallUUID: [UUID: String] = [:]
     private var audioSessionWaiters: [CheckedContinuation<Void, Never>] = []
+    private(set) var isAudioSessionActivated = false
 
     private override init() {
         let configuration = CXProviderConfiguration(localizedName: "Matterya")
@@ -19,6 +22,9 @@ final class CallKitManager: NSObject, CXProviderDelegate {
         configuration.supportedHandleTypes = [.generic]
         configuration.ringtoneSound = "MatteryaCall.caf"
         configuration.includesCallsInRecents = false
+        if let icon = UIImage(named: "BrandLogo")?.pngData() {
+            configuration.iconTemplateImageData = icon
+        }
         provider = CXProvider(configuration: configuration)
         super.init()
         provider.setDelegate(self, queue: DispatchQueue.main)
@@ -59,7 +65,7 @@ final class CallKitManager: NSObject, CXProviderDelegate {
     }
 
     func reportOutgoingCall(conversationID: String, callerName: String, hasVideo: Bool) {
-        let callUUID = UUID()
+        let callUUID = callUUIDByConversationID[conversationID] ?? UUID()
         callUUIDByConversationID[conversationID] = callUUID
         conversationIDByCallUUID[callUUID] = conversationID
 
@@ -70,10 +76,22 @@ final class CallKitManager: NSObject, CXProviderDelegate {
         callController.request(CXTransaction(action: action)) { _ in }
     }
 
-    func waitForAudioSessionActivation(timeoutSeconds: Double = 5) async {
-        let session = AVAudioSession.sharedInstance()
-        if session.category == .playAndRecord {
-            try? session.setActive(true)
+    func reportOutgoingCallStartedConnecting(conversationID: String) {
+        guard let callUUID = callUUIDByConversationID[conversationID] else { return }
+        provider.reportOutgoingCall(with: callUUID, startedConnectingAt: Date())
+    }
+
+    func reportCallConnected(conversationID: String) {
+        guard let callUUID = callUUIDByConversationID[conversationID] else { return }
+        provider.reportOutgoingCall(with: callUUID, connectedAt: Date())
+    }
+
+    func hasCall(conversationID: String) -> Bool {
+        callUUIDByConversationID[conversationID] != nil
+    }
+
+    func waitForAudioSessionActivation(timeoutSeconds: Double = 8) async {
+        if isAudioSessionActivated {
             return
         }
 
@@ -94,31 +112,33 @@ final class CallKitManager: NSObject, CXProviderDelegate {
         }
     }
 
-    func endCall(for conversationID: String?) {
+    func requestEndCall(for conversationID: String?) {
         guard let conversationID,
               let callUUID = callUUIDByConversationID[conversationID]
         else { return }
 
+        clearMapping(for: conversationID)
         let action = CXEndCallAction(call: callUUID)
         callController.request(CXTransaction(action: action)) { _ in }
-        clearMapping(for: conversationID)
     }
 
     func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
+        action.fulfill()
         Task { @MainActor in
             CallSessionManager.shared.bootstrapForIncomingCall()
-            await CallSessionManager.shared.acceptCall()
-            action.fulfill()
+            _ = await CallSessionManager.shared.acceptCall()
         }
     }
 
     func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
         Task { @MainActor in
             let manager = CallSessionManager.shared
-            if manager.isIncoming && !manager.isActive && !manager.isConnecting {
-                manager.declineCall()
-            } else {
-                manager.endCall()
+            if !manager.hasEndedCurrentCall {
+                if manager.isIncoming && !manager.isActive && !manager.isConnecting {
+                    manager.declineCall(fromCallKit: true)
+                } else {
+                    manager.endCall(fromCallKit: true)
+                }
             }
             if let conversationID = conversationIDByCallUUID[action.callUUID] {
                 clearMapping(for: conversationID)
@@ -131,19 +151,24 @@ final class CallKitManager: NSObject, CXProviderDelegate {
         action.fulfill()
     }
 
+    func provider(_ provider: CXProvider, perform action: CXSetMutedCallAction) {
+        Task { @MainActor in
+            CallSessionManager.shared.setMuted(action.isMuted)
+            action.fulfill()
+        }
+    }
+
     func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
-        do {
-            try audioSession.setCategory(
-                .playAndRecord,
-                mode: .voiceChat,
-                options: [.allowBluetoothHFP, .defaultToSpeaker, .mixWithOthers]
-            )
-            try audioSession.setActive(true)
-        } catch {}
+        isAudioSessionActivated = true
+        AudioManager.shared.audioSession.isAutomaticConfigurationEnabled = true
+        try? AudioManager.shared.setEngineAvailability(.default)
         resumeAudioSessionWaiters()
     }
 
     func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
+        isAudioSessionActivated = false
+        AudioManager.shared.audioSession.isAutomaticConfigurationEnabled = false
+        try? AudioManager.shared.setEngineAvailability(.none)
         Task { @MainActor in
             CallSoundService.shared.stop()
         }
@@ -152,6 +177,7 @@ final class CallKitManager: NSObject, CXProviderDelegate {
     func providerDidReset(_ provider: CXProvider) {
         callUUIDByConversationID.removeAll()
         conversationIDByCallUUID.removeAll()
+        isAudioSessionActivated = false
     }
 
     private func clearMapping(for conversationID: String) {

@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 @MainActor
 final class PostsService {
@@ -12,7 +13,22 @@ final class PostsService {
 
     private let postFields = """
     id title body media_type media_url thumb_url shared_post_id
+    shared_post {
+      id title body media_type media_url thumb_url author_id
+      author { user_id display_name username avatar_url country_name country_code }
+    }
     visibility like_count comment_count liked_by_me
+    created_at updated_at author_id country_name country_code city_name
+    author { user_id display_name username avatar_url country_name country_code }
+    """
+
+    private let postFieldsWithBookmarks = """
+    id title body media_type media_url thumb_url shared_post_id
+    shared_post {
+      id title body media_type media_url thumb_url author_id
+      author { user_id display_name username avatar_url country_name country_code }
+    }
+    visibility like_count comment_count liked_by_me saved_by_me
     created_at updated_at author_id country_name country_code city_name
     author { user_id display_name username avatar_url country_name country_code }
     """
@@ -59,13 +75,71 @@ final class PostsService {
         return merged.sorted { ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast) }
     }
 
-    func loadHomeFeed(followingLimitPerAuthor: Int = 4, globalLimit: Int = 40, maxPosts: Int = 50) async -> [CountryPost] {
+    /// Country feed posts: local country posts plus followed creators posting from abroad.
+    func loadCountryFeedPosts(
+        countryISO: String,
+        localLimit: Int = 30,
+        followingLimitPerAuthor: Int = 5,
+        maxAuthors: Int = 24
+    ) async throws -> [CountryPost] {
+        let iso = countryISO.uppercased()
+        async let localTask = listByCountry(iso, limit: localLimit)
+        async let followingTask = loadFollowingFeed(
+            limitPerAuthor: followingLimitPerAuthor,
+            maxAuthors: maxAuthors
+        )
+
+        let local = try await localTask
+        let following = await followingTask
+        let localIDs = Set(local.map(\.id))
+        let abroadFollowing = following.filter { post in
+            guard !localIDs.contains(post.id) else { return false }
+            let postISO = post.countryCode?.uppercased() ?? ""
+            return !postISO.isEmpty && postISO != iso
+        }
+
+        return mergeFeedSources([local, abroadFollowing], limit: localLimit + abroadFollowing.count)
+    }
+
+    func loadHomeFeed(
+        followingLimitPerAuthor: Int = 4,
+        globalLimit: Int = 40,
+        maxPosts: Int = 50,
+        forceRefresh: Bool = false
+    ) async -> [CountryPost] {
+        if !forceRefresh,
+           ContentCache.shared.isFresh(.homeFeed),
+           let cached = ContentCache.shared.posts(for: .homeFeed) {
+            return cached
+        }
+
+        await prepareFeedContext()
+
+        async let ownTask = fetchOwnPosts(limit: max(globalLimit, 25))
         async let followingTask = loadFollowingFeed(limitPerAuthor: followingLimitPerAuthor)
         async let globalTask = fetchRecentPosts(limit: globalLimit)
+        async let homeCountryTask = fetchHomeCountryPosts(limit: max(globalLimit, 25))
 
+        let own = await ownTask
         let following = await followingTask
         let global = await globalTask
-        return mergeFeedSources([following, global], limit: maxPosts)
+        let homeCountry = await homeCountryTask
+        var batches: [[CountryPost]] = []
+        if !own.isEmpty { batches.append(own) }
+        if !homeCountry.isEmpty { batches.append(homeCountry) }
+        if !following.isEmpty { batches.append(following) }
+        if !global.isEmpty { batches.append(global) }
+
+        var merged = mergeFeedSources(batches, limit: maxPosts)
+        if merged.isEmpty {
+            merged = await fallbackFeedPosts(limit: maxPosts)
+        }
+        if !merged.isEmpty {
+            ContentCache.shared.setPosts(merged, for: .homeFeed)
+        } else {
+            ContentCache.shared.invalidate(.homeFeed)
+        }
+        return merged
     }
 
     func loadReelsFeed(
@@ -74,19 +148,100 @@ final class PostsService {
         viewerCountry: String? = nil,
         followingIDs: Set<String> = []
     ) async -> [CountryPost] {
-        let pool = await loadReelsPool(
+        let page = await loadReelsFeedPage(
+            excludingIDs: [],
+            cursor: nil,
+            batchSize: globalLimit,
+            fetchLimit: max(globalLimit, 40),
             followingLimitPerAuthor: followingLimitPerAuthor,
-            globalLimit: globalLimit
+            viewerCountry: viewerCountry,
+            followingIDs: followingIDs,
+            tail: [],
+            allowRecycle: false
         )
-        let reels = pool.filter { $0.isReel && !$0.isStory && $0.playableVideoURL != nil }
-        let source = reels.isEmpty
-            ? pool.filter { $0.hasVideo && !$0.isStory && $0.playableVideoURL != nil }
-            : reels
-        return ReelsRankingEngine.rank(source, viewerCountry: viewerCountry, followingIDs: followingIDs)
+        return page.posts
+    }
+
+    /// Paginated endless spark feed — ranks diversity, following, home country, and engagement.
+    func loadReelsFeedPage(
+        excludingIDs: Set<String>,
+        cursor: String? = nil,
+        batchSize: Int = 12,
+        fetchLimit: Int = 48,
+        followingLimitPerAuthor: Int = 10,
+        viewerCountry: String? = nil,
+        followingIDs: Set<String> = [],
+        tail: [CountryPost] = [],
+        allowRecycle: Bool = false
+    ) async -> ReelsFeedPage {
+        await prepareFeedContext()
+
+        var candidates: [CountryPost] = []
+        let recent = await fetchRecentPosts(limit: fetchLimit, before: cursor)
+        candidates.append(contentsOf: recent)
+
+        if cursor == nil {
+            let pool = await loadReelsPool(
+                followingLimitPerAuthor: followingLimitPerAuthor,
+                globalLimit: max(fetchLimit, 40)
+            )
+            candidates.append(contentsOf: pool)
+        }
+
+        var seenCandidateIDs = Set<String>()
+        candidates = candidates.filter { post in
+            guard seenCandidateIDs.insert(post.id).inserted else { return false }
+            return ReelsRankingEngine.isSparkEligible(post)
+        }
+
+        let batch = ReelsRankingEngine.nextBatch(
+            from: candidates,
+            excluding: excludingIDs,
+            limit: batchSize,
+            viewerCountry: viewerCountry,
+            followingIDs: followingIDs,
+            tail: tail,
+            allowRecycle: allowRecycle
+        )
+
+        let nextCursor = recent.last?.createdAt
+        let hasMore = recent.count >= max(8, fetchLimit / 3)
+
+        return ReelsFeedPage(posts: batch, nextCursor: nextCursor, hasMore: hasMore)
+    }
+
+    /// Fresher sparks to prepend when scrolling back up.
+    func loadReelsNewerBatch(
+        than createdAfter: String,
+        excludingIDs: Set<String>,
+        batchSize: Int = 8,
+        viewerCountry: String? = nil,
+        followingIDs: Set<String> = [],
+        head: [CountryPost] = []
+    ) async -> [CountryPost] {
+        let recent = await fetchRecentPosts(limit: 60)
+        let newer = recent.filter { $0.createdAt > createdAfter }
+        let pool = await loadReelsPool(followingLimitPerAuthor: 8, globalLimit: 40)
+        var candidates = newer + pool
+        var seen = Set<String>()
+        candidates = candidates.filter { seen.insert($0.id).inserted }
+
+        return ReelsRankingEngine.nextBatch(
+            from: candidates,
+            excluding: excludingIDs,
+            limit: batchSize,
+            viewerCountry: viewerCountry,
+            followingIDs: followingIDs,
+            tail: head,
+            allowRecycle: false
+        )
     }
 
     func loadReelsPool(followingLimitPerAuthor: Int = 10, globalLimit: Int = 40) async -> [CountryPost] {
+        await prepareFeedContext()
+
         let followingIDs = await follow.followingIDs()
+        let currentUserID = currentAuthorID()
 
         var videos: [CountryPost] = []
         var seen = Set<String>()
@@ -98,11 +253,13 @@ final class PostsService {
             }
         }
 
+        appendVideos(await fetchOwnPosts(limit: globalLimit))
+        appendVideos(await fetchHomeCountryPosts(limit: globalLimit))
         appendVideos(await fetchRecentPosts(limit: globalLimit))
 
         if !followingIDs.isEmpty {
             await withTaskGroup(of: [CountryPost].self) { group in
-                for authorID in followingIDs {
+                for authorID in followingIDs where authorID != currentUserID {
                     group.addTask {
                         (try? await self.listForAuthor(authorID, limit: followingLimitPerAuthor)) ?? []
                     }
@@ -121,13 +278,63 @@ final class PostsService {
 
     func loadLivingVideos(
         followingLimitPerAuthor: Int = 10,
-        globalLimit: Int = 40
+        globalLimit: Int = 40,
+        forceRefresh: Bool = false
     ) async -> [CountryPost] {
+        if !forceRefresh,
+           ContentCache.shared.isFresh(.livingVideos),
+           let cached = ContentCache.shared.posts(for: .livingVideos) {
+            return cached
+        }
+
+        await prepareFeedContext()
+
         let pool = await loadReelsPool(
             followingLimitPerAuthor: followingLimitPerAuthor,
             globalLimit: globalLimit
         )
-        return pool.filter { $0.hasVideo && !$0.isReel && !$0.isStory && $0.playableVideoURL != nil }
+        var videos = pool.filter { $0.hasVideo && !$0.isReel && !$0.isStory }
+        if videos.isEmpty {
+            let own = await fetchOwnPosts(limit: globalLimit)
+            videos = own.filter { $0.hasVideo && !$0.isReel && !$0.isStory }
+        }
+        if !videos.isEmpty {
+            ContentCache.shared.setPosts(videos, for: .livingVideos)
+        } else {
+            ContentCache.shared.invalidate(.livingVideos)
+        }
+        return videos
+    }
+
+    /// Unified Matterya Hubs catalog: long-form videos + reels.
+    func loadPlayCatalog(
+        followingLimitPerAuthor: Int = 10,
+        globalLimit: Int = 40,
+        forceRefresh: Bool = false,
+        viewerCountry: String? = nil,
+        followingIDs: Set<String> = []
+    ) async -> [CountryPost] {
+        async let longFormTask = loadLivingVideos(
+            followingLimitPerAuthor: followingLimitPerAuthor,
+            globalLimit: globalLimit,
+            forceRefresh: forceRefresh
+        )
+        async let reelsTask = loadReelsFeed(
+            followingLimitPerAuthor: followingLimitPerAuthor,
+            globalLimit: globalLimit,
+            viewerCountry: viewerCountry,
+            followingIDs: followingIDs
+        )
+        let longForm = await longFormTask
+        let reels = await reelsTask
+
+        var merged: [CountryPost] = []
+        var seen = Set<String>()
+        for post in reels + longForm where !seen.contains(post.id) {
+            seen.insert(post.id)
+            merged.append(post)
+        }
+        return merged
     }
 
     func searchPosts(_ query: String, limit: Int = 20) async throws -> [CountryPost] {
@@ -145,9 +352,10 @@ final class PostsService {
 
         if AppConfig.useDemoDataset {
             let demoPosts = await demo.searchPosts(query, limit: limit)
-            return mergePosts(real: real, demo: demoPosts, limit: limit)
+            let merged = mergePosts(real: real, demo: demoPosts, limit: limit)
+            return MatteryaSearchEngine.rankContent(merged, query: query, limit: limit)
         }
-        return real
+        return MatteryaSearchEngine.rankContent(real, query: query, limit: limit)
     }
 
     func getPostByID(_ postID: String) async throws -> CountryPost? {
@@ -164,14 +372,17 @@ final class PostsService {
         }
         struct Response: Decodable { let commentsByPost: [GraphQLComment] }
         let query = """
-        query($postId: ID!, $limit: Int) {
-          commentsByPost(post_id: $postId, limit: $limit) {
+        query($post_id: ID!, $limit: Int) {
+          commentsByPost(post_id: $post_id, limit: $limit) {
             id post_id parent_id author_id body like_count liked_by_me created_at updated_at
             author { user_id display_name username avatar_url country_name country_code }
           }
         }
         """
-        let result: Response = try await gql.authenticatedRequest(query: query, variables: ["postId": postID, "limit": limit])
+        let result: Response = try await gql.authenticatedRequest(
+            query: query,
+            variables: ["post_id": postID, "limit": limit]
+        )
         return result.commentsByPost.map(\.toModel)
     }
 
@@ -181,15 +392,20 @@ final class PostsService {
         }
         struct Response: Decodable { let addComment: GraphQLComment }
         let mutation = """
-        mutation($postId: ID!, $body: String!, $parentId: ID) {
-          addComment(post_id: $postId, body: $body, parent_id: $parentId) {
+        mutation($post_id: ID!, $body: String!, $parent_id: ID) {
+          addComment(post_id: $post_id, body: $body, parent_id: $parent_id) {
             id post_id parent_id author_id body like_count liked_by_me created_at updated_at
             author { user_id display_name username avatar_url country_name country_code }
           }
         }
         """
-        var vars: [String: Any] = ["postId": postID, "body": body]
-        if let parentID { vars["parentId"] = parentID }
+        var vars: [String: Any] = [
+            "post_id": postID,
+            "body": body,
+        ]
+        if let parentID, !parentID.isEmpty {
+            vars["parent_id"] = parentID
+        }
         let result: Response = try await gql.authenticatedRequest(query: mutation, variables: vars)
         return result.addComment.toModel
     }
@@ -203,6 +419,7 @@ final class PostsService {
         videoFileURL: URL,
         mimeType: String = "video/mp4",
         fileExtension: String = "mp4",
+        thumbnailImage: UIImage? = nil,
         onUploadProgress: (@Sendable (UploadProgress) -> Void)? = nil,
         onPublishing: (@Sendable () -> Void)? = nil
     ) async throws -> CountryPost {
@@ -211,6 +428,10 @@ final class PostsService {
             fileExtension: fileExtension,
             mimeType: mimeType,
             onProgress: onUploadProgress
+        )
+        let thumbURL = try await uploadVideoThumbnail(
+            from: videoFileURL,
+            prefetchedImage: thumbnailImage
         )
         onPublishing?()
         let mediaURL = PostMediaPayload.encode(
@@ -225,7 +446,8 @@ final class PostsService {
             countryCode: countryCode,
             cityName: cityName,
             mediaType: "video",
-            mediaURL: mediaURL
+            mediaURL: mediaURL,
+            thumbURL: thumbURL
         )
     }
 
@@ -239,6 +461,7 @@ final class PostsService {
         videoFileURL: URL,
         mimeType: String = "video/mp4",
         fileExtension: String = "mp4",
+        thumbnailImage: UIImage? = nil,
         onUploadProgress: (@Sendable (UploadProgress) -> Void)? = nil,
         onPublishing: (@Sendable () -> Void)? = nil
     ) async throws -> CountryPost {
@@ -247,6 +470,10 @@ final class PostsService {
             fileExtension: fileExtension,
             mimeType: mimeType,
             onProgress: onUploadProgress
+        )
+        let thumbURL = try await uploadVideoThumbnail(
+            from: videoFileURL,
+            prefetchedImage: thumbnailImage
         )
         onPublishing?()
         let mediaURL = PostMediaPayload.encode(
@@ -262,7 +489,8 @@ final class PostsService {
             cityName: cityName,
             title: title,
             mediaType: "video",
-            mediaURL: mediaURL
+            mediaURL: mediaURL,
+            thumbURL: thumbURL
         )
     }
 
@@ -389,26 +617,33 @@ final class PostsService {
         countryCode: String,
         cityName: String? = nil,
         title: String? = nil,
+        visibility: PostVisibility = .public,
         mediaType: String? = nil,
         mediaURL: String? = nil,
-        thumbURL: String? = nil
+        thumbURL: String? = nil,
+        sharedPostID: String? = nil
     ) async throws -> CountryPost {
         struct Response: Decodable { let createPost: GraphQLPost }
+        let normalizedMediaType = (mediaType ?? "").lowercased()
+        let resolvedVisibility = normalizedMediaType == "video" ? PostVisibility.public : visibility
         var input: [String: Any] = [
             "body": body,
             "country_name": countryName,
             "country_code": countryCode.uppercased(),
-            "visibility": "country"
+            "visibility": resolvedVisibility.rawValue
         ]
         if let title { input["title"] = title }
         if let cityName { input["city_name"] = cityName }
         if let mediaType { input["media_type"] = mediaType }
         if let mediaURL { input["media_url"] = mediaURL }
         if let thumbURL { input["thumb_url"] = thumbURL }
+        if let sharedPostID { input["shared_post_id"] = sharedPostID }
 
         let mutation = "mutation($input: CreatePostInput!) { createPost(input: $input) { \(postFields) } }"
         let result: Response = try await gql.authenticatedRequest(query: mutation, variables: ["input": input])
-        return result.createPost.toModel
+        let created = result.createPost.toModel
+        ContentCache.shared.invalidateAllFeeds()
+        return created
     }
 
     func likePost(_ postID: String) async throws {
@@ -421,14 +656,35 @@ final class PostsService {
         let _: EmptyMutation = try await gql.authenticatedRequest(query: mutation, variables: ["postId": postID])
     }
 
+    private static let localBookmarksOnlyKey = "posts.bookmarks.local_only"
+
+    static var usesLocalBookmarksOnly: Bool {
+        get { UserDefaults.standard.bool(forKey: localBookmarksOnlyKey) }
+        set { UserDefaults.standard.set(newValue, forKey: localBookmarksOnlyKey) }
+    }
+
+    static func isUnsupportedBookmarkError(_ error: Error) -> Bool {
+        let message = error.localizedDescription.lowercased()
+        return message.contains("savepost")
+            || message.contains("unsavepost")
+            || message.contains("savedposts")
+            || message.contains("saved_by_me")
+            || message.contains("post_bookmarks")
+            || message.contains("internal server error")
+            || message.contains("internal_server_error")
+            || message.contains("cannot query field")
+            || message.contains("graphql_validation_failed")
+    }
+
     func savedPosts(limit: Int = 80) async throws -> [CountryPost] {
         struct Response: Decodable { let savedPosts: [GraphQLPost] }
         let query = """
         query SavedPosts($limit: Int) {
-          savedPosts(limit: $limit) { \(postFields) }
+          savedPosts(limit: $limit) { \(postFieldsWithBookmarks) }
         }
         """
         let result: Response = try await gql.authenticatedRequest(query: query, variables: ["limit": limit])
+        Self.usesLocalBookmarksOnly = false
         return result.savedPosts.map(\.toModel)
     }
 
@@ -436,10 +692,11 @@ final class PostsService {
         struct Response: Decodable { let savePost: GraphQLPost }
         let mutation = """
         mutation($postId: ID!) {
-          savePost(post_id: $postId) { \(postFields) }
+          savePost(post_id: $postId) { \(postFieldsWithBookmarks) }
         }
         """
         let result: Response = try await gql.authenticatedRequest(query: mutation, variables: ["postId": postID])
+        Self.usesLocalBookmarksOnly = false
         return result.savePost.toModel
     }
 
@@ -447,22 +704,93 @@ final class PostsService {
         struct Response: Decodable { let unsavePost: GraphQLPost }
         let mutation = """
         mutation($postId: ID!) {
-          unsavePost(post_id: $postId) { \(postFields) }
+          unsavePost(post_id: $postId) { \(postFieldsWithBookmarks) }
         }
         """
         let result: Response = try await gql.authenticatedRequest(query: mutation, variables: ["postId": postID])
+        Self.usesLocalBookmarksOnly = false
         return result.unsavePost.toModel
+    }
+
+    func loadBookmarkedPosts(localIDs: Set<String>, limit: Int = 100) async -> [CountryPost] {
+        if Self.usesLocalBookmarksOnly {
+            return await resolveLocalBookmarks(ids: localIDs, limit: limit)
+        }
+        do {
+            return try await savedPosts(limit: limit)
+        } catch {
+            if Self.isUnsupportedBookmarkError(error) {
+                Self.usesLocalBookmarksOnly = true
+                return await resolveLocalBookmarks(ids: localIDs, limit: limit)
+            }
+            if let cached = ContentCache.shared.posts(for: .savedPosts), !cached.isEmpty {
+                return cached
+            }
+            return await resolveLocalBookmarks(ids: localIDs, limit: limit)
+        }
+    }
+
+    func toggleBookmark(for post: CountryPost, saved: Bool) async throws -> CountryPost {
+        if Self.usesLocalBookmarksOnly {
+            return post.withSavedByMe(saved)
+        }
+        do {
+            if saved {
+                return try await savePost(post.id)
+            }
+            return try await unsavePost(post.id)
+        } catch {
+            if Self.isUnsupportedBookmarkError(error) {
+                Self.usesLocalBookmarksOnly = true
+                return post.withSavedByMe(saved)
+            }
+            throw error
+        }
+    }
+
+    private func resolveLocalBookmarks(ids: Set<String>, limit: Int) async -> [CountryPost] {
+        guard !ids.isEmpty else { return [] }
+
+        if let cached = ContentCache.shared.posts(for: .savedPosts) {
+            let filtered = cached
+                .filter { ids.contains($0.id) }
+                .map { $0.withSavedByMe(true) }
+            if !filtered.isEmpty {
+                return filtered.sorted { $0.createdAt > $1.createdAt }
+            }
+        }
+
+        var resolved: [CountryPost] = []
+        for id in ids.prefix(limit) {
+            if let post = try? await getPostByID(id) {
+                resolved.append(post.withSavedByMe(true))
+            }
+        }
+        return resolved.sorted { $0.createdAt > $1.createdAt }
     }
 
     func updatePost(
         _ postID: String,
         title: String? = nil,
-        body: String? = nil
+        body: String? = nil,
+        visibility: PostVisibility? = nil,
+        mediaType: String? = nil,
+        mediaURL: String? = nil,
+        thumbURL: String? = nil,
+        clearMedia: Bool = false
     ) async throws -> CountryPost {
         struct Response: Decodable { let updatePost: GraphQLPost }
         var input: [String: Any] = [:]
         if let title { input["title"] = title }
         if let body { input["body"] = body }
+        if let visibility { input["visibility"] = visibility.rawValue }
+        if clearMedia {
+            input["clear_media"] = true
+        } else if let mediaURL {
+            input["media_url"] = mediaURL
+            if let mediaType { input["media_type"] = mediaType }
+            if let thumbURL { input["thumb_url"] = thumbURL }
+        }
         let mutation = """
         mutation($postId: ID!, $input: UpdatePostInput!) {
           updatePost(post_id: $postId, input: $input) { \(postFields) }
@@ -550,18 +878,35 @@ final class PostsService {
         return result.postsByCountry.map(\.toModel)
     }
 
-    func fetchRecentPosts(limit: Int = 40) async -> [CountryPost] {
+    func fetchRecentPosts(limit: Int = 40, before: String? = nil) async -> [CountryPost] {
         struct Response: Decodable { let recentPosts: [GraphQLPost] }
-        let query = "query($limit: Int) { recentPosts(limit: $limit) { \(postFields) } }"
-        var real: [CountryPost]
-        do {
-            let result: Response = try await gql.authenticatedRequest(
-                query: query,
-                variables: ["limit": limit]
-            )
-            real = result.recentPosts.map(\.toModel)
-        } catch {
-            real = []
+        let query = """
+        query($limit: Int, $before: String) {
+          recentPosts(limit: $limit, before: $before) { \(postFields) }
+        }
+        """
+        var variables: [String: Any] = ["limit": limit]
+        if let before, !before.isEmpty {
+            variables["before"] = before
+        }
+        var real: [CountryPost] = []
+        for attempt in 0..<2 {
+            do {
+                let result: Response = try await gql.authenticatedRequest(
+                    query: query,
+                    variables: variables
+                )
+                real = result.recentPosts.map(\.toModel)
+                break
+            } catch {
+                if attempt == 0 {
+                    _ = try? await Task { @MainActor in
+                        try await AuthService.shared.ensureValidToken()
+                    }.value
+                    continue
+                }
+                real = []
+            }
         }
 
         if real.isEmpty {
@@ -574,23 +919,80 @@ final class PostsService {
         return real
     }
 
-    private func fallbackGlobalPosts(limit: Int) async -> [CountryPost] {
-        let countries = (try? await ProfileService.shared.countries()) ?? []
-        let codes = countries.prefix(14).map(\.iso)
-        guard !codes.isEmpty else { return [] }
+    private func fetchHomeCountryPosts(limit: Int) async -> [CountryPost] {
+        guard let code = await resolvedHomeCountryCode() else { return [] }
+        return (try? await listByCountry(code, limit: limit)) ?? []
+    }
 
-        var batches: [[CountryPost]] = []
-        await withTaskGroup(of: [CountryPost].self) { group in
-            for code in codes {
-                group.addTask {
-                    (try? await self.listByCountry(code, limit: max(6, limit / codes.count))) ?? []
+    private func prepareFeedContext() async {
+        _ = try? await AuthService.shared.ensureValidToken()
+        _ = await resolvedHomeCountryCode()
+    }
+
+    private func resolvedHomeCountryCode() async -> String? {
+        if let code = ContentCache.shared.profileCountryCode(), !code.isEmpty {
+            return code
+        }
+        if let code = ContentCache.shared.cachedProfile()?.countryCode?.uppercased(), !code.isEmpty {
+            ContentCache.shared.setProfileCountryCode(code)
+            return code
+        }
+        if let profile = try? await ProfileService.shared.meProfile(),
+           let code = profile.countryCode?.uppercased(), !code.isEmpty {
+            ContentCache.shared.setProfile(profile)
+            return code
+        }
+        return nil
+    }
+
+    private func currentAuthorID() -> String? {
+        if let userID = ContentCache.shared.cachedProfile()?.userID, !userID.isEmpty {
+            return userID
+        }
+        return AuthService.shared.currentUser?.id
+    }
+
+    private func fetchOwnPosts(limit: Int) async -> [CountryPost] {
+        guard let userID = currentAuthorID() else { return [] }
+        for attempt in 0..<2 {
+            do {
+                let posts = try await listForAuthor(userID, limit: limit)
+                ContentCache.shared.setPosts(posts, for: .profilePosts)
+                return posts
+            } catch {
+                if attempt == 0 {
+                    _ = try? await AuthService.shared.ensureValidToken()
+                    continue
                 }
             }
-            for await batch in group {
-                batches.append(batch)
-            }
         }
+        return ContentCache.shared.posts(for: .profilePosts) ?? []
+    }
+
+    private func fallbackFeedPosts(limit: Int) async -> [CountryPost] {
+        var batches: [[CountryPost]] = []
+
+        let own = await fetchOwnPosts(limit: limit)
+        if !own.isEmpty { batches.append(own) }
+
+        let home = await fetchHomeCountryPosts(limit: limit)
+        if !home.isEmpty { batches.append(home) }
+
+        if batches.isEmpty, let cached = ContentCache.shared.posts(for: .profilePosts) {
+            batches.append(cached)
+        }
+
+        if batches.isEmpty, let code = await resolvedHomeCountryCode() {
+            let retry = (try? await listByCountry(code, limit: limit)) ?? []
+            if !retry.isEmpty { batches.append(retry) }
+        }
+
+        guard !batches.isEmpty else { return [] }
         return mergeFeedSources(batches, limit: limit)
+    }
+
+    private func fallbackGlobalPosts(limit: Int) async -> [CountryPost] {
+        await fallbackFeedPosts(limit: limit)
     }
 
     func mergeFeedSources(_ batches: [[CountryPost]], limit: Int) -> [CountryPost] {
@@ -624,5 +1026,27 @@ final class PostsService {
 
     func mergePosts(real: [CountryPost], demo: [CountryPost], limit: Int) -> [CountryPost] {
         mergeFeedSources([real, demo], limit: limit)
+    }
+
+    private func uploadVideoThumbnail(
+        from videoFileURL: URL,
+        prefetchedImage: UIImage?
+    ) async throws -> String? {
+        let image: UIImage?
+        if let prefetchedImage {
+            image = prefetchedImage
+        } else {
+            image = await VideoCompressionService.shared.generateThumbnail(from: videoFileURL)
+        }
+        guard let image,
+              let data = image.jpegData(compressionQuality: 0.82)
+        else { return nil }
+
+        let upload = try await MediaService.shared.uploadPostMedia(
+            data: data,
+            fileExtension: "jpg",
+            mimeType: "image/jpeg"
+        )
+        return upload.publicURL
     }
 }

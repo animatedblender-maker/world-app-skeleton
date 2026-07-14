@@ -16,16 +16,30 @@ enum FacebookMediaLayout {
 
     static func mediaHeight(for width: CGFloat, post: CountryPost, context: MediaContext = .feed) -> CGFloat {
         let aspect = aspectRatio(for: post, context: context) ?? photoPortraitAspect
-        return min(width / aspect, maxFeedMediaHeight)
+        let natural = width / aspect
+        if usesYouTubeFrame(for: post, context: context) {
+            return natural
+        }
+        return min(natural, maxFeedMediaHeight)
     }
 
     static func feedMediaHeight(for width: CGFloat, post: CountryPost, context: MediaContext = .feed) -> CGFloat {
         mediaHeight(for: width, post: post, context: context)
     }
 
+    static func usesYouTubeFrame(for post: CountryPost, context: MediaContext = .feed) -> Bool {
+        post.hasVideo && !post.isReel && !post.isStory && context != .reel
+    }
+
     static func aspectRatio(for post: CountryPost, context: MediaContext = .feed) -> CGFloat? {
         if post.hasVideo {
-            return context == .reel ? reelAspect : feedVideoAspect
+            if usesYouTubeFrame(for: post, context: context) {
+                return YouTubeMediaLayout.aspect
+            }
+            if post.isReel || context == .reel {
+                return reelAspect
+            }
+            return feedVideoAspect
         }
         if post.hasMedia {
             return photoPortraitAspect

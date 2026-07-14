@@ -241,7 +241,38 @@ enum PostStoryMarker {
     }
 }
 
-struct CountryPost: Identifiable, Hashable, Sendable {
+struct SharedPostPreview: Identifiable, Hashable, Sendable, Codable {
+    let id: String
+    let title: String?
+    let body: String
+    let mediaType: String?
+    let mediaURL: String?
+    let thumbURL: String?
+    let authorID: String
+    let author: PostAuthor?
+
+    var asCountryPost: CountryPost {
+        CountryPost(
+            id: id,
+            title: title,
+            body: body,
+            mediaType: mediaType,
+            mediaURL: mediaURL,
+            thumbURL: thumbURL,
+            createdAt: "",
+            updatedAt: "",
+            authorID: authorID,
+            author: author
+        )
+    }
+
+    var displayExcerpt: String { asCountryPost.displayExcerpt }
+    var hasMedia: Bool { asCountryPost.hasMedia }
+    var hasVideo: Bool { asCountryPost.hasVideo }
+    var feedImageURL: URL? { asCountryPost.feedImageURL }
+}
+
+struct CountryPost: Identifiable, Hashable, Sendable, Codable {
     let id: String
     let title: String?
     let body: String
@@ -250,6 +281,7 @@ struct CountryPost: Identifiable, Hashable, Sendable {
     let thumbURL: String?
     let mediaCaption: String?
     let sharedPostID: String?
+    let sharedPost: SharedPostPreview?
     let visibility: PostVisibility
     let likeCount: Int
     let commentCount: Int
@@ -277,6 +309,7 @@ struct CountryPost: Identifiable, Hashable, Sendable {
         thumbURL: String? = nil,
         mediaCaption: String? = nil,
         sharedPostID: String? = nil,
+        sharedPost: SharedPostPreview? = nil,
         visibility: PostVisibility = .public,
         likeCount: Int = 0,
         commentCount: Int = 0,
@@ -303,6 +336,7 @@ struct CountryPost: Identifiable, Hashable, Sendable {
         self.thumbURL = thumbURL
         self.mediaCaption = mediaCaption
         self.sharedPostID = sharedPostID
+        self.sharedPost = sharedPost
         self.visibility = visibility
         self.likeCount = likeCount
         self.commentCount = commentCount
@@ -322,7 +356,53 @@ struct CountryPost: Identifiable, Hashable, Sendable {
         self.externalRefID = externalRefID
     }
 
-    var createdDate: Date? { ISO8601DateFormatter().date(from: createdAt) }
+    var createdDate: Date? { RelativeTime.parseDate(createdAt) }
+    var updatedDate: Date? { RelativeTime.parseDate(updatedAt) }
+
+    var isEdited: Bool {
+        guard let created = createdDate, let updated = updatedDate else { return false }
+        return updated.timeIntervalSince(created) > 1
+    }
+
+    var privacyLabel: String {
+        switch visibility {
+        case .public: "Public"
+        case .followers: "Followers"
+        case .private: "Only me"
+        case .country: "Country"
+        }
+    }
+
+    func withSavedByMe(_ saved: Bool) -> CountryPost {
+        CountryPost(
+            id: id,
+            title: title,
+            body: body,
+            mediaType: mediaType,
+            mediaURL: mediaURL,
+            thumbURL: thumbURL,
+            mediaCaption: mediaCaption,
+            sharedPostID: sharedPostID,
+            sharedPost: sharedPost,
+            visibility: visibility,
+            likeCount: likeCount,
+            commentCount: commentCount,
+            viewCount: viewCount,
+            likedByMe: likedByMe,
+            savedByMe: saved,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            authorID: authorID,
+            countryName: countryName,
+            countryCode: countryCode,
+            cityName: cityName,
+            author: author,
+            linkURL: linkURL,
+            linkTitle: linkTitle,
+            externalRefType: externalRefType,
+            externalRefID: externalRefID
+        )
+    }
 
     var primaryMediaURL: String? {
         resolvedMediaURLs.first ?? mediaURL ?? thumbURL
@@ -368,8 +448,17 @@ struct CountryPost: Identifiable, Hashable, Sendable {
     }
 
     var isReel: Bool {
-        if (mediaType ?? "").lowercased() == "reel" { return true }
-        return mediaPayload?.isReel == true
+        let type = (mediaType ?? "").lowercased()
+        if type == "reel" || type == "spark" { return true }
+        if mediaPayload?.isReel == true { return true }
+        if let mediaURL {
+            let normalized = mediaURL.lowercased()
+            if normalized.contains("\"reel\":true") || normalized.contains("\"reel\": true") {
+                return true
+            }
+        }
+        if body.contains("__spark__|") || body.contains("__reel__|") { return true }
+        return false
     }
 
     var isStory: Bool {
@@ -396,13 +485,13 @@ struct CountryPost: Identifiable, Hashable, Sendable {
     var displayBody: String { ContentSanitizer.clean(body) ?? "" }
 
     var displayCaption: String? {
-        ContentSanitizer.clean(mediaCaption) ?? (displayBody.isEmpty ? nil : displayBody)
+        ContentSanitizer.clean(mediaCaption)
     }
 
-    var displayHeadline: String {
+    var displayHeadline: String? {
         if let title = displayTitle { return title }
         let text = displayBody
-        if text.isEmpty { return "Untitled entry" }
+        if text.isEmpty { return nil }
         return String(text.prefix(72))
     }
 
@@ -444,6 +533,14 @@ struct StoryViewerContext: Identifiable {
     var storyIndex: Int
 }
 
+struct ReelsViewerContext: Identifiable {
+    let id = UUID()
+    let startingPost: CountryPost
+    let seedPosts: [CountryPost]
+
+    var startingPostID: String { startingPost.id }
+}
+
 enum CreateContentSheet: String, Identifiable {
     case post, video, reel, story
     var id: String { rawValue }
@@ -460,6 +557,21 @@ struct PostComment: Identifiable, Hashable, Sendable {
     let createdAt: String
     let updatedAt: String
     let author: PostAuthor?
+
+    func withParentID(_ parentID: String?) -> PostComment {
+        PostComment(
+            id: id,
+            postID: postID,
+            parentID: parentID,
+            authorID: authorID,
+            body: body,
+            likeCount: likeCount,
+            likedByMe: likedByMe,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            author: author
+        )
+    }
 }
 
 struct Country: Identifiable, Hashable, Sendable {
@@ -478,7 +590,7 @@ struct DetectedLocation: Sendable {
     let source: String
 }
 
-struct Profile: Identifiable, Hashable, Sendable {
+struct Profile: Identifiable, Hashable, Sendable, Codable {
     var id: String { userID }
     let userID: String
     let email: String?
@@ -523,6 +635,10 @@ struct Message: Identifiable, Hashable, Sendable {
 
     var isReaction: Bool {
         Self.parseReaction(body) != nil
+    }
+
+    var reactionInfo: ReactionInfo? {
+        Self.parseReaction(body)
     }
 
     var isCallLog: Bool {
@@ -570,6 +686,13 @@ struct Message: Identifiable, Hashable, Sendable {
 
     var timestampLabel: String {
         RelativeTime.formatClock(createdAt)
+    }
+
+    var isEdited: Bool {
+        guard let created = RelativeTime.parseDate(createdAt),
+              let updated = RelativeTime.parseDate(updatedAt)
+        else { return false }
+        return updated.timeIntervalSince(created) > 1
     }
 
     static func callLogBody(status: String, kind: String, durationSeconds: Int) -> String {
@@ -650,18 +773,41 @@ struct Message: Identifiable, Hashable, Sendable {
         return "\(replyPrefix)id=\(target.id)|text=\(encoded)||\(body)"
     }
 
-    private struct ParsedReaction {
+    struct ReactionInfo: Hashable, Sendable {
         let targetID: String
+        let emoji: String
+        let isActive: Bool
     }
 
-    private static func parseReaction(_ body: String) -> ParsedReaction? {
+    static func buildReactionBody(targetID: String, emoji: String = "❤", active: Bool) -> String {
+        let normalized = emoji.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolved = normalized.isEmpty ? "❤" : normalized
+        return "\(reactionPrefix)target=\(targetID)|emoji=\(resolved)|state=\(active ? 1 : 0)"
+    }
+
+    static func parseReaction(_ body: String) -> ReactionInfo? {
         let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.hasPrefix(reactionPrefix) else { return nil }
-        guard let range = trimmed.range(of: #"target=([^|]+)"#, options: .regularExpression) else { return nil }
-        let segment = String(trimmed[range])
-        let targetID = segment.replacingOccurrences(of: "target=", with: "")
+        guard let targetRange = trimmed.range(of: #"target=([^|]+)"#, options: .regularExpression) else { return nil }
+        let targetID = String(trimmed[targetRange]).replacingOccurrences(of: "target=", with: "")
         guard !targetID.isEmpty else { return nil }
-        return ParsedReaction(targetID: targetID)
+
+        let emoji: String
+        if let emojiRange = trimmed.range(of: #"emoji=([^|]+)"#, options: .regularExpression) {
+            emoji = String(trimmed[emojiRange]).replacingOccurrences(of: "emoji=", with: "")
+        } else {
+            emoji = "❤"
+        }
+
+        let state: Int
+        if let stateRange = trimmed.range(of: #"state=([01])"#, options: .regularExpression) {
+            let raw = String(trimmed[stateRange]).replacingOccurrences(of: "state=", with: "")
+            state = Int(raw) ?? 1
+        } else {
+            state = 1
+        }
+
+        return ReactionInfo(targetID: targetID, emoji: emoji, isActive: state == 1)
     }
 
     private static func parseReply(_ body: String) -> ParsedReply? {
@@ -802,7 +948,7 @@ struct NotificationItem: Identifiable, Hashable, Sendable {
             return nil
         }
         switch normalizedType {
-        case "like", "comment", "comment_like", "comment_reply", "post":
+        case "like", "comment", "comment_like", "comment_reply", "reply", "post":
             return rawID
         default:
             return entityType?.lowercased() == "post" ? rawID : nil
@@ -810,10 +956,23 @@ struct NotificationItem: Identifiable, Hashable, Sendable {
     }
 
     var conversationID: String? {
-        if entityType?.lowercased() == "conversation", let entityID {
-            return entityID
+        let rawID = entityID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let rawID, !rawID.isEmpty else { return nil }
+        if entityType?.lowercased() == "conversation" { return rawID }
+        if type.lowercased() == "message" { return rawID }
+        return nil
+    }
+
+    var actorUserID: String? {
+        if let actorID = actorID?.trimmingCharacters(in: .whitespacesAndNewlines), !actorID.isEmpty {
+            return actorID
         }
-        if type.lowercased() == "message", let entityID {
+        if let userID = actor?.userID.trimmingCharacters(in: .whitespacesAndNewlines), !userID.isEmpty {
+            return userID
+        }
+        if entityType?.lowercased() == "user",
+           let entityID = entityID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !entityID.isEmpty {
             return entityID
         }
         return nil
@@ -933,7 +1092,7 @@ enum ProfileLibrarySection: String, CaseIterable, Identifiable {
         case .posts: "Posts"
         case .savedPosts: "Saved posts"
         case .savedVideos: "Saved videos"
-        case .savedReels: "Saved reels"
+        case .savedReels: MatteryaCopy.savedSparks
         }
     }
 }
@@ -945,14 +1104,14 @@ enum CountryTab: String, CaseIterable, Identifiable {
 }
 
 enum AppTab: String, CaseIterable, Identifiable {
-    case feed, globe, reels, messages, profile
+    case feed, globe, hubs, messages, profile
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .feed: "Feed"
-        case .globe: "Living"
-        case .reels: "Reels"
+        case .globe: "Globe"
+        case .hubs: MatteryaCopy.matteryaHubs
         case .messages: "Messages"
         case .profile: "Profile"
         }
@@ -961,8 +1120,8 @@ enum AppTab: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .feed: "house"
-        case .globe: "play.tv"
-        case .reels: "play.rectangle.fill"
+        case .globe: "globe.americas"
+        case .hubs: "square.grid.2x2"
         case .messages: "bubble.left.and.bubble.right"
         case .profile: "person.circle"
         }
@@ -976,10 +1135,16 @@ enum AppDestination: Hashable, Identifiable {
     case countryFeed(Country)
     case search
     case publicProfile(username: String)
+    case publicProfileByUserID(String)
+    case playWatch(String)
+    case playChannel(username: String)
+    case playChannelID(String)
     case people
     case ads
     case editProfile
     case settings
+    case premium
+    case conversation(String)
 
     var id: String {
         switch self {
@@ -989,10 +1154,16 @@ enum AppDestination: Hashable, Identifiable {
         case .countryFeed(let c): "country-feed-\(c.iso)"
         case .search: "search"
         case .publicProfile(let u): "profile-\(u)"
+        case .publicProfileByUserID(let id): "profile-id-\(id)"
+        case .playWatch(let id): "play-watch-\(id)"
+        case .playChannel(let u): "play-channel-\(u)"
+        case .playChannelID(let id): "play-channel-id-\(id)"
         case .people: "people"
         case .ads: "ads"
         case .editProfile: "edit-profile"
         case .settings: "settings"
+        case .premium: "premium"
+        case .conversation(let id): "conversation-\(id)"
         }
     }
 }
@@ -1013,7 +1184,15 @@ enum RelativeTime {
         return formatter.string(from: date)
     }
 
-    private static func parseDate(_ iso: String) -> Date? {
+    static func formatDateTime(_ iso: String) -> String {
+        guard let date = parseDate(iso) else { return "" }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+
+    static func parseDate(_ iso: String) -> Date? {
         let trimmed = iso.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !ContentSanitizer.looksLikeId(trimmed) else { return nil }
 

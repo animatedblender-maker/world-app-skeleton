@@ -107,6 +107,11 @@ struct AdPrerollView: View {
         isLoading = true
         defer { isLoading = false }
 
+        if SubscriptionService.shared.isPremium {
+            onComplete()
+            return
+        }
+
         do {
             var slot = try await withTimeout(seconds: 3) {
                 try await AdsService.shared.serveVideoAd(

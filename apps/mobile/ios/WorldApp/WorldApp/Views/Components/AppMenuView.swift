@@ -82,14 +82,17 @@ private struct AppMenuPanel: View {
                 ) {
                     appState.openNotificationsFromMenu()
                 }
+                menuRow(MatteryaCopy.matteryaHubs, icon: "square.grid.2x2") {
+                    appState.openPlayFromMenu()
+                }
                 menuRow("Discover People", icon: "person.2") {
                     appState.openFromMenu(.people)
                 }
                 menuRow("Ads Manager", icon: "megaphone") {
                     appState.openFromMenu(.ads)
                 }
-                menuRow("Edit Profile", icon: "pencil") {
-                    appState.openFromMenu(.editProfile)
+                menuRow("Invite friends", icon: "person.badge.plus") {
+                    appState.inviteFriendsFromMenu()
                 }
                 menuRow("Saved", icon: "bookmark") {
                     appState.openSavedFromMenu()

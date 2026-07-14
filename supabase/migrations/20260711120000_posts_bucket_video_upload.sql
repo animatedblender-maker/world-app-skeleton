@@ -40,3 +40,15 @@ as permissive
 for select
 to public
 using (bucket_id = 'posts');
+
+-- Authenticated users upload into their own posts folder.
+drop policy if exists "posts_insert_own" on storage.objects;
+create policy "posts_insert_own"
+on storage.objects
+as permissive
+for insert
+to authenticated
+with check (
+  bucket_id = 'posts'
+  and (storage.foldername(name))[1] = auth.uid()::text
+);

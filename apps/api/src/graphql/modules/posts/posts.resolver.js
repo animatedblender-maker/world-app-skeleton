@@ -22,6 +22,15 @@ export const postsResolvers = {
       const limit = typeof args.limit === 'number' ? args.limit : 25;
       return await svc().postsByAuthor(args.user_id ?? '', limit, ctx.user?.id ?? null);
     },
+    recentPosts: async (_, args, ctx) => {
+      const limit = typeof args.limit === 'number' ? args.limit : 25;
+      const before = args?.before ?? null;
+      return await svc().recentPosts(limit, ctx.user?.id ?? null, before);
+    },
+    searchPosts: async (_, args, ctx) => {
+      const limit = typeof args.limit === 'number' ? args.limit : 25;
+      return await svc().searchPosts(args.query ?? '', limit, ctx.user?.id ?? null);
+    },
     postById: async (_, args, ctx) => {
       if (!args?.post_id)
         throw new Error('post_id is required.');
@@ -37,6 +46,11 @@ export const postsResolvers = {
         throw new Error('post_id is required.');
       const limit = typeof args.limit === 'number' ? args.limit : 25;
       return await svc().likesByPost(args.post_id, limit, ctx.user?.id ?? null);
+    },
+    savedPosts: async (_, args, ctx) => {
+      const user = requireAuth(ctx);
+      const limit = typeof args.limit === 'number' ? args.limit : 25;
+      return await svc().savedPosts(user.id, limit);
     },
   },
 
@@ -66,17 +80,37 @@ export const postsResolvers = {
       if (!args?.post_id) throw new Error('post_id is required.');
       return await svc().unlikePost(args.post_id, user.id);
     },
+    savePost: async (_, args, ctx) => {
+      const user = requireAuth(ctx);
+      if (!args?.post_id) throw new Error('post_id is required.');
+      return await svc().savePost(args.post_id, user.id);
+    },
+    unsavePost: async (_, args, ctx) => {
+      const user = requireAuth(ctx);
+      if (!args?.post_id) throw new Error('post_id is required.');
+      return await svc().unsavePost(args.post_id, user.id);
+    },
     addComment: async (_, args, ctx) => {
       const user = requireAuth(ctx);
       if (!args?.post_id) throw new Error('post_id is required.');
       if (!args?.body) throw new Error('body is required.');
-      return await svc().addComment(args.post_id, user.id, args.body);
+      return await svc().addComment(args.post_id, user.id, args.body, args.parent_id ?? null);
     },
     reportPost: async (_, args, ctx) => {
       const user = requireAuth(ctx);
       if (!args?.post_id) throw new Error('post_id is required.');
       if (!args?.reason) throw new Error('reason is required.');
       return await svc().reportPost(args.post_id, user.id, args.reason);
+    },
+    likeComment: async (_, args, ctx) => {
+      const user = requireAuth(ctx);
+      if (!args?.comment_id) throw new Error('comment_id is required.');
+      return await svc().likeComment(args.comment_id, user.id);
+    },
+    unlikeComment: async (_, args, ctx) => {
+      const user = requireAuth(ctx);
+      if (!args?.comment_id) throw new Error('comment_id is required.');
+      return await svc().unlikeComment(args.comment_id, user.id);
     },
   },
 };

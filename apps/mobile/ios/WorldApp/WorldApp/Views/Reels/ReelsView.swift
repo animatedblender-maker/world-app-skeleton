@@ -17,11 +17,11 @@ struct ReelsView: View {
             Color.black.ignoresSafeArea()
 
             if isLoading {
-                ProgressView("Loading reels…").tint(.white)
+                ProgressView("Loading \(MatteryaCopy.sparks.lowercased())…").tint(.white)
             } else if let errorMessage {
-                ContentUnavailableView("Reels unavailable", systemImage: "video.slash", description: Text(errorMessage))
+                ContentUnavailableView("\(MatteryaCopy.sparks) unavailable", systemImage: "video.slash", description: Text(errorMessage))
             } else if posts.isEmpty {
-                ContentUnavailableView("No videos yet", systemImage: "video", description: Text("No reels for \(country.name) yet."))
+                ContentUnavailableView("No videos yet", systemImage: "video", description: Text("\(MatteryaCopy.noSparksForCountry) \(country.name) yet."))
             } else {
                 GeometryReader { geometry in
                     ScrollView(.vertical, showsIndicators: false) {
@@ -59,7 +59,8 @@ struct ReelsView: View {
                     Spacer()
                     Color.clear.frame(width: 44)
                 }
-                .padding()
+                .safeAreaPadding(.top, 6)
+                .padding(.horizontal, Theme.pagePadding)
                 Spacer()
             }
         }
@@ -82,9 +83,15 @@ struct ReelsView: View {
 
 private struct ReelCard: View {
     @Environment(AppState.self) private var appState
-    let post: CountryPost
+    @State private var post: CountryPost
     let country: Country
     let isActive: Bool
+
+    init(post: CountryPost, country: Country, isActive: Bool) {
+        self.country = country
+        self.isActive = isActive
+        _post = State(initialValue: post)
+    }
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
@@ -109,9 +116,7 @@ private struct ReelCard: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 Button {
-                    if let username = post.author?.username {
-                        appState.navigate(to: .publicProfile(username: username))
-                    }
+                    appState.openPublicProfile(username: post.author?.username, userID: post.authorID)
                 } label: {
                     HStack {
                         AvatarView(url: post.author?.avatarURL, seed: post.authorID, size: 36)
@@ -122,17 +127,31 @@ private struct ReelCard: View {
                 }
                 .buttonStyle(.plain)
 
-                Text(post.displayCaption ?? post.displayHeadline)
-                    .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.9))
-                    .lineLimit(4)
+                if let text = post.displayCaption ?? post.displayHeadline {
+                    Text(text)
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.9))
+                        .lineLimit(4)
+                }
 
                 HStack {
-                    Label("\(post.likeCount)", systemImage: "heart")
-                    Label("\(post.commentCount)", systemImage: "bubble.right")
+                    Button {
+                        Task { await toggleLike() }
+                    } label: {
+                        Label("\(post.likeCount)", systemImage: post.likedByMe ? "heart.fill" : "heart")
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        appState.openPostInFeed(postID: post.id)
+                    } label: {
+                        Label("\(post.commentCount)", systemImage: "bubble.right")
+                    }
+                    .buttonStyle(.plain)
+
                     Spacer()
                     Button("Open post") {
-                        appState.navigate(to: .post(post.id))
+                        appState.openPostInFeed(postID: post.id)
                     }
                     .font(.caption.weight(.bold))
                 }
@@ -142,5 +161,32 @@ private struct ReelCard: View {
             .padding(20)
             .padding(.bottom, 40)
         }
+    }
+
+    private func toggleLike() async {
+        do {
+            if post.likedByMe {
+                try await PostsService.shared.unlikePost(post.id)
+                post = copyPost(likedByMe: false, likeCount: max(0, post.likeCount - 1))
+            } else {
+                try await PostsService.shared.likePost(post.id)
+                post = copyPost(likedByMe: true, likeCount: post.likeCount + 1)
+            }
+        } catch {
+            appState.showToast(error.localizedDescription, style: .error)
+        }
+    }
+
+    private func copyPost(likedByMe: Bool, likeCount: Int) -> CountryPost {
+        CountryPost(
+            id: post.id, title: post.title, body: post.body,
+            mediaType: post.mediaType, mediaURL: post.mediaURL, thumbURL: post.thumbURL,
+            mediaCaption: post.mediaCaption, sharedPostID: post.sharedPostID,
+            visibility: post.visibility, likeCount: likeCount, commentCount: post.commentCount,
+            viewCount: post.viewCount, likedByMe: likedByMe, savedByMe: post.savedByMe,
+            createdAt: post.createdAt, updatedAt: post.updatedAt,
+            authorID: post.authorID, countryName: post.countryName,
+            countryCode: post.countryCode, cityName: post.cityName, author: post.author
+        )
     }
 }

@@ -44,7 +44,7 @@ struct FloatingPostsOverlay: View {
     }
 
     private func shortText(_ post: CountryPost) -> String {
-        let text = post.displayCaption ?? post.displayHeadline
+        let text = post.displayCaption ?? post.displayHeadline ?? post.authorDisplayName
         return String(text.prefix(28))
     }
 

@@ -22,10 +22,11 @@ struct EditProfileView: View {
         Form {
             Section("Avatar") {
                 HStack {
-                    AvatarView(
+                    ExpandableProfileAvatar(
                         url: appState.currentProfile?.avatarURL,
                         seed: appState.currentProfile?.userID ?? "me",
-                        size: 64
+                        size: 64,
+                        displayName: appState.currentProfile?.displayName
                     )
                     PhotosPicker(selection: $selectedPhoto, matching: .images) {
                         Text("Change avatar")

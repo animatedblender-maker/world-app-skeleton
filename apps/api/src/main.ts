@@ -184,7 +184,28 @@ app.use(
 );
 
 // ✅ health endpoint (typed _req to avoid implicit any)
-app.get('/health', (_req: Request, res: Response) => res.json({ ok: true }));
+app.get('/health', (_req: Request, res: Response) =>
+  res.json({
+    ok: true,
+    features: {
+      iosPushRoutes: true,
+      iosPushStatus: true,
+    },
+    apnsConfigured: apns.isConfigured(),
+  })
+);
+
+app.get('/push/capabilities', (_req: Request, res: Response) => {
+  const apnsConfig = apns.getServerConfig();
+  return res.json({
+    ok: true,
+    webPushConfigured: Boolean(process.env.PUSH_VAPID_PUBLIC_KEY && process.env.PUSH_VAPID_PRIVATE_KEY),
+    apnsConfigured: apns.isConfigured(),
+    apnsProduction: apnsConfig.production,
+    apnsBundleId: apnsConfig.bundleId,
+    iosPushRoutes: true,
+  });
+});
 
 app.get('/admin/bootstrap', async (req: Request, res: Response) => {
   if (!hasAdminAccess(req)) return res.status(401).json({ error: 'unauthorized' });
@@ -329,16 +350,60 @@ app.post('/push/ios/unregister', async (req: Request, res: Response) => {
   return res.json({ ok: true });
 });
 
+app.get('/push/ios/status', async (req: Request, res: Response) => {
+  const user = await getUserFromRequest(req);
+  if (!user?.id) return res.status(401).json({ error: 'unauthenticated' });
+
+  const tokens = await apns.getTokenStatsForUser(user.id);
+  const config = apns.getServerConfig();
+  return res.json({
+    ok: true,
+    apnsConfigured: apns.isConfigured(),
+    apnsProduction: config.production,
+    bundleId: config.bundleId,
+    tokens,
+  });
+});
+
 app.post('/push/ios/test', async (req: Request, res: Response) => {
   const user = await getUserFromRequest(req);
   if (!user?.id) return res.status(401).json({ error: 'unauthenticated' });
 
-  await apns.sendToUser(user.id, {
+  if (!apns.isConfigured()) {
+    return res.status(503).json({
+      ok: false,
+      error: 'apns_not_configured',
+      message: 'Matterya API server is missing APNs credentials (APNS_TEAM_ID, APNS_KEY_ID, APNS_PRIVATE_KEY).',
+    });
+  }
+
+  const tokens = await apns.getTokenStatsForUser(user.id);
+  if (tokens.alert < 1) {
+    return res.status(404).json({
+      ok: false,
+      error: 'no_alert_tokens',
+      message: 'No alert push token registered for this account on the server.',
+      tokens,
+    });
+  }
+
+  const result = await apns.sendToUser(user.id, {
     title: 'Matterya',
     body: 'Push notifications are working.',
     data: { type: 'test' },
   });
-  return res.json({ ok: true });
+
+  if (result.delivered < 1) {
+    return res.status(502).json({
+      ok: false,
+      error: 'apns_delivery_failed',
+      message: 'Apple rejected the push or delivery failed.',
+      result,
+      tokens,
+    });
+  }
+
+  return res.json({ ok: true, result, tokens });
 });
 
 app.post('/livekit/token', async (req: Request, res: Response) => {

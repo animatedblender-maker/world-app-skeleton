@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct NewsDetailView: View {
     @Environment(AppState.self) private var appState
@@ -7,7 +8,6 @@ struct NewsDetailView: View {
 
     @State private var item: ExternalNewsItem?
     @State private var comments: [ExternalNewsComment] = []
-    @State private var commentDraft = ""
     @State private var shareDraft = ""
     @State private var commentsOpen = false
     @State private var isLoading = true
@@ -80,6 +80,7 @@ struct NewsDetailView: View {
             Button(commentsOpen ? "Hide comments" : "Comments (\(article.commentCount))") {
                 commentsOpen.toggle()
             }
+            Button("Share") { shareExternally(article) }
             if let url = URL(string: article.url) {
                 Link("Source", destination: url)
             }
@@ -98,22 +99,8 @@ struct NewsDetailView: View {
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
 
         if commentsOpen {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Comments").font(.headline)
-                ForEach(comments) { comment in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(comment.author?.displayName ?? "Member")
-                            .font(.caption.weight(.bold))
-                        Text(comment.body).font(.subheadline)
-                    }
-                    .padding(10)
-                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
-                }
-                HStack {
-                    TextField("Add comment…", text: $commentDraft)
-                    Button("Send") { Task { await addComment(article) } }
-                        .disabled(commentDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
+            NewsCommentsSection(newsItemID: article.id, comments: $comments) { message in
+                errorMessage = message
             }
         }
     }
@@ -139,16 +126,10 @@ struct NewsDetailView: View {
         }
     }
 
-    private func addComment(_ article: ExternalNewsItem) async {
-        let body = commentDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !body.isEmpty else { return }
-        do {
-            let comment = try await NewsService.shared.addComment(article.id, body: body)
-            comments.append(comment)
-            commentDraft = ""
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+    private func shareExternally(_ article: ExternalNewsItem) {
+        let items = ShareService.shared.activityItems(for: .news(article))
+        guard let root = UIApplication.shared.firstKeyWindow?.rootViewController else { return }
+        root.topMostViewController().presentShareSheet(items: items)
     }
 
     private func share(_ article: ExternalNewsItem) async {

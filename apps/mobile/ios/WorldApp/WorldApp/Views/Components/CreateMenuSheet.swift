@@ -6,7 +6,7 @@ struct CreateMenuOverlay: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             if appState.showCreateMenu {
-                Color.black.opacity(0.42)
+                Theme.ink.opacity(0.16)
                     .ignoresSafeArea()
                     .onTapGesture { close() }
 
@@ -15,13 +15,13 @@ struct CreateMenuOverlay: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .animation(.easeOut(duration: 0.24), value: appState.showCreateMenu)
+        .animation(.easeOut(duration: 0.22), value: appState.showCreateMenu)
         .allowsHitTesting(appState.showCreateMenu)
-        .zIndex(180)
+        .zIndex(500)
     }
 
     private func close() {
-        withAnimation(.easeOut(duration: 0.24)) {
+        withAnimation(.easeOut(duration: 0.22)) {
             appState.showCreateMenu = false
         }
     }
@@ -32,125 +32,124 @@ private struct CreateMenuPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 4) {
+            Capsule()
+                .fill(Theme.border)
+                .frame(width: 36, height: 4)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 10)
+                .padding(.bottom, 12)
+
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
                     Text("Create")
-                        .font(.system(size: 28, weight: .regular, design: .serif))
+                        .font(.system(size: 24, weight: .regular, design: .serif))
                         .foregroundStyle(Theme.ink)
-                    Text("Share something with your country")
+                    Text("Share with your country")
                         .font(.caption)
                         .foregroundStyle(Theme.inkMuted)
                 }
-
                 Spacer()
-
                 Button { close() } label: {
                     Image(systemName: "xmark")
                         .font(.body.weight(.semibold))
                         .foregroundStyle(Theme.inkMuted)
                         .frame(width: 32, height: 32)
-                        .background(Theme.canvasMuted, in: Circle())
                 }
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, 20)
-            .padding(.top, 20)
-            .padding(.bottom, 16)
+            .padding(.bottom, 10)
 
             Theme.divider.frame(height: 0.5)
 
-            VStack(spacing: 10) {
-                createOption(
+            VStack(spacing: 0) {
+                createRow(
                     title: "Post",
-                    subtitle: "Share an update with your country",
-                    icon: "square.and.pencil",
-                    tint: Theme.accentBright
+                    subtitle: "Share an update",
+                    icon: "square.and.pencil"
                 ) {
                     Task { await appState.presentCreateSheet(.post) }
                 }
 
-                createOption(
+                createRow(
                     title: "Video",
-                    subtitle: "Share to feed and Living",
-                    icon: "play.tv",
-                    tint: Theme.accent
+                    subtitle: MatteryaCopy.longFormOnHubs,
+                    icon: "film"
                 ) {
                     Task { await appState.presentCreateSheet(.video) }
                 }
 
-                createOption(
-                    title: "Reel",
-                    subtitle: "Publish a short vertical video",
-                    icon: "play.rectangle.fill",
-                    tint: Theme.facebookBlue
+                createRow(
+                    title: MatteryaCopy.spark,
+                    subtitle: MatteryaCopy.sparksOnHubs,
+                    icon: "sparkles"
                 ) {
                     Task { await appState.presentCreateSheet(.reel) }
                 }
 
-                createOption(
-                    title: "Story",
-                    subtitle: "24-hour photo or video moment",
-                    icon: "circle.dashed",
-                    tint: Color(red: 0.85, green: 0.32, blue: 0.55)
+                createRow(
+                    title: "Moment",
+                    subtitle: "Disappears in 24 hours",
+                    icon: "circle.dashed"
                 ) {
                     Task { await appState.presentCreateSheet(.story) }
                 }
             }
-            .padding(.horizontal, Theme.pagePadding)
-            .padding(.vertical, 16)
+            .padding(.vertical, 6)
         }
-        .background(
-            Theme.surface
-                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .frame(maxWidth: .infinity)
+        .background(Theme.surface)
+        .clipShape(
+            UnevenRoundedRectangle(
+                topLeadingRadius: 18,
+                topTrailingRadius: 18,
+                style: .continuous
+            )
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Theme.border, lineWidth: 0.5)
+            UnevenRoundedRectangle(
+                topLeadingRadius: 18,
+                topTrailingRadius: 18,
+                style: .continuous
+            )
+            .stroke(Theme.border, lineWidth: 0.5)
         )
-        .shadow(color: Theme.ink.opacity(0.14), radius: 24, y: -4)
-        .padding(.horizontal, 10)
+        .shadow(color: Theme.ink.opacity(0.08), radius: 18, y: -4)
     }
 
-    private func createOption(
+    private func createRow(
         title: String,
         subtitle: String,
         icon: String,
-        tint: Color,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             HStack(spacing: 14) {
                 Image(systemName: icon)
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 48, height: 48)
-                    .background(tint, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .font(.system(size: 20))
+                    .frame(width: 24)
+                    .foregroundStyle(Theme.accent)
 
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.headline.weight(.semibold))
+                        .font(.body.weight(.medium))
                         .foregroundStyle(Theme.ink)
                     Text(subtitle)
                         .font(.caption)
                         .foregroundStyle(Theme.inkMuted)
-                        .multilineTextAlignment(.leading)
                 }
 
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .background(Theme.canvasMuted, in: RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
-                    .stroke(Theme.border, lineWidth: 0.5)
-            )
+            .contentShape(Rectangle())
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
         }
         .buttonStyle(.plain)
     }
 
     private func close() {
-        withAnimation(.easeOut(duration: 0.24)) {
+        withAnimation(.easeOut(duration: 0.22)) {
             appState.showCreateMenu = false
         }
     }

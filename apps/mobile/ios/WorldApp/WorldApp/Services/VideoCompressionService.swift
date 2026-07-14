@@ -1,5 +1,36 @@
 import AVFoundation
 import Foundation
+import SwiftUI
+import UIKit
+import UniformTypeIdentifiers
+
+struct PickedVideoFile: Transferable {
+    let url: URL
+    let suggestedExtension: String
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(importedContentType: .mpeg4Movie) { received in
+            try Self.importCopy(from: received.file, defaultExtension: "mp4")
+        }
+        FileRepresentation(importedContentType: .quickTimeMovie) { received in
+            try Self.importCopy(from: received.file, defaultExtension: "mov")
+        }
+        FileRepresentation(importedContentType: .movie) { received in
+            try Self.importCopy(from: received.file, defaultExtension: "mov")
+        }
+    }
+
+    private static func importCopy(from source: URL, defaultExtension: String) throws -> PickedVideoFile {
+        let ext = source.pathExtension.isEmpty ? defaultExtension : source.pathExtension.lowercased()
+        let destination = FileManager.default.temporaryDirectory
+            .appendingPathComponent("picked-\(UUID().uuidString).\(ext)")
+        if FileManager.default.fileExists(atPath: destination.path) {
+            try FileManager.default.removeItem(at: destination)
+        }
+        try FileManager.default.copyItem(at: source, to: destination)
+        return PickedVideoFile(url: destination, suggestedExtension: ext)
+    }
+}
 
 enum VideoCompressionError: LocalizedError {
     case exportFailed(String)
@@ -97,12 +128,14 @@ final class VideoCompressionService {
         session.outputFileType = .mp4
         session.shouldOptimizeForNetworkUse = true
 
+        nonisolated(unsafe) let exportSession = session
+
         let progressTask: Task<Void, Never>? = onProgress.map { handler in
             Task { @MainActor in
                 handler(0)
                 while !Task.isCancelled {
-                    handler(Double(session.progress))
-                    switch session.status {
+                    handler(Double(exportSession.progress))
+                    switch exportSession.status {
                     case .completed, .failed, .cancelled:
                         return
                     default:
@@ -114,9 +147,9 @@ final class VideoCompressionService {
         }
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            session.exportAsynchronously {
+            exportSession.exportAsynchronously {
                 progressTask?.cancel()
-                switch session.status {
+                switch exportSession.status {
                 case .completed:
                     if let onProgress {
                         Task { @MainActor in onProgress(1) }
@@ -125,7 +158,7 @@ final class VideoCompressionService {
                 case .cancelled:
                     continuation.resume(throwing: VideoCompressionError.exportFailed("Video compression was cancelled."))
                 case .failed:
-                    let message = session.error?.localizedDescription ?? "Video compression failed."
+                    let message = exportSession.error?.localizedDescription ?? "Video compression failed."
                     continuation.resume(throwing: VideoCompressionError.exportFailed(message))
                 default:
                     continuation.resume(throwing: VideoCompressionError.exportFailed("Video compression did not finish."))
@@ -149,5 +182,15 @@ final class VideoCompressionService {
         }
         let kilobytes = Double(bytes) / 1024
         return String(format: "%.0f KB", kilobytes)
+    }
+
+    func generateThumbnail(from url: URL, at seconds: Double = 0) async -> UIImage? {
+        let asset = AVURLAsset(url: url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 1280, height: 1280)
+        let time = CMTime(seconds: max(0, seconds), preferredTimescale: 600)
+        guard let cgImage = try? generator.copyCGImage(at: time, actualTime: nil) else { return nil }
+        return UIImage(cgImage: cgImage)
     }
 }

@@ -9,13 +9,19 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         // VoIP + CallKit must exist synchronously so a cold-start push can take over the screen.
         VoIPPushService.shared.bootstrap()
         _ = CallKitManager.shared
+        application.registerForRemoteNotifications()
+
+        if let remotePayload = launchOptions?[.remoteNotification] as? [AnyHashable: Any] {
+            _ = IncomingCallWake.handleIfNeeded(remotePayload)
+        }
 
         Task { @MainActor in
             PushNotificationService.shared.configure()
+            VoIPPushService.shared.bootstrap()
             if AuthService.shared.isAuthenticated {
                 CallSessionManager.shared.bootstrap()
-                await PushNotificationService.shared.syncWithServer(force: true)
             }
+            await PushNotificationService.shared.syncWithServer(force: true)
         }
         return true
     }
@@ -43,9 +49,28 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         didReceiveRemoteNotification userInfo: [AnyHashable: Any],
         fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
     ) {
+        var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
+        backgroundTaskID = application.beginBackgroundTask {
+            if backgroundTaskID != .invalid {
+                application.endBackgroundTask(backgroundTaskID)
+                backgroundTaskID = .invalid
+            }
+        }
+
+        let callPresented = IncomingCallWake.handleIfNeeded(userInfo)
+
         Task { @MainActor in
-            let handled = await PushNotificationService.shared.handleRemoteNotification(userInfo)
+            let handled: Bool
+            if callPresented {
+                handled = true
+            } else {
+                handled = await PushNotificationService.shared.handleRemoteNotification(userInfo)
+            }
             completionHandler(handled ? .newData : .noData)
+            if backgroundTaskID != .invalid {
+                application.endBackgroundTask(backgroundTaskID)
+                backgroundTaskID = .invalid
+            }
         }
     }
 }

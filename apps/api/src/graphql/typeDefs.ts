@@ -258,6 +258,10 @@ export const typeDefs = `#graphql
     title: String
     body: String
     visibility: String
+    media_type: String
+    media_url: String
+    thumb_url: String
+    clear_media: Boolean
   }
 
   input AdCampaignInput {
@@ -387,6 +391,20 @@ export const typeDefs = `#graphql
     lastSeen: String!
   }
 
+  type GlobePresenceDot {
+    lat: Float!
+    lng: Float!
+    count: Int!
+  }
+
+  type GlobePresenceDotsResult {
+    dots: [GlobePresenceDot!]!
+    totalOnline: Int!
+    precision: Int!
+    maxPoints: Int!
+    computedAt: String!
+  }
+
   type StreamingConnection {
     platform: String!
     is_linked: Boolean!
@@ -468,6 +486,7 @@ export const typeDefs = `#graphql
     # Presence stats
     globalStats: GlobalStats!
     countryStats(iso: String!): CountryStats!
+    globePresenceDots(precision: Int = 3, maxPoints: Int = 4096): GlobePresenceDotsResult!
 
     # Mood / Trends
     globalMood: CountryMood!
@@ -478,6 +497,7 @@ export const typeDefs = `#graphql
     # Posts / social
     postsByCountry(country_code: String!, limit: Int): [Post!]!
     postsByAuthor(user_id: ID!, limit: Int): [Post!]!
+    recentPosts(limit: Int, before: String): [Post!]!
     savedPosts(limit: Int): [Post!]!
     searchPosts(query: String!, limit: Int): [Post!]!
     postById(post_id: ID!): Post
@@ -567,6 +587,8 @@ export const typeDefs = `#graphql
     ): Message!
     updateMessage(message_id: ID!, body: String!): Message!
     deleteMessage(message_id: ID!): Boolean!
+    archiveConversation(conversation_id: ID!): Boolean!
+    deleteConversation(conversation_id: ID!): Boolean!
 
     # Notifications
     markNotificationRead(id: ID!): Boolean!

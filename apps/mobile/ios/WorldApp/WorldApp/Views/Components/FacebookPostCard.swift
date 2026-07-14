@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 
 struct FacebookPostCard: View {
@@ -11,8 +12,11 @@ struct FacebookPostCard: View {
     var onLikeToggle: (() -> Void)?
     var onOpenPost: () -> Void
     var onOpenVideo: (() -> Void)? = nil
+    var onOpenReel: (() -> Void)? = nil
     var onPostDeleted: ((String) -> Void)?
     var onPostUpdated: ((CountryPost) -> Void)?
+    var expandsCommentsInline: Bool = false
+    var viewingCountryISO: String? = nil
 
     @State private var commentsExpanded = false
     @State private var inlineComments: [PostComment] = []
@@ -28,15 +32,63 @@ struct FacebookPostCard: View {
         return post.authorID == userID
     }
 
+    private var opensAsSpark: Bool {
+        if post.isReel || PlayPlatformBridge.isReelVideo(post) { return true }
+        if post.hasVideo,
+           FacebookMediaLayout.aspectRatio(for: post, context: mediaContext) == FacebookMediaLayout.reelAspect {
+            return true
+        }
+        return false
+    }
+
+    private var postedFromLabel: String? {
+        guard let viewing = viewingCountryISO?.uppercased(),
+              let postISO = post.countryCode?.uppercased(),
+              !postISO.isEmpty,
+              postISO != viewing
+        else { return nil }
+
+        let country = post.countryName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedCountry = (country?.isEmpty == false) ? country! : postISO
+        if let city = post.cityName?.trimmingCharacters(in: .whitespacesAndNewlines), !city.isEmpty {
+            return "Posted from \(city), \(resolvedCountry)"
+        }
+        return "Posted from \(resolvedCountry)"
+    }
+
+    @ViewBuilder
+    private var postedFromBadge: some View {
+        if let postedFromLabel {
+            Label(postedFromLabel, systemImage: "mappin.and.ellipse")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Theme.accent)
+                .lineLimit(2)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Theme.accent.opacity(0.1), in: Capsule())
+                .accessibilityLabel(postedFromLabel)
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if showsAuthorHeader {
                 authorHeader
-            } else {
+            } else if showsPlayLinkInFeed || !usesYouTubeVideoFrame || !post.hasMedia {
                 journalHeader
             }
 
-            if post.hasMedia {
+            if let embed = post.sharedPost {
+                SharedPostEmbedView(embed: embed)
+            } else if post.sharedPostID != nil {
+                SharedPostLoadingEmbed(postID: post.sharedPostID!)
+            }
+
+            if showsPlayLinkInFeed {
+                PlayFeedLinkCard(post: post) {
+                    openPlayVideo()
+                }
+            } else if post.hasMedia {
                 media
             }
 
@@ -49,6 +101,8 @@ struct FacebookPostCard: View {
                     .padding(.horizontal, Theme.pagePadding)
                     .padding(.top, post.hasMedia ? 12 : 0)
                     .padding(.bottom, 4)
+                    .contentShape(Rectangle())
+                    .onTapGesture { openPrimaryDestination() }
             }
 
             actions
@@ -85,9 +139,9 @@ struct FacebookPostCard: View {
             }
         }
         .background(Theme.surface)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
+        .clipShape(cardShape)
         .overlay(
-            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+            cardShape
                 .stroke(Theme.border, lineWidth: 0.5)
         )
 
@@ -137,16 +191,18 @@ struct FacebookPostCard: View {
                 }
                 .buttonStyle(.plain)
 
-                Text(RelativeTime.format(post.createdAt))
-                    .font(.caption2)
-                    .foregroundStyle(Theme.inkMuted)
+                postTimestampRow
+
+                postedFromBadge
             }
 
             Spacer(minLength: 8)
+                .contentShape(Rectangle())
+                .onTapGesture { openPrimaryDestination() }
 
             postOptionsMenu
 
-            Button(action: onOpenPost) {
+            Button(action: openPrimaryDestination) {
                 Image(systemName: "arrow.up.right")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Theme.inkMuted)
@@ -177,29 +233,54 @@ struct FacebookPostCard: View {
                         Text(post.authorDisplayName)
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(Theme.ink)
+                            .lineLimit(1)
                     }
                     .buttonStyle(.plain)
                 }
 
-                Text(post.displayHeadline)
-                    .font(.system(size: 22, weight: .regular, design: .serif))
-                    .foregroundStyle(Theme.ink)
-                    .multilineTextAlignment(.leading)
-                    .lineLimit(3)
-            }
+                postedFromBadge
 
-            Spacer(minLength: 12)
+                if showsPlayLinkInFeed {
+                    Label(MatteryaCopy.publishedOnHubs, systemImage: "play.tv")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.accentBright)
+                } else if let headline = post.displayHeadline {
+                    Text(headline)
+                        .postHeadlineStyle(lineLimit: 4)
+                        .contentShape(Rectangle())
+                        .onTapGesture { openPrimaryDestination() }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(1)
+
+            Spacer(minLength: 8)
+                .contentShape(Rectangle())
+                .onTapGesture { openPrimaryDestination() }
 
             VStack(alignment: .trailing, spacing: 8) {
                 postOptionsMenu
-                Text(RelativeTime.format(post.createdAt))
-                    .font(.caption2)
-                    .foregroundStyle(Theme.inkMuted)
+                postTimestampRow
             }
         }
         .padding(.horizontal, Theme.pagePadding)
         .padding(.top, 20)
         .padding(.bottom, 14)
+    }
+
+    private var postTimestampRow: some View {
+        HStack(spacing: 6) {
+            Text(RelativeTime.format(post.createdAt))
+            if post.isEdited {
+                Text("Edited")
+                    .fontWeight(.semibold)
+            }
+            if isOwnPost, post.visibility != .public, post.visibility != .country {
+                Image(systemName: post.visibility == .private ? "lock.fill" : "person.2.fill")
+            }
+        }
+        .font(.caption2)
+        .foregroundStyle(Theme.inkMuted)
     }
 
     private var postOptionsMenu: some View {
@@ -209,6 +290,15 @@ struct FacebookPostCard: View {
                 Button("Delete", role: .destructive) { showDeleteConfirm = true }
             }
             Button("Report", role: .destructive) { showReportConfirm = true }
+            if !isOwnPost {
+                Button("Block \(post.authorDisplayName)", role: .destructive) {
+                    appState.blockUser(
+                        post.authorID,
+                        username: post.author?.username,
+                        displayName: post.author?.displayName
+                    )
+                }
+            }
         } label: {
             Image(systemName: "ellipsis")
                 .font(.body.weight(.semibold))
@@ -219,11 +309,55 @@ struct FacebookPostCard: View {
         .disabled(actionBusy)
     }
 
+    private var usesYouTubeVideoFrame: Bool {
+        FacebookMediaLayout.usesYouTubeFrame(for: post, context: mediaContext)
+    }
+
+    private var showsPlayLinkInFeed: Bool {
+        PlayPlatformBridge.showsPlayLinkInFeed(post, context: mediaContext)
+    }
+
+    private var cardShape: UnevenRoundedRectangle {
+        if usesYouTubeVideoFrame, post.hasMedia, !showsPlayLinkInFeed {
+            return UnevenRoundedRectangle(
+                topLeadingRadius: 0,
+                bottomLeadingRadius: Theme.cardRadius,
+                bottomTrailingRadius: Theme.cardRadius,
+                topTrailingRadius: 0,
+                style: .continuous
+            )
+        }
+        return UnevenRoundedRectangle(
+            topLeadingRadius: Theme.cardRadius,
+            bottomLeadingRadius: Theme.cardRadius,
+            bottomTrailingRadius: Theme.cardRadius,
+            topTrailingRadius: Theme.cardRadius,
+            style: .continuous
+        )
+    }
+
     @ViewBuilder
     private var media: some View {
         if let aspect = FacebookMediaLayout.aspectRatio(for: post, context: mediaContext) {
             Group {
-                if post.hasVideo, let url = post.playableVideoURL {
+                if usesYouTubeVideoFrame {
+                    YouTubeVideoFrame(style: .feed) {
+                        if let url = post.playableVideoURL {
+                            InFrameVideoPlayer(
+                                url: url,
+                                posterURL: post.posterImageURL,
+                                placement: nil,
+                                countryCode: post.countryCode,
+                                contentCountryCode: post.countryCode,
+                                postID: post.id,
+                                muted: true,
+                                onViewed: { Task { await PostsService.shared.recordView(post) } }
+                            )
+                        } else {
+                            feedVideoPoster
+                        }
+                    }
+                } else if post.hasVideo, let url = post.playableVideoURL {
                     InFrameVideoPlayer(
                         url: url,
                         posterURL: post.posterImageURL,
@@ -249,7 +383,7 @@ struct FacebookPostCard: View {
             }
             .frame(maxWidth: .infinity)
             .aspectRatio(aspect, contentMode: .fit)
-            .frame(maxHeight: FacebookMediaLayout.maxFeedMediaHeight)
+            .frame(maxHeight: usesYouTubeVideoFrame ? nil : FacebookMediaLayout.maxFeedMediaHeight)
             .clipped()
             .overlay(alignment: .bottom) {
                 if !post.hasVideo {
@@ -261,9 +395,18 @@ struct FacebookPostCard: View {
                     .frame(height: 60)
                 }
             }
+            .overlay {
+                if opensAsSpark {
+                    Image(systemName: "play.circle.fill")
+                        .font(.system(size: 52))
+                        .foregroundStyle(Theme.iconFill.opacity(0.95))
+                        .shadow(color: .black.opacity(0.25), radius: 6)
+                        .allowsHitTesting(false)
+                }
+            }
             .contentShape(Rectangle())
             .onTapGesture { openMedia() }
-            .padding(.top, showsAuthorHeader || !post.displayExcerpt.isEmpty ? 0 : 8)
+            .padding(.top, usesYouTubeVideoFrame || showsAuthorHeader || !post.displayExcerpt.isEmpty ? 0 : 8)
         }
     }
 
@@ -277,32 +420,39 @@ struct FacebookPostCard: View {
             .buttonStyle(.plain)
 
             Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    commentsExpanded.toggle()
+                if expandsCommentsInline {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        commentsExpanded.toggle()
+                    }
+                } else {
+                    onOpenPost()
                 }
             } label: {
                 Image(systemName: commentsExpanded ? "bubble.right.fill" : "bubble.right")
                     .font(.system(size: 22))
-                    .foregroundStyle(commentsExpanded ? Theme.facebookBlue : Theme.ink)
+                    .foregroundStyle(commentsExpanded ? Theme.ink : Theme.inkMuted)
             }
             .buttonStyle(.plain)
 
             Button {
-                Task { await shareToFeed() }
+                appState.presentShareSheet(for: post)
             } label: {
                 Image(systemName: "arrowshape.turn.up.right")
                     .font(.system(size: 21, weight: .semibold))
                     .foregroundStyle(Theme.ink)
             }
             .buttonStyle(.plain)
-            .disabled(actionBusy)
 
             Button {
-                Task { await appState.toggleSavePost(post) }
+                Task {
+                    if let error = await appState.toggleSavePost(post) {
+                        actionMessage = error
+                    }
+                }
             } label: {
                 Image(systemName: appState.isPostSaved(post.id) ? "bookmark.fill" : "bookmark")
                     .font(.system(size: 21))
-                    .foregroundStyle(appState.isPostSaved(post.id) ? Theme.facebookBlue : Theme.ink)
+                    .foregroundStyle(appState.isPostSaved(post.id) ? Theme.ink : Theme.inkMuted)
             }
             .buttonStyle(.plain)
 
@@ -323,8 +473,12 @@ struct FacebookPostCard: View {
 
             if post.commentCount > 0, !commentsExpanded {
                 Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        commentsExpanded = true
+                    if expandsCommentsInline {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            commentsExpanded = true
+                        }
+                    } else {
+                        onOpenPost()
                     }
                 } label: {
                     Text("\(post.commentCount) \(post.commentCount == 1 ? "comment" : "comments")")
@@ -336,8 +490,7 @@ struct FacebookPostCard: View {
 
             if showsAuthorHeader, let title = post.displayTitle {
                 Text(title)
-                    .font(.system(size: 17, weight: .regular, design: .serif))
-                    .foregroundStyle(Theme.ink)
+                    .postHeadlineStyle(lineLimit: 3)
             }
 
 
@@ -356,22 +509,19 @@ struct FacebookPostCard: View {
     }
 
     private var feedVideoPoster: some View {
-        ZStack {
-            if let url = post.posterImageURL ?? post.feedImageURL {
-                CachedAsyncImage(
-                    url: url,
+        Group {
+            if usesYouTubeVideoFrame {
+                YouTubeVideoThumbnail(post: post, maxPixelSize: 900, frameStyle: .feed, embedsFrame: false)
+            } else {
+                VideoThumbnailView(
+                    post: post,
                     maxPixelSize: 600,
                     contentMode: .fill,
+                    showsPlayIcon: true,
+                    playIconSize: 52,
                     placeholder: AnyView(mediaPlaceholder)
                 )
-            } else {
-                mediaPlaceholder
             }
-
-            Image(systemName: "play.circle.fill")
-                .font(.system(size: 52))
-                .foregroundStyle(.white.opacity(0.92))
-                .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
         }
     }
 
@@ -379,18 +529,44 @@ struct FacebookPostCard: View {
         ["Spam", "Harassment", "Misinformation", "Other"]
     }
 
+    private func openPrimaryDestination() {
+        if opensAsSpark {
+            openReel()
+        } else {
+            onOpenPost()
+        }
+    }
+
     private func openMedia() {
-        if post.hasVideo, !post.isReel, mediaContext == .feed, let onOpenVideo {
+        if opensAsSpark {
+            openReel()
+        } else if showsPlayLinkInFeed {
+            openPlayVideo()
+        } else if post.hasVideo, mediaContext == .feed, let onOpenVideo {
             onOpenVideo()
         } else {
             onOpenPost()
         }
     }
 
-    private func openAuthorProfile() {
-        if let username = post.author?.username {
-            appState.navigate(to: .publicProfile(username: username))
+    private func openReel() {
+        if let onOpenReel {
+            onOpenReel()
+        } else {
+            appState.openReelsViewer(startingPost: post, seedPosts: [post])
         }
+    }
+
+    private func openPlayVideo() {
+        if let onOpenVideo {
+            onOpenVideo()
+        } else {
+            appState.openPost(post)
+        }
+    }
+
+    private func openAuthorProfile() {
+        appState.openPublicProfile(username: post.author?.username, userID: post.authorID)
     }
 
     private func deletePost() async {
@@ -409,13 +585,6 @@ struct FacebookPostCard: View {
         }
     }
 
-    private func shareToFeed() async {
-        actionBusy = true
-        defer { actionBusy = false }
-        let message = await appState.sharePostToCountryFeed(post)
-        actionMessage = message
-    }
-
     private func reportPost(reason: String) async {
         actionBusy = true
         defer { actionBusy = false }
@@ -428,6 +597,43 @@ struct FacebookPostCard: View {
     }
 }
 
+private struct SharedPostLoadingEmbed: View {
+    let postID: String
+
+    @State private var embed: SharedPostPreview?
+
+    var body: some View {
+        Group {
+            if let embed {
+                SharedPostEmbedView(embed: embed)
+            } else {
+                HStack(spacing: 10) {
+                    ProgressView()
+                    Text("Loading shared post…")
+                        .font(.caption)
+                        .foregroundStyle(Theme.inkMuted)
+                }
+                .padding(.horizontal, Theme.pagePadding)
+                .padding(.top, 8)
+            }
+        }
+        .task(id: postID) {
+            if let post = try? await PostsService.shared.getPostByID(postID) {
+                embed = SharedPostPreview(
+                    id: post.id,
+                    title: post.title,
+                    body: post.body,
+                    mediaType: post.mediaType,
+                    mediaURL: post.mediaURL,
+                    thumbURL: post.thumbURL,
+                    authorID: post.authorID,
+                    author: post.author
+                )
+            }
+        }
+    }
+}
+
 private struct PostEditSheet: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -436,14 +642,25 @@ private struct PostEditSheet: View {
 
     @State private var title: String
     @State private var bodyText: String
+    @State private var visibility: PostVisibility
+    @State private var selectedPhoto: PhotosPickerItem?
+    @State private var imageData: Data?
+    @State private var previewImage: UIImage?
+    @State private var removeExistingImage = false
     @State private var busy = false
     @State private var errorMessage: String?
+
+    private var canEditImage: Bool {
+        post.hasImage && !post.hasVideo && !post.isReel && !post.isStory
+    }
 
     init(post: CountryPost, onSaved: @escaping (CountryPost) -> Void) {
         self.post = post
         self.onSaved = onSaved
         _title = State(initialValue: post.displayTitle ?? "")
         _bodyText = State(initialValue: post.displayBody)
+        let initialVisibility = post.visibility == .country ? PostVisibility.public : post.visibility
+        _visibility = State(initialValue: initialVisibility)
     }
 
     var body: some View {
@@ -455,6 +672,15 @@ private struct PostEditSheet: View {
                 Section("Body") {
                     TextEditor(text: $bodyText)
                         .frame(minHeight: 140)
+                }
+                Section("Privacy") {
+                    PostVisibilityControl(visibility: $visibility)
+                        .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
+                }
+                if canEditImage {
+                    Section("Photo") {
+                        editImageSection
+                    }
                 }
                 if let errorMessage {
                     Section {
@@ -474,7 +700,99 @@ private struct PostEditSheet: View {
                         .disabled(busy)
                 }
             }
+            .onChange(of: selectedPhoto) { _, item in
+                Task { await loadSelectedPhoto(item) }
+            }
         }
+    }
+
+    @ViewBuilder
+    private var editImageSection: some View {
+        if let previewImage {
+            ZStack(alignment: .topTrailing) {
+                Image(uiImage: previewImage)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 180)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                Button {
+                    clearReplacementImage()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title3)
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, Color.black.opacity(0.55))
+                        .padding(8)
+                }
+                .buttonStyle(.plain)
+            }
+        } else if post.hasImage, !removeExistingImage, let url = post.feedImageURL {
+            ZStack(alignment: .topTrailing) {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    default:
+                        Rectangle().fill(Theme.canvasMuted)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 180)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                Button {
+                    removeExistingImage = true
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title3)
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, Color.black.opacity(0.55))
+                        .padding(8)
+                }
+                .buttonStyle(.plain)
+            }
+
+            PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                Label("Replace photo", systemImage: "photo.on.rectangle.angled")
+            }
+        } else {
+            PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                Label("Add photo", systemImage: "photo.on.rectangle.angled")
+            }
+
+            if post.hasImage, removeExistingImage {
+                Button("Restore original photo", role: .cancel) {
+                    removeExistingImage = false
+                }
+            }
+        }
+    }
+
+    private func loadSelectedPhoto(_ item: PhotosPickerItem?) async {
+        guard let item else { return }
+        do {
+            guard let raw = try await item.loadTransferable(type: Data.self) else { return }
+            guard let image = UIImage(data: raw) else { return }
+            let jpeg = image.jpegData(compressionQuality: 0.88) ?? raw
+            imageData = jpeg
+            previewImage = UIImage(data: jpeg)
+            removeExistingImage = false
+            selectedPhoto = nil
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+            clearReplacementImage()
+        }
+    }
+
+    private func clearReplacementImage() {
+        imageData = nil
+        previewImage = nil
+        selectedPhoto = nil
     }
 
     private func save() async {
@@ -482,10 +800,32 @@ private struct PostEditSheet: View {
         errorMessage = nil
         defer { busy = false }
         do {
+            var mediaType: String?
+            var mediaURL: String?
+            var clearMedia = false
+
+            if canEditImage {
+                if let imageData {
+                    let upload = try await MediaService.shared.uploadPostMedia(
+                        data: imageData,
+                        fileExtension: "jpg",
+                        mimeType: "image/jpeg"
+                    )
+                    mediaType = "image"
+                    mediaURL = upload.publicURL
+                } else if removeExistingImage, post.hasImage {
+                    clearMedia = true
+                }
+            }
+
             let updated = try await PostsService.shared.updatePost(
                 post.id,
                 title: title.trimmingCharacters(in: .whitespacesAndNewlines).nilIfWhitespace,
-                body: preservedBody(from: bodyText)
+                body: preservedBody(from: bodyText),
+                visibility: visibility,
+                mediaType: mediaType,
+                mediaURL: mediaURL,
+                clearMedia: clearMedia
             )
             onSaved(updated)
             dismiss()

@@ -78,7 +78,12 @@ final class MediaService {
     ) async throws -> (path: String, publicURL: String) {
         guard let userID = AuthService.shared.currentUser?.id else { throw MediaError.notAuthenticated }
         let path = "\(userID)/\(UUID().uuidString).\(fileExtension)"
-        try await upload(bucket: "posts", path: path, fileURL: fileURL, mimeType: mimeType, onProgress: onProgress)
+        try await uploadVideoToPosts(
+            path: path,
+            fileURL: fileURL,
+            mimeType: mimeType,
+            onProgress: onProgress
+        )
         let publicURL = "\(AppConfig.supabaseURL)/storage/v1/object/public/posts/\(path)"
         return (path, publicURL)
     }
@@ -152,6 +157,34 @@ final class MediaService {
         }
     }
 
+    private func uploadVideoToPosts(
+        path: String,
+        fileURL: URL,
+        mimeType: String,
+        onProgress: (@Sendable (UploadProgress) -> Void)?
+    ) async throws {
+        var lastError: Error?
+        for attempt in 0..<2 {
+            do {
+                try await uploadDirect(
+                    bucket: "posts",
+                    path: path,
+                    fileURL: fileURL,
+                    mimeType: mimeType,
+                    upsert: false,
+                    onProgress: onProgress
+                )
+                return
+            } catch {
+                lastError = error
+                if attempt == 0 {
+                    _ = try? await AuthService.shared.ensureValidToken()
+                }
+            }
+        }
+        throw lastError ?? MediaError.uploadFailed("Upload failed.")
+    }
+
     private func upload(
         bucket: String,
         path: String,
@@ -160,6 +193,24 @@ final class MediaService {
         upsert: Bool = false,
         onProgress: (@Sendable (UploadProgress) -> Void)? = nil
     ) async throws {
+        try await uploadDirect(
+            bucket: bucket,
+            path: path,
+            fileURL: fileURL,
+            mimeType: mimeType,
+            upsert: upsert,
+            onProgress: onProgress
+        )
+    }
+
+    private func uploadDirect(
+        bucket: String,
+        path: String,
+        fileURL: URL,
+        mimeType: String,
+        upsert: Bool,
+        onProgress: (@Sendable (UploadProgress) -> Void)?
+    ) async throws {
         let request = try await makeUploadRequest(bucket: bucket, path: path, mimeType: mimeType, upsert: upsert)
         let (responseData, http) = try await StorageUploadClient.shared.upload(
             request: request,
@@ -167,8 +218,7 @@ final class MediaService {
             onProgress: onProgress
         )
         guard (200...299).contains(http.statusCode) else {
-            let msg = String(data: responseData, encoding: .utf8) ?? "Upload failed."
-            throw MediaError.uploadFailed(msg)
+            throw MediaError.uploadFailed(Self.storageErrorMessage(from: responseData, statusCode: http.statusCode))
         }
     }
 
@@ -183,8 +233,7 @@ final class MediaService {
         do {
             let (responseData, response) = try await send(request)
             guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-                let msg = String(data: responseData, encoding: .utf8) ?? "Upload failed."
-                throw MediaError.uploadFailed(msg)
+                throw MediaError.uploadFailed(Self.storageErrorMessage(from: responseData, statusCode: (response as? HTTPURLResponse)?.statusCode ?? 0))
             }
         } catch let error as URLError where error.code == .timedOut {
             throw MediaError.uploadFailed("Upload timed out. Try a shorter video or stronger Wi‑Fi.")
@@ -220,6 +269,27 @@ final class MediaService {
             request.setValue("true", forHTTPHeaderField: "x-upsert")
         }
         return request
+    }
+
+    private static func storageErrorMessage(from data: Data, statusCode: Int) -> String {
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let message = json["message"] as? String, !message.isEmpty {
+                return message
+            }
+            if let error = json["error"] as? String, !error.isEmpty {
+                return error
+            }
+        }
+        if let text = String(data: data, encoding: .utf8), !text.isEmpty {
+            return text
+        }
+        if statusCode == 413 {
+            return "Video is too large for storage. Try a shorter clip."
+        }
+        if statusCode > 0 {
+            return "Upload failed (HTTP \(statusCode))."
+        }
+        return "Upload failed."
     }
 
     private func createSignedURL(bucket: String, path: String) async throws -> String {

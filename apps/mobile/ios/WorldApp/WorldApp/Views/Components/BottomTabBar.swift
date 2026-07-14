@@ -4,7 +4,7 @@ struct BottomTabBar: View {
     @Environment(AppState.self) private var appState
 
     private let leftTabs: [AppTab] = [.feed, .globe]
-    private let rightTabs: [AppTab] = [.reels, .messages, .profile]
+    private let rightTabs: [AppTab] = [.hubs, .messages, .profile]
 
     var body: some View {
         HStack(alignment: .center, spacing: 0) {
@@ -35,7 +35,11 @@ struct BottomTabBar: View {
 
     private var createButton: some View {
         Button {
-            appState.showCreateMenu = true
+            withAnimation(.easeOut(duration: 0.24)) {
+                appState.showAppMenu = false
+                appState.globePanel = nil
+                appState.showCreateMenu.toggle()
+            }
         } label: {
             HandDrawnPlusIcon(size: 30)
                 .frame(width: 44, height: 44)
@@ -47,17 +51,27 @@ struct BottomTabBar: View {
 
     private func tabButton(_ tab: AppTab) -> some View {
         Button {
-            appState.selectedTab = tab
-            appState.showAppMenu = false
-            if tab == .globe {
+            if appState.selectedTab != tab {
                 appState.navigationPath.removeAll()
             }
+            appState.selectedTab = tab
+            appState.showAppMenu = false
+            appState.globePanel = nil
         } label: {
             tabIcon(tab)
                 .frame(maxWidth: .infinity)
                 .frame(height: Theme.tabBarHeight)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(tab.title)
+    }
+
+    private func tabIconSize(_ tab: AppTab) -> CGFloat {
+        switch tab {
+        case .feed: 26
+        case .hubs, .messages: 22
+        default: 24
+        }
     }
 
     @ViewBuilder
@@ -73,7 +87,7 @@ struct BottomTabBar: View {
         default:
             ZStack(alignment: .topTrailing) {
                 Image(systemName: tab.systemImage)
-                    .font(.system(size: tab == .feed ? 26 : 24, weight: selected ? .semibold : .regular))
+                    .font(.system(size: tabIconSize(tab), weight: selected ? .semibold : .regular))
                     .foregroundStyle(selected ? Theme.ink : Theme.ink)
                     .symbolVariant(selected ? .fill : .none)
 

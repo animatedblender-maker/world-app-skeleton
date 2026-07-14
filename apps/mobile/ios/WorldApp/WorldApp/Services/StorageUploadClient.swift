@@ -187,15 +187,13 @@ final class StorageUploadClient: NSObject, URLSessionTaskDelegate, URLSessionDat
         let expectedFileSize = handler.expectedFileSize
         lock.unlock()
 
-        if let onProgress {
-            if error == nil {
-                emitProgress(
-                    fractionCompleted: 1,
-                    bytesSent: expectedFileSize > 0 ? expectedFileSize : 1,
-                    totalBytes: expectedFileSize > 0 ? expectedFileSize : 1,
-                    handler: onProgress
-                )
-            }
+        if let onProgress, error == nil {
+            emitProgress(
+                fractionCompleted: 1,
+                bytesSent: expectedFileSize > 0 ? expectedFileSize : 1,
+                totalBytes: expectedFileSize > 0 ? expectedFileSize : 1,
+                handler: onProgress
+            )
         }
 
         if let error {

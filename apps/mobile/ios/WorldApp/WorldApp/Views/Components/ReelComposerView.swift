@@ -29,24 +29,29 @@ struct ReelComposerView: View {
     private var canSubmit: Bool { uploadVideoURL != nil && !isPreparingVideo }
 
     private var canPostHere: Bool {
-        guard let code = appState.currentProfile?.countryCode?.uppercased() else { return false }
-        return code == country.iso.uppercased()
+        appState.canPostToCountry(country)
+    }
+
+    private var navTitle: String {
+        publishAsReel ? MatteryaCopy.newSpark : MatteryaCopy.newVideo
     }
 
     var body: some View {
         NavigationStack {
             ZStack {
-                Color.black.ignoresSafeArea()
+                PaperBackground()
+                    .ignoresSafeArea()
 
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
-                        header
+                    VStack(alignment: .leading, spacing: 22) {
+                        composerHeader
                         previewSection
                         captionField
                         if let errorMessage { errorBanner(errorMessage) }
                     }
                     .padding(.horizontal, Theme.pagePadding)
-                    .padding(.bottom, 100)
+                    .padding(.top, 8)
+                    .padding(.bottom, 140)
                 }
 
                 VStack {
@@ -55,130 +60,153 @@ struct ReelComposerView: View {
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(Theme.surface.opacity(0.94), for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
-                        .foregroundStyle(.white.opacity(0.8))
+                        .foregroundStyle(Theme.inkSecondary)
                 }
                 ToolbarItem(placement: .principal) {
-                    Text(publishAsReel ? "New reel" : "New video")
-                        .font(.headline.weight(.semibold))
-                        .foregroundStyle(.white)
+                    Text(navTitle)
+                        .font(.system(.headline, design: .serif))
+                        .foregroundStyle(Theme.ink)
                 }
             }
-            .toolbarBackground(.black.opacity(0.9), for: .navigationBar)
         }
-        .preferredColorScheme(.dark)
+        .tint(Theme.accentBright)
         .onChange(of: selectedVideo) { _, item in
             Task { await loadVideo(item) }
         }
     }
 
-    private var header: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "play.rectangle.fill")
-                .foregroundStyle(Theme.facebookBlue)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Publishing to \(country.name)")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
+    private var composerHeader: some View {
+        HStack(spacing: 14) {
+            Image(systemName: publishAsReel ? "sparkles" : "film")
+                .font(.title2)
+                .foregroundStyle(Theme.accentBright)
+                .frame(width: 48, height: 48)
+                .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(MatteryaCopy.postToYourFeed)
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(Theme.ink)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.9)
+
                 if isPreparingVideo {
                     Text("Compressing video · \(compressionPercentText)")
                         .font(.caption)
-                        .foregroundStyle(.white.opacity(0.65))
+                        .foregroundStyle(Theme.inkMuted)
                         .monospacedDigit()
                 } else if preparedVideoSizeBytes > 0 {
                     Text("Ready · \(VideoCompressionService.formattedSize(preparedVideoSizeBytes))")
                         .font(.caption)
-                        .foregroundStyle(.white.opacity(0.65))
+                        .foregroundStyle(Theme.inkMuted)
                 } else {
-                    Text(publishAsReel ? "Vertical video works best" : "Shows in feed and Living")
+                    Text(publishAsReel ? MatteryaCopy.publishSparkHint : MatteryaCopy.publishVideoHint)
                         .font(.caption)
-                        .foregroundStyle(.white.opacity(0.65))
+                        .foregroundStyle(Theme.inkMuted)
                 }
             }
-            Spacer()
+
+            Spacer(minLength: 0)
         }
-        .padding(.top, 8)
+        .padding(18)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                .stroke(Theme.border, lineWidth: 0.5)
+        )
+        .shadow(color: Theme.ink.opacity(0.04), radius: 16, y: 8)
     }
 
     @ViewBuilder
     private var previewSection: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(Color.white.opacity(0.08))
-                .frame(height: 420)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .stroke(Color.white.opacity(0.12), lineWidth: 0.5)
-                )
+        VStack(alignment: .leading, spacing: 12) {
+            Text("VIDEO")
+                .font(.caption.weight(.semibold))
+                .tracking(1.2)
+                .foregroundStyle(Theme.inkMuted)
 
-            if isPreparingVideo {
-                VStack(spacing: 12) {
-                    if compressionProgress > 0 {
-                        ProgressView(value: compressionProgress, total: 1)
-                            .tint(.white)
-                            .frame(maxWidth: 220)
-                    } else {
-                        ProgressView()
-                            .tint(.white)
-                    }
-                    Text(compressionProgress > 0 ? "Compressing video · \(compressionPercentText)" : "Preparing video…")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.85))
-                        .monospacedDigit()
-                }
-                .padding(.horizontal, 24)
-            } else if let previewVideoURL {
-                VideoPlayerView(
-                    url: previewVideoURL,
-                    posterURL: nil,
-                    adsEnabled: false,
-                    isActive: true,
-                    loops: true,
-                    muted: false,
-                    showsControls: true
-                )
-                .frame(height: 420)
-                .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-            } else if let previewImage {
-                Image(uiImage: previewImage)
-                    .resizable()
-                    .scaledToFill()
+            ZStack {
+                RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                    .fill(Theme.canvasMuted)
                     .frame(height: 420)
-                    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-            } else {
-                VStack(spacing: 14) {
-                    Image(systemName: "video.badge.plus")
-                        .font(.system(size: 42, weight: .light))
-                        .foregroundStyle(.white.opacity(0.8))
-                    Text("Choose one video")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.85))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                            .stroke(Theme.border, lineWidth: 0.5)
+                    )
+
+                if isPreparingVideo {
+                    VStack(spacing: 12) {
+                        if compressionProgress > 0 {
+                            ProgressView(value: compressionProgress, total: 1)
+                                .tint(Theme.accentBright)
+                                .frame(maxWidth: 220)
+                        } else {
+                            ProgressView()
+                                .tint(Theme.accentBright)
+                        }
+                        Text(compressionProgress > 0 ? "Compressing video · \(compressionPercentText)" : "Preparing video…")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.inkSecondary)
+                            .monospacedDigit()
+                    }
+                    .padding(.horizontal, 24)
+                } else if let previewVideoURL {
+                    VideoPlayerView(
+                        url: previewVideoURL,
+                        posterURL: nil,
+                        adsEnabled: false,
+                        isActive: true,
+                        loops: true,
+                        muted: false,
+                        showsControls: true
+                    )
+                    .frame(height: 420)
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
+                } else if let previewImage {
+                    Image(uiImage: previewImage)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(height: 420)
+                        .clipShape(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
+                } else {
+                    VStack(spacing: 14) {
+                        Image(systemName: "video.badge.plus")
+                            .font(.system(size: 42, weight: .light))
+                            .foregroundStyle(Theme.accentBright)
+                        Text("Choose one video")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.ink)
+                    }
                 }
             }
-        }
-        .overlay(alignment: .topLeading) {
-            if previewVideoURL != nil {
-                Label("Preview before publishing", systemImage: "play.circle.fill")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(.black.opacity(0.45), in: Capsule())
-                    .padding(14)
+            .overlay(alignment: .topLeading) {
+                if previewVideoURL != nil {
+                    Label("Preview before publishing", systemImage: "play.circle.fill")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.ink)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Theme.surface.opacity(0.92), in: Capsule())
+                        .overlay(Capsule().stroke(Theme.border, lineWidth: 0.5))
+                        .padding(14)
+                }
             }
-        }
-        .overlay(alignment: .bottomTrailing) {
-            PhotosPicker(selection: $selectedVideo, matching: .videos) {
-                Text(uploadVideoURL == nil ? "Select video" : "Change video")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(.ultraThinMaterial, in: Capsule())
+            .overlay(alignment: .bottomTrailing) {
+                PhotosPicker(selection: $selectedVideo, matching: .videos) {
+                    Text(uploadVideoURL == nil ? "Select video" : "Change video")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(Theme.ink)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(Theme.surface, in: Capsule())
+                        .overlay(Capsule().stroke(Theme.border, lineWidth: 0.5))
+                }
+                .padding(14)
             }
-            .padding(14)
         }
     }
 
@@ -186,44 +214,68 @@ struct ReelComposerView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("CAPTION")
                 .font(.caption.weight(.semibold))
-                .tracking(1.1)
-                .foregroundStyle(.white.opacity(0.55))
+                .tracking(1.2)
+                .foregroundStyle(Theme.inkMuted)
             TextField("Add a caption (optional)", text: $caption, axis: .vertical)
                 .lineLimit(2...5)
-                .foregroundStyle(.white)
+                .foregroundStyle(Theme.ink)
                 .padding(14)
-                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
+                        .stroke(Theme.border, lineWidth: 0.5)
+                )
         }
     }
 
     private var publishBar: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 0) {
+            Theme.divider.frame(height: 0.5)
+
             if busy, uploadPhase != .idle {
                 UploadProgressView(phase: uploadPhase, progress: uploadProgress)
+                    .padding(.horizontal, Theme.pagePadding)
+                    .padding(.top, 12)
             }
 
-            HStack {
-                Text(statusLabel)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(canPostHere ? .white : Theme.danger)
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(statusLabel)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(canPostHere ? Theme.ink : Theme.danger)
+                    Text(canPostHere ? country.name : "Switch to your country feed to post.")
+                        .font(.caption2)
+                        .foregroundStyle(Theme.inkMuted)
+                }
                 Spacer()
                 Button {
                     Task { await submit() }
                 } label: {
-                    Text(busy ? "Working…" : (publishAsReel ? "Publish reel" : "Publish video"))
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 12)
-                        .background(canSubmit && !busy && canPostHere ? Theme.facebookBlue : Color.white.opacity(0.25), in: Capsule())
+                    HStack(spacing: 8) {
+                        if busy {
+                            ProgressView()
+                                .tint(.white)
+                                .scaleEffect(0.85)
+                        }
+                        Text(busy ? "Working…" : (publishAsReel ? MatteryaCopy.publishSpark : MatteryaCopy.publishVideo))
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+                    .background(
+                        canSubmit && !busy && canPostHere ? Theme.accentBright : Theme.inkMuted,
+                        in: Capsule()
+                    )
+                    .shadow(color: Theme.accentBright.opacity(canSubmit && canPostHere ? 0.28 : 0), radius: 12, y: 6)
                 }
                 .buttonStyle(.plain)
                 .disabled(busy || isPreparingVideo || !canSubmit || !canPostHere)
             }
+            .padding(.horizontal, Theme.pagePadding)
+            .padding(.vertical, 14)
+            .background(Theme.surface.opacity(0.96))
         }
-        .padding(.horizontal, Theme.pagePadding)
-        .padding(.vertical, 14)
-        .background(.black.opacity(0.92))
     }
 
     private var compressionPercentText: String {
@@ -248,12 +300,16 @@ struct ReelComposerView: View {
     }
 
     private func errorBanner(_ message: String) -> some View {
-        Text(message)
-            .font(.caption)
-            .foregroundStyle(Theme.danger)
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.danger.opacity(0.15), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(Theme.danger)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(Theme.danger)
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .background(Theme.danger.opacity(0.08), in: RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous))
     }
 
     private func loadVideo(_ item: PhotosPickerItem?) async {
@@ -268,13 +324,10 @@ struct ReelComposerView: View {
         }
 
         do {
-            guard let data = try await item.loadTransferable(type: Data.self) else {
+            guard let picked = try await item.loadTransferable(type: PickedVideoFile.self) else {
                 throw MediaError.uploadFailed("Could not read video.")
             }
-            let format = Self.videoFormat(for: item)
-            let sourceURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("composer-source-\(UUID().uuidString).\(format.extension)")
-            try data.write(to: sourceURL)
+            let sourceURL = picked.url
 
             let compressionHandler: @Sendable (Double) -> Void = { progress in
                 let value = progress
@@ -322,16 +375,6 @@ struct ReelComposerView: View {
         }
     }
 
-    private static func videoFormat(for item: PhotosPickerItem) -> (extension: String, mimeType: String) {
-        if item.supportedContentTypes.contains(where: { $0.conforms(to: .mpeg4Movie) }) {
-            return ("mp4", "video/mp4")
-        }
-        if item.supportedContentTypes.contains(where: { $0.conforms(to: .quickTimeMovie) }) {
-            return ("mov", "video/quicktime")
-        }
-        return ("mp4", "video/mp4")
-    }
-
     private func generateThumbnail(from url: URL) async -> UIImage? {
         let asset = AVURLAsset(url: url)
         let generator = AVAssetImageGenerator(asset: asset)
@@ -368,6 +411,9 @@ struct ReelComposerView: View {
         }
 
         do {
+            guard FileManager.default.fileExists(atPath: uploadVideoURL.path) else {
+                throw MediaError.uploadFailed("Video file is missing. Select the video again.")
+            }
             let trimmedCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
             let post: CountryPost
             if publishAsReel {
@@ -380,6 +426,7 @@ struct ReelComposerView: View {
                     videoFileURL: uploadVideoURL,
                     mimeType: videoMimeType,
                     fileExtension: videoFileExtension,
+                    thumbnailImage: previewImage,
                     onUploadProgress: progressHandler,
                     onPublishing: publishingHandler
                 )
@@ -393,6 +440,7 @@ struct ReelComposerView: View {
                     videoFileURL: uploadVideoURL,
                     mimeType: videoMimeType,
                     fileExtension: videoFileExtension,
+                    thumbnailImage: previewImage,
                     onUploadProgress: progressHandler,
                     onPublishing: publishingHandler
                 )

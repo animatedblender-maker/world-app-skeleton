@@ -15,10 +15,20 @@ struct WorldAppApp: App {
                 .task {
                     await appState.bootstrap()
                 }
+                .onOpenURL { url in
+                    appState.handleDeepLink(url)
+                }
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
+                    Task { @MainActor in
+                        CallSessionManager.shared.handleAppWillResignActive()
+                    }
+                }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-                    Task {
+                    Task { @MainActor in
+                        CallSessionManager.shared.handleAppDidBecomeActive()
                         VoIPPushService.shared.bootstrap()
-                        await PushNotificationService.shared.syncWithServer()
+                        await appState.handleBecameActive()
+                        await PushNotificationService.shared.syncWithServer(force: true)
                         if appState.isAuthenticated {
                             CallSessionManager.shared.bootstrap()
                         }

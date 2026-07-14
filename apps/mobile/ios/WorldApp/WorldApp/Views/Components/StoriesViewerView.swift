@@ -45,6 +45,8 @@ struct StoriesViewerView: View {
                         .background(.black.opacity(0.35))
                 }
             }
+            .safeAreaPadding(.top, 6)
+            .safeAreaPadding(.bottom, 8)
 
             HStack(spacing: 0) {
                 Color.clear
@@ -55,6 +57,8 @@ struct StoriesViewerView: View {
                     .onTapGesture { goNext() }
             }
         }
+        .statusBarHidden(true)
+        .persistentSystemOverlays(.hidden)
         .onAppear {
             if let story = currentStory {
                 appState.markStoryViewed(story.id)
@@ -119,8 +123,7 @@ struct StoriesViewerView: View {
                 }
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.top, 10)
+        .padding(.horizontal, 12)
     }
 
     private func barWidth(for index: Int, totalWidth: CGFloat) -> CGFloat {
@@ -133,9 +136,16 @@ struct StoriesViewerView: View {
         HStack(spacing: 10) {
             if let group = currentGroup {
                 AvatarView(url: group.author?.avatarURL, seed: group.authorID, size: 34)
-                Text(group.displayName)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(group.displayName)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                    if let story = currentStory {
+                        Text(momentUploadedLabel(for: story.createdAt))
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.72))
+                    }
+                }
             }
             Spacer()
             Button {
@@ -149,7 +159,7 @@ struct StoriesViewerView: View {
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 12)
-        .padding(.top, 8)
+        .padding(.top, 6)
     }
 
     private func startTimer() {
@@ -215,5 +225,16 @@ struct StoriesViewerView: View {
 
         progress = 0
         startTimer()
+    }
+
+    private func momentUploadedLabel(for createdAt: String) -> String {
+        let relative = RelativeTime.format(createdAt)
+        let clock = RelativeTime.formatClock(createdAt)
+        switch (relative.isEmpty, clock.isEmpty) {
+        case (false, false): return "\(relative) · \(clock)"
+        case (false, true): return relative
+        case (true, false): return clock
+        case (true, true): return "Moment"
+        }
     }
 }

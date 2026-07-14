@@ -19,8 +19,34 @@ const APNS_PRODUCTION = String(process.env.APNS_PRODUCTION ?? 'false').toLowerCa
 const APNS_ENABLED = Boolean(APNS_TEAM_ID && APNS_KEY_ID && APNS_PRIVATE_KEY);
 
 if (!APNS_ENABLED) {
-  console.warn('⚠️ APNs disabled: missing APNS_TEAM_ID, APNS_KEY_ID, or APNS_PRIVATE_KEY');
+  console.warn(
+    '⚠️ APNs disabled: missing APNS_TEAM_ID, APNS_KEY_ID, or APNS_PRIVATE_KEY. iOS push will not work (browser Web Push uses separate VAPID keys).'
+  );
+} else {
+  console.log(
+    `✅ APNs enabled for ${APNS_BUNDLE_ID} (${APNS_PRODUCTION ? 'production' : 'sandbox'} default host)`
+  );
 }
+
+export type ApnsTokenStats = {
+  alert: number;
+  voip: number;
+  total: number;
+  environments: string[];
+};
+
+export type ApnsSendFailure = {
+  deviceToken: string;
+  kind: 'alert' | 'voip';
+  error: string;
+};
+
+export type ApnsSendResult = {
+  attempted: number;
+  delivered: number;
+  failures: ApnsSendFailure[];
+  skippedReason?: 'apns_disabled' | 'no_tokens';
+};
 
 let cachedJwt: { token: string; expiresAt: number } | null = null;
 
@@ -66,10 +92,12 @@ async function sendApns(
   topic: string,
   body: Record<string, unknown>,
   priority: number,
-  pushType: 'alert' | 'voip' = 'alert',
+  pushType: 'alert' | 'voip' | 'background' = 'alert',
   environment: string | null = null
 ): Promise<void> {
-  if (!APNS_ENABLED) return;
+  if (!APNS_ENABLED) {
+    throw new Error('apns_not_configured');
+  }
 
   const host = apnsHostForEnvironment(environment);
   const client = http2.connect(`https://${host}`);
@@ -110,12 +138,18 @@ async function sendApns(
     });
     req.write(JSON.stringify(body));
     req.end();
-  }).catch((err) => {
-    console.warn('APNs send failed', err);
   });
 }
 
 export class ApnsService {
+  isConfigured(): boolean {
+    return APNS_ENABLED;
+  }
+
+  getServerConfig(): { bundleId: string; production: boolean } {
+    return { bundleId: APNS_BUNDLE_ID, production: APNS_PRODUCTION };
+  }
+
   async upsertToken(
     userId: string,
     deviceToken: string,
@@ -169,18 +203,7 @@ export class ApnsService {
     );
   }
 
-  async sendToUser(
-    userId: string,
-    payload: {
-      title: string;
-      body?: string | null;
-      category?: string | null;
-      data?: Record<string, string | null | undefined>;
-      priority?: number;
-    }
-  ): Promise<void> {
-    if (!APNS_ENABLED) return;
-
+  async getTokenStatsForUser(userId: string): Promise<ApnsTokenStats> {
     let rows: ApnsRow[] = [];
     try {
       const result = await pool.query<ApnsRow>(
@@ -192,7 +215,7 @@ export class ApnsService {
       const message = String(err?.message ?? '');
       if (!message.includes('kind')) {
         console.warn('iOS device token query failed', err);
-        return;
+        return { alert: 0, voip: 0, total: 0, environments: [] };
       }
       try {
         const fallback = await pool.query<ApnsRow>(
@@ -202,46 +225,137 @@ export class ApnsService {
         rows = fallback.rows;
       } catch (fallbackErr) {
         console.warn('iOS device token query failed', fallbackErr);
-        return;
+        return { alert: 0, voip: 0, total: 0, environments: [] };
       }
     }
 
-    if (!rows.length) return;
+    const alert = rows.filter((row) => row.kind !== 'voip').length;
+    const voip = rows.filter((row) => row.kind === 'voip').length;
+    const environments = Array.from(
+      new Set(
+        rows
+          .map((row) => String(row.apns_environment ?? '').trim().toLowerCase())
+          .filter((value) => value === 'sandbox' || value === 'production')
+      )
+    );
+
+    return { alert, voip, total: rows.length, environments };
+  }
+
+  private async queryTokensForUser(userId: string): Promise<ApnsRow[]> {
+    try {
+      const result = await pool.query<ApnsRow>(
+        `select id, device_token, bundle_id, kind, apns_environment from public.ios_device_tokens where user_id = $1`,
+        [userId]
+      );
+      return result.rows;
+    } catch (err: any) {
+      const message = String(err?.message ?? '');
+      if (!message.includes('kind')) {
+        console.warn('iOS device token query failed', err);
+        return [];
+      }
+      try {
+        const fallback = await pool.query<ApnsRow>(
+          `select id, device_token, bundle_id, null::text as kind, null::text as apns_environment from public.ios_device_tokens where user_id = $1`,
+          [userId]
+        );
+        return fallback.rows;
+      } catch (fallbackErr) {
+        console.warn('iOS device token query failed', fallbackErr);
+        return [];
+      }
+    }
+  }
+
+  async sendToUser(
+    userId: string,
+    payload: {
+      title: string;
+      body?: string | null;
+      category?: string | null;
+      data?: Record<string, string | null | undefined>;
+      priority?: number;
+    }
+  ): Promise<ApnsSendResult> {
+    if (!APNS_ENABLED) {
+      return { attempted: 0, delivered: 0, failures: [], skippedReason: 'apns_disabled' };
+    }
+
+    const rows = await this.queryTokensForUser(userId);
+    if (!rows.length) {
+      return { attempted: 0, delivered: 0, failures: [], skippedReason: 'no_tokens' };
+    }
 
     const isCall = payload.category === 'call' || payload.data?.type === 'call';
     const data = sanitizeApnsData(payload.data ?? {});
+    const failures: ApnsSendFailure[] = [];
+    let attempted = 0;
+    let delivered = 0;
 
     if (isCall) {
-      const voipRows = rows.filter((row) => row.kind === 'voip');
-      const voipBody = sanitizeApnsData({
+      const callData = sanitizeApnsData({
         ...data,
         type: 'call',
         title: payload.title,
       });
-      for (const row of voipRows) {
-        const bundle = row.bundle_id ?? APNS_BUNDLE_ID;
-        await sendApns(row.device_token, `${bundle}.voip`, voipBody, 10, 'voip', row.apns_environment);
+
+      const voipRows = rows.filter((row) => row.kind === 'voip');
+      if (!voipRows.length) {
+        console.warn(
+          `Call push for user ${userId} has no VoIP device token; falling back to silent background wake only.`
+        );
+      } else {
+        for (const row of voipRows) {
+          const bundle = row.bundle_id ?? APNS_BUNDLE_ID;
+          attempted += 1;
+          try {
+            await sendApns(row.device_token, `${bundle}.voip`, callData, 10, 'voip', row.apns_environment);
+            delivered += 1;
+          } catch (err: any) {
+            const error = String(err?.message ?? err ?? 'send_failed');
+            console.warn(`APNs voip send failed (${bundle}.voip, ${row.apns_environment ?? 'default'}):`, error);
+            failures.push({ deviceToken: row.device_token, kind: 'voip', error });
+          }
+        }
       }
-      if (voipRows.length) return;
-      console.warn(
-        `Call push for user ${userId} has no VoIP device token; falling back to alert push (no full-screen CallKit takeover).`
-      );
+
+      // Visible alert pushes do not wake the app on iOS until the user taps them.
+      // Send a silent background push so CallKit can take over the screen immediately.
+      const alertRows = rows.filter((row) => row.kind !== 'voip');
+      for (const row of alertRows) {
+        const topic = row.bundle_id ?? APNS_BUNDLE_ID;
+        const silentBody = {
+          aps: { 'content-available': 1 },
+          ...callData,
+        };
+        attempted += 1;
+        try {
+          await sendApns(row.device_token, topic, silentBody, 5, 'background', row.apns_environment);
+          delivered += 1;
+        } catch (err: any) {
+          const error = String(err?.message ?? err ?? 'send_failed');
+          console.warn(`APNs call wake send failed (${topic}, ${row.apns_environment ?? 'default'}):`, error);
+          failures.push({ deviceToken: row.device_token, kind: 'alert', error });
+        }
+      }
+
+      return { attempted, delivered, failures };
     }
 
     const alertRows = rows.filter((row) => row.kind !== 'voip');
-    if (!alertRows.length) return;
-
-    const aps: Record<string, unknown> = {
-      alert: {
-        title: payload.title,
-        body: payload.body ?? '',
-      },
-      sound: isCall ? 'MatteryaCall.caf' : 'default',
-      'content-available': isCall ? 1 : 0,
-    };
+    if (!alertRows.length) {
+      return { attempted, delivered, failures };
+    }
 
     const apnsBody = {
-      aps,
+      aps: {
+        alert: {
+          title: payload.title,
+          body: payload.body ?? '',
+        },
+        sound: 'default',
+      },
       ...sanitizeApnsData({
         ...data,
         type: data.type ?? payload.category ?? 'message',
@@ -250,7 +364,17 @@ export class ApnsService {
 
     for (const row of alertRows) {
       const topic = row.bundle_id ?? APNS_BUNDLE_ID;
-      await sendApns(row.device_token, topic, apnsBody, payload.priority ?? 10, 'alert', row.apns_environment);
+      attempted += 1;
+      try {
+        await sendApns(row.device_token, topic, apnsBody, payload.priority ?? 10, 'alert', row.apns_environment);
+        delivered += 1;
+      } catch (err: any) {
+        const error = String(err?.message ?? err ?? 'send_failed');
+        console.warn(`APNs alert send failed (${topic}, ${row.apns_environment ?? 'default'}):`, error);
+        failures.push({ deviceToken: row.device_token, kind: 'alert', error });
+      }
     }
+
+    return { attempted, delivered, failures };
   }
 }

@@ -105,4 +105,17 @@ export class NotificationsService {
       [targetId, actorId, postId]
     );
   }
+
+  async notifyCommentReply(targetId, actorId, postId) {
+    if (!targetId || !actorId || !postId || targetId === actorId) return;
+    await pool.query(
+      `
+      insert into public.notifications
+        (user_id, actor_id, type, entity_type, entity_id)
+      values
+        ($1, $2, 'comment_reply', 'post', $3)
+      `,
+      [targetId, actorId, postId]
+    );
+  }
 }

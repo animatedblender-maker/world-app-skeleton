@@ -26,6 +26,7 @@ type SharedPostRow = {
   like_count: number;
   comment_count: number;
   liked_by_me: boolean;
+  saved_by_me: boolean;
   created_at: string;
   updated_at: string;
   author: PostAuthorRow | null;
@@ -70,9 +71,59 @@ type CreatePostInput = {
 
 export class PostsService {
   private notifications = new NotificationsService();
+  private bookmarksTableExists: boolean | null = null;
+
+  private async bookmarksEnabled(): Promise<boolean> {
+    if (this.bookmarksTableExists !== null) return this.bookmarksTableExists;
+    try {
+      const { rows } = await pool.query<{ exists: boolean }>(
+        `select to_regclass('public.post_bookmarks') is not null as exists`
+      );
+      this.bookmarksTableExists = !!rows?.[0]?.exists;
+    } catch {
+      this.bookmarksTableExists = false;
+    }
+    return this.bookmarksTableExists;
+  }
+
+  private async savedByMeExpr(viewerParam: string): Promise<string> {
+    if (!(await this.bookmarksEnabled())) {
+      return `false as saved_by_me`;
+    }
+    return `
+        case
+          when ${viewerParam} is not null
+            and exists (
+              select 1
+              from public.post_bookmarks pb
+              where pb.post_id = p.id and pb.user_id = ${viewerParam}
+            )
+          then true
+          else false
+        end as saved_by_me`;
+  }
+
+  private async savedByMeSharedExpr(viewerParam: string): Promise<string> {
+    if (!(await this.bookmarksEnabled())) {
+      return `'saved_by_me', false,`;
+    }
+    return `
+            'saved_by_me', case
+              when ${viewerParam} is not null
+                and exists (
+                  select 1
+                  from public.post_bookmarks spb
+                  where spb.post_id = sp.id and spb.user_id = ${viewerParam}
+                )
+              then true
+              else false
+            end,`;
+  }
 
   async postsByCountry(code: string, limit: number, viewerId: string | null): Promise<PostRow[]> {
     const iso = (code || '').toUpperCase();
+    const savedByMe = await this.savedByMeExpr('$3::uuid');
+    const savedByMeShared = await this.savedByMeSharedExpr('$3::uuid');
     const { rows } = await pool.query(
       `
       select
@@ -88,7 +139,7 @@ export class PostsService {
             )
           then true
           else false
-        end as liked_by_me,
+        end as liked_by_me,${savedByMe},
         jsonb_build_object(
           'user_id', pr.user_id,
           'display_name', pr.display_name,
@@ -123,7 +174,7 @@ export class PostsService {
                 )
               then true
               else false
-            end,
+            end,${savedByMeShared}
             'created_at', sp.created_at,
             'updated_at', sp.updated_at,
             'author', jsonb_build_object(
@@ -166,6 +217,8 @@ export class PostsService {
   }
 
   async postsByAuthor(authorId: string, limit: number, viewerId: string | null): Promise<PostRow[]> {
+    const savedByMe = await this.savedByMeExpr('$2::uuid');
+    const savedByMeShared = await this.savedByMeSharedExpr('$2::uuid');
     const isOwner = !!viewerId && viewerId === authorId;
     if (isOwner) {
       const { rows } = await pool.query(
@@ -183,7 +236,7 @@ export class PostsService {
               )
             then true
             else false
-          end as liked_by_me,
+          end as liked_by_me,${savedByMe},
           jsonb_build_object(
             'user_id', pr.user_id,
             'display_name', pr.display_name,
@@ -218,7 +271,7 @@ export class PostsService {
                   )
                 then true
                 else false
-              end,
+              end,${savedByMeShared}
               'created_at', sp.created_at,
               'updated_at', sp.updated_at,
               'author', jsonb_build_object(
@@ -262,7 +315,7 @@ export class PostsService {
             )
           then true
           else false
-        end as liked_by_me,
+        end as liked_by_me,${savedByMe},
         jsonb_build_object(
           'user_id', pr.user_id,
           'display_name', pr.display_name,
@@ -297,7 +350,7 @@ export class PostsService {
                 )
               then true
               else false
-            end,
+            end,${savedByMeShared}
             'created_at', sp.created_at,
             'updated_at', sp.updated_at,
             'author', jsonb_build_object(
@@ -338,7 +391,112 @@ export class PostsService {
     return rows as PostRow[];
   }
 
+  async recentPosts(
+    limit: number,
+    viewerId: string | null,
+    before?: string | null
+  ): Promise<PostRow[]> {
+    const safeLimit = Math.max(1, Math.min(100, limit || 25));
+    const savedByMe = await this.savedByMeExpr('$2::uuid');
+    const savedByMeShared = await this.savedByMeSharedExpr('$2::uuid');
+    const params: Array<string | number | null> = [safeLimit, viewerId];
+    const beforeClause = before ? `and p.created_at < $3::timestamptz` : '';
+    if (before) params.push(before);
+    const { rows } = await pool.query(
+      `
+      select
+        p.*,
+        (select count(*)::int from public.post_likes pl where pl.post_id = p.id) as like_count,
+        (select count(*)::int from public.post_comments pc where pc.post_id = p.id) as comment_count,
+        case
+          when $2::uuid is not null
+            and exists (
+              select 1
+              from public.post_likes pl
+              where pl.post_id = p.id and pl.user_id = $2::uuid
+            )
+          then true
+          else false
+        end as liked_by_me,${savedByMe},
+        jsonb_build_object(
+          'user_id', pr.user_id,
+          'display_name', pr.display_name,
+          'username', pr.username,
+          'avatar_url', pr.avatar_url,
+          'country_name', pr.country_name,
+          'country_code', pr.country_code
+        ) as author,
+        case
+          when sp.id is null then null
+          else jsonb_build_object(
+            'id', sp.id,
+            'author_id', sp.author_id,
+            'category_id', sp.category_id,
+            'country_name', sp.country_name,
+            'country_code', sp.country_code,
+            'city_name', sp.city_name,
+            'title', sp.title,
+            'body', sp.body,
+            'media_type', sp.media_type,
+            'media_url', sp.media_url,
+            'thumb_url', sp.thumb_url,
+            'visibility', sp.visibility,
+            'like_count', (select count(*)::int from public.post_likes spl where spl.post_id = sp.id),
+            'comment_count', (select count(*)::int from public.post_comments spc where spc.post_id = sp.id),
+            'liked_by_me', case
+              when $2::uuid is not null
+                and exists (
+                  select 1
+                  from public.post_likes spl
+                  where spl.post_id = sp.id and spl.user_id = $2::uuid
+                )
+              then true
+              else false
+            end,${savedByMeShared}
+            'created_at', sp.created_at,
+            'updated_at', sp.updated_at,
+            'author', jsonb_build_object(
+              'user_id', spr.user_id,
+              'display_name', spr.display_name,
+              'username', spr.username,
+              'avatar_url', spr.avatar_url,
+              'country_name', spr.country_name,
+              'country_code', spr.country_code
+            )
+          )
+        end as shared_post
+      from public.posts p
+      left join public.profiles pr on pr.user_id = p.author_id
+      left join public.posts sp on sp.id = p.shared_post_id
+        and coalesce(sp.moderation_status, 'active') not in ('hidden', 'deleted')
+      left join public.profiles spr on spr.user_id = sp.author_id
+      where coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
+        and (
+          p.visibility in ('public', 'country')
+          or ($2::uuid is not null and p.author_id = $2::uuid)
+          or (
+            p.visibility = 'followers'
+            and $2::uuid is not null
+            and exists (
+              select 1
+              from public.user_follows f
+              where f.follower_id = $2::uuid and f.following_id = p.author_id
+            )
+          )
+        )
+        ${beforeClause}
+      order by p.created_at desc, p.id desc
+      limit $1
+      `,
+      params
+    );
+
+    return rows as PostRow[];
+  }
+
   async searchPosts(query: string, limit: number, viewerId: string | null): Promise<PostRow[]> {
+    const savedByMe = await this.savedByMeExpr('$4::uuid');
+    const savedByMeShared = await this.savedByMeSharedExpr('$4::uuid');
     const term = String(query ?? '').trim();
     if (!term) return [];
     const max = Math.max(1, Math.min(100, limit || 25));
@@ -362,7 +520,7 @@ export class PostsService {
             )
           then true
           else false
-        end as liked_by_me,
+        end as liked_by_me,${savedByMe},
         jsonb_build_object(
           'user_id', pr.user_id,
           'display_name', pr.display_name,
@@ -397,7 +555,7 @@ export class PostsService {
                 )
               then true
               else false
-            end,
+            end,${savedByMeShared}
             'created_at', sp.created_at,
             'updated_at', sp.updated_at,
             'author', jsonb_build_object(
@@ -500,8 +658,43 @@ export class PostsService {
     return post;
   }
 
-  async updatePost(postId: string, authorId: string, input: { title?: string | null; body?: string | null; visibility?: string | null }): Promise<PostRow> {
+  async updatePost(
+    postId: string,
+    authorId: string,
+    input: {
+      title?: string | null;
+      body?: string | null;
+      visibility?: string | null;
+      media_type?: string | null;
+      media_url?: string | null;
+      thumb_url?: string | null;
+      clear_media?: boolean | null;
+    }
+  ): Promise<PostRow> {
     const visibility = this.normalizeVisibility(input.visibility);
+    const clearMedia = input.clear_media === true;
+    const hasMediaUpdate =
+      clearMedia ||
+      (input.media_url !== undefined && input.media_url !== null && String(input.media_url).trim().length > 0);
+
+    let mediaType: string | null = null;
+    let mediaUrl: string | null = null;
+    let thumbUrl: string | null = null;
+
+    if (clearMedia) {
+      mediaType = 'none';
+      mediaUrl = null;
+      thumbUrl = null;
+    } else if (hasMediaUpdate) {
+      mediaUrl = String(input.media_url ?? '').trim() || null;
+      mediaType = this.normalizeMediaType(input.media_type, mediaUrl);
+      thumbUrl = mediaType === 'none' ? null : (input.thumb_url ?? null);
+      if (mediaType === 'none') {
+        mediaUrl = null;
+        thumbUrl = null;
+      }
+    }
+
     const { rows } = await pool.query(
       `
       update public.posts
@@ -509,6 +702,9 @@ export class PostsService {
         title = coalesce($3, title),
         body = coalesce($4, body),
         visibility = coalesce($5, visibility),
+        media_type = case when $6::boolean then $7 else media_type end,
+        media_url = case when $6::boolean then $8 else media_url end,
+        thumb_url = case when $6::boolean then $9 else thumb_url end,
         updated_at = now()
       where id = $1 and author_id = $2
       returning id
@@ -519,6 +715,10 @@ export class PostsService {
         input.title?.trim() ?? null,
         input.body?.trim() ?? null,
         visibility,
+        hasMediaUpdate,
+        mediaType,
+        mediaUrl,
+        thumbUrl,
       ]
     );
 
@@ -611,6 +811,56 @@ export class PostsService {
     const updated = await this.postByIdForViewer(postId, userId);
     if (!updated) throw new Error('POST_NOT_FOUND');
     return updated;
+  }
+
+  async savePost(postId: string, userId: string): Promise<PostRow> {
+    await this.ensurePostAccess(postId, userId);
+    await pool.query(
+      `
+      insert into public.post_bookmarks (post_id, user_id)
+      values ($1, $2)
+      on conflict do nothing
+      `,
+      [postId, userId]
+    );
+    const updated = await this.postByIdForViewer(postId, userId);
+    if (!updated) throw new Error('POST_NOT_FOUND');
+    return updated;
+  }
+
+  async unsavePost(postId: string, userId: string): Promise<PostRow> {
+    await this.ensurePostAccess(postId, userId);
+    await pool.query(
+      `
+      delete from public.post_bookmarks
+      where post_id = $1 and user_id = $2
+      `,
+      [postId, userId]
+    );
+    const updated = await this.postByIdForViewer(postId, userId);
+    if (!updated) throw new Error('POST_NOT_FOUND');
+    return updated;
+  }
+
+  async savedPosts(userId: string, limit: number): Promise<PostRow[]> {
+    const safeLimit = Math.max(1, Math.min(100, limit || 25));
+    const { rows } = await pool.query(
+      `
+      select pb.post_id
+      from public.post_bookmarks pb
+      where pb.user_id = $1
+      order by pb.created_at desc
+      limit $2
+      `,
+      [userId, safeLimit]
+    );
+
+    const posts: PostRow[] = [];
+    for (const row of rows) {
+      const post = await this.postByIdForViewer(String(row.post_id), userId);
+      if (post) posts.push(post);
+    }
+    return posts;
   }
 
   async likesByPost(postId: string, limit: number, viewerId: string | null): Promise<PostLikeRow[]> {
@@ -914,6 +1164,8 @@ export class PostsService {
   }
 
   private async postByIdForViewer(id: string, viewerId: string | null): Promise<PostRow | null> {
+    const savedByMe = await this.savedByMeExpr('$2::uuid');
+    const savedByMeShared = await this.savedByMeSharedExpr('$2::uuid');
     const { rows } = await pool.query(
       `
       select
@@ -929,7 +1181,7 @@ export class PostsService {
             )
           then true
           else false
-        end as liked_by_me,
+        end as liked_by_me,${savedByMe},
         jsonb_build_object(
           'user_id', pr.user_id,
           'display_name', pr.display_name,
@@ -964,7 +1216,7 @@ export class PostsService {
                 )
               then true
               else false
-            end,
+            end,${savedByMeShared}
             'created_at', sp.created_at,
             'updated_at', sp.updated_at,
             'author', jsonb_build_object(

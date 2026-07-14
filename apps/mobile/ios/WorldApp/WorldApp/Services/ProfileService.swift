@@ -143,10 +143,16 @@ final class ProfileService {
         }
         """
 
+        if let result: Response = try? await gql.request(
+            query: query,
+            variables: ["username": username]
+        ) {
+            return result.profileByUsername?.toModel
+        }
+
         let result: Response = try await gql.authenticatedRequest(
             query: query,
-            variables: ["username": username],
-
+            variables: ["username": username]
         )
         return result.profileByUsername?.toModel
     }
@@ -162,7 +168,8 @@ final class ProfileService {
         }
         """
         let result: Response = try await gql.authenticatedRequest(query: gqlQuery, variables: ["query": query, "limit": limit])
-        return result.searchProfiles.map(\.toModel)
+        let profiles = result.searchProfiles.map(\.toModel)
+        return MatteryaSearchEngine.rankProfiles(profiles, query: query, limit: limit)
     }
 
     func browseProfiles(limit: Int = 30, offset: Int = 0) async throws -> [Profile] {
@@ -189,6 +196,13 @@ final class ProfileService {
           }
         }
         """
+        if let result: Response = try? await gql.request(
+            query: query,
+            variables: ["user_id": userID]
+        ) {
+            return result.profileById?.toModel
+        }
+
         let result: Response = try await gql.authenticatedRequest(query: query, variables: ["user_id": userID])
         return result.profileById?.toModel
     }

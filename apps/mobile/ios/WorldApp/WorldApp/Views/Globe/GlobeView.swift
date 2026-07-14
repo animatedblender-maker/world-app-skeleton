@@ -5,10 +5,11 @@ struct GlobeView: View {
 
     var body: some View {
         ZStack {
-            PhotorealGlobeView { country in
+            AppleMapGlobeView(resetGlobe: appState.selectedCountry == nil) { country in
                 appState.selectCountry(country)
                 appState.navigate(to: .countryFeed(country))
             }
+            .ignoresSafeArea()
 
             VStack(spacing: 0) {
                 MatteryaTopBar(showsSearch: true) {

@@ -148,7 +148,7 @@ final class AppleMusicNowPlayingService {
         }
 
         let itemID = MusicItemID(contentId)
-        var request = MusicCatalogResourceRequest<Song>(matching: \.id, equalTo: itemID)
+        let request = MusicCatalogResourceRequest<Song>(matching: \.id, equalTo: itemID)
         let response = try await request.response()
         guard let song = response.items.first else {
             throw AppleMusicServiceError.songUnavailable

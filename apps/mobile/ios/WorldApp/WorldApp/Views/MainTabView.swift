@@ -14,9 +14,9 @@ struct MainTabView: View {
                     case .feed:
                         FeedView()
                     case .globe:
-                        LivingView()
-                    case .reels:
-                        ReelsTabView()
+                        GlobeView()
+                    case .hubs:
+                        MatteryaHubsView()
                     case .messages:
                         MessagesView()
                     case .profile:
@@ -24,15 +24,14 @@ struct MainTabView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .id(appState.selectedTab)
-                .safeAreaPadding(.bottom, appState.selectedTab == .reels ? 0 : Theme.tabBarHeight)
+                .id(appState.selectedTab.rawValue)
+                .safeAreaPadding(.bottom, Theme.tabBarHeight)
 
                 BottomTabBar()
             }
             .overlay {
                 AppMenuOverlay()
                 NotificationsOverlay()
-                CreateMenuOverlay()
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(appState.navigationPath.isEmpty ? .hidden : .visible, for: .navigationBar)
@@ -44,13 +43,19 @@ struct MainTabView: View {
                 case .news(let id):
                     NewsDetailView(newsID: id).screenBackground()
                 case .reels(let country):
-                    ReelsView(country: country)
+                    NavigationRedirectView {
+                        appState.openCountryReels(country)
+                    }
                 case .countryFeed(let country):
                     CountryFeedView(country: country).screenBackground()
                 case .search:
                     SearchView().screenBackground()
                 case .publicProfile(let username):
                     PublicProfileView(username: username).screenBackground()
+                case .publicProfileByUserID(let userID):
+                    PublicProfileView(userID: userID).screenBackground()
+                case .conversation(let id):
+                    ConversationRouteView(conversationID: id)
                 case .people:
                     PeopleView().screenBackground()
                 case .ads:
@@ -59,6 +64,20 @@ struct MainTabView: View {
                     EditProfileView().screenBackground()
                 case .settings:
                     SettingsView().screenBackground()
+                case .premium:
+                    SettingsView().screenBackground()
+                case .playWatch(let id):
+                    NavigationRedirectView {
+                        Task { await appState.openPlayVideo(id: id) }
+                    }
+                case .playChannel(let username):
+                    NavigationRedirectView {
+                        appState.openPlayChannel(username: username)
+                    }
+                case .playChannelID(let authorID):
+                    NavigationRedirectView {
+                        appState.openPlayChannel(authorID: authorID)
+                    }
                 }
             }
         }
@@ -67,6 +86,7 @@ struct MainTabView: View {
             get: { appState.activeCreateSheet },
             set: { appState.activeCreateSheet = $0 }
         )) { sheet in
+            Group {
             if let country = appState.composerCountry {
                 switch sheet {
                 case .post:
@@ -76,6 +96,7 @@ struct MainTabView: View {
                             object: nil,
                             userInfo: ["post": post]
                         )
+                        appState.reloadContent()
                         Task { await appState.refreshStories() }
                     }
                 case .video:
@@ -85,7 +106,8 @@ struct MainTabView: View {
                             object: nil,
                             userInfo: ["post": post]
                         )
-                        appState.openLivingVideo(postID: post.id)
+                        appState.reloadContent()
+                        appState.openPost(post)
                     }
                 case .reel:
                     ReelComposerView(country: country) { post in
@@ -94,7 +116,8 @@ struct MainTabView: View {
                             object: nil,
                             userInfo: ["post": post]
                         )
-                        appState.selectedTab = .reels
+                        appState.reloadContent()
+                        appState.openPost(post)
                     }
                 case .story:
                     StoryComposerView(country: country) { post in
@@ -103,16 +126,63 @@ struct MainTabView: View {
                             object: nil,
                             userInfo: ["post": post]
                         )
+                        appState.reloadContent()
                         Task { await appState.refreshStories() }
                     }
                 }
             }
+            }
+            .withAppState(appState)
         }
         .fullScreenCover(item: Binding(
             get: { appState.storyViewerContext },
             set: { appState.storyViewerContext = $0 }
         )) { context in
             StoriesViewerView(context: context)
+                .withAppState(appState)
         }
+        .fullScreenCover(item: Binding(
+            get: { appState.reelsViewerContext },
+            set: { appState.reelsViewerContext = $0 }
+        )) { context in
+            ReelsScrollViewer(context: context)
+                .withAppState(appState)
+        }
+        .sheet(item: Binding(
+            get: { appState.sharePostSheet },
+            set: { appState.sharePostSheet = $0 }
+        )) { post in
+            SharePostSheet(post: post)
+                .withAppState(appState)
+        }
+        .fullScreenCover(isPresented: Binding(
+            get: { appState.isPlayPresented },
+            set: { presented in
+                if !presented {
+                    appState.dismissPlay()
+                } else {
+                    appState.isPlayPresented = true
+                }
+            }
+        )) {
+            LivingView()
+                .withAppState(appState)
+        }
+    }
+}
+
+/// Pops itself after running a redirect action so ghost destinations never linger on the stack.
+private struct NavigationRedirectView: View {
+    @Environment(AppState.self) private var appState
+    let action: () -> Void
+
+    var body: some View {
+        Color.clear
+            .onAppear {
+                action()
+                if !appState.navigationPath.isEmpty {
+                    appState.navigationPath.removeLast()
+                }
+            }
     }
 }

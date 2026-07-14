@@ -1,56 +1,88 @@
 import SwiftUI
 
-struct CommentThreadItem: Identifiable {
-    let comment: PostComment
+enum CommentThreadLayout {
+    static let indentPerLevel: CGFloat = 44
+    /// Flat threads: top-level comments at 0, all replies at 1.
+    static let maxDepth = 1
+
+    static func indent(for depth: Int) -> CGFloat {
+        CGFloat(min(max(depth, 0), maxDepth)) * indentPerLevel
+    }
+}
+
+protocol CommentThreadNode: Identifiable where ID == String {
+    var parentID: String? { get }
+    var createdAt: String { get }
+}
+
+extension PostComment: CommentThreadNode {}
+extension ExternalNewsComment: CommentThreadNode {}
+
+struct CommentThreadItem<T: CommentThreadNode>: Identifiable {
+    let comment: T
     let depth: Int
     var id: String { comment.id }
 }
 
 enum CommentThreadBuilder {
-    static func ordered(_ comments: [PostComment]) -> [CommentThreadItem] {
-        var byParent: [String: [PostComment]] = [:]
-        var roots: [PostComment] = []
+    private static func normalizedID(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return trimmed.lowercased()
+    }
 
-        for comment in comments {
-            if let parentID = comment.parentID, !parentID.isEmpty {
-                byParent[parentID, default: []].append(comment)
-            } else {
-                roots.append(comment)
-            }
+    /// Top-level comment that anchors a flat reply thread.
+    static func threadRootID<T: CommentThreadNode>(for comment: T, in comments: [T]) -> String {
+        let byID = Dictionary(uniqueKeysWithValues: comments.map { (normalizedID($0.id) ?? $0.id, $0) })
+        var current = comment
+        var visited = Set<String>()
+        while let parentID = normalizedID(current.parentID),
+              !visited.contains(parentID) {
+            visited.insert(parentID)
+            guard let parent = byID[parentID] else { break }
+            current = parent
+        }
+        return current.id
+    }
+
+    static func ordered<T: CommentThreadNode>(_ comments: [T]) -> [CommentThreadItem<T>] {
+        func sortKey(_ comment: T) -> String { comment.createdAt }
+        func isRoot(_ comment: T) -> Bool { normalizedID(comment.parentID) == nil }
+        func threadRootKey(for comment: T) -> String {
+            let rootID = threadRootID(for: comment, in: comments)
+            return normalizedID(rootID) ?? rootID
         }
 
-        func sortKey(_ comment: PostComment) -> String { comment.createdAt }
-        roots.sort { sortKey($0) < sortKey($1) }
-        for key in byParent.keys {
-            byParent[key]?.sort { sortKey($0) < sortKey($1) }
-        }
+        let roots = comments.filter(isRoot).sorted { sortKey($0) < sortKey($1) }
+        let replies = comments.filter { !isRoot($0) }
 
-        var items: [CommentThreadItem] = []
-        func appendTree(_ comment: PostComment, depth: Int) {
-            items.append(CommentThreadItem(comment: comment, depth: depth))
-            for child in byParent[comment.id] ?? [] {
-                appendTree(child, depth: depth + 1)
-            }
-        }
+        var items: [CommentThreadItem<T>] = []
+        var included = Set<String>()
+
         for root in roots {
-            appendTree(root, depth: 0)
+            let rootKey = normalizedID(root.id) ?? root.id
+            items.append(CommentThreadItem(comment: root, depth: 0))
+            included.insert(rootKey)
+
+            let threadReplies = replies
+                .filter { threadRootKey(for: $0) == rootKey }
+                .sorted { sortKey($0) < sortKey($1) }
+            for reply in threadReplies {
+                let replyKey = normalizedID(reply.id) ?? reply.id
+                items.append(CommentThreadItem(comment: reply, depth: 1))
+                included.insert(replyKey)
+            }
         }
 
-        let included = Set(items.map(\.comment.id))
         let orphans = comments
-            .filter { !included.contains($0.id) }
+            .filter { !included.contains(normalizedID($0.id) ?? $0.id) }
             .sorted { sortKey($0) < sortKey($1) }
         for orphan in orphans {
-            let depth: Int
-            if let parentID = orphan.parentID, !parentID.isEmpty,
-               let parentDepth = items.first(where: { $0.comment.id == parentID })?.depth {
-                depth = parentDepth + 1
-            } else if orphan.parentID != nil {
-                depth = 1
-            } else {
-                depth = 0
-            }
+            let key = normalizedID(orphan.id) ?? orphan.id
+            let depth = isRoot(orphan) ? 0 : 1
             items.append(CommentThreadItem(comment: orphan, depth: depth))
+            included.insert(key)
         }
 
         return items
@@ -63,6 +95,9 @@ struct PostCommentsView: View {
     let postID: String
     @Binding var comments: [PostComment]
     var showsComposer: Bool = true
+    var maxVisibleComments: Int? = nil
+    var totalCommentCount: Int? = nil
+    var onViewAllComments: (() -> Void)? = nil
     var onError: ((String) -> Void)?
 
     @State private var commentDraft = ""
@@ -72,7 +107,8 @@ struct PostCommentsView: View {
     @State private var likingCommentIDs: Set<String> = []
 
     private struct ReplyTarget {
-        let commentID: String
+        /// Thread anchor sent to the API (always the top-level comment).
+        let threadRootID: String
         let authorName: String
     }
 
@@ -80,21 +116,35 @@ struct PostCommentsView: View {
         VStack(alignment: .leading, spacing: 10) {
             if isLoading {
                 ProgressView()
-                    .tint(Theme.facebookBlue)
+                    .tint(Theme.accent)
                     .frame(maxWidth: .infinity)
             } else if threadedComments.isEmpty {
                 Text("No comments yet. Be the first to comment.")
                     .font(.subheadline)
                     .foregroundStyle(Theme.inkMuted)
             } else {
-                ForEach(threadedComments) { item in
+                ForEach(visibleThreadedComments) { item in
                     FacebookCommentRow(
                         comment: item.comment,
                         depth: item.depth,
                         isLiking: likingCommentIDs.contains(item.comment.id),
-                        onReply: { startReply(to: item.comment) },
+                        onReply: { startReply(to: item.comment, depth: item.depth) },
                         onToggleLike: { Task { await toggleLike(item.comment) } }
                     )
+                }
+
+                if let maxVisibleComments,
+                   threadedComments.count > maxVisibleComments {
+                    Button {
+                        onViewAllComments?()
+                    } label: {
+                        let total = totalCommentCount ?? threadedComments.count
+                        Text("View all \(total) \(total == 1 ? "comment" : "comments")")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.inkMuted)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 2)
                 }
             }
 
@@ -109,8 +159,18 @@ struct PostCommentsView: View {
         }
     }
 
-    private var threadedComments: [CommentThreadItem] {
+    private var threadedComments: [CommentThreadItem<PostComment>] {
         CommentThreadBuilder.ordered(comments)
+    }
+
+    private var visibleThreadedComments: [CommentThreadItem<PostComment>] {
+        guard let maxVisibleComments else { return threadedComments }
+        return Array(threadedComments.prefix(maxVisibleComments))
+    }
+
+    private var composerIndent: CGFloat {
+        guard replyTarget != nil else { return 0 }
+        return CommentThreadLayout.indent(for: 1)
     }
 
     private var composer: some View {
@@ -120,7 +180,7 @@ struct PostCommentsView: View {
                     Text("Replying to")
                         .foregroundStyle(Theme.inkMuted)
                     Text("@\(replyTarget.authorName)")
-                        .foregroundStyle(Theme.facebookBlue)
+                        .foregroundStyle(Theme.accent)
                         .fontWeight(.semibold)
                     Button("Cancel") { self.replyTarget = nil }
                         .font(.caption.weight(.semibold))
@@ -133,7 +193,7 @@ struct PostCommentsView: View {
                 AvatarView(
                     url: appState.currentProfile?.avatarURL,
                     seed: appState.currentProfile?.userID ?? "me",
-                    size: 32
+                    size: replyTarget == nil ? 32 : 26
                 )
 
                 TextField(
@@ -157,14 +217,14 @@ struct PostCommentsView: View {
                     } label: {
                         Image(systemName: "paperplane.fill")
                             .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(Theme.facebookBlue)
+                            .foregroundStyle(Theme.accent)
                     }
                     .buttonStyle(.plain)
                     .disabled(isSubmitting)
                 }
             }
         }
-        .padding(.leading, replyTarget == nil ? 0 : 36)
+        .padding(.leading, composerIndent)
         .padding(.top, 4)
     }
 
@@ -174,9 +234,9 @@ struct PostCommentsView: View {
             ?? "Member"
     }
 
-    private func startReply(to comment: PostComment) {
+    private func startReply(to comment: PostComment, depth: Int) {
         replyTarget = ReplyTarget(
-            commentID: comment.id,
+            threadRootID: CommentThreadBuilder.threadRootID(for: comment, in: comments),
             authorName: comment.author?.username ?? authorName(comment)
         )
     }
@@ -185,7 +245,7 @@ struct PostCommentsView: View {
         isLoading = true
         defer { isLoading = false }
         do {
-            comments = try await PostsService.shared.listComments(postID)
+            comments = try await PostsService.shared.listComments(postID, limit: 200)
         } catch {
             onError?(error.localizedDescription)
         }
@@ -194,15 +254,23 @@ struct PostCommentsView: View {
     private func submitComment() async {
         let body = commentDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { return }
+        let parentID = replyTarget?.threadRootID
         isSubmitting = true
         defer { isSubmitting = false }
         do {
-            let comment = try await PostsService.shared.addComment(
+            let created = try await PostsService.shared.addComment(
                 postID,
                 body: body,
-                parentID: replyTarget?.commentID
+                parentID: parentID
             )
-            comments.append(comment)
+            var refreshed = try await PostsService.shared.listComments(postID, limit: 200)
+            if let parentID, !parentID.isEmpty {
+                refreshed = refreshed.map { comment in
+                    guard comment.id == created.id, comment.parentID == nil else { return comment }
+                    return comment.withParentID(parentID)
+                }
+            }
+            comments = refreshed
             commentDraft = ""
             replyTarget = nil
         } catch {
@@ -228,7 +296,7 @@ struct PostCommentsView: View {
     }
 }
 
-private struct FacebookCommentRow: View {
+struct FacebookCommentRow: View {
     let comment: PostComment
     let depth: Int
     let isLiking: Bool
@@ -237,18 +305,22 @@ private struct FacebookCommentRow: View {
 
     private var isReply: Bool { depth > 0 }
     private var avatarSize: CGFloat { isReply ? 26 : 32 }
-    private var threadIndent: CGFloat { CGFloat(min(depth, 4)) * 36 }
+    private var threadIndent: CGFloat { CommentThreadLayout.indent(for: depth) }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            if isReply {
-                RoundedRectangle(cornerRadius: 1, style: .continuous)
-                    .fill(Theme.border)
-                    .frame(width: 2)
-                    .padding(.top, 6)
-                    .padding(.bottom, 2)
+        HStack(alignment: .top, spacing: 0) {
+            if threadIndent > 0 {
+                HStack(spacing: 0) {
+                    if isReply {
+                        threadGuide
+                            .padding(.trailing, 6)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .frame(width: threadIndent, alignment: .trailing)
             }
 
+            HStack(alignment: .top, spacing: 8) {
             AvatarView(
                 url: comment.author?.avatarURL,
                 seed: comment.authorID,
@@ -256,25 +328,11 @@ private struct FacebookCommentRow: View {
             )
 
             VStack(alignment: .leading, spacing: 4) {
-                if isReply {
-                    Text(authorName)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Theme.ink)
-                } else {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(authorName)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(Theme.ink)
-                        if let body = cleanedBody {
-                            Text(body)
-                                .font(.subheadline)
-                                .foregroundStyle(Theme.ink)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                }
+                Text(authorName)
+                    .font(isReply ? .caption.weight(.semibold) : .subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.ink)
 
-                if isReply, let body = cleanedBody {
+                if let body = cleanedBody {
                     Text(body)
                         .font(.subheadline)
                         .foregroundStyle(Theme.ink)
@@ -285,7 +343,7 @@ private struct FacebookCommentRow: View {
                     Button(action: onToggleLike) {
                         Text(comment.likedByMe ? "Liked" : "Like")
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(comment.likedByMe ? Theme.facebookBlue : Theme.inkMuted)
+                            .foregroundStyle(comment.likedByMe ? Theme.ink : Theme.inkMuted)
                     }
                     .buttonStyle(.plain)
                     .disabled(isLiking)
@@ -305,7 +363,7 @@ private struct FacebookCommentRow: View {
                         HStack(spacing: 4) {
                             Image(systemName: "hand.thumbsup.fill")
                                 .font(.system(size: 9))
-                                .foregroundStyle(Theme.facebookBlue)
+                                .foregroundStyle(Theme.ink)
                             Text("\(comment.likeCount)")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(Theme.inkSecondary)
@@ -313,8 +371,17 @@ private struct FacebookCommentRow: View {
                     }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
-        .padding(.leading, threadIndent)
+    }
+
+    private var threadGuide: some View {
+        RoundedRectangle(cornerRadius: 1, style: .continuous)
+            .fill(Theme.accent.opacity(0.45))
+            .frame(width: 2)
+            .padding(.top, 4)
+            .padding(.bottom, 2)
     }
 
     private var cleanedBody: String? {
@@ -326,5 +393,200 @@ private struct FacebookCommentRow: View {
             displayName: comment.author?.displayName,
             username: comment.author?.username
         )
+    }
+}
+
+struct NewsCommentsSection: View {
+    @Environment(AppState.self) private var appState
+
+    let newsItemID: String
+    @Binding var comments: [ExternalNewsComment]
+    var onError: ((String) -> Void)?
+
+    @State private var commentDraft = ""
+    @State private var replyTarget: NewsReplyTarget?
+    @State private var isSubmitting = false
+
+    private struct NewsReplyTarget {
+        let threadRootID: String
+        let authorName: String
+    }
+
+    private var threadedComments: [CommentThreadItem<ExternalNewsComment>] {
+        CommentThreadBuilder.ordered(comments)
+    }
+
+    private var composerIndent: CGFloat {
+        guard replyTarget != nil else { return 0 }
+        return CommentThreadLayout.indent(for: 1)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Comments")
+                .font(.headline)
+                .foregroundStyle(Theme.ink)
+
+            if threadedComments.isEmpty {
+                Text("No comments yet.")
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.inkMuted)
+            } else {
+                ForEach(threadedComments) { item in
+                    NewsCommentRow(
+                        comment: item.comment,
+                        depth: item.depth,
+                        onReply: { startReply(to: item.comment, depth: item.depth) }
+                    )
+                }
+            }
+
+            composer
+        }
+    }
+
+    private var composer: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let replyTarget {
+                HStack(spacing: 6) {
+                    Text("Replying to")
+                        .foregroundStyle(Theme.inkMuted)
+                    Text("@\(replyTarget.authorName)")
+                        .foregroundStyle(Theme.accent)
+                        .fontWeight(.semibold)
+                    Button("Cancel") { self.replyTarget = nil }
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.inkMuted)
+                }
+                .font(.caption)
+            }
+
+            HStack(spacing: 8) {
+                TextField(
+                    replyTarget == nil ? "Add comment…" : "Write a reply…",
+                    text: $commentDraft,
+                    axis: .vertical
+                )
+                .lineLimit(1...4)
+                .font(.subheadline)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(Theme.surface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
+                        .stroke(Theme.border, lineWidth: 0.5)
+                )
+
+                Button("Send") {
+                    Task { await addComment() }
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Theme.accentBright)
+                .disabled(commentDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSubmitting)
+            }
+        }
+        .padding(.leading, composerIndent)
+    }
+
+    private func startReply(to comment: ExternalNewsComment, depth: Int) {
+        replyTarget = NewsReplyTarget(
+            threadRootID: CommentThreadBuilder.threadRootID(for: comment, in: comments),
+            authorName: comment.author?.username ?? comment.author?.displayName ?? "Member"
+        )
+    }
+
+    private func addComment() async {
+        let body = commentDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty else { return }
+        isSubmitting = true
+        defer { isSubmitting = false }
+        do {
+            _ = try await NewsService.shared.addComment(
+                newsItemID,
+                body: body,
+                parentID: replyTarget?.threadRootID
+            )
+            comments = try await NewsService.shared.comments(newsItemID)
+            commentDraft = ""
+            replyTarget = nil
+        } catch {
+            onError?(error.localizedDescription)
+        }
+    }
+}
+
+private struct NewsCommentRow: View {
+    let comment: ExternalNewsComment
+    let depth: Int
+    let onReply: () -> Void
+
+    private var isReply: Bool { depth > 0 }
+    private var threadIndent: CGFloat { CommentThreadLayout.indent(for: depth) }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 0) {
+            if threadIndent > 0 {
+                HStack(spacing: 0) {
+                    if isReply {
+                        RoundedRectangle(cornerRadius: 1, style: .continuous)
+                            .fill(Theme.accent.opacity(0.45))
+                            .frame(width: 2)
+                            .padding(.top, 4)
+                            .padding(.trailing, 6)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .frame(width: threadIndent, alignment: .trailing)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(comment.author?.displayName ?? comment.author?.username ?? "Member")
+                    .font(isReply ? .caption.weight(.semibold) : .subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.ink)
+                Text(comment.body)
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Button("Reply", action: onReply)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.inkMuted)
+                    .buttonStyle(.plain)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.canvasMuted, in: RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous))
+        }
+    }
+}
+
+struct PostCommentsPageView: View {
+    let postID: String
+
+    @State private var comments: [PostComment] = []
+    @State private var errorMessage: String?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                PostCommentsView(
+                    postID: postID,
+                    comments: $comments,
+                    onError: { errorMessage = $0 }
+                )
+
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.caption)
+                        .foregroundStyle(Theme.danger)
+                }
+            }
+            .padding(Theme.pagePadding)
+            .padding(.bottom, 24)
+        }
+        .screenBackground()
+        .navigationTitle("Comments")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(Theme.canvas, for: .navigationBar)
     }
 }

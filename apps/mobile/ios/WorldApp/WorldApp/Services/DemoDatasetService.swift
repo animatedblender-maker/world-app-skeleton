@@ -23,15 +23,7 @@ actor DemoDatasetService {
 
     func searchPosts(_ query: String, limit: Int) async -> [CountryPost] {
         await ensureLoaded()
-        let needle = query.lowercased()
-        return posts
-            .filter {
-                $0.body.lowercased().contains(needle)
-                    || ($0.title?.lowercased().contains(needle) ?? false)
-                    || ($0.author?.displayName?.lowercased().contains(needle) ?? false)
-            }
-            .prefix(limit)
-            .map { $0 }
+        return MatteryaSearchEngine.rankContent(posts, query: query, limit: limit)
     }
 
     func getPostByID(_ id: String) async -> CountryPost? {

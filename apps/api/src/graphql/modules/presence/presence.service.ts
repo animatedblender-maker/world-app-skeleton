@@ -1,5 +1,11 @@
 // apps/api/src/graphql/modules/presence/presence.service.ts
 import { pool } from '../../../db.js';
+import {
+  clampGlobePresenceArgs,
+  loadCountryCentroids,
+  mergePresenceSlots,
+  type GlobePresenceDotsResult,
+} from './globe-presence-geo.js';
 
 export type AuthedUser = {
   id: string;
@@ -147,6 +153,53 @@ export class PresenceService {
     );
 
     return { ok: true, ttlSeconds: ttl, lastSeen };
+  }
+
+  async globePresenceDots(
+    precision = 3,
+    maxPoints = 4096
+  ): Promise<GlobePresenceDotsResult> {
+    const ttl = this.ttlSeconds;
+    const { precision: safePrecision, maxPoints: safeMaxPoints, cellSize } =
+      clampGlobePresenceArgs(precision, maxPoints);
+
+    const [onlineQ, bucketQ] = await Promise.all([
+      pool.query<{ n: string }>(
+        `
+        select count(*)::text as n
+        from public.user_presence
+        where is_online = true
+          and last_seen_at > (now() - ($1 || ' seconds')::interval)
+        `,
+        [ttl]
+      ),
+      pool.query<{ cc: string; slot: number; n: number }>(
+        `
+        select
+          upper(trim(country_code)) as cc,
+          mod(abs(hashtext(user_id::text)), 256)::int as slot,
+          count(*)::int as n
+        from public.user_presence
+        where is_online = true
+          and last_seen_at > (now() - ($1 || ' seconds')::interval)
+          and country_code is not null
+          and trim(country_code) <> ''
+        group by cc, slot
+        `,
+        [ttl]
+      ),
+    ]);
+
+    const centroids = loadCountryCentroids();
+    const dots = mergePresenceSlots(bucketQ.rows, centroids, cellSize, safeMaxPoints);
+
+    return {
+      dots,
+      totalOnline: Number(onlineQ.rows?.[0]?.n ?? 0),
+      precision: safePrecision,
+      maxPoints: safeMaxPoints,
+      computedAt: this.nowIso(),
+    };
   }
 
   async setOffline(user: AuthedUser): Promise<boolean> {

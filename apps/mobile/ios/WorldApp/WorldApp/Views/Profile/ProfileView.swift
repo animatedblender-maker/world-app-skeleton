@@ -15,43 +15,29 @@ struct ProfileView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                profileHeader
-                librarySectionPicker
-                librarySection
+        VStack(spacing: 0) {
+            MatteryaTopBar(showsSearch: true) {
+                appState.navigate(to: .search)
             }
-            .padding(.bottom, 24)
+
+            ScrollView {
+                VStack(spacing: 0) {
+                    profileHeader
+                    librarySectionPicker
+                    librarySection
+                }
+                .padding(.bottom, 24)
+            }
         }
         .screenBackground()
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(Theme.surface.opacity(0.94), for: .navigationBar)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                MenuToolbarButton()
-            }
-            ToolbarItem(placement: .principal) {
-                Text(profile?.username ?? profile?.displayName ?? AppConfig.appName)
-                    .font(.system(.headline, design: .serif))
-                    .foregroundStyle(Theme.ink)
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    appState.navigate(to: .editProfile)
-                } label: {
-                    Image(systemName: "square.and.pencil")
-                        .font(.system(size: 18, weight: .light))
-                        .foregroundStyle(Theme.ink)
-                }
-            }
-        }
+        .toolbar(.hidden, for: .navigationBar)
         .refreshable {
             await appState.refreshProfile()
             await appState.refreshSavedPosts()
             await loadPosts()
             await loadCounts()
         }
-        .task(id: profileUserID) {
+        .task(id: ProfileLoadToken(userID: profileUserID, generation: appState.contentLoadGeneration)) {
             await appState.refreshProfile()
             await appState.refreshSavedPosts()
             await loadPosts()
@@ -79,24 +65,62 @@ struct ProfileView: View {
     private var profileHeader: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .center, spacing: 22) {
-                AvatarView(url: profile?.avatarURL, seed: profile?.userID ?? "me", size: 78)
-                    .overlay {
-                        Circle()
-                            .stroke(Theme.border, lineWidth: 0.5)
-                    }
+                ExpandableProfileAvatar(
+                    url: profile?.avatarURL,
+                    seed: profile?.userID ?? "me",
+                    size: 78,
+                    displayName: profile?.displayName ?? profile?.username
+                )
+                .overlay {
+                    Circle()
+                        .stroke(Theme.border, lineWidth: 0.5)
+                }
 
                 VStack(alignment: .leading, spacing: 10) {
                     if let name = profile?.displayName, !name.isEmpty {
                         Text(name)
                             .font(.system(size: 26, weight: .regular, design: .serif))
                             .foregroundStyle(Theme.ink)
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.85)
                     }
+
+                    if let username = profile?.username {
+                        Text("@\(username)")
+                            .font(.subheadline)
+                            .foregroundStyle(Theme.inkMuted)
+                    } else if profile?.displayName?.isEmpty != false {
+                        Text("Member")
+                            .font(.system(size: 26, weight: .regular, design: .serif))
+                            .foregroundStyle(Theme.ink)
+                    }
+
                     HStack(spacing: 18) {
                         statBlock("Posts", value: posts.count)
                         statBlock("Followers", value: followCounts.followers)
                         statBlock("Following", value: followCounts.following)
                     }
                 }
+            }
+
+            HStack(spacing: 10) {
+                Button {
+                    appState.navigate(to: .editProfile)
+                } label: {
+                    Label("Edit profile", systemImage: "square.and.pencil")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(SecondaryButtonStyle())
+
+                Button {
+                    appState.navigate(to: .settings)
+                } label: {
+                    Label("Settings", systemImage: "gearshape")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(SecondaryButtonStyle())
             }
 
             VStack(alignment: .leading, spacing: 8) {
@@ -112,6 +136,18 @@ struct ProfileView: View {
                         .font(.subheadline)
                         .foregroundStyle(Theme.accent)
                 }
+            }
+
+            if posts.contains(where: PlayPlatformBridge.isPlayEligible),
+               let userID = profileUserID {
+                Button {
+                    appState.openPlayChannel(authorID: userID, username: profile?.username)
+                } label: {
+                    Label(MatteryaCopy.yourChannelOnHubs, systemImage: "globe.americas")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(SecondaryButtonStyle())
             }
         }
         .padding(.horizontal, Theme.pagePadding)
@@ -152,16 +188,16 @@ struct ProfileView: View {
                 title: "Saved videos",
                 subtitle: "Videos you bookmarked",
                 posts: appState.savedVideoPosts,
-                emptyIcon: "play.rectangle",
+                emptyIcon: "film",
                 emptyMessage: "Save videos from the feed to watch them later."
             )
         case .savedReels:
             savedSection(
-                title: "Saved reels",
-                subtitle: "Reels you bookmarked",
+                title: MatteryaCopy.savedSparks,
+                subtitle: MatteryaCopy.savedSparksSubtitle,
                 posts: appState.savedReelPosts,
-                emptyIcon: "play.rectangle.fill",
-                emptyMessage: "Save reels from the Reels tab to keep them here."
+                emptyIcon: "sparkles",
+                emptyMessage: "Save \(MatteryaCopy.sparks.lowercased()) from Play or your feed to keep them here."
             )
         }
     }
@@ -183,7 +219,7 @@ struct ProfileView: View {
             } else if posts.isEmpty {
                 emptyPosts
             } else {
-                postCards(posts, showsAuthorInJournal: false)
+                postCards(posts, showsAuthorInJournal: true)
             }
         }
     }
@@ -246,9 +282,16 @@ struct ProfileView: View {
                         }
                     },
                     onOpenPost: { appState.navigate(to: .post(post.id)) },
-                    onOpenVideo: post.hasVideo && !post.isReel
-                        ? { appState.openLivingVideo(postID: post.id) }
+                    onOpenVideo: PlayPlatformBridge.isLongFormVideo(post)
+                        ? { appState.openPost(post) }
                         : nil,
+                    onOpenReel: {
+                        var sparks = items.filter(\.isReel)
+                        if !sparks.contains(where: { $0.id == post.id }) {
+                            sparks.insert(post, at: 0)
+                        }
+                        appState.openReelsViewer(startingPost: post, seedPosts: sparks)
+                    },
                     onPostDeleted: { id in
                         posts.removeAll { $0.id == id }
                         appState.savedPosts.removeAll { $0.id == id }
@@ -322,6 +365,7 @@ struct ProfileView: View {
         }
         do {
             posts = try await PostsService.shared.listForAuthor(userID, limit: 30)
+            ContentCache.shared.setPosts(posts, for: .profilePosts)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -366,4 +410,9 @@ struct ProfileView: View {
             countryCode: post.countryCode, cityName: post.cityName, author: post.author
         )
     }
+}
+
+private struct ProfileLoadToken: Hashable {
+    let userID: String?
+    let generation: Int
 }

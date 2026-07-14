@@ -7,12 +7,14 @@ struct AppleMapGlobeView: View {
 
     @State private var entries: [CountryMapEntry] = []
     @State private var apiCountries: [Country] = []
+    @Bindable private var globePresence = GlobePresenceService.shared
 
     var body: some View {
         AppleMapGlobeRepresentable(
             entries: entries,
             apiCountries: apiCountries,
             resetGlobe: resetGlobe,
+            dots: globePresence.dots,
             isActive: true,
             onSelectEntry: selectEntry
         )
@@ -23,6 +25,10 @@ struct AppleMapGlobeView: View {
             if apiCountries.isEmpty {
                 apiCountries = (try? await ProfileService.shared.countries()) ?? []
             }
+            globePresence.startPolling()
+        }
+        .onDisappear {
+            globePresence.stopPolling()
         }
     }
 
@@ -48,6 +54,7 @@ struct AppleMapGlobeRepresentable: UIViewRepresentable {
     let entries: [CountryMapEntry]
     let apiCountries: [Country]
     let resetGlobe: Bool
+    let dots: [GlobePresenceDot]
     let isActive: Bool
     let onSelectEntry: (CountryMapEntry) -> Void
 
@@ -60,9 +67,7 @@ struct AppleMapGlobeRepresentable: UIViewRepresentable {
         mapView.delegate = context.coordinator
         mapView.backgroundColor = UIColor(red: 0.02, green: 0.05, blue: 0.10, alpha: 1)
 
-        // Apple Maps 3D globe — realistic earth sphere, not flat map.
         let config = MKHybridMapConfiguration(elevationStyle: .realistic)
-        config.pointOfInterestFilter = .excludingAll
         config.showsTraffic = false
         mapView.preferredConfiguration = config
 
@@ -73,13 +78,7 @@ struct AppleMapGlobeRepresentable: UIViewRepresentable {
         mapView.showsCompass = false
         mapView.showsScale = false
         mapView.showsUserLocation = false
-
-        // Lock to globe distances only — never drop into flat street map.
-        let zoomRange = MKMapView.CameraZoomRange(
-            minCenterCoordinateDistance: 18_000_000,
-            maxCenterCoordinateDistance: 90_000_000
-        )
-        mapView.setCameraZoomRange(zoomRange, animated: false)
+        mapView.setCameraZoomRange(nil, animated: false)
 
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
         tap.delegate = context.coordinator
@@ -93,6 +92,7 @@ struct AppleMapGlobeRepresentable: UIViewRepresentable {
     func updateUIView(_ mapView: MKMapView, context: Context) {
         context.coordinator.entries = entries
         context.coordinator.apiCountries = apiCountries
+        context.coordinator.dots = dots
         mapView.isHidden = !isActive
         mapView.alpha = isActive ? 1 : 0
         if !isActive {
@@ -102,8 +102,10 @@ struct AppleMapGlobeRepresentable: UIViewRepresentable {
             mapView.isScrollEnabled = true
             mapView.isZoomEnabled = true
         }
+        context.coordinator.syncDotAnnotations()
         if resetGlobe, context.coordinator.didFocusCountry {
             context.coordinator.didFocusCountry = false
+            mapView.setCameraZoomRange(nil, animated: false)
             context.coordinator.showGlobe(animated: true)
         }
     }
@@ -114,10 +116,14 @@ struct AppleMapGlobeRepresentable: UIViewRepresentable {
 
         var entries: [CountryMapEntry] = []
         var apiCountries: [Country] = []
+        var dots: [GlobePresenceDot] = []
         var didFocusCountry = false
+        private var lastPrecision = 0
+        private var dotAnnotations: [String: PresenceDotAnnotation] = [:]
+        private var lastDotScale: CGFloat = 1
 
         private let globeDistance: CLLocationDistance = 42_000_000
-        private let focusDistance: CLLocationDistance = 24_000_000
+        private let focusDistance: CLLocationDistance = 2_800_000
 
         init(onSelectEntry: @escaping (CountryMapEntry) -> Void) {
             self.onSelectEntry = onSelectEntry
@@ -126,6 +132,7 @@ struct AppleMapGlobeRepresentable: UIViewRepresentable {
 
         func showGlobe(animated: Bool) {
             guard let mapView else { return }
+            mapView.setCameraZoomRange(nil, animated: false)
             let camera = MKMapCamera(
                 lookingAtCenter: CLLocationCoordinate2D(latitude: 20, longitude: 10),
                 fromDistance: globeDistance,
@@ -133,6 +140,46 @@ struct AppleMapGlobeRepresentable: UIViewRepresentable {
                 heading: 0
             )
             mapView.setCamera(camera, animated: animated)
+            syncDotAnnotations()
+        }
+
+        func syncDotAnnotations() {
+            guard let mapView else { return }
+
+            let incoming = Dictionary(uniqueKeysWithValues: dots.map { ($0.id, $0) })
+            let removedIDs = Set(dotAnnotations.keys).subtracting(incoming.keys)
+            for id in removedIDs {
+                if let annotation = dotAnnotations.removeValue(forKey: id) {
+                    mapView.removeAnnotation(annotation)
+                }
+            }
+
+            for (id, dot) in incoming {
+                let coordinate = CLLocationCoordinate2D(latitude: dot.lat, longitude: dot.lng)
+                if let existing = dotAnnotations[id] {
+                    let unchanged = existing.coordinate.latitude == coordinate.latitude
+                        && existing.coordinate.longitude == coordinate.longitude
+                        && existing.count == dot.count
+                    if unchanged { continue }
+                    mapView.removeAnnotation(existing)
+                }
+                let annotation = PresenceDotAnnotation(dot: dot)
+                dotAnnotations[id] = annotation
+                mapView.addAnnotation(annotation)
+            }
+
+            refreshDotAppearance()
+        }
+
+        private func refreshDotAppearance() {
+            guard let mapView else { return }
+            let scale = GlobePresenceDotRenderer.zoomScale(for: mapView.camera.centerCoordinateDistance)
+            guard scale != lastDotScale else { return }
+            lastDotScale = scale
+            for annotation in mapView.annotations {
+                guard let view = mapView.view(for: annotation) as? PresenceDotAnnotationView else { continue }
+                view.apply(scale: scale)
+            }
         }
 
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {
@@ -151,16 +198,53 @@ struct AppleMapGlobeRepresentable: UIViewRepresentable {
             onSelectEntry(entry)
         }
 
-        /// Rotate the globe toward a country — stay on the sphere, don't dive into flat map.
         private func focus(on entry: CountryMapEntry, animated: Bool) {
             guard let mapView else { return }
+            mapView.setCameraZoomRange(nil, animated: false)
             let camera = MKMapCamera(
                 lookingAtCenter: CLLocationCoordinate2D(latitude: entry.lat, longitude: entry.lng),
                 fromDistance: focusDistance,
-                pitch: 8,
+                pitch: 12,
                 heading: 0
             )
             mapView.setCamera(camera, animated: animated)
+        }
+
+        func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            guard annotation is PresenceDotAnnotation else { return nil }
+            let view = mapView.dequeueReusableAnnotationView(withIdentifier: PresenceDotAnnotationView.reuseID)
+                as? PresenceDotAnnotationView
+                ?? PresenceDotAnnotationView(annotation: annotation, reuseIdentifier: PresenceDotAnnotationView.reuseID)
+            view.annotation = annotation
+            view.apply(scale: GlobePresenceDotRenderer.zoomScale(for: mapView.camera.centerCoordinateDistance))
+            return view
+        }
+
+        func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
+            syncPrecision(with: mapView)
+            refreshDotAppearance()
+        }
+
+        func mapViewDidChangeVisibleRegion(_ mapView: MKMapView) {
+            syncPrecision(with: mapView)
+            refreshDotAppearance()
+        }
+
+        private func syncPrecision(with mapView: MKMapView) {
+            let precision = Self.presencePrecision(for: mapView.camera.centerCoordinateDistance)
+            guard precision != lastPrecision else { return }
+            lastPrecision = precision
+            GlobePresenceService.shared.updatePrecision(precision)
+        }
+
+        private static func presencePrecision(for distance: CLLocationDistance) -> Int {
+            switch distance {
+            case ..<1_500_000: return 5
+            case ..<4_500_000: return 4
+            case ..<18_000_000: return 3
+            case ..<40_000_000: return 2
+            default: return 1
+            }
         }
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {

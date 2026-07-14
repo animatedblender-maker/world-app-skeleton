@@ -104,9 +104,9 @@ enum CountryMapData {
         var j = ring.count - 1
         for i in 0..<ring.count {
             var piLng = ring[i].lng
-            var piLat = ring[i].lat
+            let piLat = ring[i].lat
             var pjLng = ring[j].lng
-            var pjLat = ring[j].lat
+            let pjLat = ring[j].lat
             if abs(piLng - pjLng) > 180 {
                 if piLng < pjLng { piLng += 360 } else { pjLng += 360 }
             }

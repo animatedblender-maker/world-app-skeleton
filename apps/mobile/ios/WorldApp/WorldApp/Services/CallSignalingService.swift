@@ -29,6 +29,7 @@ final class CallSignalingService {
     private var reconnectTask: Task<Void, Never>?
     private var tokenRefreshObserver: NSObjectProtocol?
     private var isDestroyed = false
+    private var socketOpenGeneration = 0
 
     private init() {}
 
@@ -118,6 +119,9 @@ final class CallSignalingService {
     }
 
     private func openSocket() async {
+        socketOpenGeneration += 1
+        let generation = socketOpenGeneration
+
         let token: String?
         do {
             token = try await AuthService.shared.ensureValidToken()
@@ -129,6 +133,8 @@ final class CallSignalingService {
             scheduleReconnect()
             return
         }
+
+        guard generation == socketOpenGeneration, !isDestroyed else { return }
 
         let wsBase = AppConfig.apiBaseURL
             .replacingOccurrences(of: "https://", with: "wss://")
@@ -147,9 +153,9 @@ final class CallSignalingService {
         task.resume()
 
         let opened = await waitForSocketOpen(task)
-        guard opened, !isDestroyed, webSocketTask === task else {
+        guard opened, generation == socketOpenGeneration, !isDestroyed, webSocketTask === task else {
             isConnected = false
-            if !isDestroyed {
+            if !isDestroyed, generation == socketOpenGeneration {
                 scheduleReconnect()
             }
             return
@@ -160,10 +166,35 @@ final class CallSignalingService {
         listenTask = Task { await listen(on: task) }
     }
 
-    private func waitForSocketOpen(_ task: URLSessionWebSocketTask) async -> Bool {
+    private func waitForSocketOpen(_ task: URLSessionWebSocketTask, timeoutSeconds: Double = 5) async -> Bool {
         await withCheckedContinuation { continuation in
+            final class ResumeOnce: @unchecked Sendable {
+                private let lock = NSLock()
+                private var finished = false
+                private let continuation: CheckedContinuation<Bool, Never>
+
+                init(_ continuation: CheckedContinuation<Bool, Never>) {
+                    self.continuation = continuation
+                }
+
+                func resume(returning value: Bool) {
+                    lock.lock()
+                    defer { lock.unlock() }
+                    guard !finished else { return }
+                    finished = true
+                    continuation.resume(returning: value)
+                }
+            }
+
+            let gate = ResumeOnce(continuation)
+
             task.sendPing { error in
-                continuation.resume(returning: error == nil)
+                gate.resume(returning: error == nil)
+            }
+
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                gate.resume(returning: false)
             }
         }
     }

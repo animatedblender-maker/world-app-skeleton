@@ -17,11 +17,14 @@ export const presenceResolvers = {
             // ✅ allow public global stats (you can lock later)
             return await svc().globalStats();
         },
-        countryStats: async (_, args, _ctx) => {
-            // ✅ allow public country stats (you can lock later)
-            return await svc().countryStats(args.iso);
-        },
+    countryStats: async (_, args, _ctx) => {
+        // ✅ allow public country stats (you can lock later)
+        return await svc().countryStats(args.iso);
     },
+    globePresenceDots: async (_, args, _ctx) => {
+        return await svc().globePresenceDots(args?.precision ?? 3, args?.maxPoints ?? 4096);
+    },
+  },
     Mutation: {
         heartbeat: async (_, args, ctx) => {
             const u = requireAuth(ctx);

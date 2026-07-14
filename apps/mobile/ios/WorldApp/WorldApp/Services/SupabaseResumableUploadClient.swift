@@ -7,6 +7,7 @@ final class SupabaseResumableUploadClient: @unchecked Sendable {
 
     private static let chunkSize = 6 * 1024 * 1024
     private static let tusVersion = "1.0.0"
+    private static let chunkTimeoutSeconds: TimeInterval = 120
 
     private let session: URLSession = {
         let configuration = URLSessionConfiguration.default
@@ -23,7 +24,7 @@ final class SupabaseResumableUploadClient: @unchecked Sendable {
         path: String,
         fileURL: URL,
         mimeType: String,
-        accessToken: String,
+        accessTokenProvider: @escaping @Sendable () async throws -> String,
         onProgress: (@Sendable (UploadProgress) -> Void)? = nil
     ) async throws {
         let fileSize = Int64((try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
@@ -31,19 +32,20 @@ final class SupabaseResumableUploadClient: @unchecked Sendable {
             throw MediaError.uploadFailed("Video file is empty.")
         }
 
+        let initialToken = try await accessTokenProvider()
         let uploadURL = try await createUploadSession(
             bucket: bucket,
             path: path,
             fileSize: fileSize,
             mimeType: mimeType,
-            accessToken: accessToken
+            accessToken: initialToken
         )
 
         try await uploadChunks(
             uploadURL: uploadURL,
             fileURL: fileURL,
             fileSize: fileSize,
-            accessToken: accessToken,
+            accessTokenProvider: accessTokenProvider,
             onProgress: onProgress
         )
     }
@@ -94,7 +96,7 @@ final class SupabaseResumableUploadClient: @unchecked Sendable {
         uploadURL: URL,
         fileURL: URL,
         fileSize: Int64,
-        accessToken: String,
+        accessTokenProvider: @escaping @Sendable () async throws -> String,
         onProgress: (@Sendable (UploadProgress) -> Void)?
     ) async throws {
         let fileHandle = try FileHandle(forReadingFrom: fileURL)
@@ -106,23 +108,19 @@ final class SupabaseResumableUploadClient: @unchecked Sendable {
         while offset < fileSize {
             let remaining = fileSize - offset
             let chunkLength = Int(min(Int64(Self.chunkSize), remaining))
+            try fileHandle.seek(toOffset: UInt64(offset))
             let chunkData = fileHandle.readData(ofLength: chunkLength)
             guard chunkData.count == chunkLength else {
                 throw MediaError.uploadFailed("Could not read video file for upload.")
             }
 
-            var request = URLRequest(url: uploadURL)
-            request.httpMethod = "PATCH"
-            request.setValue(Self.tusVersion, forHTTPHeaderField: "Tus-Resumable")
-            request.setValue("\(offset)", forHTTPHeaderField: "Upload-Offset")
-            request.setValue("application/offset+octet-stream", forHTTPHeaderField: "Content-Type")
-            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-            request.setValue(AppConfig.supabaseAnonKey, forHTTPHeaderField: "apikey")
-
-            let (responseData, response) = try await session.upload(for: request, from: chunkData)
-            guard let http = response as? HTTPURLResponse else {
-                throw MediaError.uploadFailed("Missing chunk upload response.")
-            }
+            let accessToken = try await accessTokenProvider()
+            let (responseData, http) = try await uploadChunkWithTimeout(
+                uploadURL: uploadURL,
+                offset: offset,
+                chunkData: chunkData,
+                accessToken: accessToken
+            )
             guard (200...299).contains(http.statusCode) else {
                 throw MediaError.uploadFailed(storageErrorMessage(from: responseData, statusCode: http.statusCode))
             }
@@ -138,6 +136,42 @@ final class SupabaseResumableUploadClient: @unchecked Sendable {
         }
 
         emitProgress(bytesSent: fileSize, totalBytes: fileSize, handler: onProgress)
+    }
+
+    private func uploadChunkWithTimeout(
+        uploadURL: URL,
+        offset: Int64,
+        chunkData: Data,
+        accessToken: String
+    ) async throws -> (Data, HTTPURLResponse) {
+        try await withThrowingTaskGroup(of: (Data, HTTPURLResponse).self) { group in
+            group.addTask {
+                var request = URLRequest(url: uploadURL)
+                request.httpMethod = "PATCH"
+                request.setValue(Self.tusVersion, forHTTPHeaderField: "Tus-Resumable")
+                request.setValue("\(offset)", forHTTPHeaderField: "Upload-Offset")
+                request.setValue("application/offset+octet-stream", forHTTPHeaderField: "Content-Type")
+                request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+                request.setValue(AppConfig.supabaseAnonKey, forHTTPHeaderField: "apikey")
+
+                let (responseData, response) = try await self.session.upload(for: request, from: chunkData)
+                guard let http = response as? HTTPURLResponse else {
+                    throw MediaError.uploadFailed("Missing chunk upload response.")
+                }
+                return (responseData, http)
+            }
+
+            group.addTask {
+                try await Task.sleep(for: .seconds(Self.chunkTimeoutSeconds))
+                throw MediaError.uploadFailed("Upload stalled. Check your connection and try again.")
+            }
+
+            guard let result = try await group.next() else {
+                throw MediaError.uploadFailed("Upload stalled. Check your connection and try again.")
+            }
+            group.cancelAll()
+            return result
+        }
     }
 
     private func resolveUploadLocation(_ location: String, relativeTo endpoint: URL) -> URL? {

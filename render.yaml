@@ -1,0 +1,44 @@
+# Render Blueprint for Matterya API (api.matterya.com)
+# Dashboard: New > Blueprint > connect this repo, or copy settings into an existing Web Service.
+services:
+  - type: web
+    name: matterya-api
+    runtime: node
+    branch: ios-native
+    rootDir: apps/api
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: PGSSLMODE
+        value: require
+      - key: APNS_BUNDLE_ID
+        value: com.matterya.worldapp
+      - key: APNS_PRODUCTION
+        value: "true"
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: LIVEKIT_API_KEY
+        sync: false
+      - key: LIVEKIT_API_SECRET
+        sync: false
+      - key: LIVEKIT_URL
+        sync: false
+      - key: APNS_TEAM_ID
+        sync: false
+      - key: APNS_KEY_ID
+        sync: false
+      - key: APNS_PRIVATE_KEY
+        sync: false
+      - key: PUSH_VAPID_PUBLIC_KEY
+        sync: false
+      - key: PUSH_VAPID_PRIVATE_KEY
+        sync: false
+      - key: PUSH_VAPID_SUBJECT
+        value: mailto:support@matterya.com

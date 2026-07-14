@@ -9,32 +9,36 @@ struct UploadProgressView: View {
             HStack {
                 Text(title)
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Theme.ink)
                 Spacer()
                 if let progress, phase == .uploading || phase == .compressing {
                     Text(progress.percentText)
                         .font(.caption.weight(.bold))
-                        .foregroundStyle(.white.opacity(0.9))
+                        .foregroundStyle(Theme.inkSecondary)
                         .monospacedDigit()
                 }
             }
 
             if phase == .uploading || phase == .compressing, let progress {
                 ProgressView(value: progress.fractionCompleted)
-                    .tint(phase == .compressing ? .white : Theme.facebookBlue)
+                    .tint(Theme.accentBright)
                 if phase == .uploading {
                     Text(progress.bytesText)
                         .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.72))
+                        .foregroundStyle(Theme.inkMuted)
                         .monospacedDigit()
                 }
             } else if phase == .publishing {
                 ProgressView()
-                    .tint(.white)
+                    .tint(Theme.accentBright)
             }
         }
         .padding(12)
-        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
+                .stroke(Theme.border, lineWidth: 0.5)
+        )
     }
 
     private var title: String {
@@ -44,6 +48,9 @@ struct UploadProgressView: View {
         case .compressing:
             return "Compressing video"
         case .uploading:
+            if let progress, progress.totalBytes > 0, progress.bytesSent >= progress.totalBytes {
+                return "Finishing upload"
+            }
             return "Uploading video"
         case .publishing:
             return "Publishing post"

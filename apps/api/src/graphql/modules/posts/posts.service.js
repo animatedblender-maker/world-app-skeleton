@@ -183,6 +183,29 @@ export class PostsService {
 
   async updatePost(postId, authorId, input) {
     const visibility = this.normalizeVisibility(input.visibility);
+    const clearMedia = input.clear_media === true;
+    const hasMediaUpdate =
+      clearMedia ||
+      (input.media_url !== undefined && input.media_url !== null && String(input.media_url).trim().length > 0);
+
+    let mediaType = null;
+    let mediaUrl = null;
+    let thumbUrl = null;
+
+    if (clearMedia) {
+      mediaType = 'none';
+      mediaUrl = null;
+      thumbUrl = null;
+    } else if (hasMediaUpdate) {
+      mediaUrl = String(input.media_url ?? '').trim() || null;
+      mediaType = this.normalizeMediaType(input.media_type, mediaUrl);
+      thumbUrl = mediaType === 'none' ? null : (input.thumb_url ?? null);
+      if (mediaType === 'none') {
+        mediaUrl = null;
+        thumbUrl = null;
+      }
+    }
+
     const { rows } = await pool.query(
       `
       update public.posts
@@ -190,6 +213,9 @@ export class PostsService {
         title = coalesce($3, title),
         body = coalesce($4, body),
         visibility = coalesce($5, visibility),
+        media_type = case when $6::boolean then $7 else media_type end,
+        media_url = case when $6::boolean then $8 else media_url end,
+        thumb_url = case when $6::boolean then $9 else thumb_url end,
         updated_at = now()
       where id = $1 and author_id = $2
       returning id
@@ -200,6 +226,10 @@ export class PostsService {
         input.title?.trim() ?? null,
         input.body?.trim() ?? null,
         visibility,
+        hasMediaUpdate,
+        mediaType,
+        mediaUrl,
+        thumbUrl,
       ]
     );
 
@@ -353,23 +383,40 @@ export class PostsService {
     return rows;
   }
 
-  async addComment(postId, userId, body) {
+  async addComment(postId, userId, body, parentId = null) {
     const trimmed = String(body ?? '').trim();
     if (!trimmed) throw new Error('Comment is required.');
 
     const post = await this.ensurePostAccess(postId, userId);
     const client = await pool.connect();
     let commentId = null;
+    let parentAuthorId = null;
+    const parentRef = parentId ? String(parentId) : null;
 
     try {
       await client.query('begin');
+      if (parentRef) {
+        const parent = await client.query(
+          `
+          select id, post_id, author_id
+          from public.post_comments
+          where id = $1
+          limit 1
+          `,
+          [parentRef]
+        );
+        const row = parent.rows[0];
+        if (!row?.id) throw new Error('PARENT_COMMENT_NOT_FOUND');
+        if (row.post_id !== postId) throw new Error('PARENT_COMMENT_MISMATCH');
+        parentAuthorId = row.author_id ?? null;
+      }
       const insert = await client.query(
         `
-        insert into public.post_comments (post_id, author_id, body)
-        values ($1, $2, $3)
+        insert into public.post_comments (post_id, author_id, body, parent_id)
+        values ($1, $2, $3, $4)
         returning id
         `,
-        [postId, userId, trimmed]
+        [postId, userId, trimmed, parentRef]
       );
       commentId = insert.rows[0]?.id ?? null;
       if (!commentId) throw new Error('Failed to add comment.');
@@ -397,6 +444,11 @@ export class PostsService {
     if (post.author_id !== userId) {
       try {
         await this.notifications.notifyPostComment(post.author_id, userId, postId);
+      } catch {}
+    }
+    if (parentAuthorId && parentAuthorId !== userId) {
+      try {
+        await this.notifications.notifyCommentReply(parentAuthorId, userId, postId);
       } catch {}
     }
 

@@ -20,6 +20,8 @@ final class CallSoundService {
 
     func start(_ pattern: Pattern) {
         guard activePattern != pattern else { return }
+        let callManager = CallSessionManager.shared
+        guard !callManager.isConnecting, !callManager.isActive else { return }
         stop()
         activePattern = pattern
         configureSession()

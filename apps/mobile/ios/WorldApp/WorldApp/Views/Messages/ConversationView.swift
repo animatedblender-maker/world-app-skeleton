@@ -15,11 +15,18 @@ struct ConversationView: View {
     @State private var pendingMediaImage: UIImage?
     @State private var scrollToBottomToken = 0
     @State private var replyingTo: Message?
+    @State private var peerLastReadAt: String?
 
     @Bindable private var callManager = CallSessionManager.shared
 
     private var visibleMessages: [Message] {
-        messages.filter(\.isRenderableInChat)
+        messages
+            .filter(\.isRenderableInChat)
+            .filter { !HiddenMessagesStore.isHidden(conversationID: conversation.id, messageID: $0.id) }
+    }
+
+    private var reactionSummaries: [String: MessageReactionSummary] {
+        MessageReactionIndex.build(from: messages, currentUserID: currentUserID)
     }
 
     private var currentUserID: String? {
@@ -51,8 +58,14 @@ struct ConversationView: View {
                                 MessageBubble(
                                     message: message,
                                     isMine: message.senderID == currentUserID,
+                                    peerLastReadAt: peerLastReadAt,
+                                    reactionSummary: reactionSummaries[message.id],
                                     replyAuthorName: replyAuthorName(for: message),
-                                    onReply: { replyingTo = message }
+                                    onReply: { replyingTo = message },
+                                    onLike: { Task { await toggleMessageLike(message) } },
+                                    onReact: { emoji in Task { await reactToMessage(message, emoji: emoji) } },
+                                    onUnsend: { Task { await unsendMessage(message) } },
+                                    onRemoveLocally: { removeMessageLocally(message) }
                                 )
                                 .id(message.id)
                             }
@@ -159,6 +172,9 @@ struct ConversationView: View {
         VStack(spacing: 10) {
             if let replyingTo {
                 HStack(alignment: .top, spacing: 10) {
+                    RoundedRectangle(cornerRadius: 1, style: .continuous)
+                        .fill(Theme.accent.opacity(0.45))
+                        .frame(width: 2)
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Replying to \(replyingTo.sender?.displayName ?? replyingTo.sender?.username ?? "Message")")
                             .font(.caption.weight(.semibold))
@@ -239,9 +255,14 @@ struct ConversationView: View {
             await MainActor.run { isLoading = true }
         }
         do {
-            let loaded = try await MessagesService.shared.listMessages(conversationID: conversation.id)
+            async let loadedTask = MessagesService.shared.listMessages(conversationID: conversation.id)
+            async let refreshedTask = MessagesService.shared.getConversationById(conversation.id)
+            let loaded = try await loadedTask
+            let refreshed = try? await refreshedTask
+            let peerRead = refreshed?.otherMember(currentUserID: currentUserID ?? "")?.lastReadAt
             await MainActor.run {
                 messages = loaded
+                peerLastReadAt = peerRead
                 errorMessage = nil
                 if showSpinner { isLoading = false }
                 requestScrollToBottom()
@@ -296,6 +317,30 @@ struct ConversationView: View {
         errorMessage = nil
         defer { isSending = false }
 
+        let usesPlaceholder = pendingMediaData == nil
+        let placeholderID = usesPlaceholder ? "pending-\(UUID().uuidString)" : nil
+        if usesPlaceholder, let placeholderID {
+            let now = ISO8601DateFormatter().string(from: Date())
+            let placeholder = Message(
+                id: placeholderID,
+                conversationID: conversation.id,
+                senderID: currentUserID ?? "",
+                body: body,
+                mediaType: nil,
+                mediaPath: nil,
+                mediaURL: nil,
+                mediaName: nil,
+                createdAt: now,
+                updatedAt: now,
+                sender: nil
+            )
+            messages.append(placeholder)
+            requestScrollToBottom()
+        }
+        draft = ""
+        let savedReply = replyingTo
+        replyingTo = nil
+
         do {
             if let data = pendingMediaData {
                 let upload = try await MediaService.shared.uploadMessageMedia(
@@ -313,22 +358,40 @@ struct ConversationView: View {
                     mediaMime: upload.mime,
                     mediaSize: upload.size
                 )
-                messages.append(message)
-                draft = ""
-                replyingTo = nil
+                if let placeholderID {
+                    replacePendingMessage(id: placeholderID, with: message)
+                } else {
+                    messages.append(message)
+                }
                 clearPendingMedia()
-                notifyConversationChanged()
-                requestScrollToBottom()
             } else {
                 let message = try await MessagesService.shared.sendMessage(conversationID: conversation.id, body: body)
-                messages.append(message)
-                draft = ""
-                replyingTo = nil
-                notifyConversationChanged()
-                requestScrollToBottom()
+                if let placeholderID {
+                    replacePendingMessage(id: placeholderID, with: message)
+                } else {
+                    messages.append(message)
+                }
+            }
+            notifyConversationChanged()
+            requestScrollToBottom()
+            if let refreshed = try? await MessagesService.shared.getConversationById(conversation.id) {
+                peerLastReadAt = refreshed.otherMember(currentUserID: currentUserID ?? "")?.lastReadAt
             }
         } catch {
+            if let placeholderID {
+                messages.removeAll { $0.id == placeholderID }
+            }
+            draft = body
+            replyingTo = savedReply
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    private func replacePendingMessage(id: String, with message: Message) {
+        if let index = messages.firstIndex(where: { $0.id == id }) {
+            messages[index] = message
+        } else {
+            messages.append(message)
         }
     }
 
@@ -339,18 +402,157 @@ struct ConversationView: View {
             userInfo: ["conversationId": conversation.id]
         )
     }
+
+    private func toggleMessageLike(_ message: Message) async {
+        let liked = reactionSummaries[message.id]?.likedByMe ?? false
+        await sendReaction(to: message, emoji: "❤", active: !liked)
+    }
+
+    private func reactToMessage(_ message: Message, emoji: String) async {
+        let normalized = MessageReactionIndex.normalizeEmoji(emoji)
+        let mine = reactionSummaries[message.id]?.myEmoji
+        let active = mine != normalized
+        await sendReaction(to: message, emoji: normalized, active: active)
+    }
+
+    private func sendReaction(to message: Message, emoji: String, active: Bool) async {
+        guard !message.id.hasPrefix("pending-") else { return }
+        let body = Message.buildReactionBody(targetID: message.id, emoji: emoji, active: active)
+        do {
+            let reaction = try await MessagesService.shared.sendMessage(
+                conversationID: conversation.id,
+                body: body
+            )
+            messages.append(reaction)
+            notifyConversationChanged()
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    private func unsendMessage(_ message: Message) async {
+        guard message.senderID == currentUserID, !message.id.hasPrefix("pending-") else { return }
+        do {
+            let deleted = try await MessagesService.shared.deleteMessage(message.id)
+            guard deleted else { return }
+            messages.removeAll { $0.id == message.id }
+            HiddenMessagesStore.unhide(conversationID: conversation.id, messageID: message.id)
+            notifyConversationChanged()
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    private func removeMessageLocally(_ message: Message) {
+        HiddenMessagesStore.hide(conversationID: conversation.id, messageID: message.id)
+    }
+}
+
+private struct MessageReactionSummary {
+    var emojiCounts: [String: Int] = [:]
+    var likedByMe = false
+    var myEmoji: String?
+}
+
+private enum MessageReactionIndex {
+    static let quickEmojis = ["❤️", "😂", "👍", "😮", "😢", "🔥"]
+
+    static func normalizeEmoji(_ emoji: String) -> String {
+        let trimmed = emoji.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed == "❤️" { return "❤" }
+        return trimmed.isEmpty ? "❤" : trimmed
+    }
+
+    static func build(from messages: [Message], currentUserID: String?) -> [String: MessageReactionSummary] {
+        var perTarget: [String: [String: (emoji: String, state: Int)]] = [:]
+
+        for message in messages {
+            guard let reaction = message.reactionInfo else { continue }
+            let targetID = reaction.targetID
+            let senderID = message.senderID
+            guard !targetID.isEmpty, !senderID.isEmpty else { continue }
+            perTarget[targetID, default: [:]][senderID] = (
+                normalizeEmoji(reaction.emoji),
+                reaction.isActive ? 1 : 0
+            )
+        }
+
+        var result: [String: MessageReactionSummary] = [:]
+        for (targetID, userReactions) in perTarget {
+            var summary = MessageReactionSummary()
+            for (userID, entry) in userReactions where entry.state == 1 {
+                summary.emojiCounts[entry.emoji, default: 0] += 1
+                if userID == currentUserID {
+                    summary.myEmoji = entry.emoji
+                    summary.likedByMe = entry.emoji == "❤"
+                }
+            }
+            if !summary.emojiCounts.isEmpty {
+                result[targetID] = summary
+            }
+        }
+        return result
+    }
+}
+
+@MainActor
+private enum HiddenMessagesStore {
+    private static var storageKey: String {
+        "conversation.hiddenMessages.\(AuthService.shared.currentUser?.id ?? "anonymous")"
+    }
+
+    static func isHidden(conversationID: String, messageID: String) -> Bool {
+        hiddenIDs(for: conversationID).contains(messageID)
+    }
+
+    static func hide(conversationID: String, messageID: String) {
+        var bucket = load()
+        var ids = bucket[conversationID] ?? []
+        ids.insert(messageID)
+        bucket[conversationID] = ids
+        save(bucket)
+    }
+
+    static func unhide(conversationID: String, messageID: String) {
+        var bucket = load()
+        var ids = bucket[conversationID] ?? []
+        ids.remove(messageID)
+        bucket[conversationID] = ids
+        save(bucket)
+    }
+
+    private static func hiddenIDs(for conversationID: String) -> Set<String> {
+        load()[conversationID] ?? []
+    }
+
+    private static func load() -> [String: Set<String>] {
+        guard let raw = UserDefaults.standard.dictionary(forKey: storageKey) as? [String: [String]] else {
+            return [:]
+        }
+        return raw.mapValues(Set.init)
+    }
+
+    private static func save(_ bucket: [String: Set<String>]) {
+        let raw = bucket.mapValues(Array.init)
+        UserDefaults.standard.set(raw, forKey: storageKey)
+    }
 }
 
 private struct MessageBubble: View {
     let message: Message
     let isMine: Bool
+    let peerLastReadAt: String?
+    let reactionSummary: MessageReactionSummary?
     let replyAuthorName: String?
     let onReply: () -> Void
+    let onLike: () -> Void
+    let onReact: (String) -> Void
+    let onUnsend: () -> Void
+    let onRemoveLocally: () -> Void
 
     @State private var resolvedImageURL: URL?
-
-    private var isReply: Bool { message.replyInfo != nil }
-    private var replyIndent: CGFloat { isReply ? 28 : 0 }
+    @State private var showsStatusDetail = false
+    @State private var swipeOffset: CGFloat = 0
 
     var body: some View {
         if message.isCallLog {
@@ -400,27 +602,166 @@ private struct MessageBubble: View {
     }
 
     private var chatBubble: some View {
-        HStack {
-            if isMine { Spacer(minLength: 48) }
-            VStack(alignment: isMine ? .trailing : .leading, spacing: 4) {
-                bubbleContent
-                if !message.timestampLabel.isEmpty {
-                    Text(message.timestampLabel)
-                        .font(.caption2)
-                        .foregroundStyle(Theme.inkMuted)
+        ZStack(alignment: isMine ? .trailing : .leading) {
+            if swipeOffset < -18 {
+                HStack {
+                    Spacer()
+                    Label("Reply", systemImage: "arrowshape.turn.up.left.fill")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.accent)
+                        .padding(.trailing, 12)
                 }
             }
-            .padding(isMine ? .trailing : .leading, replyIndent)
-            if !isMine { Spacer(minLength: 48) }
+
+            HStack(alignment: .top, spacing: 0) {
+                if isMine { Spacer(minLength: 48) }
+                VStack(alignment: isMine ? .trailing : .leading, spacing: 4) {
+                    bubbleContent
+                    reactionStrip
+                    messageMeta
+                }
+                if !isMine { Spacer(minLength: 48) }
+            }
+            .offset(x: swipeOffset)
         }
+        .contentShape(Rectangle())
+        .simultaneousGesture(swipeToReplyGesture)
+        .gesture(messageTapGesture)
         .contextMenu {
-            Button("Reply", systemImage: "arrowshape.turn.up.left") {
-                onReply()
+            Menu("Add Emoji", systemImage: "face.smiling") {
+                ForEach(MessageReactionIndex.quickEmojis, id: \.self) { emoji in
+                    Button(emoji) { onReact(emoji) }
+                }
+            }
+            if isMine {
+                Button("Unsend for Everyone", systemImage: "arrow.uturn.backward.circle", role: .destructive) {
+                    onUnsend()
+                }
+            }
+            Button("Remove from This Device", systemImage: "iphone.and.arrow.forward", role: .destructive) {
+                onRemoveLocally()
             }
         }
         .task(id: message.mediaPath) {
             await resolveImageURLIfNeeded()
         }
+    }
+
+    private var messageTapGesture: some Gesture {
+        TapGesture(count: 2)
+            .onEnded { _ in
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                onLike()
+            }
+            .exclusively(before: TapGesture(count: 1).onEnded {
+                showsStatusDetail.toggle()
+            })
+    }
+
+    private var swipeToReplyGesture: some Gesture {
+        DragGesture(minimumDistance: 18, coordinateSpace: .local)
+            .onChanged { value in
+                let horizontal = value.translation.width
+                let vertical = abs(value.translation.height)
+                guard abs(horizontal) > vertical else { return }
+                if horizontal < 0 {
+                    swipeOffset = max(horizontal, -72)
+                }
+            }
+            .onEnded { value in
+                if value.translation.width < -56 {
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    onReply()
+                }
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                    swipeOffset = 0
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var reactionStrip: some View {
+        if let reactionSummary, !reactionSummary.emojiCounts.isEmpty {
+            HStack(spacing: 6) {
+                ForEach(reactionSummary.emojiCounts.keys.sorted(), id: \.self) { emoji in
+                    let count = reactionSummary.emojiCounts[emoji] ?? 0
+                    Text(count > 1 ? "\(displayEmoji(emoji)) \(count)" : displayEmoji(emoji))
+                        .font(.caption)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Theme.canvasMuted, in: Capsule())
+                }
+            }
+        }
+    }
+
+    private func displayEmoji(_ emoji: String) -> String {
+        emoji == "❤" ? "❤️" : emoji
+    }
+
+    @ViewBuilder
+    private var messageMeta: some View {
+        VStack(alignment: isMine ? .trailing : .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                if !message.timestampLabel.isEmpty {
+                    Text(message.timestampLabel)
+                }
+                if message.isEdited {
+                    Text("Edited")
+                        .fontWeight(.semibold)
+                }
+            }
+            .font(.caption2)
+            .foregroundStyle(Theme.inkMuted)
+
+            if showsStatusDetail {
+                if isMine {
+                    deliveryStatusLines
+                } else if !RelativeTime.formatDateTime(message.createdAt).isEmpty {
+                    Text(RelativeTime.formatDateTime(message.createdAt))
+                        .font(.caption2)
+                        .foregroundStyle(Theme.inkMuted)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var deliveryStatusLines: some View {
+        VStack(alignment: .trailing, spacing: 2) {
+            statusLine(label: "Sent", timestamp: message.createdAt)
+            if isDelivered {
+                statusLine(label: "Delivered", timestamp: message.createdAt)
+            }
+            if let readAt = readTimestamp {
+                statusLine(label: "Read", timestamp: readAt)
+            }
+        }
+    }
+
+    private func statusLine(label: String, timestamp: String) -> some View {
+        Text("\(label) \(RelativeTime.formatDateTime(timestamp))")
+            .font(.caption2)
+            .foregroundStyle(Theme.inkMuted)
+    }
+
+    private var isPending: Bool {
+        message.id.hasPrefix("pending-")
+    }
+
+    private var isDelivered: Bool {
+        guard isMine else { return false }
+        return !isPending && !message.id.isEmpty && !message.createdAt.isEmpty
+    }
+
+    private var readTimestamp: String? {
+        guard isMine,
+              let peerLastReadAt,
+              let readDate = RelativeTime.parseDate(peerLastReadAt),
+              let created = RelativeTime.parseDate(message.createdAt),
+              readDate >= created
+        else { return nil }
+        return peerLastReadAt
     }
 
     @ViewBuilder

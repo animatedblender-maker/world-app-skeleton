@@ -15,6 +15,8 @@ struct PostComposerView: View {
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var imageData: Data?
     @State private var previewImage: UIImage?
+    @State private var quotedEmbed: SharedPostPreview?
+    @State private var visibility: PostVisibility = .public
     @FocusState private var focusedField: ComposerField?
 
     private enum ComposerField: Hashable {
@@ -28,12 +30,11 @@ struct PostComposerView: View {
     }
 
     private var canSubmit: Bool {
-        !trimmedBody.isEmpty || imageData != nil
+        !trimmedBody.isEmpty || imageData != nil || appState.quotedSharePostID != nil
     }
 
     private var canPostHere: Bool {
-        guard let code = appState.currentProfile?.countryCode?.uppercased() else { return false }
-        return code == country.iso.uppercased()
+        appState.canPostToCountry(country)
     }
 
     var body: some View {
@@ -45,8 +46,12 @@ struct PostComposerView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 22) {
                         composerHeader
+                        if let quotedEmbed {
+                            SharedPostEmbedView(embed: quotedEmbed)
+                        }
                         titleField
                         bodyField
+                        PostVisibilityControl(visibility: $visibility)
                         mediaSection
                         if let errorMessage {
                             errorBanner(errorMessage)
@@ -77,6 +82,12 @@ struct PostComposerView: View {
             }
         }
         .tint(Theme.accentBright)
+        .task {
+            await loadQuotedShare()
+        }
+        .onDisappear {
+            appState.quotedSharePostID = nil
+        }
         .onChange(of: selectedPhoto) { _, item in
             Task { await loadSelectedPhoto(item) }
         }
@@ -104,9 +115,11 @@ struct PostComposerView: View {
 
                 HStack(spacing: 6) {
                     Text(countryFlag(country.iso))
-                    Text("Posting to \(country.name)")
+                    Text(MatteryaCopy.postToYourFeed)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(Theme.accent)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
@@ -131,9 +144,10 @@ struct PostComposerView: View {
                 .tracking(1.2)
                 .foregroundStyle(Theme.inkMuted)
 
-            TextField("Optional headline", text: $title)
-                .font(.system(size: 22, weight: .regular, design: .serif))
+            TextField("Optional headline", text: $title, axis: .vertical)
+                .font(.system(.title3, design: .serif))
                 .foregroundStyle(Theme.ink)
+                .lineLimit(1...3)
                 .focused($focusedField, equals: .title)
                 .padding(16)
                 .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous))
@@ -330,6 +344,21 @@ struct PostComposerView: View {
         selectedPhoto = nil
     }
 
+    private func loadQuotedShare() async {
+        guard let shareID = appState.quotedSharePostID else { return }
+        guard let post = try? await PostsService.shared.getPostByID(shareID) else { return }
+        quotedEmbed = SharedPostPreview(
+            id: post.id,
+            title: post.title,
+            body: post.body,
+            mediaType: post.mediaType,
+            mediaURL: post.mediaURL,
+            thumbURL: post.thumbURL,
+            authorID: post.authorID,
+            author: post.author
+        )
+    }
+
     private func countryFlag(_ iso: String) -> String {
         let code = iso.uppercased()
         guard code.count == 2 else { return "🌍" }
@@ -342,7 +371,7 @@ struct PostComposerView: View {
         guard let profile = appState.currentProfile,
               let authorID = AuthService.shared.currentUser?.id else { return }
         guard canPostHere else {
-            errorMessage = "You can only post in your home country."
+            errorMessage = MatteryaCopy.homeCountryOnlyPost
             return
         }
         guard canSubmit else { return }
@@ -371,13 +400,76 @@ struct PostComposerView: View {
                 countryCode: country.iso,
                 cityName: profile.cityName,
                 title: title.nilIfEmpty,
+                visibility: visibility,
                 mediaType: mediaType,
-                mediaURL: mediaURL
+                mediaURL: mediaURL,
+                sharedPostID: appState.quotedSharePostID
             )
+            appState.quotedSharePostID = nil
             onPosted?(post)
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+}
+
+struct PostVisibilityControl: View {
+    @Binding var visibility: PostVisibility
+
+    private let options: [PostVisibility] = [.public, .followers, .private]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("PRIVACY")
+                .font(.caption.weight(.semibold))
+                .tracking(1.2)
+                .foregroundStyle(Theme.inkMuted)
+
+            HStack(spacing: 8) {
+                ForEach(options, id: \.rawValue) { option in
+                    Button {
+                        visibility = option
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: icon(for: option))
+                                .font(.caption.weight(.semibold))
+                            Text(label(for: option))
+                                .font(.caption.weight(.semibold))
+                        }
+                        .foregroundStyle(visibility == option ? Theme.accentBright : Theme.inkSecondary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(
+                            visibility == option ? Theme.accentSoft : Theme.surface,
+                            in: Capsule()
+                        )
+                        .overlay(
+                            Capsule()
+                                .stroke(visibility == option ? Theme.accent.opacity(0.45) : Theme.border, lineWidth: 0.5)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private func label(for visibility: PostVisibility) -> String {
+        switch visibility {
+        case .public: "Public"
+        case .followers: "Followers"
+        case .private: "Only me"
+        case .country: "Country"
+        }
+    }
+
+    private func icon(for visibility: PostVisibility) -> String {
+        switch visibility {
+        case .public: "globe"
+        case .followers: "person.2.fill"
+        case .private: "lock.fill"
+        case .country: "flag.fill"
         }
     }
 }

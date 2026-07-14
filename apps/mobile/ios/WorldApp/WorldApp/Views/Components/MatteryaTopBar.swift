@@ -81,6 +81,55 @@ struct MatteryaTopBar: View {
     }
 }
 
+struct ProfileTabTopBar: View {
+    let title: String
+    var onEdit: () -> Void
+    var onSettings: () -> Void
+
+    var body: some View {
+        HStack(spacing: 0) {
+            MenuToolbarButton()
+                .frame(width: 44, height: 44)
+
+            Spacer()
+
+            Text(title)
+                .font(.system(size: 20, weight: .regular, design: .serif))
+                .foregroundStyle(Theme.ink)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+
+            Spacer()
+
+            HStack(spacing: 16) {
+                Button(action: onSettings) {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 20, weight: .light))
+                        .foregroundStyle(Theme.ink)
+                        .frame(width: 32, height: 32)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Settings")
+
+                Button(action: onEdit) {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 20, weight: .light))
+                        .foregroundStyle(Theme.ink)
+                        .frame(width: 32, height: 32)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Edit profile")
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 44)
+        .background(Theme.surface.opacity(0.92))
+        .overlay(alignment: .bottom) {
+            Theme.divider.frame(height: 0.5)
+        }
+    }
+}
+
 struct NotificationsOverlay: View {
     @Environment(AppState.self) private var appState
 

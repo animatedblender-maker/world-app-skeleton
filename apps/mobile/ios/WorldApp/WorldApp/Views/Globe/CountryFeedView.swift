@@ -11,7 +11,6 @@ struct CountryFeedView: View {
     @State private var isLoading = true
     @State private var loadError: String?
     @State private var newsError: String?
-    @State private var actionError: String?
     @State private var showComposer = false
 
     var body: some View {
@@ -29,11 +28,12 @@ struct CountryFeedView: View {
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button {
-                    appState.navigate(to: .reels(country))
+                    appState.openCountryReels(country)
                 } label: {
-                    Image(systemName: "play.rectangle.fill")
+                    Image(systemName: "sparkles")
                         .foregroundStyle(Theme.accentBright)
                 }
+                .accessibilityLabel("\(MatteryaCopy.sparksFromCountry) \(country.name)")
                 Text(country.iso)
                     .font(.caption.weight(.black))
                     .tracking(1)
@@ -44,6 +44,7 @@ struct CountryFeedView: View {
             PostComposerView(country: country) { post in
                 posts.insert(post, at: 0)
             }
+            .withAppState(appState)
         }
         .task {
             await loadCurrentTab()
@@ -115,7 +116,7 @@ struct CountryFeedView: View {
         ScrollView {
             LazyVStack(spacing: 18) {
                 if followingPosts.isEmpty {
-                    emptyState("Follow people to see their posts here.")
+                    emptyState("Follow people to see their posts from around the world here.")
                 }
                 ForEach(followingPosts) { post in
                     followingPostCard(post)
@@ -129,7 +130,11 @@ struct CountryFeedView: View {
     private var mediaTab: some View {
         ScrollView {
             LazyVStack(spacing: 18) {
-                ForEach(posts.filter(\.hasMedia)) { post in
+                let mediaPosts = posts.filter(\.hasMedia)
+                if mediaPosts.isEmpty {
+                    emptyState("No photos or videos in \(country.name) yet.")
+                }
+                ForEach(mediaPosts) { post in
                     postCard(post)
                 }
             }
@@ -141,6 +146,9 @@ struct CountryFeedView: View {
     private var statsTab: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
+                if appState.countryStats == nil && appState.globalStats == nil {
+                    emptyState("Stats for \(country.name) are loading or unavailable.")
+                }
                 if let stats = appState.countryStats {
                     statRow("Total users", "\(stats.totalUsers)")
                     statRow("Online now", "\(stats.onlineUsers)")
@@ -203,12 +211,13 @@ struct CountryFeedView: View {
                             size: 40
                         )
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Create a post")
+                            Text(MatteryaCopy.postToYourFeed)
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(Theme.ink)
-                            Text("Share something from \(country.name)")
+                            Text("Write in \(country.name) — your home feed")
                                 .font(.caption)
                                 .foregroundStyle(Theme.inkMuted)
+                                .lineLimit(2)
                         }
                         Spacer()
                         Image(systemName: "plus.circle.fill")
@@ -225,44 +234,49 @@ struct CountryFeedView: View {
                 }
                 .buttonStyle(.plain)
             } else {
-                Button {
-                    Task { await appState.navigateToHomeCountryFeed(openComposer: true) }
-                } label: {
+                VStack(alignment: .leading, spacing: 12) {
                     HStack(spacing: 14) {
-                        Image(systemName: "mappin.and.ellipse")
+                        Image(systemName: "eye")
                             .font(.title3)
                             .foregroundStyle(Theme.accentBright)
                             .frame(width: 40, height: 40)
                             .background(Theme.accentSoft, in: Circle())
                         VStack(alignment: .leading, spacing: 3) {
-                            Text("Post from your country")
+                            Text("Browsing \(country.name)")
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(Theme.ink)
-                            Text("Go to \(homeCountryLabel) to share — you can only post in your home feed.")
+                            Text("Posts open in \(homeCountryLabel). \(MatteryaCopy.shareFromForeignHint)")
                                 .font(.caption)
                                 .foregroundStyle(Theme.inkMuted)
-                                .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
-                        Spacer(minLength: 0)
-                        Image(systemName: "arrow.right.circle.fill")
-                            .font(.title2)
-                            .foregroundStyle(Theme.accentBright)
                     }
-                    .padding(16)
-                    .background(
-                        LinearGradient(
-                            colors: [Theme.surface, Theme.accentSoft.opacity(0.35)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        in: RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
-                            .stroke(Theme.accent.opacity(0.25), lineWidth: 0.5)
-                    )
+
+                    Button {
+                        Task { await appState.navigateToHomeCountryFeed(openComposer: true) }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "square.and.pencil")
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(MatteryaCopy.postToYourFeed)
+                                    .font(.subheadline.weight(.semibold))
+                                Text("Go to \(homeCountryLabel)")
+                                    .font(.caption)
+                            }
+                        }
+                        .foregroundStyle(Theme.accentBright)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
+                .padding(16)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                        .stroke(Theme.border, lineWidth: 0.5)
+                )
             }
         }
     }
@@ -286,8 +300,7 @@ struct CountryFeedView: View {
     }
 
     private var canPostHere: Bool {
-        guard let code = appState.currentProfile?.countryCode?.uppercased() else { return false }
-        return code == country.iso.uppercased()
+        appState.canPostToCountry(country)
     }
 
     private func postCard(_ post: CountryPost) -> some View {
@@ -297,15 +310,23 @@ struct CountryFeedView: View {
             showsAuthorInJournal: true,
             onLikeToggle: { Task { await toggleLike(post) } },
             onOpenPost: { appState.navigate(to: .post(post.id)) },
-            onOpenVideo: post.hasVideo && !post.isReel
-                ? { appState.openLivingVideo(postID: post.id) }
+            onOpenVideo: PlayPlatformBridge.isLongFormVideo(post)
+                ? { appState.openPost(post) }
                 : nil,
+            onOpenReel: {
+                var sparks = posts.filter(\.isReel)
+                if !sparks.contains(where: { $0.id == post.id }) {
+                    sparks.insert(post, at: 0)
+                }
+                appState.openReelsViewer(startingPost: post, seedPosts: sparks)
+            },
             onPostDeleted: { id in posts.removeAll { $0.id == id } },
             onPostUpdated: { updated in
                 if let index = posts.firstIndex(where: { $0.id == updated.id }) {
                     posts[index] = updated
                 }
-            }
+            },
+            viewingCountryISO: country.iso
         )
     }
 
@@ -316,15 +337,23 @@ struct CountryFeedView: View {
             showsAuthorInJournal: true,
             onLikeToggle: { Task { await toggleFollowingLike(post) } },
             onOpenPost: { appState.navigate(to: .post(post.id)) },
-            onOpenVideo: post.hasVideo && !post.isReel
-                ? { appState.openLivingVideo(postID: post.id) }
+            onOpenVideo: PlayPlatformBridge.isLongFormVideo(post)
+                ? { appState.openPost(post) }
                 : nil,
+            onOpenReel: {
+                var sparks = followingPosts.filter(\.isReel)
+                if !sparks.contains(where: { $0.id == post.id }) {
+                    sparks.insert(post, at: 0)
+                }
+                appState.openReelsViewer(startingPost: post, seedPosts: sparks)
+            },
             onPostDeleted: { id in followingPosts.removeAll { $0.id == id } },
             onPostUpdated: { updated in
                 if let index = followingPosts.firstIndex(where: { $0.id == updated.id }) {
                     followingPosts[index] = updated
                 }
-            }
+            },
+            viewingCountryISO: country.iso
         )
     }
 
@@ -348,13 +377,16 @@ struct CountryFeedView: View {
         switch appState.countryTab {
         case .posts, .media:
             do {
-                posts = try await PostsService.shared.listByCountry(country.iso, limit: 30)
+                posts = try await PostsService.shared.loadCountryFeedPosts(countryISO: country.iso)
             } catch {
                 posts = []
                 loadError = error.localizedDescription
             }
         case .following:
-            followingPosts = await PostsService.shared.loadFollowingFeed()
+            followingPosts = await PostsService.shared.loadFollowingFeed(
+                limitPerAuthor: 6,
+                maxAuthors: 32
+            )
         case .news:
             newsError = nil
             do {
@@ -380,7 +412,7 @@ struct CountryFeedView: View {
                 posts[index] = copyPost(post, likedByMe: true, likeCount: post.likeCount + 1)
             }
         } catch {
-            actionError = error.localizedDescription
+            appState.showToast(error.localizedDescription, style: .error)
         }
     }
 
@@ -395,7 +427,7 @@ struct CountryFeedView: View {
                 followingPosts[index] = copyPost(post, likedByMe: true, likeCount: post.likeCount + 1)
             }
         } catch {
-            actionError = error.localizedDescription
+            appState.showToast(error.localizedDescription, style: .error)
         }
     }
 

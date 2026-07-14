@@ -135,6 +135,42 @@ final class MessagesService {
         return conversation
     }
 
+    func archiveConversation(_ conversationID: String) async throws -> Bool {
+        struct Response: Decodable {
+            let archiveConversation: Bool
+        }
+
+        let mutation = """
+        mutation ArchiveConversation($conversationId: ID!) {
+          archiveConversation(conversation_id: $conversationId)
+        }
+        """
+
+        let result: Response = try await gql.authenticatedRequest(
+            query: mutation,
+            variables: ["conversationId": conversationID]
+        )
+        return result.archiveConversation
+    }
+
+    func deleteConversation(_ conversationID: String) async throws -> Bool {
+        struct Response: Decodable {
+            let deleteConversation: Bool
+        }
+
+        let mutation = """
+        mutation DeleteConversation($conversationId: ID!) {
+          deleteConversation(conversation_id: $conversationId)
+        }
+        """
+
+        let result: Response = try await gql.authenticatedRequest(
+            query: mutation,
+            variables: ["conversationId": conversationID]
+        )
+        return result.deleteConversation
+    }
+
     func messagesUnreadCount() async -> Int {
         struct Response: Decodable {
             let messagesUnreadCount: Int
@@ -147,6 +183,24 @@ final class MessagesService {
         } catch {
             return 0
         }
+    }
+
+    func deleteMessage(_ messageID: String) async throws -> Bool {
+        struct Response: Decodable {
+            let deleteMessage: Bool
+        }
+
+        let mutation = """
+        mutation DeleteMessage($messageId: ID!) {
+          deleteMessage(message_id: $messageId)
+        }
+        """
+
+        let result: Response = try await gql.authenticatedRequest(
+            query: mutation,
+            variables: ["messageId": messageID]
+        )
+        return result.deleteMessage
     }
 
     func sendMessage(

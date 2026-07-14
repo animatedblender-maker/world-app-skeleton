@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import LiveKit
+import UIKit
 
 enum CallKind: String {
     case audio
@@ -19,6 +20,7 @@ final class CallSessionManager: NSObject {
     static let shared = CallSessionManager()
 
     var showUI = false
+    var isMinimized = false
     var isIncoming = false
     var isConnecting = false
     var isActive = false
@@ -45,6 +47,12 @@ final class CallSessionManager: NSObject {
     private var callStartAt: Date?
     private var callLogSent = false
     private var timerTask: Task<Void, Never>?
+    private var incomingTimeoutTask: Task<Void, Never>?
+    private var outgoingTimeoutTask: Task<Void, Never>?
+    private var sentCallAccept = false
+    private var incomingPresentedViaCallKit = false
+    private(set) var hasEndedCurrentCall = false
+    private var remoteDisconnectTask: Task<Void, Never>?
 
     private override init() {
         super.init()
@@ -81,6 +89,51 @@ final class CallSessionManager: NSObject {
 
     var canStartCall: Bool {
         !isActive && !isConnecting && !isIncoming && isSignalingConnected
+    }
+
+    var showFullCallUI: Bool {
+        showUI && !isMinimized
+    }
+
+    var showCompactCallBar: Bool {
+        isMinimized && (isActive || isConnecting)
+    }
+
+    func minimizeCall() {
+        guard isActive || isConnecting else { return }
+        isMinimized = true
+    }
+
+    func expandCall() {
+        isMinimized = false
+        showUI = true
+    }
+
+    func presentActiveCallUIIfNeeded() {
+        guard UIApplication.shared.applicationState == .active else { return }
+        guard isActive || isConnecting || (isIncoming && !incomingPresentedViaCallKit) else { return }
+        guard !isMinimized else { return }
+        showUI = true
+    }
+
+    func handleAppWillResignActive() {
+        autoMinimizeCallIfNeeded()
+    }
+
+    func handleAppDidBecomeActive() {
+        autoMinimizeCallIfNeeded()
+    }
+
+    private func autoMinimizeCallIfNeeded() {
+        guard isActive || isConnecting else { return }
+        guard !isIncoming else { return }
+        showUI = true
+        isMinimized = true
+    }
+
+    /// Foreground → Matterya overlay. Background / locked → system CallKit only (never both).
+    static var shouldUseCallKitForIncomingRing: Bool {
+        UIApplication.shared.applicationState != .active
     }
 
     func configurePeer(_ author: PostAuthor?) {
@@ -153,9 +206,11 @@ final class CallSessionManager: NSObject {
         isActive = false
         errorMessage = nil
         showUI = true
+        isMinimized = false
         callStartAt = nil
         callLogSent = false
         outgoingPhase = .calling
+        hasEndedCurrentCall = false
 
         do {
             CallKitManager.shared.reportOutgoingCall(
@@ -163,8 +218,9 @@ final class CallSessionManager: NSObject {
                 callerName: peerName,
                 hasVideo: kind == .video
             )
-            await CallKitManager.shared.waitForAudioSessionActivation()
-            prepareCallAudioSession()
+            CallKitManager.shared.reportOutgoingCallStartedConnecting(conversationID: conversationID)
+            let waitForCallKitAudio = UIApplication.shared.applicationState != .active
+            await prepareAudioForCall(usesCallKit: waitForCallKitAudio)
             try await connectRoom(video: kind == .video)
             CallSignalingService.shared.send(
                 type: "call-offer",
@@ -175,6 +231,7 @@ final class CallSessionManager: NSObject {
                 roomName: roomName
             )
             beginOutgoingFeedback()
+            scheduleOutgoingCallTimeout()
         } catch {
             errorMessage = error.localizedDescription
             cleanup(notifyRemote: false)
@@ -198,6 +255,7 @@ final class CallSessionManager: NSObject {
         let normalizedCallID = Self.nonEmpty(callID)
         let normalizedRoom = Self.nonEmpty(roomName)
             ?? normalizedCallID.map { "call_\(conversationID)_\($0)" }
+            ?? "call_\(conversationID)_\(userID)"
 
         incomingOffer = CallSignal(
             type: "call-offer",
@@ -215,8 +273,16 @@ final class CallSessionManager: NSObject {
         isIncoming = true
         isConnecting = false
         isActive = false
-        showUI = true
         errorMessage = nil
+        hasEndedCurrentCall = false
+
+        let appIsActive = UIApplication.shared.applicationState == .active
+        incomingPresentedViaCallKit = !appIsActive
+        isMinimized = false
+        showUI = appIsActive
+        if appIsActive {
+            CallSoundService.shared.start(.incomingRing)
+        }
 
         if let callerName = Self.nonEmpty(callerName) {
             peerName = callerName
@@ -227,7 +293,15 @@ final class CallSessionManager: NSObject {
             to: userID,
             callID: normalizedCallID
         )
+        scheduleIncomingCallTimeout()
         return true
+    }
+
+    func presentInAppIncomingUI() {
+        guard isIncoming else { return }
+        isMinimized = false
+        showUI = true
+        CallSoundService.shared.start(.incomingRing)
     }
 
     private func sendCallRinging(conversationID: String, to userID: String, callID: String?) {
@@ -263,6 +337,7 @@ final class CallSessionManager: NSObject {
         guard isIncoming, self.conversationID == conversationID else { return }
 
         if reportToCallKit {
+            incomingPresentedViaCallKit = true
             CallSoundService.shared.stop()
             await CallKitManager.shared.reportIncomingCall(
                 conversationID: conversationID,
@@ -299,15 +374,25 @@ final class CallSessionManager: NSObject {
         )
     }
 
-    func acceptCall() async {
+    @discardableResult
+    func acceptCall() async -> Bool {
+        if isConnecting || isActive {
+            return isActive || isConnecting
+        }
+        guard isIncoming else { return false }
+
+        incomingTimeoutTask?.cancel()
+        incomingTimeoutTask = nil
+        sentCallAccept = false
         bootstrapForIncomingCall()
-        _ = await ensureSignalingReady()
+        isSignalingConnected = await CallSignalingService.shared.ensureConnected(timeoutSeconds: 15)
 
         guard let offer = incomingOffer ?? pendingIncomingSignal(),
               let me = AuthService.shared.currentUser?.id
         else {
             errorMessage = "Could not join call."
-            return
+            cleanup(notifyRemote: false)
+            return false
         }
 
         CallSoundService.shared.stop()
@@ -315,25 +400,20 @@ final class CallSessionManager: NSObject {
         callKind = offer.callType == "video" ? .video : .audio
         fromUserID = offer.from
         sessionID = offer.callID
-        roomName = Self.nonEmpty(offer.roomName)
-            ?? offer.callID.flatMap { Self.nonEmpty($0) }.map { "call_\(offer.conversationID)_\($0)" }
+        roomName = resolvedRoomName(for: offer)
         isIncoming = false
         isConnecting = true
         showUI = true
+        isMinimized = false
         errorMessage = nil
-
-        guard let roomName else {
-            errorMessage = "Missing call room."
-            incomingOffer = nil
-            cleanup(notifyRemote: false)
-            return
-        }
+        hasEndedCurrentCall = false
 
         do {
-            await CallKitManager.shared.waitForAudioSessionActivation()
-            prepareCallAudioSession()
+            let usesCallKitAudio = shouldUseCallKitAudio(for: offer.conversationID)
+            await prepareAudioForCall(usesCallKit: usesCallKitAudio)
             try await connectRoom(video: callKind == .video)
             incomingOffer = nil
+            sentCallAccept = true
             CallSignalingService.shared.send(
                 type: "call-accept",
                 conversationID: offer.conversationID,
@@ -342,32 +422,53 @@ final class CallSessionManager: NSObject {
                 callID: sessionID,
                 roomName: roomName
             )
+            await refreshLocalAudioCapture()
+            evaluateConnectedState()
+            isMinimized = false
+            showUI = true
+            presentActiveCallUIIfNeeded()
+            return isActive || isConnecting
         } catch {
             errorMessage = error.localizedDescription
             incomingOffer = offer
-            cleanup(notifyRemote: false)
+            cleanup(notifyRemote: false, endCallKit: true)
+            return false
         }
     }
 
-    func declineCall() {
-        guard let conversationID else { return }
+    func declineCall(fromCallKit: Bool = false) {
+        guard conversationID != nil else { return }
         CallSoundService.shared.stop()
-        if let me = AuthService.shared.currentUser?.id {
+        if let conversationID, let me = AuthService.shared.currentUser?.id {
             CallSignalingService.shared.send(type: "call-decline", conversationID: conversationID, from: me, callID: sessionID)
         }
-        cleanup(notifyRemote: false)
+        Task {
+            await sendCallLog(status: "missed")
+            cleanup(notifyRemote: false, endCallKit: !fromCallKit)
+        }
     }
 
-    func endCall() {
+    func endCall(fromCallKit: Bool = false) {
+        guard !hasEndedCurrentCall else { return }
         let status = isActive || callStartAt != nil ? "ended" : "missed"
-        Task { await sendCallLog(status: status) }
-        cleanup(notifyRemote: true)
+        Task {
+            await sendCallLog(status: status)
+            cleanup(notifyRemote: true, endCallKit: !fromCallKit)
+        }
     }
 
     func toggleMute() {
-        isMuted.toggle()
+        setMuted(!isMuted)
+    }
+
+    func setMuted(_ muted: Bool) {
+        isMuted = muted
         Task {
-            try? await room?.localParticipant.setMicrophone(enabled: !isMuted)
+            if !muted {
+                await refreshLocalAudioCapture()
+            } else {
+                try? await room?.localParticipant.setMicrophone(enabled: false)
+            }
         }
     }
 
@@ -408,6 +509,10 @@ final class CallSessionManager: NSObject {
 
         switch signal.type {
         case "call-offer":
+            if isIncoming, conversationID == signal.conversationID {
+                // VoIP push may have already staged this call and reported it to CallKit.
+                return
+            }
             if isActive || isIncoming || (isConnecting && fromUserID == me) {
                 CallSignalingService.shared.send(type: "call-busy", conversationID: signal.conversationID, from: me, callID: signal.callID)
                 return
@@ -418,23 +523,30 @@ final class CallSessionManager: NSObject {
                 callType: signal.callType ?? "audio",
                 callID: signal.callID,
                 roomName: signal.roomName,
-                reportToCallKit: true
+                reportToCallKit: Self.shouldUseCallKitForIncomingRing
             )
 
         case "call-ringing":
             guard isOutgoingCaller, conversationID == signal.conversationID else { return }
             outgoingPhase = .ringing
-            CallSoundService.shared.start(.outgoingRing)
+            if !isConnecting, !isActive {
+                CallSoundService.shared.start(.outgoingRing)
+            }
 
         case "call-unreachable":
             guard isOutgoingCaller, conversationID == signal.conversationID, outgoingPhase != .ringing else { return }
             outgoingPhase = .tryingToReach
-            CallSoundService.shared.start(.tryingToReach)
+            if !isConnecting, !isActive {
+                CallSoundService.shared.start(.tryingToReach)
+            }
 
         case "call-accept":
             guard fromUserID == me, conversationID == signal.conversationID else { return }
             if let name = signal.roomName { roomName = name }
-            markActive()
+            outgoingPhase = .ringing
+            if let room, !room.remoteParticipants.isEmpty {
+                markActive()
+            }
 
         case "call-decline", "call-busy":
             if fromUserID == me {
@@ -443,6 +555,11 @@ final class CallSessionManager: NSObject {
             cleanup(notifyRemote: false)
 
         case "call-end":
+            if isActive || callStartAt != nil {
+                await sendCallLog(status: "ended")
+            } else if isIncoming || isConnecting {
+                await sendCallLog(status: "missed")
+            }
             cleanup(notifyRemote: false)
 
         default:
@@ -450,14 +567,58 @@ final class CallSessionManager: NSObject {
         }
     }
 
-    private func prepareCallAudioSession() {
+    private func shouldUseCallKitAudio(for conversationID: String) -> Bool {
+        if CallKitManager.shared.isAudioSessionActivated {
+            return true
+        }
+        if UIApplication.shared.applicationState != .active {
+            return incomingPresentedViaCallKit
+                || CallKitManager.shared.hasCall(conversationID: conversationID)
+        }
+        return false
+    }
+
+    private func resolvedRoomName(for offer: CallSignal) -> String {
+        if let explicit = Self.nonEmpty(offer.roomName) {
+            return explicit
+        }
+        if let callID = Self.nonEmpty(offer.callID) {
+            return "call_\(offer.conversationID)_\(callID)"
+        }
+        return "call_\(offer.conversationID)_\(offer.from)"
+    }
+
+    private func prepareAudioForCall(usesCallKit: Bool) async {
+        CallSoundService.shared.stop()
+        if usesCallKit {
+            await CallKitManager.shared.waitForAudioSessionActivation()
+            activateLiveKitAudio()
+        } else {
+            prepareInAppCallAudio()
+        }
+    }
+
+    private func prepareInAppCallAudio() {
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(
             .playAndRecord,
             mode: .voiceChat,
-            options: [.allowBluetoothHFP, .defaultToSpeaker, .mixWithOthers]
+            options: [.defaultToSpeaker, .allowBluetoothHFP]
         )
         try? session.setActive(true)
+        activateLiveKitAudio()
+    }
+
+    private func activateLiveKitAudio() {
+        AudioManager.shared.audioSession.isAutomaticConfigurationEnabled = true
+        try? AudioManager.shared.setEngineAvailability(.default)
+    }
+
+    private func refreshLocalAudioCapture() async {
+        activateLiveKitAudio()
+        try? await room?.localParticipant.setMicrophone(enabled: !isMuted)
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        try? await room?.localParticipant.setMicrophone(enabled: !isMuted)
     }
 
     private func connectRoom(video: Bool) async throws {
@@ -467,20 +628,48 @@ final class CallSessionManager: NSObject {
         let tokenInfo = try await fetchLiveKitToken(roomName: roomName)
         guard !tokenInfo.url.isEmpty else { throw CallError.liveKitNotConfigured }
 
-        let newRoom = Room()
-        newRoom.add(delegate: self)
-        room = newRoom
-        isCameraOff = !video
-        isMuted = false
+        var lastError: Error?
+        for attempt in 0..<2 {
+            if attempt > 0 {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                await disconnectRoom()
+            }
 
-        try await newRoom.connect(
-            url: tokenInfo.url,
-            token: tokenInfo.token,
-            connectOptions: ConnectOptions(enableMicrophone: true)
-        )
-        try await newRoom.localParticipant.setCamera(enabled: video)
-        try await newRoom.localParticipant.setMicrophone(enabled: true)
-        updateLocalVideoTrack(from: newRoom.localParticipant)
+            let newRoom = Room()
+            newRoom.add(delegate: self)
+            room = newRoom
+            isCameraOff = !video
+            isMuted = false
+
+            do {
+                activateLiveKitAudio()
+                try await newRoom.connect(
+                    url: tokenInfo.url,
+                    token: tokenInfo.token,
+                    connectOptions: ConnectOptions(enableMicrophone: true)
+                )
+                try await newRoom.localParticipant.setCamera(enabled: video)
+                await refreshLocalAudioCapture()
+                updateLocalVideoTrack(from: newRoom.localParticipant)
+                evaluateConnectedState()
+                return
+            } catch {
+                lastError = error
+                room?.remove(delegate: self)
+                room = nil
+            }
+        }
+
+        throw lastError ?? CallError.tokenFailed("Could not join call room.")
+    }
+
+    private func evaluateConnectedState() {
+        guard let room, !isActive else { return }
+        guard !room.remoteParticipants.isEmpty else { return }
+        markActive()
+        for participant in room.remoteParticipants.values {
+            updateRemoteVideoTrack(for: participant)
+        }
     }
 
     private func fetchLiveKitToken(roomName: String) async throws -> (token: String, url: String) {
@@ -516,10 +705,22 @@ final class CallSessionManager: NSObject {
 
     private func markActive() {
         CallSoundService.shared.stop()
+        incomingTimeoutTask?.cancel()
+        incomingTimeoutTask = nil
+        outgoingTimeoutTask?.cancel()
+        outgoingTimeoutTask = nil
         isConnecting = false
         isActive = true
         isIncoming = false
+        showUI = true
         outgoingPhase = .calling
+        Task {
+            await refreshLocalAudioCapture()
+        }
+        if let conversationID {
+            CallKitManager.shared.reportCallConnected(conversationID: conversationID)
+        }
+        presentActiveCallUIIfNeeded()
         if callStartAt == nil {
             callStartAt = Date()
             startTimer()
@@ -530,12 +731,46 @@ final class CallSessionManager: NSObject {
         guard isOutgoingCaller else { return }
         Task {
             try? await Task.sleep(nanoseconds: 8_000_000_000)
-            guard isOutgoingCaller, !isActive, !isIncoming, showUI else { return }
+            guard isOutgoingCaller, !isActive, !isConnecting, !isIncoming, showUI else { return }
             if outgoingPhase == .calling {
                 outgoingPhase = .tryingToReach
                 CallSoundService.shared.start(.tryingToReach)
             }
         }
+    }
+
+    private func scheduleIncomingCallTimeout() {
+        incomingTimeoutTask?.cancel()
+        incomingTimeoutTask = Task {
+            try? await Task.sleep(nanoseconds: 45_000_000_000)
+            guard !Task.isCancelled else { return }
+            await missUnansweredIncomingCall()
+        }
+    }
+
+    private func scheduleOutgoingCallTimeout() {
+        outgoingTimeoutTask?.cancel()
+        outgoingTimeoutTask = Task {
+            try? await Task.sleep(nanoseconds: 60_000_000_000)
+            guard !Task.isCancelled else { return }
+            guard isOutgoingCaller, !isActive, showUI || isConnecting else { return }
+            endCall()
+        }
+    }
+
+    private func missUnansweredIncomingCall() async {
+        guard isIncoming, !isActive, !isConnecting else { return }
+        if let conversationID, let me = AuthService.shared.currentUser?.id, let fromUserID {
+            CallSignalingService.shared.send(
+                type: "call-decline",
+                conversationID: conversationID,
+                from: me,
+                callID: sessionID,
+                to: fromUserID
+            )
+        }
+        await sendCallLog(status: "missed")
+        cleanup(notifyRemote: false)
     }
 
     private func startTimer() {
@@ -590,18 +825,51 @@ final class CallSessionManager: NSObject {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    private func cleanup(notifyRemote: Bool) {
+    private func notifyCallerCallEnded() {
+        guard sentCallAccept || isActive else { return }
+        guard let conversationID, let me = AuthService.shared.currentUser?.id else { return }
+        CallSignalingService.shared.send(
+            type: "call-end",
+            conversationID: conversationID,
+            from: me,
+            callID: sessionID,
+            to: fromUserID
+        )
+    }
+
+    private func cleanup(notifyRemote: Bool, endCallKit: Bool = true) {
+        guard !hasEndedCurrentCall else { return }
+        hasEndedCurrentCall = true
+
+        incomingTimeoutTask?.cancel()
+        incomingTimeoutTask = nil
+        outgoingTimeoutTask?.cancel()
+        outgoingTimeoutTask = nil
+        remoteDisconnectTask?.cancel()
+        remoteDisconnectTask = nil
         let endedConversationID = conversationID
+        let shouldNotifyRemote = notifyRemote || sentCallAccept || isActive
         CallSoundService.shared.stop()
-        CallKitManager.shared.endCall(for: endedConversationID)
-        if notifyRemote, let conversationID, let me = AuthService.shared.currentUser?.id {
-            CallSignalingService.shared.send(type: "call-end", conversationID: conversationID, from: me, callID: sessionID)
+        if endCallKit {
+            CallKitManager.shared.requestEndCall(for: endedConversationID)
         }
+        if shouldNotifyRemote, let conversationID, let me = AuthService.shared.currentUser?.id {
+            CallSignalingService.shared.send(
+                type: "call-end",
+                conversationID: conversationID,
+                from: me,
+                callID: sessionID,
+                to: isIncoming || fromUserID == me ? peerUserID : fromUserID
+            )
+        }
+        sentCallAccept = false
+        incomingPresentedViaCallKit = false
         timerTask?.cancel()
         timerTask = nil
         Task { await disconnectRoom() }
 
         showUI = false
+        isMinimized = false
         outgoingPhase = .calling
         isIncoming = false
         isConnecting = false
@@ -675,6 +943,8 @@ extension CallSessionManager: RoomDelegate {
 
     nonisolated func room(_ room: Room, participantDidConnect participant: RemoteParticipant) {
         Task { @MainActor in
+            self.remoteDisconnectTask?.cancel()
+            self.remoteDisconnectTask = nil
             self.markActive()
             self.updateRemoteVideoTrack(for: participant)
         }
@@ -682,7 +952,11 @@ extension CallSessionManager: RoomDelegate {
 
     nonisolated func room(_ room: Room, participantDidDisconnect participant: RemoteParticipant) {
         Task { @MainActor in
-            if self.isActive {
+            guard self.isActive, self.room === room else { return }
+            self.remoteDisconnectTask?.cancel()
+            self.remoteDisconnectTask = Task {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                guard !Task.isCancelled, self.isActive, self.room?.remoteParticipants.isEmpty == true else { return }
                 self.endCall()
             }
         }
@@ -690,6 +964,12 @@ extension CallSessionManager: RoomDelegate {
 
     nonisolated func room(_ room: Room, participant: RemoteParticipant, didSubscribeTrack publication: RemoteTrackPublication) {
         Task { @MainActor in
+            if publication.kind == .audio {
+                self.activateLiveKitAudio()
+                if !self.isActive {
+                    self.markActive()
+                }
+            }
             if publication.kind == .video {
                 self.remoteVideoTrack = publication.track as? VideoTrack
                 self.markActive()
@@ -707,10 +987,19 @@ extension CallSessionManager: RoomDelegate {
 
     nonisolated func room(_ room: Room, didDisconnectWithError error: LiveKitError?) {
         Task { @MainActor in
+            guard self.room === room, !self.hasEndedCurrentCall else { return }
             if let error {
                 self.errorMessage = error.localizedDescription
             }
-            self.cleanup(notifyRemote: false)
+            if self.isActive {
+                self.endCall()
+            } else if self.sentCallAccept {
+                self.cleanup(notifyRemote: true, endCallKit: true)
+            } else if self.isConnecting || self.isIncoming {
+                self.cleanup(notifyRemote: false, endCallKit: true)
+            } else {
+                self.cleanup(notifyRemote: true, endCallKit: true)
+            }
         }
     }
 }

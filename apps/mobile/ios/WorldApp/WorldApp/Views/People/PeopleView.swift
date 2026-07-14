@@ -17,14 +17,14 @@ struct PeopleView: View {
             if isLoading && people.isEmpty {
                 ProgressView("Loading people…")
             } else if let errorMessage, people.isEmpty {
-                Text(errorMessage).foregroundStyle(.red)
+                ContentUnavailableView("People unavailable", systemImage: "person.2", description: Text(errorMessage))
+            } else if people.isEmpty {
+                ContentUnavailableView("No people yet", systemImage: "person.2", description: Text("Check back soon for new members."))
             } else {
                 ForEach(people) { person in
                     HStack(spacing: 12) {
                         Button {
-                            if let username = person.username {
-                                appState.navigate(to: .publicProfile(username: username))
-                            }
+                            appState.openPublicProfile(username: person.username, userID: person.userID)
                         } label: {
                             HStack(spacing: 12) {
                                 AvatarView(url: person.avatarURL, seed: person.userID, size: 44)

@@ -1,10 +1,13 @@
 import Foundation
 import Observation
+import UIKit
 
 @MainActor
 @Observable
 final class AppState {
     var isAuthenticated = false
+    var isSessionReady = false
+    var contentLoadGeneration = 0
     var needsProfileSetup = false
     var currentProfile: Profile?
     var selectedTab: AppTab = .feed
@@ -32,16 +35,25 @@ final class AppState {
     var composerCountry: Country?
     var storyGroups: [StoryGroup] = []
     var storyViewerContext: StoryViewerContext?
+    var reelsViewerContext: ReelsViewerContext?
 
     private let reelSavedDefaultsKey = "saved_reel_presentation_ids"
     private let localSavedPostIDsKey = "local_saved_post_ids"
     private let viewedStoriesDefaultsKey = "viewed_story_post_ids"
     var navigationPath: [AppDestination] = []
     var pendingConversationID: String?
+    var isPlayPresented = false
     var pendingLivingVideoID: String?
+    var pendingPlayTab: YouTubeMainTab?
+    var pendingPlayChannelAuthorID: String?
+    var pendingPlayChannelUsername: String?
     var showAppMenu = false
     var floatingPosts: [CountryPost] = []
     var errorMessage: String?
+    var toastMessage: String?
+    var toastStyle: ToastBanner.ToastStyle = .info
+    var sharePostSheet: CountryPost?
+    var quotedSharePostID: String?
 
     private let auth = AuthService.shared
     private let profileService = ProfileService.shared
@@ -54,29 +66,108 @@ final class AppState {
         VoIPPushService.shared.bootstrap()
         reelPresentationSavedIDs = loadReelPresentationSavedIDs()
         isAuthenticated = auth.isAuthenticated
-        guard isAuthenticated else { return }
+        guard isAuthenticated else {
+            isSessionReady = true
+            return
+        }
+
+        restoreCachedProfile()
+        markSessionReady()
         CallSessionManager.shared.bootstrap()
-        await PushNotificationService.shared.requestAuthorizationAndRegister()
-        await PushNotificationService.shared.syncWithServer(force: true)
-        await refreshAll()
         startPolling()
+        registerPushInBackground()
+        Task { await finishSessionWarmup() }
+    }
+
+    func handleBecameActive() async {
+        guard isAuthenticated else { return }
+        if !isSessionReady {
+            restoreCachedProfile()
+            markSessionReady()
+            Task { await finishSessionWarmup() }
+            return
+        }
+        await prepareSession()
+    }
+
+    private func restoreCachedProfile() {
+        guard currentProfile == nil, let cached = ContentCache.shared.cachedProfile() else { return }
+        currentProfile = cached
+        needsProfileSetup = !cached.isComplete
+    }
+
+    private func markSessionReady() {
+        guard !isSessionReady else { return }
+        isSessionReady = true
+    }
+
+    private func finishSessionWarmup() async {
+        await prepareSession()
+        await refreshProfile()
+        await refreshAllInBackground()
+        contentLoadGeneration += 1
+    }
+
+    private func prepareSession() async {
+        await withTimeout(seconds: 10) {
+            _ = try? await self.auth.ensureValidToken()
+        }
+    }
+
+    private func withTimeout(seconds: TimeInterval, operation: @escaping () async -> Void) async {
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                await operation()
+                return true
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                return false
+            }
+            _ = await group.next()
+            group.cancelAll()
+        }
+    }
+
+    private func registerPushInBackground() {
+        Task {
+            VoIPPushService.shared.bootstrap()
+            await VoIPPushService.shared.ensureToken()
+            await PushNotificationService.shared.syncWithServer(force: true)
+            await PushNotificationService.shared.requestAuthorizationAndRegister()
+            await VoIPPushService.shared.ensureToken()
+            await PushNotificationService.shared.syncWithServer(force: true)
+        }
     }
 
     func refreshAll() async {
         await refreshProfile()
-        await refreshGlobalStats()
-        await refreshFollowingIDs()
-        await refreshSavedPosts()
-        await refreshStories()
-        await refreshNotifications()
-        await refreshUnreadCounts()
+        await refreshAllInBackground()
+    }
+
+    private func refreshAllInBackground() async {
+        async let statsTask: Void = { await refreshGlobalStats() }()
+        async let followingTask: Void = { await refreshFollowingIDs() }()
+        async let savedTask: Void = { await refreshSavedPosts() }()
+        async let storiesTask: Void = { await refreshStories() }()
+        async let notificationsTask: Void = { await refreshNotifications() }()
+        async let feedTask: Void = { _ = await PostsService.shared.loadHomeFeed() }()
+        async let livingTask: Void = { _ = await PostsService.shared.loadLivingVideos() }()
+        _ = await (statsTask, followingTask, savedTask, storiesTask, notificationsTask, feedTask, livingTask)
         startPresence()
     }
 
     func refreshProfile() async {
+        let previousCountry = ContentCache.shared.profileCountryCode()
         do {
             currentProfile = try await profileService.meProfile()
+            ContentCache.shared.setProfile(currentProfile)
             needsProfileSetup = !(currentProfile?.isComplete ?? false)
+            let newCountry = currentProfile?.countryCode?.uppercased()
+            if newCountry != previousCountry, newCountry != nil {
+                ContentCache.shared.invalidate(.homeFeed, .livingVideos)
+                contentLoadGeneration += 1
+            }
         } catch {
             let message = error.localizedDescription.lowercased()
             if message.contains("authentication required") || message.contains("unauthenticated") {
@@ -104,12 +195,21 @@ final class AppState {
     }
 
     func refreshSavedPosts() async {
-        do {
-            savedPosts = try await PostsService.shared.savedPosts(limit: 100)
-            savedPostIDs = Set(savedPosts.map(\.id))
+        if savedPostIDs.isEmpty {
+            savedPostIDs = Set(UserDefaults.standard.stringArray(forKey: localSavedPostIDsKey) ?? [])
+        }
+        if savedPosts.isEmpty, let cached = ContentCache.shared.posts(for: .savedPosts) {
+            savedPosts = cached
+            savedPostIDs = Set(cached.map(\.id))
+        }
+        let loaded = await PostsService.shared.loadBookmarkedPosts(localIDs: savedPostIDs, limit: 100)
+        if !loaded.isEmpty || PostsService.usesLocalBookmarksOnly {
+            savedPosts = loaded
+            savedPostIDs = Set(loaded.map(\.id))
+            ContentCache.shared.setPosts(savedPosts, for: .savedPosts)
             persistLocalSavedPostIDs()
-        } catch {
-            await loadLocalSavedPosts()
+        } else if savedPosts.isEmpty {
+            await loadLocalSavedPosts(resolvePosts: true)
         }
     }
 
@@ -117,19 +217,20 @@ final class AppState {
         savedPostIDs.contains(postID)
     }
 
-    func toggleSavePost(_ post: CountryPost, reelPresentation: Bool = false) async {
+    @discardableResult
+    func toggleSavePost(_ post: CountryPost, reelPresentation: Bool = false) async -> String? {
         let wasSaved = savedPostIDs.contains(post.id)
+        let targetSaved = !wasSaved
+        applySavedState(for: post, saved: targetSaved, reelPresentation: reelPresentation)
         do {
-            if wasSaved {
-                _ = try await PostsService.shared.unsavePost(post.id)
-            } else {
-                _ = try await PostsService.shared.savePost(post.id)
-            }
-            applySavedState(for: post, saved: !wasSaved, reelPresentation: reelPresentation)
+            let updated = try await PostsService.shared.toggleBookmark(for: post, saved: targetSaved)
+            applySavedState(for: updated, saved: targetSaved, reelPresentation: reelPresentation)
             persistLocalSavedPostIDs()
+            ContentCache.shared.setPosts(savedPosts, for: .savedPosts)
+            return nil
         } catch {
-            applySavedState(for: post, saved: !wasSaved, reelPresentation: reelPresentation)
-            persistLocalSavedPostIDs()
+            applySavedState(for: post, saved: wasSaved, reelPresentation: reelPresentation)
+            return error.localizedDescription
         }
     }
 
@@ -150,22 +251,18 @@ final class AppState {
         }
     }
 
-    private func loadLocalSavedPosts() async {
+    private func loadLocalSavedPosts(resolvePosts: Bool = false) async {
         let ids = Set(UserDefaults.standard.stringArray(forKey: localSavedPostIDsKey) ?? [])
         guard !ids.isEmpty else { return }
 
         savedPostIDs = ids
-        var loaded: [CountryPost] = []
-        for id in ids {
-            if let cached = savedPosts.first(where: { $0.id == id }) {
-                loaded.append(cached)
-                continue
-            }
-            if let post = try? await PostsService.shared.getPostByID(id) {
-                loaded.append(post)
-            }
+        if let cached = ContentCache.shared.posts(for: .savedPosts), !cached.isEmpty {
+            savedPosts = cached.filter { ids.contains($0.id) }
+            if !savedPosts.isEmpty { return }
         }
-        savedPosts = loaded
+        guard resolvePosts else { return }
+        savedPosts = await PostsService.shared.loadBookmarkedPosts(localIDs: ids, limit: 100)
+        ContentCache.shared.setPosts(savedPosts, for: .savedPosts)
     }
 
     private func persistLocalSavedPostIDs() {
@@ -220,34 +317,122 @@ final class AppState {
 
     func onAuthenticated() async {
         isAuthenticated = true
+        restoreCachedProfile()
+        markSessionReady()
         CallSessionManager.shared.bootstrap()
-        await PushNotificationService.shared.requestAuthorizationAndRegister()
-        await PushNotificationService.shared.syncWithServer(force: true)
-        await refreshAll()
         startPolling()
+        registerPushInBackground()
+        Task { await finishSessionWarmup() }
     }
 
     func logout() {
         stopPolling()
+        Task { await PushNotificationService.shared.unregisterFromServer() }
         CallSessionManager.shared.teardown()
-        VoIPPushService.shared.teardown()
         CallSignalingService.shared.shutdown()
         Task { await presenceService.setOffline() }
         presenceService.stopHeartbeat()
         auth.logout()
         isAuthenticated = false
+        isSessionReady = true
+        contentLoadGeneration = 0
         needsProfileSetup = false
         currentProfile = nil
         selectedCountry = nil
         selectedTab = .feed
         globePanel = nil
         navigationPath = []
+        isPlayPresented = false
+        pendingConversationID = nil
         pendingLivingVideoID = nil
+        clearPendingPlayRouting()
         followingIDs = []
         savedPostIDs = []
         savedPosts = []
         notifications = []
         showAppMenu = false
+        toastMessage = nil
+        sharePostSheet = nil
+        quotedSharePostID = nil
+        reelsViewerContext = nil
+    }
+
+    func showToast(_ message: String, style: ToastBanner.ToastStyle = .success) {
+        toastMessage = message
+        toastStyle = style
+        Task {
+            try? await Task.sleep(nanoseconds: 2_800_000_000)
+            if toastMessage == message {
+                toastMessage = nil
+            }
+        }
+    }
+
+    func presentShareSheet(for post: CountryPost) {
+        sharePostSheet = post
+    }
+
+    func handleDeepLink(_ url: URL) {
+        guard let destination = ShareService.shared.parseDeepLink(url) else { return }
+        showAppMenu = false
+        globePanel = nil
+        switch destination {
+        case .playWatch(let id):
+            Task { await openPlayVideo(id: id) }
+        case .playChannel(let username):
+            openPlayChannel(username: username)
+        case .playChannelID(let authorID):
+            openPlayChannel(authorID: authorID)
+        case .people, .ads, .editProfile, .settings, .premium, .search:
+            selectedTab = .feed
+            navigationPath.removeAll()
+            navigationPath.append(destination)
+        case .post(let id):
+            Task { await openPost(id: id) }
+        case .news, .publicProfile, .publicProfileByUserID, .reels, .countryFeed:
+            selectedTab = .feed
+            navigationPath.removeAll()
+            navigationPath.append(destination)
+        case .conversation(let id):
+            openConversation(id: id)
+        }
+    }
+
+    func handlePushNavigation(type: String, conversationID: String?, postID: String?, username: String?) {
+        showAppMenu = false
+        globePanel = nil
+        let normalized = type.lowercased()
+
+        if normalized == "message", let conversationID {
+            openConversation(id: conversationID)
+            return
+        }
+
+        if normalized == "call" || normalized == "incoming_call" {
+            selectedTab = .messages
+            navigationPath.removeAll()
+            if CallSessionManager.shared.isIncoming {
+                CallSessionManager.shared.presentInAppIncomingUI()
+            }
+            return
+        }
+
+        if normalized == "follow" {
+            selectedTab = .feed
+            navigationPath.removeAll()
+            if let username, !username.isEmpty {
+                openPublicProfile(username: username, userID: username)
+            }
+            return
+        }
+
+        if let postID, !postID.isEmpty {
+            openNotificationPost(id: postID)
+            return
+        }
+
+        globePanel = .notifications
+        Task { await refreshNotifications() }
     }
 
     func selectCountry(_ country: Country) {
@@ -276,11 +461,28 @@ final class AppState {
         return Country(id: code, name: name, iso: code, continent: nil, centerLat: nil, centerLng: nil)
     }
 
+    var homeCountryISO: String? {
+        let code = currentProfile?.countryCode?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        return code?.isEmpty == false ? code : nil
+    }
+
+    func canPostToCountry(_ country: Country) -> Bool {
+        guard let home = homeCountryISO else { return false }
+        return home == country.iso.uppercased()
+    }
+
     func navigateToHomeCountryFeed(openComposer: Bool = false) async {
-        selectedTab = .feed
+        guard let home = await resolveHomeCountry() else {
+            showToast("Set your home country in profile before posting.", style: .error)
+            return
+        }
+        globePanel = nil
+        showAppMenu = false
         navigationPath.removeAll()
+        selectCountry(home)
+        navigate(to: .countryFeed(home))
         if openComposer {
-            await presentCreateSheet(.post)
+            openComposerOnCountryFeed = true
         }
     }
 
@@ -288,21 +490,188 @@ final class AppState {
         navigationPath.append(destination)
     }
 
-    func openLivingVideo(postID: String) {
-        selectedTab = .globe
+    func openConversation(id: String) {
+        pendingConversationID = nil
+        selectedTab = .messages
+        navigationPath.removeAll { destination in
+            if case .conversation = destination { return true }
+            return false
+        }
+        navigationPath.append(.conversation(id))
+    }
+
+    func closeConversation(id: String) {
+        navigationPath.removeAll { destination in
+            if case .conversation(let conversationID) = destination {
+                return conversationID == id
+            }
+            return false
+        }
+    }
+
+    func openDirectMessage(with userID: String) async {
+        globePanel = nil
+        showAppMenu = false
+        do {
+            let conversation = try await MessagesService.shared.startConversation(targetID: userID)
+            openConversation(id: conversation.id)
+        } catch {
+            showToast(error.localizedDescription, style: .error)
+        }
+    }
+
+    func openPublicProfile(username: String?, userID: String) {
+        globePanel = nil
+        showAppMenu = false
+        selectedTab = .feed
+        navigationPath.removeAll()
+        let trimmedUsername = username?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "^@+", with: "", options: .regularExpression)
+        if let trimmedUsername, !trimmedUsername.isEmpty {
+            navigate(to: .publicProfile(username: trimmedUsername))
+        } else if !userID.isEmpty {
+            navigate(to: .publicProfileByUserID(userID))
+        }
+    }
+
+    func presentPlaySurface() {
+        showAppMenu = false
+        globePanel = nil
+        isPlayPresented = true
+    }
+
+    func dismissPlay() {
+        isPlayPresented = false
+        pendingLivingVideoID = nil
+        clearPendingPlayRouting()
+    }
+
+    func openLivingVideo(postID: String, tab: YouTubeMainTab? = nil) {
         navigationPath.removeAll()
         showAppMenu = false
+        globePanel = nil
+        isPlayPresented = false
+        if let tab { pendingPlayTab = tab }
         pendingLivingVideoID = postID
+        selectedTab = .hubs
     }
 
     func clearPendingLivingVideo() {
         pendingLivingVideoID = nil
     }
 
+    func clearPendingPlayRouting() {
+        pendingPlayTab = nil
+        pendingPlayChannelAuthorID = nil
+        pendingPlayChannelUsername = nil
+    }
+
+    func openPlay(tab: YouTubeMainTab = .home) {
+        navigationPath.removeAll()
+        showAppMenu = false
+        globePanel = nil
+        isPlayPresented = false
+        pendingPlayTab = tab
+        selectedTab = .hubs
+    }
+
+    func openPlayFromMenu(tab: YouTubeMainTab = .home) {
+        openPlay(tab: tab)
+    }
+
+    func openPlayChannel(authorID: String, username: String? = nil) {
+        navigationPath.removeAll()
+        showAppMenu = false
+        globePanel = nil
+        isPlayPresented = false
+        pendingPlayChannelAuthorID = authorID
+        pendingPlayChannelUsername = username
+        selectedTab = .hubs
+    }
+
+    func openPlayChannel(username: String) {
+        navigationPath.removeAll()
+        showAppMenu = false
+        globePanel = nil
+        isPlayPresented = false
+        pendingPlayChannelUsername = username
+        selectedTab = .hubs
+    }
+
+    func openPost(_ post: CountryPost) {
+        if post.isReel {
+            openReelsViewer(startingPost: post)
+        } else if PlayPlatformBridge.isLongFormVideo(post) {
+            openLivingVideo(postID: post.id, tab: .home)
+        } else {
+            selectedTab = .feed
+            navigationPath.removeAll()
+            navigate(to: .post(post.id))
+        }
+    }
+
+    func openPost(id: String) async {
+        if let post = try? await PostsService.shared.getPostByID(id) {
+            openPost(post)
+        } else {
+            selectedTab = .feed
+            navigationPath.removeAll()
+            navigate(to: .post(id))
+        }
+    }
+
+    func openPlayVideo(id: String) async {
+        if let post = try? await PostsService.shared.getPostByID(id) {
+            openPost(post)
+        } else {
+            openLivingVideo(postID: id)
+        }
+    }
+
+    func openPostInFeed(postID: String) {
+        selectedTab = .feed
+        navigationPath.removeAll()
+        navigate(to: .post(postID))
+    }
+
+    func openReelsViewer(startingPost: CountryPost, seedPosts: [CountryPost] = []) {
+        reelsViewerContext = ReelsViewerContext(
+            startingPost: startingPost,
+            seedPosts: seedPosts
+        )
+    }
+
+    func openReelsFromMenu() async {
+        let reels = await PostsService.shared.loadReelsFeed(
+            viewerCountry: currentProfile?.countryCode,
+            followingIDs: followingIDs
+        )
+        guard let first = reels.first else {
+            showToast("\(MatteryaCopy.noSparksYet) — publish one to get started.", style: .info)
+            openPlay()
+            return
+        }
+        openReelsViewer(startingPost: first, seedPosts: reels)
+    }
+
+    func openCountryReels(_ country: Country) {
+        Task {
+            let posts = (try? await PostsService.shared.videoPosts(for: country)) ?? []
+            let reels = posts.filter { $0.isReel && $0.playableVideoURL != nil }
+            guard let first = reels.first else {
+                showToast("\(MatteryaCopy.noSparksForCountry) \(country.name) yet.", style: .info)
+                openPlay()
+                return
+            }
+            openReelsViewer(startingPost: first, seedPosts: reels)
+        }
+    }
+
     func openFromMenu(_ destination: AppDestination) {
         showAppMenu = false
         switch destination {
-        case .people, .ads, .editProfile, .settings, .search:
+        case .people, .ads, .editProfile, .settings, .premium, .search:
             selectedTab = .feed
             navigationPath.removeAll()
             navigationPath.append(destination)
@@ -317,11 +686,22 @@ final class AppState {
         navigationPath.removeAll()
     }
 
-    func openSavedFromMenu() {
+    func openSavedFromMenu(section: ProfileLibrarySection = .savedPosts) {
         showAppMenu = false
-        profileLibrarySection = .savedPosts
+        profileLibrarySection = section
         selectedTab = .profile
         navigationPath.removeAll()
+    }
+
+    func inviteFriendsFromMenu() {
+        showAppMenu = false
+        shareAppInvite()
+    }
+
+    func shareAppInvite() {
+        let items = ShareService.shared.activityItems(for: .appInvite)
+        guard let root = UIApplication.shared.firstKeyWindow?.rootViewController else { return }
+        root.topMostViewController().presentShareSheet(items: items)
     }
 
     func openNotificationsFromMenu() {
@@ -332,20 +712,41 @@ final class AppState {
 
     func presentCreateSheet(_ sheet: CreateContentSheet) async {
         guard let home = await resolveHomeCountry() else {
-            errorMessage = "Set your home country in profile before posting."
+            showToast("Set your home country in profile before posting.", style: .error)
             return
         }
         composerCountry = home
-        withAnimation(.easeOut(duration: 0.24)) {
-            showCreateMenu = false
-        }
+        showCreateMenu = false
         activeCreateSheet = sheet
+    }
+
+    func needsRepeatShareWarning(for post: CountryPost) -> Bool {
+        guard let profile = currentProfile,
+              let countryCode = homeCountryISO?.uppercased()
+        else { return false }
+
+        let originalID = post.sharedPostID ?? post.id
+
+        if let postCountry = post.countryCode?.uppercased(),
+           postCountry == countryCode,
+           post.authorID == profile.userID,
+           post.sharedPostID == nil {
+            return true
+        }
+
+        let cachedPosts =
+            (ContentCache.shared.posts(for: .homeFeed) ?? [])
+            + (ContentCache.shared.posts(for: .profilePosts) ?? [])
+
+        return cachedPosts.contains { item in
+            item.authorID == profile.userID && item.sharedPostID == originalID
+        }
     }
 
     func sharePostToCountryFeed(_ post: CountryPost) async -> String {
         guard isAuthenticated else { return "Sign in to share." }
         guard let profile = currentProfile,
-              let countryCode = profile.countryCode?.uppercased(), !countryCode.isEmpty,
+              let countryCode = homeCountryISO,
               let countryName = profile.countryName, !countryName.isEmpty
         else {
             return "Set your home country to share."
@@ -358,11 +759,21 @@ final class AppState {
                 countryCode: countryCode,
                 cityName: profile.cityName
             )
+            ContentCache.shared.invalidate(.homeFeed, .livingVideos)
+            contentLoadGeneration += 1
             NotificationCenter.default.post(name: .userPostsDidChange, object: nil)
-            return "Shared to your country feed."
+            if let sourceCountry = post.countryName, sourceCountry != countryName {
+                return "Shared from \(sourceCountry) to your \(countryName) feed."
+            }
+            return "Shared to your \(countryName) feed."
         } catch {
             return error.localizedDescription
         }
+    }
+
+    func reloadContent() {
+        ContentCache.shared.invalidateAllFeeds()
+        contentLoadGeneration += 1
     }
 
     func refreshStories() async {
@@ -413,8 +824,22 @@ final class AppState {
                 followingIDs.insert(userID)
             }
         } catch {
-            errorMessage = error.localizedDescription
+            showToast(error.localizedDescription, style: .error)
         }
+    }
+
+    func blockUser(_ userID: String, username: String? = nil, displayName: String? = nil) {
+        BlockService.shared.block(userID: userID, username: username, displayName: displayName)
+        if followingIDs.contains(userID) {
+            followingIDs.remove(userID)
+        }
+        reloadContent()
+        showToast("Account blocked")
+    }
+
+    func unblockUser(_ userID: String) {
+        BlockService.shared.unblock(userID)
+        showToast("Account unblocked")
     }
 
     func markNotificationRead(_ notification: NotificationItem) async {
@@ -437,39 +862,47 @@ final class AppState {
 
         let type = notification.type.lowercased()
 
-        if type == "message", let conversationID = notification.conversationID {
+        if let conversationID = notification.conversationID {
             try? await notificationsService.markRead(notification.id)
-            pendingConversationID = conversationID
-            selectedTab = .messages
-            navigationPath.removeAll()
+            openConversation(id: conversationID)
             await refreshUnreadCounts()
+            await refreshNotifications()
             return
         }
 
-        if type == "follow" {
+        if type == "follow", let actorID = notification.actorUserID {
             try? await notificationsService.markRead(notification.id)
-            if let username = notification.actor?.username?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-               !username.isEmpty {
-                selectedTab = .feed
-                navigationPath.removeAll()
-                navigate(to: .publicProfile(username: username))
-            }
+            selectedTab = .feed
+            navigationPath.removeAll()
+            openPublicProfile(username: notification.actor?.username, userID: actorID)
             await refreshNotifications()
             return
         }
 
         if let postID = notification.resolvedPostID {
             try? await notificationsService.markRead(notification.id)
+            openNotificationPost(id: postID)
+            await refreshNotifications()
+            return
+        }
+
+        if let actorID = notification.actorUserID {
+            try? await notificationsService.markRead(notification.id)
             selectedTab = .feed
             navigationPath.removeAll()
-            navigate(to: .post(postID))
+            openPublicProfile(username: notification.actor?.username, userID: actorID)
             await refreshNotifications()
             return
         }
 
         try? await notificationsService.markRead(notification.id)
         await refreshNotifications()
+    }
+
+    func openNotificationPost(id: String) {
+        selectedTab = .feed
+        navigationPath.removeAll()
+        navigate(to: .post(id))
     }
 
     private func applyLocalNotificationRead(_ notification: NotificationItem) {

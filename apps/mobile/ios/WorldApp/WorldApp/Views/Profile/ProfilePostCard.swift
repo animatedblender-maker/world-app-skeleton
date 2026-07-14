@@ -31,12 +31,13 @@ struct ProfilePostCard: View {
                         .tracking(1.6)
                         .foregroundStyle(Theme.accent)
                 }
-                Text(post.title?.nilIfWhitespace ?? headline)
-                    .font(.system(size: 22, weight: .regular, design: .serif))
-                    .foregroundStyle(Theme.ink)
-                    .multilineTextAlignment(.leading)
-                    .lineLimit(3)
+                if let headline = post.displayHeadline {
+                    Text(headline)
+                        .postHeadlineStyle(lineLimit: 3)
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(1)
             Spacer(minLength: 12)
             Text(RelativeTime.format(post.createdAt))
                 .font(.caption2)
@@ -49,26 +50,24 @@ struct ProfilePostCard: View {
 
     @ViewBuilder
     private var content: some View {
-        if let mediaURL = post.mediaURL ?? post.thumbURL, let url = URL(string: mediaURL) {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let image):
-                    image
-                        .resizable()
-                        .scaledToFill()
-                        .frame(height: 220)
-                        .clipped()
-                        .overlay(alignment: .bottom) {
-                            LinearGradient(
-                                colors: [.clear, Theme.ink.opacity(0.18)],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                            .frame(height: 80)
-                        }
-                default:
-                    mediaPlaceholder
-                }
+        if post.hasMedia {
+            VideoThumbnailView(
+                post: post,
+                maxPixelSize: 720,
+                contentMode: .fill,
+                showsPlayIcon: post.hasVideo,
+                playIconSize: 44,
+                placeholder: AnyView(mediaPlaceholder)
+            )
+            .frame(height: 220)
+            .clipped()
+            .overlay(alignment: .bottom) {
+                LinearGradient(
+                    colors: [.clear, Theme.ink.opacity(0.18)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 80)
             }
             .padding(.horizontal, 16)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -102,12 +101,6 @@ struct ProfilePostCard: View {
         .padding(.vertical, 16)
     }
 
-    private var headline: String {
-        let trimmed = post.body.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return "Untitled entry" }
-        return String(trimmed.prefix(72))
-    }
-
     private var excerpt: String {
         let trimmed = post.body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let title = post.title?.nilIfWhitespace, !title.isEmpty else { return trimmed }
@@ -120,7 +113,7 @@ struct ProfilePostCard: View {
             .fill(Theme.canvasMuted)
             .frame(height: 180)
             .overlay {
-                Image(systemName: "photo")
+                Image(systemName: post.hasVideo ? "video" : "photo")
                     .foregroundStyle(Theme.inkMuted)
             }
     }

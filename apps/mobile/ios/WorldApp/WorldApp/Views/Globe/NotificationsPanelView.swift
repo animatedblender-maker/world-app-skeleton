@@ -138,7 +138,7 @@ struct NotificationsPanelView: View {
         case "like": return "\(actor) liked your post"
         case "comment": return "\(actor) commented on your post"
         case "comment_like": return "\(actor) liked your comment"
-        case "comment_reply": return "\(actor) replied to your comment"
+        case "comment_reply", "reply": return "\(actor) replied to your comment"
         case "message": return "\(actor) sent you a message"
         default: return "\(actor) interacted with you"
         }

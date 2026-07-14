@@ -76,7 +76,7 @@ struct AdsView: View {
             Text("Advertiser dashboard")
                 .font(.title.weight(.bold))
                 .foregroundStyle(Theme.ink)
-            Text("MVP setup for direct campaigns. Create a campaign, attach one hosted video creative, then it can serve as pre-roll on videos and reels.")
+            Text("MVP setup for direct campaigns. Create a campaign, attach one hosted video creative, then it can serve as pre-roll on videos and \(MatteryaCopy.sparks.lowercased()).")
                 .font(.subheadline)
                 .foregroundStyle(Theme.inkSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -99,7 +99,7 @@ struct AdsView: View {
 
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
                 fieldGuideItem("Name", "The internal campaign name you use to identify the ad.")
-                fieldGuideItem("Placement", "Video serves before normal videos. Reel serves before reels.")
+                fieldGuideItem("Placement", "Video serves before normal videos. \(MatteryaCopy.spark) serves before \(MatteryaCopy.sparks.lowercased()).")
                 fieldGuideItem("Status", "Draft does not serve, Active can serve, Paused stops delivery.")
                 fieldGuideItem("Target countries", "Comma-separated ISO codes like US, DE, FR. Empty means global.")
                 fieldGuideItem("Total budget", "Entered in euros. Stored internally in cents for billing-safe math later.")
@@ -156,7 +156,7 @@ struct AdsView: View {
 
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
                 PremiumTextField(title: "Name", text: $campaignName)
-                adsPicker(title: "Placement", selection: $placement, options: [("video", "Video"), ("reel", "Reel")])
+                adsPicker(title: "Placement", selection: $placement, options: [("video", "Video"), ("reel", MatteryaCopy.spark)])
                 adsPicker(title: "Status", selection: $status, options: [("draft", "Draft"), ("active", "Active"), ("paused", "Paused")])
                 PremiumTextField(title: "Target countries", text: $countryCodesInput)
                 PremiumTextField(title: "Total budget (EUR)", text: $budgetEUR, keyboard: .decimalPad)
