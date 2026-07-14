@@ -29,6 +29,7 @@ struct MainTabView: View {
 
                 BottomTabBar()
             }
+            .sharePostSheet(appState: appState)
             .overlay {
                 AppMenuOverlay()
                 NotificationsOverlay()
@@ -148,13 +149,6 @@ struct MainTabView: View {
             ReelsScrollViewer(context: context)
                 .withAppState(appState)
         }
-        .sheet(item: Binding(
-            get: { appState.sharePostSheet },
-            set: { appState.sharePostSheet = $0 }
-        )) { post in
-            SharePostSheet(post: post)
-                .withAppState(appState)
-        }
         .fullScreenCover(isPresented: Binding(
             get: { appState.isPlayPresented },
             set: { presented in
@@ -165,7 +159,7 @@ struct MainTabView: View {
                 }
             }
         )) {
-            LivingView()
+            LivingView(hostsShareSheet: true)
                 .withAppState(appState)
         }
     }

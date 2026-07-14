@@ -79,12 +79,5 @@ struct RootView: View {
                 username: username
             )
         }
-        .sheet(item: Binding(
-            get: { appState.sharePostSheet },
-            set: { appState.sharePostSheet = $0 }
-        )) { post in
-            SharePostSheet(post: post)
-                .withAppState(appState)
-        }
     }
 }

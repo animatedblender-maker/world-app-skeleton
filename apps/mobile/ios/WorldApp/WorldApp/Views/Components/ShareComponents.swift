@@ -425,6 +425,18 @@ extension UIApplication {
     }
 }
 
+extension View {
+    func sharePostSheet(appState: AppState) -> some View {
+        sheet(item: Binding(
+            get: { appState.sharePostSheet },
+            set: { appState.sharePostSheet = $0 }
+        )) { post in
+            SharePostSheet(post: post)
+                .withAppState(appState)
+        }
+    }
+}
+
 extension UIViewController {
     func presentShareSheet(items: [Any]) {
         let controller = UIActivityViewController(activityItems: items, applicationActivities: nil)
