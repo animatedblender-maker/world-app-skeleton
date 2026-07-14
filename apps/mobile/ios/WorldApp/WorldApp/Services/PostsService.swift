@@ -46,6 +46,12 @@ final class PostsService {
     }
 
     func listForAuthor(_ authorID: String, limit: Int = 25) async throws -> [CountryPost] {
+        if ScreenshotMode.isActive, authorID == ScreenshotMode.demoProfile.userID {
+            if let cached = ContentCache.shared.posts(for: .profilePosts) {
+                return Array(cached.prefix(limit))
+            }
+            return Array(await demo.sampleGlobalPosts(limit: limit).prefix(limit))
+        }
         if AppConfig.useDemoDataset, authorID.hasPrefix("user_") {
             return await demo.listForAuthor(authorID, limit: limit)
         }
@@ -99,6 +105,7 @@ final class PostsService {
         }
 
         return mergeFeedSources([local, abroadFollowing], limit: localLimit + abroadFollowing.count)
+            .excludingSparks()
     }
 
     func loadHomeFeed(
@@ -130,9 +137,9 @@ final class PostsService {
         if !following.isEmpty { batches.append(following) }
         if !global.isEmpty { batches.append(global) }
 
-        var merged = mergeFeedSources(batches, limit: maxPosts)
+        var merged = mergeFeedSources(batches, limit: maxPosts).excludingSparks()
         if merged.isEmpty {
-            merged = await fallbackFeedPosts(limit: maxPosts)
+            merged = await fallbackFeedPosts(limit: maxPosts).excludingSparks()
         }
         if !merged.isEmpty {
             ContentCache.shared.setPosts(merged, for: .homeFeed)
@@ -354,8 +361,10 @@ final class PostsService {
             let demoPosts = await demo.searchPosts(query, limit: limit)
             let merged = mergePosts(real: real, demo: demoPosts, limit: limit)
             return MatteryaSearchEngine.rankContent(merged, query: query, limit: limit)
+                .excludingSparks()
         }
         return MatteryaSearchEngine.rankContent(real, query: query, limit: limit)
+            .excludingSparks()
     }
 
     func getPostByID(_ postID: String) async throws -> CountryPost? {
@@ -956,7 +965,7 @@ final class PostsService {
         guard let userID = currentAuthorID() else { return [] }
         for attempt in 0..<2 {
             do {
-                let posts = try await listForAuthor(userID, limit: limit)
+                let posts = try await listForAuthor(userID, limit: limit).excludingSparks()
                 ContentCache.shared.setPosts(posts, for: .profilePosts)
                 return posts
             } catch {

@@ -63,6 +63,7 @@ struct FeedView: View {
         .onReceive(NotificationCenter.default.publisher(for: .userPostsDidChange)) { notification in
             if let created = notification.userInfo?["post"] as? CountryPost,
                !created.isStory,
+               !created.isSpark,
                !posts.contains(where: { $0.id == created.id }) {
                 posts.insert(created, at: 0)
             }
@@ -187,9 +188,13 @@ struct FeedView: View {
         }
     }
 
-    private func refreshFeedReels() {
-        feedReels = posts
-            .filter { $0.isReel && $0.playableVideoURL != nil }
+    private func refreshFeedReels() async {
+        let reels = await PostsService.shared.loadReelsFeed(
+            viewerCountry: appState.currentProfile?.countryCode,
+            followingIDs: appState.followingIDs
+        )
+        feedReels = reels
+            .filter { $0.playableVideoURL != nil }
             .prefix(10)
             .map { $0 }
     }
@@ -307,7 +312,7 @@ struct FeedView: View {
 
     private func refreshFeed(showSpinner: Bool, resetPagination: Bool, forceRefresh: Bool) async {
         if posts.isEmpty, let cached = ContentCache.shared.posts(for: .homeFeed) {
-            posts = BlockService.shared.filterPosts(cached.filter { !$0.isStory })
+            posts = BlockService.shared.filterPosts(cached.filter { !$0.isStory }.excludingSparks())
             isLoading = false
         }
         if showSpinner && posts.isEmpty {
@@ -320,10 +325,10 @@ struct FeedView: View {
         if loaded.isEmpty {
             loaded = await PostsService.shared.loadHomeFeed(forceRefresh: true)
         }
-        posts = BlockService.shared.filterPosts(loaded.filter { !$0.isStory })
+        posts = BlockService.shared.filterPosts(loaded.filter { !$0.isStory }.excludingSparks())
         refreshContinueWatching()
         refreshNewOnPlay()
-        refreshFeedReels()
+        await refreshFeedReels()
         if resetPagination {
             visibleLimit = min(pageSize, posts.count)
         } else {

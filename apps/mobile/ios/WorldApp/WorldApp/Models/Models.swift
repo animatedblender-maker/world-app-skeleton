@@ -467,6 +467,9 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
         return mediaPayload?.isStory == true
     }
 
+    /// Sparks belong in the vertical sparks scroll only — not the home feed or profile grids.
+    var isSpark: Bool { isReel }
+
     var storyExpiresAt: Date? {
         if let expiresAt = mediaPayload?.expiresAt { return expiresAt }
         if let parsed = PostStoryMarker.expiresAt(from: body) { return parsed }
@@ -507,6 +510,12 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
             displayName: author?.displayName,
             username: author?.username
         )
+    }
+}
+
+extension Array where Element == CountryPost {
+    func excludingSparks() -> [CountryPost] {
+        filter { !$0.isSpark }
     }
 }
 

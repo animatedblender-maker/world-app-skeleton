@@ -54,6 +54,7 @@ final class AppState {
     var toastStyle: ToastBanner.ToastStyle = .info
     var sharePostSheet: CountryPost?
     var quotedSharePostID: String?
+    var pendingSearchQuery: String?
 
     private let auth = AuthService.shared
     private let profileService = ProfileService.shared
@@ -63,6 +64,11 @@ final class AppState {
     private var pollTask: Task<Void, Never>?
 
     func bootstrap() async {
+        if ScreenshotMode.isActive {
+            await applyScreenshotMode()
+            return
+        }
+
         VoIPPushService.shared.bootstrap()
         reelPresentationSavedIDs = loadReelPresentationSavedIDs()
         isAuthenticated = auth.isAuthenticated
@@ -373,6 +379,8 @@ final class AppState {
     }
 
     func handleDeepLink(_ url: URL) {
+        if handleInternalDeepLink(url) { return }
+
         guard let destination = ShareService.shared.parseDeepLink(url) else { return }
         showAppMenu = false
         globePanel = nil
@@ -931,5 +939,82 @@ final class AppState {
     private func stopPolling() {
         pollTask?.cancel()
         pollTask = nil
+    }
+
+    private func handleInternalDeepLink(_ url: URL) -> Bool {
+        let scheme = url.scheme?.lowercased() ?? ""
+        guard scheme == "matterya" || scheme == "worldapp" else { return false }
+
+        let host = (url.host ?? "").lowercased()
+        let pathParts = url.path
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            .split(separator: "/")
+            .map(String.init)
+
+        if host == "tab" {
+            let tabName = pathParts.first?.lowercased() ?? ""
+            guard let tab = AppTab(rawValue: tabName) else { return false }
+            showAppMenu = false
+            globePanel = nil
+            navigationPath.removeAll()
+            selectedTab = tab
+            return true
+        }
+
+        if host == "search" {
+            showAppMenu = false
+            globePanel = nil
+            selectedTab = .feed
+            navigationPath = [.search]
+            let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            pendingSearchQuery = components?
+                .queryItems?
+                .first(where: { $0.name == "q" })?
+                .value?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if pendingSearchQuery?.isEmpty == true {
+                pendingSearchQuery = pathParts.first
+            }
+            return true
+        }
+
+        return false
+    }
+
+    private func applyScreenshotMode() async {
+        isAuthenticated = true
+        needsProfileSetup = false
+        currentProfile = ScreenshotMode.demoProfile
+        ContentCache.shared.setProfile(ScreenshotMode.demoProfile)
+
+        let demoPosts = await DemoDatasetService.shared.sampleGlobalPosts(limit: 40)
+        let feedPosts = Array(demoPosts.filter { !$0.isStory }.excludingSparks().prefix(24))
+        let hubPosts = demoPosts.filter { $0.hasVideo && !$0.isStory }
+        let profilePosts = Array(feedPosts.prefix(6))
+
+        if !feedPosts.isEmpty {
+            ContentCache.shared.setPosts(feedPosts, for: .homeFeed)
+        }
+        if !hubPosts.isEmpty {
+            ContentCache.shared.setPosts(hubPosts, for: .livingVideos)
+        }
+        if !profilePosts.isEmpty {
+            ContentCache.shared.setPosts(profilePosts, for: .profilePosts)
+        }
+
+        isSessionReady = true
+        contentLoadGeneration += 1
+
+        if let tab = ScreenshotMode.tab {
+            selectedTab = tab
+        }
+
+        navigationPath.removeAll()
+        if let route = ScreenshotMode.route {
+            navigationPath.append(route)
+            if case .search = route {
+                pendingSearchQuery = ScreenshotMode.searchQuery
+            }
+        }
     }
 }

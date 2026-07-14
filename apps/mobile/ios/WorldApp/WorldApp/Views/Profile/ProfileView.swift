@@ -52,7 +52,8 @@ struct ProfileView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .userPostsDidChange)) { notification in
             if let created = notification.userInfo?["post"] as? CountryPost,
-               created.authorID == profileUserID {
+               created.authorID == profileUserID,
+               !created.isSpark {
                 if !posts.contains(where: { $0.id == created.id }) {
                     posts.insert(created, at: 0)
                 }
@@ -364,7 +365,7 @@ struct ProfileView: View {
             if showSpinner { isLoadingPosts = false }
         }
         do {
-            posts = try await PostsService.shared.listForAuthor(userID, limit: 30)
+            posts = try await PostsService.shared.listForAuthor(userID, limit: 30).excludingSparks()
             ContentCache.shared.setPosts(posts, for: .profilePosts)
         } catch {
             errorMessage = error.localizedDescription

@@ -377,7 +377,7 @@ struct CountryFeedView: View {
         switch appState.countryTab {
         case .posts, .media:
             do {
-                posts = try await PostsService.shared.loadCountryFeedPosts(countryISO: country.iso)
+                posts = try await PostsService.shared.loadCountryFeedPosts(countryISO: country.iso).excludingSparks()
             } catch {
                 posts = []
                 loadError = error.localizedDescription
@@ -386,7 +386,7 @@ struct CountryFeedView: View {
             followingPosts = await PostsService.shared.loadFollowingFeed(
                 limitPerAuthor: 6,
                 maxAuthors: 32
-            )
+            ).excludingSparks()
         case .news:
             newsError = nil
             do {
