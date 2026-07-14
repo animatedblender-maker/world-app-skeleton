@@ -104,8 +104,14 @@ final class YouTubeCatalogService {
 
     private let historyKey = "matterya.play.watch_history_v1"
     private let legacyHistoryKey = "youtube.watch_history_v1"
+    private let playbackPositionsKey = "matterya.play.playback_positions_v1"
+    private var playbackPositions: [String: Double] = [:]
 
-    private init() {}
+    private init() {
+        if let stored = UserDefaults.standard.dictionary(forKey: playbackPositionsKey) as? [String: Double] {
+            playbackPositions = stored
+        }
+    }
 
     func livingEligible(_ post: CountryPost) -> Bool {
         post.hasVideo && !post.isStory
@@ -239,6 +245,37 @@ final class YouTubeCatalogService {
         history.removeAll { $0 == postID }
         history.insert(postID, at: 0)
         UserDefaults.standard.set(Array(history.prefix(120)), forKey: historyKey)
+    }
+
+    func playbackPosition(for postID: String) -> Double {
+        playbackPositions[postID] ?? 0
+    }
+
+    func savePlaybackPosition(_ seconds: Double, for postID: String, duration: Double? = nil) {
+        let clamped = max(0, seconds)
+        if clamped < 1 {
+            playbackPositions.removeValue(forKey: postID)
+            persistPlaybackPositions()
+            return
+        }
+        if let duration, duration > 0, clamped >= duration - 2 {
+            playbackPositions.removeValue(forKey: postID)
+            persistPlaybackPositions()
+            return
+        }
+        playbackPositions[postID] = clamped
+        persistPlaybackPositions()
+    }
+
+    private func persistPlaybackPositions() {
+        let trimmed = Dictionary(
+            uniqueKeysWithValues: playbackPositions
+                .sorted { $0.value > $1.value }
+                .prefix(80)
+                .map { ($0.key, $0.value) }
+        )
+        playbackPositions = trimmed
+        UserDefaults.standard.set(trimmed, forKey: playbackPositionsKey)
     }
 
     func historyIDs() -> [String] {

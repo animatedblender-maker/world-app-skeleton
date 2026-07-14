@@ -15,6 +15,7 @@ struct VideoPlayerView: View {
     var muted: Bool = false
     var showsControls: Bool = false
     var allowsFullscreen: Bool = false
+    var startTime: Double? = nil
     var onViewed: (() -> Void)? = nil
 
     @State private var adFinished = false
@@ -108,6 +109,7 @@ struct VideoPlayerView: View {
             if active {
                 Task { await ensurePlayer() }
             } else {
+                persistPlaybackPosition()
                 player?.pause()
                 isPlaying = false
             }
@@ -234,6 +236,11 @@ struct VideoPlayerView: View {
                 case .readyToPlay:
                     loadFailed = false
                     updateDuration(from: item)
+                    let resumeAt = resolvedStartTime()
+                    if resumeAt > 0.5 {
+                        await newPlayer.seek(to: CMTime(seconds: resumeAt, preferredTimescale: 600))
+                        currentSeconds = resumeAt
+                    }
                     if isActive {
                         newPlayer.play()
                         isPlaying = true
@@ -324,7 +331,25 @@ struct VideoPlayerView: View {
         return AVPlayerItem(url: configuration.url)
     }
 
+    private func resolvedStartTime() -> Double {
+        if let startTime, startTime > 0 {
+            return startTime
+        }
+        guard let postID else { return 0 }
+        return YouTubeCatalogService.shared.playbackPosition(for: postID)
+    }
+
+    private func persistPlaybackPosition() {
+        guard let postID else { return }
+        YouTubeCatalogService.shared.savePlaybackPosition(
+            currentSeconds,
+            for: postID,
+            duration: durationSeconds > 0 ? durationSeconds : nil
+        )
+    }
+
     private func teardownPlayer() {
+        persistPlaybackPosition()
         removeTimeObserver()
         teardownPlayerObservers()
         player?.pause()

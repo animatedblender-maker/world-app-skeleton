@@ -37,55 +37,54 @@ struct YouTubeAppHeader: View {
     var onSearch: () -> Void
 
     var body: some View {
-        ZStack {
-            HStack(spacing: 12) {
-                MenuToolbarButton()
+        HStack(spacing: 8) {
+            MenuToolbarButton()
+                .frame(width: 44, alignment: .leading)
 
-                Spacer(minLength: 8)
+            PlayBrandMark(compact: true)
+                .frame(maxWidth: .infinity)
+                .layoutPriority(-1)
 
-                HStack(spacing: 4) {
-                    Button(action: onSearch) {
-                        Image(systemName: "magnifyingglass")
+            HStack(spacing: 4) {
+                Button(action: onSearch) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(Theme.ink)
+                        .frame(width: 40, height: 40)
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    toggleNotifications()
+                } label: {
+                    ZStack(alignment: .topTrailing) {
+                        Image(systemName: "bell")
                             .font(.system(size: 20, weight: .medium))
                             .foregroundStyle(Theme.ink)
-                            .frame(width: 40, height: 40)
-                    }
-                    .buttonStyle(.plain)
-
-                    Button {
-                        toggleNotifications()
-                    } label: {
-                        ZStack(alignment: .topTrailing) {
-                            Image(systemName: "bell")
-                                .font(.system(size: 20, weight: .medium))
-                                .foregroundStyle(Theme.ink)
-                            if appState.effectiveNotificationsUnreadCount > 0 {
-                                Circle()
-                                    .fill(Theme.danger)
-                                    .frame(width: 7, height: 7)
-                                    .offset(x: 4, y: -2)
-                            }
+                        if appState.effectiveNotificationsUnreadCount > 0 {
+                            Circle()
+                                .fill(Theme.danger)
+                                .frame(width: 7, height: 7)
+                                .offset(x: 4, y: -2)
                         }
-                        .frame(width: 40, height: 40)
                     }
-                    .buttonStyle(.plain)
-
-                    Button {
-                        appState.globePanel = nil
-                        appState.selectedTab = .profile
-                    } label: {
-                        AvatarView(
-                            url: appState.currentProfile?.avatarURL,
-                            seed: appState.currentProfile?.userID ?? "me",
-                            size: 30
-                        )
-                    }
-                    .buttonStyle(.plain)
+                    .frame(width: 40, height: 40)
                 }
-            }
+                .buttonStyle(.plain)
 
-            PlayBrandMark()
-                .allowsHitTesting(false)
+                Button {
+                    appState.globePanel = nil
+                    appState.selectedTab = .profile
+                } label: {
+                    AvatarView(
+                        url: appState.currentProfile?.avatarURL,
+                        seed: appState.currentProfile?.userID ?? "me",
+                        size: 30
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+            .fixedSize(horizontal: true, vertical: false)
         }
         .padding(.horizontal, Theme.pagePadding)
         .padding(.vertical, 8)
@@ -382,6 +381,8 @@ struct YouTubeMiniPlayerBar: View {
                     VideoPlayerView(
                         url: url,
                         posterURL: post.posterImageURL,
+                        placement: "living",
+                        postID: post.id,
                         adsEnabled: false,
                         isActive: isPlaying,
                         loops: false,
