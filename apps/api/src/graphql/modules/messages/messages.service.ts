@@ -2,6 +2,39 @@ import { pool } from '../../../db.js';
 import type { PoolClient } from '../../../db.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 
+let inboxColumnsReady: boolean | null = null;
+
+async function supportsInboxColumns(): Promise<boolean> {
+  if (inboxColumnsReady !== null) return inboxColumnsReady;
+  const { rows } = await pool.query<{ ok: boolean }>(
+    `
+    select
+      exists (
+        select 1
+        from information_schema.columns
+        where table_schema = 'public'
+          and table_name = 'conversation_members'
+          and column_name = 'deleted_at'
+      )
+      and exists (
+        select 1
+        from information_schema.columns
+        where table_schema = 'public'
+          and table_name = 'conversation_members'
+          and column_name = 'archived_at'
+      ) as ok
+    `
+  );
+  inboxColumnsReady = !!rows[0]?.ok;
+  return inboxColumnsReady;
+}
+
+async function inboxVisibilityFilter(alias = 'cm'): Promise<string> {
+  return (await supportsInboxColumns())
+    ? `and ${alias}.deleted_at is null and ${alias}.archived_at is null`
+    : '';
+}
+
 type MessageRow = {
   id: string;
   conversation_id: string;
@@ -47,6 +80,7 @@ export class MessagesService {
 
   async listConversations(userId: string, limit: number): Promise<ConversationRow[]> {
     const safeLimit = Math.max(1, Math.min(50, limit || 20));
+    const inboxFilter = await inboxVisibilityFilter('cm');
     const { rows } = await pool.query(
       `
       select
@@ -67,6 +101,7 @@ export class MessagesService {
             from public.conversation_members cm2
             left join public.profiles pr on pr.user_id = cm2.user_id
             where cm2.conversation_id = c.id
+              and cm2.user_id is not null
           ),
           '[]'::jsonb
         ) as members,
@@ -83,14 +118,17 @@ export class MessagesService {
             'media_size', m.media_size,
             'created_at', m.created_at,
             'updated_at', m.updated_at,
-            'sender', jsonb_build_object(
-              'user_id', pr2.user_id,
-              'display_name', pr2.display_name,
-              'username', pr2.username,
-              'avatar_url', pr2.avatar_url,
-              'country_name', pr2.country_name,
-              'country_code', pr2.country_code
-            )
+            'sender', case
+              when pr2.user_id is null then null
+              else jsonb_build_object(
+                'user_id', pr2.user_id,
+                'display_name', pr2.display_name,
+                'username', pr2.username,
+                'avatar_url', pr2.avatar_url,
+                'country_name', pr2.country_name,
+                'country_code', pr2.country_code
+              )
+            end
           )
           from public.messages m
           left join public.profiles pr2 on pr2.user_id = m.sender_id
@@ -101,8 +139,7 @@ export class MessagesService {
       from public.conversations c
       join public.conversation_members cm on cm.conversation_id = c.id
       where cm.user_id = $1
-        and cm.deleted_at is null
-        and cm.archived_at is null
+        ${inboxFilter}
       order by coalesce(c.last_message_at, c.updated_at, c.created_at) desc
       limit $2
       `,
@@ -311,14 +348,16 @@ export class MessagesService {
       const isCallLog = preview.startsWith('__call__|');
       const isReaction = preview.startsWith('__react__|');
 
-      await client.query(
-        `
-        update public.conversation_members
-        set archived_at = null, deleted_at = null
-        where conversation_id = $1 and user_id <> $2
-        `,
-        [conversationId, userId]
-      );
+      if (await supportsInboxColumns()) {
+        await client.query(
+          `
+          update public.conversation_members
+          set archived_at = null, deleted_at = null
+          where conversation_id = $1 and user_id <> $2
+          `,
+          [conversationId, userId]
+        );
+      }
 
       if (!isCallLog && !isReaction) {
         for (const row of otherMembers.rows) {
@@ -398,6 +437,7 @@ export class MessagesService {
 
   async archiveConversation(conversationId: string, userId: string): Promise<boolean> {
     await this.ensureMember(conversationId, userId);
+    if (!(await supportsInboxColumns())) return true;
     const { rowCount } = await pool.query(
       `
       update public.conversation_members
@@ -411,6 +451,7 @@ export class MessagesService {
 
   async deleteConversation(conversationId: string, userId: string): Promise<boolean> {
     await this.ensureMember(conversationId, userId);
+    if (!(await supportsInboxColumns())) return true;
     const { rowCount } = await pool.query(
       `
       update public.conversation_members
@@ -423,14 +464,14 @@ export class MessagesService {
   }
 
   async unreadCount(userId: string): Promise<number> {
+    const inboxFilter = await inboxVisibilityFilter('cm');
     const { rows } = await pool.query<{ count: string }>(
       `
       select count(*) as count
       from public.messages m
       join public.conversation_members cm on cm.conversation_id = m.conversation_id
       where cm.user_id = $1
-        and cm.deleted_at is null
-        and cm.archived_at is null
+        ${inboxFilter}
         and m.sender_id <> $1
         and (cm.last_read_at is null or m.created_at > cm.last_read_at)
       `,
@@ -476,6 +517,7 @@ export class MessagesService {
             from public.conversation_members cm2
             left join public.profiles pr on pr.user_id = cm2.user_id
             where cm2.conversation_id = c.id
+              and cm2.user_id is not null
           ),
           '[]'::jsonb
         ) as members,
@@ -492,14 +534,17 @@ export class MessagesService {
             'media_size', m.media_size,
             'created_at', m.created_at,
             'updated_at', m.updated_at,
-            'sender', jsonb_build_object(
-              'user_id', pr2.user_id,
-              'display_name', pr2.display_name,
-              'username', pr2.username,
-              'avatar_url', pr2.avatar_url,
-              'country_name', pr2.country_name,
-              'country_code', pr2.country_code
-            )
+            'sender', case
+              when pr2.user_id is null then null
+              else jsonb_build_object(
+                'user_id', pr2.user_id,
+                'display_name', pr2.display_name,
+                'username', pr2.username,
+                'avatar_url', pr2.avatar_url,
+                'country_name', pr2.country_name,
+                'country_code', pr2.country_code
+              )
+            end
           )
           from public.messages m
           left join public.profiles pr2 on pr2.user_id = m.sender_id

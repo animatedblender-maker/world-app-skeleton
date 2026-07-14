@@ -1,5 +1,11 @@
 import SwiftUI
 
+private struct MessagesLoadToken: Equatable {
+    let generation: Int
+    let isReady: Bool
+    let isAuthenticated: Bool
+}
+
 struct MessagesView: View {
     @Environment(AppState.self) private var appState
 
@@ -53,11 +59,19 @@ struct MessagesView: View {
         .screenBackground()
         .toolbar(.hidden, for: .navigationBar)
         .refreshable { await loadConversations() }
-        .task(id: appState.contentLoadGeneration) {
+        .task(id: MessagesLoadToken(
+            generation: appState.contentLoadGeneration,
+            isReady: appState.isSessionReady,
+            isAuthenticated: appState.isAuthenticated
+        )) {
+            guard appState.isAuthenticated, appState.isSessionReady else { return }
             await loadConversations()
             if let conversationID = appState.pendingConversationID {
                 await openPendingConversation(conversationID)
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .authTokenDidRefresh)) { _ in
+            Task { await loadConversations() }
         }
         .onChange(of: appState.pendingConversationID) { _, conversationID in
             guard let conversationID else { return }
@@ -167,7 +181,11 @@ struct MessagesView: View {
                 await openPendingConversation(pendingID)
             }
         } catch {
-            errorMessage = error.localizedDescription
+            if conversations.isEmpty {
+                errorMessage = error.localizedDescription
+            } else {
+                appState.showToast("Couldn't refresh messages. Showing your latest chats.", style: .info)
+            }
         }
     }
 }
@@ -224,7 +242,10 @@ private struct ConversationRow: View {
     let conversation: Conversation
 
     private var otherMember: PostAuthor? {
-        guard let userID = AuthService.shared.currentUser?.id else { return nil }
+        let userID = ScreenshotMode.isActive
+            ? ScreenshotMode.demoProfile.userID
+            : AuthService.shared.currentUser?.id
+        guard let userID else { return nil }
         return conversation.otherMember(currentUserID: userID)
     }
 

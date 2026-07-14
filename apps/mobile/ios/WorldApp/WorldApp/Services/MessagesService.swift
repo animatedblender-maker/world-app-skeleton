@@ -5,10 +5,36 @@ final class MessagesService {
     static let shared = MessagesService()
 
     private let gql = GraphQLService.shared
+    private var cachedConversations: [Conversation] = []
+    private var cacheUserID: String?
 
     private init() {}
 
     func listConversations(limit: Int = 40) async throws -> [Conversation] {
+        if ScreenshotMode.isActive {
+            return Array(ScreenshotMode.demoConversations.prefix(limit))
+        }
+
+        _ = try await AuthService.shared.ensureValidToken()
+
+        do {
+            let conversations = try await fetchConversations(limit: limit, retryingAuth: true)
+            if let userID = AuthService.shared.currentUser?.id {
+                cacheUserID = userID
+                cachedConversations = conversations
+            }
+            return conversations
+        } catch {
+            if let userID = AuthService.shared.currentUser?.id,
+               cacheUserID == userID,
+               !cachedConversations.isEmpty {
+                return cachedConversations
+            }
+            throw error
+        }
+    }
+
+    private func fetchConversations(limit: Int, retryingAuth: Bool) async throws -> [Conversation] {
         struct Response: Decodable {
             let conversations: [GraphQLConversation]
         }
@@ -28,11 +54,26 @@ final class MessagesService {
         }
         """
 
-        let result: Response = try await gql.authenticatedRequest(
-            query: query,
-            variables: ["limit": limit]
-        )
-        return result.conversations.map(\.toModel)
+        do {
+            let result: Response = try await gql.authenticatedRequest(
+                query: query,
+                variables: ["limit": limit]
+            )
+            return result.conversations.map(\.toModel)
+        } catch {
+            let message = error.localizedDescription.lowercased()
+            let authFailure = message.contains("auth")
+                || message.contains("unauthenticated")
+                || message.contains("jwt")
+                || message.contains("token")
+            if retryingAuth, authFailure {
+                _ = try? await Task { @MainActor in
+                    try await AuthService.shared.ensureValidToken()
+                }.value
+                return try await fetchConversations(limit: limit, retryingAuth: false)
+            }
+            throw error
+        }
     }
 
     func listMessages(conversationID: String, limit: Int = 50) async throws -> [Message] {
@@ -289,7 +330,7 @@ private struct GraphQLConversation: Decodable {
             createdAt: createdAt,
             updatedAt: updatedAt,
             lastMessageAt: lastMessageAt,
-            members: members.map(\.toModel),
+            members: members.compactMap(\.toModelIfValid),
             lastMessage: lastMessage?.toModel
         )
     }
@@ -304,7 +345,7 @@ private struct GraphQLMessage: Decodable {
     let mediaPath: String?
     let mediaName: String?
     let createdAt: String
-    let updatedAt: String
+    let updatedAt: String?
     let sender: GraphQLAuthor?
 
     enum CodingKeys: String, CodingKey {
@@ -318,6 +359,20 @@ private struct GraphQLMessage: Decodable {
         case updatedAt = "updated_at"
     }
 
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        conversationID = try container.decode(String.self, forKey: .conversationID)
+        senderID = try container.decode(String.self, forKey: .senderID)
+        body = try container.decodeIfPresent(String.self, forKey: .body) ?? ""
+        mediaType = try container.decodeIfPresent(String.self, forKey: .mediaType)
+        mediaPath = try container.decodeIfPresent(String.self, forKey: .mediaPath)
+        mediaName = try container.decodeIfPresent(String.self, forKey: .mediaName)
+        createdAt = try container.decode(String.self, forKey: .createdAt)
+        updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
+        sender = try container.decodeIfPresent(GraphQLAuthor.self, forKey: .sender)
+    }
+
     var toModel: Message {
         Message(
             id: id,
@@ -329,8 +384,8 @@ private struct GraphQLMessage: Decodable {
             mediaURL: nil,
             mediaName: mediaName,
             createdAt: createdAt,
-            updatedAt: updatedAt,
-            sender: sender?.toModel
+            updatedAt: updatedAt ?? createdAt,
+            sender: sender?.toModelIfValid
         )
     }
 }

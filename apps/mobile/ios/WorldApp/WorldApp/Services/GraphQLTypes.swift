@@ -136,9 +136,30 @@ struct GraphQLAuthor: Decodable {
         case lastReadAt = "last_read_at"
     }
 
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        userID = try container.decodeIfPresent(String.self, forKey: .userID) ?? ""
+        displayName = try container.decodeIfPresent(String.self, forKey: .displayName)
+        username = try container.decodeIfPresent(String.self, forKey: .username)
+        avatarURL = try container.decodeIfPresent(String.self, forKey: .avatarURL)
+        countryName = try container.decodeIfPresent(String.self, forKey: .countryName)
+        countryCode = try container.decodeIfPresent(String.self, forKey: .countryCode)
+        lastReadAt = try container.decodeIfPresent(String.self, forKey: .lastReadAt)
+    }
+
     var toModel: PostAuthor {
         PostAuthor(
             userID: userID, displayName: displayName, username: username,
+            avatarURL: avatarURL, countryName: countryName, countryCode: countryCode,
+            lastReadAt: lastReadAt
+        )
+    }
+
+    var toModelIfValid: PostAuthor? {
+        let normalized = userID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return nil }
+        return PostAuthor(
+            userID: normalized, displayName: displayName, username: username,
             avatarURL: avatarURL, countryName: countryName, countryCode: countryCode,
             lastReadAt: lastReadAt
         )
