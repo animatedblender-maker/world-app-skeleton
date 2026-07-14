@@ -58,7 +58,11 @@ struct YouTubeWatchView: View {
             }
         }
         .background(Theme.canvas)
+        .sharePostSheet(appState: appState)
         .task(id: currentPost.id) {
+            if let refreshed = try? await PostsService.shared.getPostByID(currentPost.id) {
+                currentPost = refreshed
+            }
             YouTubeCatalogService.shared.recordWatch(currentPost.id)
             inlineComments = (try? await PostsService.shared.listComments(currentPost.id, limit: 30)) ?? []
         }
@@ -68,20 +72,43 @@ struct YouTubeWatchView: View {
     }
 
     private var playerSection: some View {
-        playerContent
-            .contentShape(Rectangle())
-            .matteryaPullDownDismissTransform(offset: dismissDragOffset)
-            .matteryaPullDownToDismiss(
-                offset: $dismissDragOffset,
-                isDragging: $isPullingToMinimize,
-                onDismiss: onBack
-            )
+        ZStack(alignment: .topLeading) {
+            playerSurface
+                .matteryaPullDownDismissTransform(offset: dismissDragOffset)
+                .matteryaPullDownToDismiss(
+                    offset: $dismissDragOffset,
+                    isDragging: $isPullingToMinimize,
+                    onDismiss: onBack
+                )
+
+            Button(action: onBack) {
+                Image(systemName: "chevron.down")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(Theme.ink)
+                    .frame(width: 36, height: 36)
+                    .background(Theme.surface.opacity(0.94), in: Circle())
+                    .overlay(Circle().stroke(Theme.border, lineWidth: 0.5))
+                    .shadow(color: Theme.ink.opacity(0.08), radius: 6, y: 2)
+            }
+            .buttonStyle(.plain)
+            .safeAreaPadding(.top, 6)
+            .padding(.horizontal, Theme.pagePadding + 4)
+            .allowsHitTesting(!isPullingToMinimize)
+        }
+        .aspectRatio(YouTubeMediaLayout.aspect, contentMode: .fit)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, Theme.pagePadding)
+        .padding(.top, 8)
+        .onDisappear {
+            dismissDragOffset = 0
+            isPullingToMinimize = false
+        }
     }
 
-    private var playerContent: some View {
-        ZStack(alignment: .topLeading) {
+    private var playerSurface: some View {
+        Group {
             if let url = currentPost.playableVideoURL {
-                YouTubeWatchPlayer {
+                YouTubeVideoFrame(style: .watch) {
                     VideoPlayerView(
                         url: url,
                         posterURL: currentPost.posterImageURL,
@@ -100,7 +127,7 @@ struct YouTubeWatchView: View {
                     .allowsHitTesting(!isPullingToMinimize)
                 }
             } else {
-                YouTubeWatchPlayer {
+                YouTubeVideoFrame(style: .watch) {
                     YouTubeVideoThumbnail(
                         post: currentPost,
                         maxPixelSize: 900,
@@ -109,37 +136,21 @@ struct YouTubeWatchView: View {
                     )
                 }
             }
-
-            if isPullingToMinimize, dismissDragOffset > 28 {
-                VStack {
-                    Spacer()
-                    Label("Release to minimize", systemImage: "chevron.down")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.9))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Theme.ink.opacity(0.5), in: Capsule())
-                        .transition(.opacity)
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .allowsHitTesting(false)
-            }
-
-            Button(action: onBack) {
-                Image(systemName: "chevron.down")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(Theme.ink)
-                    .frame(width: 36, height: 36)
-                    .background(Theme.surface.opacity(0.94), in: Circle())
-                    .overlay(Circle().stroke(Theme.border, lineWidth: 0.5))
-                    .shadow(color: Theme.ink.opacity(0.08), radius: 6, y: 2)
-            }
-            .buttonStyle(.plain)
-            .safeAreaPadding(.top, 6)
-            .padding(.horizontal, Theme.pagePadding + 4)
-            .allowsHitTesting(!isPullingToMinimize)
         }
+        .overlay(alignment: .bottom) {
+            if isPullingToMinimize, dismissDragOffset > 28 {
+                Label("Release to minimize", systemImage: "chevron.down")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Theme.ink.opacity(0.5), in: Capsule())
+                    .padding(.bottom, 12)
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
+        }
+        .contentShape(Rectangle())
     }
 
     @ViewBuilder
@@ -177,7 +188,11 @@ struct YouTubeWatchView: View {
             .buttonStyle(.plain)
 
             Button {
-                Task { _ = await appState.toggleSavePost(currentPost) }
+                Task {
+                    if let error = await appState.toggleSavePost(currentPost) {
+                        appState.showToast(error, style: .error)
+                    }
+                }
             } label: {
                 Image(systemName: appState.isPostSaved(currentPost.id) ? "bookmark.fill" : "bookmark")
                     .font(.system(size: 20))
@@ -316,6 +331,7 @@ struct YouTubeWatchView: View {
             }
         } catch {
             commentError = error.localizedDescription
+            appState.showToast(error.localizedDescription, style: .error)
         }
     }
 }

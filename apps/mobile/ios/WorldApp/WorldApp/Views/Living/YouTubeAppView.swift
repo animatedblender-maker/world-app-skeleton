@@ -519,7 +519,13 @@ struct YouTubeAppView: View {
             errorMessage = MatteryaCopy.hubsLoadError
             return
         }
-        allVideos = filtered.isEmpty ? allVideos : filtered
+        if filtered.isEmpty {
+            // Keep locally inserted uploads while the server catalog catches up.
+        } else {
+            let filteredIDs = Set(filtered.map(\.id))
+            let localOnly = allVideos.filter { !filteredIDs.contains($0.id) }
+            allVideos = localOnly + filtered
+        }
         rebuildChannels()
         await loadChannelProfiles()
         await loadFollowerCounts()

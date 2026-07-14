@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MainTabView: View {
     @Environment(AppState.self) private var appState
+    @State private var postToOpenAfterCreate: CountryPost?
 
     var body: some View {
         NavigationStack(path: Binding(
@@ -83,10 +84,19 @@ struct MainTabView: View {
             }
         }
         .ignoresSafeArea(.keyboard)
+        .onChange(of: appState.activeCreateSheet) { _, sheet in
+            if sheet != nil {
+                postToOpenAfterCreate = nil
+            }
+        }
         .sheet(item: Binding(
             get: { appState.activeCreateSheet },
             set: { appState.activeCreateSheet = $0 }
-        )) { sheet in
+        ), onDismiss: {
+            guard let post = postToOpenAfterCreate else { return }
+            postToOpenAfterCreate = nil
+            appState.openPost(post)
+        }) { sheet in
             Group {
             if let country = appState.composerCountry {
                 switch sheet {
@@ -108,7 +118,7 @@ struct MainTabView: View {
                             userInfo: ["post": post]
                         )
                         appState.reloadContent()
-                        appState.openPost(post)
+                        postToOpenAfterCreate = post
                     }
                 case .reel:
                     ReelComposerView(country: country) { post in
@@ -118,7 +128,7 @@ struct MainTabView: View {
                             userInfo: ["post": post]
                         )
                         appState.reloadContent()
-                        appState.openPost(post)
+                        postToOpenAfterCreate = post
                     }
                 case .story:
                     StoryComposerView(country: country) { post in
