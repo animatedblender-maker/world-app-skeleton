@@ -159,9 +159,10 @@ struct StoryComposerView: View {
                 } else if let previewImage {
                     Image(uiImage: previewImage)
                         .resizable()
-                        .scaledToFit()
-                        .frame(maxWidth: .infinity, maxHeight: 220)
-                        .padding(12)
+                        .scaledToFill()
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 240)
+                        .clipped()
                         .clipShape(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
                 } else {
                     VStack(spacing: 18) {

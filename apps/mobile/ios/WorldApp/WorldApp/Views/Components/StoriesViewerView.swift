@@ -32,22 +32,6 @@ struct StoriesViewerView: View {
                 ProgressView().tint(.white)
             }
 
-            VStack(spacing: 0) {
-                progressBars
-                header
-                Spacer()
-                if let story = currentStory, !story.displayBody.isEmpty {
-                    Text(story.displayBody)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .padding(14)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(.black.opacity(0.35))
-                }
-            }
-            .safeAreaPadding(.top, 6)
-            .safeAreaPadding(.bottom, 8)
-
             HStack(spacing: 0) {
                 Color.clear
                     .contentShape(Rectangle())
@@ -56,6 +40,29 @@ struct StoriesViewerView: View {
                     .contentShape(Rectangle())
                     .onTapGesture { goNext() }
             }
+            .ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                topChrome
+                Spacer(minLength: 0)
+                if let story = currentStory, !story.displayBody.isEmpty {
+                    Text(story.displayBody)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(4)
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            LinearGradient(
+                                colors: [.clear, .black.opacity(0.55)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                }
+            }
+            .safeAreaPadding(.top, 6)
+            .safeAreaPadding(.bottom, 8)
         }
         .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)
@@ -78,33 +85,55 @@ struct StoriesViewerView: View {
 
     @ViewBuilder
     private func storyContent(_ story: CountryPost) -> some View {
-        if story.hasVideo, let url = story.playableVideoURL {
-            VideoPlayerView(
-                url: url,
-                posterURL: story.posterImageURL,
-                adsEnabled: false,
-                isActive: true,
-                loops: false
-            )
-            .ignoresSafeArea()
-        } else if let url = story.resolvedImageURL {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let image):
-                    image
-                        .resizable()
-                        .scaledToFill()
-                        .ignoresSafeArea()
-                default:
-                    ProgressView().tint(.white)
+        GeometryReader { geometry in
+            Group {
+                if story.hasVideo, let url = story.playableVideoURL {
+                    VideoPlayerView(
+                        url: url,
+                        posterURL: story.posterImageURL,
+                        adsEnabled: false,
+                        isActive: true,
+                        loops: false
+                    )
+                } else if let url = story.resolvedImageURL {
+                    AsyncImage(url: url) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .scaledToFill()
+                        default:
+                            ProgressView().tint(.white)
+                        }
+                    }
+                } else {
+                    Text(story.displayBody)
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                        .padding()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-        } else {
-            Text(story.displayBody)
-                .font(.title2.weight(.semibold))
-                .foregroundStyle(.white)
-                .padding()
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .clipped()
         }
+        .ignoresSafeArea()
+    }
+
+    private var topChrome: some View {
+        VStack(spacing: 8) {
+            progressBars
+            header
+        }
+        .padding(.bottom, 10)
+        .background(
+            LinearGradient(
+                colors: [Color.black.opacity(0.68), Color.black.opacity(0.34), .clear],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
     }
 
     private var progressBars: some View {
@@ -133,21 +162,28 @@ struct StoriesViewerView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
+        HStack(alignment: .center, spacing: 10) {
             if let group = currentGroup {
                 AvatarView(url: group.author?.avatarURL, seed: group.authorID, size: 34)
+
                 VStack(alignment: .leading, spacing: 2) {
                     Text(group.displayName)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.white)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.85)
+                        .fixedSize(horizontal: false, vertical: true)
                     if let story = currentStory {
                         Text(momentUploadedLabel(for: story.createdAt))
                             .font(.caption)
                             .foregroundStyle(.white.opacity(0.72))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.9)
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Spacer()
+
             Button {
                 dismiss()
             } label: {
@@ -155,6 +191,7 @@ struct StoriesViewerView: View {
                     .font(.body.weight(.bold))
                     .foregroundStyle(.white)
                     .padding(8)
+                    .background(Color.black.opacity(0.28), in: Circle())
             }
             .buttonStyle(.plain)
         }

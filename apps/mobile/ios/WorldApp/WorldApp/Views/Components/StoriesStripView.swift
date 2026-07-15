@@ -105,7 +105,9 @@ struct StoriesStripView: View {
                 Text(group.displayName)
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(Theme.inkSecondary)
-                    .lineLimit(1)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.85)
+                    .multilineTextAlignment(.center)
 
                 if let code = group.author?.countryCode?.uppercased(), !code.isEmpty {
                     Text(code)
