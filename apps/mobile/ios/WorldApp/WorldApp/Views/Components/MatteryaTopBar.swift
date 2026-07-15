@@ -50,17 +50,6 @@ struct MatteryaTopBar: View {
                     .frame(width: 32, height: 32)
                 }
                 .buttonStyle(.plain)
-
-                Button {
-                    appState.globePanel = nil
-                    appState.selectedTab = .profile
-                } label: {
-                    ProfileTabAvatar(
-                        profile: appState.currentProfile,
-                        isSelected: false
-                    )
-                }
-                .buttonStyle(.plain)
             }
         }
         .padding(.horizontal, 12)

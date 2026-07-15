@@ -71,18 +71,6 @@ struct YouTubeAppHeader: View {
                     .frame(width: 40, height: 40)
                 }
                 .buttonStyle(.plain)
-
-                Button {
-                    appState.globePanel = nil
-                    appState.selectedTab = .profile
-                } label: {
-                    AvatarView(
-                        url: appState.currentProfile?.avatarURL,
-                        seed: appState.currentProfile?.userID ?? "me",
-                        size: 30
-                    )
-                }
-                .buttonStyle(.plain)
             }
             .fixedSize(horizontal: true, vertical: false)
         }

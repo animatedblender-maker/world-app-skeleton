@@ -62,7 +62,6 @@ final class AppState {
     private let presenceService = PresenceService.shared
     private let followService = FollowService.shared
     private var pollTask: Task<Void, Never>?
-    private var postEventsObservers: [NSObjectProtocol] = []
 
     func bootstrap() async {
         if ScreenshotMode.isActive {
@@ -113,7 +112,6 @@ final class AppState {
         await refreshProfile()
         await refreshAllInBackground()
         contentLoadGeneration += 1
-        startPostRealtime()
     }
 
     private func prepareSession() async {
@@ -334,7 +332,6 @@ final class AppState {
     }
 
     func logout() {
-        stopPostRealtime()
         stopPolling()
         Task { await PushNotificationService.shared.unregisterFromServer() }
         CallSessionManager.shared.teardown()
@@ -868,17 +865,6 @@ final class AppState {
         return followingIDs.contains(post.authorID)
     }
 
-    private func storyRelevant(authorID: String?, countryCode: String?) -> Bool {
-        guard let authorID, !authorID.isEmpty else { return false }
-        if authorID == currentProfile?.userID { return true }
-        let viewerCountry = currentProfile?.countryCode?.uppercased()
-        let eventCountry = countryCode?.uppercased()
-        if let viewerCountry, let eventCountry, viewerCountry == eventCountry {
-            return true
-        }
-        return followingIDs.contains(authorID)
-    }
-
     private func sortStoryGroups() {
         let currentUserID = currentProfile?.userID
         storyGroups.sort { lhs, rhs in
@@ -889,89 +875,6 @@ final class AppState {
         }
     }
 
-    private func startPostRealtime() {
-        guard isAuthenticated, !AppConfig.useDemoDataset else { return }
-        installPostRealtimeObserversIfNeeded()
-        PostEventsService.shared.start()
-    }
-
-    private func stopPostRealtime() {
-        PostEventsService.shared.stop()
-        for observer in postEventsObservers {
-            NotificationCenter.default.removeObserver(observer)
-        }
-        postEventsObservers.removeAll()
-    }
-
-    private func installPostRealtimeObserversIfNeeded() {
-        guard postEventsObservers.isEmpty else { return }
-
-        postEventsObservers.append(
-            NotificationCenter.default.addObserver(
-                forName: .postRealtimeInsert,
-                object: nil,
-                queue: .main
-            ) { [weak self] notification in
-                guard let self,
-                      let event = Self.parseRealtimeInsert(notification.userInfo)
-                else { return }
-                Task { await self.handlePostRealtimeInsert(event) }
-            }
-        )
-
-        postEventsObservers.append(
-            NotificationCenter.default.addObserver(
-                forName: .postRealtimeDelete,
-                object: nil,
-                queue: .main
-            ) { [weak self] notification in
-                guard let self,
-                      let event = Self.parseRealtimeDelete(notification.userInfo)
-                else { return }
-                Task { await self.handlePostRealtimeDelete(event) }
-            }
-        )
-    }
-
-    private func handlePostRealtimeInsert(_ event: PostRealtimeInsert) async {
-        guard isAuthenticated else { return }
-        guard let authorID = event.authorID, !authorID.isEmpty else { return }
-        guard authorID != currentProfile?.userID else { return }
-        guard storyRelevant(authorID: authorID, countryCode: event.countryCode) else { return }
-        guard !BlockService.shared.isBlocked(authorID) else { return }
-        guard let post = try? await PostsService.shared.getPostByID(event.id) else { return }
-        mergeStoryPost(post)
-    }
-
-    private func handlePostRealtimeDelete(_ event: PostRealtimeDelete) async {
-        guard isAuthenticated else { return }
-        removeStoryPost(id: event.id)
-    }
-
-    private static func parseRealtimeInsert(_ userInfo: [AnyHashable: Any]?) -> PostRealtimeInsert? {
-        guard let userInfo,
-              let id = userInfo["id"] as? String,
-              !id.isEmpty
-        else { return nil }
-        return PostRealtimeInsert(
-            id: id,
-            countryCode: userInfo["countryCode"] as? String,
-            authorID: userInfo["authorID"] as? String
-        )
-    }
-
-    private static func parseRealtimeDelete(_ userInfo: [AnyHashable: Any]?) -> PostRealtimeDelete? {
-        guard let userInfo,
-              let id = userInfo["id"] as? String,
-              !id.isEmpty
-        else { return nil }
-        return PostRealtimeDelete(
-            id: id,
-            countryCode: userInfo["countryCode"] as? String,
-            authorID: userInfo["authorID"] as? String
-        )
-    }
-
     var viewedStoryIDs: Set<String> {
         Set(UserDefaults.standard.stringArray(forKey: viewedStoriesDefaultsKey) ?? [])
     }
@@ -980,7 +883,20 @@ final class AppState {
         var ids = viewedStoryIDs
         ids.insert(postID)
         UserDefaults.standard.set(Array(ids), forKey: viewedStoriesDefaultsKey)
-        Task { await refreshStories() }
+
+        for index in storyGroups.indices {
+            let group = storyGroups[index]
+            guard group.stories.contains(where: { $0.id == postID }) else { continue }
+            let hasUnviewed = group.stories.contains { !ids.contains($0.id) }
+            guard group.hasUnviewed != hasUnviewed else { break }
+            storyGroups[index] = StoryGroup(
+                authorID: group.authorID,
+                author: group.author,
+                stories: group.stories,
+                hasUnviewed: hasUnviewed
+            )
+            break
+        }
     }
 
     func openStoryViewer(group: StoryGroup) {

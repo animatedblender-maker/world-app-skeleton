@@ -55,6 +55,13 @@ struct StoriesStripView: View {
                 endPoint: .bottom
             )
         }
+        .task(id: appState.isSessionReady) {
+            guard appState.isSessionReady, appState.isAuthenticated else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 8_000_000_000)
+                await appState.refreshStories()
+            }
+        }
     }
 
     private var yourStoryButton: some View {
