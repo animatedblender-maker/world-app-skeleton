@@ -9,6 +9,9 @@ APP_DIR = os.path.join(PROJECT_ROOT, "WorldApp")
 XCODEPROJ = os.path.join(PROJECT_ROOT, "WorldApp.xcodeproj")
 PBXPROJ = os.path.join(XCODEPROJ, "project.pbxproj")
 DEFAULT_DEVELOPMENT_TEAM = "XQ4HXZN6Y5"
+INFOPLIST_FILE = "WorldApp/SupplementalInfo.plist"
+# Keep in sync with SupplementalInfo.plist UIBackgroundModes.
+BACKGROUND_MODES = "audio remote-notification voip"
 
 
 def development_team() -> str:
@@ -320,13 +323,14 @@ for config_id, name, is_target in [
         add(f'\t\t\t\tDEVELOPMENT_TEAM = {development_team()};')
         add("\t\t\t\tENABLE_PREVIEWS = YES;")
         add("\t\t\t\tGENERATE_INFOPLIST_FILE = YES;")
+        add(f"\t\t\t\tINFOPLIST_FILE = {INFOPLIST_FILE};")
         add("\t\t\t\tINFOPLIST_KEY_CFBundleDisplayName = Matterya;")
         add("\t\t\t\tINFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;")
         add("\t\t\t\tINFOPLIST_KEY_NSLocationWhenInUseUsageDescription = \"Matterya uses your location to set your country during profile setup.\";")
         add("\t\t\t\tINFOPLIST_KEY_NSCameraUsageDescription = \"Matterya uses your camera for video calls and photos.\";")
         add("\t\t\t\tINFOPLIST_KEY_NSMicrophoneUsageDescription = \"Matterya uses your microphone for voice and video calls.\";")
         add("\t\t\t\tINFOPLIST_KEY_NSAppleMusicUsageDescription = \"Matterya reads what you're playing in Apple Music so you can share live listening status with friends.\";")
-        add("\t\t\t\tINFOPLIST_KEY_UIBackgroundModes = \"audio remote-notification voip\";")
+        add(f'\t\t\t\tINFOPLIST_KEY_UIBackgroundModes = "{BACKGROUND_MODES}";')
         add("\t\t\t\tINFOPLIST_KEY_LSApplicationCategoryType = \"public.app-category.social-networking\";")
         add("\t\t\t\tINFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;")
         add("\t\t\t\tINFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;")
