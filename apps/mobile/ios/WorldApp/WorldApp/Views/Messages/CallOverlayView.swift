@@ -110,7 +110,7 @@ struct CallOverlayView: View {
     private var videoLayout: some View {
         ZStack(alignment: .topTrailing) {
             if let track = callManager.remoteVideoTrack {
-                LiveKitVideoView(track: track)
+                LiveKitVideoView(track: track, mirrorMode: .off)
                     .ignoresSafeArea()
             } else {
                 VStack(spacing: 18) {
@@ -126,7 +126,7 @@ struct CallOverlayView: View {
             }
 
             if let localTrack = callManager.localVideoTrack, !callManager.isCameraOff {
-                LiveKitVideoView(track: localTrack)
+                LiveKitVideoView(track: localTrack, mirrorMode: .mirror)
                     .frame(width: 112, height: 156)
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     .overlay {
@@ -332,17 +332,20 @@ struct CallOverlayView: View {
 
 private struct LiveKitVideoView: UIViewRepresentable {
     let track: VideoTrack
+    var mirrorMode: VideoView.MirrorMode = .auto
 
     func makeUIView(context: Context) -> VideoView {
         let view = VideoView()
         view.track = track
         view.layoutMode = .fill
+        view.mirrorMode = mirrorMode
         return view
     }
 
     func updateUIView(_ uiView: VideoView, context: Context) {
         uiView.track = track
         uiView.layoutMode = .fill
+        uiView.mirrorMode = mirrorMode
     }
 }
 
