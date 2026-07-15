@@ -219,8 +219,7 @@ final class CallSessionManager: NSObject {
                 hasVideo: kind == .video
             )
             CallKitManager.shared.reportOutgoingCallStartedConnecting(conversationID: conversationID)
-            let waitForCallKitAudio = UIApplication.shared.applicationState != .active
-            await prepareAudioForCall(usesCallKit: waitForCallKitAudio)
+            await prepareAudioForCall(usesCallKit: shouldUseCallKitAudio(for: conversationID))
             try await connectRoom(video: kind == .video)
             CallSignalingService.shared.send(
                 type: "call-offer",
@@ -263,7 +262,8 @@ final class CallSessionManager: NSObject {
             from: userID,
             callType: callType,
             callID: normalizedCallID,
-            roomName: normalizedRoom
+            roomName: normalizedRoom,
+            connectedAt: nil
         )
         self.conversationID = conversationID
         callKind = callType == "video" ? .video : .audio
@@ -414,13 +414,17 @@ final class CallSessionManager: NSObject {
             try await connectRoom(video: callKind == .video)
             incomingOffer = nil
             sentCallAccept = true
+            let connectedAt = Date().timeIntervalSince1970
+            applySynchronizedCallStart(at: connectedAt)
             CallSignalingService.shared.send(
                 type: "call-accept",
                 conversationID: offer.conversationID,
                 from: me,
                 callType: callKind?.rawValue,
                 callID: sessionID,
-                roomName: roomName
+                roomName: roomName,
+                to: offer.from,
+                connectedAt: connectedAt
             )
             await refreshLocalAudioCapture()
             evaluateConnectedState()
@@ -467,7 +471,7 @@ final class CallSessionManager: NSObject {
             if !muted {
                 await refreshLocalAudioCapture()
             } else {
-                try? await room?.localParticipant.setMicrophone(enabled: false)
+                _ = try? await room?.localParticipant.setMicrophone(enabled: false)
             }
         }
     }
@@ -475,7 +479,7 @@ final class CallSessionManager: NSObject {
     func toggleCamera() {
         isCameraOff.toggle()
         Task {
-            try? await room?.localParticipant.setCamera(enabled: !isCameraOff)
+            _ = try? await room?.localParticipant.setCamera(enabled: !isCameraOff)
         }
     }
 
@@ -500,7 +504,8 @@ final class CallSessionManager: NSObject {
             from: fromUserID,
             callType: callKind?.rawValue,
             callID: sessionID,
-            roomName: roomName
+            roomName: roomName,
+            connectedAt: nil
         )
     }
 
@@ -541,20 +546,25 @@ final class CallSessionManager: NSObject {
             }
 
         case "call-accept":
-            guard fromUserID == me, conversationID == signal.conversationID else { return }
+            guard fromUserID == me, matchesCurrentCall(signal) else { return }
             if let name = signal.roomName { roomName = name }
             outgoingPhase = .ringing
+            if let connectedAt = signal.connectedAt {
+                applySynchronizedCallStart(at: connectedAt)
+            }
             if let room, !room.remoteParticipants.isEmpty {
                 markActive()
             }
 
         case "call-decline", "call-busy":
+            guard matchesCurrentCall(signal) else { return }
             if fromUserID == me {
                 await sendCallLog(status: "missed")
             }
             cleanup(notifyRemote: false)
 
         case "call-end":
+            guard matchesCurrentCall(signal) else { return }
             if isActive || callStartAt != nil {
                 await sendCallLog(status: "ended")
             } else if isIncoming || isConnecting {
@@ -571,11 +581,41 @@ final class CallSessionManager: NSObject {
         if CallKitManager.shared.isAudioSessionActivated {
             return true
         }
+        if CallKitManager.shared.hasCall(conversationID: conversationID) {
+            return true
+        }
         if UIApplication.shared.applicationState != .active {
             return incomingPresentedViaCallKit
-                || CallKitManager.shared.hasCall(conversationID: conversationID)
         }
         return false
+    }
+
+    private func matchesCurrentCall(_ signal: CallSignal) -> Bool {
+        guard let conversationID, signal.conversationID == conversationID else { return false }
+        if let currentID = sessionID,
+           let signalID = Self.nonEmpty(signal.callID),
+           currentID != signalID {
+            return false
+        }
+        return true
+    }
+
+    private func applySynchronizedCallStart(at unixTime: TimeInterval) {
+        let startDate = Date(timeIntervalSince1970: unixTime)
+        if let existingStart = callStartAt {
+            callStartAt = min(existingStart, startDate)
+        } else {
+            callStartAt = startDate
+            startTimer()
+        }
+    }
+
+    private func remotePeerUserID() -> String? {
+        guard let me = AuthService.shared.currentUser?.id else { return nil }
+        if fromUserID == me {
+            return peerUserID
+        }
+        return fromUserID
     }
 
     private func resolvedRoomName(for offer: CallSignal) -> String {
@@ -616,9 +656,9 @@ final class CallSessionManager: NSObject {
 
     private func refreshLocalAudioCapture() async {
         activateLiveKitAudio()
-        try? await room?.localParticipant.setMicrophone(enabled: !isMuted)
-        try? await Task.sleep(nanoseconds: 250_000_000)
-        try? await room?.localParticipant.setMicrophone(enabled: !isMuted)
+        _ = try? await room?.localParticipant.setMicrophone(enabled: !isMuted)
+        _ = try? await Task.sleep(nanoseconds: 250_000_000)
+        _ = try? await room?.localParticipant.setMicrophone(enabled: !isMuted)
     }
 
     private func connectRoom(video: Bool) async throws {
@@ -704,6 +744,7 @@ final class CallSessionManager: NSObject {
     }
 
     private func markActive() {
+        guard !isActive else { return }
         CallSoundService.shared.stop()
         incomingTimeoutTask?.cancel()
         incomingTimeoutTask = nil
@@ -714,9 +755,6 @@ final class CallSessionManager: NSObject {
         isIncoming = false
         showUI = true
         outgoingPhase = .calling
-        Task {
-            await refreshLocalAudioCapture()
-        }
         if let conversationID {
             CallKitManager.shared.reportCallConnected(conversationID: conversationID)
         }
@@ -724,6 +762,12 @@ final class CallSessionManager: NSObject {
         if callStartAt == nil {
             callStartAt = Date()
             startTimer()
+        }
+        Task {
+            if let conversationID {
+                await prepareAudioForCall(usesCallKit: shouldUseCallKitAudio(for: conversationID))
+            }
+            await refreshLocalAudioCapture()
         }
     }
 
@@ -854,13 +898,16 @@ final class CallSessionManager: NSObject {
             CallKitManager.shared.requestEndCall(for: endedConversationID)
         }
         if shouldNotifyRemote, let conversationID, let me = AuthService.shared.currentUser?.id {
-            CallSignalingService.shared.send(
-                type: "call-end",
-                conversationID: conversationID,
-                from: me,
-                callID: sessionID,
-                to: isIncoming || fromUserID == me ? peerUserID : fromUserID
-            )
+            Task {
+                _ = await CallSignalingService.shared.ensureConnected(timeoutSeconds: 2)
+                CallSignalingService.shared.send(
+                    type: "call-end",
+                    conversationID: conversationID,
+                    from: me,
+                    callID: sessionID,
+                    to: remotePeerUserID()
+                )
+            }
         }
         sentCallAccept = false
         incomingPresentedViaCallKit = false
@@ -955,8 +1002,9 @@ extension CallSessionManager: RoomDelegate {
             guard self.isActive, self.room === room else { return }
             self.remoteDisconnectTask?.cancel()
             self.remoteDisconnectTask = Task {
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                guard !Task.isCancelled, self.isActive, self.room?.remoteParticipants.isEmpty == true else { return }
+                try? await Task.sleep(nanoseconds: 8_000_000_000)
+                guard !Task.isCancelled, self.isActive, self.room === room else { return }
+                guard self.room?.remoteParticipants.isEmpty == true else { return }
                 self.endCall()
             }
         }
@@ -988,14 +1036,25 @@ extension CallSessionManager: RoomDelegate {
     nonisolated func room(_ room: Room, didDisconnectWithError error: LiveKitError?) {
         Task { @MainActor in
             guard self.room === room, !self.hasEndedCurrentCall else { return }
-            if let error {
-                self.errorMessage = error.localizedDescription
-            }
             if self.isActive {
-                self.endCall()
+                // Transient LiveKit drops can happen during CallKit audio handoff.
+                let shouldEnd = error != nil
+                if shouldEnd {
+                    self.errorMessage = error?.localizedDescription
+                    self.endCall()
+                } else {
+                    self.remoteDisconnectTask?.cancel()
+                    self.remoteDisconnectTask = Task {
+                        try? await Task.sleep(nanoseconds: 5_000_000_000)
+                        guard !Task.isCancelled, self.isActive, self.room?.connectionState != .connected else { return }
+                        self.endCall()
+                    }
+                }
             } else if self.sentCallAccept {
+                if let error { self.errorMessage = error.localizedDescription }
                 self.cleanup(notifyRemote: true, endCallKit: true)
             } else if self.isConnecting || self.isIncoming {
+                if let error { self.errorMessage = error.localizedDescription }
                 self.cleanup(notifyRemote: false, endCallKit: true)
             } else {
                 self.cleanup(notifyRemote: true, endCallKit: true)

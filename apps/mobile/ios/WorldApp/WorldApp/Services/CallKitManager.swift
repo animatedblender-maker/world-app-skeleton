@@ -15,7 +15,7 @@ final class CallKitManager: NSObject, CXProviderDelegate {
     private(set) var isAudioSessionActivated = false
 
     private override init() {
-        let configuration = CXProviderConfiguration(localizedName: "Matterya")
+        let configuration = CXProviderConfiguration()
         configuration.supportsVideo = true
         configuration.maximumCallsPerCallGroup = 1
         configuration.maximumCallGroups = 1
@@ -167,9 +167,13 @@ final class CallKitManager: NSObject, CXProviderDelegate {
 
     func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
         isAudioSessionActivated = false
-        AudioManager.shared.audioSession.isAutomaticConfigurationEnabled = false
-        try? AudioManager.shared.setEngineAvailability(.none)
         Task { @MainActor in
+            let manager = CallSessionManager.shared
+            // CallKit swaps audio sessions when a call connects; don't tear down
+            // LiveKit while the Matterya call is still active.
+            guard !manager.isActive, !manager.isConnecting else { return }
+            AudioManager.shared.audioSession.isAutomaticConfigurationEnabled = false
+            try? AudioManager.shared.setEngineAvailability(.none)
             CallSoundService.shared.stop()
         }
     }

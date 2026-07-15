@@ -7,6 +7,7 @@ struct CallSignal: Sendable {
     let callType: String?
     let callID: String?
     let roomName: String?
+    let connectedAt: TimeInterval?
 }
 
 @MainActor
@@ -100,7 +101,8 @@ final class CallSignalingService {
         callType: String? = nil,
         callID: String? = nil,
         roomName: String? = nil,
-        to: String? = nil
+        to: String? = nil,
+        connectedAt: TimeInterval? = nil
     ) {
         guard let webSocketTask, isConnected else { return }
         var payload: [String: Any] = [
@@ -112,6 +114,7 @@ final class CallSignalingService {
         if let callID { payload["callId"] = callID }
         if let roomName { payload["roomName"] = roomName }
         if let to { payload["to"] = to }
+        if let connectedAt { payload["connectedAt"] = connectedAt }
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let text = String(data: data, encoding: .utf8)
         else { return }
@@ -221,13 +224,15 @@ final class CallSignalingService {
               let from = json["from"] as? String
         else { return }
 
+        let connectedAt = (json["connectedAt"] as? NSNumber)?.doubleValue
         let signal = CallSignal(
             type: type,
             conversationID: conversationID,
             from: from,
             callType: json["callType"] as? String,
             callID: json["callId"] as? String,
-            roomName: json["roomName"] as? String
+            roomName: json["roomName"] as? String,
+            connectedAt: connectedAt
         )
         onSignal?(signal)
     }
