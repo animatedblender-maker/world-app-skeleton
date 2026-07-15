@@ -381,6 +381,10 @@ final class AppState {
     }
 
     func presentShareSheet(for post: CountryPost) {
+        guard !post.isStory else {
+            showToast("Moments live in Globe — they aren't shared as feed posts.", style: .info)
+            return
+        }
         sharePostSheet = post
     }
 
@@ -759,6 +763,12 @@ final class AppState {
 
     func sharePostToCountryFeed(_ post: CountryPost) async -> String {
         guard isAuthenticated else { return "Sign in to share." }
+        guard !post.isStory else {
+            return "Moments live in Globe — they can't be shared as feed posts."
+        }
+        if let shared = post.sharedPost, shared.asCountryPost.isStory {
+            return "Moments live in Globe — they can't be shared as feed posts."
+        }
         guard let profile = currentProfile,
               let countryCode = homeCountryISO,
               let countryName = profile.countryName, !countryName.isEmpty

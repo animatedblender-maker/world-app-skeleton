@@ -105,6 +105,7 @@ final class PostsService {
         }
 
         return mergeFeedSources([local, abroadFollowing], limit: localLimit + abroadFollowing.count)
+            .excludingMoments()
             .excludingSparks()
     }
 
@@ -137,7 +138,7 @@ final class PostsService {
         if !following.isEmpty { batches.append(following) }
         if !global.isEmpty { batches.append(global) }
 
-        var merged = mergeFeedSources(batches, limit: maxPosts).excludingSparks()
+        var merged = mergeFeedSources(batches, limit: maxPosts).excludingMoments().excludingSparks()
         if merged.isEmpty {
             merged = await fallbackFeedPosts(limit: maxPosts).excludingSparks()
         }
@@ -534,7 +535,6 @@ final class PostsService {
             throw MediaError.uploadFailed("Missing story media.")
         }
         onPublishing?()
-        let mediaType = mimeType.hasPrefix("video/") ? "video" : "image"
         let expiresAt = Date().addingTimeInterval(86_400)
         let storyBody = PostStoryMarker.buildBody(caption: body, expiresAt: expiresAt)
         return try await createPost(
@@ -543,7 +543,8 @@ final class PostsService {
             countryName: countryName,
             countryCode: countryCode,
             cityName: cityName,
-            mediaType: mediaType,
+            visibility: .country,
+            mediaType: "story",
             mediaURL: upload.publicURL
         )
     }
@@ -602,6 +603,12 @@ final class PostsService {
         countryCode: String,
         cityName: String? = nil
     ) async throws -> CountryPost {
+        guard !post.isStory else {
+            throw PostsServiceError.momentCannotBeSharedAsPost
+        }
+        if let shared = post.sharedPost, shared.asCountryPost.isStory {
+            throw PostsServiceError.momentCannotBeSharedAsPost
+        }
         let originalID = post.sharedPostID ?? post.id
         struct Response: Decodable { let createPost: GraphQLPost }
         var input: [String: Any] = [
@@ -634,7 +641,14 @@ final class PostsService {
     ) async throws -> CountryPost {
         struct Response: Decodable { let createPost: GraphQLPost }
         let normalizedMediaType = (mediaType ?? "").lowercased()
-        let resolvedVisibility = normalizedMediaType == "video" ? PostVisibility.public : visibility
+        let resolvedVisibility: PostVisibility
+        if normalizedMediaType == "story" || body.contains("__story__|") {
+            resolvedVisibility = .country
+        } else if normalizedMediaType == "video" {
+            resolvedVisibility = .public
+        } else {
+            resolvedVisibility = visibility
+        }
         var input: [String: Any] = [
             "body": body,
             "country_name": countryName,
@@ -651,7 +665,9 @@ final class PostsService {
         let mutation = "mutation($input: CreatePostInput!) { createPost(input: $input) { \(postFields) } }"
         let result: Response = try await gql.authenticatedRequest(query: mutation, variables: ["input": input])
         let created = result.createPost.toModel
-        ContentCache.shared.invalidateAllFeeds()
+        if !created.isStory {
+            ContentCache.shared.invalidateAllFeeds()
+        }
         return created
     }
 
@@ -1019,7 +1035,7 @@ final class PostsService {
                 while indices[batchIndex] < batch.count {
                     let post = batch[indices[batchIndex]]
                     indices[batchIndex] += 1
-                    guard !seen.contains(post.id) else { continue }
+                    guard !seen.contains(post.id), !post.isStory else { continue }
                     seen.insert(post.id)
                     merged.append(post)
                     appended = true
@@ -1057,5 +1073,16 @@ final class PostsService {
             mimeType: "image/jpeg"
         )
         return upload.publicURL
+    }
+}
+
+enum PostsServiceError: LocalizedError {
+    case momentCannotBeSharedAsPost
+
+    var errorDescription: String? {
+        switch self {
+        case .momentCannotBeSharedAsPost:
+            "Moments live in Globe — they can't be shared as feed posts."
+        }
     }
 }

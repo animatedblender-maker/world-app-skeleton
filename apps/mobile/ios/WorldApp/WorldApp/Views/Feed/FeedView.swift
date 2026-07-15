@@ -313,7 +313,7 @@ struct FeedView: View {
 
     private func refreshFeed(showSpinner: Bool, resetPagination: Bool, forceRefresh: Bool) async {
         if posts.isEmpty, let cached = ContentCache.shared.posts(for: .homeFeed) {
-            posts = BlockService.shared.filterPosts(cached.filter { !$0.isStory }.excludingSparks())
+            posts = BlockService.shared.filterPosts(cached.excludingMoments().excludingSparks())
             isLoading = false
         }
         if showSpinner && posts.isEmpty {
@@ -326,7 +326,7 @@ struct FeedView: View {
         if loaded.isEmpty {
             loaded = await PostsService.shared.loadHomeFeed(forceRefresh: true)
         }
-        posts = BlockService.shared.filterPosts(loaded.filter { !$0.isStory }.excludingSparks())
+        posts = BlockService.shared.filterPosts(loaded.excludingMoments().excludingSparks())
         refreshContinueWatching()
         refreshNewOnPlay()
         await refreshFeedReels()

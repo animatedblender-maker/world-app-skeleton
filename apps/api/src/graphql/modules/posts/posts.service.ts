@@ -69,6 +69,15 @@ type CreatePostInput = {
   shared_post_id?: string | null;
 };
 
+function isMomentRow(row: { body?: string | null; media_type?: string | null } | null | undefined): boolean {
+  if (!row) return false;
+  const body = String(row.body ?? '');
+  if (body.includes('__story__|')) return true;
+  return String(row.media_type ?? '').trim().toLowerCase() === 'story';
+}
+
+const EXCLUDE_MOMENTS_SQL = `and position('__story__|' in coalesce(p.body, '')) = 0`;
+
 export class PostsService {
   private notifications = new NotificationsService();
   private bookmarksTableExists: boolean | null = null;
@@ -194,6 +203,7 @@ export class PostsService {
       left join public.profiles spr on spr.user_id = sp.author_id
       where upper(coalesce(p.country_code, '')) = $1
         and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
+        ${EXCLUDE_MOMENTS_SQL}
         and (
           p.visibility in ('public', 'country')
           or ($3::uuid is not null and p.author_id = $3::uuid)
@@ -471,6 +481,7 @@ export class PostsService {
         and coalesce(sp.moderation_status, 'active') not in ('hidden', 'deleted')
       left join public.profiles spr on spr.user_id = sp.author_id
       where coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
+        ${EXCLUDE_MOMENTS_SQL}
         and (
           p.visibility in ('public', 'country')
           or ($2::uuid is not null and p.author_id = $2::uuid)
@@ -584,6 +595,7 @@ export class PostsService {
           or lower(coalesce(p.body, '')) like $2
         )
         and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
+        ${EXCLUDE_MOMENTS_SQL}
         and (
           p.visibility = 'public'
           or ($4::uuid is not null and p.author_id = $4::uuid)
@@ -615,14 +627,26 @@ export class PostsService {
     const sharedPostId = input.shared_post_id ? String(input.shared_post_id) : null;
     if (sharedPostId) {
       await this.ensurePostAccess(sharedPostId, authorId);
+      const { rows: sharedRows } = await pool.query<{ body: string; media_type: string | null }>(
+        `select body, media_type from public.posts where id = $1 limit 1`,
+        [sharedPostId]
+      );
+      if (isMomentRow(sharedRows[0])) {
+        throw new Error('Moments cannot be shared as feed posts.');
+      }
     }
     const categoryId = await this.resolveCategoryId(input.country_code);
     const iso = (input.country_code || '').toUpperCase();
-    const visibility = this.normalizeVisibility(input.visibility) ?? 'public';
+    const body = (input.body ?? '').trim();
+    const isMomentBody = body.includes('__story__|');
+    const normalizedInputType = String(input.media_type ?? '').trim().toLowerCase();
+    const visibility =
+      isMomentBody || normalizedInputType === 'story'
+        ? 'country'
+        : this.normalizeVisibility(input.visibility) ?? 'public';
     const mediaType = this.normalizeMediaType(input.media_type, input.media_url);
     const mediaUrl = mediaType === 'none' ? null : (input.media_url ?? null);
     const thumbUrl = mediaType === 'none' ? null : (input.thumb_url ?? null);
-    const body = (input.body ?? '').trim();
     // GraphQL Post.body is non-null, so never return null here.
     const bodyValue = body.length ? body : '';
 
@@ -1315,7 +1339,7 @@ export class PostsService {
   private normalizeMediaType(value?: string | null, url?: string | null): string {
     const normalized = String(value ?? '').trim().toLowerCase();
     if (!normalized) return url ? 'image' : 'none';
-    const allowed = new Set(['none', 'image', 'video', 'link']);
+    const allowed = new Set(['none', 'image', 'video', 'link', 'story']);
     if (!allowed.has(normalized)) return 'none';
     if (normalized === 'none') return 'none';
     if (!url) return 'none';

@@ -298,7 +298,9 @@ struct PublicProfileView: View {
             followCounts = await FollowService.shared.counts(userID: profile.userID)
 
             do {
-                posts = try await PostsService.shared.listForAuthor(profile.userID, limit: 20).excludingSparks()
+                posts = try await PostsService.shared.listForAuthor(profile.userID, limit: 20)
+                    .excludingMoments()
+                    .excludingSparks()
             } catch {
                 posts = []
                 postsErrorMessage = "Couldn't load posts."

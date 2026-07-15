@@ -137,8 +137,7 @@ struct MainTabView: View {
                             object: nil,
                             userInfo: ["post": post]
                         )
-                        appState.reloadContent()
-                        Task { await appState.refreshStories() }
+                        appState.mergeStoryPost(post)
                     }
                 }
             }

@@ -91,12 +91,12 @@ struct StoryComposerView: View {
                 .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Sharing to your country feed")
+                Text("Sharing to Globe moments")
                     .font(.headline.weight(.semibold))
                     .foregroundStyle(Theme.ink)
                     .lineLimit(2)
                     .minimumScaleFactor(0.9)
-                Text("Moments disappear after 24 hours")
+                Text("Visible in the moments strip — not your feed. Disappears after 24 hours.")
                     .font(.caption)
                     .foregroundStyle(Theme.inkMuted)
             }

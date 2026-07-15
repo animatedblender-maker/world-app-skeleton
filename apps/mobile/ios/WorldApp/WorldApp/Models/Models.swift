@@ -517,6 +517,10 @@ extension Array where Element == CountryPost {
     func excludingSparks() -> [CountryPost] {
         filter { !$0.isSpark }
     }
+
+    func excludingMoments() -> [CountryPost] {
+        filter { !$0.isStory }
+    }
 }
 
 struct StoryGroup: Identifiable, Hashable, Sendable {
