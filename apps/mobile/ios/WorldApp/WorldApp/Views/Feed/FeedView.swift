@@ -61,10 +61,11 @@ struct FeedView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .userPostsDidChange)) { notification in
-            if let created = notification.userInfo?["post"] as? CountryPost,
-               !created.isStory,
-               !created.isSpark,
-               !posts.contains(where: { $0.id == created.id }) {
+            guard let created = notification.userInfo?["post"] as? CountryPost else { return }
+            if created.isStory {
+                appState.mergeStoryPost(created)
+            } else if !created.isSpark,
+                      !posts.contains(where: { $0.id == created.id }) {
                 posts.insert(created, at: 0)
             }
         }

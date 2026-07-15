@@ -62,6 +62,7 @@ final class AppState {
     private let presenceService = PresenceService.shared
     private let followService = FollowService.shared
     private var pollTask: Task<Void, Never>?
+    private var postEventsObservers: [NSObjectProtocol] = []
 
     func bootstrap() async {
         if ScreenshotMode.isActive {
@@ -81,6 +82,7 @@ final class AppState {
         markSessionReady()
         CallSessionManager.shared.bootstrap()
         startPolling()
+        startPostRealtime()
         registerPushInBackground()
         Task { await finishSessionWarmup() }
     }
@@ -327,11 +329,13 @@ final class AppState {
         markSessionReady()
         CallSessionManager.shared.bootstrap()
         startPolling()
+        startPostRealtime()
         registerPushInBackground()
         Task { await finishSessionWarmup() }
     }
 
     func logout() {
+        stopPostRealtime()
         stopPolling()
         Task { await PushNotificationService.shared.unregisterFromServer() }
         CallSessionManager.shared.teardown()
@@ -361,6 +365,8 @@ final class AppState {
         sharePostSheet = nil
         quotedSharePostID = nil
         reelsViewerContext = nil
+        storyGroups = []
+        storyViewerContext = nil
     }
 
     func showToast(_ message: String, style: ToastBanner.ToastStyle = .success) {
@@ -791,6 +797,145 @@ final class AppState {
             viewedStoryIDs: viewedStoryIDs,
             currentUserID: currentProfile?.userID
         )
+    }
+
+    func mergeStoryPost(_ post: CountryPost) {
+        guard post.isStory, post.isStoryActive else { return }
+        guard !BlockService.shared.isBlocked(post.authorID) else { return }
+        guard storyRelevant(post) else { return }
+        guard !storyGroups.contains(where: { $0.stories.contains(where: { $0.id == post.id }) }) else { return }
+
+        if let index = storyGroups.firstIndex(where: { $0.authorID == post.authorID }) {
+            let current = storyGroups[index]
+            var stories = current.stories
+            stories.append(post)
+            stories.sort { ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast) }
+            let hasUnviewed = stories.contains { !viewedStoryIDs.contains($0.id) }
+            storyGroups[index] = StoryGroup(
+                authorID: current.authorID,
+                author: current.author ?? post.author,
+                stories: stories,
+                hasUnviewed: hasUnviewed
+            )
+        } else {
+            let hasUnviewed = !viewedStoryIDs.contains(post.id)
+            storyGroups.append(
+                StoryGroup(
+                    authorID: post.authorID,
+                    author: post.author,
+                    stories: [post],
+                    hasUnviewed: hasUnviewed
+                )
+            )
+        }
+        sortStoryGroups()
+    }
+
+    func removeStoryPost(id: String) {
+        var changed = false
+        storyGroups = storyGroups.compactMap { group in
+            let remaining = group.stories.filter { $0.id != id }
+            guard remaining.count != group.stories.count else { return group }
+            changed = true
+            guard !remaining.isEmpty else { return nil }
+            return StoryGroup(
+                authorID: group.authorID,
+                author: group.author,
+                stories: remaining,
+                hasUnviewed: remaining.contains { !viewedStoryIDs.contains($0.id) }
+            )
+        }
+        guard changed else { return }
+        sortStoryGroups()
+    }
+
+    private func storyRelevant(_ post: CountryPost) -> Bool {
+        if post.authorID == currentProfile?.userID { return true }
+        let viewerCountry = currentProfile?.countryCode?.uppercased()
+        let postCountry = post.countryCode?.uppercased()
+        if let viewerCountry, let postCountry, viewerCountry == postCountry {
+            return true
+        }
+        return followingIDs.contains(post.authorID)
+    }
+
+    private func storyRelevant(authorID: String?, countryCode: String?) -> Bool {
+        guard let authorID, !authorID.isEmpty else { return false }
+        if authorID == currentProfile?.userID { return true }
+        let viewerCountry = currentProfile?.countryCode?.uppercased()
+        let eventCountry = countryCode?.uppercased()
+        if let viewerCountry, let eventCountry, viewerCountry == eventCountry {
+            return true
+        }
+        return followingIDs.contains(authorID)
+    }
+
+    private func sortStoryGroups() {
+        let currentUserID = currentProfile?.userID
+        storyGroups.sort { lhs, rhs in
+            if lhs.authorID == currentUserID { return true }
+            if rhs.authorID == currentUserID { return false }
+            if lhs.hasUnviewed != rhs.hasUnviewed { return lhs.hasUnviewed }
+            return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+        }
+    }
+
+    private func startPostRealtime() {
+        installPostRealtimeObserversIfNeeded()
+        PostEventsService.shared.start()
+    }
+
+    private func stopPostRealtime() {
+        PostEventsService.shared.stop()
+        for observer in postEventsObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        postEventsObservers.removeAll()
+    }
+
+    private func installPostRealtimeObserversIfNeeded() {
+        guard postEventsObservers.isEmpty else { return }
+
+        postEventsObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: .postRealtimeInsert,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let self,
+                      let event = notification.userInfo?["event"] as? PostRealtimeInsert
+                else { return }
+                Task { await self.handlePostRealtimeInsert(event) }
+            }
+        )
+
+        postEventsObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: .postRealtimeDelete,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let self,
+                      let event = notification.userInfo?["event"] as? PostRealtimeDelete
+                else { return }
+                Task { await self.handlePostRealtimeDelete(event) }
+            }
+        )
+    }
+
+    private func handlePostRealtimeInsert(_ event: PostRealtimeInsert) async {
+        guard isAuthenticated else { return }
+        guard let authorID = event.authorID, !authorID.isEmpty else { return }
+        guard authorID != currentProfile?.userID else { return }
+        guard storyRelevant(authorID: authorID, countryCode: event.countryCode) else { return }
+        guard !BlockService.shared.isBlocked(authorID) else { return }
+        guard let post = try? await PostsService.shared.getPostByID(event.id) else { return }
+        mergeStoryPost(post)
+    }
+
+    private func handlePostRealtimeDelete(_ event: PostRealtimeDelete) async {
+        guard isAuthenticated else { return }
+        removeStoryPost(id: event.id)
     }
 
     var viewedStoryIDs: Set<String> {

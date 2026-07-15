@@ -1,505 +1,336 @@
 // !$*UTF8*$!
 {
 	archiveVersion = 1;
-	classes = {
-	};
+	classes = {};
 	objectVersion = 56;
 	objects = {
 
 /* Begin PBXBuildFile section */
-		03175F4712CC45BDBF52BCE3 /* WorldApp/Services/PresenceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22EAB13F97CD412B8CA6A9BF /* WorldApp/Services/PresenceService.swift */; };
-		0B3E291003F24FF2ABB5CD1C /* WorldApp/Views/Globe/HandDrawnGlobeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 384FA8B263A2472496D6915B /* WorldApp/Views/Globe/HandDrawnGlobeView.swift */; };
-		0BBA8F8A4EAD40548083452B /* WorldApp/Services/DemoDatasetService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F5CF071F07C40729E23CF19 /* WorldApp/Services/DemoDatasetService.swift */; };
-		0C7C3AB6C5DB47D2827B8CA0 /* WorldApp/Views/Post/PostDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B73E01861A24BAE8F1EF5EB /* WorldApp/Views/Post/PostDetailView.swift */; };
-		0CA6B8646A784526A067A0EA /* WorldApp/Services/MediaService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7538CA4E8774E1087E40D78 /* WorldApp/Services/MediaService.swift */; };
-		0D37054004EF40BA90CC02ED /* WorldApp/Views/Components/StoriesStripView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0488DAC867814A01A1B372A7 /* WorldApp/Views/Components/StoriesStripView.swift */; };
-		11673563E5F249B8B11CC148 /* WorldApp/Theme/FacebookMediaLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9388CC06052A43F1B8918AAF /* WorldApp/Theme/FacebookMediaLayout.swift */; };
-		119ADCEC8C8748DB852D1E8B /* WorldApp/Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6BE8ECD7BE204A809CFFE7A2 /* WorldApp/Assets.xcassets */; };
-		1213B3BB51C045FDB496630D /* WorldApp/Views/Globe/GlobeMeshBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18FA19A5057E4322B9BBE53C /* WorldApp/Views/Globe/GlobeMeshBuilder.swift */; };
-		17979262E77F4307BAFAC05C /* WorldApp/Services/ImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 423C2800954F4D999FD8D538 /* WorldApp/Services/ImageCache.swift */; };
-		17DD4BF8E0B7468CA74C5CBC /* WorldApp/Views/Profile/ProfileSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DA59965489E402FB6508496 /* WorldApp/Views/Profile/ProfileSetupView.swift */; };
-		18CFEDF03BAE47D4847D53C5 /* WorldApp/Views/Components/AppMenuView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53133371019B4C9193F2F6C7 /* WorldApp/Views/Components/AppMenuView.swift */; };
-		199A59C915194FE5989D93AD /* WorldApp/Services/MatteryaReelsTwists.swift in Sources */ = {isa = PBXBuildFile; fileRef = C684FF42C30249D9A0E2BD2F /* WorldApp/Services/MatteryaReelsTwists.swift */; };
-		1A9D56DDB0414399830D94A6 /* WorldApp/Services/ReelsRankingEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 489CA2467DCC473A99C3C51B /* WorldApp/Services/ReelsRankingEngine.swift */; };
-		1B3E9EDF496241DEB2C5C5CB /* WorldApp/Resources/countries_map.json in Resources */ = {isa = PBXBuildFile; fileRef = B06C9D7EC185498CB6985F21 /* WorldApp/Resources/countries_map.json */; };
-		1BEB734F137F471D98668E68 /* WorldApp/Views/Globe/CountryFeedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C84E12E7789441EAF77B9B9 /* WorldApp/Views/Globe/CountryFeedView.swift */; };
-		237E2AB257E04BDC8D115EEB /* WorldApp/Views/Globe/GlobeOnlineDotsOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B48213BD26C4A8B8AD8B712 /* WorldApp/Views/Globe/GlobeOnlineDotsOverlay.swift */; };
-		24757A09C0BD4A3A8171ADF9 /* WorldApp/Services/CallSoundService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95B48C12B6964034A9675F67 /* WorldApp/Services/CallSoundService.swift */; };
-		27886E996663455B82EA70E5 /* WorldApp/Services/PostsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2F2059D72F646939BAA9E0A /* WorldApp/Services/PostsService.swift */; };
-		321476E6412D416F95B31AC3 /* WorldApp/Views/Components/UploadProgressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F48BF93C2D2248F987879850 /* WorldApp/Views/Components/UploadProgressView.swift */; };
-		33691526CEAF4673934EA02C /* WorldApp/Views/Connected/ConnectedHubView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0BA5D3734E947B2AABA7FD2 /* WorldApp/Views/Connected/ConnectedHubView.swift */; };
-		351CF12299234895AA3844BA /* WorldApp/Views/Hubs/HubsComingSoonView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DFB32F77352494FBF3438AA /* WorldApp/Views/Hubs/HubsComingSoonView.swift */; };
-		367D0C2EAEC340F6AD5FF4BC /* WorldApp/AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1577EEA3B9847CDB5801208 /* WorldApp/AppDelegate.swift */; };
-		3902F5E44A6F47D19D25E67C /* WorldApp/Views/Living/YouTubeAppView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4B16326363B4CCA8A253F63 /* WorldApp/Views/Living/YouTubeAppView.swift */; };
-		394C7299535E48C49D0B4EC1 /* WorldApp/Services/MediaURLResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = A57C95918FF3498BB5E3F055 /* WorldApp/Services/MediaURLResolver.swift */; };
-		3ACBEE6823CF44829CC063D6 /* WorldApp/Views/Components/BottomTabBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B5F8986E76F463C9D2A5EC9 /* WorldApp/Views/Components/BottomTabBar.swift */; };
-		3C0B058E12274BC2AC00BA18 /* WorldApp/Services/CallKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100E928327F74F98A17A958F /* WorldApp/Services/CallKitManager.swift */; };
-		3E503A361FAD4432AAA433D2 /* WorldApp/Views/RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3BAAEB4FEFA4DE38F9C922B /* WorldApp/Views/RootView.swift */; };
-		3E553429E47C4581A8EA9440 /* WorldApp/Views/Globe/PhotorealGlobeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D842A7C716DC4794BF20834A /* WorldApp/Views/Globe/PhotorealGlobeView.swift */; };
-		3F169B0598D54CC998BDA788 /* WorldApp/Services/PushNotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1947F58E6131424181410154 /* WorldApp/Services/PushNotificationService.swift */; };
-		404FF059155F47AAB4AE364D /* WorldApp/Services/SupabaseResumableUploadClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50BCE254002340878372FCD2 /* WorldApp/Services/SupabaseResumableUploadClient.swift */; };
-		439255FF3E7D42D9AA63B531 /* WorldApp/Services/PlayPlatformBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 925B8632B95447FA9E9FA13C /* WorldApp/Services/PlayPlatformBridge.swift */; };
-		43E8AE77742941D7BFCFC063 /* WorldApp/Resources/GlobeTextures/stars.png in Resources */ = {isa = PBXBuildFile; fileRef = 599D25AB2191486DA6B9FFDA /* WorldApp/Resources/GlobeTextures/stars.png */; };
-		44411300DA174367A5DA939A /* WorldApp/Views/Components/FacebookPostCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C9F4061EA414AEC9104F6AA /* WorldApp/Views/Components/FacebookPostCard.swift */; };
-		4532E1B731D7473A99C248D3 /* WorldApp/Views/Messages/ConversationRouteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9933A4977BD6434FB1B62BDF /* WorldApp/Views/Messages/ConversationRouteView.swift */; };
-		47956624582644F1AC64F79E /* WorldApp/Config/AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CD6B7EAB2CF43299DC00C65 /* WorldApp/Config/AppConfig.swift */; };
-		49B2066463454A36BB09DA51 /* WorldApp/Views/Living/YouTubeWatchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FDF3F2B77F34E8BAE9323E7 /* WorldApp/Views/Living/YouTubeWatchView.swift */; };
-		4E20DE00789749BFB8867BC2 /* WorldApp/Views/MainTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DD03E50C2FB4D33937064CC /* WorldApp/Views/MainTabView.swift */; };
-		4F5D3FDAB7D348A996F0C107 /* WorldApp/Views/Components/PostCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 719DC4EB12374A79B0FE588E /* WorldApp/Views/Components/PostCardView.swift */; };
-		515FB3FBBC594CB7A1CD732F /* WorldApp/Views/Components/HandDrawnStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E4615CE823B4438884F4A51 /* WorldApp/Views/Components/HandDrawnStyle.swift */; };
-		5194C9A6AB2C4133B31CBE08 /* WorldApp/Services/CallSessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD1B01263C7C48C6A33D9769 /* WorldApp/Services/CallSessionManager.swift */; };
-		57113DB47E8849CE8182758B /* WorldApp/Views/Profile/PublicProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2060B080BD4E4783B61222C1 /* WorldApp/Views/Profile/PublicProfileView.swift */; };
-		5744C5C5FB0940CCBB5C72A4 /* WorldApp/Views/Connected/LivePlaybackCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D57F29D499E4D209AADF21A /* WorldApp/Views/Connected/LivePlaybackCard.swift */; };
-		5B15BCB37E3846BFB8AA5F16 /* WorldApp/Views/Globe/PhotorealGlobeTextures.swift in Sources */ = {isa = PBXBuildFile; fileRef = B164A7D2AA36405097D76BCF /* WorldApp/Views/Globe/PhotorealGlobeTextures.swift */; };
-		5BE3CB32F39D4432B8639BB4 /* WorldApp/Views/Globe/GlobeCountryLabels.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAC714BA82604DEB8C54FA7C /* WorldApp/Views/Globe/GlobeCountryLabels.swift */; };
-		5C5E19CCEB924D5EA38A59DC /* WorldApp/Views/Globe/StarfieldGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF95DB00E4804BCBA8C2880C /* WorldApp/Views/Globe/StarfieldGenerator.swift */; };
-		60B34A0D924E4FA0BFF2933D /* WorldApp/Views/Globe/PresencePanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02F8092DC907459791E01FA6 /* WorldApp/Views/Globe/PresencePanelView.swift */; };
-		63C9762B0F5D47D0A49044E0 /* WorldApp/Services/ShareService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9B6CBEC1B5A4C1B828F3346 /* WorldApp/Services/ShareService.swift */; };
-		658251AC9FBF4FE9A79C15FB /* WorldApp/Resources/GlobeTextures/earth_clouds.jpg in Resources */ = {isa = PBXBuildFile; fileRef = 5BB3A30FD5304AE19668E48D /* WorldApp/Resources/GlobeTextures/earth_clouds.jpg */; };
-		6B5A82A83F7748159540B8FE /* WorldApp/Views/Globe/CartoonGlobeTexture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50EE0B0F22D84C0D91BC23E8 /* WorldApp/Views/Globe/CartoonGlobeTexture.swift */; };
-		6B72CFCC99284BF384931937 /* WorldApp/Services/GraphQLService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45210031F55744BD904A291E /* WorldApp/Services/GraphQLService.swift */; };
-		6FFD066606CD4B57B31A5EA9 /* WorldApp/Views/Components/MatteryaTopBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DAC20C8C7F4408CA05E51A9 /* WorldApp/Views/Components/MatteryaTopBar.swift */; };
-		70E7D274D0544D01BDEA07F4 /* WorldApp/Views/Connected/LivePlaybackModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = E49F44851749446CA0E955E7 /* WorldApp/Views/Connected/LivePlaybackModels.swift */; };
-		71042AA7A4834D0C878CD8ED /* WorldApp/Views/Globe/PhotorealGlobeScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEDDEA975DEF4E8EAF847EA5 /* WorldApp/Views/Globe/PhotorealGlobeScene.swift */; };
-		731174D988AE4EAB9606AD31 /* WorldApp/Services/StorageUploadClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59E1DD076E5944628E686F0D /* WorldApp/Services/StorageUploadClient.swift */; };
-		73FAA89CF60E433EB087C6C4 /* WorldApp/Views/Feed/FeedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F817575F01BC4DB8B05865CA /* WorldApp/Views/Feed/FeedView.swift */; };
-		7626D4AD6F214D0297FF4189 /* WorldApp/Views/Profile/ProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA498F4D6A774E6696C52BFF /* WorldApp/Views/Profile/ProfileView.swift */; };
-		78512A3D28524512BA83D4AA /* WorldApp/Views/Messages/CallOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E753E33419584BE69914ED70 /* WorldApp/Views/Messages/CallOverlayView.swift */; };
-		7A06598A06314E3C96FD55CA /* WorldApp/Services/BlockService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B469A008C84D4A609FA02ED4 /* WorldApp/Services/BlockService.swift */; };
-		7B883EA130F649D0A7629FB5 /* WorldApp/Views/Messages/ConversationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F97BC8D812A341C387028DEE /* WorldApp/Views/Messages/ConversationView.swift */; };
-		80185081BC834D34AF4ED603 /* WorldApp/Views/AuthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6A786C9FD464EDF8DFBB754 /* WorldApp/Views/AuthView.swift */; };
-		821971E4DDE24914B20599BC /* WorldApp/Services/CallSignalingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 766900FCF6E541B591EF48B1 /* WorldApp/Services/CallSignalingService.swift */; };
-		8666ACDFD3D84BE7A9446A57 /* WorldApp/Views/Settings/SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F1774092A89433FB1B065E7 /* WorldApp/Views/Settings/SettingsView.swift */; };
-		8B4E825E7B384491B8DA5B05 /* WorldApp/Views/Connected/MomentRoomSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73B557567761458AB72E4B3D /* WorldApp/Views/Connected/MomentRoomSheet.swift */; };
-		8D68A8FBB7BD4825B9685F58 /* WorldApp/Views/Globe/CountryMapData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49BD91C0D4654C94A5E18E16 /* WorldApp/Views/Globe/CountryMapData.swift */; };
-		8D8B211667F44CBBA8F75D6C /* WorldApp/Views/Globe/AppleMapGlobeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0019DBE53449A9B6E71FD4 /* WorldApp/Views/Globe/AppleMapGlobeView.swift */; };
-		8D9D0FA84FA441D5A6A3DDD1 /* WorldApp/Theme/ContentSanitizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3973A413610E4DEEB527289F /* WorldApp/Theme/ContentSanitizer.swift */; };
-		8E6956759BBE41368CF5572D /* WorldApp/Services/MatteryaSearchEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = C71C93CA30F24E36918FE1BA /* WorldApp/Services/MatteryaSearchEngine.swift */; };
-		8EC423BB22EA41259F87585D /* WorldApp/Views/Living/LivingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F09BFE4BEF6D49EAB778C4F4 /* WorldApp/Views/Living/LivingView.swift */; };
-		8EFD752D84364169B4691CAC /* WorldApp/Views/Messages/MessagesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A98D8111F674741ACEB4D7B /* WorldApp/Views/Messages/MessagesView.swift */; };
-		90CB0F92D52B44F7BF6250D9 /* WorldApp/WorldAppApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F74627DF12C48BD93B3D6F7 /* WorldApp/WorldAppApp.swift */; };
-		9622D60605DD4F988F23A76E /* WorldApp/Config/ScreenshotMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C8C68B76D3F46D1B1D7C5F7 /* WorldApp/Config/ScreenshotMode.swift */; };
-		96B59F2AEB504C5993A683B6 /* WorldApp/Services/AdsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A88D1A8B59A54F9C99AB0E7D /* WorldApp/Services/AdsService.swift */; };
-		97CA02C55242419EB750E6C7 /* WorldApp/Views/Reels/ReelsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C937B25B07D47428E9B5513 /* WorldApp/Views/Reels/ReelsView.swift */; };
-		97FCB014870B40C594810284 /* WorldApp/Views/Ads/AdPrerollView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2243AE4ECE0A441C8986F65C /* WorldApp/Views/Ads/AdPrerollView.swift */; };
-		98E1D9D368E44D1C8882F2A8 /* WorldApp/Services/GlobeCityCoordinateCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F4EDC4C86154889A9EA0FEE /* WorldApp/Services/GlobeCityCoordinateCache.swift */; };
-		990536AF72DD457894CB78C7 /* WorldApp/Views/Components/StoriesViewerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C518634E4284516ADD9668B /* WorldApp/Views/Components/StoriesViewerView.swift */; };
-		A1216EFD7191496E9E70742E /* WorldApp/Resources/MatteryaCall.caf in Resources */ = {isa = PBXBuildFile; fileRef = 22E469ADC5CF43F6A729A7E5 /* WorldApp/Resources/MatteryaCall.caf */; };
-		E8F41A2B3C4D5E6F708192A3 /* WorldApp/Resources/MatteryaCallRing.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = F9A52B3C4D5E6F708192A3B4 /* WorldApp/Resources/MatteryaCallRing.mp3 */; };
-		A39DB437444145F79F8B569F /* WorldApp/Services/IncomingCallWake.swift in Sources */ = {isa = PBXBuildFile; fileRef = 861735B9550140679624A0AA /* WorldApp/Services/IncomingCallWake.swift */; };
-		A3EC4073466E4B77A1C0D3EE /* WorldApp/Views/Globe/NotificationsPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5F318863F254866B1544D03 /* WorldApp/Views/Globe/NotificationsPanelView.swift */; };
-		A837AD86B1E441AFB26C566C /* WorldApp/Resources/GlobeTextures/earth_daymap.jpg in Resources */ = {isa = PBXBuildFile; fileRef = B229E91DA64F475AB5E364D6 /* WorldApp/Resources/GlobeTextures/earth_daymap.jpg */; };
-		A8AE892A45BD47CE8D8906F0 /* WorldApp/Services/GraphQLTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 696930085CD84E8FB608A319 /* WorldApp/Services/GraphQLTypes.swift */; };
-		A926B38FA942402DA8117CAC /* WorldApp/Services/GlobePresenceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA34975762034A10BAA1D3D8 /* WorldApp/Services/GlobePresenceService.swift */; };
-		A9DBCD9AEC9E4C70944A05FF /* WorldApp/Views/Globe/PhotorealGlobeBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DFB283F7C9944A19E48118F /* WorldApp/Views/Globe/PhotorealGlobeBuilder.swift */; };
-		ACD74614941D4853BBD26CA7 /* WorldApp/Services/ProfileService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F8FC9AB10A941DC9118DF2A /* WorldApp/Services/ProfileService.swift */; };
-		AEA4E8C36A5A410EBE668915 /* WorldApp/Services/StreamingHubService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62DC90BD23E9499395822E5D /* WorldApp/Services/StreamingHubService.swift */; };
-		B0096BC2EE5041F782483A8A /* WorldApp/Models/Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D96137DBB21402DB246F542 /* WorldApp/Models/Models.swift */; };
-		B2B6956C8CA8427DBC0C1B6E /* WorldApp/Views/Components/VideoPlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7233FDDA2FC848FAAD367A95 /* WorldApp/Views/Components/VideoPlayerView.swift */; };
-		B3F74FF75E1940DFB110BEB9 /* WorldApp/ViewModels/AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7154CEA798244DF688929B5D /* WorldApp/ViewModels/AppState.swift */; };
-		B4C254938BE74318A1281607 /* WorldApp/Views/People/PeopleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0206F4A221F4CE6B03E716E /* WorldApp/Views/People/PeopleView.swift */; };
-		B61EEA31003540C99C82A752 /* WorldApp/Views/Profile/EditProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6A20397342E4E07B9A0625C /* WorldApp/Views/Profile/EditProfileView.swift */; };
-		B7D229C1AF1346DFB765C138 /* WorldApp/Views/Components/UnreadBadge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F477B1F513242CFB36A3553 /* WorldApp/Views/Components/UnreadBadge.swift */; };
-		B82F2E81766342369D035BFC /* WorldApp/Services/MessagesService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 756D6AA808BD4885B0250572 /* WorldApp/Services/MessagesService.swift */; };
-		B83C074F3006F3EC0029F092 /* LiveKit in Frameworks */ = {isa = PBXBuildFile; productRef = 27CA460A6AEB41989EBB991D /* LiveKit */; };
-		B9A00925248440FF8783DBD5 /* WorldApp/Theme/YouTubeComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = E33DDAAA1AEF4227B6606EE2 /* WorldApp/Theme/YouTubeComponents.swift */; };
-		BA3CD4FCE3AD41CCAF664A38 /* WorldApp/Views/Connected/ConnectedHubModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8912C854EBA4495AEB8568A /* WorldApp/Views/Connected/ConnectedHubModels.swift */; };
-		BB8D073C2B8F452FBD037B18 /* WorldApp/Views/News/NewsDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E48C36A028740349DCDDB2E /* WorldApp/Views/News/NewsDetailView.swift */; };
-		BB967F7F4E154674B92A184D /* WorldApp/Views/Connected/UpdateNowPlayingSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB0F787B300E47299BF5E4BB /* WorldApp/Views/Connected/UpdateNowPlayingSheet.swift */; };
-		BCF7E1F2C2DB4F249E15E32A /* WorldApp/Services/SubscriptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77131195D45F418798562010 /* WorldApp/Services/SubscriptionService.swift */; };
-		BEA29B774D25427B9C478F6A /* WorldApp/Views/Profile/ProfilePostCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0594A41785B5466F8FFCF026 /* WorldApp/Views/Profile/ProfilePostCard.swift */; };
-		C0465BF2450A48858F0CD5FB /* WorldApp/Services/VoIPPushService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B04E626289714D05B539F595 /* WorldApp/Services/VoIPPushService.swift */; };
-		C5D21B5DA1D7482C9B5E8693 /* WorldApp/Views/Globe/CustomGlobeBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFFEF9F76EFC40B08F6A3770 /* WorldApp/Views/Globe/CustomGlobeBuilder.swift */; };
-		C867E28AF5634013B4B293F7 /* WorldApp/Services/AppleMusicNowPlayingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88C6B85C0AA140F484EA246B /* WorldApp/Services/AppleMusicNowPlayingService.swift */; };
-		C9542B6FFC2F422BB2AE5B83 /* WorldApp/Services/JSONCoding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65C693EC064349099C3FDD39 /* WorldApp/Services/JSONCoding.swift */; };
-		C98EA7F9AE78451A82BE3818 /* WorldApp/Views/Search/SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A34664D5354B45F9A6C3F6FC /* WorldApp/Views/Search/SearchView.swift */; };
-		CE6580404FD94A1D8AF61336 /* WorldApp/Views/Components/ShareComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = F77612416044437BB9830893 /* WorldApp/Views/Components/ShareComponents.swift */; };
-		CEF97C6CD42F4DC2BD0BFB20 /* WorldApp/Views/Globe/GlobeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58F49FA8875E4139A12464B8 /* WorldApp/Views/Globe/GlobeView.swift */; };
-		D2ECC579E8FE4B2EB8F7E50D /* WorldApp/Services/AuthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB7222E5359F49D792EA6E5B /* WorldApp/Services/AuthService.swift */; };
-		D769261526674BC9A580947F /* WorldApp/Theme/Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB2FAC56CAC04279BBB518F6 /* WorldApp/Theme/Theme.swift */; };
-		D7D07D77E8784F2EBECF3877 /* WorldApp/Views/Reels/ReelsVerticalFeed.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6C9B13B394843D5B4A214DC /* WorldApp/Views/Reels/ReelsVerticalFeed.swift */; };
-		D810B8DB26D54B28BFBD1CBA /* MusicKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BC87D2483BD54EC1BA14DA01 /* MusicKit.framework */; };
-		D9DF5AA4101C4C36ADD9B6A7 /* WorldApp/Theme/YouTubeMediaLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50F57A04B9104B9C9B52D1EC /* WorldApp/Theme/YouTubeMediaLayout.swift */; };
-		DA20FA993201444885FBDCE7 /* WorldApp/Views/Components/ReelComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90C585E821074FD4A2233366 /* WorldApp/Views/Components/ReelComposerView.swift */; };
-		DA392A9311A841E4B8E20B4A /* WorldApp/Services/NotificationsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59C0857063F24EF9AF0522B1 /* WorldApp/Services/NotificationsService.swift */; };
-		DAFA4CCA30F2448B90C3D047 /* WorldApp/Views/Ads/AdsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 792827FE35864550B833E809 /* WorldApp/Views/Ads/AdsView.swift */; };
-		DD1002CBB9504F76A981B22A /* WorldApp/Resources/GlobeTextures/stars.jpg in Resources */ = {isa = PBXBuildFile; fileRef = 64FBEADC3B2045E99011CA11 /* WorldApp/Resources/GlobeTextures/stars.jpg */; };
-		DECEE9949F8543A994537E7B /* WorldApp/Services/LocationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9CA675E4BF145D4A0D128EA /* WorldApp/Services/LocationService.swift */; };
-		E1D19D0142944702811E85DE /* WorldApp/Views/Components/FloatingPostsOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3D5B6DC3F4C4756B8F0DCA6 /* WorldApp/Views/Components/FloatingPostsOverlay.swift */; };
-		E21D6F4510CE4AE19030BD42 /* WorldApp/Services/FollowService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB4770A597DE424D807981DA /* WorldApp/Services/FollowService.swift */; };
-		E23ADBBF8460457C9C9870D6 /* WorldApp/Views/Components/StoryComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E329E1D5A8E464C8AC57BF0 /* WorldApp/Views/Components/StoryComposerView.swift */; };
-		E3865925CAA441F2A97EECD0 /* WorldApp/Resources/GlobeTextures/earth_clouds.png in Resources */ = {isa = PBXBuildFile; fileRef = 16C9A6A5C2DC4FBFAEAE02CC /* WorldApp/Resources/GlobeTextures/earth_clouds.png */; };
-		E77FA27EEF52415C9625BA4E /* WorldApp/Views/Components/VideoThumbnailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AD00958267A4F179C231286 /* WorldApp/Views/Components/VideoThumbnailView.swift */; };
-		EC80BA36E30140498E6E0762 /* WorldApp/Views/Components/CreateMenuSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA007C02F2524D9B8BBD76B0 /* WorldApp/Views/Components/CreateMenuSheet.swift */; };
-		EEBDB39A757D442EB338FA3E /* WorldApp/Services/NotificationNames.swift in Sources */ = {isa = PBXBuildFile; fileRef = A37A6029B5044AE795FCD6A6 /* WorldApp/Services/NotificationNames.swift */; };
-		EEF31B873FEE41F9B393BB78 /* WorldApp/Views/Globe/HandDrawnGlobeScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = A95FB0D06E264CD58DBB0A2F /* WorldApp/Views/Globe/HandDrawnGlobeScene.swift */; };
-		EFF3FC1072DD4ED4BBB6804D /* WorldApp/Services/YouTubeCatalogService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08CCF872675F45DCA7AAA666 /* WorldApp/Services/YouTubeCatalogService.swift */; };
-		F03FCF41799244B18122530F /* WorldApp/Services/GlobePresenceGeo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DB5DCED7B8D4A3982D95A04 /* WorldApp/Services/GlobePresenceGeo.swift */; };
-		F3E979607CDF46689B84625F /* WorldApp/Services/NewsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CB11C419F0A4F9EA52B716E /* WorldApp/Services/NewsService.swift */; };
-		F4A82EEEDDEE4C70B3B941AB /* WorldApp/Services/VideoCompressionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCF732A6A36B48559AF81AC8 /* WorldApp/Services/VideoCompressionService.swift */; };
-		F5888DC4FFAB422B957854BE /* WorldApp/Services/ContentCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBF922B8D1734A31A652B7D0 /* WorldApp/Services/ContentCache.swift */; };
-		F8CB853C707645D09B4CB48A /* WorldApp/Resources/GlobeTextures/earth_daymap.png in Resources */ = {isa = PBXBuildFile; fileRef = 50C0E49410114173B8AECFA1 /* WorldApp/Resources/GlobeTextures/earth_daymap.png */; };
-		F9F95F0FEFBD468A9774408A /* WorldApp/Views/Components/PostCommentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77249035E6CB4578A2E763EB /* WorldApp/Views/Components/PostCommentsView.swift */; };
-		FA13979E982242B48B8E9E80 /* WorldApp/Views/Components/PostComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD073B8506564B08BAD65A09 /* WorldApp/Views/Components/PostComposerView.swift */; };
-		FC3195FAEBD44986A16C5D28 /* WorldApp/Views/Living/YouTubeChannelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82926FDD659340A2B0F0043F /* WorldApp/Views/Living/YouTubeChannelView.swift */; };
+		C0FA646E5386467190F77929 /* MusicKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F11450CC4314D75988042EE /* MusicKit.framework */; };
+		73E464EC2F404944901AAE0C /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 785CED286E634760801B23B4 /* AppDelegate.swift */; };
+		9AAD6F46FD0542DC9168FF30 /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDAF042BB1D046FBAAFA0796 /* AppConfig.swift */; };
+		1DFBD4215C4747AB8B009E92 /* ScreenshotMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA6BD7355D784173B3A39B5B /* ScreenshotMode.swift */; };
+		FE59D079DD9A43E092C0F8A3 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = D71057AECEF545C09575EB5A /* Models.swift */; };
+		07D73CE2D8C4499084325198 /* AdsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CD5F1D39F1B4EEFB708B035 /* AdsService.swift */; };
+		DC2202FA692D4BC496A8095A /* AppleMusicNowPlayingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25C4EEAF417F4AD5968219E5 /* AppleMusicNowPlayingService.swift */; };
+		6861993E813147168F3991F5 /* AuthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B00FB821D4943349CA293CA /* AuthService.swift */; };
+		78095EBEBF694A789456176D /* BlockService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1CD28A99E614DF9B6A8FC61 /* BlockService.swift */; };
+		EDBC873754584AED8C35E652 /* CallKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A91A780E3C2472DBAE9574F /* CallKitManager.swift */; };
+		38A7E2B59E3844EB8BE34BF8 /* CallSessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9CF130218F14F31B8F3F2CA /* CallSessionManager.swift */; };
+		3FB9D9B537CB4A9D8A4CD64E /* CallSignalingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5BE1616F6AA41B685744402 /* CallSignalingService.swift */; };
+		33B7600757A34491B8147168 /* CallSoundService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1846A26D07C44E5E879CE8A3 /* CallSoundService.swift */; };
+		A9097D1FCA8048ADB991BEA5 /* ContentCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8287EDF0D3A74079AD11A4EF /* ContentCache.swift */; };
+		A93A448E73FE47DDA8B1271F /* DemoDatasetService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D701D704B5E945E9B59B4BE7 /* DemoDatasetService.swift */; };
+		2C4C7BF7559F4AEC89AE2173 /* FollowService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06F5EE96BC1B4ABBBFC42DE6 /* FollowService.swift */; };
+		88F09192308642F1BDE69C6E /* GlobeCityCoordinateCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9AD31F0B3AF47B988EC3A67 /* GlobeCityCoordinateCache.swift */; };
+		A43392C774284E12B6CB5040 /* GlobePresenceGeo.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6A85D14E37E40D29F5C895A /* GlobePresenceGeo.swift */; };
+		5D84C926D1DC49F983FE963B /* GlobePresenceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D98AA7E95ABF43D488051697 /* GlobePresenceService.swift */; };
+		38CCB28CAFA14A3CA70AEA98 /* GraphQLService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4F353C62ECE4072A1EA4D72 /* GraphQLService.swift */; };
+		D9B063F1F5204515B9E900DE /* GraphQLTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C5626E878B340128392AD94 /* GraphQLTypes.swift */; };
+		0674672284F240C5BADCC61B /* ImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 128504892EB345A990CD7DD2 /* ImageCache.swift */; };
+		ADAE7F4888F44473A1696462 /* IncomingCallWake.swift in Sources */ = {isa = PBXBuildFile; fileRef = 937E92E25E044DB6BD8CFFF2 /* IncomingCallWake.swift */; };
+		6C39CA12F5EE436FABC4AAE7 /* JSONCoding.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE7ED56D14044F8098ABE4A7 /* JSONCoding.swift */; };
+		DA975FBDB35A40F5A732A9F5 /* LocationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3046B68DC65D47A2A29013E1 /* LocationService.swift */; };
+		1EC4BB54148C43458829BF3B /* MatteryaReelsTwists.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F63D06938E148CE853EAF8C /* MatteryaReelsTwists.swift */; };
+		F9D05D893FB54D34A797F9DA /* MatteryaSearchEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 737121EEC51B4D31819AF713 /* MatteryaSearchEngine.swift */; };
+		0623A56E85784513B00854B4 /* MediaService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30998BEDA7CC493681EE3ECA /* MediaService.swift */; };
+		151E0C1B0C2B4E37A531CFC4 /* MediaURLResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6CF1D87500E4303B10A0EAD /* MediaURLResolver.swift */; };
+		59A601F7791240C298D3A941 /* MessagesService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA3AB85B1FC043BFB874AE92 /* MessagesService.swift */; };
+		8BF70F0BDA0447349474241F /* NewsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD8BA713120E4D61A71EDF9F /* NewsService.swift */; };
+		BBA9039B7EA54491BBCA1D19 /* NotificationNames.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6CF99AFFA70445480D50463 /* NotificationNames.swift */; };
+		996C3B50790C4A9BBA338DE8 /* NotificationsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA93EDB0933E4E308F083816 /* NotificationsService.swift */; };
+		F7B302B2D7994595A464670D /* PlayPlatformBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AD613C2EDF14D25BACB5E6A /* PlayPlatformBridge.swift */; };
+		A3F6B1D8256B4EB587F7026B /* PostEventsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC724774DA1B4E5FA04129E4 /* PostEventsService.swift */; };
+		3FECC761D38E45B8A52C46C9 /* PostsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77B597DEAD254CD3899B9CB3 /* PostsService.swift */; };
+		300D04EDC34E42E5A35D2236 /* PresenceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E47606240158471A88A0573E /* PresenceService.swift */; };
+		E921538D918245B79D8D8E2D /* ProfileService.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBE45D8449074564B2C78508 /* ProfileService.swift */; };
+		35B7EE8102094F19916DCBF3 /* PushNotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6540785EB7B144F79CE62920 /* PushNotificationService.swift */; };
+		D116AD2460094161BFB89F1E /* ReelsRankingEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E4A7B5DBA3F47AD8986F595 /* ReelsRankingEngine.swift */; };
+		0A539C09B4DF4349BD156A7C /* ShareService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 592FBE15FDF347FB91DD9D73 /* ShareService.swift */; };
+		C88F4E247432418F8C2D2445 /* StorageUploadClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5C0828404374C2D813A4282 /* StorageUploadClient.swift */; };
+		0D143A698E16426198D8BE2A /* StreamingHubService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA457C378A664788B8339F80 /* StreamingHubService.swift */; };
+		D6DD061EED5246498264A7BB /* SubscriptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAFB6E1BAA6440EB836A7706 /* SubscriptionService.swift */; };
+		94B872364880426AA6BE4941 /* SupabaseResumableUploadClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B517B06CB2B4EAE8A086FD4 /* SupabaseResumableUploadClient.swift */; };
+		D6BF999200E84D85AF324580 /* VideoCompressionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 677DD22EE0854911AC21A106 /* VideoCompressionService.swift */; };
+		8927C59E86594E7BB12DEAC8 /* VoIPPushService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13BEC1EBF9CC42E4B2F75961 /* VoIPPushService.swift */; };
+		FE259132F2D14667A9F1DB5D /* YouTubeCatalogService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FEC632059DB46C38601D9C5 /* YouTubeCatalogService.swift */; };
+		49386304225A4E5FB3CCA41E /* ContentSanitizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B2EA7FE91CC4374867CBBD4 /* ContentSanitizer.swift */; };
+		253DB710318747A5AB51B803 /* FacebookMediaLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 153E74D72DF34A43A0CD8ADF /* FacebookMediaLayout.swift */; };
+		D2EC3824CB914EE1ABBE4368 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFAD5AA9C01E448A81E525BE /* Theme.swift */; };
+		32A6B959E1FA41A0B5983715 /* YouTubeComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36AA0FE84AE7442D83AAD0A7 /* YouTubeComponents.swift */; };
+		A8F9782E088A45B0AE36E003 /* YouTubeMediaLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 513BDAD1E6F8478B9B3A1AF0 /* YouTubeMediaLayout.swift */; };
+		87A6EFEDAC1647AEBD43D930 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 169D91C4C13D4047BF8290FB /* AppState.swift */; };
+		545ECE50F80D4AF28063763E /* AdPrerollView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AA941515F7543C383D2BC39 /* AdPrerollView.swift */; };
+		150347E3F9374CBD9D80459B /* AdsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B896E9AB1444787B662E6F5 /* AdsView.swift */; };
+		9CC17E5842C6462395074544 /* AuthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31052BAF766A4D9E9D4F641B /* AuthView.swift */; };
+		445519DAFDBB4D8895DCCF35 /* AppMenuView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDDA1E6334B84A1D952193E1 /* AppMenuView.swift */; };
+		1D571603D1A644BC8FD8AC48 /* BottomTabBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A840FC6E74042AF945D435C /* BottomTabBar.swift */; };
+		559D8202B22B4569AFDA88D8 /* CreateMenuSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = B741D93EC7DA479A8AAF9A70 /* CreateMenuSheet.swift */; };
+		7455C6270B0B463288EFFFD5 /* FacebookPostCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 290B0FAA39104BB49CF7C3C8 /* FacebookPostCard.swift */; };
+		D6C77A92417C4337B618B70C /* FloatingPostsOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B184F3641845038E250586 /* FloatingPostsOverlay.swift */; };
+		8DE122FB4D4A45A0B5EB04DB /* HandDrawnStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9358BC5ACE2F4B938F825782 /* HandDrawnStyle.swift */; };
+		2435B906AA3F4CF0BC15CC40 /* MatteryaTopBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECDC7413B3544766BF3E6448 /* MatteryaTopBar.swift */; };
+		D251C1FFACB0479DBC75E9F0 /* PostCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 776CD68F57A84CEA948D5865 /* PostCardView.swift */; };
+		F5C178C9EF234C529F7AD65F /* PostCommentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B13D9EF4204477288426418 /* PostCommentsView.swift */; };
+		1C42E766163042A08E0F79EE /* PostComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEA81E6843F0440FB53945C7 /* PostComposerView.swift */; };
+		9884684748E14A9B9732E75C /* ReelComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A15263E65F247FE994B0B69 /* ReelComposerView.swift */; };
+		8AA5053FD3694259BFD423AC /* ShareComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43373C577ACD45769B34C519 /* ShareComponents.swift */; };
+		C5AA480875BE47ACAFF20A68 /* StoriesStripView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 614C9EFA33CB45ADB515B1AF /* StoriesStripView.swift */; };
+		2E3913F488634BCA9E156EFD /* StoriesViewerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F189BCAA7AB04B109BABC8AC /* StoriesViewerView.swift */; };
+		FBFA7D414A2F4BC08FCEA748 /* StoryComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC574A64944146AFA52D36EA /* StoryComposerView.swift */; };
+		0E0A77568AB54D0DB4B6B4D7 /* UnreadBadge.swift in Sources */ = {isa = PBXBuildFile; fileRef = F53FC52AC4AE4A018894C22B /* UnreadBadge.swift */; };
+		C5F4F7D460194F42AC91BF95 /* UploadProgressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F9804B916F441F2A5944954 /* UploadProgressView.swift */; };
+		57345B73779C4279819F5EB4 /* VideoPlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72CED8582F664B308EBAC6EF /* VideoPlayerView.swift */; };
+		E9962641D57C41309BE26EDE /* VideoThumbnailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B3DB9C915FA4EFEA9EEF44D /* VideoThumbnailView.swift */; };
+		C587B54F5C4D48BE958587AD /* ConnectedHubModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 660EC9123E9449B093EDCC65 /* ConnectedHubModels.swift */; };
+		D2306E51282E4D5A8B6B22B0 /* ConnectedHubView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C8609622DE7423B8A26C1D8 /* ConnectedHubView.swift */; };
+		559197D5A8964CFEA8DF2F85 /* LivePlaybackCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 450B6AC84EB946BC9B0E581F /* LivePlaybackCard.swift */; };
+		4198E7945F914F04931CF25B /* LivePlaybackModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9077593839D84E79A5238DB5 /* LivePlaybackModels.swift */; };
+		5497376A907143CA87C9DB19 /* MomentRoomSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = C885B80F427E4EEBB37025C8 /* MomentRoomSheet.swift */; };
+		9BE767D6F09340BFA848A269 /* UpdateNowPlayingSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E6CECD9539C40E8905AFE2A /* UpdateNowPlayingSheet.swift */; };
+		C6E3A483B8D04C9CAF79743D /* FeedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21744EE0E1464D4CB3AD9B4E /* FeedView.swift */; };
+		F5F6982D50904349A23D2BA5 /* AppleMapGlobeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95345B1820D144F4839CFDE5 /* AppleMapGlobeView.swift */; };
+		CAB346422D8E4B11ACE00D36 /* CartoonGlobeTexture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0188822275D14DB1AF2681C2 /* CartoonGlobeTexture.swift */; };
+		441CECE2C4A248C4AD208281 /* CountryFeedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9997A3B1B3C843DE8812F8B3 /* CountryFeedView.swift */; };
+		1A87E86DC8EA4C0C85B9D168 /* CountryMapData.swift in Sources */ = {isa = PBXBuildFile; fileRef = D36D6D91690D4D09869A1FFD /* CountryMapData.swift */; };
+		0B315C5F38E04873B0534643 /* CustomGlobeBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B51BE2F9D43649E290377DA2 /* CustomGlobeBuilder.swift */; };
+		F1D362E19B16456096564A2E /* GlobeCountryLabels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2789D520FA1742C2A856F367 /* GlobeCountryLabels.swift */; };
+		6BC3BEEC161C436583266B95 /* GlobeMeshBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CF2D8B8A86A450C8AABC4CB /* GlobeMeshBuilder.swift */; };
+		91706866FC7D4A7A9F9EEB17 /* GlobeOnlineDotsOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D6BF21D7B8942E7B0CE758E /* GlobeOnlineDotsOverlay.swift */; };
+		52B01FCFA9B74B06B4FB9BF4 /* GlobeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5627BCECE390400C8509C4A6 /* GlobeView.swift */; };
+		2E931AAAEB124B16938505F6 /* HandDrawnGlobeScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF7AB4EAE0E041BFBACE3298 /* HandDrawnGlobeScene.swift */; };
+		F38DB68CAEF84C19872FB6A3 /* HandDrawnGlobeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6AFAE80A0EF4C07A2A0AF6D /* HandDrawnGlobeView.swift */; };
+		E88408A3165144C9B031F53E /* NotificationsPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E227A9AFE88B4CD3B14A1662 /* NotificationsPanelView.swift */; };
+		F03DB188306E4678A7A666C1 /* PhotorealGlobeBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 549DDB2641214978BE2FED67 /* PhotorealGlobeBuilder.swift */; };
+		2A7EA273722042DD99FFD9A8 /* PhotorealGlobeScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50B88035831F43F9A77A190E /* PhotorealGlobeScene.swift */; };
+		7BE8557D20034B7EB02A98ED /* PhotorealGlobeTextures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B23A6476F2540359A30D885 /* PhotorealGlobeTextures.swift */; };
+		7844112C19E6450E9A9364BA /* PhotorealGlobeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25A56B388A914666AA999311 /* PhotorealGlobeView.swift */; };
+		FA9DB19D37DD4D24A79C5411 /* PresencePanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87FA19A358AF4402AD6EDD27 /* PresencePanelView.swift */; };
+		F6946D2703D449ADB1524C1F /* StarfieldGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24631CEEF93A4DB4996C65FD /* StarfieldGenerator.swift */; };
+		D4530496AE9043549AF2F337 /* HubsComingSoonView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E2FA37FBD7F41DF91B9BC94 /* HubsComingSoonView.swift */; };
+		48218FB6960C4739BB2AE69E /* LivingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0014F3D75FCF4BA7B129418A /* LivingView.swift */; };
+		4E95FD0F362B4AE786387D0E /* YouTubeAppView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BA6CDE23F6B47D1A26FA045 /* YouTubeAppView.swift */; };
+		9B1744043F4B4D468BEF1472 /* YouTubeChannelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCC80875E24947F98A48B463 /* YouTubeChannelView.swift */; };
+		DCBF66B12EDA4030AEA06CF4 /* YouTubeWatchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7D207AD88D84A289C7828D6 /* YouTubeWatchView.swift */; };
+		3D74CA311B68421AA76C0D8D /* MainTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8A713E9748348BB9EB6FE41 /* MainTabView.swift */; };
+		86CF178D17E5440A9EF26D61 /* CallOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B086F38932FE49C4987DB80C /* CallOverlayView.swift */; };
+		3B1799A63AED448DAF5BEE3A /* ConversationRouteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E86D0606EBC41B28DCE63D6 /* ConversationRouteView.swift */; };
+		A16680DDC50C456191194DC4 /* ConversationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9712D85331FB43CA9935DE2E /* ConversationView.swift */; };
+		F2CEFAAD73F44020A5071930 /* MessagesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 845599AAC32B4ABE83086EB3 /* MessagesView.swift */; };
+		452DACBC443E4F85A90B5CF0 /* NewsDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0636AA63B0DE4A15801FA7EE /* NewsDetailView.swift */; };
+		DEE53375A1A4434881E27AC6 /* PeopleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7C0A01FFA194105B24A8A61 /* PeopleView.swift */; };
+		A515032D8DD449BBA4137FB5 /* PostDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0BFBA6CADC444FC9A0D0B8E /* PostDetailView.swift */; };
+		5271B276742645D4944CDB6C /* EditProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2707BF0594747CB9E09FE10 /* EditProfileView.swift */; };
+		D605D3E2E6B944C0BD86BD28 /* ProfilePostCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F4E38CFED4D4E3FB5E00158 /* ProfilePostCard.swift */; };
+		0EB69286095B428285074D63 /* ProfileSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3404CD34BA6541F6800F58DD /* ProfileSetupView.swift */; };
+		549259298B1148B6AE207F70 /* ProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53250DE187DD4141AA82085E /* ProfileView.swift */; };
+		800DC303AC5D49F780F84FDE /* PublicProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3133CD473DF74AD39F15EB4F /* PublicProfileView.swift */; };
+		8D4096502F484076BFB4CBA4 /* ReelsVerticalFeed.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95BF3BEF6281489FA23E4744 /* ReelsVerticalFeed.swift */; };
+		F4908EC7838843BB959F55FA /* ReelsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52D229BABF0649179E0B24FF /* ReelsView.swift */; };
+		1B7A48ECE2D44FB6A9248651 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5BCF9486DA24C72B884BE0B /* RootView.swift */; };
+		F1CD4C595B56497C80F115DA /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DF46F0A4EEB4525AC627117 /* SearchView.swift */; };
+		E842B780990242E19FFB89C7 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 794B4360FD4B40688991DBD8 /* SettingsView.swift */; };
+		BC286A39D6FF404FB9C340C8 /* WorldAppApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DAC10643F314885AD68CD9E /* WorldAppApp.swift */; };
+		86A6BE0C9B614665966F4F6D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6CDC10A1F15D48BDB3D74815 /* Assets.xcassets */; };
+		125FCF83443A4009B9BD6990 /* earth_clouds.jpg in Resources */ = {isa = PBXBuildFile; fileRef = F32222D13D304A93999A5203 /* earth_clouds.jpg */; };
+		558A8DF2B9E04F9BA8509E96 /* earth_clouds.png in Resources */ = {isa = PBXBuildFile; fileRef = D47B2FB3201F4153A4CA897C /* earth_clouds.png */; };
+		EF1541CE2575425883624E6A /* earth_daymap.jpg in Resources */ = {isa = PBXBuildFile; fileRef = C1F0BFECF8C94FA3855D2436 /* earth_daymap.jpg */; };
+		4A0134C226C04133912ACE90 /* earth_daymap.png in Resources */ = {isa = PBXBuildFile; fileRef = 85C6188850F6479C8AFA6AF3 /* earth_daymap.png */; };
+		B5F08DFB631A4C8D8C2F08E5 /* stars.jpg in Resources */ = {isa = PBXBuildFile; fileRef = 9C03FFED9FCA4C8E89ABB580 /* stars.jpg */; };
+		4C166B2C4A704208AB3AFB77 /* stars.png in Resources */ = {isa = PBXBuildFile; fileRef = 9A794BAFA2A54C908D14F39B /* stars.png */; };
+		59BD989B817148E48F638DD7 /* MatteryaCall.caf in Resources */ = {isa = PBXBuildFile; fileRef = C06207CBAB034B4BB352AA30 /* MatteryaCall.caf */; };
+		451C02B85D15482EADA1A9A4 /* countries_map.json in Resources */ = {isa = PBXBuildFile; fileRef = 9BDA7E6124CB447EA0E90A3E /* countries_map.json */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		02F8092DC907459791E01FA6 /* WorldApp/Views/Globe/PresencePanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/PresencePanelView.swift; sourceTree = "<group>"; };
-		0488DAC867814A01A1B372A7 /* WorldApp/Views/Components/StoriesStripView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/StoriesStripView.swift; sourceTree = "<group>"; };
-		0594A41785B5466F8FFCF026 /* WorldApp/Views/Profile/ProfilePostCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Profile/ProfilePostCard.swift; sourceTree = "<group>"; };
-		08CCF872675F45DCA7AAA666 /* WorldApp/Services/YouTubeCatalogService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/YouTubeCatalogService.swift; sourceTree = "<group>"; };
-		0B0019DBE53449A9B6E71FD4 /* WorldApp/Views/Globe/AppleMapGlobeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/AppleMapGlobeView.swift; sourceTree = "<group>"; };
-		0B48213BD26C4A8B8AD8B712 /* WorldApp/Views/Globe/GlobeOnlineDotsOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/GlobeOnlineDotsOverlay.swift; sourceTree = "<group>"; };
-		0B73E01861A24BAE8F1EF5EB /* WorldApp/Views/Post/PostDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Post/PostDetailView.swift; sourceTree = "<group>"; };
-		100E928327F74F98A17A958F /* WorldApp/Services/CallKitManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/CallKitManager.swift; sourceTree = "<group>"; };
-		16C9A6A5C2DC4FBFAEAE02CC /* WorldApp/Resources/GlobeTextures/earth_clouds.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = WorldApp/Resources/GlobeTextures/earth_clouds.png; sourceTree = "<group>"; };
-		18FA19A5057E4322B9BBE53C /* WorldApp/Views/Globe/GlobeMeshBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/GlobeMeshBuilder.swift; sourceTree = "<group>"; };
-		1947F58E6131424181410154 /* WorldApp/Services/PushNotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/PushNotificationService.swift; sourceTree = "<group>"; };
-		2060B080BD4E4783B61222C1 /* WorldApp/Views/Profile/PublicProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Profile/PublicProfileView.swift; sourceTree = "<group>"; };
-		2243AE4ECE0A441C8986F65C /* WorldApp/Views/Ads/AdPrerollView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Ads/AdPrerollView.swift; sourceTree = "<group>"; };
-		22E469ADC5CF43F6A729A7E5 /* WorldApp/Resources/MatteryaCall.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = WorldApp/Resources/MatteryaCall.caf; sourceTree = "<group>"; };
-		F9A52B3C4D5E6F708192A3B4 /* WorldApp/Resources/MatteryaCallRing.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = WorldApp/Resources/MatteryaCallRing.mp3; sourceTree = "<group>"; };
-		22EAB13F97CD412B8CA6A9BF /* WorldApp/Services/PresenceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/PresenceService.swift; sourceTree = "<group>"; };
-		2CD6B7EAB2CF43299DC00C65 /* WorldApp/Config/AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Config/AppConfig.swift; sourceTree = "<group>"; };
-		2DB5DCED7B8D4A3982D95A04 /* WorldApp/Services/GlobePresenceGeo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/GlobePresenceGeo.swift; sourceTree = "<group>"; };
-		2E6E01C599E84314AA85547C /* WorldApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WorldApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		2F563D58F31449B9B9F6565D /* WorldApp/Release.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = WorldApp/Release.entitlements; sourceTree = "<group>"; };
-		2F74627DF12C48BD93B3D6F7 /* WorldApp/WorldAppApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/WorldAppApp.swift; sourceTree = "<group>"; };
-		384FA8B263A2472496D6915B /* WorldApp/Views/Globe/HandDrawnGlobeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/HandDrawnGlobeView.swift; sourceTree = "<group>"; };
-		3973A413610E4DEEB527289F /* WorldApp/Theme/ContentSanitizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Theme/ContentSanitizer.swift; sourceTree = "<group>"; };
-		3C8C68B76D3F46D1B1D7C5F7 /* WorldApp/Config/ScreenshotMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Config/ScreenshotMode.swift; sourceTree = "<group>"; };
-		3C9F4061EA414AEC9104F6AA /* WorldApp/Views/Components/FacebookPostCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/FacebookPostCard.swift; sourceTree = "<group>"; };
-		3DFB283F7C9944A19E48118F /* WorldApp/Views/Globe/PhotorealGlobeBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/PhotorealGlobeBuilder.swift; sourceTree = "<group>"; };
-		3E4615CE823B4438884F4A51 /* WorldApp/Views/Components/HandDrawnStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/HandDrawnStyle.swift; sourceTree = "<group>"; };
-		3FDF3F2B77F34E8BAE9323E7 /* WorldApp/Views/Living/YouTubeWatchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Living/YouTubeWatchView.swift; sourceTree = "<group>"; };
-		423C2800954F4D999FD8D538 /* WorldApp/Services/ImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/ImageCache.swift; sourceTree = "<group>"; };
-		45210031F55744BD904A291E /* WorldApp/Services/GraphQLService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/GraphQLService.swift; sourceTree = "<group>"; };
-		489CA2467DCC473A99C3C51B /* WorldApp/Services/ReelsRankingEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/ReelsRankingEngine.swift; sourceTree = "<group>"; };
-		49BD91C0D4654C94A5E18E16 /* WorldApp/Views/Globe/CountryMapData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/CountryMapData.swift; sourceTree = "<group>"; };
-		4C937B25B07D47428E9B5513 /* WorldApp/Views/Reels/ReelsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Reels/ReelsView.swift; sourceTree = "<group>"; };
-		4DA59965489E402FB6508496 /* WorldApp/Views/Profile/ProfileSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Profile/ProfileSetupView.swift; sourceTree = "<group>"; };
-		4F477B1F513242CFB36A3553 /* WorldApp/Views/Components/UnreadBadge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/UnreadBadge.swift; sourceTree = "<group>"; };
-		4F4EDC4C86154889A9EA0FEE /* WorldApp/Services/GlobeCityCoordinateCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/GlobeCityCoordinateCache.swift; sourceTree = "<group>"; };
-		4F8FC9AB10A941DC9118DF2A /* WorldApp/Services/ProfileService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/ProfileService.swift; sourceTree = "<group>"; };
-		50BCE254002340878372FCD2 /* WorldApp/Services/SupabaseResumableUploadClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/SupabaseResumableUploadClient.swift; sourceTree = "<group>"; };
-		50C0E49410114173B8AECFA1 /* WorldApp/Resources/GlobeTextures/earth_daymap.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = WorldApp/Resources/GlobeTextures/earth_daymap.png; sourceTree = "<group>"; };
-		50EE0B0F22D84C0D91BC23E8 /* WorldApp/Views/Globe/CartoonGlobeTexture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/CartoonGlobeTexture.swift; sourceTree = "<group>"; };
-		50F57A04B9104B9C9B52D1EC /* WorldApp/Theme/YouTubeMediaLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Theme/YouTubeMediaLayout.swift; sourceTree = "<group>"; };
-		53133371019B4C9193F2F6C7 /* WorldApp/Views/Components/AppMenuView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/AppMenuView.swift; sourceTree = "<group>"; };
-		58F49FA8875E4139A12464B8 /* WorldApp/Views/Globe/GlobeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/GlobeView.swift; sourceTree = "<group>"; };
-		599D25AB2191486DA6B9FFDA /* WorldApp/Resources/GlobeTextures/stars.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = WorldApp/Resources/GlobeTextures/stars.png; sourceTree = "<group>"; };
-		59C0857063F24EF9AF0522B1 /* WorldApp/Services/NotificationsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/NotificationsService.swift; sourceTree = "<group>"; };
-		59E1DD076E5944628E686F0D /* WorldApp/Services/StorageUploadClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/StorageUploadClient.swift; sourceTree = "<group>"; };
-		5BB3A30FD5304AE19668E48D /* WorldApp/Resources/GlobeTextures/earth_clouds.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = WorldApp/Resources/GlobeTextures/earth_clouds.jpg; sourceTree = "<group>"; };
-		5C518634E4284516ADD9668B /* WorldApp/Views/Components/StoriesViewerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/StoriesViewerView.swift; sourceTree = "<group>"; };
-		5DAC20C8C7F4408CA05E51A9 /* WorldApp/Views/Components/MatteryaTopBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/MatteryaTopBar.swift; sourceTree = "<group>"; };
-		5E48C36A028740349DCDDB2E /* WorldApp/Views/News/NewsDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/News/NewsDetailView.swift; sourceTree = "<group>"; };
-		62DC90BD23E9499395822E5D /* WorldApp/Services/StreamingHubService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/StreamingHubService.swift; sourceTree = "<group>"; };
-		62FD26A10F094E5AB5D0C5F8 /* WorldApp/Debug.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = WorldApp/Debug.entitlements; sourceTree = "<group>"; };
-		64FBEADC3B2045E99011CA11 /* WorldApp/Resources/GlobeTextures/stars.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = WorldApp/Resources/GlobeTextures/stars.jpg; sourceTree = "<group>"; };
-		65C693EC064349099C3FDD39 /* WorldApp/Services/JSONCoding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/JSONCoding.swift; sourceTree = "<group>"; };
-		696930085CD84E8FB608A319 /* WorldApp/Services/GraphQLTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/GraphQLTypes.swift; sourceTree = "<group>"; };
-		6BE8ECD7BE204A809CFFE7A2 /* WorldApp/Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = WorldApp/Assets.xcassets; sourceTree = "<group>"; };
-		6C84E12E7789441EAF77B9B9 /* WorldApp/Views/Globe/CountryFeedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/CountryFeedView.swift; sourceTree = "<group>"; };
-		6DFB32F77352494FBF3438AA /* WorldApp/Views/Hubs/HubsComingSoonView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Hubs/HubsComingSoonView.swift; sourceTree = "<group>"; };
-		6F1774092A89433FB1B065E7 /* WorldApp/Views/Settings/SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Settings/SettingsView.swift; sourceTree = "<group>"; };
-		7154CEA798244DF688929B5D /* WorldApp/ViewModels/AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/ViewModels/AppState.swift; sourceTree = "<group>"; };
-		719DC4EB12374A79B0FE588E /* WorldApp/Views/Components/PostCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/PostCardView.swift; sourceTree = "<group>"; };
-		7233FDDA2FC848FAAD367A95 /* WorldApp/Views/Components/VideoPlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/VideoPlayerView.swift; sourceTree = "<group>"; };
-		73B557567761458AB72E4B3D /* WorldApp/Views/Connected/MomentRoomSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Connected/MomentRoomSheet.swift; sourceTree = "<group>"; };
-		756D6AA808BD4885B0250572 /* WorldApp/Services/MessagesService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/MessagesService.swift; sourceTree = "<group>"; };
-		766900FCF6E541B591EF48B1 /* WorldApp/Services/CallSignalingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/CallSignalingService.swift; sourceTree = "<group>"; };
-		77131195D45F418798562010 /* WorldApp/Services/SubscriptionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/SubscriptionService.swift; sourceTree = "<group>"; };
-		77249035E6CB4578A2E763EB /* WorldApp/Views/Components/PostCommentsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/PostCommentsView.swift; sourceTree = "<group>"; };
-		792827FE35864550B833E809 /* WorldApp/Views/Ads/AdsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Ads/AdsView.swift; sourceTree = "<group>"; };
-		7CB11C419F0A4F9EA52B716E /* WorldApp/Services/NewsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/NewsService.swift; sourceTree = "<group>"; };
-		7D96137DBB21402DB246F542 /* WorldApp/Models/Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Models/Models.swift; sourceTree = "<group>"; };
-		82926FDD659340A2B0F0043F /* WorldApp/Views/Living/YouTubeChannelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Living/YouTubeChannelView.swift; sourceTree = "<group>"; };
-		861735B9550140679624A0AA /* WorldApp/Services/IncomingCallWake.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/IncomingCallWake.swift; sourceTree = "<group>"; };
-		88C6B85C0AA140F484EA246B /* WorldApp/Services/AppleMusicNowPlayingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/AppleMusicNowPlayingService.swift; sourceTree = "<group>"; };
-		8A98D8111F674741ACEB4D7B /* WorldApp/Views/Messages/MessagesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Messages/MessagesView.swift; sourceTree = "<group>"; };
-		8DD03E50C2FB4D33937064CC /* WorldApp/Views/MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/MainTabView.swift; sourceTree = "<group>"; };
-		8E329E1D5A8E464C8AC57BF0 /* WorldApp/Views/Components/StoryComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/StoryComposerView.swift; sourceTree = "<group>"; };
-		8F5CF071F07C40729E23CF19 /* WorldApp/Services/DemoDatasetService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/DemoDatasetService.swift; sourceTree = "<group>"; };
-		90C585E821074FD4A2233366 /* WorldApp/Views/Components/ReelComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/ReelComposerView.swift; sourceTree = "<group>"; };
-		925B8632B95447FA9E9FA13C /* WorldApp/Services/PlayPlatformBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/PlayPlatformBridge.swift; sourceTree = "<group>"; };
-		9388CC06052A43F1B8918AAF /* WorldApp/Theme/FacebookMediaLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Theme/FacebookMediaLayout.swift; sourceTree = "<group>"; };
-		95B48C12B6964034A9675F67 /* WorldApp/Services/CallSoundService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/CallSoundService.swift; sourceTree = "<group>"; };
-		9933A4977BD6434FB1B62BDF /* WorldApp/Views/Messages/ConversationRouteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Messages/ConversationRouteView.swift; sourceTree = "<group>"; };
-		9AD00958267A4F179C231286 /* WorldApp/Views/Components/VideoThumbnailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/VideoThumbnailView.swift; sourceTree = "<group>"; };
-		9B5F8986E76F463C9D2A5EC9 /* WorldApp/Views/Components/BottomTabBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/BottomTabBar.swift; sourceTree = "<group>"; };
-		9D57F29D499E4D209AADF21A /* WorldApp/Views/Connected/LivePlaybackCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Connected/LivePlaybackCard.swift; sourceTree = "<group>"; };
-		A34664D5354B45F9A6C3F6FC /* WorldApp/Views/Search/SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Search/SearchView.swift; sourceTree = "<group>"; };
-		A37A6029B5044AE795FCD6A6 /* WorldApp/Services/NotificationNames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/NotificationNames.swift; sourceTree = "<group>"; };
-		A57C95918FF3498BB5E3F055 /* WorldApp/Services/MediaURLResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/MediaURLResolver.swift; sourceTree = "<group>"; };
-		A7538CA4E8774E1087E40D78 /* WorldApp/Services/MediaService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/MediaService.swift; sourceTree = "<group>"; };
-		A88D1A8B59A54F9C99AB0E7D /* WorldApp/Services/AdsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/AdsService.swift; sourceTree = "<group>"; };
-		A95FB0D06E264CD58DBB0A2F /* WorldApp/Views/Globe/HandDrawnGlobeScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/HandDrawnGlobeScene.swift; sourceTree = "<group>"; };
-		AA007C02F2524D9B8BBD76B0 /* WorldApp/Views/Components/CreateMenuSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/CreateMenuSheet.swift; sourceTree = "<group>"; };
-		AA34975762034A10BAA1D3D8 /* WorldApp/Services/GlobePresenceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/GlobePresenceService.swift; sourceTree = "<group>"; };
-		B04E626289714D05B539F595 /* WorldApp/Services/VoIPPushService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/VoIPPushService.swift; sourceTree = "<group>"; };
-		B06C9D7EC185498CB6985F21 /* WorldApp/Resources/countries_map.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = WorldApp/Resources/countries_map.json; sourceTree = "<group>"; };
-		B164A7D2AA36405097D76BCF /* WorldApp/Views/Globe/PhotorealGlobeTextures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/PhotorealGlobeTextures.swift; sourceTree = "<group>"; };
-		B229E91DA64F475AB5E364D6 /* WorldApp/Resources/GlobeTextures/earth_daymap.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = WorldApp/Resources/GlobeTextures/earth_daymap.jpg; sourceTree = "<group>"; };
-		B2F2059D72F646939BAA9E0A /* WorldApp/Services/PostsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/PostsService.swift; sourceTree = "<group>"; };
-		B3D5B6DC3F4C4756B8F0DCA6 /* WorldApp/Views/Components/FloatingPostsOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/FloatingPostsOverlay.swift; sourceTree = "<group>"; };
-		B469A008C84D4A609FA02ED4 /* WorldApp/Services/BlockService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/BlockService.swift; sourceTree = "<group>"; };
-		B6A20397342E4E07B9A0625C /* WorldApp/Views/Profile/EditProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Profile/EditProfileView.swift; sourceTree = "<group>"; };
-		B83C07513006FD180029F092 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; name = Info.plist; path = WorldApp/Info.plist; sourceTree = "<group>"; };
-		B9CA675E4BF145D4A0D128EA /* WorldApp/Services/LocationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/LocationService.swift; sourceTree = "<group>"; };
-		BA498F4D6A774E6696C52BFF /* WorldApp/Views/Profile/ProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Profile/ProfileView.swift; sourceTree = "<group>"; };
-		BB4770A597DE424D807981DA /* WorldApp/Services/FollowService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/FollowService.swift; sourceTree = "<group>"; };
-		BBF922B8D1734A31A652B7D0 /* WorldApp/Services/ContentCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/ContentCache.swift; sourceTree = "<group>"; };
-		BC87D2483BD54EC1BA14DA01 /* MusicKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MusicKit.framework; path = System/Library/Frameworks/MusicKit.framework; sourceTree = SDKROOT; };
-		BCF732A6A36B48559AF81AC8 /* WorldApp/Services/VideoCompressionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/VideoCompressionService.swift; sourceTree = "<group>"; };
-		BD073B8506564B08BAD65A09 /* WorldApp/Views/Components/PostComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/PostComposerView.swift; sourceTree = "<group>"; };
-		BFFEF9F76EFC40B08F6A3770 /* WorldApp/Views/Globe/CustomGlobeBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/CustomGlobeBuilder.swift; sourceTree = "<group>"; };
-		C1577EEA3B9847CDB5801208 /* WorldApp/AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/AppDelegate.swift; sourceTree = "<group>"; };
-		C684FF42C30249D9A0E2BD2F /* WorldApp/Services/MatteryaReelsTwists.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/MatteryaReelsTwists.swift; sourceTree = "<group>"; };
-		C71C93CA30F24E36918FE1BA /* WorldApp/Services/MatteryaSearchEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/MatteryaSearchEngine.swift; sourceTree = "<group>"; };
-		D6A786C9FD464EDF8DFBB754 /* WorldApp/Views/AuthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/AuthView.swift; sourceTree = "<group>"; };
-		D842A7C716DC4794BF20834A /* WorldApp/Views/Globe/PhotorealGlobeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/PhotorealGlobeView.swift; sourceTree = "<group>"; };
-		D9B6CBEC1B5A4C1B828F3346 /* WorldApp/Services/ShareService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/ShareService.swift; sourceTree = "<group>"; };
-		E0206F4A221F4CE6B03E716E /* WorldApp/Views/People/PeopleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/People/PeopleView.swift; sourceTree = "<group>"; };
-		E33DDAAA1AEF4227B6606EE2 /* WorldApp/Theme/YouTubeComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Theme/YouTubeComponents.swift; sourceTree = "<group>"; };
-		E49F44851749446CA0E955E7 /* WorldApp/Views/Connected/LivePlaybackModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Connected/LivePlaybackModels.swift; sourceTree = "<group>"; };
-		E4B16326363B4CCA8A253F63 /* WorldApp/Views/Living/YouTubeAppView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Living/YouTubeAppView.swift; sourceTree = "<group>"; };
-		E753E33419584BE69914ED70 /* WorldApp/Views/Messages/CallOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Messages/CallOverlayView.swift; sourceTree = "<group>"; };
-		EB0F787B300E47299BF5E4BB /* WorldApp/Views/Connected/UpdateNowPlayingSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Connected/UpdateNowPlayingSheet.swift; sourceTree = "<group>"; };
-		EB2FAC56CAC04279BBB518F6 /* WorldApp/Theme/Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Theme/Theme.swift; sourceTree = "<group>"; };
-		EB7222E5359F49D792EA6E5B /* WorldApp/Services/AuthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/AuthService.swift; sourceTree = "<group>"; };
-		EF95DB00E4804BCBA8C2880C /* WorldApp/Views/Globe/StarfieldGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/StarfieldGenerator.swift; sourceTree = "<group>"; };
-		F09BFE4BEF6D49EAB778C4F4 /* WorldApp/Views/Living/LivingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Living/LivingView.swift; sourceTree = "<group>"; };
-		F0BA5D3734E947B2AABA7FD2 /* WorldApp/Views/Connected/ConnectedHubView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Connected/ConnectedHubView.swift; sourceTree = "<group>"; };
-		F3BAAEB4FEFA4DE38F9C922B /* WorldApp/Views/RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/RootView.swift; sourceTree = "<group>"; };
-		F48BF93C2D2248F987879850 /* WorldApp/Views/Components/UploadProgressView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/UploadProgressView.swift; sourceTree = "<group>"; };
-		F5F318863F254866B1544D03 /* WorldApp/Views/Globe/NotificationsPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/NotificationsPanelView.swift; sourceTree = "<group>"; };
-		F6C9B13B394843D5B4A214DC /* WorldApp/Views/Reels/ReelsVerticalFeed.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Reels/ReelsVerticalFeed.swift; sourceTree = "<group>"; };
-		F77612416044437BB9830893 /* WorldApp/Views/Components/ShareComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/ShareComponents.swift; sourceTree = "<group>"; };
-		F817575F01BC4DB8B05865CA /* WorldApp/Views/Feed/FeedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Feed/FeedView.swift; sourceTree = "<group>"; };
-		F8912C854EBA4495AEB8568A /* WorldApp/Views/Connected/ConnectedHubModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Connected/ConnectedHubModels.swift; sourceTree = "<group>"; };
-		F97BC8D812A341C387028DEE /* WorldApp/Views/Messages/ConversationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Messages/ConversationView.swift; sourceTree = "<group>"; };
-		FAC714BA82604DEB8C54FA7C /* WorldApp/Views/Globe/GlobeCountryLabels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/GlobeCountryLabels.swift; sourceTree = "<group>"; };
-		FD1B01263C7C48C6A33D9769 /* WorldApp/Services/CallSessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/CallSessionManager.swift; sourceTree = "<group>"; };
-		FEDDEA975DEF4E8EAF847EA5 /* WorldApp/Views/Globe/PhotorealGlobeScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/PhotorealGlobeScene.swift; sourceTree = "<group>"; };
+		6DD1BE328681481094B0BA21 /* WorldApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WorldApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		785CED286E634760801B23B4 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/AppDelegate.swift; sourceTree = "<group>"; };
+		CDAF042BB1D046FBAAFA0796 /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Config/AppConfig.swift; sourceTree = "<group>"; };
+		BA6BD7355D784173B3A39B5B /* ScreenshotMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Config/ScreenshotMode.swift; sourceTree = "<group>"; };
+		D71057AECEF545C09575EB5A /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Models/Models.swift; sourceTree = "<group>"; };
+		9CD5F1D39F1B4EEFB708B035 /* AdsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/AdsService.swift; sourceTree = "<group>"; };
+		25C4EEAF417F4AD5968219E5 /* AppleMusicNowPlayingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/AppleMusicNowPlayingService.swift; sourceTree = "<group>"; };
+		0B00FB821D4943349CA293CA /* AuthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/AuthService.swift; sourceTree = "<group>"; };
+		B1CD28A99E614DF9B6A8FC61 /* BlockService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/BlockService.swift; sourceTree = "<group>"; };
+		5A91A780E3C2472DBAE9574F /* CallKitManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/CallKitManager.swift; sourceTree = "<group>"; };
+		B9CF130218F14F31B8F3F2CA /* CallSessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/CallSessionManager.swift; sourceTree = "<group>"; };
+		B5BE1616F6AA41B685744402 /* CallSignalingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/CallSignalingService.swift; sourceTree = "<group>"; };
+		1846A26D07C44E5E879CE8A3 /* CallSoundService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/CallSoundService.swift; sourceTree = "<group>"; };
+		8287EDF0D3A74079AD11A4EF /* ContentCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/ContentCache.swift; sourceTree = "<group>"; };
+		D701D704B5E945E9B59B4BE7 /* DemoDatasetService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/DemoDatasetService.swift; sourceTree = "<group>"; };
+		06F5EE96BC1B4ABBBFC42DE6 /* FollowService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/FollowService.swift; sourceTree = "<group>"; };
+		E9AD31F0B3AF47B988EC3A67 /* GlobeCityCoordinateCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/GlobeCityCoordinateCache.swift; sourceTree = "<group>"; };
+		F6A85D14E37E40D29F5C895A /* GlobePresenceGeo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/GlobePresenceGeo.swift; sourceTree = "<group>"; };
+		D98AA7E95ABF43D488051697 /* GlobePresenceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/GlobePresenceService.swift; sourceTree = "<group>"; };
+		C4F353C62ECE4072A1EA4D72 /* GraphQLService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/GraphQLService.swift; sourceTree = "<group>"; };
+		0C5626E878B340128392AD94 /* GraphQLTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/GraphQLTypes.swift; sourceTree = "<group>"; };
+		128504892EB345A990CD7DD2 /* ImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/ImageCache.swift; sourceTree = "<group>"; };
+		937E92E25E044DB6BD8CFFF2 /* IncomingCallWake.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/IncomingCallWake.swift; sourceTree = "<group>"; };
+		FE7ED56D14044F8098ABE4A7 /* JSONCoding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/JSONCoding.swift; sourceTree = "<group>"; };
+		3046B68DC65D47A2A29013E1 /* LocationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/LocationService.swift; sourceTree = "<group>"; };
+		5F63D06938E148CE853EAF8C /* MatteryaReelsTwists.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/MatteryaReelsTwists.swift; sourceTree = "<group>"; };
+		737121EEC51B4D31819AF713 /* MatteryaSearchEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/MatteryaSearchEngine.swift; sourceTree = "<group>"; };
+		30998BEDA7CC493681EE3ECA /* MediaService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/MediaService.swift; sourceTree = "<group>"; };
+		B6CF1D87500E4303B10A0EAD /* MediaURLResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/MediaURLResolver.swift; sourceTree = "<group>"; };
+		AA3AB85B1FC043BFB874AE92 /* MessagesService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/MessagesService.swift; sourceTree = "<group>"; };
+		DD8BA713120E4D61A71EDF9F /* NewsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/NewsService.swift; sourceTree = "<group>"; };
+		B6CF99AFFA70445480D50463 /* NotificationNames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/NotificationNames.swift; sourceTree = "<group>"; };
+		EA93EDB0933E4E308F083816 /* NotificationsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/NotificationsService.swift; sourceTree = "<group>"; };
+		9AD613C2EDF14D25BACB5E6A /* PlayPlatformBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/PlayPlatformBridge.swift; sourceTree = "<group>"; };
+		CC724774DA1B4E5FA04129E4 /* PostEventsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/PostEventsService.swift; sourceTree = "<group>"; };
+		77B597DEAD254CD3899B9CB3 /* PostsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/PostsService.swift; sourceTree = "<group>"; };
+		E47606240158471A88A0573E /* PresenceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/PresenceService.swift; sourceTree = "<group>"; };
+		EBE45D8449074564B2C78508 /* ProfileService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/ProfileService.swift; sourceTree = "<group>"; };
+		6540785EB7B144F79CE62920 /* PushNotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/PushNotificationService.swift; sourceTree = "<group>"; };
+		0E4A7B5DBA3F47AD8986F595 /* ReelsRankingEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/ReelsRankingEngine.swift; sourceTree = "<group>"; };
+		592FBE15FDF347FB91DD9D73 /* ShareService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/ShareService.swift; sourceTree = "<group>"; };
+		D5C0828404374C2D813A4282 /* StorageUploadClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/StorageUploadClient.swift; sourceTree = "<group>"; };
+		FA457C378A664788B8339F80 /* StreamingHubService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/StreamingHubService.swift; sourceTree = "<group>"; };
+		DAFB6E1BAA6440EB836A7706 /* SubscriptionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/SubscriptionService.swift; sourceTree = "<group>"; };
+		5B517B06CB2B4EAE8A086FD4 /* SupabaseResumableUploadClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/SupabaseResumableUploadClient.swift; sourceTree = "<group>"; };
+		677DD22EE0854911AC21A106 /* VideoCompressionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/VideoCompressionService.swift; sourceTree = "<group>"; };
+		13BEC1EBF9CC42E4B2F75961 /* VoIPPushService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/VoIPPushService.swift; sourceTree = "<group>"; };
+		3FEC632059DB46C38601D9C5 /* YouTubeCatalogService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Services/YouTubeCatalogService.swift; sourceTree = "<group>"; };
+		4B2EA7FE91CC4374867CBBD4 /* ContentSanitizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Theme/ContentSanitizer.swift; sourceTree = "<group>"; };
+		153E74D72DF34A43A0CD8ADF /* FacebookMediaLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Theme/FacebookMediaLayout.swift; sourceTree = "<group>"; };
+		FFAD5AA9C01E448A81E525BE /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Theme/Theme.swift; sourceTree = "<group>"; };
+		36AA0FE84AE7442D83AAD0A7 /* YouTubeComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Theme/YouTubeComponents.swift; sourceTree = "<group>"; };
+		513BDAD1E6F8478B9B3A1AF0 /* YouTubeMediaLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Theme/YouTubeMediaLayout.swift; sourceTree = "<group>"; };
+		169D91C4C13D4047BF8290FB /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/ViewModels/AppState.swift; sourceTree = "<group>"; };
+		3AA941515F7543C383D2BC39 /* AdPrerollView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Ads/AdPrerollView.swift; sourceTree = "<group>"; };
+		6B896E9AB1444787B662E6F5 /* AdsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Ads/AdsView.swift; sourceTree = "<group>"; };
+		31052BAF766A4D9E9D4F641B /* AuthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/AuthView.swift; sourceTree = "<group>"; };
+		BDDA1E6334B84A1D952193E1 /* AppMenuView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/AppMenuView.swift; sourceTree = "<group>"; };
+		3A840FC6E74042AF945D435C /* BottomTabBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/BottomTabBar.swift; sourceTree = "<group>"; };
+		B741D93EC7DA479A8AAF9A70 /* CreateMenuSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/CreateMenuSheet.swift; sourceTree = "<group>"; };
+		290B0FAA39104BB49CF7C3C8 /* FacebookPostCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/FacebookPostCard.swift; sourceTree = "<group>"; };
+		46B184F3641845038E250586 /* FloatingPostsOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/FloatingPostsOverlay.swift; sourceTree = "<group>"; };
+		9358BC5ACE2F4B938F825782 /* HandDrawnStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/HandDrawnStyle.swift; sourceTree = "<group>"; };
+		ECDC7413B3544766BF3E6448 /* MatteryaTopBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/MatteryaTopBar.swift; sourceTree = "<group>"; };
+		776CD68F57A84CEA948D5865 /* PostCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/PostCardView.swift; sourceTree = "<group>"; };
+		0B13D9EF4204477288426418 /* PostCommentsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/PostCommentsView.swift; sourceTree = "<group>"; };
+		FEA81E6843F0440FB53945C7 /* PostComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/PostComposerView.swift; sourceTree = "<group>"; };
+		9A15263E65F247FE994B0B69 /* ReelComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/ReelComposerView.swift; sourceTree = "<group>"; };
+		43373C577ACD45769B34C519 /* ShareComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/ShareComponents.swift; sourceTree = "<group>"; };
+		614C9EFA33CB45ADB515B1AF /* StoriesStripView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/StoriesStripView.swift; sourceTree = "<group>"; };
+		F189BCAA7AB04B109BABC8AC /* StoriesViewerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/StoriesViewerView.swift; sourceTree = "<group>"; };
+		BC574A64944146AFA52D36EA /* StoryComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/StoryComposerView.swift; sourceTree = "<group>"; };
+		F53FC52AC4AE4A018894C22B /* UnreadBadge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/UnreadBadge.swift; sourceTree = "<group>"; };
+		5F9804B916F441F2A5944954 /* UploadProgressView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/UploadProgressView.swift; sourceTree = "<group>"; };
+		72CED8582F664B308EBAC6EF /* VideoPlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/VideoPlayerView.swift; sourceTree = "<group>"; };
+		8B3DB9C915FA4EFEA9EEF44D /* VideoThumbnailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/VideoThumbnailView.swift; sourceTree = "<group>"; };
+		660EC9123E9449B093EDCC65 /* ConnectedHubModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Connected/ConnectedHubModels.swift; sourceTree = "<group>"; };
+		8C8609622DE7423B8A26C1D8 /* ConnectedHubView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Connected/ConnectedHubView.swift; sourceTree = "<group>"; };
+		450B6AC84EB946BC9B0E581F /* LivePlaybackCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Connected/LivePlaybackCard.swift; sourceTree = "<group>"; };
+		9077593839D84E79A5238DB5 /* LivePlaybackModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Connected/LivePlaybackModels.swift; sourceTree = "<group>"; };
+		C885B80F427E4EEBB37025C8 /* MomentRoomSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Connected/MomentRoomSheet.swift; sourceTree = "<group>"; };
+		8E6CECD9539C40E8905AFE2A /* UpdateNowPlayingSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Connected/UpdateNowPlayingSheet.swift; sourceTree = "<group>"; };
+		21744EE0E1464D4CB3AD9B4E /* FeedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Feed/FeedView.swift; sourceTree = "<group>"; };
+		95345B1820D144F4839CFDE5 /* AppleMapGlobeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/AppleMapGlobeView.swift; sourceTree = "<group>"; };
+		0188822275D14DB1AF2681C2 /* CartoonGlobeTexture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/CartoonGlobeTexture.swift; sourceTree = "<group>"; };
+		9997A3B1B3C843DE8812F8B3 /* CountryFeedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/CountryFeedView.swift; sourceTree = "<group>"; };
+		D36D6D91690D4D09869A1FFD /* CountryMapData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/CountryMapData.swift; sourceTree = "<group>"; };
+		B51BE2F9D43649E290377DA2 /* CustomGlobeBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/CustomGlobeBuilder.swift; sourceTree = "<group>"; };
+		2789D520FA1742C2A856F367 /* GlobeCountryLabels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/GlobeCountryLabels.swift; sourceTree = "<group>"; };
+		5CF2D8B8A86A450C8AABC4CB /* GlobeMeshBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/GlobeMeshBuilder.swift; sourceTree = "<group>"; };
+		2D6BF21D7B8942E7B0CE758E /* GlobeOnlineDotsOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/GlobeOnlineDotsOverlay.swift; sourceTree = "<group>"; };
+		5627BCECE390400C8509C4A6 /* GlobeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/GlobeView.swift; sourceTree = "<group>"; };
+		DF7AB4EAE0E041BFBACE3298 /* HandDrawnGlobeScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/HandDrawnGlobeScene.swift; sourceTree = "<group>"; };
+		D6AFAE80A0EF4C07A2A0AF6D /* HandDrawnGlobeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/HandDrawnGlobeView.swift; sourceTree = "<group>"; };
+		E227A9AFE88B4CD3B14A1662 /* NotificationsPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/NotificationsPanelView.swift; sourceTree = "<group>"; };
+		549DDB2641214978BE2FED67 /* PhotorealGlobeBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/PhotorealGlobeBuilder.swift; sourceTree = "<group>"; };
+		50B88035831F43F9A77A190E /* PhotorealGlobeScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/PhotorealGlobeScene.swift; sourceTree = "<group>"; };
+		2B23A6476F2540359A30D885 /* PhotorealGlobeTextures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/PhotorealGlobeTextures.swift; sourceTree = "<group>"; };
+		25A56B388A914666AA999311 /* PhotorealGlobeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/PhotorealGlobeView.swift; sourceTree = "<group>"; };
+		87FA19A358AF4402AD6EDD27 /* PresencePanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/PresencePanelView.swift; sourceTree = "<group>"; };
+		24631CEEF93A4DB4996C65FD /* StarfieldGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Globe/StarfieldGenerator.swift; sourceTree = "<group>"; };
+		6E2FA37FBD7F41DF91B9BC94 /* HubsComingSoonView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Hubs/HubsComingSoonView.swift; sourceTree = "<group>"; };
+		0014F3D75FCF4BA7B129418A /* LivingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Living/LivingView.swift; sourceTree = "<group>"; };
+		3BA6CDE23F6B47D1A26FA045 /* YouTubeAppView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Living/YouTubeAppView.swift; sourceTree = "<group>"; };
+		DCC80875E24947F98A48B463 /* YouTubeChannelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Living/YouTubeChannelView.swift; sourceTree = "<group>"; };
+		F7D207AD88D84A289C7828D6 /* YouTubeWatchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Living/YouTubeWatchView.swift; sourceTree = "<group>"; };
+		A8A713E9748348BB9EB6FE41 /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/MainTabView.swift; sourceTree = "<group>"; };
+		B086F38932FE49C4987DB80C /* CallOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Messages/CallOverlayView.swift; sourceTree = "<group>"; };
+		9E86D0606EBC41B28DCE63D6 /* ConversationRouteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Messages/ConversationRouteView.swift; sourceTree = "<group>"; };
+		9712D85331FB43CA9935DE2E /* ConversationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Messages/ConversationView.swift; sourceTree = "<group>"; };
+		845599AAC32B4ABE83086EB3 /* MessagesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Messages/MessagesView.swift; sourceTree = "<group>"; };
+		0636AA63B0DE4A15801FA7EE /* NewsDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/News/NewsDetailView.swift; sourceTree = "<group>"; };
+		C7C0A01FFA194105B24A8A61 /* PeopleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/People/PeopleView.swift; sourceTree = "<group>"; };
+		F0BFBA6CADC444FC9A0D0B8E /* PostDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Post/PostDetailView.swift; sourceTree = "<group>"; };
+		B2707BF0594747CB9E09FE10 /* EditProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Profile/EditProfileView.swift; sourceTree = "<group>"; };
+		3F4E38CFED4D4E3FB5E00158 /* ProfilePostCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Profile/ProfilePostCard.swift; sourceTree = "<group>"; };
+		3404CD34BA6541F6800F58DD /* ProfileSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Profile/ProfileSetupView.swift; sourceTree = "<group>"; };
+		53250DE187DD4141AA82085E /* ProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Profile/ProfileView.swift; sourceTree = "<group>"; };
+		3133CD473DF74AD39F15EB4F /* PublicProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Profile/PublicProfileView.swift; sourceTree = "<group>"; };
+		95BF3BEF6281489FA23E4744 /* ReelsVerticalFeed.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Reels/ReelsVerticalFeed.swift; sourceTree = "<group>"; };
+		52D229BABF0649179E0B24FF /* ReelsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Reels/ReelsView.swift; sourceTree = "<group>"; };
+		B5BCF9486DA24C72B884BE0B /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/RootView.swift; sourceTree = "<group>"; };
+		6DF46F0A4EEB4525AC627117 /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Search/SearchView.swift; sourceTree = "<group>"; };
+		794B4360FD4B40688991DBD8 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Settings/SettingsView.swift; sourceTree = "<group>"; };
+		4DAC10643F314885AD68CD9E /* WorldAppApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/WorldAppApp.swift; sourceTree = "<group>"; };
+		F32222D13D304A93999A5203 /* earth_clouds.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = WorldApp/Resources/GlobeTextures/earth_clouds.jpg; sourceTree = "<group>"; };
+		D47B2FB3201F4153A4CA897C /* earth_clouds.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = WorldApp/Resources/GlobeTextures/earth_clouds.png; sourceTree = "<group>"; };
+		C1F0BFECF8C94FA3855D2436 /* earth_daymap.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = WorldApp/Resources/GlobeTextures/earth_daymap.jpg; sourceTree = "<group>"; };
+		85C6188850F6479C8AFA6AF3 /* earth_daymap.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = WorldApp/Resources/GlobeTextures/earth_daymap.png; sourceTree = "<group>"; };
+		9C03FFED9FCA4C8E89ABB580 /* stars.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = WorldApp/Resources/GlobeTextures/stars.jpg; sourceTree = "<group>"; };
+		9A794BAFA2A54C908D14F39B /* stars.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = WorldApp/Resources/GlobeTextures/stars.png; sourceTree = "<group>"; };
+		C06207CBAB034B4BB352AA30 /* MatteryaCall.caf */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = WorldApp/Resources/MatteryaCall.caf; sourceTree = "<group>"; };
+		9BDA7E6124CB447EA0E90A3E /* countries_map.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = WorldApp/Resources/countries_map.json; sourceTree = "<group>"; };
+		6CDC10A1F15D48BDB3D74815 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = WorldApp/Assets.xcassets; sourceTree = "<group>"; };
+		3A64FB9198B743C68CE6F03D /* Debug.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = WorldApp/Debug.entitlements; sourceTree = "<group>"; };
+		A2DAB8CCE852474880D5D110 /* Release.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = WorldApp/Release.entitlements; sourceTree = "<group>"; };
+		0F11450CC4314D75988042EE /* MusicKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MusicKit.framework; path = System/Library/Frameworks/MusicKit.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		7C9B66E710EB411EA1256E66 /* Frameworks */ = {
+		053F32816CE041C5BA6878E4 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				B83C074F3006F3EC0029F092 /* LiveKit in Frameworks */,
-				D810B8DB26D54B28BFBD1CBA /* MusicKit.framework in Frameworks */,
+				C0FA646E5386467190F77929 /* MusicKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		6080F4AA692242448A489AEB /* WorldApp */ = {
-			isa = PBXGroup;
-			children = (
-				B83C07513006FD180029F092 /* Info.plist */,
-				C1577EEA3B9847CDB5801208 /* WorldApp/AppDelegate.swift */,
-				2CD6B7EAB2CF43299DC00C65 /* WorldApp/Config/AppConfig.swift */,
-				3C8C68B76D3F46D1B1D7C5F7 /* WorldApp/Config/ScreenshotMode.swift */,
-				7D96137DBB21402DB246F542 /* WorldApp/Models/Models.swift */,
-				A88D1A8B59A54F9C99AB0E7D /* WorldApp/Services/AdsService.swift */,
-				88C6B85C0AA140F484EA246B /* WorldApp/Services/AppleMusicNowPlayingService.swift */,
-				EB7222E5359F49D792EA6E5B /* WorldApp/Services/AuthService.swift */,
-				B469A008C84D4A609FA02ED4 /* WorldApp/Services/BlockService.swift */,
-				100E928327F74F98A17A958F /* WorldApp/Services/CallKitManager.swift */,
-				FD1B01263C7C48C6A33D9769 /* WorldApp/Services/CallSessionManager.swift */,
-				766900FCF6E541B591EF48B1 /* WorldApp/Services/CallSignalingService.swift */,
-				95B48C12B6964034A9675F67 /* WorldApp/Services/CallSoundService.swift */,
-				BBF922B8D1734A31A652B7D0 /* WorldApp/Services/ContentCache.swift */,
-				8F5CF071F07C40729E23CF19 /* WorldApp/Services/DemoDatasetService.swift */,
-				BB4770A597DE424D807981DA /* WorldApp/Services/FollowService.swift */,
-				4F4EDC4C86154889A9EA0FEE /* WorldApp/Services/GlobeCityCoordinateCache.swift */,
-				2DB5DCED7B8D4A3982D95A04 /* WorldApp/Services/GlobePresenceGeo.swift */,
-				AA34975762034A10BAA1D3D8 /* WorldApp/Services/GlobePresenceService.swift */,
-				45210031F55744BD904A291E /* WorldApp/Services/GraphQLService.swift */,
-				696930085CD84E8FB608A319 /* WorldApp/Services/GraphQLTypes.swift */,
-				423C2800954F4D999FD8D538 /* WorldApp/Services/ImageCache.swift */,
-				861735B9550140679624A0AA /* WorldApp/Services/IncomingCallWake.swift */,
-				65C693EC064349099C3FDD39 /* WorldApp/Services/JSONCoding.swift */,
-				B9CA675E4BF145D4A0D128EA /* WorldApp/Services/LocationService.swift */,
-				C684FF42C30249D9A0E2BD2F /* WorldApp/Services/MatteryaReelsTwists.swift */,
-				C71C93CA30F24E36918FE1BA /* WorldApp/Services/MatteryaSearchEngine.swift */,
-				A7538CA4E8774E1087E40D78 /* WorldApp/Services/MediaService.swift */,
-				A57C95918FF3498BB5E3F055 /* WorldApp/Services/MediaURLResolver.swift */,
-				756D6AA808BD4885B0250572 /* WorldApp/Services/MessagesService.swift */,
-				7CB11C419F0A4F9EA52B716E /* WorldApp/Services/NewsService.swift */,
-				A37A6029B5044AE795FCD6A6 /* WorldApp/Services/NotificationNames.swift */,
-				59C0857063F24EF9AF0522B1 /* WorldApp/Services/NotificationsService.swift */,
-				925B8632B95447FA9E9FA13C /* WorldApp/Services/PlayPlatformBridge.swift */,
-				B2F2059D72F646939BAA9E0A /* WorldApp/Services/PostsService.swift */,
-				22EAB13F97CD412B8CA6A9BF /* WorldApp/Services/PresenceService.swift */,
-				4F8FC9AB10A941DC9118DF2A /* WorldApp/Services/ProfileService.swift */,
-				1947F58E6131424181410154 /* WorldApp/Services/PushNotificationService.swift */,
-				489CA2467DCC473A99C3C51B /* WorldApp/Services/ReelsRankingEngine.swift */,
-				D9B6CBEC1B5A4C1B828F3346 /* WorldApp/Services/ShareService.swift */,
-				59E1DD076E5944628E686F0D /* WorldApp/Services/StorageUploadClient.swift */,
-				62DC90BD23E9499395822E5D /* WorldApp/Services/StreamingHubService.swift */,
-				77131195D45F418798562010 /* WorldApp/Services/SubscriptionService.swift */,
-				50BCE254002340878372FCD2 /* WorldApp/Services/SupabaseResumableUploadClient.swift */,
-				BCF732A6A36B48559AF81AC8 /* WorldApp/Services/VideoCompressionService.swift */,
-				B04E626289714D05B539F595 /* WorldApp/Services/VoIPPushService.swift */,
-				08CCF872675F45DCA7AAA666 /* WorldApp/Services/YouTubeCatalogService.swift */,
-				3973A413610E4DEEB527289F /* WorldApp/Theme/ContentSanitizer.swift */,
-				9388CC06052A43F1B8918AAF /* WorldApp/Theme/FacebookMediaLayout.swift */,
-				EB2FAC56CAC04279BBB518F6 /* WorldApp/Theme/Theme.swift */,
-				E33DDAAA1AEF4227B6606EE2 /* WorldApp/Theme/YouTubeComponents.swift */,
-				50F57A04B9104B9C9B52D1EC /* WorldApp/Theme/YouTubeMediaLayout.swift */,
-				7154CEA798244DF688929B5D /* WorldApp/ViewModels/AppState.swift */,
-				2243AE4ECE0A441C8986F65C /* WorldApp/Views/Ads/AdPrerollView.swift */,
-				792827FE35864550B833E809 /* WorldApp/Views/Ads/AdsView.swift */,
-				D6A786C9FD464EDF8DFBB754 /* WorldApp/Views/AuthView.swift */,
-				53133371019B4C9193F2F6C7 /* WorldApp/Views/Components/AppMenuView.swift */,
-				9B5F8986E76F463C9D2A5EC9 /* WorldApp/Views/Components/BottomTabBar.swift */,
-				AA007C02F2524D9B8BBD76B0 /* WorldApp/Views/Components/CreateMenuSheet.swift */,
-				3C9F4061EA414AEC9104F6AA /* WorldApp/Views/Components/FacebookPostCard.swift */,
-				B3D5B6DC3F4C4756B8F0DCA6 /* WorldApp/Views/Components/FloatingPostsOverlay.swift */,
-				3E4615CE823B4438884F4A51 /* WorldApp/Views/Components/HandDrawnStyle.swift */,
-				5DAC20C8C7F4408CA05E51A9 /* WorldApp/Views/Components/MatteryaTopBar.swift */,
-				719DC4EB12374A79B0FE588E /* WorldApp/Views/Components/PostCardView.swift */,
-				77249035E6CB4578A2E763EB /* WorldApp/Views/Components/PostCommentsView.swift */,
-				BD073B8506564B08BAD65A09 /* WorldApp/Views/Components/PostComposerView.swift */,
-				90C585E821074FD4A2233366 /* WorldApp/Views/Components/ReelComposerView.swift */,
-				F77612416044437BB9830893 /* WorldApp/Views/Components/ShareComponents.swift */,
-				0488DAC867814A01A1B372A7 /* WorldApp/Views/Components/StoriesStripView.swift */,
-				5C518634E4284516ADD9668B /* WorldApp/Views/Components/StoriesViewerView.swift */,
-				8E329E1D5A8E464C8AC57BF0 /* WorldApp/Views/Components/StoryComposerView.swift */,
-				4F477B1F513242CFB36A3553 /* WorldApp/Views/Components/UnreadBadge.swift */,
-				F48BF93C2D2248F987879850 /* WorldApp/Views/Components/UploadProgressView.swift */,
-				7233FDDA2FC848FAAD367A95 /* WorldApp/Views/Components/VideoPlayerView.swift */,
-				9AD00958267A4F179C231286 /* WorldApp/Views/Components/VideoThumbnailView.swift */,
-				F8912C854EBA4495AEB8568A /* WorldApp/Views/Connected/ConnectedHubModels.swift */,
-				F0BA5D3734E947B2AABA7FD2 /* WorldApp/Views/Connected/ConnectedHubView.swift */,
-				9D57F29D499E4D209AADF21A /* WorldApp/Views/Connected/LivePlaybackCard.swift */,
-				E49F44851749446CA0E955E7 /* WorldApp/Views/Connected/LivePlaybackModels.swift */,
-				73B557567761458AB72E4B3D /* WorldApp/Views/Connected/MomentRoomSheet.swift */,
-				EB0F787B300E47299BF5E4BB /* WorldApp/Views/Connected/UpdateNowPlayingSheet.swift */,
-				F817575F01BC4DB8B05865CA /* WorldApp/Views/Feed/FeedView.swift */,
-				0B0019DBE53449A9B6E71FD4 /* WorldApp/Views/Globe/AppleMapGlobeView.swift */,
-				50EE0B0F22D84C0D91BC23E8 /* WorldApp/Views/Globe/CartoonGlobeTexture.swift */,
-				6C84E12E7789441EAF77B9B9 /* WorldApp/Views/Globe/CountryFeedView.swift */,
-				49BD91C0D4654C94A5E18E16 /* WorldApp/Views/Globe/CountryMapData.swift */,
-				BFFEF9F76EFC40B08F6A3770 /* WorldApp/Views/Globe/CustomGlobeBuilder.swift */,
-				FAC714BA82604DEB8C54FA7C /* WorldApp/Views/Globe/GlobeCountryLabels.swift */,
-				18FA19A5057E4322B9BBE53C /* WorldApp/Views/Globe/GlobeMeshBuilder.swift */,
-				0B48213BD26C4A8B8AD8B712 /* WorldApp/Views/Globe/GlobeOnlineDotsOverlay.swift */,
-				58F49FA8875E4139A12464B8 /* WorldApp/Views/Globe/GlobeView.swift */,
-				A95FB0D06E264CD58DBB0A2F /* WorldApp/Views/Globe/HandDrawnGlobeScene.swift */,
-				384FA8B263A2472496D6915B /* WorldApp/Views/Globe/HandDrawnGlobeView.swift */,
-				F5F318863F254866B1544D03 /* WorldApp/Views/Globe/NotificationsPanelView.swift */,
-				3DFB283F7C9944A19E48118F /* WorldApp/Views/Globe/PhotorealGlobeBuilder.swift */,
-				FEDDEA975DEF4E8EAF847EA5 /* WorldApp/Views/Globe/PhotorealGlobeScene.swift */,
-				B164A7D2AA36405097D76BCF /* WorldApp/Views/Globe/PhotorealGlobeTextures.swift */,
-				D842A7C716DC4794BF20834A /* WorldApp/Views/Globe/PhotorealGlobeView.swift */,
-				02F8092DC907459791E01FA6 /* WorldApp/Views/Globe/PresencePanelView.swift */,
-				EF95DB00E4804BCBA8C2880C /* WorldApp/Views/Globe/StarfieldGenerator.swift */,
-				6DFB32F77352494FBF3438AA /* WorldApp/Views/Hubs/HubsComingSoonView.swift */,
-				F09BFE4BEF6D49EAB778C4F4 /* WorldApp/Views/Living/LivingView.swift */,
-				E4B16326363B4CCA8A253F63 /* WorldApp/Views/Living/YouTubeAppView.swift */,
-				82926FDD659340A2B0F0043F /* WorldApp/Views/Living/YouTubeChannelView.swift */,
-				3FDF3F2B77F34E8BAE9323E7 /* WorldApp/Views/Living/YouTubeWatchView.swift */,
-				8DD03E50C2FB4D33937064CC /* WorldApp/Views/MainTabView.swift */,
-				E753E33419584BE69914ED70 /* WorldApp/Views/Messages/CallOverlayView.swift */,
-				9933A4977BD6434FB1B62BDF /* WorldApp/Views/Messages/ConversationRouteView.swift */,
-				F97BC8D812A341C387028DEE /* WorldApp/Views/Messages/ConversationView.swift */,
-				8A98D8111F674741ACEB4D7B /* WorldApp/Views/Messages/MessagesView.swift */,
-				5E48C36A028740349DCDDB2E /* WorldApp/Views/News/NewsDetailView.swift */,
-				E0206F4A221F4CE6B03E716E /* WorldApp/Views/People/PeopleView.swift */,
-				0B73E01861A24BAE8F1EF5EB /* WorldApp/Views/Post/PostDetailView.swift */,
-				B6A20397342E4E07B9A0625C /* WorldApp/Views/Profile/EditProfileView.swift */,
-				0594A41785B5466F8FFCF026 /* WorldApp/Views/Profile/ProfilePostCard.swift */,
-				4DA59965489E402FB6508496 /* WorldApp/Views/Profile/ProfileSetupView.swift */,
-				BA498F4D6A774E6696C52BFF /* WorldApp/Views/Profile/ProfileView.swift */,
-				2060B080BD4E4783B61222C1 /* WorldApp/Views/Profile/PublicProfileView.swift */,
-				F6C9B13B394843D5B4A214DC /* WorldApp/Views/Reels/ReelsVerticalFeed.swift */,
-				4C937B25B07D47428E9B5513 /* WorldApp/Views/Reels/ReelsView.swift */,
-				F3BAAEB4FEFA4DE38F9C922B /* WorldApp/Views/RootView.swift */,
-				A34664D5354B45F9A6C3F6FC /* WorldApp/Views/Search/SearchView.swift */,
-				6F1774092A89433FB1B065E7 /* WorldApp/Views/Settings/SettingsView.swift */,
-				2F74627DF12C48BD93B3D6F7 /* WorldApp/WorldAppApp.swift */,
-				5BB3A30FD5304AE19668E48D /* WorldApp/Resources/GlobeTextures/earth_clouds.jpg */,
-				16C9A6A5C2DC4FBFAEAE02CC /* WorldApp/Resources/GlobeTextures/earth_clouds.png */,
-				B229E91DA64F475AB5E364D6 /* WorldApp/Resources/GlobeTextures/earth_daymap.jpg */,
-				50C0E49410114173B8AECFA1 /* WorldApp/Resources/GlobeTextures/earth_daymap.png */,
-				64FBEADC3B2045E99011CA11 /* WorldApp/Resources/GlobeTextures/stars.jpg */,
-				599D25AB2191486DA6B9FFDA /* WorldApp/Resources/GlobeTextures/stars.png */,
-				22E469ADC5CF43F6A729A7E5 /* WorldApp/Resources/MatteryaCall.caf */,
-				F9A52B3C4D5E6F708192A3B4 /* WorldApp/Resources/MatteryaCallRing.mp3 */,
-				B06C9D7EC185498CB6985F21 /* WorldApp/Resources/countries_map.json */,
-				6BE8ECD7BE204A809CFFE7A2 /* WorldApp/Assets.xcassets */,
-				62FD26A10F094E5AB5D0C5F8 /* WorldApp/Debug.entitlements */,
-				2F563D58F31449B9B9F6565D /* WorldApp/Release.entitlements */,
-			);
-			name = WorldApp;
-			sourceTree = "<group>";
-		};
-		8F0F3E9C774A4F22B31BF969 /* Products */ = {
-			isa = PBXGroup;
-			children = (
-				2E6E01C599E84314AA85547C /* WorldApp.app */,
-			);
-			name = Products;
-			sourceTree = "<group>";
-		};
-		B3BABE258DF749D580D0CB8C = {
-			isa = PBXGroup;
-			children = (
-				6080F4AA692242448A489AEB /* WorldApp */,
-				8F0F3E9C774A4F22B31BF969 /* Products */,
-				B83C07503006F3EC0029F092 /* Recovered References */,
-			);
-			sourceTree = "<group>";
-		};
-		B83C07503006F3EC0029F092 /* Recovered References */ = {
-			isa = PBXGroup;
-			children = (
-				BC87D2483BD54EC1BA14DA01 /* MusicKit.framework */,
-			);
-			name = "Recovered References";
-			sourceTree = "<group>";
-		};
+		905CB6569F6846C1BEF4BD66 /* WorldApp */ = {isa = PBXGroup; children = (785CED286E634760801B23B4 /* AppDelegate.swift */, CDAF042BB1D046FBAAFA0796 /* AppConfig.swift */, BA6BD7355D784173B3A39B5B /* ScreenshotMode.swift */, D71057AECEF545C09575EB5A /* Models.swift */, 9CD5F1D39F1B4EEFB708B035 /* AdsService.swift */, 25C4EEAF417F4AD5968219E5 /* AppleMusicNowPlayingService.swift */, 0B00FB821D4943349CA293CA /* AuthService.swift */, B1CD28A99E614DF9B6A8FC61 /* BlockService.swift */, 5A91A780E3C2472DBAE9574F /* CallKitManager.swift */, B9CF130218F14F31B8F3F2CA /* CallSessionManager.swift */, B5BE1616F6AA41B685744402 /* CallSignalingService.swift */, 1846A26D07C44E5E879CE8A3 /* CallSoundService.swift */, 8287EDF0D3A74079AD11A4EF /* ContentCache.swift */, D701D704B5E945E9B59B4BE7 /* DemoDatasetService.swift */, 06F5EE96BC1B4ABBBFC42DE6 /* FollowService.swift */, E9AD31F0B3AF47B988EC3A67 /* GlobeCityCoordinateCache.swift */, F6A85D14E37E40D29F5C895A /* GlobePresenceGeo.swift */, D98AA7E95ABF43D488051697 /* GlobePresenceService.swift */, C4F353C62ECE4072A1EA4D72 /* GraphQLService.swift */, 0C5626E878B340128392AD94 /* GraphQLTypes.swift */, 128504892EB345A990CD7DD2 /* ImageCache.swift */, 937E92E25E044DB6BD8CFFF2 /* IncomingCallWake.swift */, FE7ED56D14044F8098ABE4A7 /* JSONCoding.swift */, 3046B68DC65D47A2A29013E1 /* LocationService.swift */, 5F63D06938E148CE853EAF8C /* MatteryaReelsTwists.swift */, 737121EEC51B4D31819AF713 /* MatteryaSearchEngine.swift */, 30998BEDA7CC493681EE3ECA /* MediaService.swift */, B6CF1D87500E4303B10A0EAD /* MediaURLResolver.swift */, AA3AB85B1FC043BFB874AE92 /* MessagesService.swift */, DD8BA713120E4D61A71EDF9F /* NewsService.swift */, B6CF99AFFA70445480D50463 /* NotificationNames.swift */, EA93EDB0933E4E308F083816 /* NotificationsService.swift */, 9AD613C2EDF14D25BACB5E6A /* PlayPlatformBridge.swift */, CC724774DA1B4E5FA04129E4 /* PostEventsService.swift */, 77B597DEAD254CD3899B9CB3 /* PostsService.swift */, E47606240158471A88A0573E /* PresenceService.swift */, EBE45D8449074564B2C78508 /* ProfileService.swift */, 6540785EB7B144F79CE62920 /* PushNotificationService.swift */, 0E4A7B5DBA3F47AD8986F595 /* ReelsRankingEngine.swift */, 592FBE15FDF347FB91DD9D73 /* ShareService.swift */, D5C0828404374C2D813A4282 /* StorageUploadClient.swift */, FA457C378A664788B8339F80 /* StreamingHubService.swift */, DAFB6E1BAA6440EB836A7706 /* SubscriptionService.swift */, 5B517B06CB2B4EAE8A086FD4 /* SupabaseResumableUploadClient.swift */, 677DD22EE0854911AC21A106 /* VideoCompressionService.swift */, 13BEC1EBF9CC42E4B2F75961 /* VoIPPushService.swift */, 3FEC632059DB46C38601D9C5 /* YouTubeCatalogService.swift */, 4B2EA7FE91CC4374867CBBD4 /* ContentSanitizer.swift */, 153E74D72DF34A43A0CD8ADF /* FacebookMediaLayout.swift */, FFAD5AA9C01E448A81E525BE /* Theme.swift */, 36AA0FE84AE7442D83AAD0A7 /* YouTubeComponents.swift */, 513BDAD1E6F8478B9B3A1AF0 /* YouTubeMediaLayout.swift */, 169D91C4C13D4047BF8290FB /* AppState.swift */, 3AA941515F7543C383D2BC39 /* AdPrerollView.swift */, 6B896E9AB1444787B662E6F5 /* AdsView.swift */, 31052BAF766A4D9E9D4F641B /* AuthView.swift */, BDDA1E6334B84A1D952193E1 /* AppMenuView.swift */, 3A840FC6E74042AF945D435C /* BottomTabBar.swift */, B741D93EC7DA479A8AAF9A70 /* CreateMenuSheet.swift */, 290B0FAA39104BB49CF7C3C8 /* FacebookPostCard.swift */, 46B184F3641845038E250586 /* FloatingPostsOverlay.swift */, 9358BC5ACE2F4B938F825782 /* HandDrawnStyle.swift */, ECDC7413B3544766BF3E6448 /* MatteryaTopBar.swift */, 776CD68F57A84CEA948D5865 /* PostCardView.swift */, 0B13D9EF4204477288426418 /* PostCommentsView.swift */, FEA81E6843F0440FB53945C7 /* PostComposerView.swift */, 9A15263E65F247FE994B0B69 /* ReelComposerView.swift */, 43373C577ACD45769B34C519 /* ShareComponents.swift */, 614C9EFA33CB45ADB515B1AF /* StoriesStripView.swift */, F189BCAA7AB04B109BABC8AC /* StoriesViewerView.swift */, BC574A64944146AFA52D36EA /* StoryComposerView.swift */, F53FC52AC4AE4A018894C22B /* UnreadBadge.swift */, 5F9804B916F441F2A5944954 /* UploadProgressView.swift */, 72CED8582F664B308EBAC6EF /* VideoPlayerView.swift */, 8B3DB9C915FA4EFEA9EEF44D /* VideoThumbnailView.swift */, 660EC9123E9449B093EDCC65 /* ConnectedHubModels.swift */, 8C8609622DE7423B8A26C1D8 /* ConnectedHubView.swift */, 450B6AC84EB946BC9B0E581F /* LivePlaybackCard.swift */, 9077593839D84E79A5238DB5 /* LivePlaybackModels.swift */, C885B80F427E4EEBB37025C8 /* MomentRoomSheet.swift */, 8E6CECD9539C40E8905AFE2A /* UpdateNowPlayingSheet.swift */, 21744EE0E1464D4CB3AD9B4E /* FeedView.swift */, 95345B1820D144F4839CFDE5 /* AppleMapGlobeView.swift */, 0188822275D14DB1AF2681C2 /* CartoonGlobeTexture.swift */, 9997A3B1B3C843DE8812F8B3 /* CountryFeedView.swift */, D36D6D91690D4D09869A1FFD /* CountryMapData.swift */, B51BE2F9D43649E290377DA2 /* CustomGlobeBuilder.swift */, 2789D520FA1742C2A856F367 /* GlobeCountryLabels.swift */, 5CF2D8B8A86A450C8AABC4CB /* GlobeMeshBuilder.swift */, 2D6BF21D7B8942E7B0CE758E /* GlobeOnlineDotsOverlay.swift */, 5627BCECE390400C8509C4A6 /* GlobeView.swift */, DF7AB4EAE0E041BFBACE3298 /* HandDrawnGlobeScene.swift */, D6AFAE80A0EF4C07A2A0AF6D /* HandDrawnGlobeView.swift */, E227A9AFE88B4CD3B14A1662 /* NotificationsPanelView.swift */, 549DDB2641214978BE2FED67 /* PhotorealGlobeBuilder.swift */, 50B88035831F43F9A77A190E /* PhotorealGlobeScene.swift */, 2B23A6476F2540359A30D885 /* PhotorealGlobeTextures.swift */, 25A56B388A914666AA999311 /* PhotorealGlobeView.swift */, 87FA19A358AF4402AD6EDD27 /* PresencePanelView.swift */, 24631CEEF93A4DB4996C65FD /* StarfieldGenerator.swift */, 6E2FA37FBD7F41DF91B9BC94 /* HubsComingSoonView.swift */, 0014F3D75FCF4BA7B129418A /* LivingView.swift */, 3BA6CDE23F6B47D1A26FA045 /* YouTubeAppView.swift */, DCC80875E24947F98A48B463 /* YouTubeChannelView.swift */, F7D207AD88D84A289C7828D6 /* YouTubeWatchView.swift */, A8A713E9748348BB9EB6FE41 /* MainTabView.swift */, B086F38932FE49C4987DB80C /* CallOverlayView.swift */, 9E86D0606EBC41B28DCE63D6 /* ConversationRouteView.swift */, 9712D85331FB43CA9935DE2E /* ConversationView.swift */, 845599AAC32B4ABE83086EB3 /* MessagesView.swift */, 0636AA63B0DE4A15801FA7EE /* NewsDetailView.swift */, C7C0A01FFA194105B24A8A61 /* PeopleView.swift */, F0BFBA6CADC444FC9A0D0B8E /* PostDetailView.swift */, B2707BF0594747CB9E09FE10 /* EditProfileView.swift */, 3F4E38CFED4D4E3FB5E00158 /* ProfilePostCard.swift */, 3404CD34BA6541F6800F58DD /* ProfileSetupView.swift */, 53250DE187DD4141AA82085E /* ProfileView.swift */, 3133CD473DF74AD39F15EB4F /* PublicProfileView.swift */, 95BF3BEF6281489FA23E4744 /* ReelsVerticalFeed.swift */, 52D229BABF0649179E0B24FF /* ReelsView.swift */, B5BCF9486DA24C72B884BE0B /* RootView.swift */, 6DF46F0A4EEB4525AC627117 /* SearchView.swift */, 794B4360FD4B40688991DBD8 /* SettingsView.swift */, 4DAC10643F314885AD68CD9E /* WorldAppApp.swift */, F32222D13D304A93999A5203 /* earth_clouds.jpg */, D47B2FB3201F4153A4CA897C /* earth_clouds.png */, C1F0BFECF8C94FA3855D2436 /* earth_daymap.jpg */, 85C6188850F6479C8AFA6AF3 /* earth_daymap.png */, 9C03FFED9FCA4C8E89ABB580 /* stars.jpg */, 9A794BAFA2A54C908D14F39B /* stars.png */, C06207CBAB034B4BB352AA30 /* MatteryaCall.caf */, 9BDA7E6124CB447EA0E90A3E /* countries_map.json */, 6CDC10A1F15D48BDB3D74815 /* Assets.xcassets */, 3A64FB9198B743C68CE6F03D /* Debug.entitlements */, A2DAB8CCE852474880D5D110 /* Release.entitlements */); name = WorldApp; sourceTree = "<group>"; };
+		53DFB4F01E254CDABE29710D /* Products */ = {isa = PBXGroup; children = (6DD1BE328681481094B0BA21 /* WorldApp.app */,); name = Products; sourceTree = "<group>"; };
+		F28317C952AF41FA977CB27C /* */ = {isa = PBXGroup; children = (905CB6569F6846C1BEF4BD66 /* WorldApp */, 53DFB4F01E254CDABE29710D /* Products */); sourceTree = "<group>"; };
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		47E64BC0C4104EC680EAA90E /* WorldApp */ = {
+		9C4688688D024B65898F90A9 /* WorldApp */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 947D081C781B43398B2EE510 /* Build configuration list for PBXNativeTarget "WorldApp" */;
+			buildConfigurationList = CA6A1220A077455C808C0409 /* Build configuration list for PBXNativeTarget "WorldApp" */;
 			buildPhases = (
-				65113220FF46425EA65B2C02 /* Sources */,
-				7C9B66E710EB411EA1256E66 /* Frameworks */,
-				39596260881E40FAA2480B13 /* Resources */,
+				570D40D33F66400983C39703 /* Sources */,
+				053F32816CE041C5BA6878E4 /* Frameworks */,
+				2E06535B301A429DB8651C2B /* Resources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
-			name = WorldApp;
 			packageProductDependencies = (
-				27CA460A6AEB41989EBB991D /* LiveKit */,
+				2D6F01F970144C5583D13813 /* LiveKit */,
 			);
+			name = WorldApp;
 			productName = WorldApp;
-			productReference = 2E6E01C599E84314AA85547C /* WorldApp.app */;
+			productReference = 6DD1BE328681481094B0BA21 /* WorldApp.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
-		EB83209941A5493D8A390BDD /* Project object */ = {
+		4B16A733F0CB4B7291731A2F /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 1630;
 				LastUpgradeCheck = 1630;
 				TargetAttributes = {
-					47E64BC0C4104EC680EAA90E = {
+					9C4688688D024B65898F90A9 = {
 						CreatedOnToolsVersion = 16.0;
 						SystemCapabilities = {
 							com.apple.BackgroundModes = {
@@ -517,191 +348,207 @@
 					};
 				};
 			};
-			buildConfigurationList = 824EE9E6E7AE45D7A8057469 /* Build configuration list for PBXProject "WorldApp" */;
+			buildConfigurationList = 5CC4A6217A924ED0B29FC8FF /* Build configuration list for PBXProject "WorldApp" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
-			knownRegions = (
-				en,
-				Base,
-			);
-			mainGroup = B3BABE258DF749D580D0CB8C;
-			packageReferences = (
-				68F9BFAA5A854132B3555AA5 /* XCRemoteSwiftPackageReference "client-sdk-swift" */,
-			);
-			productRefGroup = 8F0F3E9C774A4F22B31BF969 /* Products */;
+			knownRegions = (en, Base);
+			mainGroup = F28317C952AF41FA977CB27C;
+			productRefGroup = 53DFB4F01E254CDABE29710D /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
+			packageReferences = (
+				66F2180AC5794F27ADBAA282 /* XCRemoteSwiftPackageReference "client-sdk-swift" */,
+			);
 			targets = (
-				47E64BC0C4104EC680EAA90E /* WorldApp */,
+				9C4688688D024B65898F90A9 /* WorldApp */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		39596260881E40FAA2480B13 /* Resources */ = {
+		2E06535B301A429DB8651C2B /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				119ADCEC8C8748DB852D1E8B /* WorldApp/Assets.xcassets in Resources */,
-				658251AC9FBF4FE9A79C15FB /* WorldApp/Resources/GlobeTextures/earth_clouds.jpg in Resources */,
-				E3865925CAA441F2A97EECD0 /* WorldApp/Resources/GlobeTextures/earth_clouds.png in Resources */,
-				A837AD86B1E441AFB26C566C /* WorldApp/Resources/GlobeTextures/earth_daymap.jpg in Resources */,
-				F8CB853C707645D09B4CB48A /* WorldApp/Resources/GlobeTextures/earth_daymap.png in Resources */,
-				DD1002CBB9504F76A981B22A /* WorldApp/Resources/GlobeTextures/stars.jpg in Resources */,
-				43E8AE77742941D7BFCFC063 /* WorldApp/Resources/GlobeTextures/stars.png in Resources */,
-				A1216EFD7191496E9E70742E /* WorldApp/Resources/MatteryaCall.caf in Resources */,
-				E8F41A2B3C4D5E6F708192A3 /* WorldApp/Resources/MatteryaCallRing.mp3 in Resources */,
-				1B3E9EDF496241DEB2C5C5CB /* WorldApp/Resources/countries_map.json in Resources */,
+				86A6BE0C9B614665966F4F6D /* Assets.xcassets in Resources */,
+				125FCF83443A4009B9BD6990 /* earth_clouds.jpg in Resources */,
+				558A8DF2B9E04F9BA8509E96 /* earth_clouds.png in Resources */,
+				EF1541CE2575425883624E6A /* earth_daymap.jpg in Resources */,
+				4A0134C226C04133912ACE90 /* earth_daymap.png in Resources */,
+				B5F08DFB631A4C8D8C2F08E5 /* stars.jpg in Resources */,
+				4C166B2C4A704208AB3AFB77 /* stars.png in Resources */,
+				59BD989B817148E48F638DD7 /* MatteryaCall.caf in Resources */,
+				451C02B85D15482EADA1A9A4 /* countries_map.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		65113220FF46425EA65B2C02 /* Sources */ = {
+		570D40D33F66400983C39703 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				367D0C2EAEC340F6AD5FF4BC /* WorldApp/AppDelegate.swift in Sources */,
-				47956624582644F1AC64F79E /* WorldApp/Config/AppConfig.swift in Sources */,
-				9622D60605DD4F988F23A76E /* WorldApp/Config/ScreenshotMode.swift in Sources */,
-				B0096BC2EE5041F782483A8A /* WorldApp/Models/Models.swift in Sources */,
-				96B59F2AEB504C5993A683B6 /* WorldApp/Services/AdsService.swift in Sources */,
-				C867E28AF5634013B4B293F7 /* WorldApp/Services/AppleMusicNowPlayingService.swift in Sources */,
-				D2ECC579E8FE4B2EB8F7E50D /* WorldApp/Services/AuthService.swift in Sources */,
-				7A06598A06314E3C96FD55CA /* WorldApp/Services/BlockService.swift in Sources */,
-				3C0B058E12274BC2AC00BA18 /* WorldApp/Services/CallKitManager.swift in Sources */,
-				5194C9A6AB2C4133B31CBE08 /* WorldApp/Services/CallSessionManager.swift in Sources */,
-				821971E4DDE24914B20599BC /* WorldApp/Services/CallSignalingService.swift in Sources */,
-				24757A09C0BD4A3A8171ADF9 /* WorldApp/Services/CallSoundService.swift in Sources */,
-				F5888DC4FFAB422B957854BE /* WorldApp/Services/ContentCache.swift in Sources */,
-				0BBA8F8A4EAD40548083452B /* WorldApp/Services/DemoDatasetService.swift in Sources */,
-				E21D6F4510CE4AE19030BD42 /* WorldApp/Services/FollowService.swift in Sources */,
-				98E1D9D368E44D1C8882F2A8 /* WorldApp/Services/GlobeCityCoordinateCache.swift in Sources */,
-				F03FCF41799244B18122530F /* WorldApp/Services/GlobePresenceGeo.swift in Sources */,
-				A926B38FA942402DA8117CAC /* WorldApp/Services/GlobePresenceService.swift in Sources */,
-				6B72CFCC99284BF384931937 /* WorldApp/Services/GraphQLService.swift in Sources */,
-				A8AE892A45BD47CE8D8906F0 /* WorldApp/Services/GraphQLTypes.swift in Sources */,
-				17979262E77F4307BAFAC05C /* WorldApp/Services/ImageCache.swift in Sources */,
-				A39DB437444145F79F8B569F /* WorldApp/Services/IncomingCallWake.swift in Sources */,
-				C9542B6FFC2F422BB2AE5B83 /* WorldApp/Services/JSONCoding.swift in Sources */,
-				DECEE9949F8543A994537E7B /* WorldApp/Services/LocationService.swift in Sources */,
-				199A59C915194FE5989D93AD /* WorldApp/Services/MatteryaReelsTwists.swift in Sources */,
-				8E6956759BBE41368CF5572D /* WorldApp/Services/MatteryaSearchEngine.swift in Sources */,
-				0CA6B8646A784526A067A0EA /* WorldApp/Services/MediaService.swift in Sources */,
-				394C7299535E48C49D0B4EC1 /* WorldApp/Services/MediaURLResolver.swift in Sources */,
-				B82F2E81766342369D035BFC /* WorldApp/Services/MessagesService.swift in Sources */,
-				F3E979607CDF46689B84625F /* WorldApp/Services/NewsService.swift in Sources */,
-				EEBDB39A757D442EB338FA3E /* WorldApp/Services/NotificationNames.swift in Sources */,
-				DA392A9311A841E4B8E20B4A /* WorldApp/Services/NotificationsService.swift in Sources */,
-				439255FF3E7D42D9AA63B531 /* WorldApp/Services/PlayPlatformBridge.swift in Sources */,
-				27886E996663455B82EA70E5 /* WorldApp/Services/PostsService.swift in Sources */,
-				03175F4712CC45BDBF52BCE3 /* WorldApp/Services/PresenceService.swift in Sources */,
-				ACD74614941D4853BBD26CA7 /* WorldApp/Services/ProfileService.swift in Sources */,
-				3F169B0598D54CC998BDA788 /* WorldApp/Services/PushNotificationService.swift in Sources */,
-				1A9D56DDB0414399830D94A6 /* WorldApp/Services/ReelsRankingEngine.swift in Sources */,
-				63C9762B0F5D47D0A49044E0 /* WorldApp/Services/ShareService.swift in Sources */,
-				731174D988AE4EAB9606AD31 /* WorldApp/Services/StorageUploadClient.swift in Sources */,
-				AEA4E8C36A5A410EBE668915 /* WorldApp/Services/StreamingHubService.swift in Sources */,
-				BCF7E1F2C2DB4F249E15E32A /* WorldApp/Services/SubscriptionService.swift in Sources */,
-				404FF059155F47AAB4AE364D /* WorldApp/Services/SupabaseResumableUploadClient.swift in Sources */,
-				F4A82EEEDDEE4C70B3B941AB /* WorldApp/Services/VideoCompressionService.swift in Sources */,
-				C0465BF2450A48858F0CD5FB /* WorldApp/Services/VoIPPushService.swift in Sources */,
-				EFF3FC1072DD4ED4BBB6804D /* WorldApp/Services/YouTubeCatalogService.swift in Sources */,
-				8D9D0FA84FA441D5A6A3DDD1 /* WorldApp/Theme/ContentSanitizer.swift in Sources */,
-				11673563E5F249B8B11CC148 /* WorldApp/Theme/FacebookMediaLayout.swift in Sources */,
-				D769261526674BC9A580947F /* WorldApp/Theme/Theme.swift in Sources */,
-				B9A00925248440FF8783DBD5 /* WorldApp/Theme/YouTubeComponents.swift in Sources */,
-				D9DF5AA4101C4C36ADD9B6A7 /* WorldApp/Theme/YouTubeMediaLayout.swift in Sources */,
-				B3F74FF75E1940DFB110BEB9 /* WorldApp/ViewModels/AppState.swift in Sources */,
-				97FCB014870B40C594810284 /* WorldApp/Views/Ads/AdPrerollView.swift in Sources */,
-				DAFA4CCA30F2448B90C3D047 /* WorldApp/Views/Ads/AdsView.swift in Sources */,
-				80185081BC834D34AF4ED603 /* WorldApp/Views/AuthView.swift in Sources */,
-				18CFEDF03BAE47D4847D53C5 /* WorldApp/Views/Components/AppMenuView.swift in Sources */,
-				3ACBEE6823CF44829CC063D6 /* WorldApp/Views/Components/BottomTabBar.swift in Sources */,
-				EC80BA36E30140498E6E0762 /* WorldApp/Views/Components/CreateMenuSheet.swift in Sources */,
-				44411300DA174367A5DA939A /* WorldApp/Views/Components/FacebookPostCard.swift in Sources */,
-				E1D19D0142944702811E85DE /* WorldApp/Views/Components/FloatingPostsOverlay.swift in Sources */,
-				515FB3FBBC594CB7A1CD732F /* WorldApp/Views/Components/HandDrawnStyle.swift in Sources */,
-				6FFD066606CD4B57B31A5EA9 /* WorldApp/Views/Components/MatteryaTopBar.swift in Sources */,
-				4F5D3FDAB7D348A996F0C107 /* WorldApp/Views/Components/PostCardView.swift in Sources */,
-				F9F95F0FEFBD468A9774408A /* WorldApp/Views/Components/PostCommentsView.swift in Sources */,
-				FA13979E982242B48B8E9E80 /* WorldApp/Views/Components/PostComposerView.swift in Sources */,
-				DA20FA993201444885FBDCE7 /* WorldApp/Views/Components/ReelComposerView.swift in Sources */,
-				CE6580404FD94A1D8AF61336 /* WorldApp/Views/Components/ShareComponents.swift in Sources */,
-				0D37054004EF40BA90CC02ED /* WorldApp/Views/Components/StoriesStripView.swift in Sources */,
-				990536AF72DD457894CB78C7 /* WorldApp/Views/Components/StoriesViewerView.swift in Sources */,
-				E23ADBBF8460457C9C9870D6 /* WorldApp/Views/Components/StoryComposerView.swift in Sources */,
-				B7D229C1AF1346DFB765C138 /* WorldApp/Views/Components/UnreadBadge.swift in Sources */,
-				321476E6412D416F95B31AC3 /* WorldApp/Views/Components/UploadProgressView.swift in Sources */,
-				B2B6956C8CA8427DBC0C1B6E /* WorldApp/Views/Components/VideoPlayerView.swift in Sources */,
-				E77FA27EEF52415C9625BA4E /* WorldApp/Views/Components/VideoThumbnailView.swift in Sources */,
-				BA3CD4FCE3AD41CCAF664A38 /* WorldApp/Views/Connected/ConnectedHubModels.swift in Sources */,
-				33691526CEAF4673934EA02C /* WorldApp/Views/Connected/ConnectedHubView.swift in Sources */,
-				5744C5C5FB0940CCBB5C72A4 /* WorldApp/Views/Connected/LivePlaybackCard.swift in Sources */,
-				70E7D274D0544D01BDEA07F4 /* WorldApp/Views/Connected/LivePlaybackModels.swift in Sources */,
-				8B4E825E7B384491B8DA5B05 /* WorldApp/Views/Connected/MomentRoomSheet.swift in Sources */,
-				BB967F7F4E154674B92A184D /* WorldApp/Views/Connected/UpdateNowPlayingSheet.swift in Sources */,
-				73FAA89CF60E433EB087C6C4 /* WorldApp/Views/Feed/FeedView.swift in Sources */,
-				8D8B211667F44CBBA8F75D6C /* WorldApp/Views/Globe/AppleMapGlobeView.swift in Sources */,
-				6B5A82A83F7748159540B8FE /* WorldApp/Views/Globe/CartoonGlobeTexture.swift in Sources */,
-				1BEB734F137F471D98668E68 /* WorldApp/Views/Globe/CountryFeedView.swift in Sources */,
-				8D68A8FBB7BD4825B9685F58 /* WorldApp/Views/Globe/CountryMapData.swift in Sources */,
-				C5D21B5DA1D7482C9B5E8693 /* WorldApp/Views/Globe/CustomGlobeBuilder.swift in Sources */,
-				5BE3CB32F39D4432B8639BB4 /* WorldApp/Views/Globe/GlobeCountryLabels.swift in Sources */,
-				1213B3BB51C045FDB496630D /* WorldApp/Views/Globe/GlobeMeshBuilder.swift in Sources */,
-				237E2AB257E04BDC8D115EEB /* WorldApp/Views/Globe/GlobeOnlineDotsOverlay.swift in Sources */,
-				CEF97C6CD42F4DC2BD0BFB20 /* WorldApp/Views/Globe/GlobeView.swift in Sources */,
-				EEF31B873FEE41F9B393BB78 /* WorldApp/Views/Globe/HandDrawnGlobeScene.swift in Sources */,
-				0B3E291003F24FF2ABB5CD1C /* WorldApp/Views/Globe/HandDrawnGlobeView.swift in Sources */,
-				A3EC4073466E4B77A1C0D3EE /* WorldApp/Views/Globe/NotificationsPanelView.swift in Sources */,
-				A9DBCD9AEC9E4C70944A05FF /* WorldApp/Views/Globe/PhotorealGlobeBuilder.swift in Sources */,
-				71042AA7A4834D0C878CD8ED /* WorldApp/Views/Globe/PhotorealGlobeScene.swift in Sources */,
-				5B15BCB37E3846BFB8AA5F16 /* WorldApp/Views/Globe/PhotorealGlobeTextures.swift in Sources */,
-				3E553429E47C4581A8EA9440 /* WorldApp/Views/Globe/PhotorealGlobeView.swift in Sources */,
-				60B34A0D924E4FA0BFF2933D /* WorldApp/Views/Globe/PresencePanelView.swift in Sources */,
-				5C5E19CCEB924D5EA38A59DC /* WorldApp/Views/Globe/StarfieldGenerator.swift in Sources */,
-				351CF12299234895AA3844BA /* WorldApp/Views/Hubs/HubsComingSoonView.swift in Sources */,
-				8EC423BB22EA41259F87585D /* WorldApp/Views/Living/LivingView.swift in Sources */,
-				3902F5E44A6F47D19D25E67C /* WorldApp/Views/Living/YouTubeAppView.swift in Sources */,
-				FC3195FAEBD44986A16C5D28 /* WorldApp/Views/Living/YouTubeChannelView.swift in Sources */,
-				49B2066463454A36BB09DA51 /* WorldApp/Views/Living/YouTubeWatchView.swift in Sources */,
-				4E20DE00789749BFB8867BC2 /* WorldApp/Views/MainTabView.swift in Sources */,
-				78512A3D28524512BA83D4AA /* WorldApp/Views/Messages/CallOverlayView.swift in Sources */,
-				4532E1B731D7473A99C248D3 /* WorldApp/Views/Messages/ConversationRouteView.swift in Sources */,
-				7B883EA130F649D0A7629FB5 /* WorldApp/Views/Messages/ConversationView.swift in Sources */,
-				8EFD752D84364169B4691CAC /* WorldApp/Views/Messages/MessagesView.swift in Sources */,
-				BB8D073C2B8F452FBD037B18 /* WorldApp/Views/News/NewsDetailView.swift in Sources */,
-				B4C254938BE74318A1281607 /* WorldApp/Views/People/PeopleView.swift in Sources */,
-				0C7C3AB6C5DB47D2827B8CA0 /* WorldApp/Views/Post/PostDetailView.swift in Sources */,
-				B61EEA31003540C99C82A752 /* WorldApp/Views/Profile/EditProfileView.swift in Sources */,
-				BEA29B774D25427B9C478F6A /* WorldApp/Views/Profile/ProfilePostCard.swift in Sources */,
-				17DD4BF8E0B7468CA74C5CBC /* WorldApp/Views/Profile/ProfileSetupView.swift in Sources */,
-				7626D4AD6F214D0297FF4189 /* WorldApp/Views/Profile/ProfileView.swift in Sources */,
-				57113DB47E8849CE8182758B /* WorldApp/Views/Profile/PublicProfileView.swift in Sources */,
-				D7D07D77E8784F2EBECF3877 /* WorldApp/Views/Reels/ReelsVerticalFeed.swift in Sources */,
-				97CA02C55242419EB750E6C7 /* WorldApp/Views/Reels/ReelsView.swift in Sources */,
-				3E503A361FAD4432AAA433D2 /* WorldApp/Views/RootView.swift in Sources */,
-				C98EA7F9AE78451A82BE3818 /* WorldApp/Views/Search/SearchView.swift in Sources */,
-				8666ACDFD3D84BE7A9446A57 /* WorldApp/Views/Settings/SettingsView.swift in Sources */,
-				90CB0F92D52B44F7BF6250D9 /* WorldApp/WorldAppApp.swift in Sources */,
+				73E464EC2F404944901AAE0C /* AppDelegate.swift in Sources */,
+				9AAD6F46FD0542DC9168FF30 /* AppConfig.swift in Sources */,
+				1DFBD4215C4747AB8B009E92 /* ScreenshotMode.swift in Sources */,
+				FE59D079DD9A43E092C0F8A3 /* Models.swift in Sources */,
+				07D73CE2D8C4499084325198 /* AdsService.swift in Sources */,
+				DC2202FA692D4BC496A8095A /* AppleMusicNowPlayingService.swift in Sources */,
+				6861993E813147168F3991F5 /* AuthService.swift in Sources */,
+				78095EBEBF694A789456176D /* BlockService.swift in Sources */,
+				EDBC873754584AED8C35E652 /* CallKitManager.swift in Sources */,
+				38A7E2B59E3844EB8BE34BF8 /* CallSessionManager.swift in Sources */,
+				3FB9D9B537CB4A9D8A4CD64E /* CallSignalingService.swift in Sources */,
+				33B7600757A34491B8147168 /* CallSoundService.swift in Sources */,
+				A9097D1FCA8048ADB991BEA5 /* ContentCache.swift in Sources */,
+				A93A448E73FE47DDA8B1271F /* DemoDatasetService.swift in Sources */,
+				2C4C7BF7559F4AEC89AE2173 /* FollowService.swift in Sources */,
+				88F09192308642F1BDE69C6E /* GlobeCityCoordinateCache.swift in Sources */,
+				A43392C774284E12B6CB5040 /* GlobePresenceGeo.swift in Sources */,
+				5D84C926D1DC49F983FE963B /* GlobePresenceService.swift in Sources */,
+				38CCB28CAFA14A3CA70AEA98 /* GraphQLService.swift in Sources */,
+				D9B063F1F5204515B9E900DE /* GraphQLTypes.swift in Sources */,
+				0674672284F240C5BADCC61B /* ImageCache.swift in Sources */,
+				ADAE7F4888F44473A1696462 /* IncomingCallWake.swift in Sources */,
+				6C39CA12F5EE436FABC4AAE7 /* JSONCoding.swift in Sources */,
+				DA975FBDB35A40F5A732A9F5 /* LocationService.swift in Sources */,
+				1EC4BB54148C43458829BF3B /* MatteryaReelsTwists.swift in Sources */,
+				F9D05D893FB54D34A797F9DA /* MatteryaSearchEngine.swift in Sources */,
+				0623A56E85784513B00854B4 /* MediaService.swift in Sources */,
+				151E0C1B0C2B4E37A531CFC4 /* MediaURLResolver.swift in Sources */,
+				59A601F7791240C298D3A941 /* MessagesService.swift in Sources */,
+				8BF70F0BDA0447349474241F /* NewsService.swift in Sources */,
+				BBA9039B7EA54491BBCA1D19 /* NotificationNames.swift in Sources */,
+				996C3B50790C4A9BBA338DE8 /* NotificationsService.swift in Sources */,
+				F7B302B2D7994595A464670D /* PlayPlatformBridge.swift in Sources */,
+				A3F6B1D8256B4EB587F7026B /* PostEventsService.swift in Sources */,
+				3FECC761D38E45B8A52C46C9 /* PostsService.swift in Sources */,
+				300D04EDC34E42E5A35D2236 /* PresenceService.swift in Sources */,
+				E921538D918245B79D8D8E2D /* ProfileService.swift in Sources */,
+				35B7EE8102094F19916DCBF3 /* PushNotificationService.swift in Sources */,
+				D116AD2460094161BFB89F1E /* ReelsRankingEngine.swift in Sources */,
+				0A539C09B4DF4349BD156A7C /* ShareService.swift in Sources */,
+				C88F4E247432418F8C2D2445 /* StorageUploadClient.swift in Sources */,
+				0D143A698E16426198D8BE2A /* StreamingHubService.swift in Sources */,
+				D6DD061EED5246498264A7BB /* SubscriptionService.swift in Sources */,
+				94B872364880426AA6BE4941 /* SupabaseResumableUploadClient.swift in Sources */,
+				D6BF999200E84D85AF324580 /* VideoCompressionService.swift in Sources */,
+				8927C59E86594E7BB12DEAC8 /* VoIPPushService.swift in Sources */,
+				FE259132F2D14667A9F1DB5D /* YouTubeCatalogService.swift in Sources */,
+				49386304225A4E5FB3CCA41E /* ContentSanitizer.swift in Sources */,
+				253DB710318747A5AB51B803 /* FacebookMediaLayout.swift in Sources */,
+				D2EC3824CB914EE1ABBE4368 /* Theme.swift in Sources */,
+				32A6B959E1FA41A0B5983715 /* YouTubeComponents.swift in Sources */,
+				A8F9782E088A45B0AE36E003 /* YouTubeMediaLayout.swift in Sources */,
+				87A6EFEDAC1647AEBD43D930 /* AppState.swift in Sources */,
+				545ECE50F80D4AF28063763E /* AdPrerollView.swift in Sources */,
+				150347E3F9374CBD9D80459B /* AdsView.swift in Sources */,
+				9CC17E5842C6462395074544 /* AuthView.swift in Sources */,
+				445519DAFDBB4D8895DCCF35 /* AppMenuView.swift in Sources */,
+				1D571603D1A644BC8FD8AC48 /* BottomTabBar.swift in Sources */,
+				559D8202B22B4569AFDA88D8 /* CreateMenuSheet.swift in Sources */,
+				7455C6270B0B463288EFFFD5 /* FacebookPostCard.swift in Sources */,
+				D6C77A92417C4337B618B70C /* FloatingPostsOverlay.swift in Sources */,
+				8DE122FB4D4A45A0B5EB04DB /* HandDrawnStyle.swift in Sources */,
+				2435B906AA3F4CF0BC15CC40 /* MatteryaTopBar.swift in Sources */,
+				D251C1FFACB0479DBC75E9F0 /* PostCardView.swift in Sources */,
+				F5C178C9EF234C529F7AD65F /* PostCommentsView.swift in Sources */,
+				1C42E766163042A08E0F79EE /* PostComposerView.swift in Sources */,
+				9884684748E14A9B9732E75C /* ReelComposerView.swift in Sources */,
+				8AA5053FD3694259BFD423AC /* ShareComponents.swift in Sources */,
+				C5AA480875BE47ACAFF20A68 /* StoriesStripView.swift in Sources */,
+				2E3913F488634BCA9E156EFD /* StoriesViewerView.swift in Sources */,
+				FBFA7D414A2F4BC08FCEA748 /* StoryComposerView.swift in Sources */,
+				0E0A77568AB54D0DB4B6B4D7 /* UnreadBadge.swift in Sources */,
+				C5F4F7D460194F42AC91BF95 /* UploadProgressView.swift in Sources */,
+				57345B73779C4279819F5EB4 /* VideoPlayerView.swift in Sources */,
+				E9962641D57C41309BE26EDE /* VideoThumbnailView.swift in Sources */,
+				C587B54F5C4D48BE958587AD /* ConnectedHubModels.swift in Sources */,
+				D2306E51282E4D5A8B6B22B0 /* ConnectedHubView.swift in Sources */,
+				559197D5A8964CFEA8DF2F85 /* LivePlaybackCard.swift in Sources */,
+				4198E7945F914F04931CF25B /* LivePlaybackModels.swift in Sources */,
+				5497376A907143CA87C9DB19 /* MomentRoomSheet.swift in Sources */,
+				9BE767D6F09340BFA848A269 /* UpdateNowPlayingSheet.swift in Sources */,
+				C6E3A483B8D04C9CAF79743D /* FeedView.swift in Sources */,
+				F5F6982D50904349A23D2BA5 /* AppleMapGlobeView.swift in Sources */,
+				CAB346422D8E4B11ACE00D36 /* CartoonGlobeTexture.swift in Sources */,
+				441CECE2C4A248C4AD208281 /* CountryFeedView.swift in Sources */,
+				1A87E86DC8EA4C0C85B9D168 /* CountryMapData.swift in Sources */,
+				0B315C5F38E04873B0534643 /* CustomGlobeBuilder.swift in Sources */,
+				F1D362E19B16456096564A2E /* GlobeCountryLabels.swift in Sources */,
+				6BC3BEEC161C436583266B95 /* GlobeMeshBuilder.swift in Sources */,
+				91706866FC7D4A7A9F9EEB17 /* GlobeOnlineDotsOverlay.swift in Sources */,
+				52B01FCFA9B74B06B4FB9BF4 /* GlobeView.swift in Sources */,
+				2E931AAAEB124B16938505F6 /* HandDrawnGlobeScene.swift in Sources */,
+				F38DB68CAEF84C19872FB6A3 /* HandDrawnGlobeView.swift in Sources */,
+				E88408A3165144C9B031F53E /* NotificationsPanelView.swift in Sources */,
+				F03DB188306E4678A7A666C1 /* PhotorealGlobeBuilder.swift in Sources */,
+				2A7EA273722042DD99FFD9A8 /* PhotorealGlobeScene.swift in Sources */,
+				7BE8557D20034B7EB02A98ED /* PhotorealGlobeTextures.swift in Sources */,
+				7844112C19E6450E9A9364BA /* PhotorealGlobeView.swift in Sources */,
+				FA9DB19D37DD4D24A79C5411 /* PresencePanelView.swift in Sources */,
+				F6946D2703D449ADB1524C1F /* StarfieldGenerator.swift in Sources */,
+				D4530496AE9043549AF2F337 /* HubsComingSoonView.swift in Sources */,
+				48218FB6960C4739BB2AE69E /* LivingView.swift in Sources */,
+				4E95FD0F362B4AE786387D0E /* YouTubeAppView.swift in Sources */,
+				9B1744043F4B4D468BEF1472 /* YouTubeChannelView.swift in Sources */,
+				DCBF66B12EDA4030AEA06CF4 /* YouTubeWatchView.swift in Sources */,
+				3D74CA311B68421AA76C0D8D /* MainTabView.swift in Sources */,
+				86CF178D17E5440A9EF26D61 /* CallOverlayView.swift in Sources */,
+				3B1799A63AED448DAF5BEE3A /* ConversationRouteView.swift in Sources */,
+				A16680DDC50C456191194DC4 /* ConversationView.swift in Sources */,
+				F2CEFAAD73F44020A5071930 /* MessagesView.swift in Sources */,
+				452DACBC443E4F85A90B5CF0 /* NewsDetailView.swift in Sources */,
+				DEE53375A1A4434881E27AC6 /* PeopleView.swift in Sources */,
+				A515032D8DD449BBA4137FB5 /* PostDetailView.swift in Sources */,
+				5271B276742645D4944CDB6C /* EditProfileView.swift in Sources */,
+				D605D3E2E6B944C0BD86BD28 /* ProfilePostCard.swift in Sources */,
+				0EB69286095B428285074D63 /* ProfileSetupView.swift in Sources */,
+				549259298B1148B6AE207F70 /* ProfileView.swift in Sources */,
+				800DC303AC5D49F780F84FDE /* PublicProfileView.swift in Sources */,
+				8D4096502F484076BFB4CBA4 /* ReelsVerticalFeed.swift in Sources */,
+				F4908EC7838843BB959F55FA /* ReelsView.swift in Sources */,
+				1B7A48ECE2D44FB6A9248651 /* RootView.swift in Sources */,
+				F1CD4C595B56497C80F115DA /* SearchView.swift in Sources */,
+				E842B780990242E19FFB89C7 /* SettingsView.swift in Sources */,
+				BC286A39D6FF404FB9C340C8 /* WorldAppApp.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		66F2180AC5794F27ADBAA282 /* XCRemoteSwiftPackageReference "client-sdk-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/livekit/client-sdk-swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.5.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		2D6F01F970144C5583D13813 /* LiveKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 66F2180AC5794F27ADBAA282 /* XCRemoteSwiftPackageReference "client-sdk-swift" */;
+			productName = LiveKit;
+		};
+/* End XCSwiftPackageProductDependency section */
+
 /* Begin XCBuildConfiguration section */
-		4CBB20A7CAC845F49396BAC4 /* Debug */ = {
+		ACC9D5C362B445DAA01F5A78 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ENABLE_MODULES = YES;
-				COPY_PHASE_STRIP = NO;
 				DEAD_CODE_STRIPPING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_DYNAMIC_NO_PIC = NO;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				ONLY_ACTIVE_ARCH = YES;
@@ -710,28 +557,45 @@
 			};
 			name = Debug;
 		};
-		8AC128331544405381101DF8 /* Debug */ = {
+		31BE167BE32841BA8120859A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_DYNAMIC_NO_PIC = NO;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				VALIDATE_PRODUCT = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		2F3F33D081834F79A9D90BD6 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = WorldApp/Debug.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 20;
+				CODE_SIGN_ENTITLEMENTS = WorldApp/Debug.entitlements;
+				CURRENT_PROJECT_VERSION = 19;
 				DEVELOPMENT_TEAM = XQ4HXZN6Y5;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = WorldApp/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Matterya;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
-				INFOPLIST_KEY_NSAppleMusicUsageDescription = "Matterya reads what you're playing in Apple Music so you can share live listening status with friends.";
-				INFOPLIST_KEY_NSCameraUsageDescription = "Matterya uses your camera for video calls and photos.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Matterya uses your location to set your country during profile setup.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Matterya uses your camera for video calls and photos.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Matterya uses your microphone for voice and video calls.";
+				INFOPLIST_KEY_NSAppleMusicUsageDescription = "Matterya reads what you're playing in Apple Music so you can share live listening status with friends.";
+				INFOPLIST_KEY_UIBackgroundModes = "audio remote-notification voip";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UIBackgroundModes = "audio remote-notification voip";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
@@ -744,53 +608,34 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.matterya.worldapp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 			};
 			name = Debug;
 		};
-		A38668B241B84AE5A0272319 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ALWAYS_SEARCH_USER_PATHS = NO;
-				CLANG_ENABLE_MODULES = YES;
-				COPY_PHASE_STRIP = NO;
-				DEAD_CODE_STRIPPING = YES;
-				DEBUG_INFORMATION_FORMAT = dwarf;
-				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
-				GCC_DYNAMIC_NO_PIC = NO;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				SDKROOT = iphoneos;
-				SWIFT_COMPILATION_MODE = wholemodule;
-				VALIDATE_PRODUCT = YES;
-			};
-			name = Release;
-		};
-		EB5990C611B04189A8FA7EB1 /* Release */ = {
+		B2A29DD6049A4A76AA7FC13B /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = WorldApp/Release.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 20;
+				CODE_SIGN_ENTITLEMENTS = WorldApp/Release.entitlements;
+				CURRENT_PROJECT_VERSION = 19;
 				DEVELOPMENT_TEAM = XQ4HXZN6Y5;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = WorldApp/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Matterya;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
-				INFOPLIST_KEY_NSAppleMusicUsageDescription = "Matterya reads what you're playing in Apple Music so you can share live listening status with friends.";
-				INFOPLIST_KEY_NSCameraUsageDescription = "Matterya uses your camera for video calls and photos.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Matterya uses your location to set your country during profile setup.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Matterya uses your camera for video calls and photos.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Matterya uses your microphone for voice and video calls.";
+				INFOPLIST_KEY_NSAppleMusicUsageDescription = "Matterya reads what you're playing in Apple Music so you can share live listening status with friends.";
+				INFOPLIST_KEY_UIBackgroundModes = "audio remote-notification voip";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UIBackgroundModes = "audio remote-notification voip";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
@@ -812,44 +657,25 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		824EE9E6E7AE45D7A8057469 /* Build configuration list for PBXProject "WorldApp" */ = {
+		5CC4A6217A924ED0B29FC8FF /* Build configuration list for PBXProject "WorldApp" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				4CBB20A7CAC845F49396BAC4 /* Debug */,
-				A38668B241B84AE5A0272319 /* Release */,
+				ACC9D5C362B445DAA01F5A78 /* Debug */,
+				31BE167BE32841BA8120859A /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		947D081C781B43398B2EE510 /* Build configuration list for PBXNativeTarget "WorldApp" */ = {
+		CA6A1220A077455C808C0409 /* Build configuration list for PBXNativeTarget "WorldApp" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				8AC128331544405381101DF8 /* Debug */,
-				EB5990C611B04189A8FA7EB1 /* Release */,
+				2F3F33D081834F79A9D90BD6 /* Debug */,
+				B2A29DD6049A4A76AA7FC13B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
-
-/* Begin XCRemoteSwiftPackageReference section */
-		68F9BFAA5A854132B3555AA5 /* XCRemoteSwiftPackageReference "client-sdk-swift" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/livekit/client-sdk-swift";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 2.5.0;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		27CA460A6AEB41989EBB991D /* LiveKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 68F9BFAA5A854132B3555AA5 /* XCRemoteSwiftPackageReference "client-sdk-swift" */;
-			productName = LiveKit;
-		};
-/* End XCSwiftPackageProductDependency section */
 	};
-	rootObject = EB83209941A5493D8A390BDD /* Project object */;
+	rootObject = 4B16A733F0CB4B7291731A2F /* Project object */;
 }
