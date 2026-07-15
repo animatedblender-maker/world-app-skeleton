@@ -11,6 +11,10 @@ PBXPROJ = os.path.join(XCODEPROJ, "project.pbxproj")
 DEFAULT_DEVELOPMENT_TEAM = "XQ4HXZN6Y5"
 INFOPLIST_FILE = "WorldApp/SupplementalInfo.plist"
 # Keep in sync with SupplementalInfo.plist UIBackgroundModes.
+# Required for Matterya calls:
+#   voip               — PushKit incoming call wakes + CallKit
+#   audio              — voice/video while app is backgrounded
+#   remote-notification — message/social push when app is not active
 BACKGROUND_MODES = "audio remote-notification voip"
 
 

@@ -13,6 +13,7 @@ if [[ ! -f "$INFO_PLIST" ]]; then
   exit 1
 fi
 
+# All three are required for calls (VoIP push + CallKit + in-call audio).
 REQUIRED_MODES=(audio remote-notification voip)
 MISSING=()
 
