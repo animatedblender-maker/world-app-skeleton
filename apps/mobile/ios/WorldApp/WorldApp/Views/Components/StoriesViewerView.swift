@@ -7,6 +7,8 @@ struct StoriesViewerView: View {
     @State private var context: StoryViewerContext
     @State private var progress: CGFloat = 0
     @State private var timerTask: Task<Void, Never>?
+    @State private var showDeleteConfirm = false
+    @State private var isDeleting = false
 
     init(context: StoryViewerContext) {
         _context = State(initialValue: context)
@@ -20,6 +22,13 @@ struct StoriesViewerView: View {
     private var currentStory: CountryPost? {
         guard let group = currentGroup, group.stories.indices.contains(context.storyIndex) else { return nil }
         return group.stories[context.storyIndex]
+    }
+
+    private var isOwnMoment: Bool {
+        guard let story = currentStory,
+              let userID = appState.currentProfile?.userID
+        else { return false }
+        return story.authorID == userID
     }
 
     var body: some View {
@@ -80,6 +89,28 @@ struct StoriesViewerView: View {
         }
         .onChange(of: context.groupIndex) { _, _ in
             restartTimer()
+        }
+        .confirmationDialog(
+            "Delete this moment?",
+            isPresented: $showDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete moment", role: .destructive) {
+                Task { await deleteCurrentMoment() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("It will disappear from Globe moments right away.")
+        }
+        .overlay {
+            if isDeleting {
+                ZStack {
+                    Color.black.opacity(0.35).ignoresSafeArea()
+                    ProgressView("Removing moment…")
+                        .tint(.white)
+                        .foregroundStyle(.white)
+                }
+            }
         }
     }
 
@@ -184,6 +215,21 @@ struct StoriesViewerView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
+            if isOwnMoment {
+                Button {
+                    timerTask?.cancel()
+                    showDeleteConfirm = true
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(8)
+                        .background(Color.black.opacity(0.28), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Delete moment")
+            }
+
             Button {
                 dismiss()
             } label: {
@@ -262,6 +308,70 @@ struct StoriesViewerView: View {
 
         progress = 0
         startTimer()
+    }
+
+    private func deleteCurrentMoment() async {
+        guard let story = currentStory else { return }
+        isDeleting = true
+        timerTask?.cancel()
+        defer { isDeleting = false }
+
+        do {
+            let deleted = try await PostsService.shared.deletePost(story.id)
+            guard deleted else {
+                appState.showToast("Could not delete moment.", style: .error)
+                startTimer()
+                return
+            }
+
+            var groups = context.groups
+            guard groups.indices.contains(context.groupIndex) else {
+                await appState.refreshStories()
+                dismiss()
+                return
+            }
+
+            let current = groups[context.groupIndex]
+            let remainingStories = current.stories.filter { $0.id != story.id }
+            var nextGroupIndex = context.groupIndex
+            var nextStoryIndex = context.storyIndex
+
+            if remainingStories.isEmpty {
+                groups.remove(at: context.groupIndex)
+                if groups.isEmpty {
+                    await appState.refreshStories()
+                    appState.showToast("Moment deleted.", style: .success)
+                    dismiss()
+                    return
+                }
+                if nextGroupIndex >= groups.count {
+                    nextGroupIndex = max(0, groups.count - 1)
+                }
+                nextStoryIndex = 0
+            } else {
+                groups[context.groupIndex] = StoryGroup(
+                    authorID: current.authorID,
+                    author: current.author,
+                    stories: remainingStories,
+                    hasUnviewed: current.hasUnviewed
+                )
+                if nextStoryIndex >= remainingStories.count {
+                    nextStoryIndex = max(0, remainingStories.count - 1)
+                }
+            }
+
+            context = StoryViewerContext(
+                groups: groups,
+                groupIndex: nextGroupIndex,
+                storyIndex: nextStoryIndex
+            )
+            await appState.refreshStories()
+            appState.showToast("Moment deleted.", style: .success)
+            startTimer()
+        } catch {
+            appState.showToast(error.localizedDescription, style: .error)
+            startTimer()
+        }
     }
 
     private func momentUploadedLabel(for createdAt: String) -> String {
