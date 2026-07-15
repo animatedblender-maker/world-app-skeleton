@@ -13,45 +13,41 @@ struct PostRealtimeDelete: Sendable {
 }
 
 /// Supabase Realtime listener for `public.posts` — mirrors web `PostEventsService`.
-/// Runs off the main thread so launch and UI stay responsive on device builds.
 final class PostEventsService: @unchecked Sendable {
     static let shared = PostEventsService()
 
-    private let worker = PostEventsWorker()
-
-    private init() {}
-
-    func start() {
-        guard !AppConfig.useDemoDataset else { return }
-        Task { await worker.start() }
-    }
-
-    func stop() {
-        Task { await worker.stop() }
-    }
-}
-
-private actor PostEventsWorker {
     private var webSocketTask: URLSessionWebSocketTask?
     private var listenTask: Task<Void, Never>?
     private var heartbeatTask: Task<Void, Never>?
     private var reconnectTask: Task<Void, Never>?
     private var tokenRefreshObserver: NSObjectProtocol?
-    private var isDestroyed = false
+    private var isDestroyed = true
     private var isJoined = false
-    private var nextRef = 1
     private var isConnecting = false
+    private var nextRef = 1
     private let channelTopic = "realtime:public:posts"
     private let joinRef = "1"
+    private let stateLock = NSLock()
+
+    private init() {}
 
     func start() {
+        guard !AppConfig.useDemoDataset else { return }
+        stateLock.lock()
         isDestroyed = false
+        stateLock.unlock()
+
         installTokenRefreshObserverIfNeeded()
-        scheduleConnect(delay: 0)
+        scheduleConnect(delay: 0.75)
     }
 
     func stop() {
+        stateLock.lock()
         isDestroyed = true
+        isJoined = false
+        isConnecting = false
+        stateLock.unlock()
+
         if let tokenRefreshObserver {
             NotificationCenter.default.removeObserver(tokenRefreshObserver)
             self.tokenRefreshObserver = nil
@@ -64,8 +60,6 @@ private actor PostEventsWorker {
         reconnectTask = nil
         webSocketTask?.cancel(with: .goingAway, reason: nil)
         webSocketTask = nil
-        isJoined = false
-        isConnecting = false
     }
 
     private func installTokenRefreshObserverIfNeeded() {
@@ -76,54 +70,83 @@ private actor PostEventsWorker {
             queue: nil
         ) { [weak self] _ in
             guard let self else { return }
-            Task { await self.handleTokenRefresh() }
+            self.scheduleReconnect(delay: 0.75)
         }
     }
 
-    private func handleTokenRefresh() async {
-        guard !isDestroyed, isJoined else { return }
-        await reconnectWithFreshToken()
-    }
-
-    private func reconnectWithFreshToken() async {
-        guard !isDestroyed else { return }
-        heartbeatTask?.cancel()
-        listenTask?.cancel()
-        webSocketTask?.cancel(with: .goingAway, reason: nil)
-        webSocketTask = nil
-        isJoined = false
-        isConnecting = false
-        reconnectTask?.cancel()
-        scheduleConnect(delay: 0.5)
-    }
-
     private func scheduleConnect(delay: TimeInterval) {
-        guard !isDestroyed else { return }
+        stateLock.lock()
+        let destroyed = isDestroyed
+        stateLock.unlock()
+        guard !destroyed else { return }
+
         reconnectTask?.cancel()
-        reconnectTask = Task {
+        reconnectTask = Task.detached(priority: .utility) { [weak self] in
+            guard let self else { return }
             if delay > 0 {
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             }
-            guard !Task.isCancelled, !self.isDestroyed else { return }
+            guard !Task.isCancelled else { return }
             await self.openSocket()
         }
     }
 
-    private func openSocket() async {
-        guard !isDestroyed else { return }
-        guard !isConnecting else { return }
-        guard await MainActor.run(body: { AuthService.shared.isAuthenticated }) else { return }
+    private func scheduleReconnect(delay: TimeInterval) {
+        stateLock.lock()
+        let destroyed = isDestroyed
+        let joined = isJoined
+        stateLock.unlock()
+        guard !destroyed, joined else { return }
+        teardownSocket()
+        scheduleConnect(delay: delay)
+    }
 
+    private func teardownSocket() {
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
+        listenTask?.cancel()
+        listenTask = nil
+        webSocketTask?.cancel(with: .goingAway, reason: nil)
+        webSocketTask = nil
+        stateLock.lock()
+        isJoined = false
+        isConnecting = false
+        stateLock.unlock()
+    }
+
+    private func openSocket() async {
+        stateLock.lock()
+        let destroyed = isDestroyed
+        let connecting = isConnecting
+        stateLock.unlock()
+        guard !destroyed, !connecting else { return }
+
+        let authenticated = await MainActor.run { AuthService.shared.isAuthenticated }
+        guard authenticated else { return }
+
+        stateLock.lock()
         isConnecting = true
-        defer { isConnecting = false }
+        stateLock.unlock()
+        defer {
+            stateLock.lock()
+            isConnecting = false
+            stateLock.unlock()
+        }
 
         let accessToken: String
         do {
-            accessToken = try await fetchAccessToken()
+            accessToken = try await Task { @MainActor in
+                try await AuthService.shared.ensureValidToken()
+            }.value
         } catch {
             scheduleConnect(delay: 5)
             return
         }
+
+        stateLock.lock()
+        let stillActive = !isDestroyed
+        stateLock.unlock()
+        guard stillActive else { return }
 
         var components = URLComponents(string: "\(AppConfig.supabaseURL)/realtime/v1/websocket")!
         components.queryItems = [
@@ -144,12 +167,6 @@ private actor PostEventsWorker {
 
         sendJoin(accessToken: accessToken, on: task)
         startHeartbeat(on: task)
-    }
-
-    private func fetchAccessToken() async throws -> String {
-        try await Task { @MainActor in
-            try await AuthService.shared.ensureValidToken()
-        }.value
     }
 
     private static func makeSessionConfiguration() -> URLSessionConfiguration {
@@ -187,8 +204,8 @@ private actor PostEventsWorker {
         heartbeatTask = Task.detached(priority: .utility) { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 25_000_000_000)
-                guard !Task.isCancelled else { return }
-                await self?.sendHeartbeat(on: task)
+                guard !Task.isCancelled, let self else { return }
+                self.sendHeartbeat(on: task)
             }
         }
     }
@@ -204,41 +221,53 @@ private actor PostEventsWorker {
     }
 
     private func sendJSON(_ object: [String: Any], on task: URLSessionWebSocketTask) {
-        guard let data = try? JSONSerialization.data(withJSONObject: object),
+        guard JSONSerialization.isValidJSONObject(object),
+              let data = try? JSONSerialization.data(withJSONObject: object),
               let text = String(data: data, encoding: .utf8)
         else { return }
         task.send(.string(text)) { _ in }
     }
 
     private func nextRefString() -> String {
+        stateLock.lock()
+        defer { stateLock.unlock() }
         defer { nextRef += 1 }
         return String(nextRef)
     }
 
     private func listen(on task: URLSessionWebSocketTask) async {
-        while !Task.isCancelled, !isDestroyed {
+        while !Task.isCancelled {
+            stateLock.lock()
+            let destroyed = isDestroyed
+            stateLock.unlock()
+            guard !destroyed else { return }
+
             do {
                 let message = try await task.receive()
                 switch message {
                 case .string(let text):
-                    await handleMessage(text)
+                    handleMessage(text)
                 case .data(let data):
                     if let text = String(data: data, encoding: .utf8) {
-                        await handleMessage(text)
+                        handleMessage(text)
                     }
                 @unknown default:
                     break
                 }
             } catch {
-                guard !Task.isCancelled, !isDestroyed else { return }
+                guard !Task.isCancelled else { return }
+                stateLock.lock()
                 isJoined = false
+                let destroyed = isDestroyed
+                stateLock.unlock()
+                guard !destroyed else { return }
                 scheduleConnect(delay: 3)
                 return
             }
         }
     }
 
-    private func handleMessage(_ text: String) async {
+    private func handleMessage(_ text: String) {
         guard let data = text.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data)
         else { return }
@@ -262,7 +291,9 @@ private actor PostEventsWorker {
         if event == "phx_reply",
            let payload,
            payload["status"] as? String == "ok" {
+            stateLock.lock()
             isJoined = true
+            stateLock.unlock()
             return
         }
 
@@ -277,52 +308,44 @@ private actor PostEventsWorker {
             guard let record = change["record"] as? [String: Any],
                   let id = record["id"] as? String
             else { return }
-            let insert = PostRealtimeInsert(
-                id: id,
-                countryCode: record["country_code"] as? String,
-                authorID: record["author_id"] as? String
+            postInsert(
+                PostRealtimeInsert(
+                    id: id,
+                    countryCode: record["country_code"] as? String,
+                    authorID: record["author_id"] as? String
+                )
             )
-            await postInsert(insert)
         case "DELETE":
             guard let record = change["old_record"] as? [String: Any],
                   let id = record["id"] as? String
             else { return }
-            let deleted = PostRealtimeDelete(
-                id: id,
-                countryCode: record["country_code"] as? String,
-                authorID: record["author_id"] as? String
+            postDelete(
+                PostRealtimeDelete(
+                    id: id,
+                    countryCode: record["country_code"] as? String,
+                    authorID: record["author_id"] as? String
+                )
             )
-            await postDelete(deleted)
         default:
             break
         }
     }
 
-    private func postInsert(_ event: PostRealtimeInsert) async {
-        await MainActor.run {
-            NotificationCenter.default.post(
-                name: .postRealtimeInsert,
-                object: nil,
-                userInfo: [
-                    "id": event.id,
-                    "countryCode": event.countryCode as Any,
-                    "authorID": event.authorID as Any,
-                ]
-            )
+    private func postInsert(_ event: PostRealtimeInsert) {
+        var userInfo: [AnyHashable: Any] = ["id": event.id]
+        if let countryCode = event.countryCode { userInfo["countryCode"] = countryCode }
+        if let authorID = event.authorID { userInfo["authorID"] = authorID }
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .postRealtimeInsert, object: nil, userInfo: userInfo)
         }
     }
 
-    private func postDelete(_ event: PostRealtimeDelete) async {
-        await MainActor.run {
-            NotificationCenter.default.post(
-                name: .postRealtimeDelete,
-                object: nil,
-                userInfo: [
-                    "id": event.id,
-                    "countryCode": event.countryCode as Any,
-                    "authorID": event.authorID as Any,
-                ]
-            )
+    private func postDelete(_ event: PostRealtimeDelete) {
+        var userInfo: [AnyHashable: Any] = ["id": event.id]
+        if let countryCode = event.countryCode { userInfo["countryCode"] = countryCode }
+        if let authorID = event.authorID { userInfo["authorID"] = authorID }
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .postRealtimeDelete, object: nil, userInfo: userInfo)
         }
     }
 }

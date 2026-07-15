@@ -890,6 +890,7 @@ final class AppState {
     }
 
     private func startPostRealtime() {
+        guard isAuthenticated, !AppConfig.useDemoDataset else { return }
         installPostRealtimeObserversIfNeeded()
         PostEventsService.shared.start()
     }
