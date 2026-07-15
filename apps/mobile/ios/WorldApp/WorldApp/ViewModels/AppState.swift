@@ -82,7 +82,6 @@ final class AppState {
         markSessionReady()
         CallSessionManager.shared.bootstrap()
         startPolling()
-        startPostRealtime()
         registerPushInBackground()
         Task { await finishSessionWarmup() }
     }
@@ -114,6 +113,7 @@ final class AppState {
         await refreshProfile()
         await refreshAllInBackground()
         contentLoadGeneration += 1
+        startPostRealtime()
     }
 
     private func prepareSession() async {
@@ -329,7 +329,6 @@ final class AppState {
         markSessionReady()
         CallSessionManager.shared.bootstrap()
         startPolling()
-        startPostRealtime()
         registerPushInBackground()
         Task { await finishSessionWarmup() }
     }
@@ -913,7 +912,7 @@ final class AppState {
                 queue: .main
             ) { [weak self] notification in
                 guard let self,
-                      let event = notification.userInfo?["event"] as? PostRealtimeInsert
+                      let event = Self.parseRealtimeInsert(notification.userInfo)
                 else { return }
                 Task { await self.handlePostRealtimeInsert(event) }
             }
@@ -926,7 +925,7 @@ final class AppState {
                 queue: .main
             ) { [weak self] notification in
                 guard let self,
-                      let event = notification.userInfo?["event"] as? PostRealtimeDelete
+                      let event = Self.parseRealtimeDelete(notification.userInfo)
                 else { return }
                 Task { await self.handlePostRealtimeDelete(event) }
             }
@@ -946,6 +945,30 @@ final class AppState {
     private func handlePostRealtimeDelete(_ event: PostRealtimeDelete) async {
         guard isAuthenticated else { return }
         removeStoryPost(id: event.id)
+    }
+
+    private static func parseRealtimeInsert(_ userInfo: [AnyHashable: Any]?) -> PostRealtimeInsert? {
+        guard let userInfo,
+              let id = userInfo["id"] as? String,
+              !id.isEmpty
+        else { return nil }
+        return PostRealtimeInsert(
+            id: id,
+            countryCode: userInfo["countryCode"] as? String,
+            authorID: userInfo["authorID"] as? String
+        )
+    }
+
+    private static func parseRealtimeDelete(_ userInfo: [AnyHashable: Any]?) -> PostRealtimeDelete? {
+        guard let userInfo,
+              let id = userInfo["id"] as? String,
+              !id.isEmpty
+        else { return nil }
+        return PostRealtimeDelete(
+            id: id,
+            countryCode: userInfo["countryCode"] as? String,
+            authorID: userInfo["authorID"] as? String
+        )
     }
 
     var viewedStoryIDs: Set<String> {

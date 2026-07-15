@@ -310,8 +310,8 @@ final class VoIPPushService: NSObject, PKPushRegistryDelegate {
         if Thread.isMainThread {
             MainActor.assumeIsolated(work)
         } else {
-            DispatchQueue.main.sync {
-                MainActor.assumeIsolated(work)
+            Task { @MainActor in
+                work()
             }
         }
     }

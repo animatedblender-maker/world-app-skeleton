@@ -13,10 +13,25 @@ struct PostRealtimeDelete: Sendable {
 }
 
 /// Supabase Realtime listener for `public.posts` — mirrors web `PostEventsService`.
-@MainActor
-final class PostEventsService {
+/// Runs off the main thread so launch and UI stay responsive on device builds.
+final class PostEventsService: @unchecked Sendable {
     static let shared = PostEventsService()
 
+    private let worker = PostEventsWorker()
+
+    private init() {}
+
+    func start() {
+        guard !AppConfig.useDemoDataset else { return }
+        Task { await worker.start() }
+    }
+
+    func stop() {
+        Task { await worker.stop() }
+    }
+}
+
+private actor PostEventsWorker {
     private var webSocketTask: URLSessionWebSocketTask?
     private var listenTask: Task<Void, Never>?
     private var heartbeatTask: Task<Void, Never>?
@@ -25,20 +40,14 @@ final class PostEventsService {
     private var isDestroyed = false
     private var isJoined = false
     private var nextRef = 1
+    private var isConnecting = false
     private let channelTopic = "realtime:public:posts"
     private let joinRef = "1"
 
-    private init() {}
-
     func start() {
-        guard !AppConfig.useDemoDataset else { return }
         isDestroyed = false
         installTokenRefreshObserverIfNeeded()
-        if isJoined, let webSocketTask, webSocketTask.state == .running {
-            return
-        }
-        reconnectTask?.cancel()
-        reconnectTask = Task { await openSocket() }
+        scheduleConnect(delay: 0)
     }
 
     func stop() {
@@ -56,6 +65,7 @@ final class PostEventsService {
         webSocketTask?.cancel(with: .goingAway, reason: nil)
         webSocketTask = nil
         isJoined = false
+        isConnecting = false
     }
 
     private func installTokenRefreshObserverIfNeeded() {
@@ -63,11 +73,16 @@ final class PostEventsService {
         tokenRefreshObserver = NotificationCenter.default.addObserver(
             forName: .authTokenDidRefresh,
             object: nil,
-            queue: .main
+            queue: nil
         ) { [weak self] _ in
             guard let self else { return }
-            Task { await self.reconnectWithFreshToken() }
+            Task { await self.handleTokenRefresh() }
         }
+    }
+
+    private func handleTokenRefresh() async {
+        guard !isDestroyed, isJoined else { return }
+        await reconnectWithFreshToken()
     }
 
     private func reconnectWithFreshToken() async {
@@ -77,19 +92,36 @@ final class PostEventsService {
         webSocketTask?.cancel(with: .goingAway, reason: nil)
         webSocketTask = nil
         isJoined = false
+        isConnecting = false
         reconnectTask?.cancel()
-        reconnectTask = Task { await openSocket() }
+        scheduleConnect(delay: 0.5)
+    }
+
+    private func scheduleConnect(delay: TimeInterval) {
+        guard !isDestroyed else { return }
+        reconnectTask?.cancel()
+        reconnectTask = Task {
+            if delay > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            }
+            guard !Task.isCancelled, !self.isDestroyed else { return }
+            await self.openSocket()
+        }
     }
 
     private func openSocket() async {
         guard !isDestroyed else { return }
-        guard AuthService.shared.isAuthenticated else { return }
+        guard !isConnecting else { return }
+        guard await MainActor.run(body: { AuthService.shared.isAuthenticated }) else { return }
+
+        isConnecting = true
+        defer { isConnecting = false }
 
         let accessToken: String
         do {
-            accessToken = try await AuthService.shared.ensureValidToken()
+            accessToken = try await fetchAccessToken()
         } catch {
-            scheduleReconnect(after: 3)
+            scheduleConnect(delay: 5)
             return
         }
 
@@ -100,19 +132,35 @@ final class PostEventsService {
         ]
         guard let url = components.url else { return }
 
-        let session = URLSession(configuration: .default)
+        let session = URLSession(configuration: Self.makeSessionConfiguration())
         let task = session.webSocketTask(with: url)
         webSocketTask = task
         task.resume()
 
         listenTask?.cancel()
-        listenTask = Task { await listen(on: task) }
+        listenTask = Task.detached(priority: .utility) { [weak self] in
+            await self?.listen(on: task)
+        }
 
-        sendJoin(accessToken: accessToken)
-        startHeartbeat()
+        sendJoin(accessToken: accessToken, on: task)
+        startHeartbeat(on: task)
     }
 
-    private func sendJoin(accessToken: String) {
+    private func fetchAccessToken() async throws -> String {
+        try await Task { @MainActor in
+            try await AuthService.shared.ensureValidToken()
+        }.value
+    }
+
+    private static func makeSessionConfiguration() -> URLSessionConfiguration {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 20
+        config.timeoutIntervalForResource = 45
+        config.waitsForConnectivity = false
+        return config
+    }
+
+    private func sendJoin(accessToken: String, on task: URLSessionWebSocketTask) {
         let ref = nextRefString()
         let message: [String: Any] = [
             "topic": channelTopic,
@@ -131,36 +179,35 @@ final class PostEventsService {
             "ref": ref,
             "join_ref": joinRef,
         ]
-        sendJSON(message)
+        sendJSON(message, on: task)
     }
 
-    private func startHeartbeat() {
+    private func startHeartbeat(on task: URLSessionWebSocketTask) {
         heartbeatTask?.cancel()
-        heartbeatTask = Task {
-            while !Task.isCancelled, !self.isDestroyed {
+        heartbeatTask = Task.detached(priority: .utility) { [weak self] in
+            while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 25_000_000_000)
-                guard !Task.isCancelled, !self.isDestroyed else { return }
-                self.sendHeartbeat()
+                guard !Task.isCancelled else { return }
+                await self?.sendHeartbeat(on: task)
             }
         }
     }
 
-    private func sendHeartbeat() {
+    private func sendHeartbeat(on task: URLSessionWebSocketTask) {
         let message: [String: Any] = [
             "topic": "phoenix",
             "event": "heartbeat",
             "payload": [:] as [String: Any],
             "ref": nextRefString(),
         ]
-        sendJSON(message)
+        sendJSON(message, on: task)
     }
 
-    private func sendJSON(_ object: [String: Any]) {
-        guard let webSocketTask else { return }
+    private func sendJSON(_ object: [String: Any], on task: URLSessionWebSocketTask) {
         guard let data = try? JSONSerialization.data(withJSONObject: object),
               let text = String(data: data, encoding: .utf8)
         else { return }
-        webSocketTask.send(.string(text)) { _ in }
+        task.send(.string(text)) { _ in }
     }
 
     private func nextRefString() -> String {
@@ -174,10 +221,10 @@ final class PostEventsService {
                 let message = try await task.receive()
                 switch message {
                 case .string(let text):
-                    handleMessage(text)
+                    await handleMessage(text)
                 case .data(let data):
                     if let text = String(data: data, encoding: .utf8) {
-                        handleMessage(text)
+                        await handleMessage(text)
                     }
                 @unknown default:
                     break
@@ -185,23 +232,13 @@ final class PostEventsService {
             } catch {
                 guard !Task.isCancelled, !isDestroyed else { return }
                 isJoined = false
-                scheduleReconnect(after: 2)
+                scheduleConnect(delay: 3)
                 return
             }
         }
     }
 
-    private func scheduleReconnect(after seconds: TimeInterval) {
-        guard !isDestroyed else { return }
-        reconnectTask?.cancel()
-        reconnectTask = Task {
-            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-            guard !Task.isCancelled, !self.isDestroyed else { return }
-            await self.openSocket()
-        }
-    }
-
-    private func handleMessage(_ text: String) {
+    private func handleMessage(_ text: String) async {
         guard let data = text.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data)
         else { return }
@@ -245,11 +282,7 @@ final class PostEventsService {
                 countryCode: record["country_code"] as? String,
                 authorID: record["author_id"] as? String
             )
-            NotificationCenter.default.post(
-                name: .postRealtimeInsert,
-                object: nil,
-                userInfo: ["event": insert]
-            )
+            await postInsert(insert)
         case "DELETE":
             guard let record = change["old_record"] as? [String: Any],
                   let id = record["id"] as? String
@@ -259,13 +292,37 @@ final class PostEventsService {
                 countryCode: record["country_code"] as? String,
                 authorID: record["author_id"] as? String
             )
+            await postDelete(deleted)
+        default:
+            break
+        }
+    }
+
+    private func postInsert(_ event: PostRealtimeInsert) async {
+        await MainActor.run {
+            NotificationCenter.default.post(
+                name: .postRealtimeInsert,
+                object: nil,
+                userInfo: [
+                    "id": event.id,
+                    "countryCode": event.countryCode as Any,
+                    "authorID": event.authorID as Any,
+                ]
+            )
+        }
+    }
+
+    private func postDelete(_ event: PostRealtimeDelete) async {
+        await MainActor.run {
             NotificationCenter.default.post(
                 name: .postRealtimeDelete,
                 object: nil,
-                userInfo: ["event": deleted]
+                userInfo: [
+                    "id": event.id,
+                    "countryCode": event.countryCode as Any,
+                    "authorID": event.authorID as Any,
+                ]
             )
-        default:
-            break
         }
     }
 }

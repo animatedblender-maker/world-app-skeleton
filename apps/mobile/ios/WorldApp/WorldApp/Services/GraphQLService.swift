@@ -45,6 +45,7 @@ final class GraphQLService: Sendable {
     ) async throws -> T {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
+        request.timeoutInterval = 25
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let token {
@@ -89,6 +90,25 @@ final class GraphQLService: Sendable {
         }
 
         let dataJSON = try JSONSerialization.data(withJSONObject: dataNode)
-        return try decoder.decode(T.self, from: dataJSON)
+        do {
+            return try decoder.decode(T.self, from: dataJSON)
+        } catch let error as DecodingError {
+            throw GraphQLError.gql("Response decoding failed: \(Self.describeDecodingError(error))")
+        }
+    }
+
+    private static func describeDecodingError(_ error: DecodingError) -> String {
+        switch error {
+        case .keyNotFound(let key, let context):
+            "Missing field '\(key.stringValue)' at \(context.codingPath.map(\.stringValue).joined(separator: "."))"
+        case .valueNotFound(_, let context):
+            "Missing value at \(context.codingPath.map(\.stringValue).joined(separator: "."))"
+        case .typeMismatch(let type, let context):
+            "Type mismatch for \(type) at \(context.codingPath.map(\.stringValue).joined(separator: "."))"
+        case .dataCorrupted(let context):
+            context.debugDescription
+        @unknown default:
+            error.localizedDescription
+        }
     }
 }
