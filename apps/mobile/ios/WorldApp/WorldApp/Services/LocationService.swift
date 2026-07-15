@@ -15,6 +15,10 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
         manager.desiredAccuracy = kCLLocationAccuracyKilometer
     }
 
+    func requestAuthorizationIfNeeded() async -> Bool {
+        await ensureAuthorization()
+    }
+
     func currentCoordinate() async -> CLLocationCoordinate2D? {
         guard await ensureAuthorization() else { return nil }
 

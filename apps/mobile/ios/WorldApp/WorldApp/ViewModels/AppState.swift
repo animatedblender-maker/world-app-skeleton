@@ -69,6 +69,8 @@ final class AppState {
             return
         }
 
+        await AppPermissionsService.shared.requestEssentialPermissionsOnLaunch()
+
         VoIPPushService.shared.bootstrap()
         reelPresentationSavedIDs = loadReelPresentationSavedIDs()
         isAuthenticated = auth.isAuthenticated
@@ -140,7 +142,7 @@ final class AppState {
             VoIPPushService.shared.bootstrap()
             await VoIPPushService.shared.ensureToken()
             await PushNotificationService.shared.syncWithServer(force: true)
-            await PushNotificationService.shared.requestAuthorizationAndRegister()
+            await PushNotificationService.shared.registerForRemoteNotificationsIfAuthorized()
             await VoIPPushService.shared.ensureToken()
             await PushNotificationService.shared.syncWithServer(force: true)
         }

@@ -166,6 +166,16 @@ final class PushNotificationService: NSObject, UNUserNotificationCenterDelegate 
             return
         }
 
+        await registerForRemoteNotifications()
+    }
+
+    func registerForRemoteNotificationsIfAuthorized() async {
+        configure()
+        guard await notificationsAuthorized() else { return }
+        await registerForRemoteNotifications()
+    }
+
+    private func registerForRemoteNotifications() async {
         await MainActor.run {
             UIApplication.shared.registerForRemoteNotifications()
         }
