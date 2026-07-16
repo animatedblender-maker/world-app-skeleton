@@ -5,6 +5,7 @@ struct FacebookPostCard: View {
     @Environment(AppState.self) private var appState
 
     let post: CountryPost
+    var edgeToEdge: Bool = false
     var showsAuthorHeader: Bool = true
     var showsAuthorInJournal: Bool = false
     var mediaContext: MediaContext = .feed
@@ -30,6 +31,10 @@ struct FacebookPostCard: View {
     private var isOwnPost: Bool {
         guard let userID = appState.currentProfile?.userID else { return false }
         return post.authorID == userID
+    }
+
+    private var horizontalGutter: CGFloat {
+        edgeToEdge ? Theme.feedGutter : Theme.pagePadding
     }
 
     private var opensAsSpark: Bool {
@@ -98,7 +103,7 @@ struct FacebookPostCard: View {
                     .foregroundStyle(Theme.inkSecondary)
                     .lineSpacing(4)
                     .lineLimit(post.hasMedia ? 4 : 8)
-                    .padding(.horizontal, Theme.pagePadding)
+                    .padding(.horizontal, horizontalGutter)
                     .padding(.top, post.hasMedia ? 12 : 0)
                     .padding(.bottom, 4)
                     .contentShape(Rectangle())
@@ -112,7 +117,7 @@ struct FacebookPostCard: View {
                 Text(actionMessage)
                     .font(.caption)
                     .foregroundStyle(Theme.inkMuted)
-                    .padding(.horizontal, Theme.pagePadding)
+                    .padding(.horizontal, horizontalGutter)
                     .padding(.bottom, 8)
             }
 
@@ -125,7 +130,7 @@ struct FacebookPostCard: View {
                     comments: $inlineComments,
                     onError: { commentError = $0 }
                 )
-                .padding(.horizontal, Theme.pagePadding)
+                .padding(.horizontal, horizontalGutter)
                 .padding(.top, 10)
                 .padding(.bottom, 12)
 
@@ -133,17 +138,25 @@ struct FacebookPostCard: View {
                     Text(commentError)
                         .font(.caption)
                         .foregroundStyle(Theme.danger)
-                        .padding(.horizontal, Theme.pagePadding)
+                        .padding(.horizontal, horizontalGutter)
                         .padding(.bottom, 8)
                 }
             }
         }
-        .background(Theme.surface)
+        .background(edgeToEdge ? Theme.canvas : Theme.surface)
         .clipShape(cardShape)
-        .overlay(
-            cardShape
-                .stroke(Theme.border, lineWidth: 0.5)
-        )
+        .overlay {
+            if !edgeToEdge {
+                cardShape
+                    .stroke(Theme.border, lineWidth: 0.5)
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if edgeToEdge {
+                Theme.divider.frame(height: 0.5)
+            }
+        }
+        .padding(.bottom, edgeToEdge ? 10 : 0)
 
         .onAppear {
             if commentsInitiallyExpanded {
@@ -209,7 +222,7 @@ struct FacebookPostCard: View {
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, Theme.pagePadding)
+        .padding(.horizontal, horizontalGutter)
         .padding(.top, 14)
         .padding(.bottom, 10)
     }
@@ -263,7 +276,7 @@ struct FacebookPostCard: View {
                 postTimestampRow
             }
         }
-        .padding(.horizontal, Theme.pagePadding)
+        .padding(.horizontal, horizontalGutter)
         .padding(.top, 20)
         .padding(.bottom, 14)
     }
@@ -318,6 +331,15 @@ struct FacebookPostCard: View {
     }
 
     private var cardShape: UnevenRoundedRectangle {
+        if edgeToEdge {
+            return UnevenRoundedRectangle(
+                topLeadingRadius: 0,
+                bottomLeadingRadius: 0,
+                bottomTrailingRadius: 0,
+                topTrailingRadius: 0,
+                style: .continuous
+            )
+        }
         if usesYouTubeVideoFrame, post.hasMedia, !showsPlayLinkInFeed {
             return UnevenRoundedRectangle(
                 topLeadingRadius: 0,
@@ -458,7 +480,7 @@ struct FacebookPostCard: View {
 
             Spacer()
         }
-        .padding(.horizontal, Theme.pagePadding)
+        .padding(.horizontal, horizontalGutter)
         .padding(.top, 10)
         .padding(.bottom, 4)
     }
@@ -495,7 +517,7 @@ struct FacebookPostCard: View {
 
 
         }
-        .padding(.horizontal, Theme.pagePadding)
+        .padding(.horizontal, horizontalGutter)
         .padding(.bottom, 14)
     }
 

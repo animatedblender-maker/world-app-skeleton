@@ -163,7 +163,10 @@ struct PostDetailView: View {
             } else {
                 try await PostsService.shared.likePost(post.id)
             }
-            self.post = try await PostsService.shared.getPostByID(postID)
+            if let refreshed = try await PostsService.shared.getPostByID(postID) {
+                self.post = refreshed
+                PostsService.shared.publishPostChange(refreshed)
+            }
         } catch {
             errorMessage = error.localizedDescription
         }

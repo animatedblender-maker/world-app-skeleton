@@ -53,6 +53,8 @@ final class CallSessionManager: NSObject {
     private var incomingPresentedViaCallKit = false
     private(set) var hasEndedCurrentCall = false
     private var remoteDisconnectTask: Task<Void, Never>?
+    private var roomReconnectTask: Task<Void, Never>?
+    private var roomReconnectAttempts = 0
 
     private override init() {
         super.init()
@@ -211,6 +213,7 @@ final class CallSessionManager: NSObject {
         callLogSent = false
         outgoingPhase = .calling
         hasEndedCurrentCall = false
+        roomReconnectAttempts = 0
 
         do {
             CallKitManager.shared.reportOutgoingCall(
@@ -891,6 +894,9 @@ final class CallSessionManager: NSObject {
         outgoingTimeoutTask = nil
         remoteDisconnectTask?.cancel()
         remoteDisconnectTask = nil
+        roomReconnectTask?.cancel()
+        roomReconnectTask = nil
+        roomReconnectAttempts = 0
         let endedConversationID = conversationID
         let shouldNotifyRemote = notifyRemote || sentCallAccept || isActive
         CallSoundService.shared.stop()
@@ -1000,9 +1006,11 @@ extension CallSessionManager: RoomDelegate {
     nonisolated func room(_ room: Room, participantDidDisconnect participant: RemoteParticipant) {
         Task { @MainActor in
             guard self.isActive, self.room === room else { return }
+            // Wait for explicit call-end signaling; LiveKit can briefly drop participants
+            // during track or network churn.
             self.remoteDisconnectTask?.cancel()
             self.remoteDisconnectTask = Task {
-                try? await Task.sleep(nanoseconds: 8_000_000_000)
+                try? await Task.sleep(nanoseconds: 20_000_000_000)
                 guard !Task.isCancelled, self.isActive, self.room === room else { return }
                 guard self.room?.remoteParticipants.isEmpty == true else { return }
                 self.endCall()
@@ -1033,23 +1041,36 @@ extension CallSessionManager: RoomDelegate {
         }
     }
 
+    private func scheduleRoomReconnect(reason: String?) {
+        guard isActive, !hasEndedCurrentCall, roomReconnectAttempts < 3 else {
+            if isActive { endCall() }
+            return
+        }
+        roomReconnectTask?.cancel()
+        roomReconnectTask = Task {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard !Task.isCancelled, self.isActive, !self.hasEndedCurrentCall else { return }
+            self.roomReconnectAttempts += 1
+            if let reason, !reason.isEmpty {
+                self.errorMessage = "Reconnecting…"
+            }
+            do {
+                try await self.connectRoom(video: self.callKind == .video)
+                self.errorMessage = nil
+                self.roomReconnectAttempts = 0
+                await self.refreshLocalAudioCapture()
+                self.evaluateConnectedState()
+            } catch {
+                self.scheduleRoomReconnect(reason: error.localizedDescription)
+            }
+        }
+    }
+
     nonisolated func room(_ room: Room, didDisconnectWithError error: LiveKitError?) {
         Task { @MainActor in
             guard self.room === room, !self.hasEndedCurrentCall else { return }
             if self.isActive {
-                // Transient LiveKit drops can happen during CallKit audio handoff.
-                let shouldEnd = error != nil
-                if shouldEnd {
-                    self.errorMessage = error?.localizedDescription
-                    self.endCall()
-                } else {
-                    self.remoteDisconnectTask?.cancel()
-                    self.remoteDisconnectTask = Task {
-                        try? await Task.sleep(nanoseconds: 5_000_000_000)
-                        guard !Task.isCancelled, self.isActive, self.room?.connectionState != .connected else { return }
-                        self.endCall()
-                    }
-                }
+                self.scheduleRoomReconnect(reason: error?.localizedDescription)
             } else if self.sentCallAccept {
                 if let error { self.errorMessage = error.localizedDescription }
                 self.cleanup(notifyRemote: true, endCallKit: true)

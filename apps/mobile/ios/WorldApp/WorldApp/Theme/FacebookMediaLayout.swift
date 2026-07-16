@@ -11,8 +11,8 @@ enum FacebookMediaLayout {
     static let feedVideoAspect: CGFloat = 16.0 / 9.0
     /// Facebook Reels / Stories vertical video (9:16).
     static let reelAspect: CGFloat = 9.0 / 16.0
-    /// Max height for in-feed photos and videos (Facebook-style cap).
-    static let maxFeedMediaHeight: CGFloat = 420
+    /// Max height for in-feed photos and videos — tall enough for 4:5 immersion on phones.
+    static let maxFeedMediaHeight: CGFloat = 520
 
     static func mediaHeight(for width: CGFloat, post: CountryPost, context: MediaContext = .feed) -> CGFloat {
         let aspect = aspectRatio(for: post, context: context) ?? photoPortraitAspect

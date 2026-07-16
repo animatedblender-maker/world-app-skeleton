@@ -681,6 +681,19 @@ final class PostsService {
         let _: EmptyMutation = try await gql.authenticatedRequest(query: mutation, variables: ["postId": postID])
     }
 
+    func publishPostChange(_ post: CountryPost) {
+        if var cached = ContentCache.shared.posts(for: .homeFeed),
+           let index = cached.firstIndex(where: { $0.id == post.id }) {
+            cached[index] = post
+            ContentCache.shared.setPosts(cached, for: .homeFeed)
+        }
+        NotificationCenter.default.post(
+            name: .userPostsDidChange,
+            object: nil,
+            userInfo: ["post": post]
+        )
+    }
+
     private static let localBookmarksOnlyKey = "posts.bookmarks.local_only"
 
     static var usesLocalBookmarksOnly: Bool {

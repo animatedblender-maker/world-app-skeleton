@@ -40,7 +40,7 @@ struct MatteryaTopBar: View {
                         Image(systemName: "bell")
                             .font(.system(size: 22, weight: .light))
                             .foregroundStyle(Theme.ink)
-                        if appState.notificationsUnreadCount > 0 {
+                        if appState.effectiveNotificationsUnreadCount > 0 {
                             Circle()
                                 .fill(Theme.danger)
                                 .frame(width: 7, height: 7)

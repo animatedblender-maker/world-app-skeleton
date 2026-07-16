@@ -21,7 +21,11 @@ final class AppState {
     var notifications: [NotificationItem] = []
 
     var effectiveNotificationsUnreadCount: Int {
-        max(notificationsUnreadCount, notifications.filter(\.isUnread).count)
+        let socialUnread = notifications.filter { !$0.isMessageType && $0.isUnread }.count
+        if !notifications.isEmpty {
+            return socialUnread
+        }
+        return notificationsUnreadCount
     }
     var followingIDs: Set<String> = []
     var savedPostIDs: Set<String> = []
@@ -954,10 +958,15 @@ final class AppState {
     }
 
     func markAllNotificationsRead() async {
+        do {
+            try await notificationsService.markAllRead()
+        } catch {
+            showToast("Could not mark notifications read", style: .error)
+            return
+        }
         notifications = notifications.map { $0.markedAsRead() }
         notificationsUnreadCount = 0
-        try? await notificationsService.markAllRead()
-        await refreshNotifications()
+        await refreshUnreadCounts()
     }
 
     func openNotification(_ notification: NotificationItem) async {

@@ -44,6 +44,7 @@ enum Theme {
     static let cardRadius: CGFloat = 12
     static let controlRadius: CGFloat = 8
     static let pagePadding: CGFloat = 16
+    static let feedGutter: CGFloat = 14
     static let cardPadding: CGFloat = 12
     static let tabBarHeight: CGFloat = 49
 }

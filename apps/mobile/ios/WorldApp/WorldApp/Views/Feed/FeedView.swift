@@ -61,19 +61,22 @@ struct FeedView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .userPostsDidChange)) { notification in
-            guard let created = notification.userInfo?["post"] as? CountryPost else { return }
-            if created.isStory {
-                appState.mergeStoryPost(created)
-            } else if !created.isSpark,
-                      !posts.contains(where: { $0.id == created.id }) {
-                posts.insert(created, at: 0)
+            guard let changed = notification.userInfo?["post"] as? CountryPost else { return }
+            if changed.isStory {
+                appState.mergeStoryPost(changed)
+                return
+            }
+            if let index = posts.firstIndex(where: { $0.id == changed.id }) {
+                posts[index] = changed
+            } else if !changed.isSpark {
+                posts.insert(changed, at: 0)
             }
         }
     }
 
     private var feedList: some View {
         ScrollView {
-            LazyVStack(spacing: 18) {
+            LazyVStack(spacing: 0) {
                 StoriesStripView()
                     .padding(.horizontal, Theme.pagePadding)
 
@@ -92,6 +95,7 @@ struct FeedView: View {
                 ForEach(displayedPosts) { post in
                     FacebookPostCard(
                         post: post,
+                        edgeToEdge: true,
                         showsAuthorHeader: false,
                         showsAuthorInJournal: true,
                         onLikeToggle: { Task { await toggleLike(post) } },
@@ -113,7 +117,6 @@ struct FeedView: View {
                             }
                         }
                     )
-                    .padding(.horizontal, Theme.pagePadding)
                     .onAppear {
                         loadMoreIfNeeded(for: post)
                     }
@@ -367,13 +370,16 @@ struct FeedView: View {
     private func toggleLike(_ post: CountryPost) async {
         guard let index = posts.firstIndex(where: { $0.id == post.id }) else { return }
         do {
+            let updated: CountryPost
             if post.likedByMe {
                 try await PostsService.shared.unlikePost(post.id)
-                posts[index] = copyPost(post, likedByMe: false, likeCount: max(0, post.likeCount - 1))
+                updated = copyPost(post, likedByMe: false, likeCount: max(0, post.likeCount - 1))
             } else {
                 try await PostsService.shared.likePost(post.id)
-                posts[index] = copyPost(post, likedByMe: true, likeCount: post.likeCount + 1)
+                updated = copyPost(post, likedByMe: true, likeCount: post.likeCount + 1)
             }
+            posts[index] = updated
+            PostsService.shared.publishPostChange(updated)
         } catch {
             errorMessage = error.localizedDescription
         }

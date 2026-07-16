@@ -35,7 +35,9 @@ export class NotificationsService {
       `
       select count(*)::int as total
       from public.notifications
-      where user_id = $1 and read_at is null
+      where user_id = $1
+        and read_at is null
+        and type <> 'message'
       `,
       [userId]
     );

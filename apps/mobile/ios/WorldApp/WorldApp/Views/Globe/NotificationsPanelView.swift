@@ -8,7 +8,7 @@ struct NotificationsPanelView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("NOTIFICATIONS")
                     .sectionLabel()
-                Text("Unread: \(appState.effectiveNotificationsUnreadCount)")
+                Text(notificationSummary)
                     .font(.caption)
                     .foregroundStyle(Theme.inkMuted)
             }
@@ -125,6 +125,20 @@ struct NotificationsPanelView: View {
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
                     .stroke(Theme.border, lineWidth: 0.5)
             )
+    }
+
+    private var notificationSummary: String {
+        var parts: [String] = []
+        let social = appState.effectiveNotificationsUnreadCount
+        if social > 0 {
+            parts.append("Unread: \(social)")
+        } else {
+            parts.append("All caught up")
+        }
+        if appState.messagesUnreadCount > 0 {
+            parts.append("\(appState.messagesUnreadCount) in Messages")
+        }
+        return parts.joined(separator: " · ")
     }
 
     private func notificationTitle(_ n: NotificationItem) -> String {
