@@ -247,17 +247,38 @@ export class AppComponent {
     this.isMessagesRoute = url.startsWith('/messages');
     this.isProfileRoute = url.startsWith('/me') || url.startsWith('/user');
     this.isReelsRoute = url.startsWith('/reels');
-    this.isSearchRoute = url.startsWith('/search');
     let parsed: URL | null = null;
     try {
       parsed = new URL(url, window.location.origin);
     } catch {}
     const pathname = parsed?.pathname ?? url;
     this.isAdsRoute = pathname.startsWith('/ads');
-    const isGlobe =
-      pathname === '/' || pathname.startsWith('/globe') || pathname.startsWith('/globe-cesium');
-    const hasCountry = !!parsed?.searchParams?.get('country');
-    this.showTravelButton = isGlobe && !hasCountry;
+    // Hide legacy floating bell/travel — pages use app-matterya-topbar / in-page chrome.
+    const hasOwnChrome =
+      pathname === '/' ||
+      pathname.startsWith('/feed') ||
+      pathname.startsWith('/hubs') ||
+      pathname.startsWith('/globe') ||
+      pathname.startsWith('/globe-cesium') ||
+      pathname.startsWith('/reels') ||
+      pathname.startsWith('/sparks') ||
+      pathname.startsWith('/search') ||
+      pathname.startsWith('/messages') ||
+      pathname.startsWith('/call') ||
+      pathname.startsWith('/me') ||
+      pathname.startsWith('/user') ||
+      pathname.startsWith('/profile') ||
+      pathname.startsWith('/settings') ||
+      pathname.startsWith('/travel') ||
+      pathname.startsWith('/notifications') ||
+      pathname.startsWith('/auth') ||
+      pathname.startsWith('/onboarding') ||
+      pathname.startsWith('/welcome') ||
+      pathname.startsWith('/admin') ||
+      pathname.startsWith('/legal') ||
+      pathname.startsWith('/ads');
+    this.isSearchRoute = hasOwnChrome || pathname.startsWith('/search');
+    this.showTravelButton = false;
   }
 
   private syncRootBackground(url: string): void {
@@ -276,14 +297,26 @@ export class AppComponent {
     } catch {}
     const pathname = parsed?.pathname ?? url;
     const isGlobe =
-      pathname.startsWith('/globe') || pathname === '/' || pathname.startsWith('/globe-cesium');
+      pathname.startsWith('/globe') || pathname.startsWith('/globe-cesium');
     const isReels = pathname.startsWith('/reels');
-    const isFeed = isGlobe && !!parsed?.searchParams?.get('country');
+    const isCountryFeed = isGlobe && !!parsed?.searchParams?.get('country');
+    const isHomeFeed =
+      pathname === '/' ||
+      pathname.startsWith('/feed') ||
+      pathname.startsWith('/hubs') ||
+      pathname.startsWith('/messages') ||
+      pathname.startsWith('/me') ||
+      pathname.startsWith('/user') ||
+      pathname.startsWith('/search') ||
+      pathname.startsWith('/post');
 
-    if (isFeed) {
+    if (isHomeFeed || isCountryFeed) {
       root.classList.add('app-bg-feed');
+      // Clear any leftover inline overflow locks so paper pages can scroll.
+      document.documentElement.style.overflowY = '';
+      document.body.style.overflowY = '';
       const computed = getComputedStyle(root).getPropertyValue('--app-bg').trim();
-      setTheme(computed || '#f5f6f8');
+      setTheme(computed || '#f8f6f2');
       return;
     }
     if (isGlobe || isReels) {
@@ -294,7 +327,7 @@ export class AppComponent {
     }
     root.classList.add('app-bg-light');
     const computed = getComputedStyle(root).getPropertyValue('--app-bg').trim();
-    setTheme(computed || '#f5f6f8');
+    setTheme(computed || '#f8f6f2');
   }
 
   openTravelSearch(): void {
@@ -329,17 +362,27 @@ export class AppComponent {
 
   acceptCall(): void {
     if (!this.incomingCall) return;
-    const { conversationId, callType, from } = this.incomingCall;
+    const { conversationId, callType, from, callId, roomName } = this.incomingCall;
     this.callService.clearIncomingCall();
     void this.router.navigate(['/messages'], {
-      queryParams: { c: conversationId, call: callType, from },
+      queryParams: {
+        c: conversationId,
+        call: callType,
+        from,
+        callId: callId || null,
+        room: roomName || null,
+        accept: '1',
+      },
     });
   }
 
   declineCall(): void {
     if (!this.incomingCall) return;
     const { conversationId, callId } = this.incomingCall;
-    this.callService.sendSignal('call-decline', conversationId, { callId });
+    this.callService.sendSignal('call-decline', conversationId, {
+      callId,
+      to: this.incomingCall.from,
+    });
     this.callService.clearIncomingCall();
   }
 

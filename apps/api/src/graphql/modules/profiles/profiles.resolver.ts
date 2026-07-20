@@ -39,22 +39,22 @@ export const profilesResolvers = {
       return await svc().getMeProfile(u.id);
     },
 
-    profileById: async (_: any, args: { user_id: string }) => {
+    profileById: async (_: any, args: { user_id: string }, ctx: Context) => {
       if (!args?.user_id) return null;
-      return await svc().getProfileById(args.user_id);
+      return await svc().getProfileById(args.user_id, ctx.user?.id ?? null);
     },
 
-    profileByUsername: async (_: any, args: { username: string }) => {
+    profileByUsername: async (_: any, args: { username: string }, ctx: Context) => {
       if (!args?.username) return null;
-      return await svc().getProfileByUsername(args.username);
+      return await svc().getProfileByUsername(args.username, ctx.user?.id ?? null);
     },
-    searchProfiles: async (_: any, args: { query: string; limit?: number }) => {
+    searchProfiles: async (_: any, args: { query: string; limit?: number }, ctx: Context) => {
       const raw = (args?.query ?? '').trim();
       if (!raw) return [];
-      return await svc().searchProfiles(raw, args?.limit ?? 6);
+      return await svc().searchProfiles(raw, args?.limit ?? 6, ctx.user?.id ?? null);
     },
-    browseProfiles: async (_: any, args: { limit?: number; offset?: number }) => {
-      return await svc().browseProfiles(args?.limit ?? 80, args?.offset ?? 0);
+    browseProfiles: async (_: any, args: { limit?: number; offset?: number }, ctx: Context) => {
+      return await svc().browseProfiles(args?.limit ?? 80, args?.offset ?? 0, ctx.user?.id ?? null);
     },
   },
 

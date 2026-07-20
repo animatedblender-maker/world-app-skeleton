@@ -9,7 +9,7 @@ export type DetectedLocation = {
 };
 
 const DETECT_LOCATION = `
-mutation DetectLocation($lat: Float!, $lng: Float!) {
+mutation DetectLocation($lat: Float, $lng: Float) {
   detectLocation(lat: $lat, lng: $lng) {
     countryCode
     countryName
@@ -23,28 +23,126 @@ mutation DetectLocation($lat: Float!, $lng: Float!) {
 export class LocationService {
   constructor(private gql: GqlService) {}
 
-  // ✅ THIS is what profile-setup.page.ts calls
+  /**
+   * Auto-detect country for profile setup / posting home:
+   * 1) browser GPS → server reverse-geocode
+   * 2) server IP geo (caller's IP via API)
+   * 3) client-side IP APIs (when server cannot see real client IP)
+   * 4) last cached location
+   */
   async detectViaGpsThenServer(timeoutMs = 8000): Promise<DetectedLocation | null> {
     const cached = this.getCachedLocation();
+
     const coords = await this.getBrowserCoords(timeoutMs);
-    if (!coords) return cached;
-
-    try {
-      const res = await this.gql.request<{ detectLocation: DetectedLocation }>(
-        DETECT_LOCATION,
-        { lat: coords.lat, lng: coords.lng }
-      );
-
-      if (res.detectLocation?.countryCode && res.detectLocation?.countryName) {
-        this.setCachedLocation(res.detectLocation);
+    if (coords) {
+      try {
+        const res = await this.gql.request<{ detectLocation: DetectedLocation }>(DETECT_LOCATION, {
+          lat: coords.lat,
+          lng: coords.lng,
+        });
+        const loc = this.normalize(res.detectLocation);
+        if (loc) {
+          this.setCachedLocation(loc);
+          return loc;
+        }
+      } catch {
+        // fall through
       }
-      return res.detectLocation ?? cached;
-    } catch {
-      return cached;
     }
+
+    // Server-side IP from request headers (works in production behind a proxy).
+    try {
+      const res = await this.gql.request<{ detectLocation: DetectedLocation }>(DETECT_LOCATION, {
+        lat: null,
+        lng: null,
+      });
+      const loc = this.normalize(res.detectLocation);
+      if (loc) {
+        this.setCachedLocation(loc);
+        return loc;
+      }
+    } catch {
+      // fall through
+    }
+
+    // Browser-side IP geo (user's real public IP even when API is remote).
+    const fromBrowserIp = await this.detectViaBrowserIp();
+    if (fromBrowserIp) {
+      this.setCachedLocation(fromBrowserIp);
+      return fromBrowserIp;
+    }
+
+    return cached;
   }
 
-  // Internal helper
+  private normalize(raw: DetectedLocation | null | undefined): DetectedLocation | null {
+    if (!raw) return null;
+    const countryCode = String(raw.countryCode || '').trim().toUpperCase();
+    const countryName = String(raw.countryName || '').trim();
+    if (!countryCode || !countryName || countryName === 'Unknown' || countryCode === 'XX') {
+      return null;
+    }
+    return {
+      countryCode,
+      countryName,
+      cityName: raw.cityName ?? null,
+      source: raw.source || 'ip',
+    };
+  }
+
+  private async detectViaBrowserIp(): Promise<DetectedLocation | null> {
+    const endpoints = [
+      {
+        url: 'https://ipapi.co/json/',
+        map: (j: any): DetectedLocation | null => {
+          const countryCode = String(j?.country_code ?? '').toUpperCase();
+          const countryName = String(j?.country_name ?? '');
+          if (!countryCode || !countryName || j?.error) return null;
+          return {
+            countryCode,
+            countryName,
+            cityName: j?.city ?? null,
+            source: 'ip',
+          };
+        },
+      },
+      {
+        url: 'https://ipwho.is/',
+        map: (j: any): DetectedLocation | null => {
+          if (j?.success === false) return null;
+          const countryCode = String(j?.country_code ?? '').toUpperCase();
+          const countryName = String(j?.country ?? '');
+          if (!countryCode || !countryName) return null;
+          return {
+            countryCode,
+            countryName,
+            cityName: j?.city ?? null,
+            source: 'ip',
+          };
+        },
+      },
+    ];
+
+    for (const ep of endpoints) {
+      try {
+        const controller = new AbortController();
+        const t = window.setTimeout(() => controller.abort(), 4000);
+        const res = await fetch(ep.url, {
+          signal: controller.signal,
+          headers: { Accept: 'application/json' },
+        });
+        clearTimeout(t);
+        if (!res.ok) continue;
+        const json = await res.json();
+        const loc = ep.map(json);
+        if (loc) return loc;
+      } catch {
+        // try next
+      }
+    }
+    return null;
+  }
+
   private getBrowserCoords(
     timeoutMs: number
   ): Promise<{ lat: number; lng: number } | null> {
@@ -86,8 +184,7 @@ export class LocationService {
       const raw = localStorage.getItem('matterya:lastLocation');
       if (!raw) return null;
       const parsed = JSON.parse(raw) as DetectedLocation;
-      if (!parsed?.countryCode || !parsed?.countryName) return null;
-      return parsed;
+      return this.normalize(parsed);
     } catch {
       return null;
     }

@@ -36,14 +36,12 @@ export class SearchUiService {
       return;
     }
 
-    // click outside suggestions closes
     document.addEventListener('mousedown', (e) => {
       const t = e.target as any;
       if (!this.suggEl) return;
       if (!this.suggEl.contains(t) && t !== this.searchInput) this.clearSuggestions();
     });
 
-    // clear button
     this.clearBtn.addEventListener('click', () => {
       hooks.onClear();
       this.setInputValue('');
@@ -51,17 +49,14 @@ export class SearchUiService {
       this.clearSuggestions();
     });
 
-    // input => suggestions
     this.searchInput.addEventListener('input', () => {
       const raw = (this.searchInput?.value || '').trim();
       this.setClearButtonVisible(hooks.isFocusMode() || raw.length > 0);
       this.updateSuggestions();
     });
 
-    // GO
     this.goBtn.addEventListener('click', () => this.runSearch());
 
-    // keyboard
     this.searchInput.addEventListener('keydown', (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         hooks.onClear();
@@ -88,7 +83,6 @@ export class SearchUiService {
       if (e.key === 'Enter') this.runSearch();
     });
 
-    // initial
     this.setClearButtonVisible(false);
     this.clearSuggestions();
   }
@@ -101,8 +95,6 @@ export class SearchUiService {
     if (!this.clearBtn) return;
     this.clearBtn.style.display = show ? 'flex' : 'none';
   }
-
-  /** ---------- suggestions ---------- */
 
   private updateSuggestions(): void {
     if (!this.hooks) return;
@@ -167,8 +159,6 @@ export class SearchUiService {
       this.suggEl.innerHTML = '';
     }
   }
-
-  /** ---------- run search ---------- */
 
   private runSearch(): void {
     if (!this.hooks) return;

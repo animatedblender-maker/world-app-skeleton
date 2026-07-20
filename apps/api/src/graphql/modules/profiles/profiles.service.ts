@@ -1,6 +1,6 @@
 import { pool } from '../../../db.js';
 
-type ProfileRow = {
+export type ProfileRow = {
   user_id: string;
   email: string | null;
   display_name: string | null;
@@ -10,6 +10,7 @@ type ProfileRow = {
   country_code: string | null;
   city_name: string | null;
   bio: string | null;
+  is_private: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -22,22 +23,51 @@ type UpdateProfileInput = {
   country_code?: string | null;
   city_name?: string | null;
   bio?: string | null;
+  is_private?: boolean | null;
 };
 
 export class ProfilesService {
-  async getMeProfile(userId: string): Promise<ProfileRow | null> {
-    return await this.getProfileById(userId);
+  /** Owner always sees full data; others lose avatar (and bio/city) when private. */
+  redactForViewer(profile: ProfileRow | null, viewerId: string | null): ProfileRow | null {
+    if (!profile) return null;
+    const isPrivate = !!profile.is_private;
+    const isOwner = !!viewerId && viewerId === profile.user_id;
+    if (!isPrivate || isOwner) {
+      return {
+        ...profile,
+        is_private: isPrivate,
+      };
+    }
+    return {
+      ...profile,
+      is_private: true,
+      avatar_url: null,
+      bio: null,
+      city_name: null,
+      email: null,
+    };
   }
 
-  async getProfileById(userId: string): Promise<ProfileRow | null> {
+  async getMeProfile(userId: string): Promise<ProfileRow | null> {
+    return await this.getProfileByIdRaw(userId);
+  }
+
+  async getProfileById(userId: string, viewerId: string | null = null): Promise<ProfileRow | null> {
+    return this.redactForViewer(await this.getProfileByIdRaw(userId), viewerId);
+  }
+
+  async getProfileByIdRaw(userId: string): Promise<ProfileRow | null> {
     const { rows } = await pool.query(
       `select * from public.profiles where user_id = $1 limit 1`,
       [userId]
     );
-    return (rows[0] as ProfileRow) ?? null;
+    return this.normalize(rows[0] as ProfileRow | undefined);
   }
 
-  async getProfileByUsername(username: string): Promise<ProfileRow | null> {
+  async getProfileByUsername(
+    username: string,
+    viewerId: string | null = null
+  ): Promise<ProfileRow | null> {
     const { rows } = await pool.query(
       `
       select * from public.profiles
@@ -46,7 +76,7 @@ export class ProfilesService {
       `,
       [username]
     );
-    return (rows[0] as ProfileRow) ?? null;
+    return this.redactForViewer(this.normalize(rows[0] as ProfileRow | undefined), viewerId);
   }
 
   async updateProfile(userId: string, input: UpdateProfileInput): Promise<ProfileRow> {
@@ -70,6 +100,7 @@ export class ProfilesService {
           country_code = coalesce($6, country_code),
           city_name    = coalesce($7, city_name),
           bio          = coalesce($8, bio),
+          is_private   = coalesce($9, is_private),
           updated_at   = now()
         where user_id = $1
         returning *
@@ -83,11 +114,12 @@ export class ProfilesService {
           input.country_code ?? null,
           input.city_name ?? null,
           input.bio ?? null,
+          typeof input.is_private === 'boolean' ? input.is_private : null,
         ]
       );
 
       if (!rows[0]) throw new Error('PROFILE_UPDATE_FAILED');
-      return rows[0] as ProfileRow;
+      return this.normalize(rows[0] as ProfileRow)!;
     } catch (err: any) {
       if (err?.code === '23505' && String(err?.constraint ?? '').includes('profiles_username')) {
         throw new Error('Handle already taken.');
@@ -96,7 +128,7 @@ export class ProfilesService {
     }
   }
 
-  async searchProfiles(query: string, limit: number): Promise<ProfileRow[]> {
+  async searchProfiles(query: string, limit: number, viewerId: string | null = null): Promise<ProfileRow[]> {
     const raw = (query || '').trim();
     if (!raw) return [];
     const iso = raw.toLowerCase();
@@ -125,10 +157,16 @@ export class ProfilesService {
       [raw, pattern, max]
     );
 
-    return rows as ProfileRow[];
+    return (rows as ProfileRow[])
+      .map((row) => this.normalize(row)!)
+      .map((row) => this.redactForViewer(row, viewerId)!);
   }
 
-  async browseProfiles(limit: number, offset: number): Promise<ProfileRow[]> {
+  async browseProfiles(
+    limit: number,
+    offset: number,
+    viewerId: string | null = null
+  ): Promise<ProfileRow[]> {
     const max = Math.max(1, Math.min(200, limit));
     const start = Math.max(0, offset);
     const { rows } = await pool.query(
@@ -141,6 +179,16 @@ export class ProfilesService {
       `,
       [max, start]
     );
-    return rows as ProfileRow[];
+    return (rows as ProfileRow[])
+      .map((row) => this.normalize(row)!)
+      .map((row) => this.redactForViewer(row, viewerId)!);
+  }
+
+  private normalize(row: ProfileRow | undefined | null): ProfileRow | null {
+    if (!row) return null;
+    return {
+      ...row,
+      is_private: !!(row as any).is_private,
+    };
   }
 }

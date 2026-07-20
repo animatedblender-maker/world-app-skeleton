@@ -10,20 +10,15 @@ export const authGuard: CanActivateFn = async (_route, state) => {
 
   const url = state.url || '/';
 
-  // ✅ Always allow public routes (guard is not applied there now, but future-proof)
   if (url.startsWith('/auth') || url.startsWith('/reset-password')) {
     return true;
   }
 
-  // 1) Must be logged in
   const user = await auth.getUser();
   if (!user) return router.parseUrl('/auth');
 
-  // 2) Always allow profile setup route (so user can finish profile)
   if (url.startsWith('/profile-setup')) return true;
 
-  // 3) If profile is missing, prefer allowing navigation over trapping
-  //    established users in profile-setup due to environment/data drift.
   try {
     const { meProfile } = await profiles.meProfile();
     if (meProfile) return true;

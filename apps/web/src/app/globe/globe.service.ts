@@ -3,7 +3,6 @@ import type { CountryModel } from '../data/countries.service';
 
 type CountriesPayload = { features: any[]; countries: CountryModel[] };
 
-/** Connection point model (floating dots / stars). */
 export type ConnectionPoint = {
   id: string | number;
   lat: number;
@@ -170,10 +169,8 @@ export class GlobeService {
           shouldAnimate: true,
         });
 
-      // Hide Cesium credits/logo.
       try { viewer.cesiumWidget.creditContainer.style.display = 'none'; } catch {}
 
-      // Stylized globe (no photo imagery).
       viewer.imageryLayers.removeAll();
 
         viewer.scene.globe.enableLighting = false;
@@ -398,7 +395,6 @@ export class GlobeService {
       this.viewer.dataSources.add(labels);
     });
 
-    // Labels enabled for country names.
   }
 
   setConnections(points: ConnectionPoint[]): void {
@@ -468,10 +464,6 @@ export class GlobeService {
       duration: 0.9,
     });
   }
-
-  // -----------------------------
-  // Overlay: stars + projectiles
-  // -----------------------------
 
   private installOverlay(host: HTMLElement) {
     if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
@@ -1222,10 +1214,6 @@ export class GlobeService {
     const dy = (y - cy) / globeRy;
     return dx * dx + dy * dy < 1.02;
   }
-
-  // -----------------------------
-  // Helpers
-  // -----------------------------
 
   private altitudeToHeight(altitude: number): number {
     if (!Number.isFinite(altitude) || altitude <= 0) return 8_000_000;

@@ -6,6 +6,6 @@ export const environment = {
   apiBaseUrl: 'https://api.matterya.com',
   livekitUrl: 'wss://world-app-9jjcc056.livekit.cloud',
   pushPublicKey: 'BJBK13EqL_dxU_VIiuUOJam93OTxcdqOBE1UDRraZ85g864U-GrpFSu8lt5V8FGdv5_tM_hftrH2cAEI--4oIZ0',
-  useDemoDataset: true,
+  useDemoDataset: false,
   pexelsApiKey: 'gN9dMuDmlYiMu1AjIEHZcpoemMfHhfWhAmi71jrRssq5I5AIVIl6D3Ll',
 };

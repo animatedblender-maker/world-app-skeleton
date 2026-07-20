@@ -44,6 +44,19 @@ export const notificationsResolvers = {
       return await svc().markRead(user.id, args.id);
     },
 
+    markConversationNotificationsRead: async (
+      _: any,
+      args: { conversationId: string },
+      ctx: Context
+    ) => {
+      const user = requireAuth(ctx);
+      if (!args?.conversationId) throw new Error('conversationId is required');
+      return await svc().markConversationMessageNotificationsRead(
+        user.id,
+        args.conversationId
+      );
+    },
+
     markAllNotificationsRead: async (_: any, __: any, ctx: Context) => {
       const user = requireAuth(ctx);
       return await svc().markAllRead(user.id);

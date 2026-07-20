@@ -31,6 +31,7 @@ export const typeDefs = `#graphql
     country_code: String
     city_name: String
     bio: String
+    is_private: Boolean!
     created_at: String
     updated_at: String
   }
@@ -298,6 +299,7 @@ export const typeDefs = `#graphql
     country_code: String
     city_name: String
     bio: String
+    is_private: Boolean
   }
 
   # ----------------------------
@@ -547,11 +549,13 @@ export const typeDefs = `#graphql
   }
 
   type Mutation {
-    detectLocation(lat: Float!, lng: Float!): DetectedLocation!
+    # lat/lng optional: when omitted, server geolocates via the caller's IP.
+    detectLocation(lat: Float, lng: Float): DetectedLocation!
     updateProfile(input: UpdateProfileInput!): Profile!
 
     # Presence mutations
     heartbeat(iso: String): HeartbeatResult!
+    setActiveConversation(conversationId: ID): Boolean!
     setOffline: Boolean!
 
     # Posts / social
@@ -592,6 +596,7 @@ export const typeDefs = `#graphql
 
     # Notifications
     markNotificationRead(id: ID!): Boolean!
+    markConversationNotificationsRead(conversationId: ID!): Int!
     markAllNotificationsRead: Int!
 
     # Ads

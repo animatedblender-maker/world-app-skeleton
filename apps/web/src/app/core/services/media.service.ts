@@ -3,7 +3,6 @@ import { supabase } from '../../supabase/supabase.client';
 
 @Injectable({ providedIn: 'root' })
 export class MediaService {
-  // Keep your existing post media upload (bucket: posts)
   async uploadPostMedia(file: File): Promise<{ path: string; publicUrl: string }> {
     const { data: sessionData, error: sessionErr } = await supabase.auth.getSession();
     if (sessionErr) throw sessionErr;
@@ -71,11 +70,7 @@ export class MediaService {
     return { path, name: safeName, mime: file.type || 'application/octet-stream', size: file.size };
   }
 
-  // ✅ Avatar upload (bucket: avatars)
-  // - blocks GIF
-  // - accepts a File (we will pass a cropped File from the cropper)
   async uploadAvatar(file: File): Promise<{ path: string; url: string }> {
-    // Block GIF for now
     const ext = (file.name.split('.').pop() || '').toLowerCase();
     if (ext === 'gif' || file.type === 'image/gif') {
       throw new Error('GIF avatars are disabled for now. Please upload PNG/JPG/WebP.');

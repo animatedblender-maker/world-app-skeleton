@@ -202,11 +202,68 @@ export class PresenceService {
     };
   }
 
+  async setActiveConversation(
+    user: AuthedUser,
+    conversationId?: string | null
+  ): Promise<boolean> {
+    const trimmed = String(conversationId ?? '').trim();
+    const activeConversationId = trimmed.length > 0 ? trimmed : null;
+    const lastSeen = this.nowIso();
+
+    await pool.query(
+      `
+      insert into public.user_presence (user_id, is_online, last_seen_at, active_conversation_id)
+      values ($1, true, $2, $3)
+      on conflict (user_id) do update set
+        is_online = true,
+        last_seen_at = excluded.last_seen_at,
+        active_conversation_id = excluded.active_conversation_id
+      `,
+      [user.id, lastSeen, activeConversationId]
+    );
+
+    return true;
+  }
+
+  async isViewingConversation(
+    userId: string,
+    conversationId: string,
+    maxAgeSeconds = 45
+  ): Promise<boolean> {
+    const wantUser = String(userId || '').trim();
+    const wantConversation = String(conversationId || '').trim();
+    if (!wantUser || !wantConversation) return false;
+
+    const { rows } = await pool.query<{
+      active_conversation_id: string | null;
+      last_seen_at: string;
+    }>(
+      `
+      select active_conversation_id, last_seen_at
+      from public.user_presence
+      where user_id = $1
+      limit 1
+      `,
+      [wantUser]
+    );
+
+    const row = rows?.[0];
+    if (!row?.active_conversation_id) return false;
+    if (String(row.active_conversation_id) !== wantConversation) return false;
+
+    const lastSeenMs = Date.parse(row.last_seen_at);
+    if (!Number.isFinite(lastSeenMs)) return false;
+
+    const ageSeconds = (Date.now() - lastSeenMs) / 1000;
+    return ageSeconds >= 0 && ageSeconds <= maxAgeSeconds;
+  }
+
   async setOffline(user: AuthedUser): Promise<boolean> {
     await pool.query(
       `
       update public.user_presence
       set is_online = false,
+          active_conversation_id = null,
           last_seen_at = now()
       where user_id = $1
       `,

@@ -6,6 +6,6 @@ export const environment = {
   apiBaseUrl: 'http://localhost:3000',
   livekitUrl: '',
   pushPublicKey: '',
-  useDemoDataset: true,
+  useDemoDataset: false,
   pexelsApiKey: 'gN9dMuDmlYiMu1AjIEHZcpoemMfHhfWhAmi71jrRssq5I5AIVIl6D3Ll',
 };

@@ -13,6 +13,7 @@ import { GraphqlService } from '../core/services/graphql.service';
 import { MediaService } from '../core/services/media.service';
 import { VideoPlayerComponent } from '../components/video-player.component';
 import { BottomTabsComponent } from '../components/bottom-tabs.component';
+import { MatteryaTopbarComponent } from '../components/matterya-topbar.component';
 import { ProfileService, type Profile } from '../core/services/profile.service';
 import { LocationService } from '../core/services/location.service';
 import { PresenceService, type PresenceSnapshot } from '../core/services/presence.service';
@@ -103,7 +104,7 @@ type CountryIntelligenceData = {
 @Component({
   selector: 'app-globe-page',
   standalone: true,
-  imports: [CommonModule, FormsModule, VideoPlayerComponent, BottomTabsComponent],
+  imports: [CommonModule, FormsModule, VideoPlayerComponent, BottomTabsComponent, MatteryaTopbarComponent],
   template: `
     <div
       class="top-overlay"
@@ -139,15 +140,20 @@ type CountryIntelligenceData = {
       </div>
     </div>
 
-      <div class="space-backdrop" aria-hidden="true"></div>
-      <button class="globe-logo" type="button" (click)="returnToGlobe()">
-        <img src="/logo.png?v=3" alt="Matterya logo" />
-      </button>
+    <div class="globe-topbar-host" *ngIf="!selectedCountry && !searchOpen">
+      <app-matterya-topbar
+        title="Matterya"
+        [overGlobe]="true"
+        [unreadCount]="notificationsUnreadCount"
+        (search)="openGlobeCountrySearch()"
+        (notifications)="openNotificationsPanel()"
+      ></app-matterya-topbar>
+    </div>
 
-    <!-- Ocean map ALWAYS full background -->
+      <div class="space-backdrop" aria-hidden="true"></div>
+
     <div id="globe" class="globe-bg" [class.bg-static]="!!selectedCountry"></div>
 
-    <!-- Foreground layout that appears on focus (doesn't replace ocean background) -->
     <div class="stage" [class.focus]="!!selectedCountry" [class.feed-full]="countryFeedFull">
       <div class="map-pane" *ngIf="selectedCountry">
         <div class="map-glass">
@@ -211,26 +217,34 @@ type CountryIntelligenceData = {
         </div>
       </div>
 
-      <!-- RIGHT: Main pane (expensive white card) -->
       <div class="main-pane" *ngIf="selectedCountry">
         <div class="main-card white-card">
           <div class="feed-top" [class.hidden]="feedHeaderHidden">
           <div class="main-head">
             <div class="mh-text">
               <div class="mh-title-row">
-                <div class="mh-title">COUNTRY FEED</div>
+                <div class="mh-title">{{ selectedCountry.name }}</div>
                 <button
                   *ngIf="selectedCountry"
                   class="feed-return"
                   type="button"
                   (click)="returnToGlobe()"
                 >
-                  Return to globe
+                  Globe
+                </button>
+                <button
+                  *ngIf="selectedCountry"
+                  class="feed-sparks"
+                  type="button"
+                  (click)="openCountrySparks()"
+                  aria-label="Open Sparks"
+                >
+                  ✦ Sparks
                 </button>
               </div>
               <div class="mh-sub">
-                {{ selectedCountry.name }} public space
-                <span class="mh-clock" *ngIf="clockLabel">({{ clockLabel }})</span>
+                Country feed
+                <span class="mh-clock" *ngIf="clockLabel">· {{ clockLabel }}</span>
                 <select
                   class="mh-country-select"
                   [ngModel]="selectedCountry.code"
@@ -243,10 +257,10 @@ type CountryIntelligenceData = {
           </div>
 
           <div class="tabs">
-            <button class="tab" [class.active]="countryTab==='posts'" (click)="setCountryTab('posts')">POSTS</button>
-            <button class="tab" [class.active]="countryTab==='following'" (click)="setCountryTab('following')">FOLLOWING</button>
-            <button class="tab" [class.active]="countryTab==='media'" (click)="setCountryTab('media')">MEDIA</button>
-            <button class="tab" [class.active]="countryTab==='stats'" (click)="setCountryTab('stats')">STATS</button>
+            <button class="tab" [class.active]="countryTab==='posts'" (click)="setCountryTab('posts')">Posts</button>
+            <button class="tab" [class.active]="countryTab==='following'" (click)="setCountryTab('following')">Following</button>
+            <button class="tab" [class.active]="countryTab==='media'" (click)="setCountryTab('media')">Media</button>
+            <button class="tab" [class.active]="countryTab==='stats'" (click)="setCountryTab('stats')">Stats</button>
           </div>
           </div>
 
@@ -323,8 +337,8 @@ type CountryIntelligenceData = {
                           <input
                             #composerMediaInput
                             type="file"
-                            [attr.accept]="composerMediaMode === 'video' || composerMediaMode === 'reel' ? 'video/*' : 'image/*,video/*'"
-                            [attr.multiple]="composerMediaMode === 'reel' ? null : ''"
+                            [attr.accept]="composerMediaMode === 'video' || composerMediaMode === 'reel' || composerMediaMode === 'spark' ? 'video/*' : 'image/*,video/*'"
+                            [attr.multiple]="composerMediaMode === 'reel' || composerMediaMode === 'spark' || composerMediaMode === 'moment' ? null : ''"
                             (change)="onComposerMediaSelect($event)"
                             style="display:none;"
                           />
@@ -348,10 +362,18 @@ type CountryIntelligenceData = {
                             <button
                               class="type-chip"
                               type="button"
-                              [class.active]="composerMediaMode === 'reel'"
-                              (click)="setComposerMediaMode('reel')"
+                              [class.active]="composerMediaMode === 'spark' || composerMediaMode === 'reel'"
+                              (click)="setComposerMediaMode('spark')"
                             >
-                              Reel
+                              Spark
+                            </button>
+                            <button
+                              class="type-chip"
+                              type="button"
+                              [class.active]="composerMediaMode === 'moment'"
+                              (click)="setComposerMediaMode('moment')"
+                            >
+                              Moment
                             </button>
                           </div>
                           <div class="composer-media-actions">
@@ -1178,7 +1200,6 @@ type CountryIntelligenceData = {
       </div>
     </div>
 
-    <!-- Panel overlay (profile editor restored fully) -->
     <div class="overlay" *ngIf="panel && panel !== 'notifications'" (click)="closePanel()">
       <div class="panel" (click)="$event.stopPropagation()">
         <div class="panel-head">
@@ -1260,31 +1281,6 @@ type CountryIntelligenceData = {
     }
     :host.country-open .space-backdrop{
       background: #000;
-    }
-    .globe-logo{
-      position: fixed;
-      top: var(--ui-edge-top);
-      left: var(--ui-edge-left);
-      z-index: 9;
-      pointer-events: auto;
-      width: var(--node-size);
-      height: var(--node-size);
-      padding: 0;
-      box-sizing: border-box;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      background: rgba(8,12,18,0.65);
-      border-radius: 50%;
-      border: 0;
-      cursor: pointer;
-    }
-    .globe-logo img{
-      width: var(--node-size);
-      height: var(--node-size);
-      object-fit: contain;
-      border-radius: 10px;
-      box-shadow: none;
     }
     .feed-logo{
         width: calc(var(--node-size) - 4px);
@@ -1597,58 +1593,73 @@ type CountryIntelligenceData = {
     }
     .stage.focus{
       pointer-events: auto;
-      padding-top: var(--stage-top-pad);
-      padding-left: var(--ui-edge-left);
-      padding-right: var(--ui-edge-right);
+      padding-top: env(safe-area-inset-top);
+      padding-left: 0;
+      padding-right: 0;
       padding-bottom: calc(var(--ui-edge-bottom) + var(--tabs-height, 64px));
       box-sizing: border-box;
       display: grid;
-      grid-template-columns: minmax(260px, 24vw) minmax(0, 1fr) minmax(260px, 24vw);
+      grid-template-columns: minmax(0, 1fr);
       grid-template-rows: minmax(0, 1fr);
-      gap: var(--ui-gap);
+      gap: 0;
       min-height: 0;
       height: 100dvh;
       align-items: stretch;
       justify-items: stretch;
-      background: #f3f5f8;
+      background: var(--m-paper, #f8f6f2);
     }
 
     @media (min-width: 901px){
       .stage.focus{
-        grid-template-columns: minmax(280px, 23vw) minmax(0, 44vw) minmax(280px, 23vw);
+        grid-template-columns: minmax(0, 1fr);
         justify-content: center;
       }
       .stage.focus.feed-full{
-        grid-template-columns: minmax(280px, 23vw) minmax(0, 44vw) minmax(280px, 23vw);
+        grid-template-columns: minmax(0, 1fr);
         justify-content: center;
       }
     }
 
     .stage.focus.feed-full{
-      grid-template-columns: minmax(280px, 23vw) minmax(0, 44vw) minmax(280px, 23vw);
+      grid-template-columns: minmax(0, 1fr);
       grid-template-rows: minmax(0, 1fr);
-      padding-top: var(--stage-top-pad);
-      padding-left: var(--ui-edge-left);
-      padding-right: var(--ui-edge-right);
-      gap: var(--ui-gap);
+      padding-top: env(safe-area-inset-top);
+      padding-left: 0;
+      padding-right: 0;
+      gap: 0;
       min-height: 0;
       padding-bottom: calc(var(--ui-edge-bottom) + var(--tabs-height, 64px));
       height: 100dvh;
-      background: #f3f5f8;
+      background: var(--m-paper, #f8f6f2);
     }
       .stage.focus.feed-full .main-pane{
-        width: 44vw;
+        width: min(720px, 100%);
         margin: 0 auto;
-        background: #f3f5f8;
+        background: var(--m-paper, #f8f6f2);
       }
       .stage.focus.feed-full .main-card{
         width: 100%;
         max-width: none;
         border-radius: 0;
-        padding: 12px 18px 20px;
+        padding: 12px 0 20px;
         --card-pad-x: 0px;
-        background: #f3f5f8;
+        background: var(--m-paper, #f8f6f2);
       }
+    .stage.focus .map-pane{
+      display: none;
+    }
+    .globe-topbar-host{
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 40;
+      pointer-events: auto;
+    }
+    .globe-topbar-host app-matterya-topbar{
+      position: relative;
+      display: block;
+    }
       .stage.focus.feed-full .post-card{
         margin-left: 0;
         margin-right: 0;
@@ -1682,25 +1693,27 @@ type CountryIntelligenceData = {
     .main-card{
           height: 100%;
           min-height: 0;
-          border-radius: 26px;
-          padding: 16px;
+          border-radius: 0;
+          padding: 12px 0 16px;
           --card-pad-x: 16px;
-          --feed-top-space: 132px;
+          --feed-top-space: 128px;
           box-shadow: none;
           overflow: hidden;
           display:flex;
           flex-direction: column;
       width: 100%;
+      max-width: 720px;
+      margin: 0 auto;
       box-sizing: border-box;
       position: relative;
-      background: #f3f5f8;
+      background: var(--m-paper, #f8f6f2);
     }
 
     .white-card{
-      background: rgba(245, 247, 250, 0.92);
+      background: var(--m-paper, #f8f6f2);
       border: 0;
-      backdrop-filter: blur(14px);
-      color: rgba(10,12,18,0.90);
+      backdrop-filter: none;
+      color: var(--m-ink, #2c2825);
     }
 
     .feed-top{
@@ -1711,11 +1724,12 @@ type CountryIntelligenceData = {
       z-index: 6;
       display:flex;
       flex-direction:column;
-      gap:10px;
-      background: rgba(243,245,248,0.88);
-      backdrop-filter: blur(22px) saturate(1.05);
-      -webkit-backdrop-filter: blur(22px) saturate(1.05);
-      padding: 12px 0 10px;
+      gap:8px;
+      background: rgba(253, 252, 250, 0.94);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      padding: 10px 16px 10px;
+      border-bottom: 0.5px solid var(--m-divider, #e2ded8);
       transition: opacity 0.22s ease, transform 0.22s ease;
     }
     .feed-top.hidden{
@@ -1727,73 +1741,100 @@ type CountryIntelligenceData = {
     .mh-text{ min-width: 0; display:flex; flex-direction:column; justify-content:center; }
     .mh-title-row{ display:flex; align-items:center; gap: 10px; flex-wrap: wrap; }
     .feed-return{
-      border: 1px solid rgba(0,0,0,0.12);
-      background: rgba(255,255,255,0.9);
-      color: rgba(10,12,18,0.8);
-      border-radius: 14px;
-      padding: 8px 14px;
-      font-size: 10px;
-      letter-spacing: 0.18em;
-      text-transform: uppercase;
-      font-weight: 800;
+      border: 0.5px solid var(--m-border, #ddd8d1);
+      background: var(--m-surface, #fefdfb);
+      color: var(--m-ink-secondary, #6b645d);
+      border-radius: 10px;
+      padding: 6px 12px;
+      font-size: 12px;
+      letter-spacing: 0;
+      text-transform: none;
+      font-weight: 650;
       cursor: pointer;
       white-space: nowrap;
     }
-    .mh-title{ font-weight: 900; letter-spacing: .16em; font-size: 12px; text-transform: uppercase; }
-    .mh-sub{ margin-top: 4px; opacity: .72; font-weight: 800; letter-spacing: .08em; font-size: 12px; display:flex; align-items:center; gap: 6px; flex-wrap: wrap; }
-    .mh-clock{
-      font-size: 11px;
-      letter-spacing: .08em;
-      text-transform: uppercase;
-      opacity: .8;
+    .feed-sparks{
+      border: 0;
+      background: var(--m-ink, #2c2825);
+      color: var(--m-surface, #fefdfb);
+      border-radius: 10px;
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 650;
+      cursor: pointer;
       white-space: nowrap;
     }
+    .mh-title{
+      font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+      font-weight: 500;
+      letter-spacing: 0.02em;
+      font-size: 22px;
+      text-transform: none;
+      color: var(--m-ink, #2c2825);
+    }
+    .mh-sub{
+      margin-top: 2px;
+      opacity: 1;
+      font-weight: 500;
+      letter-spacing: 0;
+      font-size: 13px;
+      color: var(--m-ink-muted, #948b82);
+      display:flex;
+      align-items:center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .mh-clock{
+      font-size: 12px;
+      letter-spacing: 0;
+      text-transform: none;
+      opacity: 1;
+      white-space: nowrap;
+      color: var(--m-ink-muted, #948b82);
+    }
     .mh-country-select{
-      border: 1px solid rgba(0,0,0,0.12);
-      border-radius: 12px;
-      background: rgba(255,255,255,0.9);
-      color: rgba(10,12,18,0.8);
-      font-size: 11px;
-      letter-spacing: .06em;
+      border: 0.5px solid var(--m-border, #ddd8d1);
+      border-radius: 10px;
+      background: var(--m-surface, #fefdfb);
+      color: var(--m-ink-secondary, #6b645d);
+      font-size: 12px;
+      letter-spacing: 0;
       padding: 4px 8px;
-      text-transform: uppercase;
-      font-weight: 700;
+      text-transform: none;
+      font-weight: 600;
     }
     .mh-country-select:focus{
       outline: none;
-      border-color: rgba(0,0,0,0.24);
+      border-color: var(--m-accent, #6b5841);
     }
 
-    .tabs{ display:flex; gap: 10px; margin: 0; flex-wrap: wrap; }
+    .tabs{ display:flex; gap: 8px; margin: 0; flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px; }
     .tab{
-      border: 1px solid rgba(255,255,255,0.54);
-      background: rgba(255,255,255,0.6);
-      color: rgba(16,22,34,0.78);
-      padding: 10px 16px;
+      border: 0.5px solid var(--m-border, #ddd8d1);
+      background: var(--m-surface, #fefdfb);
+      color: var(--m-ink-secondary, #6b645d);
+      padding: 8px 14px;
       border-radius: 999px;
-      font-weight: 800;
-      letter-spacing: .12em;
-      font-size: 11px;
+      font-weight: 650;
+      letter-spacing: 0;
+      font-size: 13px;
       cursor: pointer;
-      box-shadow:
-        0 12px 30px rgba(15,23,42,0.08),
-        0 1px 0 rgba(255,255,255,0.78) inset;
-      backdrop-filter: blur(18px) saturate(1.12);
-      -webkit-backdrop-filter: blur(18px) saturate(1.12);
-      transition: transform .16s ease, box-shadow .16s ease, background .16s ease, color .16s ease, border-color .16s ease;
+      box-shadow: none;
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      transition: background .16s ease, color .16s ease, border-color .16s ease;
+      white-space: nowrap;
     }
     .tabs .tab:hover{
-      transform: translateY(-1px);
-      background: rgba(255,255,255,0.82);
-      color: rgba(10,12,18,0.92);
+      transform: none;
+      background: rgba(44, 40, 37, 0.05);
+      color: var(--m-ink, #2c2825);
     }
     .tab.active{
-      border-color: rgba(171, 235, 225, 0.88);
-      background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(233,247,243,0.94));
-      color: rgba(11,18,29,0.96);
-      box-shadow:
-        0 14px 34px rgba(15,23,42,0.12),
-        0 0 0 1px rgba(168, 236, 221, 0.34) inset;
+      border-color: var(--m-ink, #2c2825);
+      background: var(--m-ink, #2c2825);
+      color: var(--m-surface, #fefdfb);
+      box-shadow: none;
     }
     .tab-body{
       flex: 1;
@@ -3259,7 +3300,6 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   private feedLastScrollTop = 0;
   private globalFireworkSeeded = false;
   private globalFireworkPosts: CountryPost[] = [];
-  // background is simple black for now
   clockLabel = '';
   private clockTimer: any = null;
   menuOpen = false;
@@ -3323,7 +3363,8 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   composerMediaTypes: Array<'image' | 'video'> = [];
   composerMediaPreview = '';
   composerMediaType: 'image' | 'video' | 'mixed' | null = null;
-  composerMediaMode: 'post' | 'video' | 'reel' = 'post';
+  composerMediaMode: 'post' | 'video' | 'reel' | 'spark' | 'moment' = 'post';
+  private pendingComposerMode: 'post' | 'video' | 'reel' | 'spark' | 'moment' | null = null;
   composerMediaError = '';
   postMediaIndex: Record<string, number> = {};
   private mediaUrlsCache = new Map<string, string[]>();
@@ -3423,12 +3464,10 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   private globeReady = false;
   private lastSyncedRouteState: RouteState = { country: null, tab: null, panel: null };
 
-  // --- Avatar orb state ---
   nodeAvatarUrl = '';
   private nodeNormX = 0;
   private nodeNormY = 0;
 
-  // --- Profile editor state (restored) ---
   editDisplayName = '';
   editBio = '';
 
@@ -3484,7 +3523,6 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     private cdr: ChangeDetectorRef
   ) {}
 
-  /** Angular templates can't do `(profile as any)`; do it here. */
   get cityName(): string {
     const p: any = this.profile as any;
     return (p?.city_name ?? p?.cityName ?? 'Unknown') as string;
@@ -3672,6 +3710,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
           source: 'profile',
         });
       }
+      this.tryOpenPendingComposer();
 
       this.editDisplayName =
         meProfile?.display_name ?? (this.userEmail?.split('@')[0] ?? '');
@@ -3762,6 +3801,25 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
         this.lastHandledNotificationUserId = userParam;
         void this.router.navigate(['/user', userParam]);
         return;
+      }
+
+      const compose = String(params.get('compose') || '').toLowerCase();
+      if (compose === 'post' || compose === 'video' || compose === 'spark' || compose === 'reel' || compose === 'moment' || compose === 'story') {
+        const mode =
+          compose === 'story' || compose === 'moment'
+            ? 'moment'
+            : compose === 'reel'
+              ? 'spark'
+              : (compose as 'post' | 'video' | 'spark');
+        this.pendingComposerMode = mode;
+        this.composerMediaMode = mode;
+        this.tryOpenPendingComposer();
+        void this.router.navigate([], {
+          relativeTo: this.route,
+          queryParams: { compose: null },
+          queryParamsHandling: 'merge',
+          replaceUrl: true,
+        });
       }
 
       const normalized = this.normalizeRouteState({
@@ -4169,7 +4227,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.resetFeedHeader();
     this.notificationFocusPostId = opts?.focusPostId ?? null;
     this.notificationFocusPost = opts?.focusPost ?? null;
-    if (!this.canPostHere) this.composerOpen = false;
+    if (!this.canPostHere && !this.pendingComposerMode) this.composerOpen = false;
 
     this.ui.setMode('focus');
     this.ui.setSelected(country.id);
@@ -4199,6 +4257,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     void this.presence.setViewingCountry(country.code ?? null, country.name ?? null);
     void this.loadPostsForCountry(country);
     void this.loadCountryColumns();
+    this.tryOpenPendingComposer();
     this.startSideDataRefresh();
     if (tab === 'following') {
       void this.loadFollowingFeed();
@@ -4413,7 +4472,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       }
     } catch {
       this.globalFireworkSeeded = false;
-      // Keep globe running even if seed fails.
+
     }
   }
 
@@ -5074,10 +5133,14 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     });
   }
 
-  setComposerMediaMode(mode: 'post' | 'video' | 'reel'): void {
+  setComposerMediaMode(mode: 'post' | 'video' | 'reel' | 'spark' | 'moment'): void {
     if (this.composerMediaMode === mode) return;
     this.composerMediaMode = mode;
     this.clearComposerMedia();
+  }
+
+  private isSparkComposerMode(): boolean {
+    return this.composerMediaMode === 'reel' || this.composerMediaMode === 'spark';
   }
 
   onComposerMediaSelect(event: Event): void {
@@ -5085,7 +5148,8 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     const files = Array.from(input.files ?? []);
     if (!files.length) return;
 
-    const wantsVideoOnly = this.composerMediaMode === 'video' || this.composerMediaMode === 'reel';
+    const wantsVideoOnly =
+      this.composerMediaMode === 'video' || this.isSparkComposerMode();
     const invalid = files.some((file) => {
       const isImage = file.type.startsWith('image/');
       const isVideo = file.type.startsWith('video/');
@@ -5099,8 +5163,11 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       return;
     }
 
-    if (this.composerMediaMode === 'reel' && files.length > 1) {
-      this.composerMediaError = 'Reels can only contain one video.';
+    if ((this.isSparkComposerMode() || this.composerMediaMode === 'moment') && files.length > 1) {
+      this.composerMediaError =
+        this.composerMediaMode === 'moment'
+          ? 'Moments can only contain one photo or video.'
+          : 'Sparks can only contain one video.';
       input.value = '';
       return;
     }
@@ -5150,6 +5217,15 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       this.postComposerError = 'Sign in to share with your country.';
       return;
     }
+    // Moments always publish to the profile country; auto-align selection if needed.
+    if (this.composerMediaMode === 'moment' && !this.canPostHere) {
+      this.pendingComposerMode = 'moment';
+      this.tryOpenPendingComposer();
+      if (!this.canPostHere) {
+        this.postComposerError = 'Open your home country on the globe to share a Moment.';
+        return;
+      }
+    }
     if (!this.canPostHere) {
     this.postComposerError = 'Switch to the country where you post from to post.';
       return;
@@ -5174,8 +5250,22 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.forceUi();
 
     try {
+      if (this.composerMediaMode === 'moment' && !this.composerMediaFiles.length) {
+        this.postComposerError = 'Add a photo or video for your Moment.';
+        this.postBusy = false;
+        this.forceUi();
+        return;
+      }
+      if (this.isSparkComposerMode() && !this.composerMediaFiles.length) {
+        this.postComposerError = 'Add a video for your Spark.';
+        this.postBusy = false;
+        this.forceUi();
+        return;
+      }
+
       let mediaType: string | null = null;
       let mediaUrl: string | null = null;
+      let bodyOut = body;
       if (this.composerMediaFiles.length) {
         const uploads = [];
         for (const file of this.composerMediaFiles) {
@@ -5189,21 +5279,30 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
                 file.type.startsWith('video/') ? 'video' : 'image'
               );
         const hasVideo = types.includes('video');
-        mediaType = hasVideo ? 'video' : 'image';
-        if (urls.length > 1 || types.length > 1 || this.composerMediaMode === 'reel') {
-          mediaUrl = JSON.stringify({
-            urls,
-            types,
-            reel: this.composerMediaMode === 'reel',
-          });
-        } else {
+        if (this.composerMediaMode === 'moment') {
+          mediaType = 'story';
           mediaUrl = urls[0] ?? null;
+          const expires = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+          const marker = `__story__|expires=${expires}`;
+          bodyOut = bodyOut ? `${bodyOut}\n${marker}` : marker;
+        } else {
+          mediaType = hasVideo ? 'video' : 'image';
+          if (urls.length > 1 || types.length > 1 || this.isSparkComposerMode()) {
+            mediaUrl = JSON.stringify({
+              urls,
+              types,
+              reel: this.isSparkComposerMode(),
+              spark: this.isSparkComposerMode(),
+            });
+          } else {
+            mediaUrl = urls[0] ?? null;
+          }
         }
       }
       const post = await this.postsService.createPost({
         authorId: this.meId,
-        title: this.newPostTitle.trim() || null,
-        body,
+        title: this.composerMediaMode === 'moment' ? null : this.newPostTitle.trim() || null,
+        body: bodyOut,
         countryCode,
         countryName,
         cityName: (this.profile as any)?.city_name ?? null,
@@ -5217,9 +5316,15 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       this.posts = this.sortPostsDesc([post, ...this.posts]);
     }
       this.composerOpen = false;
-      this.postFeedback = mediaUrl
-        ? 'Posted to Media (your country + followers feed).'
-        : 'Shared with your country.';
+      this.postFeedback =
+        this.composerMediaMode === 'moment'
+          ? 'Moment shared to Globe moments (24 hours).'
+          : this.isSparkComposerMode()
+            ? 'Spark published.'
+            : mediaUrl
+              ? 'Posted to Media (your country + followers feed).'
+              : 'Shared with your country.';
+      this.composerMediaMode = 'post';
       setTimeout(() => {
         this.postFeedback = '';
         this.cdr.detectChanges();
@@ -5293,12 +5398,15 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   postIsReel(post: CountryPost): boolean {
+    if (this.postsService.isSpark(post)) return true;
+    const media = String(post?.media_type || '').toLowerCase();
+    if (media === 'reel' || media === 'spark') return true;
     const raw = String(post?.media_url || '').trim();
     if (!raw) return false;
     if (raw.startsWith('{') || raw.startsWith('[')) {
       try {
         const parsed = JSON.parse(raw) as any;
-        const reelFlag = parsed?.reel;
+        const reelFlag = parsed?.reel ?? parsed?.spark;
         return reelFlag === true || reelFlag === 'true' || reelFlag === 1 || reelFlag === '1';
       } catch {}
     }
@@ -5956,6 +6064,52 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     void this.router.navigate(['/user', normalized]);
   }
 
+  openGlobeCountrySearch(): void {
+    this.searchOpen = true;
+    this.activeTab = 'countries';
+    this.userSearchTerm = '';
+    this.countrySearchTerm = '';
+    this.countrySuggestions = [];
+    this.forceUi();
+  }
+
+  openNotificationsPanel(): void {
+    this.openPanel('notifications');
+  }
+
+  private tryOpenPendingComposer(): void {
+    if (!this.pendingComposerMode) return;
+    const mode = this.pendingComposerMode;
+    this.composerMediaMode = mode;
+
+    // Moments/posts need the profile country selected so canPostHere is true.
+    if (!this.selectedCountry || !this.canPostHere) {
+      const code = this.effectiveCountryCode;
+      if (code) {
+        const match =
+          this.ui.countries.find(
+            (c) => String(c.code || '').trim().toUpperCase() === code
+          ) || null;
+        if (match && (!this.selectedCountry || this.selectedCountry.id !== match.id)) {
+          this.focusCountry(match, { tab: 'posts', skipRouteUpdate: false });
+          return;
+        }
+      }
+    }
+
+    if (this.canPostHere) {
+      this.composerOpen = true;
+      this.pendingComposerMode = null;
+      this.forceUi();
+    }
+  }
+
+  openCountrySparks(): void {
+    const code = this.selectedCountry?.code?.trim().toUpperCase();
+    if (!code) return;
+    void this.router.navigate(['/sparks', code]);
+  }
+
   openReels(post: CountryPost): void {
     if (!post) return;
     const code =
@@ -5964,7 +6118,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       this.selectedCountry?.code?.toUpperCase();
     if (!code) return;
     const seedPosts = this.buildReelSeedPosts(post);
-    void this.router.navigate(['/reels', code], {
+    void this.router.navigate(['/sparks', code], {
       queryParams: { postId: post.id },
       state: {
         seedPosts,
@@ -6081,7 +6235,8 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
 
       const res = await this.profiles.updateProfile(updates);
       this.profile = res.updateProfile;
-      if (!this.canPostHere) this.composerOpen = false;
+      if (!this.canPostHere && !this.pendingComposerMode) this.composerOpen = false;
+      this.tryOpenPendingComposer();
       await this.presence.setMyLocation(
         (this.profile as any)?.country_code ?? null,
         this.profile.country_name ?? null,
@@ -6370,9 +6525,6 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     return null;
   }
 
-  // -----------------------------
-  // Menu / panels
-  // -----------------------------
   toggleSearch(): void {
     void this.router.navigate(['/search']);
   }
@@ -6470,7 +6622,7 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
       return new Date();
     }
 
-    // Approximate timezone from longitude with 15-minute granularity.
+
     const offsetHours = Math.round((Number(lng) / 15) * 4) / 4;
     const now = new Date();
     const utcMs = now.getTime() + now.getTimezoneOffset() * 60_000;
@@ -6485,9 +6637,6 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     return `${d}.${m}.${y}`;
   }
 
-  // -----------------------------
-  // Avatar preview / adjust
-  // -----------------------------
   openAvatarPreview(): void {
     if (!this.draftAvatarUrl) return;
     this.avatarPreviewOpen = true;
@@ -6562,9 +6711,6 @@ export class GlobePageComponent implements OnInit, AfterViewInit, OnDestroy {
     this.forceUi();
   }
 
-  // -----------------------------
-  // Avatar upload + crop (restored)
-  // -----------------------------
   private async cropAvatarToSquare(file: File): Promise<File> {
     const type = (file.type || '').toLowerCase();
 

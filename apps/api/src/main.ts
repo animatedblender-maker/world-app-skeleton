@@ -414,6 +414,8 @@ app.post('/livekit/token', async (req: Request, res: Response) => {
   if (!LIVEKIT_API_KEY || !LIVEKIT_API_SECRET) {
     return res.status(500).json({ error: 'livekit_not_configured' });
   }
+  const instance = String(req.body?.instance ?? '').trim();
+  const identity = instance ? `${user.id}#${instance}` : user.id;
   const jwt = await new SignJWT({
     name: user.email ?? user.id,
     video: {
@@ -425,7 +427,7 @@ app.post('/livekit/token', async (req: Request, res: Response) => {
   })
     .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
     .setIssuer(LIVEKIT_API_KEY)
-    .setSubject(user.id)
+    .setSubject(identity)
     .setIssuedAt()
     .setExpirationTime('1h')
     .sign(new TextEncoder().encode(LIVEKIT_API_SECRET));

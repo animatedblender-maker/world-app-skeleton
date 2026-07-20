@@ -19,7 +19,6 @@ export const routes: Routes = [
       import('./pages/reset-password.page').then((m) => m.ResetPasswordPageComponent),
   },
 
-  // ✅ NEW: /me must be BEFORE '**'
   {
     path: 'me',
     canActivate: [authGuard],
@@ -31,7 +30,19 @@ export const routes: Routes = [
     path: '',
     canActivate: [authGuard],
     loadComponent: () =>
-      import('./pages/globe.page').then((m) => m.GlobePageComponent),
+      import('./pages/feed.page').then((m) => m.FeedPageComponent),
+  },
+  {
+    path: 'feed',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pages/feed.page').then((m) => m.FeedPageComponent),
+  },
+  {
+    path: 'hubs',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pages/hubs.page').then((m) => m.HubsPageComponent),
   },
   {
     path: 'globe',
@@ -76,6 +87,12 @@ export const routes: Routes = [
       import('./pages/reels.page').then((m) => m.ReelsPageComponent),
   },
   {
+    path: 'sparks/:country',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pages/reels.page').then((m) => m.ReelsPageComponent),
+  },
+  {
     path: 'post/:id',
     loadComponent: () =>
       import('./pages/post.page').then((m) => m.PostPageComponent),
@@ -104,6 +121,5 @@ export const routes: Routes = [
       import('./pages/profile.page').then((m) => m.ProfilePageComponent),
   },
 
-  // ✅ wildcard ALWAYS last
   { path: '**', redirectTo: '' },
 ];
