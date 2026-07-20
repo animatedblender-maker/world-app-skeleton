@@ -1,4 +1,4 @@
-import{a as g}from"./chunk-7QOEYGCO.js";import{b as l}from"./chunk-NIO25GJ3.js";import{b as m,k as _,n as u}from"./chunk-KO2AEFNE.js";import{a as d,b as o}from"./chunk-2NFLSA4Y.js";var p=`
+import{a as g}from"./chunk-S5AV2D4B.js";import{b as l}from"./chunk-NIO25GJ3.js";import{b as m,k as _,n as u}from"./chunk-KO2AEFNE.js";import{a as d,b as o}from"./chunk-2NFLSA4Y.js";var p=`
 query Conversations($limit: Int) {
   conversations(limit: $limit) {
     id

@@ -1,4 +1,4 @@
-import{a as m}from"./chunk-7QOEYGCO.js";import{a as f}from"./chunk-LQQHCQP3.js";import{c as d}from"./chunk-NIO25GJ3.js";import{k as l,n as r}from"./chunk-KO2AEFNE.js";import{a as u}from"./chunk-2NFLSA4Y.js";var p=`
+import{a as m}from"./chunk-S5AV2D4B.js";import{a as f}from"./chunk-TYADZYHJ.js";import{c as d}from"./chunk-NIO25GJ3.js";import{k as l,n as r}from"./chunk-KO2AEFNE.js";import{a as u}from"./chunk-2NFLSA4Y.js";var p=`
 query Notifications($limit: Int, $before: String) {
   notifications(limit: $limit, before: $before) {
     id
