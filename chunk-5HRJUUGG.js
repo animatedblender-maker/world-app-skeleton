@@ -1,4 +1,4 @@
-import{a as l}from"./chunk-D43EV3QJ.js";import{a}from"./chunk-7QOEYGCO.js";import{k as n,n as s}from"./chunk-KO2AEFNE.js";var f=class e{constructor(o,t){this.gql=o;this.fakeData=t}async counts(o){let t=await this.fakeData.getFollowCounts(o);if(t)return t;let i=`
+import{a as l}from"./chunk-MSV3PIY6.js";import{a}from"./chunk-7QOEYGCO.js";import{k as n,n as s}from"./chunk-KO2AEFNE.js";var f=class e{constructor(o,t){this.gql=o;this.fakeData=t}async counts(o){let t=await this.fakeData.getFollowCounts(o);if(t)return t;let i=`
       query FollowCounts($userId: ID!) {
         followCounts(user_id: $userId) {
           followers
