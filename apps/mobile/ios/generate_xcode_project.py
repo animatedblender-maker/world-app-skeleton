@@ -90,6 +90,7 @@ debug_entitlements_ref = uid() if debug_entitlements_rel else None
 release_entitlements_ref = uid() if release_entitlements_rel else None
 livekit_package_ref = uid()
 livekit_product_dep = uid()
+livekit_framework_build = uid()
 musickit_framework_ref = uid()
 musickit_framework_build = uid()
 
@@ -110,6 +111,9 @@ add("\tobjectVersion = 56;")
 add("\tobjects = {")
 add("")
 add("/* Begin PBXBuildFile section */")
+add(
+    f"\t\t{livekit_framework_build} /* LiveKit in Frameworks */ = {{isa = PBXBuildFile; productRef = {livekit_product_dep} /* LiveKit */; }};"
+)
 add(
     f"\t\t{musickit_framework_build} /* MusicKit.framework in Frameworks */ = {{isa = PBXBuildFile; fileRef = {musickit_framework_ref} /* MusicKit.framework */; }};"
 )
@@ -167,6 +171,7 @@ add(f"\t\t{frameworks_phase} /* Frameworks */ = {{")
 add("\t\t\tisa = PBXFrameworksBuildPhase;")
 add("\t\t\tbuildActionMask = 2147483647;")
 add("\t\t\tfiles = (")
+add(f"\t\t\t\t{livekit_framework_build} /* LiveKit in Frameworks */,")
 add(f"\t\t\t\t{musickit_framework_build} /* MusicKit.framework in Frameworks */,")
 add("\t\t\t);")
 add("\t\t\trunOnlyForDeploymentPostprocessing = 0;")
@@ -405,5 +410,50 @@ os.makedirs(XCODEPROJ, exist_ok=True)
 with open(PBXPROJ, "w", encoding="utf-8") as f:
     f.write("\n".join(lines) + "\n")
 
+# Shared scheme for Xcode Cloud Archive (must be committed or generated on CI).
+scheme_dir = os.path.join(XCODEPROJ, "xcshareddata", "xcschemes")
+os.makedirs(scheme_dir, exist_ok=True)
+scheme_path = os.path.join(scheme_dir, "WorldApp.xcscheme")
+with open(scheme_path, "w", encoding="utf-8") as f:
+    f.write(
+        """<?xml version="1.0" encoding="UTF-8"?>
+<Scheme LastUpgradeVersion="1500" version="1.7">
+  <BuildAction parallelizeBuildables="YES" buildImplicitDependencies="YES">
+    <BuildActionEntries>
+      <BuildActionEntry buildForTesting="YES" buildForRunning="YES" buildForProfiling="YES" buildForArchiving="YES" buildForAnalyzing="YES">
+        <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="WorldApp" BuildableName="WorldApp.app" BlueprintName="WorldApp" ReferencedContainer="container:WorldApp.xcodeproj"/>
+      </BuildActionEntry>
+    </BuildActionEntries>
+  </BuildAction>
+  <LaunchAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.DebuggerFoundation.Launcher.LLDB" launchStyle="0" useCustomWorkingDirectory="NO" ignoresPersistentStateOnLaunch="NO" debugDocumentVersioning="YES" debugServiceExtension="internal" allowLocationSimulation="YES">
+    <BuildableProductRunnable runnableDebuggingMode="0">
+      <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="WorldApp" BuildableName="WorldApp.app" BlueprintName="WorldApp" ReferencedContainer="container:WorldApp.xcodeproj"/>
+    </BuildableProductRunnable>
+  </LaunchAction>
+  <ProfileAction buildConfiguration="Release" shouldUseLaunchSchemeArgsEnv="YES" savedToolIdentifier="" useCustomWorkingDirectory="NO" debugDocumentVersioning="YES">
+    <BuildableProductRunnable runnableDebuggingMode="0">
+      <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="WorldApp" BuildableName="WorldApp.app" BlueprintName="WorldApp" ReferencedContainer="container:WorldApp.xcodeproj"/>
+    </BuildableProductRunnable>
+  </ProfileAction>
+  <AnalyzeAction buildConfiguration="Debug"/>
+  <ArchiveAction buildConfiguration="Release" revealArchiveInOrganizer="YES"/>
+</Scheme>
+"""
+    )
+
+ws_dir = os.path.join(XCODEPROJ, "project.xcworkspace")
+os.makedirs(ws_dir, exist_ok=True)
+ws_data = os.path.join(ws_dir, "contents.xcworkspacedata")
+if not os.path.exists(ws_data):
+    with open(ws_data, "w", encoding="utf-8") as f:
+        f.write(
+            """<?xml version="1.0" encoding="UTF-8"?>
+<Workspace version="1.0">
+   <FileRef location="self:"/>
+</Workspace>
+"""
+        )
+
 print(f"Wrote {PBXPROJ}")
+print(f"Wrote {scheme_path}")
 print(f"Swift files: {len(swift_files)}")

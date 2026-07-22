@@ -6,6 +6,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A1B2C3D4E5F6478901234567 /* LiveKit in Frameworks */ = {isa = PBXBuildFile; productRef = 14715329DAFB46A5A088625D /* LiveKit */; };
 		C2035E6AE00D4FEAAAA7A56E /* MusicKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2D780FB318D74D358AF5CA34 /* MusicKit.framework */; };
 		023234040FEA4972BEB1EED2 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 548CBA36A4124DD4867E028A /* AppDelegate.swift */; };
 		E05A6951D6CC47F9B73D7AB3 /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9650600E66BD47D58FACDCFF /* AppConfig.swift */; };
@@ -287,6 +288,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A1B2C3D4E5F6478901234567 /* LiveKit in Frameworks */,
 				C2035E6AE00D4FEAAAA7A56E /* MusicKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
