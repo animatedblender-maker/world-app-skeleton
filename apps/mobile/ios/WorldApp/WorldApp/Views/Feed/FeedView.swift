@@ -52,7 +52,8 @@ struct FeedView: View {
         }
         .task(id: appState.contentLoadGeneration) {
             await refreshFeed(showSpinner: posts.isEmpty, resetPagination: posts.isEmpty, forceRefresh: false)
-            Task { await appState.refreshStories() }
+            LettersService.shared.rolloverQuotaIfNeeded()
+            LettersService.shared.expireStaleThreads()
             Task {
                 _ = await PostsService.shared.loadPlayCatalog(
                     viewerCountry: appState.currentProfile?.countryCode,
@@ -63,7 +64,7 @@ struct FeedView: View {
         .onReceive(NotificationCenter.default.publisher(for: .userPostsDidChange)) { notification in
             guard let changed = notification.userInfo?["post"] as? CountryPost else { return }
             if changed.isStory {
-                appState.mergeStoryPost(changed)
+                // Moments parked — ignore story inserts in feed for now.
                 return
             }
             if let index = posts.firstIndex(where: { $0.id == changed.id }) {
@@ -77,8 +78,7 @@ struct FeedView: View {
     private var feedList: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
-                StoriesStripView()
-                    .padding(.horizontal, Theme.pagePadding)
+                LettersStripView()
 
                 if !feedReels.isEmpty {
                     feedReelsStrip

@@ -80,6 +80,10 @@ struct MainTabView: View {
                     NavigationRedirectView {
                         appState.openPlayChannel(authorID: authorID)
                     }
+                case .letters:
+                    LettersHomeView().screenBackground()
+                case .letterThread(let id):
+                    LetterThreadView(threadID: id).screenBackground()
                 }
             }
         }
@@ -144,10 +148,25 @@ struct MainTabView: View {
             }
             .withAppState(appState)
         }
+        .sheet(isPresented: Binding(
+            get: { appState.showLetterCompose },
+            set: { appState.showLetterCompose = $0 }
+        )) {
+            LetterComposeView()
+                .withAppState(appState)
+        }
+        .fullScreenCover(item: Binding(
+            get: { appState.letterFlightEvent },
+            set: { appState.letterFlightEvent = $0 }
+        )) { event in
+            LetterFlightView(event: event)
+                .withAppState(appState)
+        }
         .fullScreenCover(item: Binding(
             get: { appState.storyViewerContext },
             set: { appState.storyViewerContext = $0 }
         )) { context in
+            // Moments viewer kept for legacy data but not linked from feed.
             StoriesViewerView(context: context)
                 .withAppState(appState)
         }

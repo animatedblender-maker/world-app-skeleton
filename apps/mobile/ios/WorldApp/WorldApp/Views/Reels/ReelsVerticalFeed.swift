@@ -568,8 +568,10 @@ struct ReelsScrollViewer: View {
                 get: { commentsPostID.map(ReelsCommentTarget.init(id:)) },
                 set: { commentsPostID = $0?.id }
             )) { target in
-                ReelsCommentsSheet(postID: target.id)
-                    .withAppState(appState)
+                NavigationStack {
+                    PostCommentsPageView(postID: target.id)
+                }
+                .withAppState(appState)
             }
     }
 

@@ -88,11 +88,12 @@ private struct CreateMenuPanel: View {
                 }
 
                 createRow(
-                    title: "Moment",
-                    subtitle: "Disappears in 24 hours",
-                    icon: "circle.dashed"
+                    title: "Letter",
+                    subtitle: "5/day to random strangers · local midnight",
+                    icon: "envelope.open"
                 ) {
-                    Task { await appState.presentCreateSheet(.story) }
+                    appState.showCreateMenu = false
+                    appState.presentLetterCompose()
                 }
             }
             .padding(.vertical, 6)

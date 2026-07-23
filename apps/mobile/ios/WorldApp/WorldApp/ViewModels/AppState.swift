@@ -40,6 +40,9 @@ final class AppState {
     var storyGroups: [StoryGroup] = []
     var storyViewerContext: StoryViewerContext?
     var reelsViewerContext: ReelsViewerContext?
+    /// Letters (pen-friend) — Moments entry is parked.
+    var showLetterCompose = false
+    var letterFlightEvent: LetterFlightEvent?
 
     private let reelSavedDefaultsKey = "saved_reel_presentation_ids"
     private let localSavedPostIDsKey = "local_saved_post_ids"
@@ -403,7 +406,7 @@ final class AppState {
             openPlayChannel(username: username)
         case .playChannelID(let authorID):
             openPlayChannel(authorID: authorID)
-        case .people, .ads, .editProfile, .settings, .premium, .search:
+        case .people, .ads, .editProfile, .settings, .premium, .search, .letters, .letterThread:
             selectedTab = .feed
             navigationPath.removeAll()
             navigationPath.append(destination)
@@ -731,6 +734,12 @@ final class AppState {
     }
 
     func presentCreateSheet(_ sheet: CreateContentSheet) async {
+        // Moments parked in favor of Letters.
+        if sheet == .story {
+            showCreateMenu = false
+            presentLetterCompose()
+            return
+        }
         guard let home = await resolveHomeCountry() else {
             showToast("Set your home country in profile before posting.", style: .error)
             return
@@ -738,6 +747,26 @@ final class AppState {
         composerCountry = home
         showCreateMenu = false
         activeCreateSheet = sheet
+    }
+
+    func presentLetterCompose() {
+        LettersService.shared.rolloverQuotaIfNeeded()
+        if LettersService.shared.remainingToday == 0 {
+            let hours = Int(LettersService.shared.secondsUntilLocalMidnight / 3600)
+            let mins = Int(LettersService.shared.secondsUntilLocalMidnight.truncatingRemainder(dividingBy: 3600) / 60)
+            showToast("All 5 letters used. Resets in \(hours)h \(mins)m (local midnight).", style: .info)
+            return
+        }
+        showCreateMenu = false
+        showLetterCompose = true
+    }
+
+    func presentLetterFlight(_ event: LetterFlightEvent) {
+        letterFlightEvent = event
+    }
+
+    func dismissLetterFlight() {
+        letterFlightEvent = nil
     }
 
     func needsRepeatShareWarning(for post: CountryPost) -> Bool {

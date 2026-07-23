@@ -1158,6 +1158,8 @@ enum AppDestination: Hashable, Identifiable {
     case settings
     case premium
     case conversation(String)
+    case letters
+    case letterThread(String)
 
     var id: String {
         switch self {
@@ -1177,6 +1179,8 @@ enum AppDestination: Hashable, Identifiable {
         case .settings: "settings"
         case .premium: "premium"
         case .conversation(let id): "conversation-\(id)"
+        case .letters: "letters"
+        case .letterThread(let id): "letter-thread-\(id)"
         }
     }
 }
