@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/main.js"
+    "start": "node dist/main.js",
+    "render-build": "npm install --no-workspaces --include=dev && npm run build"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.89.0",
