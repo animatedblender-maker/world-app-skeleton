@@ -1,3 +1,54 @@
-﻿version: '3.9'
-services: {}
+# Matterya local infrastructure
+# Usage (from repo root):
+#   docker compose -f infra/docker/docker-compose.yml up -d
+#   docker compose -f infra/docker/docker-compose.yml down
+#
+# Redpanda is Kafka API-compatible (no ZooKeeper). App brokers: localhost:19092
 
+version: "3.9"
+
+services:
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.4
+    container_name: matterya-redpanda
+    command:
+      - redpanda
+      - start
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      - --pandaproxy-addr internal://0.0.0.0:8082,external://0.0.0.0:18082
+      - --advertise-pandaproxy-addr internal://redpanda:8082,external://localhost:18082
+      - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:18081
+      - --rpc-addr redpanda:33145
+      - --advertise-rpc-addr redpanda:33145
+      - --mode dev-container
+      - --smp 1
+      - --default-log-level=warn
+    ports:
+      - "19092:19092"   # Kafka API (clients)
+      - "18081:18081"   # Schema registry (optional)
+      - "18082:18082"   # HTTP proxy (optional)
+      - "9644:9644"     # Admin API
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy'"]
+      interval: 10s
+      timeout: 8s
+      retries: 10
+      start_period: 20s
+
+  # Optional UI — open http://localhost:8080
+  console:
+    image: docker.redpanda.com/redpandadata/console:v2.7.2
+    container_name: matterya-kafka-console
+    depends_on:
+      - redpanda
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+      REDPANDA_ADMINAPI_URL: http://redpanda:9644
+
+volumes:
+  redpanda-data:
