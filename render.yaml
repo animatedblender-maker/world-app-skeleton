@@ -6,9 +6,9 @@ services:
     runtime: node
     branch: ios-native
     rootDir: apps/api
-    # --no-workspaces: parent monorepo package.json would otherwise pull Capacitor/mobile
-    # and break install against the root package-lock. Install only apps/api deps.
-    buildCommand: npm install --no-workspaces --include=dev && npm run build
+    # If Dashboard still runs "npm ci", override Build Command to: npm run render-build
+    # (see docs/RENDER.md). Blueprint alone often does not update existing services.
+    buildCommand: npm run render-build
     startCommand: npm start
     healthCheckPath: /health
     envVars:
