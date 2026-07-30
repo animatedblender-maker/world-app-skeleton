@@ -1,13 +1,15 @@
 import { CommonModule } from '@angular/common';
-import { Component, OnDestroy, OnInit } from '@angular/core';
+import { ChangeDetectorRef, Component, OnDestroy, OnInit } from '@angular/core';
 import { NavigationEnd, Router } from '@angular/router';
 import { Subscription } from 'rxjs';
 
 import { AuthService } from '../core/services/auth.service';
 import { LocationService } from '../core/services/location.service';
 import { NotificationsService } from '../core/services/notifications.service';
+import { ProfileService } from '../core/services/profile.service';
+import { resolveAvatarUrl } from '../core/utils/media-url.util';
 
-type TabKey = 'home' | 'search' | 'messages' | 'profile';
+type TabKey = 'feed' | 'globe' | 'hubs' | 'messages' | 'profile';
 
 @Component({
   selector: 'app-bottom-tabs',
@@ -17,74 +19,101 @@ type TabKey = 'home' | 'search' | 'messages' | 'profile';
     '[class.hidden]': 'tabsHidden',
   },
   template: `
-    <button
-      type="button"
-      class="desktop-menu-trigger"
-      [class.globe-mode]="globeMode"
-      [class.active]="profileMenuOpen"
-      aria-label="Open menu"
-      (click)="toggleProfileMenu($event)"
-    >
-      <span class="desktop-menu-icon" aria-hidden="true">...</span>
-      <span class="desktop-menu-badge" *ngIf="messagesUnreadCount > 0">{{ messagesUnreadCount }}</span>
-    </button>
-
     <nav class="bottom-tabs" [class.globe-mode]="globeMode" role="navigation" aria-label="Primary">
-      <button
-        type="button"
-        class="tab-btn"
-        aria-label="Feed"
-        [class.active]="active === 'home'"
-        (click)="goHome()"
-      >
-        <span class="tab-icon" aria-hidden="true">&#127968;</span>
+      <button type="button" class="tab-btn" aria-label="Feed" [class.active]="active === 'feed'" (click)="goFeed()">
+        <svg class="tab-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+          <path d="M4 10.5L12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1v-9.5z" stroke-linejoin="round" />
+        </svg>
       </button>
-      <button
-        type="button"
-        class="tab-btn"
-        aria-label="Search"
-        [class.active]="active === 'search'"
-        (click)="openSearch()"
-      >
-        <span class="tab-icon" aria-hidden="true">&#128269;</span>
+
+      <button type="button" class="tab-btn" aria-label="Globe" [class.active]="active === 'globe'" (click)="goGlobe()">
+        <svg class="tab-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+          <circle cx="12" cy="12" r="8.5" />
+          <path d="M3.5 12h17M12 3.5c2.4 2.6 3.6 5.4 3.6 8.5S14.4 17.9 12 20.5C9.6 17.9 8.4 15.1 8.4 12S9.6 6.1 12 3.5z" />
+        </svg>
       </button>
+
+      <button type="button" class="create-btn" aria-label="Create" (click)="toggleCreateMenu($event)">
+        <span class="create-plus">+</span>
+      </button>
+
+      <button type="button" class="tab-btn" aria-label="Hubs" [class.active]="active === 'hubs'" (click)="goHubs()">
+        <svg class="tab-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+          <rect x="3.5" y="3.5" width="7" height="7" rx="1.2" />
+          <rect x="13.5" y="3.5" width="7" height="7" rx="1.2" />
+          <rect x="3.5" y="13.5" width="7" height="7" rx="1.2" />
+          <rect x="13.5" y="13.5" width="7" height="7" rx="1.2" />
+        </svg>
+      </button>
+
       <button
         type="button"
         class="tab-btn"
-        aria-label="Chats"
+        aria-label="Messages"
         [class.active]="active === 'messages'"
         (click)="goMessages()"
       >
-        <span class="tab-icon" aria-hidden="true">&#128172;</span>
-        <span class="tab-badge" *ngIf="messagesUnreadCount > 0">{{ messagesUnreadCount }}</span>
+        <svg class="tab-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+          <path
+            d="M5 16.5V7.8A2.3 2.3 0 0 1 7.3 5.5h9.4A2.3 2.3 0 0 1 19 7.8v5.4a2.3 2.3 0 0 1-2.3 2.3H9.2L5 18.5v-2z"
+            stroke-linejoin="round"
+          />
+        </svg>
+        <span class="tab-dot" *ngIf="messagesUnreadCount > 0"></span>
       </button>
+
       <button
         type="button"
-        class="tab-btn"
+        class="tab-btn profile-tab"
         aria-label="Profile"
-        [class.active]="active === 'profile' || profileMenuOpen"
-        (click)="toggleProfileMenu($event)"
+        [class.active]="active === 'profile'"
+        (click)="goProfile()"
       >
-        <span class="tab-icon" aria-hidden="true">&#128100;</span>
+        <span class="profile-avatar" [class.selected]="active === 'profile'">
+          <img
+            *ngIf="avatarUrl"
+            [src]="avatarUrl"
+            alt=""
+            (error)="onAvatarError()"
+          />
+          <span *ngIf="!avatarUrl">{{ avatarInitials }}</span>
+        </span>
       </button>
     </nav>
 
     <button
-      *ngIf="profileMenuOpen"
+      *ngIf="createMenuOpen"
       type="button"
-      class="profile-menu-backdrop"
-      aria-label="Close profile menu"
-      (click)="closeProfileMenu()"
+      class="create-backdrop"
+      aria-label="Close create menu"
+      (click)="closeCreateMenu()"
     ></button>
 
-    <div class="profile-menu" [class.desktop]="isDesktop" *ngIf="profileMenuOpen">
-      <button type="button" class="profile-menu-item" (click)="goHome()">Feed</button>
-      <button type="button" class="profile-menu-item" (click)="openSearch()">Search</button>
-      <button type="button" class="profile-menu-item" (click)="openMessagesFromMenu()">Messages</button>
-      <button type="button" class="profile-menu-item" (click)="openProfileFromMenu()">Profile</button>
-      <button type="button" class="profile-menu-item" (click)="openAdsFromMenu()">Ads</button>
-      <button type="button" class="profile-menu-item muted" disabled>Settings</button>
-      <button type="button" class="profile-menu-item danger" (click)="logout()">Logout</button>
+    <div class="create-sheet" *ngIf="createMenuOpen">
+      <div class="create-handle"></div>
+      <div class="create-head">
+        <div>
+          <div class="create-title">Create</div>
+          <div class="create-sub">Share with your country</div>
+        </div>
+        <button type="button" class="create-close" (click)="closeCreateMenu()" aria-label="Close">×</button>
+      </div>
+      <button type="button" class="create-row" (click)="create('post')">
+        <span class="create-row-title">Post</span>
+        <span class="create-row-sub">Share an update</span>
+      </button>
+      <button type="button" class="create-row" (click)="create('video')">
+        <span class="create-row-title">Video</span>
+        <span class="create-row-sub">Long-form on Matterya Hubs</span>
+      </button>
+      <button type="button" class="create-row" (click)="create('spark')">
+        <span class="create-row-title">Spark</span>
+        <span class="create-row-sub">Short vertical video</span>
+      </button>
+      <button type="button" class="create-row" (click)="create('moment')">
+        <span class="create-row-title">Moment</span>
+        <span class="create-row-sub">Disappears in 24 hours</span>
+      </button>
     </div>
   `,
   styles: [
@@ -99,274 +128,247 @@ type TabKey = 'home' | 'search' | 'messages' | 'profile';
         transition: transform 180ms ease, opacity 180ms ease;
       }
       :host.hidden {
-        transform: translateY(calc(var(--tabs-height, 64px) + env(safe-area-inset-bottom) + 6px));
+        transform: translateY(calc(var(--tabs-height, 56px) + env(safe-area-inset-bottom) + 6px));
         opacity: 0;
-      }
-      .desktop-menu-trigger {
-        pointer-events: auto;
-        position: fixed;
-        top: calc(env(safe-area-inset-top) + 14px);
-        right: 56px;
-        width: 34px;
-        height: 34px;
-        border-radius: 12px;
-        border: 0;
-        background: transparent;
-        color: #f4f7ff;
-        display: none;
-        place-items: center;
-        cursor: pointer;
-        z-index: 121;
-        padding: 0;
-        transition: opacity 0.2s ease, transform 0.2s ease;
-      }
-      .desktop-menu-trigger.globe-mode {
-        color: #f4f7ff;
-      }
-      .desktop-menu-trigger.active {
-        opacity: 0.92;
-      }
-      .desktop-menu-icon {
-        font-size: 18px;
-        line-height: 1;
-        letter-spacing: 0.06em;
-        font-weight: 900;
-      }
-      .desktop-menu-badge {
-        position: absolute;
-        top: -4px;
-        right: -4px;
-        min-width: 12px;
-        height: 12px;
-        border-radius: 999px;
-        background: rgba(56, 158, 255, 0.95);
-        color: #041629;
-        font-size: 7px;
-        font-weight: 900;
-        display: grid;
-        place-items: center;
-        padding: 0 4px;
-        box-shadow: 0 0 0 2px rgba(6,10,16,0.8);
       }
       .bottom-tabs {
         pointer-events: auto;
         display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 8px;
-        width: min(560px, calc(100vw - 24px));
-        margin: 0 auto 10px;
-        padding: 8px 10px calc(10px + env(safe-area-inset-bottom));
-        min-height: calc(var(--tabs-height, 64px) + env(safe-area-inset-bottom) - 8px);
-        background: rgba(255, 255, 255, 0.78);
-        border: 1px solid rgba(255, 255, 255, 0.58);
-        border-radius: 24px;
-        box-shadow:
-          0 18px 48px rgba(15, 23, 42, 0.12),
-          0 1px 0 rgba(255, 255, 255, 0.72) inset;
-        backdrop-filter: blur(22px) saturate(1.18);
-        -webkit-backdrop-filter: blur(22px) saturate(1.18);
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        align-items: center;
+        width: 100%;
+        margin: 0;
+        padding: 4px 6px calc(4px + env(safe-area-inset-bottom));
+        min-height: calc(var(--tabs-height, 56px) + env(safe-area-inset-bottom));
+        background: rgba(253, 252, 250, 0.96);
+        border-top: 0.5px solid var(--m-divider, #e2ded8);
+        box-shadow: 0 -8px 24px rgba(44, 40, 37, 0.04);
       }
       .bottom-tabs.globe-mode {
-        background: rgba(8, 16, 28, 0.62);
-        border-color: rgba(151, 214, 255, 0.16);
-        box-shadow:
-          0 20px 56px rgba(0, 0, 0, 0.34),
-          0 0 0 1px rgba(111, 194, 255, 0.08) inset,
-          0 0 28px rgba(111, 194, 255, 0.08);
-      }
-      .bottom-tabs.globe-mode .tab-btn {
-        color: rgba(231, 241, 255, 0.72);
-      }
-      .bottom-tabs.globe-mode .tab-btn:hover,
-      .bottom-tabs.globe-mode .tab-btn.active {
-        color: #ffffff;
-      }
-      .profile-menu-backdrop {
-        position: fixed;
-        inset: 0;
-        border: 0;
-        background: transparent;
-        pointer-events: auto;
-        z-index: 89;
-      }
-      .profile-menu {
-        position: fixed;
-        right: max(12px, calc(50vw - min(280px, calc((100vw - 24px) / 2))));
-        bottom: calc(var(--tabs-height, 64px) + env(safe-area-inset-bottom) + 18px);
-        min-width: 188px;
-        padding: 8px;
-        border-radius: 20px;
-        background: rgba(255, 255, 255, 0.84);
-        border: 1px solid rgba(255, 255, 255, 0.62);
-        box-shadow: 0 22px 52px rgba(12, 18, 24, 0.18);
-        backdrop-filter: blur(24px) saturate(1.14);
-        -webkit-backdrop-filter: blur(24px) saturate(1.14);
-        display: grid;
-        gap: 4px;
-        pointer-events: auto;
-        z-index: 91;
-      }
-      .profile-menu.desktop {
-        top: calc(env(safe-area-inset-top) + 54px);
-        right: 16px;
-        bottom: auto;
-        min-width: 210px;
-      }
-      .profile-menu-item {
-        border: 0;
-        background: transparent;
-        text-align: left;
-        border-radius: 12px;
-        padding: 11px 12px;
-        font-size: 14px;
-        font-weight: 700;
-        color: #0b1a2c;
-        cursor: pointer;
-      }
-      .profile-menu-item:hover {
-        background: rgba(11, 26, 44, 0.06);
-      }
-      .profile-menu-item.muted {
-        color: rgba(11, 26, 44, 0.45);
-        cursor: default;
-      }
-      .profile-menu-item.danger {
-        color: #c53a3a;
+        background: rgba(253, 252, 250, 0.94);
       }
       .tab-btn {
         border: 0;
-        border-radius: 18px;
+        border-radius: 14px;
         background: transparent;
-        color: rgba(13, 22, 36, 0.64);
+        color: var(--m-ink, #2c2825);
         cursor: pointer;
-        padding: 9px 4px;
-        transition: color 120ms ease, background 140ms ease, transform 140ms ease, box-shadow 140ms ease;
+        padding: 8px 2px;
         position: relative;
         display: grid;
         place-items: center;
-        gap: 4px;
-      }
-      .tab-btn:hover {
-        color: #101724;
-        background: rgba(255, 255, 255, 0.34);
-        transform: translateY(-1px);
+        min-height: 44px;
       }
       .tab-btn.active {
-        color: #0b1a2c;
-        background: rgba(255, 255, 255, 0.7);
-        box-shadow:
-          0 10px 22px rgba(15, 23, 42, 0.08),
-          0 1px 0 rgba(255, 255, 255, 0.72) inset;
+        color: var(--m-ink, #2c2825);
       }
-      .bottom-tabs.globe-mode .tab-btn:hover {
-        background: rgba(255, 255, 255, 0.08);
+      .tab-svg {
+        width: 24px;
+        height: 24px;
       }
-      .bottom-tabs.globe-mode .tab-btn.active {
-        color: #f7fffd;
-        background: linear-gradient(180deg, rgba(166, 255, 231, 0.2), rgba(123, 220, 255, 0.14));
-        box-shadow:
-          0 12px 28px rgba(0, 0, 0, 0.24),
-          0 0 0 1px rgba(152, 242, 228, 0.2) inset;
+      .tab-btn.active .tab-svg {
+        stroke-width: 2;
       }
-      .tab-icon {
-        font-size: 20px;
-        line-height: 1;
-      }
-      .tab-badge {
+      .tab-dot {
         position: absolute;
-        top: 2px;
-        right: 10px;
-        min-width: 18px;
-        height: 18px;
+        top: 8px;
+        right: calc(50% - 14px);
+        width: 8px;
+        height: 8px;
         border-radius: 999px;
-        background: rgba(56, 158, 255, 0.95);
-        color: #041629;
-        font-size: 10px;
-        font-weight: 900;
+        background: var(--m-danger, #ea000b);
+      }
+      .create-btn {
+        pointer-events: auto;
+        border: 0;
+        background: transparent;
+        width: 100%;
+        height: 48px;
         display: grid;
         place-items: center;
-        padding: 0 6px;
-        box-shadow: 0 0 0 2px rgba(6, 10, 16, 0.8);
+        cursor: pointer;
+        transform: translateY(-8px);
       }
-      @media (min-width: 641px) {
-        :host {
-          bottom: auto;
-          transform: none !important;
-          opacity: 1 !important;
-        }
-        .desktop-menu-trigger {
-          display: grid;
-        }
-        .bottom-tabs {
-          display: none;
-        }
+      .create-plus {
+        width: 36px;
+        height: 36px;
+        border-radius: 12px;
+        display: grid;
+        place-items: center;
+        font-size: 28px;
+        font-weight: 300;
+        line-height: 1;
+        color: var(--m-ink, #2c2825);
+        background: transparent;
       }
-      @media (max-width: 640px) {
-        .desktop-menu-trigger {
-          display: none;
-        }
-        .profile-menu {
-          right: 10px;
-          min-width: 166px;
-        }
+      .profile-avatar {
+        width: 28px;
+        height: 28px;
+        border-radius: 999px;
+        overflow: hidden;
+        display: grid;
+        place-items: center;
+        background: var(--m-canvas-muted, #f2f0ec);
+        font-size: 10px;
+        font-weight: 700;
+        color: var(--m-ink-secondary, #6b645d);
+        border: 1.5px solid transparent;
+      }
+      .profile-avatar.selected {
+        border-color: var(--m-accent, #6b5841);
+        width: 26px;
+        height: 26px;
+      }
+      .profile-avatar img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+      .create-backdrop {
+        position: fixed;
+        inset: 0;
+        border: 0;
+        background: rgba(44, 40, 37, 0.16);
+        pointer-events: auto;
+        z-index: 91;
+      }
+      .create-sheet {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 92;
+        pointer-events: auto;
+        background: var(--m-surface, #fefdfb);
+        border-radius: 18px 18px 0 0;
+        padding: 8px 0 calc(12px + env(safe-area-inset-bottom));
+        box-shadow: 0 -16px 40px rgba(44, 40, 37, 0.12);
+        border-top: 0.5px solid var(--m-divider, #e2ded8);
+      }
+      .create-handle {
+        width: 36px;
+        height: 4px;
+        border-radius: 999px;
+        background: var(--m-border, #ddd8d1);
+        margin: 6px auto 10px;
+      }
+      .create-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        padding: 0 20px 10px;
+      }
+      .create-title {
+        font-family: 'Iowan Old Style', Palatino, Georgia, serif;
+        font-size: 24px;
+        color: var(--m-ink, #2c2825);
+      }
+      .create-sub {
+        font-size: 12px;
+        color: var(--m-ink-muted, #948b82);
+        margin-top: 2px;
+      }
+      .create-close {
+        border: 0;
+        background: transparent;
+        font-size: 24px;
+        color: var(--m-ink-muted, #948b82);
+        cursor: pointer;
+        line-height: 1;
+        width: 36px;
+        height: 36px;
+      }
+      .create-row {
+        width: 100%;
+        border: 0;
+        background: transparent;
+        text-align: left;
+        padding: 14px 20px;
+        cursor: pointer;
+        display: grid;
+        gap: 2px;
+        border-top: 0.5px solid var(--m-divider, #e2ded8);
+      }
+      .create-row:hover {
+        background: rgba(44, 40, 37, 0.04);
+      }
+      .create-row-title {
+        font-size: 16px;
+        font-weight: 650;
+        color: var(--m-ink, #2c2825);
+      }
+      .create-row-sub {
+        font-size: 12px;
+        color: var(--m-ink-muted, #948b82);
+      }
+      @media (min-width: 900px) {
         .bottom-tabs {
-          width: calc(100vw - 16px);
-          margin-bottom: 8px;
-          border-radius: 22px;
+          max-width: 720px;
+          margin: 0 auto 10px;
+          border-radius: 18px;
+          border: 0.5px solid var(--m-divider, #e2ded8);
+          width: min(720px, calc(100vw - 24px));
         }
-        .tab-icon {
-          font-size: 18px;
-        }
-        .tab-badge {
-          top: 2px;
-          right: 6px;
-          min-width: 16px;
-          height: 16px;
-          font-size: 9px;
+        .create-sheet {
+          left: 50%;
+          transform: translateX(-50%);
+          width: min(480px, 100vw);
+          border-radius: 18px;
+          bottom: calc(var(--tabs-height, 56px) + env(safe-area-inset-bottom) + 16px);
         }
       }
     `,
   ],
 })
 export class BottomTabsComponent implements OnInit, OnDestroy {
-  active: TabKey = 'home';
+  active: TabKey = 'feed';
   messagesUnreadCount = 0;
   tabsHidden = false;
-  profileMenuOpen = false;
+  createMenuOpen = false;
   globeMode = false;
-  isDesktop = false;
+  avatarUrl: string | null = null;
+  avatarInitials = 'ME';
 
   private sub?: Subscription;
-  private lastGlobeUrl = '/globe';
   private unreadPollTimer: number | null = null;
   private unreadRefreshInFlight = false;
   private lastScrollTop = 0;
   private scrollHandler = (event: Event) => this.handleScroll(event);
-  private resizeHandler = () => this.syncViewportMode();
 
   constructor(
     private router: Router,
     private location: LocationService,
     private auth: AuthService,
-    private notifications: NotificationsService
+    private notifications: NotificationsService,
+    private profiles: ProfileService,
+    private cdr: ChangeDetectorRef
   ) {}
 
+  private paint(): void {
+    try {
+      this.cdr.detectChanges();
+    } catch {
+      // destroyed
+    }
+  }
+
   ngOnInit(): void {
-    this.syncViewportMode();
     this.syncActive(this.router.url);
-    this.captureGlobeUrl(this.router.url);
+    void this.loadProfileAvatar();
     this.sub = this.router.events.subscribe((event) => {
       if (event instanceof NavigationEnd) {
-        const url = event.urlAfterRedirects || event.url;
-        this.syncActive(url);
-        this.captureGlobeUrl(url);
-        this.profileMenuOpen = false;
+        this.syncActive(event.urlAfterRedirects || event.url);
+        this.createMenuOpen = false;
+        // Re-fetch when returning to app chrome (avatar may have changed on /me).
+        if (this.active === 'feed' || this.active === 'profile') {
+          void this.loadProfileAvatar();
+        }
+        this.paint();
       }
     });
     void this.refreshUnreadMessages();
     this.unreadPollTimer = window.setInterval(() => this.refreshUnreadMessages(), 20000);
     window.addEventListener('scroll', this.scrollHandler, true);
-    window.addEventListener('resize', this.resizeHandler);
   }
 
   ngOnDestroy(): void {
@@ -376,70 +378,127 @@ export class BottomTabsComponent implements OnInit, OnDestroy {
       this.unreadPollTimer = null;
     }
     window.removeEventListener('scroll', this.scrollHandler, true);
-    window.removeEventListener('resize', this.resizeHandler);
   }
 
-  goHome(): void {
-    this.profileMenuOpen = false;
-    if (this.lastGlobeUrl) {
-      void this.router.navigateByUrl(this.lastGlobeUrl);
-      return;
-    }
+  goFeed(): void {
+    this.createMenuOpen = false;
+    void this.router.navigate(['/feed']);
+  }
+
+  goGlobe(): void {
+    this.createMenuOpen = false;
     const cached = this.location.getCachedLocation();
     const code = cached?.countryCode?.trim().toUpperCase();
     void this.router.navigate(['/globe'], {
-      queryParams: code ? { country: code, tab: 'posts', panel: null } : null,
+      queryParams: code ? { country: null } : null,
     });
   }
 
-  openSearch(): void {
-    this.profileMenuOpen = false;
-    if (this.active === 'search') return;
-    void this.router.navigate(['/search']);
+  goHubs(): void {
+    this.createMenuOpen = false;
+    void this.router.navigate(['/hubs']);
   }
 
   goMessages(): void {
-    this.profileMenuOpen = false;
-    if (this.active === 'messages') return;
+    this.createMenuOpen = false;
     void this.router.navigate(['/messages']);
   }
 
   goProfile(): void {
-    this.profileMenuOpen = false;
-    if (this.active === 'profile') return;
+    this.createMenuOpen = false;
     void this.router.navigate(['/me']);
   }
 
-  toggleProfileMenu(event?: Event): void {
+  toggleCreateMenu(event?: Event): void {
     event?.stopPropagation();
-    this.profileMenuOpen = !this.profileMenuOpen;
+    this.createMenuOpen = !this.createMenuOpen;
   }
 
-  closeProfileMenu(): void {
-    this.profileMenuOpen = false;
+  closeCreateMenu(): void {
+    this.createMenuOpen = false;
   }
 
-  openProfileFromMenu(): void {
-    this.goProfile();
-  }
-
-  openMessagesFromMenu(): void {
-    this.goMessages();
-  }
-
-  openAdsFromMenu(): void {
-    this.profileMenuOpen = false;
-    void this.router.navigate(['/ads']);
-  }
-
-  async logout(): Promise<void> {
-    this.profileMenuOpen = false;
-    try {
-      await this.auth.logout();
-    } catch {
-      // ignore
+  create(kind: 'post' | 'video' | 'spark' | 'moment'): void {
+    this.createMenuOpen = false;
+    const cached = this.location.getCachedLocation();
+    const code = cached?.countryCode?.trim().toUpperCase();
+    if (kind === 'video' && code) {
+      void this.router.navigate(['/globe'], {
+        queryParams: { country: code, tab: 'posts', compose: 'video' },
+      });
+      return;
     }
-    void this.router.navigate(['/auth']);
+    if (kind === 'spark' && code) {
+      void this.router.navigate(['/globe'], {
+        queryParams: { country: code, tab: 'posts', compose: 'spark' },
+      });
+      return;
+    }
+    void this.router.navigate(['/globe'], {
+      queryParams: {
+        country: code || null,
+        tab: 'posts',
+        compose: kind === 'moment' ? 'moment' : kind === 'video' ? 'video' : 'post',
+      },
+    });
+  }
+
+  onAvatarError(): void {
+    // Broken storage URL → fall back to generated avatar or initials (never a ? icon).
+    if (this.avatarUrl && !this.avatarUrl.includes('dicebear.com')) {
+      const seed = this.avatarSeed || this.avatarInitials || 'user';
+      this.avatarUrl = resolveAvatarUrl(null, seed) || null;
+      this.paint();
+      return;
+    }
+    this.avatarUrl = null;
+    this.paint();
+  }
+
+  private avatarSeed = '';
+
+  private async loadProfileAvatar(): Promise<void> {
+    try {
+      const user = await this.auth.getUser();
+      if (!user) {
+        this.avatarUrl = null;
+        this.avatarInitials = 'ME';
+        this.paint();
+        return;
+      }
+      const { meProfile } = await this.profiles.meProfile();
+      const name =
+        meProfile?.display_name ||
+        meProfile?.username ||
+        user.email?.split('@')[0] ||
+        'ME';
+      this.avatarInitials = this.initialsFrom(name);
+      this.avatarSeed =
+        meProfile?.username || meProfile?.user_id || user.id || this.avatarInitials;
+      // Always resolve to a usable <img> URL (public storage path or dicebear).
+      const resolved = resolveAvatarUrl(
+        meProfile?.avatar_url,
+        this.avatarSeed
+      );
+      this.avatarUrl = resolved || null;
+      this.paint();
+    } catch {
+      // keep last known
+      this.paint();
+    }
+  }
+
+  private initialsFrom(name: string): string {
+    const cleaned = String(name || '')
+      .trim()
+      .replace(/[@._-]+/g, ' ')
+      .replace(/\s+/g, ' ');
+    if (!cleaned) return 'ME';
+    const parts = cleaned.split(' ').filter(Boolean);
+    if (parts.length >= 2) {
+      return (parts[0][0] + parts[1][0]).toUpperCase();
+    }
+    return cleaned.slice(0, 2).toUpperCase();
   }
 
   private async refreshUnreadMessages(): Promise<void> {
@@ -449,6 +508,7 @@ export class BottomTabsComponent implements OnInit, OnDestroy {
       const user = await this.auth.getUser();
       if (!user) {
         this.messagesUnreadCount = 0;
+        this.paint();
         return;
       }
       const { notifications } = await this.notifications.list(80);
@@ -456,6 +516,7 @@ export class BottomTabsComponent implements OnInit, OnDestroy {
         (notif) => !notif.read_at && String(notif?.type ?? '').toLowerCase() === 'message'
       );
       this.messagesUnreadCount = unread.length;
+      this.paint();
     } catch {
       // keep last known
     } finally {
@@ -469,50 +530,38 @@ export class BottomTabsComponent implements OnInit, OnDestroy {
       parsed = new URL(url, window.location.origin);
     } catch {}
     const pathname = parsed?.pathname ?? url;
-    const hasCountry = !!parsed?.searchParams?.get('country');
     this.globeMode =
-      (pathname === '/' || pathname.startsWith('/globe') || pathname.startsWith('/globe-cesium')) &&
-      !hasCountry;
-    if (url.startsWith('/messages')) {
+      pathname === '/globe' || pathname.startsWith('/globe-cesium');
+
+    if (pathname.startsWith('/messages')) {
       this.active = 'messages';
       return;
     }
-    if (url.startsWith('/me')) {
+    if (pathname.startsWith('/me') || pathname.startsWith('/user')) {
       this.active = 'profile';
       return;
     }
-    if (url.startsWith('/user')) {
-      this.active = 'home';
+    if (pathname.startsWith('/hubs') || pathname.startsWith('/reels') || pathname.startsWith('/sparks')) {
+      this.active = 'hubs';
       return;
     }
-    if (url.startsWith('/globe') || url === '/' || url.startsWith('/globe-cesium')) {
-      this.active = 'home';
+    if (pathname.startsWith('/globe') || pathname.startsWith('/globe-cesium')) {
+      this.active = 'globe';
       return;
     }
-    if (url.startsWith('/search')) {
-      this.active = 'search';
+    if (pathname.startsWith('/feed') || pathname === '/') {
+      this.active = 'feed';
       return;
     }
-    this.active = 'home';
-  }
-
-  private captureGlobeUrl(url: string): void {
-    if (!(url.startsWith('/globe') || url === '/' || url.startsWith('/globe-cesium'))) return;
-    this.lastGlobeUrl = this.stripSearchParam(url);
-  }
-
-  private stripSearchParam(url: string): string {
-    try {
-      const parsed = new URL(url, window.location.origin);
-      parsed.searchParams.delete('search');
-      return parsed.pathname + (parsed.search ? parsed.search : '');
-    } catch {
-      return url.replace(/([?&])search=[^&]+/, '').replace(/[?&]$/, '');
+    if (pathname.startsWith('/search')) {
+      this.active = 'feed';
+      return;
     }
+    this.active = 'feed';
   }
 
   private handleScroll(event: Event): void {
-    if (this.isDesktop) {
+    if (typeof window !== 'undefined' && window.innerWidth >= 900) {
       this.tabsHidden = false;
       return;
     }
@@ -527,14 +576,10 @@ export class BottomTabsComponent implements OnInit, OnDestroy {
     if (Math.abs(delta) < 6) return;
     if (delta > 0 && current > 20) {
       this.tabsHidden = true;
-      this.profileMenuOpen = false;
+      this.createMenuOpen = false;
     } else if (delta < 0) {
       this.tabsHidden = false;
     }
     this.lastScrollTop = current;
-  }
-
-  private syncViewportMode(): void {
-    this.isDesktop = typeof window !== 'undefined' && window.innerWidth >= 641;
   }
 }

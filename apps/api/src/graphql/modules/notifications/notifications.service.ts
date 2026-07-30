@@ -1,6 +1,7 @@
 import { pool } from '../../../db.js';
 import { PushService } from '../../../push/push.service.js';
 import { ApnsService } from '../../../push/apns.service.js';
+import { PresenceService } from '../presence/presence.service.js';
 
 type NotificationRow = {
   id: string;
@@ -22,6 +23,7 @@ type NotificationRow = {
 export class NotificationsService {
   private push = new PushService();
   private apns = new ApnsService();
+  private presence = new PresenceService();
   async listForUser(userId: string, limit: number, before?: string | null): Promise<NotificationRow[]> {
     const safeLimit = Math.max(1, Math.min(100, limit || 40));
     const params: Array<string | number> = [userId, safeLimit];
@@ -76,6 +78,29 @@ export class NotificationsService {
       [id, userId]
     );
     return !!rows[0]?.id;
+  }
+
+  async markConversationMessageNotificationsRead(
+    userId: string,
+    conversationId: string
+  ): Promise<number> {
+    const wantUser = String(userId || '').trim();
+    const wantConversation = String(conversationId || '').trim();
+    if (!wantUser || !wantConversation) return 0;
+
+    const { rowCount } = await pool.query(
+      `
+      update public.notifications
+      set read_at = coalesce(read_at, now())
+      where user_id = $1
+        and read_at is null
+        and type = 'message'
+        and entity_type = 'conversation'
+        and entity_id = $2
+      `,
+      [wantUser, wantConversation]
+    );
+    return rowCount ?? 0;
   }
 
   async markAllRead(userId: string): Promise<number> {
@@ -227,6 +252,13 @@ export class NotificationsService {
     meta?: { senderName?: string | null; preview?: string | null }
   ): Promise<void> {
     if (!targetId || !actorId || !conversationId || targetId === actorId) return;
+
+    const isViewingChat = await this.presence.isViewingConversation(
+      targetId,
+      conversationId
+    );
+    if (isViewingChat) return;
+
     await pool.query(
       `
       insert into public.notifications

@@ -9,22 +9,12 @@ export class AuthService {
     if (error) throw error;
   }
 
-  /**
-   * Register that returns info to drive UI:
-   * - isExistingEmail: email already registered
-   * - needsEmailConfirm: signUp succeeded but session is null (email confirmation enabled)
-   *
-   * NOTE:
-   * Supabase sometimes does NOT throw an error for existing emails.
-   * Instead it returns a user with identities = [] and session = null.
-   */
   async register(
     email: string,
     password: string
   ): Promise<{ isExistingEmail: boolean; needsEmailConfirm: boolean }> {
     const { data, error } = await supabase.auth.signUp({ email, password });
 
-    // Case 1: explicit error
     if (error) {
       const msg = (error as any)?.message ?? String(error);
 
@@ -35,19 +25,11 @@ export class AuthService {
       throw error;
     }
 
-    /**
-     * Case 2: "email already used" but NO error:
-     * Supabase returns:
-     * - data.user exists
-     * - data.user.identities is []
-     * - data.session is null
-     */
     const identities = (data.user as any)?.identities;
     if (data.user && Array.isArray(identities) && identities.length === 0) {
       return { isExistingEmail: true, needsEmailConfirm: false };
     }
 
-    // Case 3: normal new signup
     const needsEmailConfirm = !data.session;
     return { isExistingEmail: false, needsEmailConfirm };
   }
@@ -68,10 +50,6 @@ export class AuthService {
     return data.session?.access_token ?? null;
   }
 
-  /**
-   * Sends reset password email. Make sure Supabase Auth "Site URL" + redirect URLs
-   * include your app route: http://localhost:4200/reset-password
-   */
   async resetPassword(email: string): Promise<void> {
     const redirectTo = `${window.location.origin}/reset-password`;
 
@@ -82,11 +60,6 @@ export class AuthService {
     if (error) throw error;
   }
 
-  /**
-   * On reset-password page load:
-   * Exchange the recovery "code" in URL for a session.
-   * Returns true if session is ready.
-   */
   async prepareResetSession(): Promise<{ ok: boolean; reason?: string }> {
     try {
       const current = await supabase.auth.getSession();
@@ -111,9 +84,6 @@ export class AuthService {
     }
   }
 
-  /**
-   * Update password for the current authenticated session.
-   */
   async updatePassword(newPassword: string): Promise<void> {
     const { error } = await supabase.auth.updateUser({ password: newPassword });
 

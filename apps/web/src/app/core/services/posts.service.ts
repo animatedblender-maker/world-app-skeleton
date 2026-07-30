@@ -5,8 +5,7 @@ import { CountryPost, PostComment, PostLike } from '../models/post.model';
 import { PostEventsService } from './post-events.service';
 import { DemoDatasetService } from './demo-dataset.service';
 import { SUPABASE_URL } from '../../config/supabase.config';
-
-const DICEBEAR_BASE = 'https://api.dicebear.com/7.x/identicon/svg?seed=';
+import { resolveAvatarUrl as resolveAvatarMediaUrl } from '../utils/media-url.util';
 
 @Injectable({ providedIn: 'root' })
 export class PostsService {
@@ -21,88 +20,7 @@ export class PostsService {
     limit = 25,
     opts?: { demoLimit?: number; skipComments?: boolean }
   ): Promise<CountryPost[]> {
-    if (environment.useDemoDataset) {
-      const minDemo = opts?.demoLimit ?? 1000;
-      const demoLimit = Math.max(limit, minDemo);
-      const [realResult, demoResult] = await Promise.allSettled([
-        this.withTimeout(
-          this.gql.request<{ postsByCountry: any[] }>(
-          `
-          query PostsByCountry($code: String!, $limit: Int) {
-            postsByCountry(country_code: $code, limit: $limit) {
-              id
-              title
-              body
-              media_type
-              media_url
-              thumb_url
-              shared_post_id
-              shared_post {
-                id
-                title
-                body
-                media_type
-                media_url
-                thumb_url
-                visibility
-                like_count
-                comment_count
-                liked_by_me
-                created_at
-                updated_at
-                author_id
-                country_name
-                country_code
-                city_name
-                author {
-                  user_id
-                  display_name
-                  username
-                  avatar_url
-                  country_name
-                  country_code
-                }
-              }
-              visibility
-              like_count
-              comment_count
-              liked_by_me
-              created_at
-              updated_at
-              author_id
-              country_name
-              country_code
-              city_name
-              author {
-                user_id
-                display_name
-                username
-                avatar_url
-                country_name
-                country_code
-              }
-            }
-          }
-          `,
-          { code: countryCode, limit: demoLimit }
-        ),
-          1600,
-          'postsByCountry'
-        ),
-        this.demoData.listByCountry(countryCode, demoLimit, {
-          skipComments: opts?.skipComments,
-        }),
-      ]);
-
-      const realPosts =
-        realResult.status === 'fulfilled'
-          ? (realResult.value.postsByCountry ?? []).map((row) => this.mapPost(row))
-          : [];
-      const demoPosts = demoResult.status === 'fulfilled' ? demoResult.value : [];
-
-      return this.mergePosts(realPosts, demoPosts, demoLimit);
-    }
-
+    const safeLimit = Math.max(1, Math.min(80, limit || 25));
     const query = `
       query PostsByCountry($code: String!, $limit: Int) {
         postsByCountry(country_code: $code, limit: $limit) {
@@ -161,11 +79,238 @@ export class PostsService {
       }
     `;
 
-    const { postsByCountry } = await this.gql.request<{ postsByCountry: any[] }>(query, {
-      code: countryCode,
-      limit,
+    try {
+      const { postsByCountry } = await this.withTimeout(
+        this.gql.request<{ postsByCountry: any[] }>(query, {
+          code: countryCode,
+          limit: safeLimit,
+        }),
+        8000,
+        'postsByCountry'
+      );
+      const realPosts = (postsByCountry ?? [])
+        .map((row) => this.mapPost(row))
+        .filter((p) => !this.isMoment(p));
+      if (!environment.useDemoDataset) return realPosts;
+
+      const demoLimit = Math.min(opts?.demoLimit ?? safeLimit, 40);
+      const demoPosts = await this.withTimeout(
+        this.demoData.listByCountry(countryCode, demoLimit, {
+          skipComments: opts?.skipComments ?? true,
+        }),
+        2500,
+        'demoPostsByCountry'
+      ).catch(() => [] as CountryPost[]);
+      return this.mergePosts(realPosts, demoPosts, safeLimit);
+    } catch {
+      if (!environment.useDemoDataset) return [];
+      try {
+        return await this.withTimeout(
+          this.demoData.listByCountry(countryCode, Math.min(safeLimit, 20), {
+            skipComments: true,
+          }),
+          2500,
+          'demoPostsByCountryFallback'
+        );
+      } catch {
+        return [];
+      }
+    }
+  }
+
+  async listRecent(limit = 40, before?: string | null): Promise<CountryPost[]> {
+    const query = `
+      query RecentPosts($limit: Int, $before: String) {
+        recentPosts(limit: $limit, before: $before) {
+          id
+          title
+          body
+          media_type
+          media_url
+          thumb_url
+          shared_post_id
+          shared_post {
+            id
+            title
+            body
+            media_type
+            media_url
+            thumb_url
+            visibility
+            like_count
+            comment_count
+            liked_by_me
+            created_at
+            updated_at
+            author_id
+            country_name
+            country_code
+            city_name
+            author {
+              user_id
+              display_name
+              username
+              avatar_url
+              country_name
+              country_code
+            }
+          }
+          visibility
+          like_count
+          comment_count
+          liked_by_me
+          created_at
+          updated_at
+          author_id
+          country_name
+          country_code
+          city_name
+          author {
+            user_id
+            display_name
+            username
+            avatar_url
+            country_name
+            country_code
+          }
+        }
+      }
+    `;
+    try {
+      const { recentPosts } = await this.withTimeout(
+        this.gql.request<{ recentPosts: any[] }>(query, {
+          limit: Math.max(1, Math.min(80, limit || 40)),
+          before: before ?? null,
+        }),
+        8000,
+        'recentPosts'
+      );
+      // Moments must never appear as regular feed posts (also strip markers in mapPost).
+      return (recentPosts ?? [])
+        .map((row) => this.mapPost(row))
+        .filter((p) => !this.isMoment(p));
+    } catch {
+      return [];
+    }
+  }
+
+  isMoment(post: CountryPost | null | undefined): boolean {
+    if (!post) return false;
+    const media = String(post.media_type || '').toLowerCase();
+    if (media === 'story' || media === 'moment') return true;
+    return String(post.body || '').includes('__story__|');
+  }
+
+  isSpark(post: CountryPost | null | undefined): boolean {
+    if (!post) return false;
+    if (this.isMoment(post)) return false;
+    const media = String(post.media_type || '').toLowerCase();
+    if (media === 'reel' || media === 'spark') return true;
+    const raw = String(post.media_url || '').trim();
+    if (raw.startsWith('{') || raw.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(raw) as any;
+        const flag = parsed?.reel ?? parsed?.spark;
+        return flag === true || flag === 'true' || flag === 1 || flag === '1';
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }
+
+  isMomentActive(post: CountryPost): boolean {
+    if (!this.isMoment(post)) return false;
+    const body = String(post.body || '');
+    const match = body.match(/__story__\|expires=([^\s|]+)/i);
+    if (!match?.[1]) return true;
+    const expires = Date.parse(match[1]);
+    if (!Number.isFinite(expires)) return true;
+    return expires > Date.now();
+  }
+
+  async listActiveMoments(
+    limit = 40,
+    opts?: {
+      authorId?: string | null;
+      followingIds?: string[];
+      countryCode?: string | null;
+    }
+  ): Promise<CountryPost[]> {
+    // Country/recent feeds exclude moments on the API; author feeds include them.
+    const followingIds = (opts?.followingIds ?? []).filter(Boolean).slice(0, 8);
+    const batches = await Promise.all([
+      opts?.authorId
+        ? this.listForAuthor(opts.authorId, 24).catch(() => [] as CountryPost[])
+        : Promise.resolve([] as CountryPost[]),
+      ...followingIds.map((id) => this.listForAuthor(id, 10).catch(() => [] as CountryPost[])),
+    ]);
+
+    const seen = new Set<string>();
+    const moments: CountryPost[] = [];
+    for (const batch of batches) {
+      for (const post of batch) {
+        if (!post?.id || seen.has(post.id)) continue;
+        if (!this.isMomentActive(post)) continue;
+        seen.add(post.id);
+        moments.push(post);
+      }
+    }
+    moments.sort((a, b) => {
+      const ta = Date.parse(a.created_at || '') || 0;
+      const tb = Date.parse(b.created_at || '') || 0;
+      return tb - ta;
     });
-    return (postsByCountry ?? []).map((row) => this.mapPost(row));
+    return moments.slice(0, Math.max(1, limit));
+  }
+
+  async loadHomeFeed(opts?: {
+    authorId?: string | null;
+    countryCode?: string | null;
+    followingIds?: string[];
+    maxPosts?: number;
+  }): Promise<CountryPost[]> {
+    const maxPosts = opts?.maxPosts ?? 50;
+    const followingIds = (opts?.followingIds ?? []).filter(Boolean).slice(0, 6);
+
+    // Prefer recent + country; author/following are best-effort with short timeouts.
+    const batches = await Promise.all([
+      this.listRecent(40).catch(() => [] as CountryPost[]),
+      opts?.countryCode
+        ? this.listByCountry(opts.countryCode, 24, {
+            demoLimit: 12,
+            skipComments: true,
+          }).catch(() => [] as CountryPost[])
+        : Promise.resolve([] as CountryPost[]),
+      opts?.authorId
+        ? this.withTimeout(this.listForAuthor(opts.authorId, 12), 5000, 'feedAuthor').catch(
+            () => [] as CountryPost[]
+          )
+        : Promise.resolve([] as CountryPost[]),
+      ...followingIds.map((id) =>
+        this.withTimeout(this.listForAuthor(id, 3), 4000, 'feedFollowing').catch(
+          () => [] as CountryPost[]
+        )
+      ),
+    ]);
+
+    const seen = new Set<string>();
+    const merged: CountryPost[] = [];
+    for (const batch of batches) {
+      for (const post of batch) {
+        if (!post?.id || seen.has(post.id)) continue;
+        if (this.isMoment(post) || this.isSpark(post)) continue;
+        seen.add(post.id);
+        merged.push(post);
+      }
+    }
+
+    merged.sort((a, b) => {
+      const ta = Date.parse(a.created_at || '') || 0;
+      const tb = Date.parse(b.created_at || '') || 0;
+      return tb - ta;
+    });
+    return merged.slice(0, maxPosts);
   }
 
   async listForAuthor(userId: string, limit = 25): Promise<CountryPost[]> {
@@ -231,11 +376,19 @@ export class PostsService {
       }
     `;
 
-    const { postsByAuthor } = await this.gql.request<{ postsByAuthor: any[] }>(
-      query,
-      { authorId: userId, limit }
-    );
-    return (postsByAuthor ?? []).map((row) => this.mapPost(row));
+    try {
+      const { postsByAuthor } = await this.withTimeout(
+        this.gql.request<{ postsByAuthor: any[] }>(query, {
+          authorId: userId,
+          limit: Math.max(1, Math.min(60, limit || 25)),
+        }),
+        8000,
+        'postsByAuthor'
+      );
+      return (postsByAuthor ?? []).map((row) => this.mapPost(row));
+    } catch {
+      return [];
+    }
   }
 
   async searchPosts(query: string, limit = 25): Promise<CountryPost[]> {
@@ -910,6 +1063,21 @@ export class PostsService {
     return !!reportPost;
   }
 
+  private stripMomentMarkers(body: string | null | undefined): string {
+    return String(body ?? '')
+      .split('\n')
+      .filter((line) => {
+        const t = line.trim();
+        if (!t) return true;
+        if (/__story__/i.test(t)) return false;
+        if (/\bstory\b/i.test(t) && /\bexpir/i.test(t)) return false;
+        return true;
+      })
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
   private mapPost(row: any, depth = 0): CountryPost {
     const viewCount =
       row?.view_count != null
@@ -920,7 +1088,7 @@ export class PostsService {
     return {
       id: row.id,
       title: row.title ?? null,
-      body: row.body ?? '',
+      body: this.stripMomentMarkers(row.body ?? ''),
       media_type: row.media_type ?? 'none',
       media_url: row.media_url ?? null,
       thumb_url: row.thumb_url ?? null,
@@ -1017,26 +1185,7 @@ export class PostsService {
     userId: string | null | undefined,
     username: string | null | undefined
   ): string {
-    const normalized = this.normalizeAvatarUrl(url);
-    if (normalized) return normalized;
-    const seed = String(username || userId || '').trim();
-    return seed ? `${DICEBEAR_BASE}${encodeURIComponent(seed)}` : '';
-  }
-
-  private normalizeAvatarUrl(url: string | null | undefined): string {
-    const raw = String(url || '').trim();
-    if (!raw) return '';
-    if (raw.startsWith('data:') || raw.startsWith('blob:') || raw.startsWith('/')) {
-      return raw;
-    }
-    const storageMatch = raw.match(/\/storage\/v1\/object\/(?:sign|public)\/avatars\/([^?#]+)/i);
-    if (storageMatch?.[1]) {
-      const normalizedPath = decodeURIComponent(storageMatch[1]).replace(/^\/+/, '');
-      return `${SUPABASE_URL}/storage/v1/object/public/avatars/${normalizedPath}`;
-    }
-    if (/^https?:\/\//i.test(raw)) return raw;
-    const normalized = raw.replace(/^\/+/, '');
-    return `${SUPABASE_URL}/storage/v1/object/public/avatars/${normalized}`;
+    return resolveAvatarMediaUrl(url, username || userId);
   }
 
   private mergePosts(real: CountryPost[], demo: CountryPost[], limit: number): CountryPost[] {

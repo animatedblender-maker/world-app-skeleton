@@ -333,8 +333,8 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       min-height:100svh;
       height:100svh;
       position:relative;
-      color:#e6f1ff;
-      background:transparent;
+      color:var(--m-ink, #2c2825);
+      background:var(--m-paper, #f8f6f2);
     }
     .wrap{
       min-height:100%;
@@ -344,6 +344,7 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       box-sizing:border-box;
       display:flex;
       flex-direction:column;
+      background:var(--m-paper, #f8f6f2);
     }
     .card{
       position:relative;
@@ -352,13 +353,13 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       height:100%;
       max-width:none;
       margin:0;
-      background:transparent;
+      background:var(--m-paper, #f8f6f2);
       border-radius:0;
       padding:0;
       border:0;
       box-shadow:none;
       backdrop-filter:none;
-      color:#0c1422;
+      color:var(--m-ink, #2c2825);
       flex:1;
       box-sizing:border-box;
       display:flex;
@@ -389,11 +390,12 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       overflow:auto;
     }
     .panel-title{
-      font-weight:800;
-      letter-spacing:0.24em;
-      text-transform:uppercase;
-      font-size:11px;
-      color:rgba(9,22,38,0.6);
+      font-family:'Iowan Old Style', Palatino, Georgia, serif;
+      font-weight:500;
+      letter-spacing:0.02em;
+      text-transform:none;
+      font-size:22px;
+      color:var(--m-ink, #2c2825);
       margin-bottom:6px;
       display:flex;
       align-items:center;
@@ -403,10 +405,11 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
     .panel-backlink{
       border:0;
       background:transparent;
-      color:rgba(10,20,32,0.85);
-      letter-spacing:0.14em;
-      font-size:10px;
-      text-transform:uppercase;
+      color:var(--m-ink-secondary, #6b645d);
+      letter-spacing:0;
+      font-size:13px;
+      font-weight:650;
+      text-transform:none;
       cursor:pointer;
       padding:4px 6px;
     }
@@ -423,28 +426,28 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       align-items:center;
       gap:10px;
       padding:10px;
-      border-radius:16px;
-      border:1px solid transparent;
-      background:rgba(7,20,40,0.03);
+      border-radius:14px;
+      border:0.5px solid transparent;
+      background:transparent;
       cursor:pointer;
       text-align:left;
-      transition: border 160ms ease, background 160ms ease, transform 160ms ease;
+      transition: border 160ms ease, background 160ms ease;
     }
     .conversation:hover{
-      border-color:rgba(0,155,220,0.3);
-      background:rgba(0,155,220,0.1);
-      transform: translateY(-1px);
+      border-color:var(--m-divider, #e2ded8);
+      background:rgba(44,40,37,0.04);
+      transform: none;
     }
     .conversation.active{
-      border-color:rgba(0,155,220,0.5);
-      background:rgba(0,155,220,0.15);
+      border-color:var(--m-border, #ddd8d1);
+      background:var(--m-surface, #fefdfb);
     }
     .conversation-unread{
       width:8px;
       height:8px;
       border-radius:999px;
-      background:rgba(255,255,255,0.9);
-      border:1px solid rgba(7,20,40,0.12);
+      background:var(--m-danger, #ea000b);
+      border:0;
       flex:0 0 auto;
       margin-left:6px;
     }
@@ -453,12 +456,12 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       height:40px;
       border-radius:50%;
       overflow:hidden;
-      background:rgba(0,155,220,0.12);
+      background:var(--m-canvas-muted, #f2f0ec);
       display:flex;
       align-items:center;
       justify-content:center;
-      font-weight:800;
-      color:rgba(5,25,40,0.75);
+      font-weight:700;
+      color:var(--m-ink-secondary, #6b645d);
       flex-shrink:0;
     }
     .avatar img{
@@ -500,18 +503,18 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       flex-direction:column;
       border-radius:0;
       border:0;
-      background:transparent;
+      background:var(--m-paper, #f8f6f2);
       min-height:0;
       overflow:hidden;
-      min-height:0;
     }
     .thread-back{
       border:0;
       background:none;
-      color:rgba(7,20,40,0.6);
-      font-size:11px;
-      letter-spacing:0.18em;
-      text-transform:uppercase;
+      color:var(--m-ink-secondary, #6b645d);
+      font-size:13px;
+      letter-spacing:0;
+      text-transform:none;
+      font-weight:650;
       cursor:pointer;
       margin-right:8px;
     }
@@ -520,18 +523,19 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       align-items:center;
       gap:12px;
       padding:14px;
-      border-bottom:1px solid rgba(7,20,40,0.12);
-      background:transparent;
+      border-bottom:0.5px solid var(--m-divider, #e2ded8);
+      background:rgba(253, 252, 250, 0.94);
       min-width:0;
     }
     .thread-backlink{
       margin-left:auto;
       border:0;
       background:transparent;
-      color:rgba(10,20,32,0.85);
-      letter-spacing:0.14em;
-      font-size:11px;
-      text-transform:uppercase;
+      color:var(--m-ink-secondary, #6b645d);
+      letter-spacing:0;
+      font-size:13px;
+      text-transform:none;
+      font-weight:650;
       cursor:pointer;
       padding:6px 10px;
     }
@@ -652,16 +656,29 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
     }
     .bubble{
       max-width:72%;
-      background:rgba(7,20,40,0.05);
-      border:1px solid rgba(7,20,40,0.08);
+      background:var(--m-surface, #fefdfb);
+      border:0.5px solid var(--m-border, #ddd8d1);
       border-radius:18px;
       padding:10px 12px;
       font-size:14px;
       line-height:1.5;
+      color:var(--m-ink, #2c2825);
     }
     .message.me .bubble{
-      background:rgba(0,155,220,0.18);
-      border-color:rgba(0,155,220,0.4);
+      background:var(--m-ink, #2c2825);
+      border-color:var(--m-ink, #2c2825);
+      color:var(--m-surface, #fefdfb);
+    }
+    .message.me .bubble .body,
+    .message.me .bubble .message-time,
+    .message.me .bubble .message-date,
+    .message.me .bubble .message-edited,
+    .message.me .bubble .message-status{
+      color:rgba(254,253,251,0.92);
+    }
+    .message.me .bubble .message-reply,
+    .message.me .bubble .message-like{
+      color:rgba(254,253,251,0.88);
     }
     .body{
       white-space:pre-wrap;
@@ -958,13 +975,13 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       justify-content:center;
       min-height:44px;
       border:0;
-      border-radius:999px;
+      border-radius:12px;
       padding:10px 18px;
-      background:rgba(0,155,220,0.85);
-      color:white;
-      font-weight:700;
+      background:var(--m-ink, #2c2825);
+      color:var(--m-surface, #fefdfb);
+      font-weight:650;
       cursor:pointer;
-      box-shadow:0 12px 24px rgba(0,155,220,0.25);
+      box-shadow:none;
     }
     .composer-send:disabled{
       opacity:0.6;
@@ -1320,9 +1337,13 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   private pendingCallType: 'audio' | 'video' | null = null;
   private pendingCallFrom: string | null = null;
   private pendingCallConversationId: string | null = null;
+  private pendingCallId: string | null = null;
+  private pendingCallRoom: string | null = null;
+  private pendingCallAutoAccept = false;
   private awaitingOffer = false;
   private callSessionId: string | null = null;
   private callRoomName: string | null = null;
+  private liveKitConnectGeneration = 0;
   private readonly callLogPrefix = '__call__|';
   private audioContext?: AudioContext;
   private audioAnalyser?: AnalyserNode;
@@ -1386,14 +1407,20 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       const convoId = params.get('c');
       const callParam = params.get('call');
       const fromParam = params.get('from');
+      const callIdParam = params.get('callId');
+      const roomParam = params.get('room');
+      const acceptParam = params.get('accept');
       if (convoId && callParam) {
         this.pendingCallType = callParam === 'video' ? 'video' : 'audio';
         this.pendingCallFrom = fromParam;
         this.pendingCallConversationId = convoId;
+        this.pendingCallId = callIdParam;
+        this.pendingCallRoom = roomParam;
+        this.pendingCallAutoAccept = acceptParam === '1';
       }
       if (!convoId) return;
       if (convoId !== this.activeConversationId) {
-        void this.activateConversationById(convoId);
+        void this.activateConversationById(convoId).then(() => this.maybeShowCallFromParams());
         return;
       }
       if (!this.messages.length) {
@@ -1582,21 +1609,46 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     this.callType = this.pendingCallType;
     this.callConversationId = this.pendingCallConversationId;
     this.callFromId = this.pendingCallFrom;
-    this.callIncoming = true;
-    this.callConnecting = false;
-    this.callActive = false;
+    this.callSessionId = this.pendingCallId;
+    this.callRoomName =
+      this.pendingCallRoom ||
+      (this.pendingCallId
+        ? `call_${this.pendingCallConversationId}_${this.pendingCallId}`
+        : this.pendingCallFrom
+          ? `call_${this.pendingCallConversationId}_${this.pendingCallFrom}`
+          : null);
     this.callError = '';
+    const autoAccept = this.pendingCallAutoAccept;
     this.pendingCallType = null;
     this.pendingCallFrom = null;
     this.pendingCallConversationId = null;
+    this.pendingCallId = null;
+    this.pendingCallRoom = null;
+    this.pendingCallAutoAccept = false;
     this.clearCallParams();
+
+    if (autoAccept && this.callRoomName && this.callType) {
+      this.incomingOffer = {
+        conversationId: this.callConversationId,
+        from: this.callFromId || '',
+        callType: this.callType,
+        callId: this.callSessionId,
+        roomName: this.callRoomName,
+      };
+      void this.acceptCall();
+      return;
+    }
+
+    this.callIncoming = true;
+    this.callConnecting = false;
+    this.callActive = false;
     this.forceUi();
   }
 
   private clearCallParams(): void {
     void this.router.navigate([], {
       relativeTo: this.route,
-      queryParams: { call: null, from: null },
+      queryParams: { call: null, from: null, callId: null, room: null, accept: null },
       queryParamsHandling: 'merge',
     });
   }
@@ -1609,8 +1661,35 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     }
   }
 
+  private resolveCallRoomName(offer: {
+    conversationId: string;
+    from: string;
+    callId?: string | null;
+    roomName?: string | null;
+  }): string {
+    const explicit =
+      typeof offer.roomName === 'string' ? offer.roomName.trim() : '';
+    if (explicit) return explicit;
+    if (this.callRoomName) return this.callRoomName;
+    if (offer.callId) return `call_${offer.conversationId}_${offer.callId}`;
+    // Prefer shared call session id over "from" so caller/callee join the same room.
+    if (this.callSessionId) return `call_${offer.conversationId}_${this.callSessionId}`;
+    return `call_${offer.conversationId}_${offer.from}`;
+  }
+
   async startCall(type: 'audio' | 'video'): Promise<void> {
-    if (!this.activeConversationId || !this.canStartCall()) return;
+    if (!this.activeConversationId) {
+      this.callError = 'Open a conversation first.';
+      this.forceUi();
+      return;
+    }
+    if (!this.wsConnected) {
+      this.callError = 'Connecting to call service… try again in a moment.';
+      this.forceUi();
+      this.callService.reconnect();
+      return;
+    }
+    if (!this.canStartCall()) return;
     if (this.callActive || this.callConnecting || this.callIncoming) {
       this.cleanupCall();
     }
@@ -1627,11 +1706,15 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     this.callLogSent = false;
     this.forceUi();
     try {
-      await this.ensureLiveKitConnected(type, this.callRoomName);
+      // Announce first so the peer has roomName/callId before we finish joining.
       this.sendSignal('call-offer', this.callConversationId, {
         callType: type,
+        callId: this.callSessionId,
         roomName: this.callRoomName,
       });
+      await this.ensureLiveKitConnected(type, this.callRoomName);
+      this.callConnecting = true;
+      this.forceUi();
     } catch (e: any) {
       this.callError = e?.message ?? 'Call failed.';
       this.callConnecting = false;
@@ -1674,11 +1757,8 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     this.awaitingOffer = false;
     this.forceUi();
     try {
-      const roomName =
-        offer.roomName ??
-        (offer.callId ? `call_${offer.conversationId}_${offer.callId}` : null);
+      const roomName = this.resolveCallRoomName(offer);
       this.callRoomName = roomName;
-      if (!roomName) throw new Error('Missing call room.');
       await this.ensureLiveKitConnected(offer.callType, roomName);
       this.sendSignal('call-accept', offer.conversationId, {
         callType: offer.callType,
@@ -1790,8 +1870,15 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       if (callId) {
         this.callSessionId = callId;
       }
-      const roomName =
-        typeof (msg as any)?.roomName === 'string' ? String((msg as any).roomName) : null;
+      const roomName = this.resolveCallRoomName({
+        conversationId,
+        from,
+        callId,
+        roomName:
+          typeof (msg as any)?.roomName === 'string'
+            ? String((msg as any).roomName)
+            : null,
+      });
       this.incomingOffer = { conversationId, from, callType, callId, roomName };
       this.awaitingOffer = false;
       if (this.callConnecting && (this.callFromId === from || expectingOffer)) {
@@ -1821,11 +1908,15 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       try {
         const callType = msg.callType === 'video' ? 'video' : (this.callType ?? 'audio');
         this.callType = callType;
-        const roomName =
-          typeof (msg as any)?.roomName === 'string'
-            ? String((msg as any).roomName)
-            : this.callRoomName;
-        if (!roomName) return;
+        const roomName = this.resolveCallRoomName({
+          conversationId,
+          from,
+          callId: msgCallId || this.callSessionId,
+          roomName:
+            typeof (msg as any)?.roomName === 'string'
+              ? String((msg as any).roomName)
+              : this.callRoomName,
+        });
         this.callRoomName = roomName;
         await this.ensureLiveKitConnected(callType, roomName);
       } catch {}
@@ -1854,14 +1945,25 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       await this.disconnectLiveKit();
       this.callMuted = false;
       this.callCameraOff = callType !== 'video';
-      const tokenInfo = await this.fetchLiveKitToken(roomName);
-      const url = tokenInfo.url || environment.livekitUrl;
-      if (!url) throw new Error('LiveKit URL not configured.');
+
+      const urlBase = environment.livekitUrl;
+      if (!urlBase) throw new Error('LiveKit URL not configured.');
 
       await this.ensureLiveKitLoaded();
       const LiveKit = this.livekitModule || (window as any).LiveKit;
       if (!LiveKit) throw new Error('LiveKit not loaded.');
     const { Room, RoomEvent, createLocalTracks } = LiveKit;
+
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) {
+        await this.disconnectLiveKit();
+        await new Promise((resolve) => setTimeout(resolve, 600));
+      }
+
+      const tokenInfo = await this.fetchLiveKitToken(roomName, attempt);
+      const url = tokenInfo.url || urlBase;
+
     const room = new Room({ adaptiveStream: true, dynacast: true });
     this.livekitRoom = room;
     this.remoteStream = new MediaStream();
@@ -1913,29 +2015,48 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       }
     });
 
-    await room.connect(url, tokenInfo.token);
-    this.callConnecting = true;
-    this.callError = '';
+    try {
+      await room.connect(url, tokenInfo.token);
+      this.callConnecting = true;
+      this.callError = '';
 
-    const tracks = await createLocalTracks({
-      audio: true,
-      video: callType === 'video',
-    });
-    this.livekitLocalTracks = tracks;
-    this.localStream = new MediaStream();
-    for (const track of tracks) {
-      const mediaTrack = (track as any)?.mediaStreamTrack as MediaStreamTrack | undefined;
-      if (mediaTrack) this.localStream.addTrack(mediaTrack);
-      await room.localParticipant.publishTrack(track);
+      const tracks = await createLocalTracks({
+        audio: true,
+        video: callType === 'video',
+      });
+      this.livekitLocalTracks = tracks;
+      this.localStream = new MediaStream();
+      for (const track of tracks) {
+        const mediaTrack = (track as any)?.mediaStreamTrack as MediaStreamTrack | undefined;
+        if (mediaTrack) this.localStream.addTrack(mediaTrack);
+        await room.localParticipant.publishTrack(track);
+      }
+      this.startVoiceDetection();
+      this.forceUi();
+      requestAnimationFrame(() => {
+        this.attachLocalStream();
+      });
+      return;
+    } catch (e) {
+      lastError = e;
+      try {
+        room.removeAllListeners();
+        await room.disconnect();
+      } catch {}
+      this.livekitRoom = undefined;
     }
-    this.startVoiceDetection();
-    this.forceUi();
-    requestAnimationFrame(() => {
-      this.attachLocalStream();
-    });
+    }
+
+    throw lastError instanceof Error ? lastError : new Error('Could not join call room.');
   }
 
-  private async fetchLiveKitToken(roomName: string): Promise<{ token: string; url: string }> {
+  private liveKitConnectInstance(attempt: number): string {
+    this.liveKitConnectGeneration += 1;
+    const base = this.callSessionId ?? `${Date.now()}`;
+    return `${base}-${this.liveKitConnectGeneration}-${attempt}`;
+  }
+
+  private async fetchLiveKitToken(roomName: string, attempt = 0): Promise<{ token: string; url: string }> {
     const token = await this.auth.getAccessToken();
     if (!token) throw new Error('Missing auth token.');
     const res = await fetch(`${environment.apiBaseUrl}/livekit/token`, {
@@ -1946,7 +2067,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       },
       body: JSON.stringify({
         room: roomName,
-        name: this.meId ?? 'member',
+        instance: this.liveKitConnectInstance(attempt),
       }),
     });
     const data = await res.json().catch(() => ({}));
@@ -1964,9 +2085,10 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     if (this.livekitRoom) {
       try {
         this.livekitRoom.removeAllListeners();
-        this.livekitRoom.disconnect();
+        await this.livekitRoom.disconnect(true);
       } catch {}
       this.livekitRoom = undefined;
+      await new Promise((resolve) => setTimeout(resolve, 200));
     }
     if (this.livekitLocalTracks.length) {
       for (const track of this.livekitLocalTracks) {
@@ -2026,6 +2148,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     this.awaitingOffer = false;
     this.callSessionId = null;
     this.callRoomName = null;
+    this.liveKitConnectGeneration = 0;
     this.stopCallTimer();
     this.clearDisconnectTimer();
     this.stopVoiceDetection();

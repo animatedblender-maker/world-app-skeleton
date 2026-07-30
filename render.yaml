@@ -42,3 +42,30 @@ services:
         sync: false
       - key: PUSH_VAPID_SUBJECT
         value: mailto:support@matterya.com
+
+      # --- Kafka (managed broker — NOT localhost) ---
+      # 1) Create a free/paid cluster at Upstash / Redpanda Cloud / Confluent
+      # 2) Paste credentials in Render Dashboard → Environment
+      # 3) Start with KAFKA_SHADOW=true, then set false after validation
+      - key: KAFKA_ENABLED
+        sync: false
+      - key: KAFKA_BROKERS
+        sync: false
+      - key: KAFKA_CLIENT_ID
+        value: matterya-api-render
+      - key: KAFKA_CONSUMER_GROUP
+        value: matterya-api-workers
+      - key: KAFKA_SHADOW
+        sync: false
+      - key: KAFKA_SSL
+        sync: false
+      - key: KAFKA_SASL_MECHANISM
+        sync: false
+      - key: KAFKA_SASL_USERNAME
+        sync: false
+      - key: KAFKA_SASL_PASSWORD
+        sync: false
+      - key: KAFKA_REPLICATION_FACTOR
+        sync: false
+      - key: KAFKAJS_NO_PARTITIONER_WARNING
+        value: "1"

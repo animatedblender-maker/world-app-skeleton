@@ -1,6 +1,4 @@
-<!-- Background App (blurred + disabled until logged in) -->
 <div class="app-shell" [class.blurred]="!user">
-  <!-- UI -->
   <div class="topbar">
     <div class="searchwrap">
       <input id="search" placeholder="Search a country on the globe…" />
@@ -22,11 +20,9 @@
     </div>
   </div>
 
-  <!-- Globe container -->
   <div id="globe"></div>
 </div>
 
-<!-- Sci-Fi Auth Overlay -->
 <div class="auth-overlay" *ngIf="!user">
   <div class="auth-frame">
     <div class="scanlines"></div>

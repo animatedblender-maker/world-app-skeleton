@@ -168,7 +168,7 @@ export class ProfileService {
   async updateProfile(input: {
     display_name?: string;
     username?: string;
-    avatar_url?: string | null; // ✅ allow null
+    avatar_url?: string | null;
     country_name?: string;
     country_code?: string | null;
     city_name?: string | null;
@@ -189,7 +189,6 @@ export class ProfileService {
       );
       if (real?.profileByUsername) return real;
     } catch {
-      // fall back to fake profiles if API fails
     }
     const fake = await this.fakeData.getProfileByUsername(trimmed);
     if (fake) return { profileByUsername: fake };
@@ -205,7 +204,6 @@ export class ProfileService {
       });
       if (real?.profileById) return real;
     } catch {
-      // fall back to fake profiles if API fails
     }
     const fake = await this.fakeData.getProfileById(trimmed);
     if (fake) return { profileById: fake };
@@ -214,7 +212,6 @@ export class ProfileService {
 
   isComplete(p: Profile | null) {
     if (!p) return false;
-    // Treat profiles with a display name + country name as complete even if code is missing.
     return !!p.display_name && !!p.country_name && p.country_name !== 'Unknown';
   }
 

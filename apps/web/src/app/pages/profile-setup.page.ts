@@ -4,18 +4,9 @@ import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 
 import { AuthService } from '../core/services/auth.service';
-import { CountriesService, CountryModel } from '../data/countries.service';
 import { GraphqlService } from '../core/services/graphql.service';
 import { MediaService } from '../core/services/media.service';
-
-type DetectLocationResult = {
-  detectLocation: {
-    countryCode: string;
-    countryName: string;
-    cityName?: string | null;
-    source: string;
-  };
-};
+import { LocationService } from '../core/services/location.service';
 
 @Component({
   selector: 'app-profile-setup-page',
@@ -28,11 +19,11 @@ type DetectLocationResult = {
         <button class="back" type="button" (click)="goBack()">Back</button>
       </div>
       <div class="title">Create your profile</div>
-      <div class="sub">Auto-detect is default. Manual selection is fallback.</div>
+      <div class="sub">Your country is detected automatically. Just add who you are.</div>
 
       <div class="field">
         <label>Screen name</label>
-        <input [(ngModel)]="displayName" placeholder="e.g. Amr" />
+        <input [(ngModel)]="displayName" placeholder="e.g. Amr" autocomplete="nickname" />
       </div>
 
       <div class="field">
@@ -42,40 +33,34 @@ type DetectLocationResult = {
             Choose image
             <input type="file" accept="image/*" (change)="onAvatar($event)" style="display:none;" />
           </label>
-          <small class="muted" *ngIf="avatarUrl">Selected ✅</small>
+          <div class="avatar-preview" *ngIf="avatarPreviewUrl || avatarUrl">
+            <img [src]="avatarPreviewUrl || avatarUrl" alt="" />
+          </div>
+          <small class="muted" *ngIf="avatarUrl && !avatarPreviewUrl">Selected ✅</small>
         </div>
       </div>
 
       <div class="field">
-        <label>Detected location</label>
-        <div class="locbox">
-          <div class="locrow"><div class="k">Country</div><div class="v">{{ countryName || '—' }}</div></div>
-          <div class="locrow"><div class="k">City</div><div class="v">{{ cityName || '—' }}</div></div>
-          <div class="locrow"><div class="k">Status</div><div class="v">{{ detecting ? 'Detecting…' : (detectSource || '—') }}</div></div>
-        </div>
-
-        <div class="row" style="margin-top:10px;">
-          <button class="btn2" type="button" (click)="detect()" [disabled]="detecting">
-            {{ detecting ? 'Detecting…' : 'Detect again' }}
-          </button>
-          <button class="link" type="button" (click)="manual = !manual">
-            {{ manual ? 'Hide manual' : 'Manual fallback' }}
-          </button>
-        </div>
+        <label>Bio (optional)</label>
+        <textarea
+          [(ngModel)]="bio"
+          rows="3"
+          placeholder="Tell the world a little about you…"
+          maxlength="280"
+        ></textarea>
       </div>
 
-      <div class="field" *ngIf="manual">
-        <label>Manual country</label>
-        <select [(ngModel)]="manualCountryName">
-          <option value="">Select…</option>
-          <option *ngFor="let c of countries" [value]="c.name">{{ c.name }}</option>
-        </select>
-        <small class="muted">Used only if auto-detect fails.</small>
+      <div class="loc-status" *ngIf="detecting || countryName">
+        <span class="dot" [class.ok]="!!countryCode && !detecting" [class.busy]="detecting"></span>
+        <span *ngIf="detecting">Detecting your location…</span>
+        <span *ngIf="!detecting && countryName">
+          Home country: <b>{{ countryName }}</b><span *ngIf="cityName"> · {{ cityName }}</span>
+        </span>
       </div>
 
       <div class="row" style="margin-top:16px;">
-        <button class="btn" (click)="save()" [disabled]="busy">
-          {{ busy ? 'Saving…' : 'Save & Continue' }}
+        <button class="btn" (click)="save()" [disabled]="busy || detecting || !canSave">
+          {{ busy ? 'Saving…' : detecting ? 'Detecting location…' : 'Save & Continue' }}
         </button>
         <div class="msg" *ngIf="msg">{{ msg }}</div>
       </div>
@@ -119,25 +104,43 @@ type DetectLocationResult = {
     }
     .field{ margin-top:14px; display:grid; gap:8px; }
     label{ font-size:12px; opacity:.75; letter-spacing:0.12em; }
-    input,select{
+    input,textarea{
       padding:12px; border-radius:16px;
       border:1px solid rgba(255,255,255,0.12);
       background: rgba(0,0,0,0.28);
       color: rgba(255,255,255,0.92);
       outline:none;
+      font: inherit;
+      resize: vertical;
     }
-    .locbox{
-      border:1px solid rgba(255,255,255,0.10);
-      background: rgba(0,0,0,0.20);
-      border-radius:16px;
-      padding:12px;
-      display:grid;
+    .loc-status{
+      margin-top:14px;
+      display:flex;
+      align-items:center;
       gap:8px;
+      font-size:13px;
+      opacity:.85;
     }
-    .locrow{ display:flex; justify-content:space-between; gap:12px; }
-    .k{ opacity:.7; font-size:12px; }
-    .v{ font-weight:800; font-size:13px; }
-    .row{ display:flex; gap:12px; align-items:center; }
+    .loc-status .dot{
+      width:8px; height:8px; border-radius:999px;
+      background: rgba(255,255,255,0.35);
+      flex-shrink:0;
+    }
+    .loc-status .dot.ok{ background: #22c55e; box-shadow: 0 0 0 3px rgba(34,197,94,0.2); }
+    .loc-status .dot.busy{
+      background: #00ffd1;
+      animation: pulse 1s ease infinite;
+    }
+    @keyframes pulse {
+      0%,100% { opacity: 1; }
+      50% { opacity: 0.35; }
+    }
+    .row{ display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+    .avatar-preview{
+      width:44px; height:44px; border-radius:999px; overflow:hidden;
+      border:1px solid rgba(255,255,255,0.15);
+    }
+    .avatar-preview img{ width:100%; height:100%; object-fit:cover; display:block; }
     .muted{ opacity:.65; font-weight:600; font-size:12px; }
     .btn{
       border:0; border-radius:16px; padding:12px 14px; cursor:pointer;
@@ -156,41 +159,35 @@ type DetectLocationResult = {
       letter-spacing:0.08em;
       font-size:12px;
     }
-    .link{
-      border:0; background:transparent; padding:0;
-      color: rgba(0,255,209,0.90);
-      cursor:pointer; font-weight:900; letter-spacing:0.08em;
-      font-size:12px;
-    }
-    .msg{ font-size:13px; opacity:.95; white-space:pre-wrap; }
+    .msg{ font-size:13px; opacity:.95; white-space:pre-wrap; color:#fca5a5; }
   `],
 })
 export class ProfileSetupPageComponent implements OnInit {
-  countries: CountryModel[] = [];
-
   displayName = '';
+  bio = '';
   avatarUrl: string | null = null;
+  avatarPreviewUrl: string | null = null;
 
   detecting = false;
-  detectSource = '';
   countryName = '';
   countryCode = '';
   cityName = '';
-
-  manual = false;
-  manualCountryName = '';
 
   busy = false;
   msg = '';
 
   constructor(
     private auth: AuthService,
-    private countriesService: CountriesService,
     private gql: GraphqlService,
     private media: MediaService,
+    private location: LocationService,
     private router: Router,
     private cdr: ChangeDetectorRef
   ) {}
+
+  get canSave(): boolean {
+    return !!this.displayName.trim() && !!this.countryCode && !!this.countryName;
+  }
 
   async ngOnInit(): Promise<void> {
     const user = await this.auth.getUser();
@@ -200,15 +197,10 @@ export class ProfileSetupPageComponent implements OnInit {
     }
 
     this.displayName = user.email?.split('@')[0] ?? 'User';
-
-    // Load countries for fallback (always)
-    const data = await this.countriesService.loadCountries();
-    this.countries = data.countries ?? [];
     this.cdr.detectChanges();
 
-    // Auto-detect ON LOAD (default)
-    // Use a microtask so page renders first (helps permission prompts)
-    queueMicrotask(() => this.detect());
+    // Location is automatic — no manual country picker on this screen.
+    queueMicrotask(() => void this.detectLocation());
   }
 
   async onAvatar(e: Event): Promise<void> {
@@ -217,57 +209,41 @@ export class ProfileSetupPageComponent implements OnInit {
     if (!file) return;
 
     this.msg = '';
+    if (this.avatarPreviewUrl) {
+      try {
+        URL.revokeObjectURL(this.avatarPreviewUrl);
+      } catch {}
+    }
+    this.avatarPreviewUrl = URL.createObjectURL(file);
 
     try {
       const res = await this.media.uploadAvatar(file);
       this.avatarUrl = res.path;
     } catch (err: any) {
       this.msg = `Avatar upload failed: ${err?.message ?? err}`;
+      this.avatarPreviewUrl = null;
     } finally {
       input.value = '';
       this.cdr.detectChanges();
     }
   }
 
-  async detect(): Promise<void> {
-    this.msg = '';
+  private async detectLocation(): Promise<void> {
     this.detecting = true;
-    this.detectSource = '';
+    this.msg = '';
+    this.cdr.detectChanges();
 
     try {
-      const coords = await this.getBrowserCoords(9000);
-
-      if (!coords) {
-        this.manual = true;
-        this.detectSource = 'location unavailable';
-        return;
+      const loc = await this.location.detectViaGpsThenServer(9000);
+      if (loc?.countryCode && loc.countryName) {
+        this.countryCode = loc.countryCode;
+        this.countryName = loc.countryName;
+        this.cityName = loc.cityName ?? '';
+      } else {
+        this.msg =
+          'Could not detect your location automatically. Check network permission and try again, or refresh the page.';
       }
-
-      const result = await this.gql.query<DetectLocationResult>(
-        `
-        mutation Detect($lat: Float!, $lng: Float!) {
-          detectLocation(lat: $lat, lng: $lng) {
-            countryCode
-            countryName
-            cityName
-            source
-          }
-        }
-        `,
-        { lat: coords.lat, lng: coords.lng }
-      );
-
-      const d = result.detectLocation;
-
-      this.countryName = d.countryName;
-      this.countryCode = d.countryCode;
-      this.cityName = d.cityName ?? '';
-      this.detectSource = d.source;
-
-      this.manual = false;
     } catch (e: any) {
-      this.manual = true;
-      this.detectSource = 'detect failed';
       this.msg = e?.message ?? String(e);
     } finally {
       this.detecting = false;
@@ -283,23 +259,18 @@ export class ProfileSetupPageComponent implements OnInit {
       const dn = this.displayName.trim();
       if (!dn) throw new Error('Screen name is required.');
 
-      // if auto-detect failed, use manual fallback
-      let cn = (this.countryName || '').trim();
-      let cc = (this.countryCode || '').trim();
-      let city = (this.cityName || '').trim();
+      // One more detect attempt if still missing (e.g. slow network).
+      if (!this.countryCode || !this.countryName) {
+        const loc = await this.location.detectViaGpsThenServer(9000);
+        if (loc?.countryCode && loc.countryName) {
+          this.countryCode = loc.countryCode;
+          this.countryName = loc.countryName;
+          this.cityName = loc.cityName ?? '';
+        }
+      }
 
-      if (!cn || cn === 'Unknown') {
-        if (!this.manualCountryName) throw new Error('Auto-detect failed. Select a country manually.');
-        const manualName = this.manualCountryName.trim().toLowerCase();
-        const match = this.countries.find((c) => c.name.trim().toLowerCase() === manualName);
-        if (!match?.code) throw new Error('Selected country has no code. Pick another country.');
-        cn = match.name;
-        cc = match.code;
-        city = '';
-        this.countryName = cn;
-        this.countryCode = cc;
-        this.cityName = '';
-        this.detectSource = 'manual selection';
+      if (!this.countryCode || !this.countryName) {
+        throw new Error('Still detecting location. Please wait a moment and try again.');
       }
 
       await this.gql.query(
@@ -312,9 +283,10 @@ export class ProfileSetupPageComponent implements OnInit {
           input: {
             display_name: dn,
             avatar_url: this.avatarUrl,
-            country_name: cn,
-            country_code: cc || null,
-            city_name: city || null,
+            bio: this.bio.trim() || null,
+            country_name: this.countryName,
+            country_code: this.countryCode,
+            city_name: this.cityName || null,
           },
         }
       );
@@ -334,28 +306,5 @@ export class ProfileSetupPageComponent implements OnInit {
       return;
     }
     await this.router.navigateByUrl('/');
-  }
-
-  private getBrowserCoords(timeoutMs: number): Promise<{ lat: number; lng: number } | null> {
-    return new Promise((resolve) => {
-      if (!('geolocation' in navigator)) return resolve(null);
-
-      let done = false;
-      const finish = (v: any) => { if (!done) { done = true; resolve(v); } };
-
-      const t = window.setTimeout(() => finish(null), timeoutMs);
-
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          clearTimeout(t);
-          finish({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-        },
-        () => {
-          clearTimeout(t);
-          finish(null);
-        },
-        { enableHighAccuracy: false, timeout: timeoutMs, maximumAge: 60_000 }
-      );
-    });
   }
 }

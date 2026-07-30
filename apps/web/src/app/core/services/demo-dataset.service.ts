@@ -85,7 +85,6 @@ function parseJsonl<T>(text: string): T[] {
     try {
       out.push(JSON.parse(trimmed) as T);
     } catch {
-      // Skip bad lines.
     }
   }
   return out;

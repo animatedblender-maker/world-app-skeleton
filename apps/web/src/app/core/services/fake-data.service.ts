@@ -70,7 +70,6 @@ function parseJsonl<T>(text: string, limit?: number): T[] {
     try {
       out.push(JSON.parse(trimmed) as T);
     } catch {
-      // Skip bad lines.
     }
     if (limit && out.length >= limit) break;
   }

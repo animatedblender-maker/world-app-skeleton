@@ -19,6 +19,7 @@ export type IncomingCall = {
   from: string;
   callType: 'audio' | 'video';
   callId?: string;
+  roomName?: string;
 };
 
 @Injectable({ providedIn: 'root' })
@@ -44,8 +45,17 @@ export class CallService {
     this.incomingSubject.next(null);
   }
 
+  /** Force a reconnect attempt (e.g. after login or when starting a call). */
+  reconnect(): void {
+    void this.connect();
+  }
+
   sendSignal(type: string, conversationId: string | null, payload?: Record<string, any>): void {
-    if (!conversationId || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!conversationId) return;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      void this.connect();
+      return;
+    }
     const msg = {
       type,
       conversationId,
@@ -109,7 +119,9 @@ export class CallService {
       if (type === 'call-offer') {
         const callType = msg.callType === 'video' ? 'video' : 'audio';
         const callId = typeof msg.callId === 'string' ? msg.callId : undefined;
-        this.incomingSubject.next({ conversationId, from, callType, callId });
+        const roomName =
+          typeof (msg as any)?.roomName === 'string' ? String((msg as any).roomName) : undefined;
+        this.incomingSubject.next({ conversationId, from, callType, callId, roomName });
       }
 
       if (type === 'call-end' || type === 'call-decline' || type === 'call-busy') {

@@ -8,8 +8,11 @@ export class GqlService {
 
   constructor(private auth: AuthService) {}
 
-  async request<T>(query: string, variables?: any): Promise<T> {
+  async request<T>(query: string, variables?: any, opts?: { timeoutMs?: number }): Promise<T> {
     const token = await this.safeGetToken();
+    const timeoutMs = Math.max(2000, opts?.timeoutMs ?? 10000);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     let res: Response;
     let text = '';
@@ -23,17 +26,21 @@ export class GqlService {
           ...(token ? { authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({ query, variables: variables ?? {} }),
+        signal: controller.signal,
       });
 
-      // Read as text first so we can show useful errors even if JSON parsing fails
       text = await res.text();
     } catch (e: any) {
-      const msg = `GraphQL NETWORK error (endpoint=${this.endpoint}): ${e?.message ?? e}`;
+      const aborted = e?.name === 'AbortError' || controller.signal.aborted;
+      const msg = aborted
+        ? `GraphQL timeout after ${timeoutMs}ms (endpoint=${this.endpoint})`
+        : `GraphQL NETWORK error (endpoint=${this.endpoint}): ${e?.message ?? e}`;
       console.error('[gql] NETWORK', msg);
       throw new Error(msg);
+    } finally {
+      clearTimeout(timer);
     }
 
-    // Try parsing JSON, but if the server returned HTML/plain text, show it
     let json: any = null;
     try {
       json = text ? JSON.parse(text) : null;
@@ -43,14 +50,12 @@ export class GqlService {
       throw new Error(msg);
     }
 
-    // If HTTP status is not OK, show details
     if (!res.ok) {
       const msg = `GraphQL HTTP error ${res.status} ${res.statusText} from ${this.endpoint}:\n${JSON.stringify(json).slice(0, 800)}`;
       console.error('[gql] HTTP', msg);
       throw new Error(msg);
     }
 
-    // GraphQL errors
     if (json?.errors?.length) {
       console.error('[gql] GQL ERRORS', json.errors);
       console.error('[gql] GQL ERRORS JSON', JSON.stringify(json.errors));
@@ -72,7 +77,6 @@ export class GqlService {
       const token = await this.auth.getAccessToken();
       return token || null;
     } catch (e) {
-      // token fetch failed (not logged in / supabase not ready / etc.)
       console.warn('[gql] token missing:', e);
       return null;
     }

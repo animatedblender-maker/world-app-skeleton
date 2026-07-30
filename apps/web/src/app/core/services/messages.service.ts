@@ -411,7 +411,6 @@ export class MessagesService {
     try {
       window.sessionStorage.setItem(this.pendingStorageKey, JSON.stringify(convo));
     } catch {
-      // ignore storage errors (private mode, quota, etc.)
     }
   }
 
@@ -420,7 +419,6 @@ export class MessagesService {
     try {
       window.sessionStorage.removeItem(this.pendingStorageKey);
     } catch {
-      // ignore storage errors
     }
   }
 }

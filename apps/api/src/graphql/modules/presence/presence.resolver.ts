@@ -46,6 +46,15 @@ export const presenceResolvers = {
       return await svc().heartbeat(u, args?.iso ?? null);
     },
 
+    setActiveConversation: async (
+      _: any,
+      args: { conversationId?: string | null },
+      ctx: Context
+    ) => {
+      const u = requireAuth(ctx);
+      return await svc().setActiveConversation(u, args?.conversationId ?? null);
+    },
+
     setOffline: async (_: any, __: any, ctx: Context) => {
       const u = requireAuth(ctx);
       return await svc().setOffline(u);

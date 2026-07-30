@@ -10,100 +10,75 @@ import { AuthService } from '../core/services/auth.service';
   imports: [CommonModule, FormsModule],
   template: `
   <div class="auth-bg">
-    <div class="auth-frame">
-      <div class="scanlines"></div>
-      <div class="grid"></div>
+    <div class="auth-card">
+      <div class="brand-title">Matterya</div>
 
-      <div class="auth-card">
-        <div class="auth-brand">
-          <img class="brand-logo" src="/logo.png" alt="matterya logo" />
-          <div class="brand-text">
-            <div class="brand-title">MATTERYA</div>
-            <div class="brand-sub">Authenticate to synchronize your node.</div>
+      <form class="form" (ngSubmit)="submit()">
+        <label class="field">
+          <span>Email</span>
+          <input
+            type="email"
+            [(ngModel)]="email"
+            name="email"
+            autocomplete="email"
+            placeholder="you@example.com"
+            required
+          />
+        </label>
+
+        <label class="field">
+          <span>Password</span>
+          <input
+            type="password"
+            [(ngModel)]="password"
+            name="password"
+            [attr.autocomplete]="tab==='register' ? 'new-password' : 'current-password'"
+            placeholder="••••••••"
+            minlength="6"
+            required
+          />
+        </label>
+
+        <div class="error" *ngIf="errorMsg">{{ errorMsg }}</div>
+
+        <div class="hint" *ngIf="accountExists">
+          Email already used.
+          <div class="actions">
+            <button type="button" class="link" (click)="forgotPassword()">Forgot password</button>
           </div>
+          <div class="hint" *ngIf="resetMsg" style="margin-top:8px;">{{ resetMsg }}</div>
         </div>
 
-        <div class="tabs">
-          <button
-            type="button"
-            class="tab"
-            [class.active]="tab==='login'"
-            (click)="tab='login'; clearMsgs()">
-            LOGIN
-          </button>
-
-          <button
-            type="button"
-            class="tab"
-            [class.active]="tab==='register'"
-            (click)="tab='register'; clearMsgs()">
-            REGISTER
-          </button>
+        <div class="hint" *ngIf="wrongPassword && !accountExists">
+          Wrong password.
+          <div class="actions">
+            <button type="button" class="link" (click)="forgotPassword()">Forgot password</button>
+          </div>
+          <div class="hint" *ngIf="resetMsg" style="margin-top:8px;">{{ resetMsg }}</div>
         </div>
 
-        <form class="form" (ngSubmit)="submit()">
-          <label class="field">
-            <span>IDENTIFIER (EMAIL)</span>
-            <input
-              type="email"
-              [(ngModel)]="email"
-              name="email"
-              autocomplete="email"
-              placeholder="you@example.com"
-              required
-            />
-          </label>
-
-          <label class="field">
-            <span>ACCESS KEY (PASSWORD)</span>
-            <input
-              type="password"
-              [(ngModel)]="password"
-              name="password"
-              [attr.autocomplete]="tab==='register' ? 'new-password' : 'current-password'"
-              placeholder="••••••••"
-              minlength="6"
-              required
-            />
-          </label>
-
-          <div class="error" *ngIf="errorMsg">{{ errorMsg }}</div>
-
-          <!-- ✅ Email already used -->
-          <div class="hint" *ngIf="accountExists">
-            Email already used.
-            <div class="actions">
-              <button type="button" class="link" (click)="forgotPassword()">Forgot password</button>
-            </div>
-            <div class="hint" *ngIf="resetMsg" style="margin-top:8px;">{{ resetMsg }}</div>
+        <div class="hint" *ngIf="needsEmailConfirm && !accountExists && !wrongPassword">
+          Check your inbox to confirm your email, then come back and log in.
+          <div class="actions">
+            <button type="button" class="link" (click)="forgotPassword()">Forgot password</button>
           </div>
+          <div class="hint" *ngIf="resetMsg" style="margin-top:8px;">{{ resetMsg }}</div>
+        </div>
 
-          <!-- ✅ Wrong password -->
-          <div class="hint" *ngIf="wrongPassword && !accountExists">
-            Wrong password.
-            <div class="actions">
-              <button type="button" class="link" (click)="forgotPassword()">Forgot password</button>
-            </div>
-            <div class="hint" *ngIf="resetMsg" style="margin-top:8px;">{{ resetMsg }}</div>
-          </div>
+        <button class="cta" type="submit" [disabled]="busy || !email || password.length < 6">
+          {{ busy ? 'Please wait…' : (tab==='login' ? 'Log In' : 'Sign Up') }}
+        </button>
+      </form>
 
-          <!-- ✅ Needs email confirmation -->
-          <div class="hint" *ngIf="needsEmailConfirm && !accountExists && !wrongPassword">
-            Check your inbox to confirm your email, then come back and login.
-            <div class="actions">
-              <button type="button" class="link" (click)="forgotPassword()">Forgot password</button>
-            </div>
-            <div class="hint" *ngIf="resetMsg" style="margin-top:8px;">{{ resetMsg }}</div>
-          </div>
+      <div class="switch-row">
+        <span>{{ tab === 'login' ? "Don't have an account?" : 'Have an account?' }}</span>
+        <button type="button" class="link" (click)="tab = tab === 'login' ? 'register' : 'login'; clearMsgs()">
+          {{ tab === 'login' ? 'Sign up' : 'Log in' }}
+        </button>
+      </div>
 
-          <button class="cta" type="submit" [disabled]="busy">
-            {{ busy ? 'LINKING…' : (tab==='login' ? 'LOGIN' : 'CREATE ACCOUNT') }}
-          </button>
-
-          <div class="hint" *ngIf="tab==='register'">
-            If email confirmation is enabled, check your inbox to confirm.
-          </div>
-        </form>
+      <div class="hint center" *ngIf="tab==='register'">
+        If email confirmation is enabled, check your inbox after registering.
       </div>
     </div>
   </div>
@@ -111,85 +86,90 @@ import { AuthService } from '../core/services/auth.service';
   styles: [`
     :host { display:block; height:100vh; }
     .auth-bg{
-      height:100vh; display:grid; place-items:center;
-      background:
-        radial-gradient(1200px 800px at 50% 30%, rgba(0,255,209,0.14), transparent 60%),
-        radial-gradient(900px 700px at 60% 70%, rgba(140,0,255,0.12), transparent 55%),
-        rgba(6,8,14,0.92);
-    }
-    .auth-frame{ position:relative; width:min(520px,92vw); padding:20px; }
-    .scanlines{
-      pointer-events:none; position:absolute; inset:0; border-radius:26px;
-      background:repeating-linear-gradient(to bottom, rgba(255,255,255,0.05) 0px, rgba(255,255,255,0.05) 1px, rgba(0,0,0,0) 3px, rgba(0,0,0,0) 6px);
-      opacity:0.35; mix-blend-mode:overlay; animation:scan 7s linear infinite;
-    }
-    @keyframes scan{ from{transform:translateY(0)} to{transform:translateY(18px)} }
-    .grid{
-      pointer-events:none; position:absolute; inset:0; border-radius:26px;
-      background-image:linear-gradient(rgba(0,255,209,0.10) 1px, transparent 1px), linear-gradient(90deg, rgba(0,255,209,0.08) 1px, transparent 1px);
-      background-size:36px 36px; opacity:0.25;
-      mask-image:radial-gradient(circle at 50% 45%, black 40%, transparent 75%);
+      min-height:100vh;
+      display:grid;
+      place-items:center;
+      padding: 32px 16px;
+      background: var(--m-paper, #f8f6f2);
+      color: var(--m-ink, #2c2825);
     }
     .auth-card{
-      position:relative; border-radius:26px; padding:18px;
-      background:rgba(10,12,20,0.58); backdrop-filter:blur(14px);
-      box-shadow:0 30px 90px rgba(0,0,0,0.45), 0 0 0 1px rgba(0,255,209,0.20), 0 0 50px rgba(0,255,209,0.12);
-      overflow:hidden;
+      width:min(420px, 92vw);
+      display:grid;
+      gap: 22px;
     }
-    .auth-card::before{
-      content:""; position:absolute; inset:-2px; border-radius:28px;
-      background:conic-gradient(from 180deg, rgba(0,255,209,0), rgba(0,255,209,0.65), rgba(140,0,255,0.55), rgba(0,255,209,0));
-      filter:blur(10px); opacity:0.45;
+    .brand-title{
+      text-align:center;
+      font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+      font-size: 42px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      color: var(--m-ink, #2c2825);
+      margin-bottom: 8px;
     }
-    .auth-card>*{ position:relative; z-index:1; }
-    .auth-brand{ display:flex; gap:12px; align-items:center; margin-bottom:12px; }
-    .brand-logo{
-      width:30px;
-      height:30px;
-      border-radius:8px;
-      object-fit:contain;
-      background:rgba(0,0,0,0.25);
-      box-shadow:0 0 18px rgba(0,255,209,0.35);
-      padding:4px;
-    }
-    .brand-title{ color:rgba(255,255,255,0.92); letter-spacing:0.18em; font-weight:800; font-size:14px; }
-    .brand-sub{ color:rgba(255,255,255,0.68); font-size:12px; margin-top:2px; }
-    .tabs{ display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:10px 0 14px; }
-    .tab{
-      border:0; border-radius:16px; padding:12px; cursor:pointer;
-      background:rgba(255,255,255,0.06); color:rgba(255,255,255,0.78);
-      font-weight:800; letter-spacing:0.12em;
-    }
-    .tab.active{
-      background:rgba(0,255,209,0.14); color:rgba(255,255,255,0.95);
-      box-shadow:0 0 0 1px rgba(0,255,209,0.25) inset, 0 0 28px rgba(0,255,209,0.10);
-    }
-    .form{ display:grid; gap:12px; }
+    .form{ display:grid; gap:14px; }
     .field{ display:grid; gap:7px; }
-    .field span{ font-size:11px; letter-spacing:0.14em; color:rgba(255,255,255,0.62); }
+    .field span{
+      font-size:12px;
+      font-weight: 600;
+      color: var(--m-ink-muted, #948b82);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
     .field input{
-      border:1px solid rgba(255,255,255,0.12); border-radius:16px; padding:12px;
-      background:rgba(0,0,0,0.28); color:rgba(255,255,255,0.92); outline:none;
+      border: 0.5px solid var(--m-border, #ddd8d1);
+      border-radius: 10px;
+      padding: 12px 14px;
+      background: var(--m-surface, #fefdfb);
+      color: var(--m-ink, #2c2825);
+      outline:none;
+      font-size: 16px;
     }
-    .field input:focus{ border-color:rgba(0,255,209,0.35); box-shadow:0 0 0 3px rgba(0,255,209,0.10); }
+    .field input:focus{
+      border-color: var(--m-accent, #6b5841);
+      box-shadow: 0 0 0 3px rgba(107, 88, 65, 0.12);
+    }
     .cta{
-      border:0; border-radius:16px; padding:13px 14px; cursor:pointer;
-      background:linear-gradient(90deg, rgba(0,255,209,0.85), rgba(140,0,255,0.75));
-      color:rgba(6,8,14,0.96); font-weight:900; letter-spacing:0.18em;
-      box-shadow:0 18px 50px rgba(0,255,209,0.18);
+      border:0;
+      border-radius: 10px;
+      padding: 12px 14px;
+      cursor:pointer;
+      background: var(--m-ink, #2c2825);
+      color: var(--m-surface, #fefdfb);
+      font-weight: 650;
+      font-size: 15px;
     }
-    .cta:disabled{ opacity:0.6; cursor:not-allowed; }
+    .cta:disabled{ opacity:0.55; cursor:not-allowed; }
     .error{
-      color:rgba(255,120,120,0.95); background:rgba(255,80,80,0.10);
-      border:1px solid rgba(255,80,80,0.18); padding:10px 12px; border-radius:16px; font-size:12px;
+      color: var(--m-danger, #ea000b);
+      background: rgba(234, 0, 11, 0.06);
+      border: 0.5px solid rgba(234, 0, 11, 0.18);
+      padding:10px 12px;
+      border-radius:10px;
+      font-size:13px;
     }
-    .hint{ color:rgba(255,255,255,0.60); font-size:12px; line-height:1.4; }
+    .hint{ color: var(--m-ink-muted, #948b82); font-size:13px; line-height:1.4; }
+    .hint.center{ text-align:center; }
     .actions{ display:flex; gap:12px; margin-top:6px; flex-wrap:wrap; }
+    .switch-row{
+      display:flex;
+      gap: 6px;
+      justify-content:center;
+      align-items:center;
+      flex-wrap: wrap;
+      padding-top: 8px;
+      border-top: 0.5px solid var(--m-divider, #e2ded8);
+      color: var(--m-ink-muted, #948b82);
+      font-size: 14px;
+    }
     .link{
-      background:transparent; border:0; padding:0; cursor:pointer;
-      color:rgba(0,255,209,0.92);
-      font-size:12px; letter-spacing:0.08em; font-weight:800;
-      text-decoration:underline;
+      background:transparent;
+      border:0;
+      padding:0;
+      cursor:pointer;
+      color: var(--m-accent, #6b5841);
+      font-size:14px;
+      font-weight:650;
     }
     .link:hover{ opacity:0.85; }
   `],
@@ -227,7 +207,6 @@ export class AuthPageComponent {
   }
 
   private normalizeError(e: any): string {
-    // Supabase errors can be objects with: message, error_description, code, status, etc.
     const msg =
       e?.message ??
       e?.error_description ??
@@ -249,11 +228,6 @@ export class AuthPageComponent {
   private isEmailExistsError(msg: string): boolean {
     const m = (msg || '').toLowerCase();
 
-    // Covers common Supabase variants:
-    // "User already registered"
-    // "A user with this email address has already been registered"
-    // "email already in use"
-    // codes: user_already_exists, email_exists, etc.
     return (
       m.includes('already registered') ||
       m.includes('already exists') ||
@@ -308,11 +282,10 @@ export class AuthPageComponent {
 
       if (this.tab === 'login') {
         await this.auth.login(email, pass);
-        await this.router.navigateByUrl('/');
+        await this.router.navigateByUrl('/feed');
         return;
       }
 
-      // REGISTER
       const r = await this.auth.register(email, pass);
 
       if (r.isExistingEmail) {
@@ -328,18 +301,15 @@ export class AuthPageComponent {
         return;
       }
 
-      await this.router.navigateByUrl('/');
+      await this.router.navigateByUrl('/feed');
     } catch (e: any) {
       const msg = this.normalizeError(e);
 
-      // REGISTER: email already used
       if (this.tab === 'register' && this.isEmailExistsError(msg)) {
         this.accountExists = true;
         this.errorMsg = 'Email already used.';
         this.tab = 'login';
-      }
-      // LOGIN: wrong password
-      else if (this.tab === 'login' && this.isWrongPasswordError(msg)) {
+      } else if (this.tab === 'login' && this.isWrongPasswordError(msg)) {
         this.wrongPassword = true;
         this.errorMsg = 'Wrong password.';
       } else {

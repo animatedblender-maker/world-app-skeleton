@@ -19,7 +19,7 @@ const __dirname = path.dirname(__filename);
 
 // src/main.ts  -> apps/api/src
 // we want       -> apps/api/.env
-dotenv.config({ path: path.join(__dirname, '..', '.env') });
+dotenv.config({ path: path.join(__dirname, '..', '.env'), override: true });
 
 // ✅ ts-node --esm on Windows needs explicit ".ts"
 import { typeDefs } from './graphql/typeDefs.js';
@@ -37,6 +37,7 @@ import {
   moderateReportedPost,
 } from './admin/admin.service.js';
 import { clearCountryMoodCache } from './graphql/modules/insights/insights.service.js';
+import { startKafkaPipeline, stopKafkaPipeline } from './kafka/index.js';
 
 type AuthedUser = {
   id: string;
@@ -414,6 +415,8 @@ app.post('/livekit/token', async (req: Request, res: Response) => {
   if (!LIVEKIT_API_KEY || !LIVEKIT_API_SECRET) {
     return res.status(500).json({ error: 'livekit_not_configured' });
   }
+  const instance = String(req.body?.instance ?? '').trim();
+  const identity = instance ? `${user.id}#${instance}` : user.id;
   const jwt = await new SignJWT({
     name: user.email ?? user.id,
     video: {
@@ -425,7 +428,7 @@ app.post('/livekit/token', async (req: Request, res: Response) => {
   })
     .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
     .setIssuer(LIVEKIT_API_KEY)
-    .setSubject(user.id)
+    .setSubject(identity)
     .setIssuedAt()
     .setExpirationTime('1h')
     .sign(new TextEncoder().encode(LIVEKIT_API_SECRET));
@@ -562,4 +565,20 @@ server.listen(PORT, () => {
   console.log(`✅ WS signaling at  http://localhost:${PORT}/ws`);
   console.log(`✅ Health at        http://localhost:${PORT}/health`);
   console.log(`✅ CORS origins allowed: ${ALLOWED_ORIGINS.join(', ')}`);
+  // Async event backbone (no-op unless KAFKA_ENABLED=true).
+  void startKafkaPipeline();
 });
+
+async function shutdown(signal: string) {
+  console.log(`\n${signal} received — shutting down…`);
+  try {
+    await stopKafkaPipeline();
+  } catch {
+    /* ignore */
+  }
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 4000).unref();
+}
+
+process.on('SIGINT', () => void shutdown('SIGINT'));
+process.on('SIGTERM', () => void shutdown('SIGTERM'));

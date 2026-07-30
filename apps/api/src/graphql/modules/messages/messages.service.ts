@@ -1,5 +1,15 @@
 import { pool } from '../../../db.js';
 import type { PoolClient } from '../../../db.js';
+import {
+  enqueueOutbox,
+  kafkaEnabled,
+  kafkaShadowMode,
+  KafkaTopics,
+  MessageEventTypes,
+  type MessageDeletedPayload,
+  type MessageEditedPayload,
+  type MessageSentPayload,
+} from '../../../kafka/index.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 
 let inboxColumnsReady: boolean | null = null;
@@ -359,7 +369,41 @@ export class MessagesService {
         );
       }
 
-      if (!isCallLog && !isReaction) {
+      const recipientIds = otherMembers.rows.map((r) => r.user_id).filter(Boolean);
+
+      // Transactional outbox → Kafka (when enabled). Same DB transaction as the insert.
+      let outboxEnqueued = false;
+      if (kafkaEnabled()) {
+        const sentPayload: MessageSentPayload = {
+          messageId: message.id,
+          conversationId,
+          senderId: userId,
+          body: String(message.body ?? ''),
+          mediaType: message.media_type ?? null,
+          mediaPath: message.media_path ?? null,
+          senderName,
+          preview,
+          recipientIds,
+          isCallLog,
+          isReaction,
+        };
+        try {
+          await enqueueOutbox(client, {
+            topic: KafkaTopics.MESSAGES,
+            partitionKey: conversationId,
+            eventType: MessageEventTypes.Sent,
+            payload: sentPayload as unknown as Record<string, unknown>,
+          });
+          outboxEnqueued = true;
+        } catch (err) {
+          // Table missing or outbox failure — fall back to inline notify.
+          console.warn('[messages] outbox enqueue failed', err);
+        }
+      }
+
+      // Inline notify when Kafka is off, shadow mode, or outbox failed.
+      const useInlineNotify = !kafkaEnabled() || kafkaShadowMode() || !outboxEnqueued;
+      if (useInlineNotify && !isCallLog && !isReaction) {
         for (const row of otherMembers.rows) {
           try {
             await this.notifications.notifyMessage(row.user_id, userId, conversationId, {
@@ -394,6 +438,27 @@ export class MessagesService {
 
       const message = await this.messageById(updatedId, client);
       if (!message) throw new Error('Message not found.');
+
+      if (kafkaEnabled()) {
+        const editedPayload: MessageEditedPayload = {
+          messageId: message.id,
+          conversationId: message.conversation_id,
+          senderId: userId,
+          body: String(message.body ?? ''),
+          preview: String(message.body ?? '').trim().slice(0, 140),
+        };
+        try {
+          await enqueueOutbox(client, {
+            topic: KafkaTopics.MESSAGES,
+            partitionKey: message.conversation_id,
+            eventType: MessageEventTypes.Edited,
+            payload: editedPayload as unknown as Record<string, unknown>,
+          });
+        } catch (err) {
+          console.warn('[messages] outbox enqueue (edit) failed', err);
+        }
+      }
+
       return message;
     });
   }
@@ -425,6 +490,24 @@ export class MessagesService {
         `,
         [convoId]
       );
+
+      if (kafkaEnabled()) {
+        const deletedPayload: MessageDeletedPayload = {
+          messageId,
+          conversationId: convoId,
+          senderId: userId,
+        };
+        try {
+          await enqueueOutbox(client, {
+            topic: KafkaTopics.MESSAGES,
+            partitionKey: convoId,
+            eventType: MessageEventTypes.Deleted,
+            payload: deletedPayload as unknown as Record<string, unknown>,
+          });
+        } catch (err) {
+          console.warn('[messages] outbox enqueue (delete) failed', err);
+        }
+      }
 
       return true;
     });

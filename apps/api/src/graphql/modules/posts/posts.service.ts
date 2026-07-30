@@ -71,12 +71,76 @@ type CreatePostInput = {
 
 function isMomentRow(row: { body?: string | null; media_type?: string | null } | null | undefined): boolean {
   if (!row) return false;
+  const media = String(row.media_type ?? '').trim().toLowerCase();
+  if (media === 'story' || media === 'moment') return true;
   const body = String(row.body ?? '');
-  if (body.includes('__story__|')) return true;
-  return String(row.media_type ?? '').trim().toLowerCase() === 'story';
+  // Match __story__|expires=... and loose "story expires" markers clients may have written.
+  if (/__story__/i.test(body)) return true;
+  if (/\bstory\b/i.test(body) && /\bexpir/i.test(body)) return true;
+  return false;
 }
 
-const EXCLUDE_MOMENTS_SQL = `and position('__story__|' in coalesce(p.body, '')) = 0`;
+/** Never surface internal moment markers in feed/list APIs. */
+function stripMomentMarkers(body: string | null | undefined): string {
+  return String(body ?? '')
+    .split('\n')
+    .filter((line) => {
+      const t = line.trim();
+      if (!t) return true;
+      if (/__story__/i.test(t)) return false;
+      if (/\bstory\b/i.test(t) && /\bexpir/i.test(t)) return false;
+      return true;
+    })
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function presentPostRow<T extends Record<string, any>>(row: T): T {
+  if (!row) return row;
+  const next: any = { ...row, body: stripMomentMarkers(row.body) };
+  if (row.shared_post && typeof row.shared_post === 'object') {
+    next.shared_post = {
+      ...row.shared_post,
+      body: stripMomentMarkers((row.shared_post as any).body),
+    };
+  }
+  return next as T;
+}
+
+function presentPostRows<T extends Record<string, any>>(rows: T[]): T[] {
+  return (rows ?? []).map((r) => presentPostRow(r));
+}
+
+function withoutMoments<T extends { body?: string | null; media_type?: string | null }>(
+  rows: T[]
+): T[] {
+  return presentPostRows((rows ?? []).filter((r) => !isMomentRow(r)));
+}
+
+// Exclude moments from country/recent/search feeds (moments live on author feeds only).
+const EXCLUDE_MOMENTS_SQL = `
+  and lower(coalesce(p.media_type, '')) not in ('story', 'moment')
+  and position('__story__' in lower(coalesce(p.body, ''))) = 0
+`;
+
+/** Non-owners never see posts from private profiles. */
+function privateAuthorVisible(viewerParam: string): string {
+  return `and (
+    coalesce(pr.is_private, false) = false
+    or (${viewerParam} is not null and p.author_id = ${viewerParam})
+  )`;
+}
+
+/** Redact avatar when the profile is private and the viewer is not the owner. */
+function avatarSql(viewerParam: string, alias: string): string {
+  return `case
+    when coalesce(${alias}.is_private, false)
+      and (${viewerParam} is null or ${alias}.user_id is distinct from ${viewerParam})
+    then null
+    else ${alias}.avatar_url
+  end`;
+}
 
 export class PostsService {
   private notifications = new NotificationsService();
@@ -217,19 +281,29 @@ export class PostsService {
             )
           )
         )
+        ${privateAuthorVisible('$3::uuid')}
       order by p.created_at desc, p.id desc
       limit $2
       `,
       [iso, Math.max(1, limit), viewerId]
     );
 
-    return rows as PostRow[];
+    return withoutMoments(rows as PostRow[]);
   }
 
   async postsByAuthor(authorId: string, limit: number, viewerId: string | null): Promise<PostRow[]> {
     const savedByMe = await this.savedByMeExpr('$2::uuid');
     const savedByMeShared = await this.savedByMeSharedExpr('$2::uuid');
     const isOwner = !!viewerId && viewerId === authorId;
+    if (!isOwner) {
+      const { rows: privacyRows } = await pool.query(
+        `select coalesce(is_private, false) as is_private from public.profiles where user_id = $1 limit 1`,
+        [authorId]
+      );
+      if (privacyRows[0]?.is_private) {
+        return [];
+      }
+    }
     if (isOwner) {
       const { rows } = await pool.query(
         `
@@ -307,7 +381,8 @@ export class PostsService {
         [authorId, viewerId, Math.max(1, limit)]
       );
 
-      return rows as PostRow[];
+      // Author feed keeps moments (for the strip) but never leaks raw markers.
+      return presentPostRows(rows as PostRow[]);
     }
 
     const { rows } = await pool.query(
@@ -398,7 +473,7 @@ export class PostsService {
       [authorId, viewerId, Math.max(1, limit)]
     );
 
-    return rows as PostRow[];
+    return presentPostRows(rows as PostRow[]);
   }
 
   async recentPosts(
@@ -495,6 +570,7 @@ export class PostsService {
             )
           )
         )
+        ${privateAuthorVisible('$2::uuid')}
         ${beforeClause}
       order by p.created_at desc, p.id desc
       limit $1
@@ -502,7 +578,7 @@ export class PostsService {
       params
     );
 
-    return rows as PostRow[];
+    return withoutMoments(rows as PostRow[]);
   }
 
   async searchPosts(query: string, limit: number, viewerId: string | null): Promise<PostRow[]> {
@@ -609,18 +685,20 @@ export class PostsService {
             )
           )
         )
+        ${privateAuthorVisible('$4::uuid')}
       order by rank desc nulls last, p.created_at desc, p.id desc
       limit $3
       `,
       [term, like, max, viewerId]
     );
 
-    return rows as PostRow[];
+    return withoutMoments(rows as PostRow[]);
   }
 
   async postById(postId: string, viewerId: string | null): Promise<PostRow | null> {
     if (!postId) return null;
-    return await this.postByIdForViewer(postId, viewerId);
+    const post = await this.postByIdForViewer(postId, viewerId);
+    return post ? presentPostRow(post) : null;
   }
 
   async createPost(authorId: string, input: CreatePostInput): Promise<PostRow> {
@@ -640,11 +718,14 @@ export class PostsService {
     const body = (input.body ?? '').trim();
     const isMomentBody = body.includes('__story__|');
     const normalizedInputType = String(input.media_type ?? '').trim().toLowerCase();
-    const visibility =
-      isMomentBody || normalizedInputType === 'story'
-        ? 'country'
-        : this.normalizeVisibility(input.visibility) ?? 'public';
-    const mediaType = this.normalizeMediaType(input.media_type, input.media_url);
+    const isMoment = isMomentBody || normalizedInputType === 'story' || normalizedInputType === 'moment';
+    const visibility = isMoment
+      ? 'country'
+      : this.normalizeVisibility(input.visibility) ?? 'public';
+    // Moments always store media_type=story so feed SQL can exclude them reliably.
+    const mediaType = isMoment
+      ? 'story'
+      : this.normalizeMediaType(input.media_type, input.media_url);
     const mediaUrl = mediaType === 'none' ? null : (input.media_url ?? null);
     const thumbUrl = mediaType === 'none' ? null : (input.thumb_url ?? null);
     // GraphQL Post.body is non-null, so never return null here.
@@ -679,7 +760,7 @@ export class PostsService {
 
     const post = await this.postByIdForViewer(createdId, authorId);
     if (!post) throw new Error('Newly created post not found.');
-    return post;
+    return presentPostRow(post);
   }
 
   async updatePost(
@@ -899,7 +980,7 @@ export class PostsService {
           'user_id', pr.user_id,
           'display_name', pr.display_name,
           'username', pr.username,
-          'avatar_url', pr.avatar_url,
+          'avatar_url', ${avatarSql('$3::uuid', 'pr')},
           'country_name', pr.country_name,
           'country_code', pr.country_code
         ) as user
@@ -909,7 +990,7 @@ export class PostsService {
       order by pl.created_at desc
       limit $2
       `,
-      [postId, safeLimit]
+      [postId, safeLimit, viewerId]
     );
 
     return rows as PostLikeRow[];
@@ -946,7 +1027,7 @@ export class PostsService {
           'user_id', pr.user_id,
           'display_name', pr.display_name,
           'username', pr.username,
-          'avatar_url', pr.avatar_url,
+          'avatar_url', ${avatarSql('$3::uuid', 'pr')},
           'country_name', pr.country_name,
           'country_code', pr.country_code
         ) as author
@@ -1273,6 +1354,7 @@ export class PostsService {
             )
           )
         )
+        ${privateAuthorVisible('$2::uuid')}
       limit 1
       `,
       [id, viewerId]
@@ -1300,7 +1382,7 @@ export class PostsService {
           'user_id', pr.user_id,
           'display_name', pr.display_name,
           'username', pr.username,
-          'avatar_url', pr.avatar_url,
+          'avatar_url', ${avatarSql('$2::uuid', 'pr')},
           'country_name', pr.country_name,
           'country_code', pr.country_code
         ) as author

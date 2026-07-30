@@ -74,7 +74,6 @@ export class PresenceService {
   private overridesByCountry: PresenceOverridesMap = {};
   private overridesSub: Subscription | null = null;
 
-  // ✅ online truth comes from realtime presence state
   private onlineMetaById = new Map<string, PresenceMeta>();
 
   private onUpdateCb: ((snap: PresenceSnapshot) => void) | null = null;
@@ -88,17 +87,14 @@ export class PresenceService {
   private viewingCountryCode: string | null = null;
   private viewingCountryName: string | null = null;
 
-  // UI updates
   private renderTimer: any = null;
   private readonly RENDER_MS = 800;
 
-  // totals refresh (new registrations)
   private refreshProfilesTimer: any = null;
   private readonly PROFILES_REFRESH_MS = 120_000;
   private heartbeatTimer: any = null;
   private readonly HEARTBEAT_MS = 25_000;
 
-  // fake online refresh
   private fakeOnlineTimer: any = null;
   private readonly FAKE_ONLINE_REFRESH_MS = 30_000;
   private readonly FAKE_ONLINE_MIN = 0.4;
@@ -110,7 +106,6 @@ export class PresenceService {
   private baseTotalsByCountry: Record<string, number> = {};
   private baseTotalUsers = 0;
 
-  // Dot styling for all presence points.
   private readonly DOT_COLOR = 'rgba(0,255,209,0.92)';
 
   async start(opts: {
@@ -137,7 +132,6 @@ export class PresenceService {
     this.viewingCountryCode = this.currentCountryCode;
     this.viewingCountryName = this.currentCountryName;
 
-    // totals
     await this.fakeData.ensureInitialized(this.countries);
     if (opts.loadProfiles !== false) {
       await this.fetchAllProfiles();
@@ -146,19 +140,16 @@ export class PresenceService {
       await this.injectFakeProfiles();
     }
 
-    // online (accurate)
     await this.startRealtimePresence();
 
     this.startFakeOnline();
     this.startOverridesWatcher();
 
-    // periodic UI refresh
     this.renderTimer = setInterval(() => this.emit(), this.RENDER_MS);
     this.heartbeatTimer = setInterval(() => {
       void this.syncBackendHeartbeat();
     }, this.HEARTBEAT_MS);
 
-    // periodic totals refresh
     this.refreshProfilesTimer = setInterval(() => {
       this.fetchAllProfiles().then(() => this.emit()).catch(() => {});
     }, this.PROFILES_REFRESH_MS);
@@ -218,9 +209,6 @@ export class PresenceService {
     this.emit();
   }
 
-  // -------------------------
-  // Totals
-  // -------------------------
   private async fetchAllProfiles(): Promise<void> {
     let rows: ProfileRow[] = [];
     try {
@@ -354,9 +342,6 @@ export class PresenceService {
     this.emit();
   }
 
-  // -------------------------
-  // Online (Realtime Presence)
-  // -------------------------
   private async startRealtimePresence(): Promise<void> {
     if (!this.meId) {
       this.onHeartbeatCb?.('presence: no user session');
@@ -429,7 +414,6 @@ export class PresenceService {
         { iso }
       );
     } catch {
-      // Realtime presence should keep working even if the backend heartbeat misses.
     }
   }
 
@@ -453,9 +437,6 @@ export class PresenceService {
     }
   }
 
-  // -------------------------
-  // Emit snapshot
-  // -------------------------
   private emit(): void {
     if (!this.onUpdateCb) return;
 
@@ -471,7 +452,6 @@ export class PresenceService {
 
     const onlineIds = [...this.fakeOnlineIds];
 
-    // dots for online only
     let points: ConnectionPoint[] = [...this.fakeOnlinePoints];
 
     for (const userId of this.onlineMetaById.keys()) {

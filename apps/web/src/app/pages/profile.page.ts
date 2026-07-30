@@ -3190,7 +3190,6 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
       try {
         uploadFile = await this.cropAvatarToSquare(file);
       } catch {
-        // Fallback to original file if crop fails (e.g. HEIC decode issues)
         this.avatarError = 'Crop failed, using original image.';
       }
       if (this.avatarPreviewUrl) {

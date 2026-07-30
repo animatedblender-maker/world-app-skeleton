@@ -1,16 +1,13 @@
-/* Angular root must fill the viewport */
 html, body {
   width: 100%;
 }
 
-/* This is the missing piece in Angular */
 app-root {
   display: block;
   width: 100%;
   height: 100%;
 }
 
-/* Force globe container to be pinned to the viewport */
 #globe {
   position: fixed;
   inset: 0;
@@ -18,7 +15,6 @@ app-root {
   height: 100vh;
 }
 
-/* You can add global styles to this file, and also import other style files */
 html, body {
   margin: 0;
   height: 100%;
@@ -31,6 +27,35 @@ html, body {
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
   box-sizing: border-box;
+}
+
+/* Paper pages (feed/hubs/messages/profile) must scroll; globe stays locked. */
+html.app-bg-feed,
+html.app-bg-light {
+  height: 100% !important;
+  overflow: hidden !important;
+}
+html.app-bg-feed body,
+html.app-bg-light body {
+  height: 100% !important;
+  min-height: 100%;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  overscroll-behavior-y: contain;
+}
+html.app-bg-feed app-root,
+html.app-bg-light app-root {
+  display: block;
+  min-height: 100%;
+  height: auto !important;
+  overflow: visible;
+}
+html.app-bg-globe,
+html.app-bg-globe body {
+  height: 100%;
+  overflow: hidden;
 }
 body::before{
   content: '';
@@ -45,22 +70,36 @@ body::before{
 }
 
 :root{
-  --app-bg: #f5f6f8;
-  --app-bg-light: #f5f7fa;
-  --app-bg-feed: #ffffff;
+  --m-paper: #f8f6f2;
+  --m-canvas: #f8f6f2;
+  --m-canvas-muted: #f2f0ec;
+  --m-canvas-deep: #edeae5;
+  --m-surface: #fefdfb;
+  --m-ink: #2c2825;
+  --m-ink-secondary: #6b645d;
+  --m-ink-muted: #948b82;
+  --m-accent: #6b5841;
+  --m-accent-bright: #7b6347;
+  --m-border: #ddd8d1;
+  --m-divider: #e2ded8;
+  --m-danger: #ea000b;
+  --m-success: #00b050;
+  --app-bg: var(--m-paper);
+  --app-bg-light: var(--m-paper);
+  --app-bg-feed: var(--m-paper);
   --app-bg-dark: #05070b;
-  --tabs-height: 64px;
+  --tabs-height: 56px;
   --tabs-safe: calc(var(--tabs-height) + env(safe-area-inset-bottom, 0px));
 }
 html.app-bg-light,
 html.app-bg-feed{
-  --app-bg: var(--app-bg-light);
+  --app-bg: var(--m-paper);
 }
 html.app-bg-globe{
   --app-bg: var(--app-bg-dark);
 }
 html.app-bg-feed{
-  --app-bg: var(--app-bg-feed);
+  --app-bg: var(--m-paper);
 }
 *, *::before, *::after { box-sizing: inherit; }
 #globe { width: 100vw; height: 100vh; }
@@ -73,7 +112,6 @@ html.app-bg-feed{
   }
 }
 
-/* Center: Search pill */
 .topbar {
   position: fixed;
   top: calc(14px + env(safe-area-inset-top));
@@ -92,7 +130,6 @@ html.app-bg-feed{
   z-index: 9999;
 }
 
-/* Top-right: Auth pill */
 .authbar {
   position: fixed;
   top: calc(14px + env(safe-area-inset-top));
@@ -790,7 +827,6 @@ app-globe-page .news-summary-card{
   }
 }
 
-/* Modals */
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -916,7 +952,6 @@ app-globe-page .news-summary-card{
   }
 }
 
-/* Global lightbox */
 .post-media img.zoomable{ cursor: zoom-in; }
 .lightbox{
   position: fixed;
@@ -960,7 +995,6 @@ app-globe-page .news-summary-card{
   place-items: center;
 }
 
-/* Fullscreen cards + caption clamp */
 .post-card{
   display: flex;
   flex-direction: column;

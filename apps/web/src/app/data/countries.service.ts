@@ -99,9 +99,7 @@ function computeAltitudeFromBBox(dLat: number, dLng: number): number {
   return Math.max(0.9, Math.min(2.25, alt));
 }
 
-// ---------- Point in polygon (with holes) ----------
 function pointInRing(lng: number, lat: number, ring: any[]): boolean {
-  // Ray casting algorithm; ring = [ [lng,lat], ... ]
   let inside = false;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
     const xi = ring[i][0], yi = ring[i][1];
@@ -124,7 +122,6 @@ function pointInPolygonCoords(lng: number, lat: number, polyRings: any[]): boole
 
   if (!pointInRing(lng, lat, outer)) return false;
 
-  // holes
   for (let i = 1; i < polyRings.length; i++) {
     const hole = polyRings[i];
     if (Array.isArray(hole) && hole.length >= 3) {
@@ -151,7 +148,6 @@ function geometryContains(geometry: any, lng: number, lat: number): boolean {
   return false;
 }
 
-// deterministic RNG from seed
 function mulberry32(seed: number) {
   let a = seed >>> 0;
   return () => {
@@ -182,7 +178,6 @@ function buildPointPool(feature: any, count: number): LatLng[] {
   const dLat = Math.max(0.1, maxLat - minLat);
   const dLng = Math.max(0.1, maxLng - minLng);
 
-  // Heuristic: fewer points for tiny countries, more for large ones
   const target = Math.max(40, Math.min(count, Math.floor(50 + (dLat * dLng) * 1.5)));
 
   const seed = hashStr((feature?.properties?.ISO_A2 ?? feature?.properties?.NAME ?? '') + '|' + feature?.__id);
@@ -202,7 +197,6 @@ function buildPointPool(feature: any, count: number): LatLng[] {
     }
   }
 
-  // Hard fallback (never return empty)
   if (!pool.length) pool.push(center);
   return pool;
 }
@@ -214,8 +208,8 @@ export type CountryModel = {
   center: LatLng;
   labelSize: number;
   flyAltitude: number;
-  code: string | null; // ISO2 only (DE/US/EG) or null
-  pointPool: LatLng[]; // ✅ guaranteed inside borders (incl holes)
+  code: string | null;
+  pointPool: LatLng[];
 };
 
 export type CountriesLoadResult = {
@@ -247,7 +241,6 @@ export class CountriesService {
 
         const code = normalizeIso2(p.ISO_A2 ?? p.iso_a2 ?? p.ISO2);
 
-        // ✅ build strict in-bounds pool
         const pointPool = buildPointPool(f, 240);
 
         return {
