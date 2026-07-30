@@ -6,8 +6,9 @@ services:
     runtime: node
     branch: ios-native
     rootDir: apps/api
-    # Install includes devDependencies so `tsc` is available; lockfile must list kafkajs.
-    buildCommand: npm ci && npm run build
+    # --no-workspaces: parent monorepo package.json would otherwise pull Capacitor/mobile
+    # and break install against the root package-lock. Install only apps/api deps.
+    buildCommand: npm install --no-workspaces --include=dev && npm run build
     startCommand: npm start
     healthCheckPath: /health
     envVars:
