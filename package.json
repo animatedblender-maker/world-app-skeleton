@@ -10,13 +10,9 @@
     "kafka:down": "docker compose -f infra/docker/docker-compose.yml down",
     "kafka:logs": "docker compose -f infra/docker/docker-compose.yml logs -f redpanda",
     "demo:import:kaggle-reddit": "python3 scripts/import_kaggle_reddit_dataset.py",
-    "mobile:sync": "npm --workspace apps/mobile run cap:sync",
-    "mobile:ios": "npm --workspace apps/mobile run cap:ios",
-    "mobile:android": "npm --workspace apps/mobile run cap:android",
-    "mobile:sync:local": "npm --workspace apps/mobile run cap:sync:local",
-    "mobile:ios:local": "npm --workspace apps/mobile run cap:ios:local",
-    "mobile:android:local": "npm --workspace apps/mobile run cap:android:local",
-    "mobile:android:full": "bash apps/mobile/scripts/sync-android-full-web.sh"
+    "mobile:ios": "npm --workspace apps/mobile run ios:open",
+    "mobile:android": "npm --workspace apps/mobile run android:open",
+    "mobile:android:run": "npm --workspace apps/mobile run android:run"
   },
   "workspaces": [
     "apps/*",
