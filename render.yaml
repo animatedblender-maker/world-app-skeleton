@@ -6,7 +6,8 @@ services:
     runtime: node
     branch: ios-native
     rootDir: apps/api
-    buildCommand: npm install && npm run build
+    # Install includes devDependencies so `tsc` is available; lockfile must list kafkajs.
+    buildCommand: npm ci && npm run build
     startCommand: npm start
     healthCheckPath: /health
     envVars:
