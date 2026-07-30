@@ -59,11 +59,14 @@ WorldApp/
 ## Commands
 
 ```bash
-npm run mobile:ios          # open Xcode
-npm run mobile:ios:build    # simulator build
+npm run mobile:ios          # open native WorldApp.xcodeproj in Xcode
+# Android (Kotlin): open apps/mobile/android-app in Android Studio
+# npm run mobile:android
 
 python3 apps/mobile/ios/generate_xcode_project.py   # after adding Swift files
 ```
+
+**No Capacitor.** iOS is pure SwiftUI (`ios/WorldApp`). Do not add `@capacitor/*` packages.
 
 ## Local API
 

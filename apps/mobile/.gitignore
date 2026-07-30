@@ -1,6 +1,11 @@
 node_modules/
 android/
 
+# Legacy Capacitor / Cordova (removed — native only)
+capacitor.config.*
+ios/App/
+**/capacitor-cordova-ios-plugins/
+
 # Native iOS — track source in git, ignore local Xcode/build output
 ios/build/
 ios/**/xcuserdata/
