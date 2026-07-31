@@ -38,6 +38,11 @@ import {
 } from './admin/admin.service.js';
 import { clearCountryMoodCache } from './graphql/modules/insights/insights.service.js';
 import { startKafkaPipeline, stopKafkaPipeline } from './kafka/index.js';
+import {
+  getEngagementReport,
+  ingestEngagementBatch,
+  renderEngagementReportHtml,
+} from './engagement/engagement.service.js';
 
 type AuthedUser = {
   id: string;
@@ -405,6 +410,52 @@ app.post('/push/ios/test', async (req: Request, res: Response) => {
   }
 
   return res.json({ ok: true, result, tokens });
+});
+
+/**
+ * Behavior / attention signals (scroll dwell, skip, watch, …).
+ * Writes Postgres + kafka_outbox → topic matterya.engagement (live in Console / [kafka-live] logs).
+ */
+app.post('/v1/engagement/batch', async (req: Request, res: Response) => {
+  const user = await getUserFromRequest(req);
+  if (!user?.id) return res.status(401).json({ error: 'unauthenticated' });
+  try {
+    const result = await ingestEngagementBatch({
+      entityId: user.id,
+      sessionId: req.body?.sessionId ?? null,
+      events: Array.isArray(req.body?.events) ? req.body.events : [],
+    });
+    return res.json({ ok: true, ...result });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'engagement_ingest_failed' });
+  }
+});
+
+/**
+ * People activity report (plain language + timestamp on every interaction).
+ * JSON:  GET /v1/engagement/report?hours=24
+ * HTML:  GET /v1/engagement/report?hours=24&format=html
+ * Auth:  Bearer JWT  or  ?key= / x-admin-key
+ */
+app.get('/v1/engagement/report', async (req: Request, res: Response) => {
+  const user = await getUserFromRequest(req);
+  const adminKey = String(
+    req.headers['x-admin-key'] ?? req.query.key ?? ''
+  ).trim();
+  const isAdmin = !!ADMIN_PORTAL_KEY && adminKey === ADMIN_PORTAL_KEY;
+  if (!user?.id && !isAdmin) return res.status(401).json({ error: 'unauthenticated' });
+  try {
+    const hours = Number(req.query.hours ?? 24);
+    const report = await getEngagementReport(hours);
+    const format = String(req.query.format ?? 'json').toLowerCase();
+    if (format === 'html') {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      return res.send(renderEngagementReportHtml(report));
+    }
+    return res.json({ ok: true, report });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'report_failed' });
+  }
 });
 
 app.post('/livekit/token', async (req: Request, res: Response) => {

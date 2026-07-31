@@ -89,6 +89,7 @@ export class ProfilesService {
     );
 
     try {
+      // Prefer full update including is_private when the column exists.
       const { rows } = await pool.query(
         `
         update public.profiles
@@ -123,6 +124,38 @@ export class ProfilesService {
     } catch (err: any) {
       if (err?.code === '23505' && String(err?.constraint ?? '').includes('profiles_username')) {
         throw new Error('Handle already taken.');
+      }
+      // Column missing (migration not applied yet) — update without is_private.
+      const msg = String(err?.message ?? '');
+      if (err?.code === '42703' || msg.includes('is_private')) {
+        const { rows } = await pool.query(
+          `
+          update public.profiles
+          set
+            display_name = coalesce($2, display_name),
+            username     = coalesce($3, username),
+            avatar_url   = coalesce($4, avatar_url),
+            country_name = coalesce($5, country_name),
+            country_code = coalesce($6, country_code),
+            city_name    = coalesce($7, city_name),
+            bio          = coalesce($8, bio),
+            updated_at   = now()
+          where user_id = $1
+          returning *
+          `,
+          [
+            userId,
+            input.display_name ?? null,
+            input.username ?? null,
+            input.avatar_url ?? null,
+            input.country_name ?? null,
+            input.country_code ?? null,
+            input.city_name ?? null,
+            input.bio ?? null,
+          ]
+        );
+        if (!rows[0]) throw new Error('PROFILE_UPDATE_FAILED');
+        return this.normalize(rows[0] as ProfileRow)!;
       }
       throw err;
     }
