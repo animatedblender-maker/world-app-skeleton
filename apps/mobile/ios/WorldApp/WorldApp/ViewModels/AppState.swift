@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import UIKit
+import UserNotifications
 
 @MainActor
 @Observable
@@ -40,20 +41,27 @@ final class AppState {
     var storyGroups: [StoryGroup] = []
     var storyViewerContext: StoryViewerContext?
     var reelsViewerContext: ReelsViewerContext?
-    /// Letters (pen-friend) — Moments entry is parked.
-    var showLetterCompose = false
-    var letterFlightEvent: LetterFlightEvent?
-
     private let reelSavedDefaultsKey = "saved_reel_presentation_ids"
     private let localSavedPostIDsKey = "local_saved_post_ids"
     private let viewedStoriesDefaultsKey = "viewed_story_post_ids"
     var navigationPath: [AppDestination] = []
     var pendingConversationID: String?
     var isPlayPresented = false
+    /// Deep-link / feed → open this video on the Hubs tab (watch route).
     var pendingLivingVideoID: String?
+    /// Full post when available so Hubs can open watch immediately without a re-fetch race.
+    var pendingLivingVideo: CountryPost?
     var pendingPlayTab: YouTubeMainTab?
     var pendingPlayChannelAuthorID: String?
     var pendingPlayChannelUsername: String?
+
+    // MARK: - Global hub continuous playback (survives tabs + minimize)
+    /// Active long-form hubs video. Owned by `GlobalHubPlaybackLayer` (single AVPlayer).
+    var hubPlaybackPost: CountryPost?
+    /// `true` = full watch stage on Hubs; `false` = mini player above the tab bar (any tab).
+    var hubPlaybackExpanded = false
+    var hubPlaybackPlaying = true
+    var hubPlaybackMuted = false
     var showAppMenu = false
     var floatingPosts: [CountryPost] = []
     var errorMessage: String?
@@ -63,12 +71,22 @@ final class AppState {
     var quotedSharePostID: String?
     var pendingSearchQuery: String?
 
+    /// Queued when a push / in-app notification is tapped before MainTabView is ready.
+    private var pendingPushRoute: PendingPushRoute?
+
     private let auth = AuthService.shared
     private let profileService = ProfileService.shared
     private let notificationsService = NotificationsService.shared
     private let presenceService = PresenceService.shared
     private let followService = FollowService.shared
     private var pollTask: Task<Void, Never>?
+
+    private struct PendingPushRoute: Equatable {
+        var type: String
+        var conversationID: String?
+        var postID: String?
+        var username: String?
+    }
 
     func bootstrap() async {
         if ScreenshotMode.isActive {
@@ -91,6 +109,7 @@ final class AppState {
         CallSessionManager.shared.bootstrap()
         startPolling()
         registerPushInBackground()
+        flushPendingPushRoute()
         Task { await finishSessionWarmup() }
     }
 
@@ -117,10 +136,30 @@ final class AppState {
     }
 
     private func finishSessionWarmup() async {
-        await prepareSession()
-        await refreshProfile()
-        await refreshAllInBackground()
+        // ── Fast path: paint feed from cache/demo in <1s. Never block on hubs/GraphQL. ──
+        // Disk cache already restored by ContentCache.init.
+        // Demo seed fills empty cache (small JSONL; actor work, not main-thread I/O).
+        if AppConfig.useDemoDataset, ContentCache.shared.posts(for: .homeFeed) == nil {
+            let sample = await DemoDatasetService.shared.sampleGlobalPosts(limit: 40)
+            if !sample.isEmpty {
+                ContentCache.shared.setPosts(sample, for: .homeFeed)
+                ImageCache.shared.prefetchFeedMedia(Array(sample.prefix(12)), maxPixelSize: 360)
+            }
+            #if DEBUG
+            print("[DemoDataset] warmup posts=\(sample.count)")
+            #endif
+        } else if let cached = ContentCache.shared.posts(for: .homeFeed) {
+            ImageCache.shared.prefetchFeedMedia(Array(cached.prefix(12)), maxPixelSize: 360)
+        }
+
+        // Feed can paint now — secondary work is non-blocking.
         contentLoadGeneration += 1
+
+        Task(priority: .utility) {
+            await prepareSession()
+            await refreshProfile()
+            await refreshAllInBackground()
+        }
     }
 
     private func prepareSession() async {
@@ -161,15 +200,22 @@ final class AppState {
     }
 
     private func refreshAllInBackground() async {
+        // Lightweight social state first — never await full hub seed (thousands of videos).
         async let statsTask: Void = { await refreshGlobalStats() }()
         async let followingTask: Void = { await refreshFollowingIDs() }()
         async let savedTask: Void = { await refreshSavedPosts() }()
         async let storiesTask: Void = { await refreshStories() }()
         async let notificationsTask: Void = { await refreshNotifications() }()
-        async let feedTask: Void = { _ = await PostsService.shared.loadHomeFeed() }()
-        async let livingTask: Void = { _ = await PostsService.shared.loadLivingVideos() }()
-        _ = await (statsTask, followingTask, savedTask, storiesTask, notificationsTask, feedTask, livingTask)
+        // Soft network refresh only when home-feed cache is stale; never blocks UI.
+        async let feedTask: Void = {
+            _ = await PostsService.shared.loadHomeFeed(forceRefresh: false, networkIfStale: true)
+        }()
+        _ = await (statsTask, followingTask, savedTask, storiesTask, notificationsTask, feedTask)
         startPresence()
+        // Hubs catalog is on-demand (Hubs tab / play). Slug-capped sample only.
+        Task(priority: .background) {
+            _ = await PostsService.shared.loadLivingVideos(forceRefresh: false)
+        }
     }
 
     func refreshProfile() async {
@@ -359,8 +405,9 @@ final class AppState {
         navigationPath = []
         isPlayPresented = false
         pendingConversationID = nil
-        pendingLivingVideoID = nil
+        clearPendingLivingVideo()
         clearPendingPlayRouting()
+        stopHubPlayback()
         followingIDs = []
         savedPostIDs = []
         savedPosts = []
@@ -375,6 +422,12 @@ final class AppState {
     }
 
     func showToast(_ message: String, style: ToastBanner.ToastStyle = .success) {
+        // Never surface GraphQL Yoga masked failures for engagement / missing seed rows.
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.localizedCaseInsensitiveContains("unexpected error")
+            || trimmed.caseInsensitiveCompare("Unexpected error") == .orderedSame {
+            return
+        }
         toastMessage = message
         toastStyle = style
         Task {
@@ -406,7 +459,7 @@ final class AppState {
             openPlayChannel(username: username)
         case .playChannelID(let authorID):
             openPlayChannel(authorID: authorID)
-        case .people, .ads, .editProfile, .settings, .premium, .search, .letters, .letterThread:
+        case .people, .ads, .editProfile, .settings, .premium, .search:
             selectedTab = .feed
             navigationPath.removeAll()
             navigationPath.append(destination)
@@ -422,11 +475,49 @@ final class AppState {
     }
 
     func handlePushNavigation(type: String, conversationID: String?, postID: String?, username: String?) {
+        // Cold start / still booting → queue and apply once the main UI is up.
+        guard isAuthenticated, isSessionReady else {
+            pendingPushRoute = PendingPushRoute(
+                type: type,
+                conversationID: conversationID,
+                postID: postID,
+                username: username
+            )
+            return
+        }
+        applyPushNavigation(
+            type: type,
+            conversationID: conversationID,
+            postID: postID,
+            username: username
+        )
+    }
+
+    func flushPendingPushRoute() {
+        guard let pending = pendingPushRoute else { return }
+        guard isAuthenticated, isSessionReady else { return }
+        pendingPushRoute = nil
+        applyPushNavigation(
+            type: pending.type,
+            conversationID: pending.conversationID,
+            postID: pending.postID,
+            username: pending.username
+        )
+    }
+
+    private func applyPushNavigation(
+        type: String,
+        conversationID: String?,
+        postID: String?,
+        username: String?
+    ) {
         showAppMenu = false
         globePanel = nil
+        reelsViewerContext = nil
+        isPlayPresented = false
         let normalized = type.lowercased()
 
-        if normalized == "message", let conversationID {
+        if normalized == "message", let conversationID, !conversationID.isEmpty {
             openConversation(id: conversationID)
             return
         }
@@ -449,13 +540,27 @@ final class AppState {
             return
         }
 
+        // Like / comment / reply / comment_like → open the post immediately.
         if let postID, !postID.isEmpty {
-            openNotificationPost(id: postID)
+            openNotificationPost(
+                id: postID,
+                preferComments: Self.notificationTypeOpensComments(normalized)
+            )
             return
         }
 
+        // No post id in the push — still surface the in-app list so the user isn't stranded.
         globePanel = .notifications
         Task { await refreshNotifications() }
+    }
+
+    private static func notificationTypeOpensComments(_ type: String) -> Bool {
+        switch type {
+        case "comment", "comment_like", "comment_reply", "reply":
+            return true
+        default:
+            return false
+        }
     }
 
     func selectCountry(_ country: Country) {
@@ -515,12 +620,44 @@ final class AppState {
 
     func openConversation(id: String) {
         pendingConversationID = nil
+        // Keep Hubs audio going as mini while chatting.
+        minimizeHubPlayback()
         selectedTab = .messages
         navigationPath.removeAll { destination in
             if case .conversation = destination { return true }
             return false
         }
         navigationPath.append(.conversation(id))
+        // Clear banners + unread for this chat as soon as we open it.
+        Task { await clearNotifications(forConversation: id) }
+    }
+
+    /// Removes Notification Center banners and marks server message notifications read for a chat.
+    func clearNotifications(forConversation conversationID: String) async {
+        let trimmed = conversationID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        await PushNotificationService.shared.clearDeliveredNotifications(forConversation: trimmed)
+
+        // Mark DB rows (type=message, entity=conversation) so they don't linger unread.
+        // Cap work: only scan recent notifications once when opening a chat (not per message).
+        let all = await notificationsService.list(limit: 40)
+        for item in all where item.isMessageType && item.isUnread && item.conversationID == trimmed {
+            try? await notificationsService.markRead(item.id)
+        }
+
+        await refreshUnreadCounts()
+        await syncAppIconBadge()
+    }
+
+    /// Keep the home-screen badge in sync after clearing chat notifications.
+    func syncAppIconBadge() async {
+        let total = messagesUnreadCount + effectiveNotificationsUnreadCount
+        if #available(iOS 16.0, *) {
+            try? await UNUserNotificationCenter.current().setBadgeCount(total)
+        } else {
+            UIApplication.shared.applicationIconBadgeNumber = total
+        }
     }
 
     func closeConversation(id: String) {
@@ -551,37 +688,121 @@ final class AppState {
         let trimmedUsername = username?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "^@+", with: "", options: .regularExpression)
-        if let trimmedUsername, !trimmedUsername.isEmpty {
+        let trimmedID = userID.trimmingCharacters(in: .whitespacesAndNewlines)
+        EngagementTracker.shared.profileOpened(userID: trimmedID, username: trimmedUsername)
+        // Prefer stable userID for postsByAuthor — username resolution can lag or miss,
+        // which left public profiles empty on cold Mac sessions while phone cache hid it.
+        if !trimmedID.isEmpty {
+            navigate(to: .publicProfileByUserID(trimmedID))
+        } else if let trimmedUsername, !trimmedUsername.isEmpty {
             navigate(to: .publicProfile(username: trimmedUsername))
-        } else if !userID.isEmpty {
-            navigate(to: .publicProfileByUserID(userID))
         }
     }
 
     func presentPlaySurface() {
-        showAppMenu = false
-        globePanel = nil
-        isPlayPresented = true
+        // Never use a full-screen cover that steals the tab bar — Hubs is a real tab.
+        openPlay(tab: .home)
     }
 
     func dismissPlay() {
         isPlayPresented = false
-        pendingLivingVideoID = nil
+        clearPendingLivingVideo()
         clearPendingPlayRouting()
     }
 
-    func openLivingVideo(postID: String, tab: YouTubeMainTab? = nil) {
+    /// Start / switch the single global hubs player. Stops feed audio first so nothing doubles.
+    /// - Parameter expanded: full watch chrome only on Hubs. Elsewhere (messages, feed, …) use mini.
+    func startHubPlayback(_ post: CountryPost, expanded: Bool = true) {
+        showAppMenu = false
+        globePanel = nil
+        reelsViewerContext = nil
+        isPlayPresented = false
+        clearPendingLivingVideo()
+
+        // Full watch clears stack; mini (e.g. from chat) keeps the current screen.
+        if expanded {
+            navigationPath.removeAll()
+        }
+
+        let switchingVideo = hubPlaybackPost?.id != post.id
+        if switchingVideo {
+            // Kill feed / previous hub audio only when the source changes.
+            // Same post re-expand must NOT tear down the continuous AVPlayer.
+            MediaPlaybackCoordinator.shared.stopAllPlayback()
+            hubPlaybackPost = post
+            hubPlaybackMuted = false
+        } else {
+            // Same post — still refresh the model if the new payload has a playable URL.
+            if hubPlaybackPost?.playableVideoURL == nil, post.playableVideoURL != nil {
+                hubPlaybackPost = post
+            }
+        }
+
+        hubPlaybackPlaying = true
+        // Never stay expanded off the Hubs tab.
+        if expanded {
+            selectedTab = .hubs
+            hubPlaybackExpanded = true
+        } else {
+            hubPlaybackExpanded = false
+        }
+        YouTubeCatalogService.shared.recordWatch(post.id)
+        // Pre-resolve Archive CDN so first frame appears almost immediately.
+        if let url = post.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) {
+            ArchiveVideoPlayback.warmResolve(url)
+        }
+        ImageCache.shared.prefetchPostThumbnails([post], maxPixelSize: 720)
+    }
+
+    func minimizeHubPlayback() {
+        guard hubPlaybackPost != nil else { return }
+        hubPlaybackExpanded = false
+        hubPlaybackPlaying = true
+    }
+
+    /// Leaving Hubs always collapses to the mini player (keep watching elsewhere).
+    func ensureHubPlaybackMinimizedIfNeeded() {
+        guard hubPlaybackPost != nil, selectedTab != .hubs else { return }
+        minimizeHubPlayback()
+    }
+
+    func expandHubPlayback() {
+        guard hubPlaybackPost != nil else { return }
+        selectedTab = .hubs
+        hubPlaybackExpanded = true
+        hubPlaybackPlaying = true
+    }
+
+    func stopHubPlayback() {
+        hubPlaybackPost = nil
+        hubPlaybackExpanded = false
+        hubPlaybackPlaying = false
+        MediaPlaybackCoordinator.shared.stopAllPlayback()
+    }
+
+    func openLivingVideo(postID: String, tab: YouTubeMainTab? = nil, post: CountryPost? = nil) {
         navigationPath.removeAll()
         showAppMenu = false
         globePanel = nil
+        reelsViewerContext = nil
         isPlayPresented = false
         if let tab { pendingPlayTab = tab }
+
+        if let post, post.id == postID, post.hasVideo {
+            startHubPlayback(post, expanded: true)
+            return
+        }
+
         pendingLivingVideoID = postID
+        pendingLivingVideo = (post?.id == postID) ? post : nil
         selectedTab = .hubs
+        // Stop feed audio even while Hubs resolves the id.
+        MediaPlaybackCoordinator.shared.stopAllPlayback()
     }
 
     func clearPendingLivingVideo() {
         pendingLivingVideoID = nil
+        pendingLivingVideo = nil
     }
 
     func clearPendingPlayRouting() {
@@ -625,8 +846,8 @@ final class AppState {
     func openPost(_ post: CountryPost) {
         if post.isReel {
             openReelsViewer(startingPost: post)
-        } else if PlayPlatformBridge.isLongFormVideo(post) {
-            openLivingVideo(postID: post.id, tab: .home)
+        } else if PlayPlatformBridge.isHubFeedCardVideo(post) || PlayPlatformBridge.isLongFormVideo(post) {
+            openLivingVideo(postID: post.id, tab: .home, post: post)
         } else {
             selectedTab = .feed
             navigationPath.removeAll()
@@ -666,15 +887,27 @@ final class AppState {
     }
 
     func openReelsFromMenu() async {
-        let reels = await PostsService.shared.loadReelsFeed(
+        // Fresh shuffle every open — different recommendations each time.
+        let seed = UInt64.random(in: 1...UInt64.max) ^ UInt64(Date().timeIntervalSince1970 * 1_000)
+        let sparks = await HubVideoSeedService.shared.sparkSeedVideos(limit: 40, shuffleSeed: seed)
+        let network = await PostsService.shared.loadReelsFeed(
             viewerCountry: currentProfile?.countryCode,
             followingIDs: followingIDs
         )
+        var seen = Set<String>()
+        var reels: [CountryPost] = []
+        for post in sparks + network {
+            guard seen.insert(post.id).inserted else { continue }
+            guard post.hasVideo, !post.isStory else { continue }
+            reels.append(post)
+        }
         guard let first = reels.first else {
             showToast("\(MatteryaCopy.noSparksYet) — publish one to get started.", style: .info)
             openPlay()
             return
         }
+        // Pre-buffer first + next three before the viewer appears.
+        SparkWarmPool.shared.prepare(posts: reels, around: 0, ahead: 3, behind: 0)
         openReelsViewer(startingPost: first, seedPosts: reels)
     }
 
@@ -734,12 +967,6 @@ final class AppState {
     }
 
     func presentCreateSheet(_ sheet: CreateContentSheet) async {
-        // Moments parked in favor of Letters.
-        if sheet == .story {
-            showCreateMenu = false
-            presentLetterCompose()
-            return
-        }
         guard let home = await resolveHomeCountry() else {
             showToast("Set your home country in profile before posting.", style: .error)
             return
@@ -749,24 +976,15 @@ final class AppState {
         activeCreateSheet = sheet
     }
 
-    func presentLetterCompose() {
-        LettersService.shared.rolloverQuotaIfNeeded()
-        if LettersService.shared.remainingToday == 0 {
-            let hours = Int(LettersService.shared.secondsUntilLocalMidnight / 3600)
-            let mins = Int(LettersService.shared.secondsUntilLocalMidnight.truncatingRemainder(dividingBy: 3600) / 60)
-            showToast("All 5 letters used. Resets in \(hours)h \(mins)m (local midnight).", style: .info)
-            return
-        }
+    /// Hub long-form: require a channel first, then open the channel video composer.
+    func presentHubVideoCreate() async {
         showCreateMenu = false
-        showLetterCompose = true
-    }
-
-    func presentLetterFlight(_ event: LetterFlightEvent) {
-        letterFlightEvent = event
-    }
-
-    func dismissLetterFlight() {
-        letterFlightEvent = nil
+        if LivingChannelMarker.hasChannel(profile: currentProfile) {
+            await presentCreateSheet(.hubVideo)
+        } else {
+            // Channel setup does not require home country first, but posting will.
+            activeCreateSheet = .channelSetup
+        }
     }
 
     func needsRepeatShareWarning(for post: CountryPost) -> Bool {
@@ -792,7 +1010,7 @@ final class AppState {
         }
     }
 
-    func sharePostToCountryFeed(_ post: CountryPost) async -> String {
+    func sharePostToCountryFeed(_ post: CountryPost, caption: String? = nil) async -> String {
         guard isAuthenticated else { return "Sign in to share." }
         guard !post.isStory else {
             return "Moments live in Globe — they can't be shared as feed posts."
@@ -808,15 +1026,20 @@ final class AppState {
         }
 
         do {
-            _ = try await PostsService.shared.sharePostToCountryFeed(
+            let created = try await PostsService.shared.sharePostToCountryFeed(
                 post: post,
                 countryName: countryName,
                 countryCode: countryCode,
-                cityName: profile.cityName
+                cityName: profile.cityName,
+                caption: caption
             )
             ContentCache.shared.invalidate(.homeFeed, .livingVideos)
             contentLoadGeneration += 1
-            NotificationCenter.default.post(name: .userPostsDidChange, object: nil)
+            NotificationCenter.default.post(
+                name: .userPostsDidChange,
+                object: nil,
+                userInfo: ["post": created]
+            )
             if let sourceCountry = post.countryName, sourceCountry != countryName {
                 return "Shared from \(sourceCountry) to your \(countryName) feed."
             }
@@ -952,16 +1175,36 @@ final class AppState {
     }
 
     func toggleFollow(_ userID: String) async {
-        guard !userID.hasPrefix("user_"), userID != currentProfile?.userID else { return }
+        let id = userID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty, id != currentProfile?.userID else { return }
+
+        // Optimistic UI first so hub/fake Follow feels instant.
+        let wasFollowing = followingIDs.contains(id)
+        if wasFollowing {
+            followingIDs.remove(id)
+        } else {
+            followingIDs.insert(id)
+        }
+
         do {
-            if followingIDs.contains(userID) {
-                try await followService.unfollow(targetID: userID)
-                followingIDs.remove(userID)
+            if wasFollowing {
+                try await followService.unfollow(targetID: id)
             } else {
-                try await followService.follow(targetID: userID)
-                followingIDs.insert(userID)
+                try await followService.follow(targetID: id)
+            }
+            // Re-merge remote + local so server follows stay in sync.
+            followingIDs = await followService.followingIDs()
+            contentLoadGeneration += 1
+            if FollowService.usesLocalFollow(userID: id) {
+                showToast(wasFollowing ? "Unfollowed" : "Following", style: .info)
             }
         } catch {
+            // Roll back optimistic update.
+            if wasFollowing {
+                followingIDs.insert(id)
+            } else {
+                followingIDs.remove(id)
+            }
             showToast(error.localizedDescription, style: .error)
         }
     }
@@ -999,53 +1242,91 @@ final class AppState {
     }
 
     func openNotification(_ notification: NotificationItem) async {
-        globePanel = nil
-        showAppMenu = false
+        // Navigate first (sync). Network mark-read happens after so a slow API
+        // never blocks opening the like/comment target.
         applyLocalNotificationRead(notification)
-
         let type = notification.type.lowercased()
+        let opened = routeNotificationDestination(notification, type: type)
 
-        if let conversationID = notification.conversationID {
+        Task {
             try? await notificationsService.markRead(notification.id)
-            openConversation(id: conversationID)
             await refreshUnreadCounts()
             await refreshNotifications()
-            return
+        }
+
+        if !opened {
+            showToast("Couldn’t open that notification.", style: .error)
+        }
+    }
+
+    /// Returns true if a concrete destination was opened.
+    @discardableResult
+    private func routeNotificationDestination(_ notification: NotificationItem, type: String) -> Bool {
+        showAppMenu = false
+        reelsViewerContext = nil
+        isPlayPresented = false
+
+        if let conversationID = notification.conversationID {
+            globePanel = nil
+            openConversation(id: conversationID)
+            return true
         }
 
         if type == "follow", let actorID = notification.actorUserID {
-            try? await notificationsService.markRead(notification.id)
-            selectedTab = .feed
-            navigationPath.removeAll()
+            globePanel = nil
             openPublicProfile(username: notification.actor?.username, userID: actorID)
-            await refreshNotifications()
-            return
+            return true
         }
 
+        // Like / comment / reply → open the post immediately (PostDetailView loads it).
         if let postID = notification.resolvedPostID {
-            try? await notificationsService.markRead(notification.id)
             openNotificationPost(id: postID)
-            await refreshNotifications()
-            return
+            return true
+        }
+
+        if notification.entityType?.lowercased() == "post",
+           let entityID = notification.entityID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !entityID.isEmpty
+        {
+            openNotificationPost(id: entityID)
+            return true
+        }
+
+        // Last resort: any non-empty entity_id for social types is treated as a post id.
+        if ["like", "comment", "comment_like", "comment_reply", "reply", "mention", "share"].contains(type),
+           let entityID = notification.entityID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !entityID.isEmpty
+        {
+            openNotificationPost(id: entityID)
+            return true
         }
 
         if let actorID = notification.actorUserID {
-            try? await notificationsService.markRead(notification.id)
-            selectedTab = .feed
-            navigationPath.removeAll()
+            globePanel = nil
             openPublicProfile(username: notification.actor?.username, userID: actorID)
-            await refreshNotifications()
-            return
+            return true
         }
 
-        try? await notificationsService.markRead(notification.id)
-        await refreshNotifications()
+        globePanel = nil
+        return false
     }
 
-    func openNotificationPost(id: String) {
+    /// Opens the post a social notification refers to (like / comment / reply).
+    /// Always pushes PostDetailView — no network wait before navigating.
+    func openNotificationPost(id: String, preferComments: Bool = false) {
+        let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        showAppMenu = false
+        globePanel = nil
+        reelsViewerContext = nil
+        isPlayPresented = false
+        _ = preferComments
+
+        let destination = AppDestination.post(trimmed)
         selectedTab = .feed
-        navigationPath.removeAll()
-        navigate(to: .post(id))
+        // Tab roots stay mounted across switches — NavigationStack is always live.
+        navigationPath = [destination]
     }
 
     private func applyLocalNotificationRead(_ notification: NotificationItem) {

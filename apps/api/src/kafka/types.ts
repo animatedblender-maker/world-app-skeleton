@@ -81,6 +81,17 @@ export const EngagementEventTypes = {
   ScrollDwell: 'EngagementScrollDwell',
   ScrollSkip: 'EngagementScrollSkip',
   ProfileOpened: 'EngagementProfileOpened',
+  /** Followed another person */
+  PersonFollowed: 'EngagementPersonFollowed',
+  PersonUnfollowed: 'EngagementPersonUnfollowed',
+  /** Opened / left Hubs tab or a hub shelf */
+  HubOpened: 'EngagementHubOpened',
+  HubLeft: 'EngagementHubLeft',
+  HubShelfSelected: 'EngagementHubShelfSelected',
+  HubVideoOpened: 'EngagementHubVideoOpened',
+  /** Generic surface open (feed, search, globe, messages, …) */
+  ScreenOpened: 'EngagementScreenOpened',
+  ScreenLeft: 'EngagementScreenLeft',
 } as const;
 
 export type EngagementPayload = {
