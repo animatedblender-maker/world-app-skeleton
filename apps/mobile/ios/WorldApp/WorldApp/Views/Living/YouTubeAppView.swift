@@ -3,12 +3,8 @@ import SwiftUI
 private enum YouTubeRoute: Equatable {
     case watch(CountryPost)
     case channel(YouTubeChannel)
-}
-
-private struct LibraryPlaybackRequest {
-    let post: CountryPost
-    let asSpark: Bool
-    let sparkSeed: [CountryPost]
+    /// In-app library (History / Sparks / Saved / Liked / Uploads) — not a modal sheet.
+    case library
 }
 
 struct YouTubeAppView: View {
@@ -21,14 +17,13 @@ struct YouTubeAppView: View {
     @State private var homeFilter: YouTubeHomeFilter = .all
     @State private var librarySection: YouTubeLibrarySection = .history
     @State private var route: YouTubeRoute?
-    @State private var miniPlayerPost: CountryPost?
     @State private var showSearch = false
-    @State private var showLibrary = false
-    @State private var pendingLibraryPlayback: LibraryPlaybackRequest?
     @State private var scrollToSubscriptions = false
     @State private var searchQuery = ""
     @State private var isLoading = true
     @State private var errorMessage: String?
+    /// Shuffled Sparks rail — refreshed every Hubs open / tab return / catalog reload.
+    @State private var sparksStrip: [CountryPost] = []
 
     private enum PlayScrollAnchor {
         static let subscriptions = "play-subscriptions"
@@ -73,8 +68,13 @@ struct YouTubeAppView: View {
         catalog.search(query: searchQuery, videos: allVideos, channels: channels)
     }
 
+    /// Mini session is owned by `GlobalHubPlaybackLayer` (any tab).
+    private var isMiniPlayback: Bool {
+        appState.hubPlaybackPost != nil && !appState.hubPlaybackExpanded
+    }
+
     var body: some View {
-        ZStack(alignment: .bottom) {
+        GeometryReader { geo in
             VStack(spacing: 0) {
                 if route == nil {
                     YouTubeAppHeader(
@@ -85,11 +85,13 @@ struct YouTubeAppView: View {
                 Group {
                     switch route {
                     case .watch(let post):
+                        // Video is drawn by GlobalHubPlaybackLayer — reserve stage + meta only.
                         YouTubeWatchView(
                             post: post,
                             channel: catalog.channel(for: post.authorID, in: channels),
-                            related: catalog.relatedVideos(to: post, from: allVideos),
+                            related: catalog.relatedVideos(to: post, from: allVideos, limit: 400),
                             subscriberCount: followerCounts[post.authorID],
+                            embedsPlayer: false,
                             onBack: { closeWatch(minimize: true) },
                             onOpenVideo: { openVideo($0) },
                             onOpenChannel: { openChannel($0) }
@@ -101,36 +103,61 @@ struct YouTubeAppView: View {
                             onBack: { route = nil },
                             onOpenVideo: { openVideo($0) }
                         )
+                    case .library:
+                        libraryScreen
                     case nil:
                         mainContent
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-
-            if let miniPlayerPost, route == nil {
-                YouTubeMiniPlayerBar(
-                    post: miniPlayerPost,
-                    onExpand: { openVideo(miniPlayerPost) },
-                    onClose: { self.miniPlayerPost = nil }
-                )
-                .padding(.bottom, Theme.tabBarHeight + 4)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
+            .frame(width: geo.size.width, height: geo.size.height)
         }
-        .animation(.easeInOut(duration: 0.2), value: miniPlayerPost?.id)
+        .animation(.easeInOut(duration: 0.2), value: appState.hubPlaybackPost?.id)
+        .animation(.easeInOut(duration: 0.2), value: appState.hubPlaybackExpanded)
         .screenBackground()
         .toolbar(.hidden, for: .navigationBar)
         .refreshable {
             await loadVideos(forceRefresh: true)
+            await reshuffleSparksStrip()
         }
         .task(id: appState.contentLoadGeneration) {
+            // Open any pending watch target first so feed → Hubs lands on the video,
+            // not a blank home shelf while catalogs load.
+            await consumePendingLivingVideoIfNeeded()
             await loadVideos(forceRefresh: false)
+            await reshuffleSparksStrip()
             await consumePendingRoutingIfNeeded()
         }
+        .onAppear {
+            syncRouteFromHubSession()
+            Task { await consumePendingLivingVideoIfNeeded() }
+            if appState.selectedTab == .hubs {
+                EngagementTracker.shared.hubsOpened()
+                Task { await reshuffleSparksStrip() }
+            }
+        }
+        .onChange(of: appState.selectedTab) { _, tab in
+            guard tab == .hubs else { return }
+            EngagementTracker.shared.hubsOpened()
+            Task { await reshuffleSparksStrip() }
+        }
+        .onChange(of: homeFilter) { _, filter in
+            EngagementTracker.shared.hubShelfSelected(filter.rawValue)
+        }
+        .onChange(of: appState.hubPlaybackPost?.id) { _, _ in
+            syncRouteFromHubSession()
+        }
+        .onChange(of: appState.hubPlaybackExpanded) { _, _ in
+            syncRouteFromHubSession()
+        }
         .onChange(of: appState.pendingLivingVideoID) { _, newID in
-            guard let newID else { return }
-            Task { await openVideo(id: newID) }
+            guard newID != nil else { return }
+            Task { await consumePendingLivingVideoIfNeeded() }
+        }
+        .onChange(of: appState.pendingLivingVideo?.id) { _, newID in
+            guard newID != nil else { return }
+            Task { await consumePendingLivingVideoIfNeeded() }
         }
         .onChange(of: appState.pendingPlayTab) { _, tab in
             guard let tab else { return }
@@ -168,18 +195,6 @@ struct YouTubeAppView: View {
                 }
             )
         }
-        .sheet(isPresented: $showLibrary, onDismiss: consumePendingLibraryPlayback) {
-            NavigationStack {
-                libraryScreen
-                    .navigationTitle("Library")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Close") { showLibrary = false }
-                        }
-                    }
-            }
-        }
     }
 
     @ViewBuilder
@@ -197,7 +212,7 @@ struct YouTubeAppView: View {
 
     private var homeScreen: some View {
         VStack(spacing: 0) {
-            YouTubeFilterChips(selected: $homeFilter, onLibrary: { showLibrary = true })
+            YouTubeFilterChips(selected: $homeFilter, onLibrary: { openLibrary() })
             if homeScreenIsEmpty {
                 ContentUnavailableView(
                     homeFilter == .all ? "No videos here yet" : "No videos in this category",
@@ -236,7 +251,7 @@ struct YouTubeAppView: View {
                             }
                         }
                         .padding(.top, 8)
-                        .padding(.bottom, miniPlayerPost == nil ? 12 : 72)
+                        .padding(.bottom, isMiniPlayback ? YouTubeMiniPlayerBar.contentBottomInset : 12)
                     }
                     .onChange(of: scrollToSubscriptions) { _, shouldScroll in
                         guard shouldScroll else { return }
@@ -310,51 +325,83 @@ struct YouTubeAppView: View {
     }
 
     private var homeReelsStrip: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(MatteryaCopy.sparks)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Theme.inkMuted)
-                    .textCase(.uppercase)
-                Spacer()
-                Button(MatteryaCopy.watchAllSparks) {
-                    openReelsPlayback(starting: playReels.first, seed: playReels)
-                }
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(Theme.accentBright)
+        // Exact same Sparks rail as the Feed page — order reshuffles each visit.
+        let rail = sparksStrip.isEmpty ? Array(playReels.prefix(10)) : sparksStrip
+        return SparksHorizontalStrip(
+            posts: rail,
+            onOpen: { post in
+                openReelsPlayback(starting: post, seed: rail + playReels)
+            },
+            onBrandTap: {
+                openReelsPlayback(starting: rail.first ?? playReels.first, seed: rail + playReels)
             }
-            .padding(.horizontal, Theme.pagePadding)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
-                    ForEach(playReels.prefix(8)) { post in
-                        PlayReelTile(post: post) {
-                            openReelsPlayback(starting: post, seed: playReels)
-                        }
-                        .frame(width: 108)
-                    }
+        )
+        .id(rail.map(\.id).joined(separator: "|"))
+        .onAppear {
+            for post in rail.prefix(4) {
+                if let url = post.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) {
+                    ArchiveVideoPlayback.warmResolve(url)
                 }
-                .padding(.horizontal, Theme.pagePadding)
             }
         }
     }
 
+    /// New Sparks suggestions whenever Hubs is opened or the catalog reloads.
+    private func reshuffleSparksStrip() async {
+        let seed = UInt64.random(in: 1...UInt64.max)
+            ^ UInt64(Date().timeIntervalSince1970 * 1_000)
+        // Prefer deep Archive spark pool; fall back to whatever is already in the catalog.
+        let seeds = await HubVideoSeedService.shared.sparkSeedVideos(limit: 24, shuffleSeed: seed)
+        var seen = Set<String>()
+        var next: [CountryPost] = []
+        for post in seeds where post.playableVideoURL != nil && seen.insert(post.id).inserted {
+            next.append(post)
+            if next.count >= 10 { break }
+        }
+        if next.count < 6 {
+            let local = HubCategoryClassifier.shuffled(playReels, seed: seed &+ 9)
+            for post in local where post.playableVideoURL != nil && seen.insert(post.id).inserted {
+                next.append(post)
+                if next.count >= 10 { break }
+            }
+        }
+        await MainActor.run {
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { sparksStrip = next }
+            ImageCache.shared.prefetchFeedMedia(next, maxPixelSize: 320)
+            for post in next.prefix(4) {
+                if let url = post.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) {
+                    ArchiveVideoPlayback.warmResolve(url)
+                }
+            }
+        }
+    }
+
+    /// Full-screen library inside Hubs (same pattern as channel / watch — not a bottom sheet).
     private var libraryScreen: some View {
         VStack(spacing: 0) {
+            libraryTopBar
+
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
+                HStack(spacing: 4) {
                     ForEach(YouTubeLibrarySection.allCases) { section in
                         Button {
                             librarySection = section
                         } label: {
+                            // Text-only chips — fixed height so selection never resizes the bar.
                             Text(section.title)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
                         }
                         .pillTab(isSelected: librarySection == section)
                     }
                 }
+                .frame(height: 40)
                 .padding(.horizontal, Theme.pagePadding)
-                .padding(.vertical, 12)
+                .padding(.vertical, 4)
             }
+            .frame(height: 48)
             .overlay(alignment: .bottom) {
                 Theme.divider.frame(height: 0.5)
             }
@@ -366,9 +413,14 @@ struct YouTubeAppView: View {
                 ScrollView {
                     LazyVStack(spacing: 22) {
                         if librarySection == .reels {
+                            // 3 equal columns, each cell locked to 9:16 — no size jitter.
                             LazyVGrid(
-                                columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)],
-                                spacing: 10
+                                columns: Array(
+                                    repeating: GridItem(.flexible(minimum: 0), spacing: 8),
+                                    count: 3
+                                ),
+                                alignment: .center,
+                                spacing: 8
                             ) {
                                 ForEach(libraryVideos) { post in
                                     PlayReelTile(post: post) {
@@ -385,9 +437,41 @@ struct YouTubeAppView: View {
                             }
                         }
                     }
-                    .padding(.bottom, miniPlayerPost == nil ? 12 : 72)
+                    .padding(.top, 8)
+                    .padding(.bottom, isMiniPlayback ? YouTubeMiniPlayerBar.contentBottomInset : 12)
                 }
             }
+        }
+        .background(Theme.canvas)
+    }
+
+    private var libraryTopBar: some View {
+        HStack(spacing: 12) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    route = nil
+                }
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(Theme.ink)
+                    .frame(width: 36, height: 36)
+                    .background(Theme.surface.opacity(0.94), in: Circle())
+                    .overlay(Circle().stroke(Theme.border, lineWidth: 0.5))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Back")
+
+            Text("Library")
+                .font(.headline)
+                .foregroundStyle(Theme.ink)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Theme.pagePadding)
+        .padding(.vertical, 10)
+        .overlay(alignment: .bottom) {
+            Theme.divider.frame(height: 0.5)
         }
     }
 
@@ -407,7 +491,11 @@ struct YouTubeAppView: View {
                 message: MatteryaCopy.saveSparksHint,
                 buttonTitle: MatteryaCopy.browseSparks
             ) {
-                queueLibrarySparkPlayback(starting: playReels.first, seed: playReels)
+                if let first = playReels.first {
+                    openReelsPlayback(starting: first, seed: playReels)
+                } else {
+                    withAnimation(.easeInOut(duration: 0.18)) { route = nil }
+                }
             }
         case .watchLater:
             playLibraryEmptyState(
@@ -416,7 +504,7 @@ struct YouTubeAppView: View {
                 message: "Tap Save on any video to watch later.",
                 buttonTitle: MatteryaCopy.exploreHubs
             ) {
-                showLibrary = false
+                withAnimation(.easeInOut(duration: 0.18)) { route = nil }
             }
         case .liked:
             ContentUnavailableView(
@@ -527,6 +615,12 @@ struct YouTubeAppView: View {
             allVideos = localOnly + filtered
         }
         rebuildChannels()
+        // Warm shelf thumbs into memory so Hubs scroll is not a sea of empty placeholders.
+        ImageCache.shared.prefetchPostThumbnails(Array(allVideos.prefix(48)), maxPixelSize: 320)
+        ImageCache.shared.prefetchPostThumbnails(
+            Array(catalog.historyVideos(from: allVideos).prefix(12)),
+            maxPixelSize: 320
+        )
         await loadChannelProfiles()
         await loadFollowerCounts()
     }
@@ -587,8 +681,14 @@ struct YouTubeAppView: View {
         case .subscriptions:
             scrollToSubscriptions = true
         case .library:
-            librarySection = .history
-            showLibrary = true
+            openLibrary(section: .history)
+        }
+    }
+
+    private func openLibrary(section: YouTubeLibrarySection = .history) {
+        librarySection = section
+        withAnimation(.easeInOut(duration: 0.18)) {
+            route = .library
         }
     }
 
@@ -597,10 +697,20 @@ struct YouTubeAppView: View {
             applyPendingPlayTab(tab)
             appState.pendingPlayTab = nil
         }
-        if let id = appState.pendingLivingVideoID {
-            await openVideo(id: id)
-        }
+        await consumePendingLivingVideoIfNeeded()
         await consumePendingChannelIfNeeded()
+    }
+
+    /// Opens the pending watch target from feed / notifications.
+    /// Prefer the full `pendingLivingVideo` so hub seeds open even before catalog load.
+    private func consumePendingLivingVideoIfNeeded() async {
+        if let post = appState.pendingLivingVideo {
+            appState.clearPendingLivingVideo()
+            openVideo(post)
+            return
+        }
+        guard let id = appState.pendingLivingVideoID else { return }
+        await openVideo(id: id)
     }
 
     private func consumePendingChannelIfNeeded() async {
@@ -629,7 +739,46 @@ struct YouTubeAppView: View {
     }
 
     private func openChannel(authorID: String) async {
+        // Hub seed channels: load full slug corpus only when the user opens the channel
+        // (catalog shelves stay capped for performance).
+        if authorID.hasPrefix("hub_spark_") || authorID.hasPrefix("hub_") {
+            let slug: String
+            let isSpark: Bool
+            if authorID.hasPrefix("hub_spark_") {
+                slug = String(authorID.dropFirst("hub_spark_".count))
+                isSpark = true
+            } else {
+                slug = String(authorID.dropFirst("hub_".count))
+                isSpark = false
+            }
+            let hubPosts = await HubVideoSeedService.shared.videos(forHub: slug)
+            let eligible = hubPosts.filter {
+                catalog.livingEligible($0) && (isSpark ? $0.isReel : !$0.isReel)
+            }
+            if let built = catalog.buildChannels(from: eligible).first(where: { $0.authorID == authorID }) {
+                openChannel(built)
+                return
+            }
+            // Fall through: maybe mixed long-form under hub_ id.
+            if let built = catalog.buildChannels(from: hubPosts.filter(catalog.livingEligible))
+                .first(where: { $0.authorID == authorID }) {
+                openChannel(built)
+                return
+            }
+        }
+
         if let channel = catalog.channel(for: authorID, in: channels) {
+            // Expand hub channel from catalog sample → full slug list when possible.
+            if authorID.hasPrefix("hub_"), !authorID.hasPrefix("hub_spark_") {
+                let slug = String(authorID.dropFirst("hub_".count))
+                let hubPosts = await HubVideoSeedService.shared.videos(forHub: slug)
+                let longForm = hubPosts.filter { catalog.livingEligible($0) && !$0.isReel }
+                if longForm.count > channel.videos.count,
+                   let built = catalog.buildChannels(from: longForm).first(where: { $0.authorID == authorID }) {
+                    openChannel(built)
+                    return
+                }
+            }
             openChannel(channel)
             return
         }
@@ -650,33 +799,11 @@ struct YouTubeAppView: View {
     private func openFromLibrary(_ post: CountryPost) {
         let section = librarySection
         let sectionVideos = libraryVideos
-        let asSpark = shouldOpenAsSpark(post, in: section)
-        let sparkSeed = librarySparkSeed(for: section, videos: sectionVideos)
-        pendingLibraryPlayback = LibraryPlaybackRequest(
-            post: post,
-            asSpark: asSpark,
-            sparkSeed: sparkSeed
-        )
-        showLibrary = false
-    }
-
-    private func queueLibrarySparkPlayback(starting post: CountryPost?, seed: [CountryPost]) {
-        guard let post else { return }
-        pendingLibraryPlayback = LibraryPlaybackRequest(
-            post: post,
-            asSpark: true,
-            sparkSeed: seed
-        )
-        showLibrary = false
-    }
-
-    private func consumePendingLibraryPlayback() {
-        guard let pending = pendingLibraryPlayback else { return }
-        pendingLibraryPlayback = nil
-        if pending.asSpark {
-            openReelsPlayback(starting: pending.post, seed: pending.sparkSeed)
+        if shouldOpenAsSpark(post, in: section) {
+            let seed = librarySparkSeed(for: section, videos: sectionVideos)
+            openReelsPlayback(starting: post, seed: seed)
         } else {
-            openVideo(pending.post)
+            openVideo(post)
         }
     }
 
@@ -704,12 +831,28 @@ struct YouTubeAppView: View {
         }
     }
 
+    /// Keep watch route in sync with the global continuous player session.
+    private func syncRouteFromHubSession() {
+        if appState.hubPlaybackExpanded, let post = appState.hubPlaybackPost {
+            if case .watch(let existing) = route, existing.id == post.id { return }
+            withAnimation(.easeInOut(duration: 0.18)) {
+                route = .watch(post)
+            }
+        } else if case .watch = route {
+            // Collapse watch → stay in library if we came from there; otherwise home.
+            withAnimation(.easeInOut(duration: 0.18)) {
+                route = nil
+            }
+        }
+    }
+
     private func openVideo(_ post: CountryPost) {
+        EngagementTracker.shared.hubVideoOpened(post)
         if post.isReel {
             openReelsPlayback(starting: post, seed: playReels)
             return
         }
-        miniPlayerPost = nil
+        appState.startHubPlayback(post, expanded: true)
         withAnimation(.easeInOut(duration: 0.2)) {
             route = .watch(post)
         }
@@ -717,46 +860,69 @@ struct YouTubeAppView: View {
 
     private func openReelsPlayback(starting post: CountryPost?, seed: [CountryPost]? = nil) {
         guard let post else { return }
-        miniPlayerPost = nil
+        appState.stopHubPlayback()
         route = nil
         appState.openReelsViewer(startingPost: post, seedPosts: seed ?? playReels)
     }
 
     private func openVideo(id: String) async {
-        appState.clearPendingLivingVideo()
+        // Resolve first; only clear pending once we actually open (or definitively fail).
         if let cached = allVideos.first(where: { $0.id == id }) {
+            appState.clearPendingLivingVideo()
+            openVideo(cached)
+            return
+        }
+        // Hub seed / cache without waiting for the full hubs catalog.
+        if let hub = await HubVideoSeedService.shared.post(id: id), hub.hasVideo {
+            appState.clearPendingLivingVideo()
+            if !allVideos.contains(where: { $0.id == hub.id }) {
+                allVideos.insert(hub, at: 0)
+                rebuildChannels()
+            }
+            openVideo(hub)
+            return
+        }
+        if let cached = PostsService.shared.cachedPostForDetail(id: id), cached.hasVideo {
+            appState.clearPendingLivingVideo()
             openVideo(cached)
             return
         }
         if allVideos.isEmpty {
             await loadVideos(forceRefresh: false)
             if let cached = allVideos.first(where: { $0.id == id }) {
+                appState.clearPendingLivingVideo()
                 openVideo(cached)
                 return
             }
         }
         if let fetched = try? await PostsService.shared.getPostByID(id), fetched.hasVideo {
+            appState.clearPendingLivingVideo()
             if !allVideos.contains(where: { $0.id == fetched.id }) {
                 allVideos.insert(fetched, at: 0)
                 rebuildChannels()
             }
             openVideo(fetched)
         } else {
+            appState.clearPendingLivingVideo()
             appState.showToast(MatteryaCopy.hubsVideoUnavailable, style: .error)
         }
     }
 
     private func openChannel(_ channel: YouTubeChannel) {
+        // Leaving watch chrome → keep audio as mini, free the screen for the channel.
+        appState.minimizeHubPlayback()
         withAnimation(.easeInOut(duration: 0.2)) {
             route = .channel(channel)
         }
     }
 
     private func closeWatch(minimize: Bool) {
-        if minimize, case .watch(let post) = route {
-            miniPlayerPost = post
+        if minimize {
+            appState.minimizeHubPlayback()
+        } else {
+            appState.stopHubPlayback()
         }
-        withAnimation(.easeInOut(duration: 0.2)) {
+        withAnimation(.easeInOut(duration: 0.22)) {
             route = nil
         }
     }

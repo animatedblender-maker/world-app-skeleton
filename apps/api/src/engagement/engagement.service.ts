@@ -10,21 +10,49 @@ import {
 /** Client-facing event type → Kafka eventType + default strength */
 const CLIENT_TYPES: Record<
   string,
-  { eventType: string; defaultStrength: number }
+  { eventType: string; defaultStrength: number; needsContent?: boolean }
 > = {
-  like: { eventType: EngagementEventTypes.Liked, defaultStrength: 0.55 },
-  unlike: { eventType: EngagementEventTypes.Unliked, defaultStrength: -0.55 },
-  comment: { eventType: EngagementEventTypes.Commented, defaultStrength: 0.85 },
-  share: { eventType: EngagementEventTypes.Shared, defaultStrength: 0.75 },
-  save: { eventType: EngagementEventTypes.Saved, defaultStrength: 0.7 },
-  unsave: { eventType: EngagementEventTypes.Unsaved, defaultStrength: -0.4 },
-  watch_partial: { eventType: EngagementEventTypes.WatchPartial, defaultStrength: 0.35 },
-  watch_complete: { eventType: EngagementEventTypes.WatchComplete, defaultStrength: 0.9 },
-  /** User scrolled and stopped looking at a post */
-  scroll_dwell: { eventType: EngagementEventTypes.ScrollDwell, defaultStrength: 0.4 },
-  /** User scrolled past quickly */
-  scroll_skip: { eventType: EngagementEventTypes.ScrollSkip, defaultStrength: -0.25 },
+  like: { eventType: EngagementEventTypes.Liked, defaultStrength: 0.55, needsContent: true },
+  unlike: { eventType: EngagementEventTypes.Unliked, defaultStrength: -0.55, needsContent: true },
+  comment: { eventType: EngagementEventTypes.Commented, defaultStrength: 0.85, needsContent: true },
+  share: { eventType: EngagementEventTypes.Shared, defaultStrength: 0.75, needsContent: true },
+  save: { eventType: EngagementEventTypes.Saved, defaultStrength: 0.7, needsContent: true },
+  unsave: { eventType: EngagementEventTypes.Unsaved, defaultStrength: -0.4, needsContent: true },
+  watch_partial: {
+    eventType: EngagementEventTypes.WatchPartial,
+    defaultStrength: 0.35,
+    needsContent: true,
+  },
+  watch_complete: {
+    eventType: EngagementEventTypes.WatchComplete,
+    defaultStrength: 0.9,
+    needsContent: true,
+  },
+  /** Stopped scrolling and looked at a post */
+  scroll_dwell: {
+    eventType: EngagementEventTypes.ScrollDwell,
+    defaultStrength: 0.4,
+    needsContent: true,
+  },
+  /** Scrolled past quickly */
+  scroll_skip: {
+    eventType: EngagementEventTypes.ScrollSkip,
+    defaultStrength: -0.25,
+    needsContent: true,
+  },
   profile_open: { eventType: EngagementEventTypes.ProfileOpened, defaultStrength: 0.2 },
+  person_follow: { eventType: EngagementEventTypes.PersonFollowed, defaultStrength: 0.7 },
+  person_unfollow: { eventType: EngagementEventTypes.PersonUnfollowed, defaultStrength: -0.3 },
+  hub_open: { eventType: EngagementEventTypes.HubOpened, defaultStrength: 0.35 },
+  hub_leave: { eventType: EngagementEventTypes.HubLeft, defaultStrength: 0.1 },
+  hub_shelf: { eventType: EngagementEventTypes.HubShelfSelected, defaultStrength: 0.3 },
+  hub_video_open: {
+    eventType: EngagementEventTypes.HubVideoOpened,
+    defaultStrength: 0.55,
+    needsContent: true,
+  },
+  screen_open: { eventType: EngagementEventTypes.ScreenOpened, defaultStrength: 0.05 },
+  screen_leave: { eventType: EngagementEventTypes.ScreenLeft, defaultStrength: 0.05 },
 };
 
 export type ClientEngagementEvent = {
@@ -109,14 +137,7 @@ export async function ingestEngagementBatch(
       }
 
       const contentId = ev.contentId ? String(ev.contentId).trim() : null;
-      // Attention events should be about a piece of content.
-      if (
-        !contentId &&
-        (typeKey.startsWith('scroll_') ||
-          typeKey.startsWith('watch_') ||
-          typeKey === 'like' ||
-          typeKey === 'comment')
-      ) {
+      if (mapped.needsContent && !contentId) {
         rejected += 1;
         continue;
       }
@@ -305,6 +326,14 @@ export const ACTION_LABELS: Record<string, string> = {
   [EngagementEventTypes.ScrollDwell]: 'Stopped and looked at a post',
   [EngagementEventTypes.ScrollSkip]: 'Scrolled past a post',
   [EngagementEventTypes.ProfileOpened]: 'Opened a profile',
+  [EngagementEventTypes.PersonFollowed]: 'Followed someone',
+  [EngagementEventTypes.PersonUnfollowed]: 'Unfollowed someone',
+  [EngagementEventTypes.HubOpened]: 'Opened Hubs',
+  [EngagementEventTypes.HubLeft]: 'Left Hubs',
+  [EngagementEventTypes.HubShelfSelected]: 'Browsed a Hubs category',
+  [EngagementEventTypes.HubVideoOpened]: 'Opened a Hubs video',
+  [EngagementEventTypes.ScreenOpened]: 'Opened a screen',
+  [EngagementEventTypes.ScreenLeft]: 'Left a screen',
 };
 
 const SURFACE_LABELS: Record<string, string> = {
@@ -480,9 +509,19 @@ export async function getEngagementReport(windowHours = 24): Promise<HumanEngage
       select e.content_id::text,
              count(*)::text as count,
              avg(e.strength)::text as avg_strength,
-             max(left(coalesce(nullif(trim(po.title), ''), nullif(trim(po.body), ''), 'Post'), 120)) as preview
+             max(
+               left(
+                 coalesce(
+                   nullif(trim(po.title), ''),
+                   nullif(trim(regexp_replace(po.body, E'[\\n\\r]+', ' ', 'g')), ''),
+                   nullif(trim(po.media_type), ''),
+                   'Post ' || left(e.content_id::text, 8)
+                 ),
+                 140
+               )
+             ) as preview
       from public.entity_engagement_events e
-      left join public.posts po on po.id = e.content_id
+      left join public.posts po on po.id::text = e.content_id::text
       where e.occurred_at > now() - ($1::text || ' hours')::interval
         and e.content_id is not null
       group by e.content_id
@@ -512,13 +551,27 @@ export async function getEngagementReport(windowHours = 24): Promise<HumanEngage
              e.strength,
              e.duration_ms,
              e.surface,
+             e.hub_slug,
+             e.media_type,
+             e.meta,
              e.occurred_at,
              p.display_name,
              p.username,
-             left(coalesce(nullif(trim(po.title), ''), nullif(trim(po.body), ''), null), 100) as post_preview
+             left(
+               coalesce(
+                 nullif(trim(po.title), ''),
+                 nullif(trim(regexp_replace(coalesce(po.body, ''), E'[\\n\\r]+', ' ', 'g')), ''),
+                 case when e.hub_slug is not null and e.hub_slug <> '' then 'Hub: ' || e.hub_slug end,
+                 case when e.media_type is not null and e.media_type <> '' and e.media_type <> 'none'
+                   then initcap(e.media_type) || ' post' end,
+                 case when e.content_id is not null then 'Post ' || left(e.content_id::text, 8) end,
+                 null
+               ),
+               120
+             ) as post_preview
       from public.entity_engagement_events e
       left join public.profiles p on p.user_id = e.entity_id
-      left join public.posts po on po.id = e.content_id
+      left join public.posts po on po.id::text = e.content_id::text
       where e.occurred_at > now() - ($1::text || ' hours')::interval
       order by e.occurred_at desc
       limit 500

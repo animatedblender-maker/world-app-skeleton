@@ -1,17 +1,14 @@
 import SwiftUI
 
+/// Home feed UI — rendering only. Loading / cache / cursor paging live in `HomeFeedStore`.
 struct FeedView: View {
     @Environment(AppState.self) private var appState
+    @State private var store = HomeFeedStore.shared
 
-    @State private var posts: [CountryPost] = []
     @State private var continueWatching: [CountryPost] = []
-    @State private var newOnPlay: [CountryPost] = []
     @State private var feedReels: [CountryPost] = []
-    @State private var isLoading = true
-    @State private var errorMessage: String?
-    @State private var visibleLimit = 10
-
-    private let pageSize = 12
+    @State private var sparksReshuffleTask: Task<Void, Never>?
+    @State private var actionError: String?
 
     var body: some View {
         ZStack {
@@ -21,17 +18,15 @@ struct FeedView: View {
                 }
 
                 Group {
-                    if isLoading && posts.isEmpty {
-                        ProgressView("Loading feed…")
-                            .tint(Theme.accent)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else if let errorMessage, posts.isEmpty {
+                    if store.showsSkeleton {
+                        feedSkeleton
+                    } else if let error = store.errorMessage ?? actionError, store.posts.isEmpty {
                         ContentUnavailableView(
                             "Feed unavailable",
                             systemImage: "exclamationmark.triangle",
-                            description: Text(errorMessage)
+                            description: Text(error)
                         )
-                    } else if posts.isEmpty {
+                    } else if store.posts.isEmpty {
                         ContentUnavailableView(
                             "Your feed is quiet",
                             systemImage: "newspaper",
@@ -44,55 +39,103 @@ struct FeedView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .screenBackground()
-
         }
         .toolbar(.hidden, for: .navigationBar)
         .refreshable {
-            await refreshFeed(showSpinner: false, resetPagination: true, forceRefresh: true)
+            // Explicit refresh → new feed session + fresh Sparks suggestions.
+            await store.bootstrap(forceRefresh: true)
+            await reshuffleFeedSparks()
+            refreshContinueWatching()
         }
         .task(id: appState.contentLoadGeneration) {
-            await refreshFeed(showSpinner: posts.isEmpty, resetPagination: posts.isEmpty, forceRefresh: false)
-            Task { await appState.refreshStories() }
-            Task {
-                _ = await PostsService.shared.loadPlayCatalog(
-                    viewerCountry: appState.currentProfile?.countryCode,
-                    followingIDs: appState.followingIDs
-                )
+            // Must: cached paint. Later: SWR. Predicted: media warm in store.
+            await store.bootstrap(forceRefresh: false)
+            await reshuffleFeedSparks()
+            refreshContinueWatching()
+        }
+        .onChange(of: appState.selectedTab) { _, tab in
+            // Leaving + returning to Home always gets a new Sparks strip.
+            guard tab == .feed else { return }
+            Task { await reshuffleFeedSparks() }
+        }
+        .onAppear {
+            // Persistent tab may not re-run task — reshuffle when feed becomes visible.
+            if appState.selectedTab == .feed, feedReels.isEmpty {
+                Task { await reshuffleFeedSparks() }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .userPostsDidChange)) { notification in
             guard let changed = notification.userInfo?["post"] as? CountryPost else { return }
-            if changed.isStory {
-                appState.mergeStoryPost(changed)
-                return
-            }
-            if let index = posts.firstIndex(where: { $0.id == changed.id }) {
-                posts[index] = changed
+            if changed.isStory { return }
+            if store.posts.contains(where: { $0.id == changed.id }) {
+                store.applyLocalUpdate(changed)
             } else if !changed.isSpark {
-                posts.insert(changed, at: 0)
+                store.insertNewPost(changed)
             }
         }
     }
 
-    private var feedList: some View {
+    // MARK: - Skeleton (reserved layout — no spinner-only blank)
+
+    private var feedSkeleton: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
-                StoriesStripView()
-                    .padding(.horizontal, Theme.pagePadding)
+                ForEach(0..<4, id: \.self) { _ in
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(spacing: 10) {
+                            Circle()
+                                .fill(Theme.canvasMuted)
+                                .frame(width: 36, height: 36)
+                            VStack(alignment: .leading, spacing: 6) {
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(Theme.canvasMuted)
+                                    .frame(width: 120, height: 12)
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(Theme.canvasMuted)
+                                    .frame(width: 80, height: 10)
+                            }
+                            Spacer()
+                        }
+                        .padding(.horizontal, Theme.feedGutter)
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Theme.canvasMuted)
+                            .frame(height: 14)
+                            .padding(.horizontal, Theme.feedGutter)
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Theme.canvasMuted)
+                            .frame(height: 14)
+                            .padding(.horizontal, Theme.feedGutter)
+                            .padding(.trailing, 40)
+                        Rectangle()
+                            .fill(Theme.canvasMuted)
+                            .frame(height: 200)
+                        Theme.divider.frame(height: 0.5)
+                    }
+                    .padding(.vertical, 12)
+                    .redacted(reason: .placeholder)
+                }
+            }
+            .padding(.top, 8)
+        }
+        .allowsHitTesting(false)
+    }
 
+    // MARK: - List
+
+    private var feedList: some View {
+        ScrollView {
+            LazyVStack(spacing: 0, pinnedViews: []) {
                 if !feedReels.isEmpty {
                     feedReelsStrip
+                        .id("feed-reels-strip")
                 }
-
-                if !newOnPlay.isEmpty {
-                    newOnPlayStrip
-                }
-
+                // No “New on Hubs” strip between Sparks and Continue watching.
                 if !continueWatching.isEmpty {
                     continueWatchingStrip
+                        .id("feed-continue-strip")
                 }
 
-                ForEach(displayedPosts) { post in
+                ForEach(store.displayedPosts) { post in
                     FacebookPostCard(
                         post: post,
                         edgeToEdge: true,
@@ -104,22 +147,35 @@ struct FeedView: View {
                             ? { appState.openPost(post) }
                             : nil,
                         onOpenReel: {
-                            var sparks = posts.filter(\.isReel)
+                            // Prefer the current shuffled strip, then any reel posts on the feed.
+                            var sparks = feedReels
+                            if sparks.isEmpty {
+                                sparks = store.posts.filter(\.isReel)
+                            }
                             if !sparks.contains(where: { $0.id == post.id }) {
                                 sparks.insert(post, at: 0)
                             }
                             appState.openReelsViewer(startingPost: post, seedPosts: sparks)
                         },
-                        onPostDeleted: { id in posts.removeAll { $0.id == id } },
-                        onPostUpdated: { updated in
-                            if let index = posts.firstIndex(where: { $0.id == updated.id }) {
-                                posts[index] = updated
-                            }
-                        }
+                        onPostDeleted: { id in store.removePost(id: id) },
+                        onPostUpdated: { updated in store.applyLocalUpdate(updated) }
                     )
+                    .id(post.id)
                     .onAppear {
-                        loadMoreIfNeeded(for: post)
+                        store.onRowAppear(post: post)
+                        // Behavior log: how long this post stays on screen.
+                        EngagementTracker.shared.feedPostAppeared(post, surface: "home")
                     }
+                    .onDisappear {
+                        EngagementTracker.shared.feedPostDisappeared(post)
+                    }
+                }
+
+                if store.isLoadingMore {
+                    ProgressView()
+                        .tint(Theme.accent)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
                 }
             }
             .padding(.top, 8)
@@ -127,141 +183,53 @@ struct FeedView: View {
         }
     }
 
-    private var displayedPosts: [CountryPost] {
-        Array(posts.prefix(visibleLimit))
+    /// Fresh Sparks suggestions every feed reload / tab return.
+    private func reshuffleFeedSparks() async {
+        sparksReshuffleTask?.cancel()
+        let task = Task(priority: .userInitiated) { () -> [CountryPost] in
+            let seed = UInt64.random(in: 1...UInt64.max)
+                ^ UInt64(Date().timeIntervalSince1970 * 1_000)
+            let seeds = await HubVideoSeedService.shared.sparkSeedVideos(
+                limit: 18,
+                shuffleSeed: seed
+            )
+            return seeds.filter { $0.playableVideoURL != nil }.prefix(8).map { $0 }
+        }
+        sparksReshuffleTask = Task {
+            let next = await task.value
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) { feedReels = next }
+                ImageCache.shared.prefetchFeedMedia(next, maxPixelSize: 320)
+                // Warm first few CDNs so opening Sparks feels instant.
+                for post in next.prefix(4) {
+                    if let url = post.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) {
+                        ArchiveVideoPlayback.warmResolve(url)
+                    }
+                }
+            }
+        }
+        await sparksReshuffleTask?.value
     }
 
     private var feedReelsStrip: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(MatteryaCopy.sparksForYou)
-                        .font(.headline)
-                        .foregroundStyle(Theme.ink)
-                    Text("Swipe the world on Matterya")
-                        .font(.caption)
-                        .foregroundStyle(Theme.inkMuted)
+        SparksHorizontalStrip(
+            posts: feedReels,
+            onOpen: { post in
+                appState.openReelsViewer(startingPost: post, seedPosts: feedReels)
+            },
+            onBrandTap: {
+                if let first = feedReels.first {
+                    appState.openReelsViewer(startingPost: first, seedPosts: feedReels)
+                } else {
+                    Task { await appState.openReelsFromMenu() }
                 }
-                Spacer()
-                Button {
-                    appState.openPlay()
-                } label: {
-                    PlayBrandMark(compact: true)
-                }
-                .buttonStyle(.plain)
             }
-            .padding(.horizontal, Theme.pagePadding)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
-                    ForEach(feedReels) { post in
-                        Button {
-                            appState.openReelsViewer(startingPost: post, seedPosts: feedReels)
-                        } label: {
-                            ZStack(alignment: .bottomLeading) {
-                                if let code = post.countryCode {
-                                    Text(CountryFlag.emoji(for: code))
-                                        .font(.caption2)
-                                        .padding(5)
-                                        .background(.black.opacity(0.42), in: Circle())
-                                        .padding(6)
-                                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                                }
-                                VideoThumbnailView(
-                                    post: post,
-                                    maxPixelSize: 420,
-                                    contentMode: .fill,
-                                    showsPlayIcon: true,
-                                    playIconSize: 28,
-                                    placeholder: AnyView(Color.black.opacity(0.2))
-                                )
-                                .frame(width: 108, height: 192)
-                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                Text(post.authorDisplayName)
-                                    .font(.caption2.weight(.semibold))
-                                    .foregroundStyle(.white)
-                                    .lineLimit(1)
-                                    .padding(8)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, Theme.pagePadding)
-            }
-        }
-    }
-
-    private func refreshFeedReels() async {
-        let reels = await PostsService.shared.loadReelsFeed(
-            viewerCountry: appState.currentProfile?.countryCode,
-            followingIDs: appState.followingIDs
         )
-        feedReels = reels
-            .filter { $0.playableVideoURL != nil }
-            .prefix(10)
-            .map { $0 }
-    }
-
-    private var newOnPlayStrip: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text(MatteryaCopy.newOnHubs)
-                    .font(.headline)
-                    .foregroundStyle(Theme.ink)
-                    .matteryaBrandLine()
-                    .layoutPriority(1)
-                Spacer()
-                Button {
-                    appState.openPlay(tab: .subscriptions)
-                } label: {
-                    PlayBrandMark(compact: true)
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, Theme.pagePadding)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
-                    ForEach(newOnPlay) { post in
-                        Button {
-                            appState.openPost(post)
-                        } label: {
-                            HStack(spacing: 10) {
-                                ZStack {
-                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        .fill(Theme.accentBright.opacity(0.1))
-                                        .frame(width: 40, height: 40)
-                                    HandDrawnGlobeStoryRing(size: 28, highlighted: true)
-                                }
-                                VStack(alignment: .leading, spacing: 2) {
-                                    if let headline = post.displayHeadline {
-                                        Text(headline)
-                                            .font(.caption.weight(.semibold))
-                                            .foregroundStyle(Theme.ink)
-                                            .lineLimit(2)
-                                            .multilineTextAlignment(.leading)
-                                    }
-                                    Text(post.authorDisplayName)
-                                        .font(.caption2)
-                                        .foregroundStyle(Theme.inkMuted)
-                                        .lineLimit(1)
-                                }
-                                .frame(width: 140, alignment: .leading)
-                            }
-                            .padding(10)
-                            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .stroke(Theme.border, lineWidth: 0.5)
-                            )
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, Theme.pagePadding)
-            }
-        }
+        // Force SwiftUI to rebuild tiles when the shuffle order changes.
+        .id(feedReels.map(\.id).joined(separator: "|"))
     }
 
     private var continueWatchingStrip: some View {
@@ -271,32 +239,41 @@ struct FeedView: View {
                     .font(.headline)
                     .foregroundStyle(Theme.ink)
                 Spacer()
-                Button("See all") {
-                    appState.openPlay(tab: .library)
-                }
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(Theme.accentBright)
+                Button("See all") { appState.openPlay(tab: .library) }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.accentBright)
             }
             .padding(.horizontal, Theme.pagePadding)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
+                LazyHStack(spacing: 12) {
                     ForEach(continueWatching) { post in
                         Button {
                             appState.openPost(post)
                         } label: {
                             VStack(alignment: .leading, spacing: 6) {
-                                YouTubeVideoThumbnail(post: post, maxPixelSize: 420, showsPlayIcon: true)
-                                    .frame(width: 168, height: 94)
-                                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                // Matterya Hubs chrome (globe / brand) — not a YouTube play button.
+                                YouTubeVideoThumbnail(
+                                    post: post,
+                                    maxPixelSize: 320,
+                                    showsPlayIcon: false,
+                                    frameStyle: .card,
+                                    extractFrameIfNeeded: false
+                                )
+                                .frame(width: 168, height: 94)
+                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                                 if let headline = post.displayHeadline {
                                     Text(headline)
                                         .font(.caption.weight(.semibold))
                                         .foregroundStyle(Theme.ink)
                                         .lineLimit(2)
-                                        .multilineTextAlignment(.leading)
                                         .frame(width: 168, alignment: .leading)
                                 }
+                                Text(post.authorDisplayName)
+                                    .font(.caption2)
+                                    .foregroundStyle(Theme.inkMuted)
+                                    .lineLimit(1)
+                                    .frame(width: 168, alignment: .leading)
                             }
                         }
                         .buttonStyle(.plain)
@@ -307,81 +284,35 @@ struct FeedView: View {
         }
     }
 
-    private func loadMoreIfNeeded(for post: CountryPost) {
-        guard let index = displayedPosts.firstIndex(where: { $0.id == post.id }) else { return }
-        guard index >= displayedPosts.count - 3 else { return }
-        guard visibleLimit < posts.count else { return }
-        visibleLimit = min(posts.count, visibleLimit + pageSize)
-    }
-
-    private func refreshFeed(showSpinner: Bool, resetPagination: Bool, forceRefresh: Bool) async {
-        if posts.isEmpty, let cached = ContentCache.shared.posts(for: .homeFeed) {
-            posts = BlockService.shared.filterPosts(cached.excludingMoments().excludingSparks())
-            isLoading = false
-        }
-        if showSpinner && posts.isEmpty {
-            isLoading = true
-        }
-        errorMessage = nil
-        defer { isLoading = false }
-
-        var loaded = await PostsService.shared.loadHomeFeed(forceRefresh: forceRefresh)
-        if loaded.isEmpty {
-            loaded = await PostsService.shared.loadHomeFeed(forceRefresh: true)
-        }
-        posts = BlockService.shared.filterPosts(loaded.excludingMoments().excludingSparks())
-        refreshContinueWatching()
-        refreshNewOnPlay()
-        await refreshFeedReels()
-        if resetPagination {
-            visibleLimit = min(pageSize, posts.count)
-        } else {
-            visibleLimit = min(max(visibleLimit, pageSize), posts.count)
-        }
-    }
-
-    private func refreshNewOnPlay() {
-        let living = ContentCache.shared.posts(for: .livingVideos) ?? []
-        let following = appState.followingIDs
-        var candidates = living.filter {
-            PlayPlatformBridge.isLongFormVideo($0) && following.contains($0.authorID)
-        }
-        if candidates.isEmpty {
-            candidates = posts.filter {
-                PlayPlatformBridge.isLongFormVideo($0) && following.contains($0.authorID)
-            }
-        }
-        newOnPlay = candidates
-            .sorted { $0.createdAt > $1.createdAt }
-            .prefix(8)
-            .map { $0 }
-    }
-
     private func refreshContinueWatching() {
         let catalog = YouTubeCatalogService.shared
         let living = ContentCache.shared.posts(for: .livingVideos) ?? []
         var history = catalog.historyVideos(from: living)
         if history.isEmpty {
-            history = catalog.historyVideos(from: posts)
+            history = catalog.historyVideos(from: store.posts)
         }
-        continueWatching = Array(history.prefix(8))
+        continueWatching = Array(history.prefix(4))
     }
 
     private func toggleLike(_ post: CountryPost) async {
-        guard let index = posts.firstIndex(where: { $0.id == post.id }) else { return }
+        // Optimistic UI — must feel immediate.
+        let optimistic: CountryPost
+        if post.likedByMe {
+            optimistic = copyPost(post, likedByMe: false, likeCount: max(0, post.likeCount - 1))
+        } else {
+            optimistic = copyPost(post, likedByMe: true, likeCount: post.likeCount + 1)
+        }
+        store.applyLocalUpdate(optimistic)
         do {
-            let updated: CountryPost
             if post.likedByMe {
                 try await PostsService.shared.unlikePost(post.id)
-                updated = copyPost(post, likedByMe: false, likeCount: max(0, post.likeCount - 1))
             } else {
                 try await PostsService.shared.likePost(post.id)
-                updated = copyPost(post, likedByMe: true, likeCount: post.likeCount + 1)
             }
-            posts[index] = updated
-            PostsService.shared.publishPostChange(updated)
+            PostsService.shared.publishPostChange(optimistic)
         } catch {
-            errorMessage = error.localizedDescription
+            store.applyLocalUpdate(post)
+            actionError = error.localizedDescription
         }
     }
 

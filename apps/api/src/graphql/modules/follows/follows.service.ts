@@ -1,4 +1,6 @@
 import { pool } from '../../../db.js';
+import { emitServerEngagement } from '../../../engagement/engagement.service.js';
+import { EngagementEventTypes } from '../../../kafka/types.js';
 
 export class FollowsService {
   async counts(userId: string): Promise<{ followers: number; following: number }> {
@@ -44,7 +46,21 @@ export class FollowsService {
       `,
       [followerId, targetId]
     );
-    return (rowCount ?? 0) > 0;
+    const inserted = (rowCount ?? 0) > 0;
+    if (inserted) {
+      void emitServerEngagement({
+        entityId: followerId,
+        eventType: EngagementEventTypes.PersonFollowed,
+        payload: {
+          entityId: followerId,
+          authorId: targetId,
+          strength: 0.7,
+          surface: 'profile',
+          meta: { targetUserId: targetId },
+        },
+      });
+    }
+    return inserted;
   }
 
   async unfollow(followerId: string, targetId: string): Promise<void> {
@@ -53,5 +69,16 @@ export class FollowsService {
       `delete from public.user_follows where follower_id = $1 and following_id = $2`,
       [followerId, targetId]
     );
+    void emitServerEngagement({
+      entityId: followerId,
+      eventType: EngagementEventTypes.PersonUnfollowed,
+      payload: {
+        entityId: followerId,
+        authorId: targetId,
+        strength: -0.3,
+        surface: 'profile',
+        meta: { targetUserId: targetId },
+      },
+    });
   }
 }

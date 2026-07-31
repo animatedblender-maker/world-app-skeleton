@@ -5,85 +5,98 @@ struct MainTabView: View {
     @State private var postToOpenAfterCreate: CountryPost?
 
     var body: some View {
-        NavigationStack(path: Binding(
-            get: { appState.navigationPath },
-            set: { appState.navigationPath = $0 }
-        )) {
-            ZStack(alignment: .bottom) {
-                Group {
-                    switch appState.selectedTab {
-                    case .feed:
-                        FeedView()
-                    case .globe:
-                        GlobeView()
-                    case .hubs:
-                        MatteryaHubsView()
-                    case .messages:
-                        MessagesView()
-                    case .profile:
-                        ProfileView()
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .id(appState.selectedTab.rawValue)
-                .safeAreaPadding(.bottom, Theme.tabBarHeight)
+        // Mini player lives OUTSIDE NavigationStack so chat / search / profile pushes
+        // cannot cover continuous Hubs playback.
+        ZStack(alignment: .bottom) {
+            NavigationStack(path: Binding(
+                get: { appState.navigationPath },
+                set: { appState.navigationPath = $0 }
+            )) {
+                ZStack(alignment: .bottom) {
+                    // Feed + Hubs stay mounted so strips / continuous watch survive tab switches.
+                    persistentTab(.feed) { FeedView() }
+                    persistentTab(.hubs) { MatteryaHubsView() }
 
-                BottomTabBar()
-            }
-            .sharePostSheet(appState: appState)
-            .overlay {
-                AppMenuOverlay()
-                NotificationsOverlay()
-            }
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar(appState.navigationPath.isEmpty ? .hidden : .visible, for: .navigationBar)
-            .toolbarBackground(.hidden, for: .navigationBar)
-            .navigationDestination(for: AppDestination.self) { destination in
-                switch destination {
-                case .post(let id):
-                    PostDetailView(postID: id).screenBackground()
-                case .news(let id):
-                    NewsDetailView(newsID: id).screenBackground()
-                case .reels(let country):
-                    NavigationRedirectView {
-                        appState.openCountryReels(country)
+                    // Other tabs remount (lighter than keeping globe live off-screen).
+                    if appState.selectedTab != .feed && appState.selectedTab != .hubs {
+                        Group {
+                            switch appState.selectedTab {
+                            case .globe:
+                                GlobeView()
+                            case .messages:
+                                MessagesView()
+                            case .profile:
+                                ProfileView()
+                            default:
+                                EmptyView()
+                            }
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .safeAreaPadding(.bottom, tabContentBottomInset)
+                        .zIndex(1)
+                        .id(appState.selectedTab.rawValue)
                     }
-                case .countryFeed(let country):
-                    CountryFeedView(country: country).screenBackground()
-                case .search:
-                    SearchView().screenBackground()
-                case .publicProfile(let username):
-                    PublicProfileView(username: username).screenBackground()
-                case .publicProfileByUserID(let userID):
-                    PublicProfileView(userID: userID).screenBackground()
-                case .conversation(let id):
-                    ConversationRouteView(conversationID: id)
-                case .people:
-                    PeopleView().screenBackground()
-                case .ads:
-                    AdsView().screenBackground()
-                case .editProfile:
-                    EditProfileView().screenBackground()
-                case .settings:
-                    SettingsView().screenBackground()
-                case .premium:
-                    SettingsView().screenBackground()
-                case .playWatch(let id):
-                    NavigationRedirectView {
-                        Task { await appState.openPlayVideo(id: id) }
-                    }
-                case .playChannel(let username):
-                    NavigationRedirectView {
-                        appState.openPlayChannel(username: username)
-                    }
-                case .playChannelID(let authorID):
-                    NavigationRedirectView {
-                        appState.openPlayChannel(authorID: authorID)
+
+                    BottomTabBar()
+                        .zIndex(50)
+                        // Hide custom tab bar when a pushed screen (e.g. chat) is on top —
+                        // same visual as before, but mini player still floats above.
+                        .opacity(appState.navigationPath.isEmpty ? 1 : 0)
+                        .allowsHitTesting(appState.navigationPath.isEmpty)
+                }
+                .sharePostSheet(appState: appState)
+                .overlay {
+                    ZStack {
+                        AppMenuOverlay()
+                        NotificationsOverlay()
                     }
                 }
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar(appState.navigationPath.isEmpty ? .hidden : .visible, for: .navigationBar)
+                .toolbarBackground(.hidden, for: .navigationBar)
+                .navigationDestination(for: AppDestination.self) { destination in
+                    destinationView(destination)
+                        // Explicit size so pushed screens (public profiles, chat) fill the
+                        // window on My Mac (Designed for iPad) — root ZStack tabs underneath
+                        // otherwise steal layout and cards can measure as zero height.
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        // Leave room for the floating mini player above the home indicator.
+                        .safeAreaPadding(.bottom, miniPlayerContentInset)
+                }
+            }
+
+            // Always above NavigationStack destinations (chat, profile, etc.).
+            GlobalHubPlaybackLayer()
+                .zIndex(40)
+                .allowsHitTesting(appState.hubPlaybackPost != nil)
+        }
+        // Do NOT ignore the keyboard safe area — that traps the keyboard open app-wide.
+        // Tap anywhere outside the keyboard (or scroll) collapses it — no Done bar.
+        .dismissKeyboardOnTap()
+        .onAppear {
+            Keyboard.installDismissOnOutsideTap()
+            appState.ensureHubPlaybackMinimizedIfNeeded()
+            EngagementTracker.shared.screenOpened(appState.selectedTab.rawValue)
+            if appState.selectedTab == .hubs {
+                EngagementTracker.shared.hubsOpened()
             }
         }
-        .ignoresSafeArea(.keyboard)
+        .onChange(of: appState.selectedTab) { _, tab in
+            // Off Hubs → always mini player so chat / feed / globe stay usable.
+            if tab != .hubs {
+                appState.minimizeHubPlayback()
+                EngagementTracker.shared.hubsLeft()
+            } else {
+                EngagementTracker.shared.hubsOpened()
+            }
+            EngagementTracker.shared.screenOpened(tab.rawValue)
+        }
+        .onChange(of: appState.navigationPath.count) { _, count in
+            // Opening chat (or any push) while watching → collapse to mini, keep playing.
+            if count > 0 {
+                appState.minimizeHubPlayback()
+            }
+        }
         .onChange(of: appState.activeCreateSheet) { _, sheet in
             if sheet != nil {
                 postToOpenAfterCreate = nil
@@ -98,7 +111,11 @@ struct MainTabView: View {
             appState.openPost(post)
         }) { sheet in
             Group {
-            if let country = appState.composerCountry {
+            if sheet == .channelSetup {
+                ChannelSetupView {
+                    Task { await appState.presentCreateSheet(.hubVideo) }
+                }
+            } else if let country = appState.composerCountry {
                 switch sheet {
                 case .post:
                     PostComposerView(country: country) { post in
@@ -111,7 +128,7 @@ struct MainTabView: View {
                         Task { await appState.refreshStories() }
                     }
                 case .video:
-                    ReelComposerView(country: country, publishAsReel: false) { post in
+                    ReelComposerView(country: country, publishAsReel: false, publishToHubChannel: false) { post in
                         NotificationCenter.default.post(
                             name: .userPostsDidChange,
                             object: nil,
@@ -120,6 +137,18 @@ struct MainTabView: View {
                         appState.reloadContent()
                         postToOpenAfterCreate = post
                     }
+                case .hubVideo:
+                    ReelComposerView(country: country, publishAsReel: false, publishToHubChannel: true) { post in
+                        NotificationCenter.default.post(
+                            name: .userPostsDidChange,
+                            object: nil,
+                            userInfo: ["post": post]
+                        )
+                        appState.reloadContent()
+                        postToOpenAfterCreate = post
+                    }
+                case .channelSetup:
+                    EmptyView()
                 case .reel:
                     ReelComposerView(country: country) { post in
                         NotificationCenter.default.post(
@@ -148,29 +177,103 @@ struct MainTabView: View {
             get: { appState.storyViewerContext },
             set: { appState.storyViewerContext = $0 }
         )) { context in
+            // Moments viewer kept for legacy data but not linked from feed.
             StoriesViewerView(context: context)
                 .withAppState(appState)
         }
         .fullScreenCover(item: Binding(
             get: { appState.reelsViewerContext },
-            set: { appState.reelsViewerContext = $0 }
+            set: { newValue in
+                if newValue == nil {
+                    // Dismiss Sparks → hard-stop any DB/Archive players immediately.
+                    MediaPlaybackCoordinator.shared.stopAllPlayback()
+                }
+                appState.reelsViewerContext = newValue
+            }
         )) { context in
             ReelsScrollViewer(context: context)
                 .withAppState(appState)
         }
-        .fullScreenCover(isPresented: Binding(
-            get: { appState.isPlayPresented },
-            set: { presented in
-                if !presented {
-                    appState.dismissPlay()
-                } else {
-                    appState.isPlayPresented = true
-                }
+        // Hubs is a real tab — never present it as a fullScreenCover (that hid the tab bar).
+        .onChange(of: appState.isPlayPresented) { _, presented in
+            if presented {
+                appState.isPlayPresented = false
+                appState.openPlay(tab: .home)
             }
-        )) {
-            LivingView(hostsShareSheet: true)
-                .withAppState(appState)
         }
+    }
+
+    private var tabContentBottomInset: CGFloat {
+        let mini = appState.hubPlaybackPost != nil && !appState.hubPlaybackExpanded
+        return Theme.tabBarHeight + (mini ? YouTubeMiniPlayerBar.contentBottomInset - Theme.tabBarHeight : 0)
+    }
+
+    /// Extra bottom space on pushed screens (chat, etc.) so content isn't under the mini bar.
+    private var miniPlayerContentInset: CGFloat {
+        guard appState.hubPlaybackPost != nil, !appState.hubPlaybackExpanded else { return 0 }
+        // No tab bar on pushed routes — mini bar sits near the home indicator.
+        return YouTubeMiniPlayerBar.videoHeight + 28
+    }
+
+    @ViewBuilder
+    private func destinationView(_ destination: AppDestination) -> some View {
+        switch destination {
+        case .post(let id):
+            PostDetailView(postID: id).screenBackground()
+        case .news(let id):
+            NewsDetailView(newsID: id).screenBackground()
+        case .reels(let country):
+            NavigationRedirectView {
+                appState.openCountryReels(country)
+            }
+        case .countryFeed(let country):
+            CountryFeedView(country: country).screenBackground()
+        case .search:
+            SearchView().screenBackground()
+        case .publicProfile(let username):
+            PublicProfileView(username: username).screenBackground()
+        case .publicProfileByUserID(let userID):
+            PublicProfileView(userID: userID).screenBackground()
+        case .conversation(let id):
+            ConversationRouteView(conversationID: id)
+        case .people:
+            PeopleView().screenBackground()
+        case .ads:
+            AdsView().screenBackground()
+        case .editProfile:
+            EditProfileView().screenBackground()
+        case .settings:
+            SettingsView().screenBackground()
+        case .premium:
+            SettingsView().screenBackground()
+        case .playWatch(let id):
+            NavigationRedirectView {
+                Task { await appState.openPlayVideo(id: id) }
+            }
+        case .playChannel(let username):
+            NavigationRedirectView {
+                appState.openPlayChannel(username: username)
+            }
+        case .playChannelID(let authorID):
+            NavigationRedirectView {
+                appState.openPlayChannel(authorID: authorID)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func persistentTab<Content: View>(
+        _ tab: AppTab,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        let selected = appState.selectedTab == tab
+        content()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .safeAreaPadding(.bottom, tabContentBottomInset)
+            .opacity(selected ? 1 : 0)
+            .allowsHitTesting(selected)
+            .accessibilityHidden(!selected)
+            .zIndex(selected ? 1 : 0)
     }
 }
 
