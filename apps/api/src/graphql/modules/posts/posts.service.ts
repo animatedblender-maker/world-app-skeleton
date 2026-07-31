@@ -1,4 +1,6 @@
 import { pool } from '../../../db.js';
+import { emitServerEngagement } from '../../../engagement/engagement.service.js';
+import { EngagementEventTypes } from '../../../kafka/types.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 
 type PostAuthorRow = {
@@ -124,7 +126,7 @@ const EXCLUDE_MOMENTS_SQL = `
   and position('__story__' in lower(coalesce(p.body, ''))) = 0
 `;
 
-/** Non-owners never see posts from private profiles. */
+/** Non-owners never see posts from private profiles (requires profiles.is_private). */
 function privateAuthorVisible(viewerParam: string): string {
   return `and (
     coalesce(pr.is_private, false) = false
@@ -145,6 +147,10 @@ function avatarSql(viewerParam: string, alias: string): string {
 export class PostsService {
   private notifications = new NotificationsService();
   private bookmarksTableExists: boolean | null = null;
+  /** profiles.is_private — shipped in code before migration landed; detect at runtime. */
+  private privacyColumnExists: boolean | null = null;
+  /** public.post_comment_likes — comment likes migration may lag behind deploy. */
+  private commentLikesTableExists: boolean | null = null;
 
   private async bookmarksEnabled(): Promise<boolean> {
     if (this.bookmarksTableExists !== null) return this.bookmarksTableExists;
@@ -157,6 +163,78 @@ export class PostsService {
       this.bookmarksTableExists = false;
     }
     return this.bookmarksTableExists;
+  }
+
+  private async privacyEnabled(): Promise<boolean> {
+    if (this.privacyColumnExists !== null) return this.privacyColumnExists;
+    try {
+      const { rows } = await pool.query<{ exists: boolean }>(
+        `
+        select exists (
+          select 1
+          from information_schema.columns
+          where table_schema = 'public'
+            and table_name = 'profiles'
+            and column_name = 'is_private'
+        ) as exists
+        `
+      );
+      this.privacyColumnExists = !!rows?.[0]?.exists;
+    } catch {
+      this.privacyColumnExists = false;
+    }
+    if (!this.privacyColumnExists) {
+      console.warn(
+        '[PostsService] profiles.is_private missing — privacy filters disabled until migration runs'
+      );
+    }
+    return this.privacyColumnExists;
+  }
+
+  private async commentLikesEnabled(): Promise<boolean> {
+    if (this.commentLikesTableExists !== null) return this.commentLikesTableExists;
+    try {
+      const { rows } = await pool.query<{ exists: boolean }>(
+        `select to_regclass('public.post_comment_likes') is not null as exists`
+      );
+      this.commentLikesTableExists = !!rows?.[0]?.exists;
+    } catch {
+      this.commentLikesTableExists = false;
+    }
+    if (!this.commentLikesTableExists) {
+      console.warn(
+        '[PostsService] post_comment_likes missing — comment like counts disabled until migration runs'
+      );
+    }
+    return this.commentLikesTableExists;
+  }
+
+  private async privateAuthorVisibleSql(viewerParam: string): Promise<string> {
+    if (!(await this.privacyEnabled())) return '';
+    return privateAuthorVisible(viewerParam);
+  }
+
+  private async avatarSqlExpr(viewerParam: string, alias: string): Promise<string> {
+    if (!(await this.privacyEnabled())) return `${alias}.avatar_url`;
+    return avatarSql(viewerParam, alias);
+  }
+
+  private async commentLikeSelectSql(viewerParam: string): Promise<string> {
+    if (!(await this.commentLikesEnabled())) {
+      return `0 as like_count, false as liked_by_me`;
+    }
+    return `
+        (select count(*)::int from public.post_comment_likes pcl where pcl.comment_id = c.id) as like_count,
+        case
+          when ${viewerParam} is not null
+            and exists (
+              select 1
+              from public.post_comment_likes pcl
+              where pcl.comment_id = c.id and pcl.user_id = ${viewerParam}
+            )
+          then true
+          else false
+        end as liked_by_me`;
   }
 
   private async savedByMeExpr(viewerParam: string): Promise<string> {
@@ -281,7 +359,7 @@ export class PostsService {
             )
           )
         )
-        ${privateAuthorVisible('$3::uuid')}
+        ${await this.privateAuthorVisibleSql('$3::uuid')}
       order by p.created_at desc, p.id desc
       limit $2
       `,
@@ -295,13 +373,18 @@ export class PostsService {
     const savedByMe = await this.savedByMeExpr('$2::uuid');
     const savedByMeShared = await this.savedByMeSharedExpr('$2::uuid');
     const isOwner = !!viewerId && viewerId === authorId;
-    if (!isOwner) {
-      const { rows: privacyRows } = await pool.query(
-        `select coalesce(is_private, false) as is_private from public.profiles where user_id = $1 limit 1`,
-        [authorId]
-      );
-      if (privacyRows[0]?.is_private) {
-        return [];
+    if (!isOwner && (await this.privacyEnabled())) {
+      try {
+        const { rows: privacyRows } = await pool.query(
+          `select coalesce(is_private, false) as is_private from public.profiles where user_id = $1 limit 1`,
+          [authorId]
+        );
+        if (privacyRows[0]?.is_private) {
+          return [];
+        }
+      } catch (err) {
+        // Column missing / transient — do not blank the whole author feed.
+        console.warn('[PostsService] postsByAuthor privacy check failed:', (err as Error)?.message ?? err);
       }
     }
     if (isOwner) {
@@ -570,7 +653,7 @@ export class PostsService {
             )
           )
         )
-        ${privateAuthorVisible('$2::uuid')}
+        ${await this.privateAuthorVisibleSql('$2::uuid')}
         ${beforeClause}
       order by p.created_at desc, p.id desc
       limit $1
@@ -685,7 +768,7 @@ export class PostsService {
             )
           )
         )
-        ${privateAuthorVisible('$4::uuid')}
+        ${await this.privateAuthorVisibleSql('$4::uuid')}
       order by rank desc nulls last, p.created_at desc, p.id desc
       limit $3
       `,
@@ -875,6 +958,19 @@ export class PostsService {
       try {
         await this.notifications.notifyPostLike(post.author_id, userId, postId);
       } catch {}
+      void emitServerEngagement({
+        entityId: userId,
+        eventType: EngagementEventTypes.Liked,
+        payload: {
+          entityId: userId,
+          contentId: postId,
+          authorId: post.author_id,
+          strength: 0.55,
+          surface: 'api',
+          mediaType: post.media_type ?? null,
+          countryCode: post.country_code ?? null,
+        },
+      });
     }
 
     return updated;
@@ -980,7 +1076,7 @@ export class PostsService {
           'user_id', pr.user_id,
           'display_name', pr.display_name,
           'username', pr.username,
-          'avatar_url', ${avatarSql('$3::uuid', 'pr')},
+          'avatar_url', ${await this.avatarSqlExpr('$3::uuid', 'pr')},
           'country_name', pr.country_name,
           'country_code', pr.country_code
         ) as user
@@ -1007,27 +1103,19 @@ export class PostsService {
     const params: Array<string | number | null> = [postId, safeLimit, viewerId];
     const beforeClause = before ? `and c.created_at < $4::timestamptz` : '';
     if (before) params.push(before);
+    const likeSelect = await this.commentLikeSelectSql('$3::uuid');
+    const avatar = await this.avatarSqlExpr('$3::uuid', 'pr');
 
     const { rows } = await pool.query(
       `
       select
         c.*,
-        (select count(*)::int from public.post_comment_likes pcl where pcl.comment_id = c.id) as like_count,
-        case
-          when $3::uuid is not null
-            and exists (
-              select 1
-              from public.post_comment_likes pcl
-              where pcl.comment_id = c.id and pcl.user_id = $3::uuid
-            )
-          then true
-          else false
-        end as liked_by_me,
+        ${likeSelect},
         jsonb_build_object(
           'user_id', pr.user_id,
           'display_name', pr.display_name,
           'username', pr.username,
-          'avatar_url', ${avatarSql('$3::uuid', 'pr')},
+          'avatar_url', ${avatar},
           'country_name', pr.country_name,
           'country_code', pr.country_code
         ) as author
@@ -1107,6 +1195,21 @@ export class PostsService {
     const comment = await this.commentById(commentId, userId);
     if (!comment) throw new Error('Comment not found.');
 
+    void emitServerEngagement({
+      entityId: userId,
+      eventType: EngagementEventTypes.Commented,
+      payload: {
+        entityId: userId,
+        contentId: postId,
+        authorId: post.author_id,
+        strength: 0.85,
+        surface: 'api',
+        mediaType: post.media_type ?? null,
+        countryCode: post.country_code ?? null,
+        meta: { commentId },
+      },
+    });
+
     if (post.author_id !== userId) {
       try {
         await this.notifications.notifyPostComment(post.author_id, userId, postId);
@@ -1123,6 +1226,11 @@ export class PostsService {
 
   async likeComment(commentId: string, userId: string): Promise<PostCommentRow> {
     const { comment, post } = await this.ensureCommentAccess(commentId, userId);
+    if (!(await this.commentLikesEnabled())) {
+      const updated = await this.commentById(commentId, userId);
+      if (!updated) throw new Error('COMMENT_NOT_FOUND');
+      return updated;
+    }
     const client = await pool.connect();
     let inserted = false;
 
@@ -1159,13 +1267,15 @@ export class PostsService {
 
   async unlikeComment(commentId: string, userId: string): Promise<PostCommentRow> {
     await this.ensureCommentAccess(commentId, userId);
-    await pool.query(
-      `
-      delete from public.post_comment_likes
-      where comment_id = $1 and user_id = $2
-      `,
-      [commentId, userId]
-    );
+    if (await this.commentLikesEnabled()) {
+      await pool.query(
+        `
+        delete from public.post_comment_likes
+        where comment_id = $1 and user_id = $2
+        `,
+        [commentId, userId]
+      );
+    }
 
     const updated = await this.commentById(commentId, userId);
     if (!updated) throw new Error('COMMENT_NOT_FOUND');
@@ -1354,7 +1464,7 @@ export class PostsService {
             )
           )
         )
-        ${privateAuthorVisible('$2::uuid')}
+        ${await this.privateAuthorVisibleSql('$2::uuid')}
       limit 1
       `,
       [id, viewerId]
@@ -1363,26 +1473,18 @@ export class PostsService {
   }
 
   private async commentById(id: string, viewerId: string | null): Promise<PostCommentRow | null> {
+    const likeSelect = await this.commentLikeSelectSql('$2::uuid');
+    const avatar = await this.avatarSqlExpr('$2::uuid', 'pr');
     const { rows } = await pool.query(
       `
       select
         c.*,
-        (select count(*)::int from public.post_comment_likes pcl where pcl.comment_id = c.id) as like_count,
-        case
-          when $2::uuid is not null
-            and exists (
-              select 1
-              from public.post_comment_likes pcl
-              where pcl.comment_id = c.id and pcl.user_id = $2::uuid
-            )
-          then true
-          else false
-        end as liked_by_me,
+        ${likeSelect},
         jsonb_build_object(
           'user_id', pr.user_id,
           'display_name', pr.display_name,
           'username', pr.username,
-          'avatar_url', ${avatarSql('$2::uuid', 'pr')},
+          'avatar_url', ${avatar},
           'country_name', pr.country_name,
           'country_code', pr.country_code
         ) as author

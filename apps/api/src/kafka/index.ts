@@ -1,5 +1,6 @@
 import { disconnectKafka, ensureTopics, getProducer } from './client.js';
 import { kafkaEnabled } from './config.js';
+import { startEngagementConsumer } from './consumers/engagement.consumer.js';
 import { startMessagesConsumer } from './consumers/messages.consumer.js';
 import { startOutboxPublisher, stopOutboxPublisher } from './publisher.js';
 
@@ -23,13 +24,15 @@ export async function startKafkaPipeline(): Promise<void> {
     startOutboxPublisher();
     if (process.env.DATABASE_URL?.trim()) {
       await startMessagesConsumer();
+      await startEngagementConsumer();
     } else {
       console.warn(
-        '⚠️ Kafka messages consumer not started: DATABASE_URL is not set. ' +
+        '⚠️ Kafka consumers not started: DATABASE_URL is not set. ' +
           'Add Supabase DB URL to apps/api/.env, then restart.'
       );
     }
     console.log('✅ Kafka broker connected (outbox/consumer need DATABASE_URL for full pipeline)');
+    console.log('   Live engagement: topic matterya.engagement (Console UI or API [kafka-live] logs)');
   } catch (err) {
     started = false;
     console.error('❌ Kafka pipeline failed to start — API continues without it', err);
@@ -47,5 +50,16 @@ export async function stopKafkaPipeline(): Promise<void> {
 
 export { kafkaEnabled, kafkaShadowMode } from './config.js';
 export { enqueueOutbox } from './outbox.js';
-export { KafkaTopics, MessageEventTypes } from './types.js';
-export type { MessageSentPayload, MessageEditedPayload, MessageDeletedPayload } from './types.js';
+export {
+  KafkaTopics,
+  MessageEventTypes,
+  EngagementEventTypes,
+  ContentEventTypes,
+} from './types.js';
+export type {
+  MessageSentPayload,
+  MessageEditedPayload,
+  MessageDeletedPayload,
+  EngagementPayload,
+  ContentPostedPayload,
+} from './types.js';
