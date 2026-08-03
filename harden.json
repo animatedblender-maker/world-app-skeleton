@@ -1,9 +1,0 @@
-{
-  "hardenedAt": "2026-08-02T20:42:31.539Z",
-  "mapsRemoved": 0,
-  "jsCount": 57,
-  "cssCount": 1,
-  "htmlCount": 2,
-  "jsFailed": 0,
-  "note": "Client bundles are minified/hardened, not cryptographically secret."
-}
