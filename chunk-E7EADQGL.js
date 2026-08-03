@@ -1,4 +1,4 @@
-import{a as u}from"./chunk-36NYYCNU.js";import{k as l,n as s}from"./chunk-JPJ3TCZX.js";var d=`
+import{a as u}from"./chunk-WWF2SQAQ.js";import{k as l,n as s}from"./chunk-JPJ3TCZX.js";var d=`
 mutation DetectLocation($lat: Float, $lng: Float) {
   detectLocation(lat: $lat, lng: $lng) {
     countryCode

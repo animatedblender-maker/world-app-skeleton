@@ -1,4 +1,4 @@
-import{a as o}from"./chunk-36NYYCNU.js";import{k as d,n as r}from"./chunk-JPJ3TCZX.js";var c=class i{constructor(e){this.gql=e}async myCampaigns(){let e=`
+import{a as o}from"./chunk-WWF2SQAQ.js";import{k as d,n as r}from"./chunk-JPJ3TCZX.js";var c=class i{constructor(e){this.gql=e}async myCampaigns(){let e=`
       query MyAdCampaigns {
         myAdCampaigns {
           id
