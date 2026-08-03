@@ -1,4 +1,4 @@
-import{a as m}from"./chunk-CLTFIU2N.js";import{a as f}from"./chunk-WWF2SQAQ.js";import{k as c,n as u}from"./chunk-JPJ3TCZX.js";var p=`
+import{a as m}from"./chunk-CLTFIU2N.js";import{a as f}from"./chunk-MN6FFA5V.js";import{k as c,n as u}from"./chunk-JPJ3TCZX.js";var p=`
 query Countries {
   countries {
     countries {
