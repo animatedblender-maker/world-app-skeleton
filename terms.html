@@ -8,7 +8,7 @@
 <style>
 *{box-sizing:border-box}
 body{margin:0;background:#f8f6f2;color:#2c2825;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.6}
-.stage{min-height:100vh;background:#f8f6f2}
+.stage{min-height:100vh}
 .top{padding:calc(10px + env(safe-area-inset-top,0px)) 16px 10px;border-bottom:0.5px solid #e2ded8;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;background:rgba(248,246,242,0.94);backdrop-filter:blur(12px)}
 .brand{font-family:Georgia,'Iowan Old Style',serif;font-size:20px;text-decoration:none;color:inherit}
 .nav a{color:#948b82;text-decoration:none;font-size:13px;font-weight:650;margin-left:12px}
@@ -17,9 +17,12 @@ h1{font-family:Georgia,'Iowan Old Style',serif;font-weight:400;font-size:28px;li
 a{color:#7b6347}
 p{margin:0 0 12px}
 .meta{color:#948b82;font-size:13px}
-@media (min-width:560px){
-  body{background:radial-gradient(900px 480px at 50% -8%,rgba(255,255,255,0.65),transparent 60%),#edeae5}
-  .stage{max-width:480px;margin:0 auto;box-shadow:0 0 0 0.5px rgba(44,40,37,0.1),0 18px 50px rgba(44,40,37,0.1)}
+@media (min-width:900px){
+  body{background:#f2f0ec}
+  .stage{max-width:920px;margin:0 auto}
+  .top{max-width:920px;margin:0 auto;padding-left:32px;padding-right:32px}
+  .wrap{max-width:760px;margin:24px auto 48px;background:#fefdfb;border:0.5px solid #ddd8d1;border-radius:16px;padding:36px 40px 64px}
+  h1{font-size:34px}
 }
 </style>
 </head>
