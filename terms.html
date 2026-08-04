@@ -1,22 +1,44 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
 <title>Terms of Service · Matterya</title>
 <link rel="canonical" href="https://matterya.com/terms"/>
 <style>
-body{margin:0;background:#f8f6f2;color:#2c2825;font-family:system-ui,sans-serif;line-height:1.6}
-.wrap{max-width:740px;margin:0 auto;padding:28px 18px 64px}
-a{color:#7b6347}.brand{font-family:Georgia,serif;font-size:20px;text-decoration:none;color:inherit}
-.top{padding:14px 16px;border-bottom:0.5px solid #e2ded8;display:flex;justify-content:space-between}
+:root{
+  --paper:#f8f6f2;--ink:#2c2825;--muted:#948b82;--accent:#7b6347;--divider:#e2ded8;
+  --page-pad:18px;--content-max:740px;--text-base:15px;--text-sm:13px;--display:34px;
+}
+@media (min-width:700px){
+  :root{--page-pad:28px;--content-max:880px;--text-base:17px;--text-sm:15px;--display:40px}
+}
+@media (min-width:1024px){
+  :root{--page-pad:36px;--content-max:960px;--text-base:18px;--display:44px}
+  html{zoom:1.06}
+}
+@media (min-width:1400px){
+  :root{--content-max:1040px}
+  html{zoom:1.1}
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:var(--text-base);line-height:1.65}
+.top{padding:calc(10px + env(safe-area-inset-top,0px)) var(--page-pad) 10px;border-bottom:0.5px solid var(--divider);display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;background:rgba(248,246,242,0.94);backdrop-filter:blur(12px)}
+.brand{font-family:Georgia,'Iowan Old Style',serif;font-size:clamp(20px,2.2vw,24px);text-decoration:none;color:inherit}
+.nav a{color:var(--muted);text-decoration:none;font-size:var(--text-sm);font-weight:650;margin-left:12px}
+.wrap{max-width:var(--content-max);margin:0 auto;padding:28px var(--page-pad) calc(64px + env(safe-area-inset-bottom,0px));width:100%}
+h1{font-family:Georgia,'Iowan Old Style',serif;font-weight:400;font-size:clamp(28px,4vw + 12px,var(--display));line-height:1.15}
+a{color:var(--accent)}
+p{margin:0 0 12px}
+.meta{color:var(--muted);font-size:var(--text-sm)}
 </style>
 </head>
 <body>
 <header class="top"><a class="brand" href="https://matterya.com">Matterya</a>
-<nav><a href="/privacy">Privacy Policy</a> · <a href="/terms">Terms</a></nav></header>
+<nav class="nav"><a href="/privacy">Privacy Policy</a><a href="/terms">Terms</a></nav></header>
 <main class="wrap">
 <h1>Terms of Service</h1>
-<p>Last updated: 4 August 2026</p>
+<p class="meta">Last updated: 4 August 2026</p>
 <p>By using Matterya you agree to use the service lawfully, respect other users, and not abuse, spam, or attempt to disrupt the platform. You retain ownership of content you create; you grant Matterya a licence to host and display it as needed to operate the service.</p>
 <p>For privacy details see our <a href="/privacy">Privacy Policy</a>. Questions: <a href="mailto:legal@matterya.com">legal@matterya.com</a>.</p>
 </main>
