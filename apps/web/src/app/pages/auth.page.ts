@@ -59,8 +59,11 @@ import { ProfileService } from '../core/services/profile.service';
         </div>
 
         <div class="hint" *ngIf="needsEmailConfirm && !accountExists && !wrongPassword">
-          Check your inbox to confirm your email, then come back and log in.
+          We emailed you a <strong>Matterya</strong> confirmation link. Open it to activate your account, then log in.
           <div class="actions">
+            <button type="button" class="link" (click)="resendConfirm()" [disabled]="busy">
+              Resend confirmation email
+            </button>
             <button type="button" class="link" (click)="forgotPassword()">Forgot password</button>
           </div>
           <div class="hint" *ngIf="resetMsg" style="margin-top:8px;">{{ resetMsg }}</div>
@@ -79,7 +82,7 @@ import { ProfileService } from '../core/services/profile.service';
       </div>
 
       <div class="hint center" *ngIf="tab==='register'">
-        If email confirmation is enabled, check your inbox after registering.
+        After signing up, Matterya emails you a confirmation link (not a generic auth page).
       </div>
     </div>
   </div>
@@ -321,6 +324,9 @@ export class AuthPageComponent {
       if (r.needsEmailConfirm) {
         this.needsEmailConfirm = true;
         this.tab = 'login';
+        this.resetMsg =
+          r.message ||
+          'Check your inbox for an email from Matterya, open the link, then log in.';
         return;
       }
 
@@ -332,6 +338,9 @@ export class AuthPageComponent {
         this.accountExists = true;
         this.errorMsg = 'Email already used.';
         this.tab = 'login';
+      } else if (this.tab === 'login' && this.isEmailNotConfirmedError(msg)) {
+        this.needsEmailConfirm = true;
+        this.errorMsg = 'Confirm your email first — check your Matterya confirmation message.';
       } else if (this.tab === 'login' && this.isWrongPasswordError(msg)) {
         this.wrongPassword = true;
         this.errorMsg = 'Wrong password.';
@@ -342,5 +351,33 @@ export class AuthPageComponent {
       this.busy = false;
       this.forceUi();
     }
+  }
+
+  async resendConfirm(): Promise<void> {
+    this.resetMsg = '';
+    this.forceUi();
+    try {
+      const email = this.email.trim();
+      if (!email) {
+        this.resetMsg = 'Type your email first.';
+        this.forceUi();
+        return;
+      }
+      this.resetMsg = await this.auth.resendConfirmation(email);
+    } catch (e: any) {
+      this.resetMsg = this.normalizeError(e);
+    } finally {
+      this.forceUi();
+    }
+  }
+
+  private isEmailNotConfirmedError(msg: string): boolean {
+    const m = (msg || '').toLowerCase();
+    return (
+      m.includes('email not confirmed') ||
+      m.includes('not confirmed') ||
+      m.includes('confirm your email') ||
+      m.includes('email_not_confirmed')
+    );
   }
 }

@@ -18,6 +18,11 @@ export const routes: Routes = [
     loadComponent: () =>
       import('./pages/reset-password.page').then((m) => m.ResetPasswordPageComponent),
   },
+  {
+    path: 'confirm-email',
+    loadComponent: () =>
+      import('./pages/confirm-email.page').then((m) => m.ConfirmEmailPageComponent),
+  },
 
   {
     path: 'me',

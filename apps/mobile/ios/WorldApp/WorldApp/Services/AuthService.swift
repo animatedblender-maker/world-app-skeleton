@@ -103,28 +103,69 @@ final class AuthService {
         try applyAuthResponse(response)
     }
 
+    /// Matterya-owned signup: API creates an unconfirmed user and emails a branded
+    /// confirmation link to `https://matterya.com/confirm-email?token=…`.
     func register(email: String, password: String) async throws -> (needsEmailConfirm: Bool, isExistingEmail: Bool) {
-        let payload: [String: Any] = ["email": email, "password": password]
-        let response = try await postAuth(path: "signup", body: payload)
-
-        if let identities = response["identities"] as? [[String: Any]], identities.isEmpty,
-           response["user"] != nil {
-            return (false, true)
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/auth/signup") else {
+            throw AuthError.network("Invalid signup URL.")
         }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 25
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "email": email.trimmingCharacters(in: .whitespacesAndNewlines),
+            "password": password,
+        ])
 
-        if let error = response["error_description"] as? String ?? response["msg"] as? String {
-            if error.range(of: "already|registered|exists", options: .regularExpression) != nil {
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw AuthError.network("No HTTP response.")
+        }
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+
+        if http.statusCode >= 400 {
+            if json["isExistingEmail"] as? Bool == true
+                || (json["error"] as? String) == "EMAIL_EXISTS" {
                 return (false, true)
             }
-            throw AuthError.server(error)
+            let message = json["message"] as? String
+                ?? json["error"] as? String
+                ?? "Signup failed (HTTP \(http.statusCode))."
+            if message.range(of: "already|registered|exists", options: .regularExpression) != nil {
+                return (false, true)
+            }
+            throw AuthError.server(message)
         }
 
-        let hasSession = response["access_token"] != nil
-        if hasSession {
-            try applyAuthResponse(response)
-            return (false, false)
-        }
+        // Successful Matterya signup always requires opening the confirmation email.
         return (true, false)
+    }
+
+    func resendConfirmation(email: String) async throws -> String {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/auth/resend-confirmation") else {
+            throw AuthError.network("Invalid resend URL.")
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 20
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "email": email.trimmingCharacters(in: .whitespacesAndNewlines),
+        ])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw AuthError.network("No HTTP response.")
+        }
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+        if http.statusCode >= 400 {
+            throw AuthError.server(
+                json["message"] as? String ?? "Could not resend confirmation email."
+            )
+        }
+        return json["message"] as? String
+            ?? "If that email needs confirmation, we sent a new Matterya link."
     }
 
     func logout() {

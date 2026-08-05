@@ -251,6 +251,10 @@ struct MainTabView: View {
             NavigationRedirectView {
                 appState.openPlayChannel(authorID: authorID)
             }
+        case .letters:
+            LettersHomeView().screenBackground()
+        case .letterThread(let id):
+            LetterThreadView(threadID: id).screenBackground()
         }
     }
 

@@ -22,6 +22,9 @@ enum ScreenshotMode {
         bio: "Exploring the world with Matterya.",
         followersCount: 1284,
         followingCount: 312,
+        accountStatus: "active",
+        deactivatedAt: nil,
+        deletedAt: nil,
         createdAt: ISO8601DateFormatter().string(from: Date()),
         updatedAt: ISO8601DateFormatter().string(from: Date())
     )

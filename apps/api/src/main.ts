@@ -43,6 +43,12 @@ import {
   ingestEngagementBatch,
   renderEngagementReportHtml,
 } from './engagement/engagement.service.js';
+import {
+  authMailStatus,
+  confirmEmailWithToken,
+  resendConfirmation,
+  signupWithMatteryaEmail,
+} from './auth/signup-confirm.service.js';
 
 type AuthedUser = {
   id: string;
@@ -196,10 +202,98 @@ app.get('/health', (_req: Request, res: Response) =>
     features: {
       iosPushRoutes: true,
       iosPushStatus: true,
+      matteryaEmailConfirm: true,
     },
     apnsConfigured: apns.isConfigured(),
+    authMail: authMailStatus(),
   })
 );
+
+// ─── Matterya signup + branded email confirmation ───────────────────────────
+// Clients must use these instead of Supabase Auth signup so confirmation goes
+// through a real Matterya route: https://matterya.com/confirm-email?token=…
+
+app.post('/auth/signup', async (req: Request, res: Response) => {
+  try {
+    const email = String(req.body?.email ?? '');
+    const password = String(req.body?.password ?? '');
+    const result = await signupWithMatteryaEmail(email, password);
+    return res.status(201).json(result);
+  } catch (err: any) {
+    const status = Number(err?.status) || 500;
+    return res.status(status).json({
+      error: err?.code ?? 'signup_failed',
+      message: err?.message ?? 'Signup failed.',
+      isExistingEmail: !!err?.isExistingEmail,
+    });
+  }
+});
+
+app.post('/auth/confirm-email', async (req: Request, res: Response) => {
+  try {
+    const token = String(req.body?.token ?? req.query.token ?? '');
+    const result = await confirmEmailWithToken(token);
+    return res.json(result);
+  } catch (err: any) {
+    const status = Number(err?.status) || 500;
+    return res.status(status).json({
+      error: err?.code ?? 'confirm_failed',
+      message: err?.message ?? 'Confirmation failed.',
+    });
+  }
+});
+
+/** Browser-friendly GET: JSON for apps, or redirect to web success page when Accept is html. */
+app.get('/auth/confirm-email', async (req: Request, res: Response) => {
+  const token = String(req.query.token ?? '');
+  const accept = String(req.headers.accept ?? '');
+  try {
+    const result = await confirmEmailWithToken(token);
+    if (accept.includes('text/html')) {
+      const web = (process.env.PUBLIC_WEB_ORIGIN ?? process.env.WEB_ORIGIN ?? 'https://matterya.com')
+        .toString()
+        .replace(/\/$/, '');
+      return res.redirect(302, `${web}/confirm-email?ok=1&email=${encodeURIComponent(result.email)}`);
+    }
+    return res.json(result);
+  } catch (err: any) {
+    const status = Number(err?.status) || 500;
+    if (accept.includes('text/html')) {
+      const web = (process.env.PUBLIC_WEB_ORIGIN ?? process.env.WEB_ORIGIN ?? 'https://matterya.com')
+        .toString()
+        .replace(/\/$/, '');
+      return res.redirect(
+        302,
+        `${web}/confirm-email?error=${encodeURIComponent(err?.message ?? 'Confirmation failed.')}`
+      );
+    }
+    return res.status(status).json({
+      error: err?.code ?? 'confirm_failed',
+      message: err?.message ?? 'Confirmation failed.',
+    });
+  }
+});
+
+app.post('/auth/resend-confirmation', async (req: Request, res: Response) => {
+  try {
+    const email = String(req.body?.email ?? '');
+    const result = await resendConfirmation(email);
+    return res.json({
+      ...result,
+      message: 'If that email needs confirmation, we sent a new Matterya link.',
+    });
+  } catch (err: any) {
+    const status = Number(err?.status) || 500;
+    return res.status(status).json({
+      error: err?.code ?? 'resend_failed',
+      message: err?.message ?? 'Could not resend confirmation.',
+    });
+  }
+});
+
+app.get('/auth/status', (_req: Request, res: Response) => {
+  return res.json({ ok: true, ...authMailStatus() });
+});
 
 app.get('/push/capabilities', (_req: Request, res: Response) => {
   const apnsConfig = apns.getServerConfig();

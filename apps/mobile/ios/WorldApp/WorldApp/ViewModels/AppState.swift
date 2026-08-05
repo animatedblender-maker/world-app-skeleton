@@ -496,6 +496,24 @@ final class AppState {
         sharePostSheet = post
     }
 
+    // MARK: - Letters (legacy destinations still linked from older UI)
+
+    var letterComposePresented = false
+    var letterFlightEvent: LetterFlightEvent?
+
+    func presentLetterCompose() {
+        letterComposePresented = true
+        navigate(to: .letters)
+    }
+
+    func presentLetterFlight(_ event: LetterFlightEvent) {
+        letterFlightEvent = event
+    }
+
+    func dismissLetterFlight() {
+        letterFlightEvent = nil
+    }
+
     func handleDeepLink(_ url: URL) {
         if handleInternalDeepLink(url) { return }
 
@@ -509,7 +527,7 @@ final class AppState {
             openPlayChannel(username: username)
         case .playChannelID(let authorID):
             openPlayChannel(authorID: authorID)
-        case .people, .ads, .editProfile, .settings, .premium, .search:
+        case .people, .ads, .editProfile, .settings, .premium, .search, .letters, .letterThread:
             selectedTab = .feed
             navigationPath.removeAll()
             navigationPath.append(destination)

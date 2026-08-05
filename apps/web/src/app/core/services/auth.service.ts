@@ -1,37 +1,59 @@
 import { Injectable } from '@angular/core';
 import { supabase } from '../../supabase/supabase.client';
 import type { User } from '@supabase/supabase-js';
+import { environment } from '../../../envirnoments/envirnoment';
 
 @Injectable({ providedIn: 'root' })
 export class AuthService {
+  private apiBase = (environment as any).apiBaseUrl || 'https://api.matterya.com';
+
   async login(email: string, password: string): Promise<void> {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) throw error;
   }
 
+  /**
+   * Matterya-owned signup: API creates an unconfirmed Auth user and emails a
+   * branded confirmation link to https://matterya.com/confirm-email?token=…
+   * (not Supabase's default confirm page).
+   */
   async register(
     email: string,
     password: string
-  ): Promise<{ isExistingEmail: boolean; needsEmailConfirm: boolean }> {
-    const { data, error } = await supabase.auth.signUp({ email, password });
+  ): Promise<{ isExistingEmail: boolean; needsEmailConfirm: boolean; message?: string }> {
+    const res = await fetch(`${this.apiBase}/auth/signup`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({ email: email.trim(), password }),
+    });
+    const json = await res.json().catch(() => ({}));
 
-    if (error) {
-      const msg = (error as any)?.message ?? String(error);
-
-      if (/already|registered|exists|EMAIL_EXISTS|user_already_exists|email_exists/i.test(msg)) {
+    if (!res.ok) {
+      if (json?.isExistingEmail || json?.error === 'EMAIL_EXISTS') {
         return { isExistingEmail: true, needsEmailConfirm: false };
       }
-
-      throw error;
+      throw new Error(json?.message || json?.error || `Signup failed (HTTP ${res.status}).`);
     }
 
-    const identities = (data.user as any)?.identities;
-    if (data.user && Array.isArray(identities) && identities.length === 0) {
-      return { isExistingEmail: true, needsEmailConfirm: false };
-    }
+    return {
+      isExistingEmail: false,
+      needsEmailConfirm: true,
+      message:
+        'We sent a confirmation email from Matterya. Open the link to activate your account, then log in.',
+    };
+  }
 
-    const needsEmailConfirm = !data.session;
-    return { isExistingEmail: false, needsEmailConfirm };
+  async resendConfirmation(email: string): Promise<string> {
+    const res = await fetch(`${this.apiBase}/auth/resend-confirmation`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({ email: email.trim() }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(json?.message || 'Could not resend confirmation email.');
+    }
+    return json?.message || 'If that email needs confirmation, we sent a new Matterya link.';
   }
 
   async logout(): Promise<void> {

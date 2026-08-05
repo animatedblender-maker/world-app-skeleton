@@ -72,11 +72,20 @@ struct AuthView: View {
                     .padding(.horizontal, 32)
 
                     if activeTab == .register {
-                        Text("If email confirmation is enabled, check your inbox after registering.")
+                        Text("After sign up, Matterya emails you a confirmation link. Open it, then log in.")
                             .font(.caption)
                             .foregroundStyle(Theme.inkMuted)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 40)
+                    }
+
+                    if activeTab == .login, infoMessage != nil {
+                        Button("Resend confirmation email") {
+                            Task { await resendConfirm() }
+                        }
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.accent)
+                        .disabled(busy || email.isEmpty)
                     }
                 }
             }
@@ -97,16 +106,36 @@ struct AuthView: View {
                 } else {
                     let result = try await AuthService.shared.register(email: email, password: password)
                     if result.isExistingEmail {
-                        errorMessage = "This email is already registered."
+                        errorMessage = "This email is already registered. Log in or reset your password."
+                        activeTab = .login
                     } else if result.needsEmailConfirm {
-                        infoMessage = "Account created. Check your email to confirm, then log in."
+                        activeTab = .login
+                        infoMessage = "We sent a Matterya confirmation email. Open the link to activate your account, then log in."
                     } else {
                         await appState.onAuthenticated()
                     }
                 }
             } catch {
-                errorMessage = error.localizedDescription
+                let msg = error.localizedDescription
+                if msg.localizedCaseInsensitiveContains("email not confirmed")
+                    || msg.localizedCaseInsensitiveContains("not confirmed") {
+                    infoMessage = "Confirm your email first — check your Matterya confirmation message, or resend below."
+                    errorMessage = nil
+                } else {
+                    errorMessage = msg
+                }
             }
+        }
+    }
+
+    private func resendConfirm() async {
+        busy = true
+        errorMessage = nil
+        defer { busy = false }
+        do {
+            infoMessage = try await AuthService.shared.resendConfirmation(email: email)
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 }

@@ -58,3 +58,103 @@ export async function deleteAuthUser(userId: string): Promise<void> {
     throw new Error(`SUPABASE_DELETE_USER_FAILED: ${res.status} ${text.slice(0, 200)}`);
   }
 }
+
+export type AdminAuthUser = {
+  id: string;
+  email?: string;
+  email_confirmed_at?: string | null;
+};
+
+/** Create auth user (optionally unconfirmed for Matterya email confirmation). */
+export async function createAuthUser(opts: {
+  email: string;
+  password: string;
+  emailConfirm?: boolean;
+}): Promise<AdminAuthUser> {
+  const res = await adminFetch('admin/users', {
+    method: 'POST',
+    body: JSON.stringify({
+      email: opts.email,
+      password: opts.password,
+      email_confirm: opts.emailConfirm === true,
+    }),
+  });
+  const text = await res.text().catch(() => '');
+  let json: any = {};
+  try {
+    json = text ? JSON.parse(text) : {};
+  } catch {
+    json = { raw: text };
+  }
+  if (!res.ok) {
+    const msg =
+      json?.msg ||
+      json?.message ||
+      json?.error_description ||
+      json?.error ||
+      text.slice(0, 200) ||
+      `HTTP ${res.status}`;
+    throw new Error(String(msg));
+  }
+  const user = json?.user ?? json;
+  if (!user?.id) throw new Error('SUPABASE_CREATE_USER_NO_ID');
+  return {
+    id: String(user.id),
+    email: user.email,
+    email_confirmed_at: user.email_confirmed_at ?? null,
+  };
+}
+
+/** Look up auth user by email (admin list with filter). */
+export async function findAuthUserByEmail(email: string): Promise<AdminAuthUser | null> {
+  const q = new URLSearchParams({ email: email.trim().toLowerCase() });
+  const res = await adminFetch(`admin/users?${q.toString()}`, { method: 'GET' });
+  if (!res.ok) {
+    // Fallback: page users (small projects) — avoid failing signup hard.
+    const text = await res.text().catch(() => '');
+    console.warn('[admin] findAuthUserByEmail failed:', res.status, text.slice(0, 120));
+    return null;
+  }
+  const json = (await res.json().catch(() => ({}))) as {
+    users?: AdminAuthUser[];
+    id?: string;
+    email?: string;
+    email_confirmed_at?: string | null;
+  };
+  // Some GoTrue versions return { users: [...] }, others a single user for filter.
+  if (Array.isArray(json.users)) {
+    const hit = json.users.find(
+      (u) => (u.email ?? '').toLowerCase() === email.trim().toLowerCase()
+    );
+    return hit
+      ? {
+          id: String(hit.id),
+          email: hit.email,
+          email_confirmed_at: hit.email_confirmed_at ?? null,
+        }
+      : null;
+  }
+  if (json.id) {
+    return {
+      id: String(json.id),
+      email: json.email,
+      email_confirmed_at: json.email_confirmed_at ?? null,
+    };
+  }
+  return null;
+}
+
+/** Mark email confirmed (or unconfirmed) via admin API. */
+export async function setAuthUserEmailConfirmed(
+  userId: string,
+  confirmed: boolean
+): Promise<void> {
+  const res = await adminFetch(`admin/users/${userId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ email_confirm: confirmed }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`SUPABASE_CONFIRM_EMAIL_FAILED: ${res.status} ${text.slice(0, 200)}`);
+  }
+}
