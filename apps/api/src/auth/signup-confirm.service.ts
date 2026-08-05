@@ -9,6 +9,7 @@ import {
   buildConfirmEmailHtml,
   buildConfirmEmailText,
   mailConfigured,
+  mailFromAddress,
   publicWebOrigin,
   sendMail,
 } from '../mail/mail.service.js';
@@ -26,6 +27,7 @@ export type SignupResult = {
   email: string;
   emailSent: boolean;
   message: string;
+  from?: string;
   /** Only present when mail is skipped in local dev — never show in production UI. */
   devConfirmUrl?: string;
 };
@@ -46,7 +48,6 @@ type AuthUserRow = {
   email_confirmed_at?: string | null;
 };
 
-/** Prefer direct auth.users lookup (reliable with DATABASE_URL). */
 async function findAuthUserByEmail(email: string): Promise<AuthUserRow | null> {
   try {
     const { rows } = await pool.query(
@@ -85,20 +86,24 @@ function newToken(): string {
 }
 
 function confirmUrlForToken(token: string): string {
-  const base = publicWebOrigin();
-  return `${base}/confirm-email?token=${encodeURIComponent(token)}`;
+  return `${publicWebOrigin()}/confirm-email?token=${encodeURIComponent(token)}`;
 }
 
+/**
+ * Issue a Matterya confirmation token and email from MAIL_FROM
+ * (default: noreply@matterya.com via Resend).
+ */
 async function issueConfirmation(userId: string, email: string): Promise<{
   token: string;
   confirmUrl: string;
   mailSkipped: boolean;
   mailId?: string;
+  from: string;
 }> {
   const token = newToken();
   const expiresAt = new Date(Date.now() + EXPIRES_HOURS * 3600_000);
+  const from = mailFromAddress();
 
-  // Table may not exist if migration not applied — fail with a clear message.
   try {
     await pool.query(
       `
@@ -121,7 +126,6 @@ async function issueConfirmation(userId: string, email: string): Promise<{
   }
 
   const confirmUrl = confirmUrlForToken(token);
-  // Throws MAIL_NOT_CONFIGURED / MAIL_SEND_FAILED — do not pretend the email was sent.
   const send = await sendMail({
     to: email,
     subject: 'Confirm your Matterya account',
@@ -133,7 +137,13 @@ async function issueConfirmation(userId: string, email: string): Promise<{
     console.info('[auth] confirmation link (mail skipped / dev):', confirmUrl);
   }
 
-  return { token, confirmUrl, mailSkipped: !!send.skipped, mailId: send.id };
+  return {
+    token,
+    confirmUrl,
+    mailSkipped: !!send.skipped,
+    mailId: send.id,
+    from,
+  };
 }
 
 export async function signupWithMatteryaEmail(
@@ -149,12 +159,23 @@ export async function signupWithMatteryaEmail(
 
   const email = normalizeEmail(rawEmail);
   validateEmail(email);
-  // Strong policy — rejects empty, short, and low-complexity passwords with specific messages.
   assertStrongPassword(password);
+  const strongPassword = String(password);
+
+  // Matterya branded mail from noreply@matterya.com requires RESEND_API_KEY
+  // (+ domain verified on Resend). Without it we fail clearly — Supabase’s
+  // default from-address cannot be noreply@matterya.com.
+  if (!mailConfigured() && (process.env.ALLOW_SKIP_EMAIL ?? '').trim() !== 'true') {
+    throw Object.assign(
+      new Error(
+        'Cannot send from noreply@matterya.com yet: set RESEND_API_KEY on Render and verify matterya.com in Resend (DNS). MAIL_FROM should be: Matterya <noreply@matterya.com>'
+      ),
+      { code: 'MAIL_NOT_CONFIGURED', status: 503 }
+    );
+  }
 
   const existing = await findAuthUserByEmail(email);
   if (existing) {
-    // Already confirmed → treat as existing account (don’t leak more).
     if (existing.email_confirmed_at) {
       throw Object.assign(new Error('This email is already registered.'), {
         code: 'EMAIL_EXISTS',
@@ -162,7 +183,6 @@ export async function signupWithMatteryaEmail(
         isExistingEmail: true,
       });
     }
-    // Unconfirmed: rotate token + resend (same as resend).
     const reissued = await issueConfirmation(existing.id, email);
     return {
       ok: true,
@@ -170,14 +190,12 @@ export async function signupWithMatteryaEmail(
       isExistingEmail: false,
       email,
       emailSent: !reissued.mailSkipped,
+      from: reissued.from,
       message: reissued.mailSkipped
         ? 'Account ready (email send skipped in dev).'
-        : 'We sent a confirmation email from Matterya. Open the link to activate your account.',
+        : `We sent a confirmation email from ${reissued.from}. Open the link to activate your account.`,
     };
   }
-
-  // assertStrongPassword already ensured password is a non-empty strong string.
-  const strongPassword = String(password);
 
   let created;
   try {
@@ -201,9 +219,10 @@ export async function signupWithMatteryaEmail(
     isExistingEmail: false,
     email,
     emailSent: !issued.mailSkipped,
+    from: issued.from,
     message: issued.mailSkipped
       ? 'Account ready (email send skipped in dev).'
-      : 'We sent a confirmation email from Matterya. Open the link to activate your account.',
+      : `We sent a confirmation email from ${issued.from}. Open the link to activate your account.`,
     ...(issued.mailSkipped && process.env.NODE_ENV !== 'production'
       ? { devConfirmUrl: issued.confirmUrl }
       : {}),
@@ -219,15 +238,30 @@ export async function confirmEmailWithToken(token: string): Promise<ConfirmResul
     });
   }
 
-  const { rows } = await pool.query(
-    `
-    select id, user_id, email, expires_at, confirmed_at
-    from public.email_confirmations
-    where token = $1
-    limit 1
-    `,
-    [clean]
-  );
+  let rows: any[];
+  try {
+    const result = await pool.query(
+      `
+      select id, user_id, email, expires_at, confirmed_at
+      from public.email_confirmations
+      where token = $1
+      limit 1
+      `,
+      [clean]
+    );
+    rows = result.rows;
+  } catch (err: any) {
+    if (err?.code === '42P01') {
+      throw Object.assign(
+        new Error(
+          'Email confirmation table is missing. Apply migration 20260805140000_email_confirmations.sql on Supabase.'
+        ),
+        { code: 'MIGRATION_REQUIRED', status: 503 }
+      );
+    }
+    throw err;
+  }
+
   const row = rows[0] as
     | {
         id: string;
@@ -250,10 +284,10 @@ export async function confirmEmailWithToken(token: string): Promise<ConfirmResul
   }
 
   if (new Date(row.expires_at).getTime() < Date.now()) {
-    throw Object.assign(new Error('This confirmation link has expired. Request a new one from Sign Up.'), {
-      code: 'TOKEN_EXPIRED',
-      status: 410,
-    });
+    throw Object.assign(
+      new Error('This confirmation link has expired. Request a new one from Sign Up.'),
+      { code: 'TOKEN_EXPIRED', status: 410 }
+    );
   }
 
   if (!supabaseAdminConfigured()) {
@@ -264,18 +298,16 @@ export async function confirmEmailWithToken(token: string): Promise<ConfirmResul
   }
 
   await setAuthUserEmailConfirmed(row.user_id, true);
-
-  await pool.query(
-    `update public.email_confirmations set confirmed_at = now() where id = $1`,
-    [row.id]
-  );
+  await pool.query(`update public.email_confirmations set confirmed_at = now() where id = $1`, [
+    row.id,
+  ]);
 
   return { ok: true, email: row.email };
 }
 
 export async function resendConfirmation(
   rawEmail: string
-): Promise<{ ok: true; email: string; emailSent: boolean; message: string }> {
+): Promise<{ ok: true; email: string; emailSent: boolean; message: string; from?: string }> {
   if (!supabaseAdminConfigured()) {
     throw Object.assign(new Error('Resend is temporarily unavailable.'), {
       code: 'ADMIN_NOT_CONFIGURED',
@@ -283,11 +315,10 @@ export async function resendConfirmation(
     });
   }
 
-  // Fail fast if mail is not wired — do not show a fake “we sent an email”.
   if (!mailConfigured() && (process.env.ALLOW_SKIP_EMAIL ?? '').trim() !== 'true') {
     throw Object.assign(
       new Error(
-        'Email delivery is not configured on the server (missing RESEND_API_KEY). Add it in Render → Environment, then redeploy.'
+        'Cannot send from noreply@matterya.com yet: set RESEND_API_KEY on Render and verify matterya.com in Resend (DNS).'
       ),
       { code: 'MAIL_NOT_CONFIGURED', status: 503 }
     );
@@ -306,7 +337,6 @@ export async function resendConfirmation(
   }
 
   const user = await findAuthUserByEmail(email);
-  // Avoid email enumeration: same success message when no pending confirmation.
   if (!user || user.email_confirmed_at) {
     lastResendByEmail.set(email, now);
     return {
@@ -324,9 +354,10 @@ export async function resendConfirmation(
     ok: true,
     email,
     emailSent: !issued.mailSkipped,
+    from: issued.from,
     message: issued.mailSkipped
       ? 'Confirmation reissued (email send skipped in dev).'
-      : 'We sent a new confirmation email from Matterya. Open the link to activate your account.',
+      : `We sent a new confirmation email from ${issued.from}. Open the link to activate your account.`,
   };
 }
 
@@ -335,7 +366,14 @@ export function authMailStatus() {
     mailConfigured: mailConfigured(),
     adminConfigured: supabaseAdminConfigured(),
     publicWebOrigin: publicWebOrigin(),
+    mailFrom: mailFromAddress(),
     expiresHours: EXPIRES_HOURS,
     passwordPolicy: PASSWORD_REQUIREMENTS_HINT,
+    /** What is required for noreply@matterya.com */
+    requiredForMatteryaFrom: {
+      RESEND_API_KEY: 'Create at resend.com → API Keys (starts with re_)',
+      MAIL_FROM: 'Matterya <noreply@matterya.com>',
+      domain: 'Verify matterya.com in Resend → Domains (DNS SPF/DKIM)',
+    },
   };
 }

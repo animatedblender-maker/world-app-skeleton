@@ -35,20 +35,32 @@ This repo is an npm **workspace**. If Root Directory is empty or npm walks up to
 
 `--no-workspaces` installs **only** API deps from `apps/api/package.json`.
 
-## Matterya confirmation email (required for signup)
+## Matterya confirmation email from `noreply@matterya.com`
 
-Signup and “Resend confirmation” call Resend.  
-Check live status: `GET https://api.matterya.com/auth/status` → `mailConfigured` must be **true**.
+To send **from Matterya** (not Supabase’s generic address), the API uses **Resend**.
+
+Check: `GET https://api.matterya.com/auth/status` → `mailConfigured` must be **true**, and `mailFrom` should be `Matterya <noreply@matterya.com>`.
 
 | Key | Value |
 |-----|--------|
-| **RESEND_API_KEY** | From [resend.com](https://resend.com) → API Keys |
-| **MAIL_FROM** | `Matterya <noreply@matterya.com>` (domain must be verified in Resend) |
+| **RESEND_API_KEY** | From [resend.com](https://resend.com) → API Keys (`re_…`) |
+| **MAIL_FROM** | `Matterya <noreply@matterya.com>` |
 | **PUBLIC_WEB_ORIGIN** | `https://matterya.com` |
+
+### Domain setup (required for that From address)
+
+1. Resend → **Domains** → Add **`matterya.com`**
+2. Add the DNS records they show (SPF, DKIM, etc.) at your DNS host
+3. Wait until status is **Verified**
+4. Then `MAIL_FROM=Matterya <noreply@matterya.com>` will deliver
+
+Without domain verification, Resend rejects sending as `@matterya.com`.
 
 Also apply Supabase migration: `supabase/migrations/20260805140000_email_confirmations.sql`.
 
-Without `RESEND_API_KEY`, the API returns **503 MAIL_NOT_CONFIGURED** (it will not pretend an email was sent).
+**Note:** Supabase-only auth email cannot use `noreply@matterya.com` unless you configure **custom SMTP** in Supabase Auth to the same domain. Resend + this API path is the supported Matterya setup.
+
+Without `RESEND_API_KEY`, the API returns **503 MAIL_NOT_CONFIGURED**.
 
 ## Kafka env vars (Confluent Cloud)
 

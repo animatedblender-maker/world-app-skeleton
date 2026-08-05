@@ -5,9 +5,20 @@
 
 const SUPABASE_URL = (process.env.SUPABASE_URL ?? '').replace(/\/$/, '');
 const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY ?? '';
+/** Optional — used for public Auth signup so Supabase can send its own confirmation email. */
+const ANON_KEY = (process.env.SUPABASE_ANON_KEY ?? process.env.SUPABASE_ANON ?? '').trim();
 
 export function supabaseAdminConfigured(): boolean {
   return Boolean(SUPABASE_URL && SERVICE_ROLE);
+}
+
+export function supabaseUrl(): string {
+  return SUPABASE_URL;
+}
+
+export function supabaseAnonKey(): string {
+  // Service role works for signup/resend as well when anon is not set.
+  return ANON_KEY || SERVICE_ROLE;
 }
 
 async function adminFetch(path: string, init: RequestInit = {}): Promise<Response> {
@@ -18,6 +29,25 @@ async function adminFetch(path: string, init: RequestInit = {}): Promise<Respons
   const headers = new Headers(init.headers);
   headers.set('apikey', SERVICE_ROLE);
   headers.set('Authorization', `Bearer ${SERVICE_ROLE}`);
+  if (init.body && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+  return fetch(url, { ...init, headers });
+}
+
+/**
+ * Public Auth API (signup / resend) — Supabase sends the confirmation email
+ * using its built-in mailer (or SMTP configured in the Supabase dashboard).
+ * No Resend required.
+ */
+export async function authPublicFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  if (!SUPABASE_URL) throw new Error('SUPABASE_URL not set');
+  const key = supabaseAnonKey();
+  if (!key) throw new Error('SUPABASE_ANON_KEY (or SERVICE_ROLE) not set');
+  const url = `${SUPABASE_URL}/auth/v1/${path.replace(/^\//, '')}`;
+  const headers = new Headers(init.headers);
+  headers.set('apikey', key);
+  headers.set('Authorization', `Bearer ${key}`);
   if (init.body && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }

@@ -15,6 +15,7 @@ export function mailConfigured(): boolean {
   return Boolean((process.env.RESEND_API_KEY ?? '').trim());
 }
 
+/** Default sender for Matterya product mail — requires domain verified at Resend. */
 export function mailFromAddress(): string {
   return (
     (process.env.MAIL_FROM ?? '').trim() ||
