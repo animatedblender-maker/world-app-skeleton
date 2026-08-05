@@ -471,7 +471,11 @@ final class AppState {
         storyViewerContext = nil
     }
 
-    func showToast(_ message: String, style: ToastBanner.ToastStyle = .success) {
+    func showToast(
+        _ message: String,
+        style: ToastBanner.ToastStyle = .success,
+        durationSeconds: Double = 2.8
+    ) {
         // Never surface GraphQL Yoga masked failures for engagement / missing seed rows.
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.localizedCaseInsensitiveContains("unexpected error")
@@ -480,8 +484,9 @@ final class AppState {
         }
         toastMessage = message
         toastStyle = style
+        let nanos = UInt64(max(1.0, durationSeconds) * 1_000_000_000)
         Task {
-            try? await Task.sleep(nanoseconds: 2_800_000_000)
+            try? await Task.sleep(nanoseconds: nanos)
             if toastMessage == message {
                 toastMessage = nil
             }

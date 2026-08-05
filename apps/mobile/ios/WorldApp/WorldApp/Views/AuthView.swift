@@ -9,6 +9,7 @@ struct AuthView: View {
     @State private var busy = false
     @State private var errorMessage: String?
     @State private var infoMessage: String?
+    @State private var successPopup: String?
 
     enum AuthTab {
         case login, register
@@ -30,18 +31,12 @@ struct AuthView: View {
                         PremiumTextField(title: "Email", text: $email, keyboard: .emailAddress)
                         PremiumTextField(title: "Password", text: $password, isSecure: true)
 
-                        if activeTab == .register {
-                            Text(PasswordPolicy.requirementsHint)
-                                .font(.caption2)
-                                .foregroundStyle(Theme.inkMuted)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-
                         if let errorMessage {
                             Text(errorMessage)
-                                .font(.footnote)
+                                .font(.footnote.weight(.medium))
                                 .foregroundStyle(Theme.danger)
                                 .frame(maxWidth: .infinity, alignment: .leading)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
 
                         if let infoMessage {
@@ -58,7 +53,7 @@ struct AuthView: View {
                             }
                         }
                         .buttonStyle(PrimaryButtonStyle())
-                        .disabled(busy || !canSubmit)
+                        .disabled(busy)
                     }
                     .padding(.horizontal, 32)
 
@@ -78,33 +73,42 @@ struct AuthView: View {
                     }
                     .padding(.horizontal, 32)
 
-                    if activeTab == .register {
-                        Text("After sign up, Matterya emails you a confirmation link. Open it, then log in.")
-                            .font(.caption)
-                            .foregroundStyle(Theme.inkMuted)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 40)
-                    }
-
                     if activeTab == .login, infoMessage != nil {
                         Button("Resend confirmation email") {
                             Task { await resendConfirm() }
                         }
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Theme.accent)
-                        .disabled(busy || email.isEmpty)
+                        .disabled(busy || email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                 }
             }
-        }
-    }
 
-    private var canSubmit: Bool {
-        let emailOK = !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        if activeTab == .login {
-            return emailOK && PasswordPolicy.validatePresent(password).isSuccess
+            if let successPopup {
+                Color.black.opacity(0.35)
+                    .ignoresSafeArea()
+                    .transition(.opacity)
+
+                VStack(spacing: 12) {
+                    Image(systemName: "envelope.badge.fill")
+                        .font(.system(size: 28))
+                        .foregroundStyle(Theme.accent)
+                    Text(successPopup)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.ink)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 8)
+                }
+                .padding(24)
+                .frame(maxWidth: 300)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .shadow(color: .black.opacity(0.18), radius: 20, y: 10)
+                .padding(.horizontal, 32)
+                .transition(.scale.combined(with: .opacity))
+            }
         }
-        return emailOK && PasswordPolicy.isStrong(password)
+        .animation(.easeOut(duration: 0.2), value: successPopup)
+        .animation(.easeOut(duration: 0.15), value: errorMessage)
     }
 
     private func submit() {
@@ -112,18 +116,26 @@ struct AuthView: View {
         infoMessage = nil
 
         let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+
         if trimmedEmail.isEmpty {
             errorMessage = "Email is required. Enter your email address."
             return
         }
+        if !isValidEmail(trimmedEmail) {
+            errorMessage = "Enter a valid email address (for example you@example.com)."
+            return
+        }
+
         if activeTab == .login {
             if case .failure(let failure) = PasswordPolicy.validatePresent(password) {
                 errorMessage = failure.errorDescription
                 return
             }
-        } else if case .failure(let failure) = PasswordPolicy.validateStrong(password) {
-            errorMessage = failure.errorDescription
-            return
+        } else {
+            if case .failure(let failure) = PasswordPolicy.validateStrong(password) {
+                errorMessage = failure.errorDescription
+                return
+            }
         }
 
         busy = true
@@ -132,16 +144,21 @@ struct AuthView: View {
             defer { busy = false }
             do {
                 if activeTab == .login {
-                    try await AuthService.shared.login(email: email, password: password)
+                    try await AuthService.shared.login(email: trimmedEmail, password: password)
                     await appState.onAuthenticated()
                 } else {
-                    let result = try await AuthService.shared.register(email: email, password: password)
+                    let result = try await AuthService.shared.register(
+                        email: trimmedEmail,
+                        password: password
+                    )
                     if result.isExistingEmail {
                         errorMessage = "This email is already registered. Log in or reset your password."
                         activeTab = .login
                     } else if result.needsEmailConfirm {
                         activeTab = .login
-                        infoMessage = "We sent a Matterya confirmation email. Open the link to activate your account, then log in."
+                        await presentSuccessPopup(
+                            "We sent you a confirmation email. Open the link to activate your account, then log in."
+                        )
                     } else {
                         await appState.onAuthenticated()
                     }
@@ -153,9 +170,20 @@ struct AuthView: View {
                     infoMessage = "Confirm your email first — check your Matterya confirmation message, or resend below."
                     errorMessage = nil
                 } else {
+                    // Always show server/client validation in red.
                     errorMessage = msg
                 }
             }
+        }
+    }
+
+    @MainActor
+    private func presentSuccessPopup(_ message: String) async {
+        successPopup = message
+        appState.showToast(message, style: .success, durationSeconds: 5)
+        try? await Task.sleep(nanoseconds: 5_000_000_000)
+        if successPopup == message {
+            successPopup = nil
         }
     }
 
@@ -163,17 +191,26 @@ struct AuthView: View {
         busy = true
         errorMessage = nil
         defer { busy = false }
+        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedEmail.isEmpty {
+            errorMessage = "Email is required. Enter your email address."
+            return
+        }
+        if !isValidEmail(trimmedEmail) {
+            errorMessage = "Enter a valid email address (for example you@example.com)."
+            return
+        }
         do {
-            infoMessage = try await AuthService.shared.resendConfirmation(email: email)
+            let msg = try await AuthService.shared.resendConfirmation(email: trimmedEmail)
+            await presentSuccessPopup(msg)
         } catch {
             errorMessage = error.localizedDescription
         }
     }
-}
 
-private extension Result {
-    var isSuccess: Bool {
-        if case .success = self { return true }
-        return false
+    private func isValidEmail(_ value: String) -> Bool {
+        // Practical email shape check (not full RFC).
+        let pattern = #"^[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}$"#
+        return value.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
     }
 }
