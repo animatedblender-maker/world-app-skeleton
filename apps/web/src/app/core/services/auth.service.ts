@@ -2,13 +2,24 @@ import { Injectable } from '@angular/core';
 import { supabase } from '../../supabase/supabase.client';
 import type { User } from '@supabase/supabase-js';
 import { environment } from '../../../envirnoments/envirnoment';
+import {
+  validatePasswordPresent,
+  validateStrongPassword,
+} from '../utils/password-policy';
 
 @Injectable({ providedIn: 'root' })
 export class AuthService {
   private apiBase = (environment as any).apiBaseUrl || 'https://api.matterya.com';
 
   async login(email: string, password: string): Promise<void> {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const emailTrim = (email ?? '').trim();
+    if (!emailTrim) throw new Error('Email is required. Enter your email address.');
+    const present = validatePasswordPresent(password);
+    if (!present.ok) throw new Error(present.message);
+    const { error } = await supabase.auth.signInWithPassword({
+      email: emailTrim,
+      password,
+    });
     if (error) throw error;
   }
 
@@ -21,10 +32,15 @@ export class AuthService {
     email: string,
     password: string
   ): Promise<{ isExistingEmail: boolean; needsEmailConfirm: boolean; message?: string }> {
+    const emailTrim = (email ?? '').trim();
+    if (!emailTrim) throw new Error('Email is required. Enter your email address.');
+    const strength = validateStrongPassword(password);
+    if (!strength.ok) throw new Error(strength.message);
+
     const res = await fetch(`${this.apiBase}/auth/signup`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'application/json' },
-      body: JSON.stringify({ email: email.trim(), password }),
+      body: JSON.stringify({ email: emailTrim, password }),
     });
     const json = await res.json().catch(() => ({}));
 

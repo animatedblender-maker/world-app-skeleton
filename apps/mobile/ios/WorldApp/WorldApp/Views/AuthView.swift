@@ -30,6 +30,13 @@ struct AuthView: View {
                         PremiumTextField(title: "Email", text: $email, keyboard: .emailAddress)
                         PremiumTextField(title: "Password", text: $password, isSecure: true)
 
+                        if activeTab == .register {
+                            Text(PasswordPolicy.requirementsHint)
+                                .font(.caption2)
+                                .foregroundStyle(Theme.inkMuted)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+
                         if let errorMessage {
                             Text(errorMessage)
                                 .font(.footnote)
@@ -51,7 +58,7 @@ struct AuthView: View {
                             }
                         }
                         .buttonStyle(PrimaryButtonStyle())
-                        .disabled(busy || email.isEmpty || password.count < 6)
+                        .disabled(busy || !canSubmit)
                     }
                     .padding(.horizontal, 32)
 
@@ -92,10 +99,34 @@ struct AuthView: View {
         }
     }
 
+    private var canSubmit: Bool {
+        let emailOK = !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if activeTab == .login {
+            return emailOK && PasswordPolicy.validatePresent(password).isSuccess
+        }
+        return emailOK && PasswordPolicy.isStrong(password)
+    }
+
     private func submit() {
-        busy = true
         errorMessage = nil
         infoMessage = nil
+
+        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedEmail.isEmpty {
+            errorMessage = "Email is required. Enter your email address."
+            return
+        }
+        if activeTab == .login {
+            if case .failure(let failure) = PasswordPolicy.validatePresent(password) {
+                errorMessage = failure.errorDescription
+                return
+            }
+        } else if case .failure(let failure) = PasswordPolicy.validateStrong(password) {
+            errorMessage = failure.errorDescription
+            return
+        }
+
+        busy = true
 
         Task {
             defer { busy = false }
@@ -137,5 +168,12 @@ struct AuthView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+}
+
+private extension Result {
+    var isSuccess: Bool {
+        if case .success = self { return true }
+        return false
     }
 }

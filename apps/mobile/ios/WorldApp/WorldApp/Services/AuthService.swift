@@ -98,7 +98,14 @@ final class AuthService {
     }
 
     func login(email: String, password: String) async throws {
-        let payload: [String: Any] = ["email": email, "password": password]
+        if case .failure(let failure) = PasswordPolicy.validatePresent(password) {
+            throw AuthError.server(failure.errorDescription ?? "Password cannot be empty.")
+        }
+        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedEmail.isEmpty else {
+            throw AuthError.server("Email is required. Enter your email address.")
+        }
+        let payload: [String: Any] = ["email": trimmedEmail, "password": password]
         let response = try await postAuth(path: "token?grant_type=password", body: payload)
         try applyAuthResponse(response)
     }
@@ -106,6 +113,13 @@ final class AuthService {
     /// Matterya-owned signup: API creates an unconfirmed user and emails a branded
     /// confirmation link to `https://matterya.com/confirm-email?token=…`.
     func register(email: String, password: String) async throws -> (needsEmailConfirm: Bool, isExistingEmail: Bool) {
+        if case .failure(let failure) = PasswordPolicy.validateStrong(password) {
+            throw AuthError.server(failure.errorDescription ?? PasswordPolicy.requirementsHint)
+        }
+        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedEmail.isEmpty else {
+            throw AuthError.server("Email is required. Enter your email address.")
+        }
         guard let url = URL(string: "\(AppConfig.apiBaseURL)/auth/signup") else {
             throw AuthError.network("Invalid signup URL.")
         }
@@ -115,7 +129,7 @@ final class AuthService {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.httpBody = try JSONSerialization.data(withJSONObject: [
-            "email": email.trimmingCharacters(in: .whitespacesAndNewlines),
+            "email": trimmedEmail,
             "password": password,
         ])
 

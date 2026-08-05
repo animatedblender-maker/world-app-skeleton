@@ -215,9 +215,13 @@ app.get('/health', (_req: Request, res: Response) =>
 
 app.post('/auth/signup', async (req: Request, res: Response) => {
   try {
-    const email = String(req.body?.email ?? '');
-    const password = String(req.body?.password ?? '');
-    const result = await signupWithMatteryaEmail(email, password);
+    // Pass raw body values so empty/null password is rejected with EMPTY_PASSWORD (not coerced to "").
+    const email = req.body?.email;
+    const password = req.body?.password;
+    const result = await signupWithMatteryaEmail(
+      email === undefined || email === null ? '' : String(email),
+      password
+    );
     return res.status(201).json(result);
   } catch (err: any) {
     const status = Number(err?.status) || 500;

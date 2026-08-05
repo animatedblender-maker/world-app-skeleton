@@ -3,6 +3,10 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { AuthService } from '../core/services/auth.service';
+import {
+  PASSWORD_REQUIREMENTS_HINT,
+  validateStrongPassword,
+} from '../core/utils/password-policy';
 
 @Component({
   selector: 'app-reset-password-page',
@@ -16,12 +20,13 @@ import { AuthService } from '../core/services/auth.service';
 
       <div class="field">
         <label>New password</label>
-        <input [(ngModel)]="password" type="password" minlength="6" placeholder="••••••••" />
+        <input [(ngModel)]="password" type="password" minlength="8" placeholder="••••••••" />
+        <div class="policy">{{ passwordHint }}</div>
       </div>
 
       <div class="field">
         <label>Confirm new password</label>
-        <input [(ngModel)]="password2" type="password" minlength="6" placeholder="••••••••" />
+        <input [(ngModel)]="password2" type="password" minlength="8" placeholder="••••••••" />
       </div>
 
       <div class="row">
@@ -69,6 +74,7 @@ import { AuthService } from '../core/services/auth.service';
     }
     .btn:disabled{ opacity:.6; cursor:not-allowed; }
     .msg{ font-size:13px; opacity:.85; }
+    .policy{ font-size:12px; opacity:.7; line-height:1.4; }
   `],
 })
 export class ResetPasswordPageComponent {
@@ -76,6 +82,7 @@ export class ResetPasswordPageComponent {
   password2 = '';
   busy = false;
   msg = '';
+  readonly passwordHint = PASSWORD_REQUIREMENTS_HINT;
 
   constructor(private auth: AuthService, private router: Router) {}
 
@@ -84,10 +91,12 @@ export class ResetPasswordPageComponent {
     this.busy = true;
 
     try {
-      const p1 = this.password.trim();
-      const p2 = this.password2.trim();
+      // Do not trim password contents — only validate strength + match.
+      const p1 = this.password;
+      const p2 = this.password2;
 
-      if (p1.length < 6) throw new Error('Password must be at least 6 characters.');
+      const strength = validateStrongPassword(p1);
+      if (!strength.ok) throw new Error(strength.message);
       if (p1 !== p2) throw new Error('Passwords do not match.');
 
       await this.auth.updatePassword(p1);

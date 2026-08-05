@@ -12,6 +12,7 @@ import {
   publicWebOrigin,
   sendMail,
 } from '../mail/mail.service.js';
+import { assertStrongPassword, PASSWORD_REQUIREMENTS_HINT } from './password-policy.js';
 
 const TOKEN_BYTES = 32;
 const EXPIRES_HOURS = Number(process.env.EMAIL_CONFIRM_EXPIRES_HOURS ?? 48);
@@ -62,17 +63,14 @@ async function findAuthUserByEmail(email: string): Promise<AuthUserRow | null> {
   }
 }
 
-function validatePassword(password: string): void {
-  if (!password || password.length < 6) {
-    throw Object.assign(new Error('Password must be at least 6 characters.'), {
-      code: 'WEAK_PASSWORD',
+function validateEmail(email: string): void {
+  if (!email || email.trim().length === 0) {
+    throw Object.assign(new Error('Email is required. Enter your email address.'), {
+      code: 'INVALID_EMAIL',
       status: 400,
     });
   }
-}
-
-function validateEmail(email: string): void {
-  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
     throw Object.assign(new Error('Enter a valid email address.'), {
       code: 'INVALID_EMAIL',
       status: 400,
@@ -122,7 +120,7 @@ async function issueConfirmation(userId: string, email: string): Promise<{
 
 export async function signupWithMatteryaEmail(
   rawEmail: string,
-  password: string
+  password: unknown
 ): Promise<SignupResult> {
   if (!supabaseAdminConfigured()) {
     throw Object.assign(new Error('Signup is temporarily unavailable (admin not configured).'), {
@@ -133,7 +131,8 @@ export async function signupWithMatteryaEmail(
 
   const email = normalizeEmail(rawEmail);
   validateEmail(email);
-  validatePassword(password);
+  // Strong policy — rejects empty, short, and low-complexity passwords with specific messages.
+  assertStrongPassword(password);
 
   const existing = await findAuthUserByEmail(email);
   if (existing) {
@@ -155,9 +154,12 @@ export async function signupWithMatteryaEmail(
     };
   }
 
+  // assertStrongPassword already ensured password is a non-empty strong string.
+  const strongPassword = String(password);
+
   let created;
   try {
-    created = await createAuthUser({ email, password, emailConfirm: false });
+    created = await createAuthUser({ email, password: strongPassword, emailConfirm: false });
   } catch (err: any) {
     const msg = String(err?.message ?? err);
     if (/already|exists|registered|duplicate/i.test(msg)) {
@@ -287,5 +289,6 @@ export function authMailStatus() {
     adminConfigured: supabaseAdminConfigured(),
     publicWebOrigin: publicWebOrigin(),
     expiresHours: EXPIRES_HOURS,
+    passwordPolicy: PASSWORD_REQUIREMENTS_HINT,
   };
 }

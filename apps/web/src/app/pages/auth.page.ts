@@ -4,6 +4,12 @@ import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { AuthService } from '../core/services/auth.service';
 import { ProfileService } from '../core/services/profile.service';
+import {
+  isStrongPassword,
+  PASSWORD_REQUIREMENTS_HINT,
+  validatePasswordPresent,
+  validateStrongPassword,
+} from '../core/utils/password-policy';
 
 @Component({
   selector: 'app-auth-page',
@@ -35,10 +41,12 @@ import { ProfileService } from '../core/services/profile.service';
             name="password"
             [attr.autocomplete]="tab==='register' ? 'new-password' : 'current-password'"
             placeholder="••••••••"
-            minlength="6"
+            [attr.minlength]="tab === 'register' ? 8 : null"
             required
           />
         </label>
+
+        <div class="policy" *ngIf="tab === 'register'">{{ passwordHint }}</div>
 
         <div class="error" *ngIf="errorMsg">{{ errorMsg }}</div>
 
@@ -69,7 +77,7 @@ import { ProfileService } from '../core/services/profile.service';
           <div class="hint" *ngIf="resetMsg" style="margin-top:8px;">{{ resetMsg }}</div>
         </div>
 
-        <button class="cta" type="submit" [disabled]="busy || !email || password.length < 6">
+        <button class="cta" type="submit" [disabled]="busy || !canSubmit">
           {{ busy ? 'Please wait…' : (tab==='login' ? 'Log In' : 'Sign Up') }}
         </button>
       </form>
@@ -152,6 +160,12 @@ import { ProfileService } from '../core/services/profile.service';
       border-radius:10px;
       font-size:13px;
     }
+    .policy{
+      color: var(--m-ink-muted, #948b82);
+      font-size:12px;
+      line-height:1.4;
+      margin-top:-4px;
+    }
     .hint{ color: var(--m-ink-muted, #948b82); font-size:13px; line-height:1.4; }
     .hint.center{ text-align:center; }
     .actions{ display:flex; gap:12px; margin-top:6px; flex-wrap:wrap; }
@@ -190,6 +204,7 @@ export class AuthPageComponent {
   needsEmailConfirm = false;
   wrongPassword = false;
   resetMsg = '';
+  readonly passwordHint = PASSWORD_REQUIREMENTS_HINT;
 
   constructor(
     private auth: AuthService,
@@ -198,6 +213,15 @@ export class AuthPageComponent {
     private cdr: ChangeDetectorRef,
     private zone: NgZone
   ) {}
+
+  get canSubmit(): boolean {
+    const emailOk = !!(this.email || '').trim();
+    if (!emailOk) return false;
+    if (this.tab === 'login') {
+      return validatePasswordPresent(this.password).ok;
+    }
+    return isStrongPassword(this.password);
+  }
 
   private forceUi(): void {
     this.zone.run(() => this.cdr.detectChanges());
@@ -298,13 +322,35 @@ export class AuthPageComponent {
 
   async submit(): Promise<void> {
     this.clearMsgs();
+
+    const email = this.email.trim();
+    const pass = this.password;
+
+    if (!email) {
+      this.errorMsg = 'Email is required. Enter your email address.';
+      this.forceUi();
+      return;
+    }
+    if (this.tab === 'login') {
+      const present = validatePasswordPresent(pass);
+      if (!present.ok) {
+        this.errorMsg = present.message;
+        this.forceUi();
+        return;
+      }
+    } else {
+      const strength = validateStrongPassword(pass);
+      if (!strength.ok) {
+        this.errorMsg = strength.message;
+        this.forceUi();
+        return;
+      }
+    }
+
     this.busy = true;
     this.forceUi();
 
     try {
-      const email = this.email.trim();
-      const pass = this.password;
-
       if (this.tab === 'login') {
         await this.auth.login(email, pass);
         await this.reactivateIfNeeded();
