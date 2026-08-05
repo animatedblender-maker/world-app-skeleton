@@ -24,7 +24,9 @@ export type SignupResult = {
   needsEmailConfirm: true;
   isExistingEmail: false;
   email: string;
-  /** Only present when mail is not configured (dev) — never rely on this in production UI. */
+  emailSent: boolean;
+  message: string;
+  /** Only present when mail is skipped in local dev — never show in production UI. */
   devConfirmUrl?: string;
 };
 
@@ -91,19 +93,35 @@ async function issueConfirmation(userId: string, email: string): Promise<{
   token: string;
   confirmUrl: string;
   mailSkipped: boolean;
+  mailId?: string;
 }> {
   const token = newToken();
   const expiresAt = new Date(Date.now() + EXPIRES_HOURS * 3600_000);
 
-  await pool.query(
-    `
-    insert into public.email_confirmations (user_id, email, token, expires_at)
-    values ($1, $2, $3, $4)
-    `,
-    [userId, email, token, expiresAt.toISOString()]
-  );
+  // Table may not exist if migration not applied — fail with a clear message.
+  try {
+    await pool.query(
+      `
+      insert into public.email_confirmations (user_id, email, token, expires_at)
+      values ($1, $2, $3, $4)
+      `,
+      [userId, email, token, expiresAt.toISOString()]
+    );
+  } catch (err: any) {
+    const msg = String(err?.message ?? err);
+    if (err?.code === '42P01' || msg.includes('email_confirmations')) {
+      throw Object.assign(
+        new Error(
+          'Email confirmation table is missing. Apply migration 20260805140000_email_confirmations.sql on Supabase.'
+        ),
+        { code: 'MIGRATION_REQUIRED', status: 503 }
+      );
+    }
+    throw err;
+  }
 
   const confirmUrl = confirmUrlForToken(token);
+  // Throws MAIL_NOT_CONFIGURED / MAIL_SEND_FAILED — do not pretend the email was sent.
   const send = await sendMail({
     to: email,
     subject: 'Confirm your Matterya account',
@@ -112,10 +130,10 @@ async function issueConfirmation(userId: string, email: string): Promise<{
   });
 
   if (send.skipped) {
-    console.info('[auth] confirmation link (mail skipped):', confirmUrl);
+    console.info('[auth] confirmation link (mail skipped / dev):', confirmUrl);
   }
 
-  return { token, confirmUrl, mailSkipped: !!send.skipped };
+  return { token, confirmUrl, mailSkipped: !!send.skipped, mailId: send.id };
 }
 
 export async function signupWithMatteryaEmail(
@@ -145,12 +163,16 @@ export async function signupWithMatteryaEmail(
       });
     }
     // Unconfirmed: rotate token + resend (same as resend).
-    await issueConfirmation(existing.id, email);
+    const reissued = await issueConfirmation(existing.id, email);
     return {
       ok: true,
       needsEmailConfirm: true,
       isExistingEmail: false,
       email,
+      emailSent: !reissued.mailSkipped,
+      message: reissued.mailSkipped
+        ? 'Account ready (email send skipped in dev).'
+        : 'We sent a confirmation email from Matterya. Open the link to activate your account.',
     };
   }
 
@@ -178,6 +200,10 @@ export async function signupWithMatteryaEmail(
     needsEmailConfirm: true,
     isExistingEmail: false,
     email,
+    emailSent: !issued.mailSkipped,
+    message: issued.mailSkipped
+      ? 'Account ready (email send skipped in dev).'
+      : 'We sent a confirmation email from Matterya. Open the link to activate your account.',
     ...(issued.mailSkipped && process.env.NODE_ENV !== 'production'
       ? { devConfirmUrl: issued.confirmUrl }
       : {}),
@@ -247,12 +273,24 @@ export async function confirmEmailWithToken(token: string): Promise<ConfirmResul
   return { ok: true, email: row.email };
 }
 
-export async function resendConfirmation(rawEmail: string): Promise<{ ok: true; email: string }> {
+export async function resendConfirmation(
+  rawEmail: string
+): Promise<{ ok: true; email: string; emailSent: boolean; message: string }> {
   if (!supabaseAdminConfigured()) {
     throw Object.assign(new Error('Resend is temporarily unavailable.'), {
       code: 'ADMIN_NOT_CONFIGURED',
       status: 503,
     });
+  }
+
+  // Fail fast if mail is not wired — do not show a fake “we sent an email”.
+  if (!mailConfigured() && (process.env.ALLOW_SKIP_EMAIL ?? '').trim() !== 'true') {
+    throw Object.assign(
+      new Error(
+        'Email delivery is not configured on the server (missing RESEND_API_KEY). Add it in Render → Environment, then redeploy.'
+      ),
+      { code: 'MAIL_NOT_CONFIGURED', status: 503 }
+    );
   }
 
   const email = normalizeEmail(rawEmail);
@@ -268,19 +306,28 @@ export async function resendConfirmation(rawEmail: string): Promise<{ ok: true; 
   }
 
   const user = await findAuthUserByEmail(email);
-  // Always return ok-ish messaging to avoid email enumeration on resend for confirmed users.
-  if (!user) {
+  // Avoid email enumeration: same success message when no pending confirmation.
+  if (!user || user.email_confirmed_at) {
     lastResendByEmail.set(email, now);
-    return { ok: true, email };
-  }
-  if (user.email_confirmed_at) {
-    lastResendByEmail.set(email, now);
-    return { ok: true, email };
+    return {
+      ok: true,
+      email,
+      emailSent: false,
+      message:
+        'If that address still needs confirmation, check your inbox (and spam). You can request another email in a minute.',
+    };
   }
 
-  await issueConfirmation(user.id, email);
+  const issued = await issueConfirmation(user.id, email);
   lastResendByEmail.set(email, now);
-  return { ok: true, email };
+  return {
+    ok: true,
+    email,
+    emailSent: !issued.mailSkipped,
+    message: issued.mailSkipped
+      ? 'Confirmation reissued (email send skipped in dev).'
+      : 'We sent a new confirmation email from Matterya. Open the link to activate your account.',
+  };
 }
 
 export function authMailStatus() {

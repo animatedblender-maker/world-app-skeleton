@@ -45,6 +45,17 @@ services:
       - key: PUSH_VAPID_SUBJECT
         value: mailto:support@matterya.com
 
+      # --- Matterya signup confirmation email (Resend) ---
+      # 1) Create account at https://resend.com and get an API key
+      # 2) Verify domain matterya.com (DNS) so MAIL_FROM can send
+      # 3) Set RESEND_API_KEY + MAIL_FROM in Render Dashboard (sync: false)
+      - key: RESEND_API_KEY
+        sync: false
+      - key: MAIL_FROM
+        value: Matterya <noreply@matterya.com>
+      - key: PUBLIC_WEB_ORIGIN
+        value: https://matterya.com
+
       # --- Kafka (managed broker — NOT localhost) ---
       # 1) Create a free/paid cluster at Upstash / Redpanda Cloud / Confluent
       # 2) Paste credentials in Render Dashboard → Environment

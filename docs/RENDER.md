@@ -35,6 +35,21 @@ This repo is an npm **workspace**. If Root Directory is empty or npm walks up to
 
 `--no-workspaces` installs **only** API deps from `apps/api/package.json`.
 
+## Matterya confirmation email (required for signup)
+
+Signup and “Resend confirmation” call Resend.  
+Check live status: `GET https://api.matterya.com/auth/status` → `mailConfigured` must be **true**.
+
+| Key | Value |
+|-----|--------|
+| **RESEND_API_KEY** | From [resend.com](https://resend.com) → API Keys |
+| **MAIL_FROM** | `Matterya <noreply@matterya.com>` (domain must be verified in Resend) |
+| **PUBLIC_WEB_ORIGIN** | `https://matterya.com` |
+
+Also apply Supabase migration: `supabase/migrations/20260805140000_email_confirmations.sql`.
+
+Without `RESEND_API_KEY`, the API returns **503 MAIL_NOT_CONFIGURED** (it will not pretend an email was sent).
+
 ## Kafka env vars (Confluent Cloud)
 
 | Key | Example |

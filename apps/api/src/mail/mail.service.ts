@@ -22,18 +22,27 @@ export function mailFromAddress(): string {
   );
 }
 
+/**
+ * When RESEND_API_KEY is missing:
+ * - production / default → throw (never pretend we emailed)
+ * - ALLOW_SKIP_EMAIL=true → log and skip (local dev only)
+ */
 export async function sendMail(input: SendMailInput): Promise<{ ok: boolean; id?: string; skipped?: boolean }> {
   const apiKey = (process.env.RESEND_API_KEY ?? '').trim();
+  const allowSkip = (process.env.ALLOW_SKIP_EMAIL ?? '').trim() === 'true';
+
   if (!apiKey) {
-    console.warn(
-      '[mail] RESEND_API_KEY not set — email not sent. To:',
-      input.to,
-      'Subject:',
-      input.subject
-    );
-    return { ok: true, skipped: true };
+    const msg =
+      'Email delivery is not configured on the server (missing RESEND_API_KEY). Add it in Render → Environment, then redeploy.';
+    console.error('[mail]', msg, 'To:', input.to, 'Subject:', input.subject);
+    if (allowSkip) {
+      console.warn('[mail] ALLOW_SKIP_EMAIL=true — skipping send (dev only).');
+      return { ok: true, skipped: true };
+    }
+    throw Object.assign(new Error(msg), { code: 'MAIL_NOT_CONFIGURED', status: 503 });
   }
 
+  const from = mailFromAddress();
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
@@ -41,7 +50,7 @@ export async function sendMail(input: SendMailInput): Promise<{ ok: boolean; id?
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      from: mailFromAddress(),
+      from,
       to: [input.to],
       subject: input.subject,
       html: input.html,
@@ -51,10 +60,27 @@ export async function sendMail(input: SendMailInput): Promise<{ ok: boolean; id?
 
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    throw new Error(`MAIL_SEND_FAILED: ${res.status} ${body.slice(0, 300)}`);
+    // Surface Resend domain / auth issues clearly (common: unverified from-domain).
+    let detail = body.slice(0, 400);
+    try {
+      const j = JSON.parse(body) as { message?: string; name?: string };
+      if (j?.message) detail = j.message;
+    } catch {
+      /* keep raw */
+    }
+    console.error('[mail] Resend failed', res.status, detail, 'from=', from);
+    throw Object.assign(
+      new Error(
+        res.status === 403 || /domain|not verified|from/i.test(detail)
+          ? `Could not send email: the sender domain for "${from}" is not verified in Resend. Verify matterya.com (or set MAIL_FROM to a verified address).`
+          : `Could not send confirmation email (${res.status}). ${detail}`
+      ),
+      { code: 'MAIL_SEND_FAILED', status: 502 }
+    );
   }
 
   const json = (await res.json().catch(() => ({}))) as { id?: string };
+  console.info('[mail] sent', json.id, 'to', input.to);
   return { ok: true, id: json.id };
 }
 
