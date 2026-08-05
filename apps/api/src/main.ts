@@ -96,6 +96,24 @@ if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
   console.log('✅ SUPABASE_SERVICE_ROLE_KEY loaded: YES');
 }
 
+// Confirmation emails from noreply@matterya.com (Resend)
+const _resendKey = (
+  process.env.RESEND_API_KEY ?? process.env.RESEND_KEY ?? process.env.RESEND_API ?? ''
+).trim();
+if (!_resendKey) {
+  console.warn(
+    '⚠️ RESEND_API_KEY missing — signup confirmation mail will fail. ' +
+      'Render → matterya-api → Environment → RESEND_API_KEY=re_… → Manual Deploy'
+  );
+} else {
+  console.log(
+    `✅ RESEND_API_KEY loaded: YES (len=${_resendKey.length}, prefix=${_resendKey.slice(0, 3)}…)`
+  );
+}
+console.log(
+  `📧 MAIL_FROM: ${(process.env.MAIL_FROM ?? '').trim() || 'Matterya <noreply@matterya.com> (default)'}`
+);
+
 const JWKS =
   SUPABASE_URL
     ? createRemoteJWKSet(new URL(`${SUPABASE_URL}/auth/v1/.well-known/jwks.json`))

@@ -11,8 +11,18 @@ export type SendMailInput = {
   text?: string;
 };
 
+/** Read Resend API key (primary + common typos / aliases). */
+export function resendApiKey(): string {
+  return (
+    process.env.RESEND_API_KEY ??
+    process.env.RESEND_KEY ??
+    process.env.RESEND_API ??
+    ''
+  ).trim();
+}
+
 export function mailConfigured(): boolean {
-  return Boolean((process.env.RESEND_API_KEY ?? '').trim());
+  return Boolean(resendApiKey());
 }
 
 /** Default sender for Matterya product mail — requires domain verified at Resend. */
@@ -29,12 +39,12 @@ export function mailFromAddress(): string {
  * - ALLOW_SKIP_EMAIL=true → log and skip (local dev only)
  */
 export async function sendMail(input: SendMailInput): Promise<{ ok: boolean; id?: string; skipped?: boolean }> {
-  const apiKey = (process.env.RESEND_API_KEY ?? '').trim();
+  const apiKey = resendApiKey();
   const allowSkip = (process.env.ALLOW_SKIP_EMAIL ?? '').trim() === 'true';
 
   if (!apiKey) {
     const msg =
-      'Email delivery is not configured on the server (missing RESEND_API_KEY). Add it in Render → Environment, then redeploy.';
+      'Email delivery is not configured on the server (missing RESEND_API_KEY). In Render → matterya-api → Environment add RESEND_API_KEY=re_… then Manual Deploy.';
     console.error('[mail]', msg, 'To:', input.to, 'Subject:', input.subject);
     if (allowSkip) {
       console.warn('[mail] ALLOW_SKIP_EMAIL=true — skipping send (dev only).');
