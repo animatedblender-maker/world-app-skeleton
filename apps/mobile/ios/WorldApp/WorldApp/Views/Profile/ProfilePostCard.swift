@@ -55,7 +55,7 @@ struct ProfilePostCard: View {
                 post: post,
                 maxPixelSize: 720,
                 contentMode: .fill,
-                showsPlayIcon: post.hasVideo,
+                showsPlayIcon: false,
                 playIconSize: 44,
                 placeholder: AnyView(mediaPlaceholder)
             )

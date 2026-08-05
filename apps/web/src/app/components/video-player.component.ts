@@ -23,6 +23,8 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
     <div
       class="video-shell"
       [class.is-playing]="isPlaying"
+      [class.matterya-chrome]="showsControls"
+      [class.chrome-visible]="shouldShowChrome"
       (mousemove)="revealControls()"
       (touchstart)="revealControls()"
     >
@@ -43,7 +45,7 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
         (waiting)="setBuffering(true)"
         (playing)="setBuffering(false)"
       ></video>
-      <div class="video-overlay"></div>
+      <div class="video-overlay" [class.subtle]="showsControls"></div>
       <div class="ad-layer" *ngIf="isAdMode && activeAd">
         <div class="ad-pill">Sponsored</div>
         <button
@@ -54,41 +56,26 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
         >
           {{ activeAd.creative.cta_label || 'Learn more' }}
         </button>
-        <button
-          *ngIf="adSkipReady"
-          class="ad-skip"
-          type="button"
-          (click)="skipAd($event)"
-        >
-          Skip
-        </button>
+        <button *ngIf="adSkipReady" class="ad-skip" type="button" (click)="skipAd($event)">Skip</button>
         <div class="ad-countdown" *ngIf="!adSkipReady && adSkipSecondsLeft > 0">
           Skip in {{ adSkipSecondsLeft }}s
         </div>
       </div>
+
+      <!-- Simple feed mute (when full Matterya chrome is off) -->
       <button
-        *ngIf="showMute && !isAdMode"
+        *ngIf="showMute && !isAdMode && !showsControls"
         class="mute-toggle"
         type="button"
         [attr.aria-label]="isMuted ? 'Unmute video' : 'Mute video'"
         (click)="toggleMute(videoEl, $event)"
       >
-        <svg
-          *ngIf="!isMuted"
-          class="icon-svg icon-stroke"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-        >
+        <svg *ngIf="!isMuted" class="icon-svg icon-stroke" viewBox="0 0 24 24" aria-hidden="true">
           <path d="M4 10h4l5-4v12l-5-4H4z"></path>
           <path d="M16 9a3 3 0 0 1 0 6"></path>
           <path d="M18.5 6.5a6 6 0 0 1 0 11"></path>
         </svg>
-        <svg
-          *ngIf="isMuted"
-          class="icon-svg icon-stroke"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-        >
+        <svg *ngIf="isMuted" class="icon-svg icon-stroke" viewBox="0 0 24 24" aria-hidden="true">
           <path d="M4 10h4l5-4v12l-5-4H4z"></path>
           <line x1="16" y1="8" x2="21" y2="13"></line>
           <line x1="21" y1="8" x2="16" y2="13"></line>
@@ -96,29 +83,111 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
       </button>
       <button
         class="center-play"
-        *ngIf="showCenterOverlay"
+        *ngIf="!showsControls && showCenterOverlay"
         type="button"
         aria-label="Play video"
         (click)="onVideoTap(videoEl, $event)"
       >
-        <svg
-          *ngIf="!isPlaying"
-          class="center-icon"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-        >
+        <svg *ngIf="!isPlaying" class="center-icon" viewBox="0 0 24 24" aria-hidden="true">
           <path d="M8 5v14l11-7z"></path>
         </svg>
-        <svg
-          *ngIf="isPlaying"
-          class="center-icon"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-        >
+        <svg *ngIf="isPlaying" class="center-icon" viewBox="0 0 24 24" aria-hidden="true">
           <rect x="6" y="5" width="4" height="14" rx="1"></rect>
           <rect x="14" y="5" width="4" height="14" rx="1"></rect>
         </svg>
       </button>
+
+      <!-- iOS / Android MatteryaVideoControls -->
+      <div class="matterya-controls" *ngIf="showsControls && !isAdMode && shouldShowChrome" (click)="$event.stopPropagation()">
+        <div class="mc-top">
+          <span class="mc-spacer"></span>
+          <button
+            type="button"
+            class="mc-icon"
+            *ngIf="showMute"
+            [attr.aria-label]="isMuted ? 'Unmute' : 'Mute'"
+            (click)="toggleMute(videoEl, $event)"
+          >
+            <svg *ngIf="!isMuted" class="icon-svg icon-stroke" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 10h4l5-4v12l-5-4H4z"></path>
+              <path d="M16 9a3 3 0 0 1 0 6"></path>
+              <path d="M18.5 6.5a6 6 0 0 1 0 11"></path>
+            </svg>
+            <svg *ngIf="isMuted" class="icon-svg icon-stroke" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 10h4l5-4v12l-5-4H4z"></path>
+              <line x1="16" y1="8" x2="21" y2="13"></line>
+              <line x1="21" y1="8" x2="16" y2="13"></line>
+            </svg>
+          </button>
+          <div class="mc-quality-wrap" *ngIf="qualityOptions.length > 1">
+            <button
+              type="button"
+              class="mc-icon mc-quality-btn"
+              aria-label="Quality"
+              [attr.aria-expanded]="qualityMenuOpen"
+              (click)="toggleQualityMenu($event)"
+            >
+              <span class="mc-quality-label">{{ activeQualityLabel }}</span>
+            </button>
+            <div class="mc-quality-menu" *ngIf="qualityMenuOpen" role="menu">
+              <button
+                type="button"
+                class="mc-quality-item"
+                *ngFor="let q of qualityOptions"
+                role="menuitemradio"
+                [class.active]="q.id === activeQualityId"
+                (click)="selectQuality(q, videoEl, $event)"
+              >
+                {{ q.label }}
+              </button>
+            </div>
+          </div>
+          <button
+            type="button"
+            class="mc-icon"
+            *ngIf="allowsFullscreen"
+            aria-label="Fullscreen"
+            (click)="toggleFullscreen(videoEl, $event)"
+          >
+            <svg class="icon-svg icon-stroke" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M8 3H5a2 2 0 0 0-2 2v3"></path>
+              <path d="M16 3h3a2 2 0 0 1 2 2v3"></path>
+              <path d="M8 21H5a2 2 0 0 1-2-2v-3"></path>
+              <path d="M16 21h3a2 2 0 0 0 2-2v-3"></path>
+            </svg>
+          </button>
+        </div>
+        <div class="mc-bottom">
+          <button
+            type="button"
+            class="mc-play"
+            [attr.aria-label]="isPlaying ? 'Pause' : 'Play'"
+            (click)="togglePlay(videoEl, $event)"
+          >
+            <svg *ngIf="!isPlaying" class="mc-play-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M8 5v14l11-7z"></path>
+            </svg>
+            <svg *ngIf="isPlaying" class="mc-play-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="6" y="5" width="4" height="14" rx="1"></rect>
+              <rect x="14" y="5" width="4" height="14" rx="1"></rect>
+            </svg>
+          </button>
+          <span class="mc-time">{{ formatTime(currentTime) }}</span>
+          <input
+            class="mc-scrub"
+            type="range"
+            min="0"
+            max="100"
+            step="0.1"
+            [value]="progressPercent"
+            (input)="onScrub($event, videoEl)"
+            (click)="$event.stopPropagation()"
+            aria-label="Seek"
+          />
+          <span class="mc-time dim">{{ formatTime(duration) }}</span>
+        </div>
+      </div>
+
       <div class="buffering" *ngIf="isBuffering">
         <span class="spinner"></span>
       </div>
@@ -192,6 +261,8 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
       .video-shell {
         position: relative;
         width: 100%;
+        height: 100%;
+        min-height: 0;
         background: #050505;
         overflow: hidden;
         max-height: var(--player-max-height, none);
@@ -215,11 +286,77 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
         position: relative;
         z-index: 0;
         width: 100%;
+        height: 100%;
         display: block;
         max-height: var(--player-max-height, none);
-        height: auto;
         object-fit: contain;
+        object-position: center center;
         background: #000;
+      }
+      /* Matterya watch chrome: fill the stage box, never crop */
+      .video-shell.matterya-chrome {
+        height: 100%;
+      }
+      .video-shell.matterya-chrome {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+      .video-shell.matterya-chrome video {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        max-height: none;
+        /* contain + stage AR matched to video = fill without crop */
+        object-fit: contain;
+        object-position: center center;
+      }
+      .mc-quality-wrap {
+        position: relative;
+      }
+      .mc-quality-btn {
+        min-width: 44px;
+        padding: 0 8px !important;
+        font-size: 11px;
+        font-weight: 750;
+        letter-spacing: 0.02em;
+      }
+      .mc-quality-label {
+        white-space: nowrap;
+      }
+      .mc-quality-menu {
+        position: absolute;
+        top: calc(100% + 6px);
+        right: 0;
+        min-width: 108px;
+        padding: 6px;
+        border-radius: 12px;
+        background: rgba(20, 16, 14, 0.94);
+        border: 0.5px solid rgba(255, 255, 255, 0.12);
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+        z-index: 20;
+      }
+      .mc-quality-item {
+        display: block;
+        width: 100%;
+        border: 0;
+        background: transparent;
+        color: #f5f0ea;
+        text-align: left;
+        padding: 8px 10px;
+        border-radius: 8px;
+        font-size: 12px;
+        font-weight: 650;
+        cursor: pointer;
+      }
+      .mc-quality-item:hover {
+        background: rgba(255, 255, 255, 0.08);
+      }
+      .mc-quality-item.active {
+        background: rgba(123, 99, 71, 0.45);
+        color: #fff;
       }
       .video-shell:fullscreen video,
       .video-shell:-webkit-full-screen video,
@@ -318,14 +455,6 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
         transform: scale(1.05);
         background: rgba(10, 10, 10, 0.9);
       }
-      .play-icon {
-        width: 0;
-        height: 0;
-        border-top: 16px solid transparent;
-        border-bottom: 16px solid transparent;
-        border-left: 26px solid #fff;
-        margin-left: 6px;
-      }
       .center-icon {
         width: 26px;
         height: 26px;
@@ -345,6 +474,154 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
         place-items: center;
         cursor: pointer;
         z-index: 20;
+      }
+      .video-overlay.subtle {
+        background: linear-gradient(180deg, rgba(44, 40, 37, 0.35), transparent 40%, transparent 55%, rgba(44, 40, 37, 0.55));
+        opacity: 0.55;
+      }
+      .video-shell.matterya-chrome.is-playing:not(.chrome-visible) .video-overlay.subtle {
+        opacity: 0.15;
+      }
+      /* —— MatteryaVideoControls (iOS / Android golden chrome) —— */
+      .matterya-controls {
+        position: absolute;
+        inset: 0;
+        z-index: 30;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        pointer-events: none;
+      }
+      .mc-top {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px 0;
+        pointer-events: auto;
+      }
+      .mc-spacer {
+        flex: 1;
+      }
+      .mc-icon {
+        width: 34px;
+        height: 34px;
+        border: 0;
+        border-radius: 999px;
+        background: rgba(44, 40, 37, 0.45);
+        color: #fff;
+        display: grid;
+        place-items: center;
+        cursor: pointer;
+        padding: 0;
+      }
+      .mc-icon:hover {
+        background: rgba(44, 40, 37, 0.65);
+      }
+      .mc-bottom {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 14px 14px;
+        pointer-events: auto;
+        background: linear-gradient(180deg, transparent, rgba(44, 40, 37, 0.72));
+      }
+      .mc-play {
+        width: 42px;
+        height: 42px;
+        flex-shrink: 0;
+        border: 0;
+        border-radius: 999px;
+        background: var(--m-accent-bright, #7b6347);
+        color: var(--m-paper, #f8f6f2);
+        display: grid;
+        place-items: center;
+        cursor: pointer;
+        box-shadow: 0 3px 8px rgba(44, 40, 37, 0.25);
+        padding: 0;
+      }
+      .mc-play:hover {
+        filter: brightness(1.08);
+      }
+      .mc-play-icon {
+        width: 18px;
+        height: 18px;
+        fill: currentColor;
+        display: block;
+      }
+      .mc-time {
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+        color: rgba(255, 255, 255, 0.9);
+        min-width: 36px;
+        flex-shrink: 0;
+      }
+      .mc-time.dim {
+        color: rgba(255, 255, 255, 0.75);
+      }
+      .mc-scrub {
+        flex: 1;
+        min-width: 0;
+        height: 20px;
+        margin: 0;
+        appearance: none;
+        background: transparent;
+        cursor: pointer;
+      }
+      .mc-scrub::-webkit-slider-runnable-track {
+        height: 4px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.22);
+      }
+      .mc-scrub::-webkit-slider-thumb {
+        appearance: none;
+        width: 14px;
+        height: 14px;
+        margin-top: -5px;
+        border-radius: 999px;
+        background: var(--m-paper, #f8f6f2);
+        box-shadow: 0 1px 3px rgba(44, 40, 37, 0.25);
+        border: 0;
+      }
+      .mc-scrub::-moz-range-track {
+        height: 4px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.22);
+      }
+      .mc-scrub::-moz-range-progress {
+        height: 4px;
+        border-radius: 999px;
+        background: var(--m-accent-bright, #7b6347);
+      }
+      .mc-scrub::-moz-range-thumb {
+        width: 14px;
+        height: 14px;
+        border-radius: 999px;
+        background: var(--m-paper, #f8f6f2);
+        border: 0;
+        box-shadow: 0 1px 3px rgba(44, 40, 37, 0.25);
+      }
+      /* golden progress fill for webkit via layered background */
+      .mc-scrub {
+        background: linear-gradient(
+          to right,
+          var(--m-accent-bright, #7b6347) 0%,
+          var(--m-accent-bright, #7b6347) var(--scrub-pct, 0%),
+          rgba(255, 255, 255, 0.22) var(--scrub-pct, 0%),
+          rgba(255, 255, 255, 0.22) 100%
+        );
+        background-size: 100% 4px;
+        background-repeat: no-repeat;
+        background-position: center;
+        border-radius: 999px;
+      }
+      .video-shell.matterya-chrome:not(.chrome-visible) .matterya-controls {
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 180ms ease;
+      }
+      .video-shell.matterya-chrome.chrome-visible .matterya-controls {
+        opacity: 1;
+        transition: opacity 180ms ease;
       }
       .buffering {
         position: absolute;
@@ -388,19 +665,31 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
   private static activeAdPlayerId: string | null = null;
   private static activeContentPlayerId: string | null = null;
   private static adDebugEnabled: boolean | null = null;
+  /** Posts that already finished a pre-roll this session — avoid re-ad on mini→expand remount. */
+  private static adsCompletedForPost = new Set<string>();
   @Input({ required: true }) src!: string;
+  /** Optional multi-bitrate ladder; auto-derived for Archive _512kb / full .mp4 pairs. */
+  @Input() sources: Array<{ id: string; label: string; src: string }> | null = null;
   @Input() poster: string | null = null;
   @Input() preload: 'none' | 'metadata' | 'auto' = 'metadata';
   @Input() showMute = true;
+  /** iOS/Android Matterya chrome: golden play, scrubber, mute, fullscreen. */
+  @Input() showsControls = false;
+  @Input() allowsFullscreen = false;
   @Input() centerOverlayMode: 'always' | 'on-click' = 'on-click';
   @Input() tapBehavior: 'toggle' | 'emit' | 'none' = 'toggle';
   @Input() adPlacement: 'video' | 'reel' | null = null;
   @Input() adCountryCode: string | null = null;
   @Input() adContentCountryCode: string | null = null;
   @Input() adPostId: string | null = null;
+  /** Resume position (seconds) applied once after metadata loads. */
+  @Input() startTime: number | null = null;
   @Output() videoTap = new EventEmitter<void>();
   @Output() viewed = new EventEmitter<void>();
+  @Output() timeUpdate = new EventEmitter<{ currentTime: number; duration: number }>();
+  @Output() playState = new EventEmitter<boolean>();
   @ViewChild('videoEl', { static: true }) videoRef!: ElementRef<HTMLVideoElement>;
+  private startTimeApplied = false;
 
   isPlaying = false;
   isMuted = false;
@@ -439,10 +728,176 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
 
   constructor(private ads: AdsService) {}
 
+  qualityOptions: Array<{ id: string; label: string; src: string }> = [];
+  /** Always prefer the original working stream as Auto. */
+  activeQualityId = 'auto';
+  qualityMenuOpen = false;
+  private qualityResumeAt: number | null = null;
+  private qualityResumePlay = false;
+  private qualitySwitchInFlight = false;
+  private qualityFallbackUsed = false;
+
+  @Output() aspectRatio = new EventEmitter<number>();
+
+  get activeQualityLabel(): string {
+    const hit = this.qualityOptions.find((q) => q.id === this.activeQualityId);
+    return hit?.label || 'Auto';
+  }
+
   get currentSrc(): string {
     if (this.adsEnabled && !this.adDecisionMade) return '';
     if (this.isAdMode && this.activeAd) return this.activeAd.creative.media_url;
-    return this.src;
+    const hit = this.qualityOptions.find((q) => q.id === this.activeQualityId);
+    // Never invent a URL — fall back to the input src that loaded the page.
+    return hit?.src || this.src || '';
+  }
+
+  private rebuildQualityOptions(): void {
+    if (this.sources?.length) {
+      this.qualityOptions = this.sources.slice();
+    } else {
+      this.qualityOptions = this.deriveQualityOptions(this.src);
+    }
+    // Reset to Auto whenever the base src changes so we never stick on a dead High URL.
+    this.activeQualityId = 'auto';
+    this.qualityFallbackUsed = false;
+    this.qualityMenuOpen = false;
+    if (!this.qualityOptions.some((q) => q.id === 'auto')) {
+      this.qualityOptions = [
+        { id: 'auto', label: 'Auto', src: String(this.src || '').trim() },
+        ...this.qualityOptions,
+      ];
+    }
+    // Drop optional alternates that 404 so the menu only lists playable streams.
+    void this.pruneUnreachableQualities();
+  }
+
+  /**
+   * Build quality ladder from the **known-good** source first.
+   * Archive seeds use *_512kb.mp4 — full .mp4 is optional and often missing,
+   * so Auto must stay on the original URL.
+   */
+  private deriveQualityOptions(src: string): Array<{ id: string; label: string; src: string }> {
+    const raw = String(src || '').trim();
+    if (!raw) return [{ id: 'auto', label: 'Auto', src: '' }];
+
+    const options: Array<{ id: string; label: string; src: string }> = [
+      { id: 'auto', label: 'Auto', src: raw },
+    ];
+
+    if (/_512kb\.mp4(\?|$)/i.test(raw)) {
+      const high = raw.replace(/_512kb\.mp4/i, '.mp4');
+      if (high !== raw) {
+        options.push({ id: 'high', label: 'High', src: high });
+      }
+      // 512kb is the same bytes as Auto — only expose when Auto is something else
+      return options;
+    }
+
+    if (/\.mp4(\?|$)/i.test(raw) && /archive\.org/i.test(raw) && !/_512kb/i.test(raw)) {
+      const low = raw.replace(/\.mp4/i, '_512kb.mp4');
+      if (low !== raw) {
+        options.push({ id: '512', label: '512kb', src: low });
+      }
+      return options;
+    }
+
+    return options;
+  }
+
+  private async pruneUnreachableQualities(): Promise<void> {
+    const baseSrc = String(this.src || '').trim();
+    const candidates = this.qualityOptions.filter((q) => q.id !== 'auto' && q.src && q.src !== baseSrc);
+    if (!candidates.length) return;
+    const kept = this.qualityOptions.filter((q) => q.id === 'auto' || q.src === baseSrc);
+    for (const q of candidates) {
+      const ok = await this.urlLooksPlayable(q.src);
+      if (ok) kept.push(q);
+    }
+    // Dedupe by id
+    const seen = new Set<string>();
+    this.qualityOptions = kept.filter((q) => {
+      if (seen.has(q.id)) return false;
+      seen.add(q.id);
+      return true;
+    });
+  }
+
+  private async urlLooksPlayable(url: string): Promise<boolean> {
+    try {
+      const res = await fetch(url, { method: 'HEAD', mode: 'cors' });
+      if (res.ok) return true;
+      // Some CDNs reject HEAD — try a tiny range GET
+      if (res.status === 405 || res.status === 403 || res.status === 0) {
+        const get = await fetch(url, {
+          method: 'GET',
+          headers: { Range: 'bytes=0-1' },
+          mode: 'cors',
+        });
+        return get.ok || get.status === 206;
+      }
+      return false;
+    } catch {
+      // CORS may block probe — keep the option; runtime error handler will fall back.
+      return true;
+    }
+  }
+
+  toggleQualityMenu(event: Event): void {
+    event.stopPropagation();
+    this.qualityMenuOpen = !this.qualityMenuOpen;
+    this.revealControls();
+  }
+
+  selectQuality(
+    q: { id: string; label: string; src: string },
+    video: HTMLVideoElement,
+    event: Event
+  ): void {
+    event.stopPropagation();
+    this.qualityMenuOpen = false;
+    if (q.id === this.activeQualityId || !q.src) return;
+    this.qualityResumePlay = !video.paused && !video.ended;
+    this.qualityResumeAt = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+    this.qualitySwitchInFlight = true;
+    this.qualityFallbackUsed = false;
+    this.activeQualityId = q.id;
+    // Explicitly apply src + load so Angular property binding can't leave a dead element.
+    try {
+      video.pause();
+    } catch {
+      // ignore
+    }
+    video.src = q.src;
+    video.load();
+    this.setBuffering(true);
+    this.revealControls();
+  }
+
+  /** If a quality pick 404s, snap back to Auto (original src) and keep watching. */
+  private recoverFromQualityError(video: HTMLVideoElement): boolean {
+    if (this.qualityFallbackUsed) return false;
+    if (this.activeQualityId === 'auto' && !this.qualitySwitchInFlight) return false;
+    const autoSrc = String(this.src || '').trim();
+    if (!autoSrc) return false;
+    // Drop the broken option from the menu so it can't be re-selected.
+    const badId = this.activeQualityId;
+    this.qualityOptions = this.qualityOptions.filter((q) => q.id === 'auto' || q.id !== badId);
+    this.qualityFallbackUsed = true;
+    this.activeQualityId = 'auto';
+    this.qualitySwitchInFlight = true;
+    this.qualityResumePlay = true;
+    try {
+      video.removeAttribute('src');
+      video.load();
+      video.src = autoSrc;
+      video.load();
+      this.setBuffering(true);
+      this.controlsVisible = true;
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   get currentPoster(): string | null {
@@ -467,25 +922,58 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
   }
 
   get showCenterOverlay(): boolean {
-    if (this.isAdMode) return false;
+    if (this.isAdMode || this.showsControls) return false;
     if (this.centerOverlayMode === 'on-click') {
       return this.centerOverlayVisible;
     }
     return !this.isPlaying;
   }
 
+  get shouldShowChrome(): boolean {
+    if (!this.showsControls || this.isAdMode) return false;
+    return this.controlsVisible || !this.isPlaying;
+  }
+
   ngOnChanges(changes: SimpleChanges): void {
+    if (changes['src'] || changes['sources']) {
+      this.rebuildQualityOptions();
+      this.qualityResumeAt = null;
+      this.qualityResumePlay = false;
+      this.qualitySwitchInFlight = false;
+      this.qualityFallbackUsed = false;
+    }
     if (changes['src'] && !changes['src'].firstChange) {
       this.resetAdState();
+      this.startTimeApplied = false;
+      this.qualityMenuOpen = false;
       if (this.videoRef?.nativeElement) {
-        this.requestAutoplay(this.videoRef.nativeElement);
+        const v = this.videoRef.nativeElement;
+        // Always re-bind the known-good Auto source on src input change.
+        v.src = this.currentSrc;
+        v.load();
+        this.requestAutoplay(v);
       }
+    }
+    if (changes['startTime'] && !changes['startTime'].firstChange) {
+      this.startTimeApplied = false;
+      this.applyStartTime(this.videoRef?.nativeElement);
     }
   }
 
   onVideoTap(video: HTMLVideoElement, event: Event): void {
     if (this.isAdMode) {
       event.stopPropagation();
+      return;
+    }
+    // iOS: tap toggles chrome visibility; play/pause is the golden button.
+    if (this.showsControls) {
+      event.stopPropagation();
+      if (this.controlsVisible && this.isPlaying) {
+        this.controlsVisible = false;
+        this.clearHideTimer();
+      } else {
+        this.revealControls();
+      }
       return;
     }
     if (this.tapBehavior === 'emit') {
@@ -575,13 +1063,63 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
 
   onLoaded(video: HTMLVideoElement): void {
     this.duration = Number.isFinite(video.duration) ? video.duration : 0;
+    this.qualitySwitchInFlight = false;
+    // Match player box to native aspect so contain fills without letterbox gaps.
+    const w = video.videoWidth || 0;
+    const h = video.videoHeight || 0;
+    if (w > 0 && h > 0) {
+      this.aspectRatio.emit(w / h);
+    }
+    if (this.qualityResumeAt != null) {
+      const t = this.qualityResumeAt;
+      const play = this.qualityResumePlay;
+      this.qualityResumeAt = null;
+      this.qualityResumePlay = false;
+      const resume = () => {
+        try {
+          if (t > 0 && Number.isFinite(t)) video.currentTime = Math.min(t, video.duration || t);
+        } catch {
+          // ignore
+        }
+        if (play) {
+          this.userPaused = false;
+          this.autoPaused = false;
+          void video.play().catch(() => undefined);
+        }
+      };
+      // Seek after canplay is more reliable than on metadata alone.
+      if (video.readyState >= 2) resume();
+      else {
+        const once = () => {
+          video.removeEventListener('canplay', once);
+          resume();
+        };
+        video.addEventListener('canplay', once);
+      }
+      return;
+    }
+    this.applyStartTime(video);
     this.requestAutoplay(video);
+  }
+
+  private applyStartTime(video?: HTMLVideoElement | null): void {
+    if (!video || this.startTimeApplied) return;
+    const t = Number(this.startTime);
+    if (!Number.isFinite(t) || t < 1) return;
+    if (Number.isFinite(video.duration) && video.duration > 0 && t >= video.duration - 1) return;
+    try {
+      video.currentTime = t;
+      this.startTimeApplied = true;
+    } catch {
+      // seek may fail until more data is buffered
+    }
   }
 
   onTimeUpdate(video: HTMLVideoElement): void {
     this.currentTime = video.currentTime || 0;
     this.duration = Number.isFinite(video.duration) ? video.duration : this.duration;
     this.progressPercent = this.duration ? (this.currentTime / this.duration) * 100 : 0;
+    this.syncScrubCssVar();
     if (this.isAdMode) {
       this.adSecondsLeft = Math.max(0, Math.ceil((video.duration || 0) - (video.currentTime || 0)));
       this.adSkipSecondsLeft = Math.max(
@@ -589,6 +1127,8 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
         Math.ceil(this.adSkipAfterSeconds - (video.currentTime || 0))
       );
       this.adSkipReady = (video.currentTime || 0) >= this.adSkipAfterSeconds;
+    } else {
+      this.timeUpdate.emit({ currentTime: this.currentTime, duration: this.duration });
     }
     this.trackView(video);
   }
@@ -601,7 +1141,15 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
     video.currentTime = (value / 100) * this.duration;
     this.currentTime = video.currentTime;
     this.progressPercent = value;
+    this.syncScrubCssVar();
     this.revealControls();
+  }
+
+  private syncScrubCssVar(): void {
+    const el = this.videoRef?.nativeElement?.closest?.('.video-shell') as HTMLElement | null;
+    if (el) {
+      el.style.setProperty('--scrub-pct', `${this.progressPercent || 0}%`);
+    }
   }
 
   onPlay(): void {
@@ -615,6 +1163,7 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
       this.startAdCountdown();
     } else {
       this.setGlobalActiveContent(true);
+      this.playState.emit(true);
     }
     this.revealControls();
   }
@@ -625,12 +1174,18 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
       this.releaseGlobalActiveAdIfOwner();
     } else {
       this.releaseGlobalActiveContentIfOwner();
+      this.playState.emit(false);
     }
     this.controlsVisible = true;
     this.clearHideTimer();
   }
 
   onError(): void {
+    const video = this.videoRef?.nativeElement;
+    // Quality switch to a missing High URL must not kill the player permanently.
+    if (video && this.recoverFromQualityError(video)) {
+      return;
+    }
     this.isPlaying = false;
     this.isBuffering = false;
     this.controlsVisible = true;
@@ -722,6 +1277,7 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
   }
 
   ngAfterViewInit(): void {
+    this.rebuildQualityOptions();
     const video = this.videoRef.nativeElement;
     const windowMuted = typeof window !== 'undefined' ? (window as any).__videoMuted : undefined;
     const globalMuted = windowMuted === true ? true : VideoPlayerComponent.globalMuted;
@@ -872,6 +1428,17 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
       this.adDecisionMade = true;
       return;
     }
+    // Same post re-opened after mini/expand — never re-roll the pre-roll.
+    const postKey = String(this.adPostId || '').trim();
+    if (postKey && VideoPlayerComponent.adsCompletedForPost.has(postKey)) {
+      this.adDecisionMade = true;
+      this.activeAd = null;
+      this.isAdMode = false;
+      this.adPreparedForSrc = src;
+      this.applyGlobalMute(video, VideoPlayerComponent.globalMuted);
+      this.requestAutoplay(video);
+      return;
+    }
     if (this.adPreparing) return;
     if (this.adPreparedForSrc === src) return;
     this.adPreparing = true;
@@ -980,6 +1547,10 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
     this.currentTime = 0;
     this.progressPercent = 0;
     this.duration = 0;
+    const postKey = String(this.adPostId || '').trim();
+    if (postKey) {
+      VideoPlayerComponent.adsCompletedForPost.add(postKey);
+    }
     if (!video) return;
     video.removeAttribute('src');
     video.load();

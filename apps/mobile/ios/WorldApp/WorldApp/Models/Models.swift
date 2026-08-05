@@ -199,6 +199,37 @@ enum LivingChannelMarker {
         }
         return lines.joined(separator: "\n")
     }
+
+    /// True when the profile bio embeds a Living channel name marker.
+    static func hasChannel(profile: Profile?) -> Bool {
+        parse(from: profile?.bio) != nil
+    }
+}
+
+/// Marks long-form uploads that belong on a user's Hubs channel (vs plain feed video).
+enum HubChannelPostMarker {
+    static let token = "__hub_channel__|"
+
+    static func markBody(_ caption: String) -> String {
+        let trimmed = caption.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.contains(token) { return trimmed }
+        if trimmed.isEmpty { return token }
+        return "\(token)\n\(trimmed)"
+    }
+
+    static func strip(_ body: String) -> String {
+        body
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.hasPrefix(token) && $0 != token.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func isMarked(_ body: String?) -> Bool {
+        guard let body else { return false }
+        return body.contains(token)
+    }
 }
 
 struct LivingChannel: Identifiable, Hashable {
@@ -250,6 +281,9 @@ struct SharedPostPreview: Identifiable, Hashable, Sendable, Codable {
     let thumbURL: String?
     let authorID: String
     let author: PostAuthor?
+    /// Preserved so hub-seed shares still resolve as Hubs content in the feed.
+    var externalRefType: String? = nil
+    var externalRefID: String? = nil
 
     var asCountryPost: CountryPost {
         CountryPost(
@@ -262,7 +296,9 @@ struct SharedPostPreview: Identifiable, Hashable, Sendable, Codable {
             createdAt: "",
             updatedAt: "",
             authorID: authorID,
-            author: author
+            author: author,
+            externalRefType: externalRefType,
+            externalRefID: externalRefID
         )
     }
 
@@ -439,6 +475,25 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
 
     var isDemoPost: Bool { authorID.hasPrefix("user_") }
 
+    /// Seeded Reddit / hub catalog / synthetic rows — not a live Matterya member post.
+    var isSeededOrSynthetic: Bool {
+        if isDemoPost || isHubSeedVideo { return true }
+        let pid = id.lowercased()
+        let aid = authorID.lowercased()
+        if pid.hasPrefix("post_") || pid.hasPrefix("demo_") || pid.hasPrefix("ia_") || pid.hasPrefix("hub_") {
+            return true
+        }
+        if aid.hasPrefix("user_") || aid.hasPrefix("hub_") || aid.hasPrefix("hub_spark_") {
+            return true
+        }
+        return false
+    }
+
+    /// Live people on Matterya (GraphQL / Supabase) — feed should surface these first.
+    var isRealPersonFeedPost: Bool {
+        !isSeededOrSynthetic && !isStory && !isSpark
+    }
+
     var mediaPayload: PostMediaPayload? { PostMediaPayload.parse(from: mediaURL) }
 
     var resolvedMediaURLs: [String] {
@@ -505,6 +560,49 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
         return text
     }
 
+    /// True when a feed/profile card would show something meaningful (text, media, or share).
+    /// Filters out blank rows left by marker-only bodies or deleted shared originals.
+    var hasFeedVisibleContent: Bool {
+        if isStory { return false }
+        if hasMedia { return true }
+        if playableVideoURL != nil { return true }
+        if sharedPost != nil { return true }
+        // Pending share hydrate — still show the card (loading embed).
+        if let sharedPostID, !sharedPostID.isEmpty { return true }
+        if let title = displayTitle, !title.isEmpty { return true }
+        if !displayBody.isEmpty { return true }
+        if let caption = displayCaption, !caption.isEmpty { return true }
+        return false
+    }
+
+    /// Subtle location line for post cards (country name or ISO).
+    var authorLocationLabel: String? {
+        let name = (author?.countryName ?? countryName)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let code = (author?.countryCode ?? countryCode)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+        if let name, !name.isEmpty, name.uppercased() != "XX" {
+            return name
+        }
+        if let code, !code.isEmpty, code != "XX" {
+            return code
+        }
+        return nil
+    }
+
+    /// ISO regional-indicator flag for the post author location (nil if unknown).
+    var authorLocationFlag: String? {
+        let code = (author?.countryCode ?? countryCode)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+        guard let code, code.count == 2, code != "XX" else { return nil }
+        let base: UInt32 = 127397
+        let scalars = code.unicodeScalars.compactMap { UnicodeScalar(base + $0.value) }
+        guard scalars.count == 2 else { return nil }
+        return String(String.UnicodeScalarView(scalars))
+    }
+
     var authorDisplayName: String {
         ContentSanitizer.displayName(
             displayName: author?.displayName,
@@ -520,6 +618,13 @@ extension Array where Element == CountryPost {
 
     func excludingMoments() -> [CountryPost] {
         filter { !$0.isStory }
+    }
+
+    /// Profile / feed lists — no blank cards, moments, or sparks.
+    func forProfileFeedGrid() -> [CountryPost] {
+        excludingMoments()
+            .excludingSparks()
+            .filter(\.hasFeedVisibleContent)
     }
 }
 
@@ -556,6 +661,10 @@ struct ReelsViewerContext: Identifiable {
 
 enum CreateContentSheet: String, Identifiable {
     case post, video, reel, story
+    /// Long-form video published to the user's Living channel (Hubs).
+    case hubVideo
+    /// First-time channel name / about setup before hubVideo.
+    case channelSetup
     var id: String { rawValue }
 }
 
@@ -572,6 +681,37 @@ struct PostComment: Identifiable, Hashable, Sendable {
     let author: PostAuthor?
 
     func withParentID(_ parentID: String?) -> PostComment {
+        PostComment(
+            id: id,
+            postID: postID,
+            parentID: parentID,
+            authorID: authorID,
+            body: body,
+            likeCount: likeCount,
+            likedByMe: likedByMe,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            author: author
+        )
+    }
+
+    func withPostAndParent(postID: String, parentID: String?) -> PostComment {
+        PostComment(
+            id: id,
+            postID: postID,
+            parentID: parentID,
+            authorID: authorID,
+            body: body,
+            likeCount: likeCount,
+            likedByMe: likedByMe,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            author: author
+        )
+    }
+
+    /// Reassign the speaker while keeping comment content / engagement.
+    func withAuthor(authorID: String, author: PostAuthor?) -> PostComment {
         PostComment(
             id: id,
             postID: postID,
@@ -616,6 +756,10 @@ struct Profile: Identifiable, Hashable, Sendable, Codable {
     let bio: String?
     let followersCount: Int?
     let followingCount: Int?
+    /// active | deactivated | deleted
+    let accountStatus: String?
+    let deactivatedAt: String?
+    let deletedAt: String?
     let createdAt: String
     let updatedAt: String
 
@@ -626,6 +770,14 @@ struct Profile: Identifiable, Hashable, Sendable, Codable {
     }
 
     var isDemoUser: Bool { userID.hasPrefix("user_") }
+
+    var isDeactivated: Bool {
+        (accountStatus ?? "active").lowercased() == "deactivated"
+    }
+
+    var isDeleted: Bool {
+        (accountStatus ?? "active").lowercased() == "deleted"
+    }
 }
 
 struct Message: Identifiable, Hashable, Sendable {
@@ -646,6 +798,11 @@ struct Message: Identifiable, Hashable, Sendable {
         return type == "image" && (mediaPath != nil || mediaURL != nil)
     }
 
+    var hasVideoMedia: Bool {
+        let type = (mediaType ?? "").lowercased()
+        return (type == "video" || type == "reel") && (mediaPath != nil || mediaURL != nil)
+    }
+
     var isReaction: Bool {
         Self.parseReaction(body) != nil
     }
@@ -658,10 +815,20 @@ struct Message: Identifiable, Hashable, Sendable {
         Self.parseCallLog(body) != nil
     }
 
+    /// Shared hub video / feed post / reel card encoded in the message body.
+    var shareInfo: ShareInfo? {
+        Self.parseShare(body)
+    }
+
+    var isShare: Bool {
+        shareInfo != nil
+    }
+
     var isRenderableInChat: Bool {
         if isReaction { return false }
         if isCallLog { return true }
-        if hasImage { return true }
+        if isShare { return true }
+        if hasImage || hasVideoMedia { return true }
         if displayText != nil { return true }
         return false
     }
@@ -671,9 +838,16 @@ struct Message: Identifiable, Hashable, Sendable {
         if let callLog = Self.parseCallLog(body) {
             return Self.formatCallLog(callLog)
         }
+        if let share = shareInfo {
+            if !share.note.isEmpty { return share.note }
+            switch share.kind {
+            case .hub, .reel: return share.isVideo ? "Shared a video" : "Shared from Hubs"
+            case .post: return share.isVideo ? "Shared a video" : "Shared a post"
+            }
+        }
         if let text = displayText, !text.isEmpty { return text }
         if hasImage { return "Photo" }
-        if (mediaType ?? "").lowercased() == "video" { return "Video" }
+        if hasVideoMedia || (mediaType ?? "").lowercased() == "video" { return "Video" }
         return "Media message"
     }
 
@@ -681,6 +855,11 @@ struct Message: Identifiable, Hashable, Sendable {
         if isReaction { return nil }
         if let callLog = Self.parseCallLog(body) {
             return Self.formatCallLog(callLog)
+        }
+        // Structured share: optional note only (card carries the content).
+        if let share = shareInfo {
+            let note = share.note.trimmingCharacters(in: .whitespacesAndNewlines)
+            return note.isEmpty ? nil : ContentSanitizer.clean(note)
         }
         if let reply = Self.parseReply(body) {
             var replyBody = Self.stripTrailingMeta(reply.body.trimmingCharacters(in: .whitespacesAndNewlines))
@@ -762,6 +941,110 @@ struct Message: Identifiable, Hashable, Sendable {
 
     private static let reactionPrefix = "__react__|"
     private static let replyPrefix = "__reply__|"
+    private static let sharePrefix = "__share__|"
+
+    /// Rich content shared into chat (hub video, feed post, reel).
+    struct ShareInfo: Hashable, Sendable {
+        enum Kind: String, Sendable {
+            case post
+            case hub
+            case reel
+        }
+
+        let kind: Kind
+        let postID: String
+        let title: String?
+        let bodyText: String?
+        let authorName: String?
+        let authorID: String?
+        let mediaURL: String?
+        let posterURL: String?
+        let mediaType: String?
+        /// Optional caption the sender typed with the share.
+        let note: String
+
+        var isVideo: Bool {
+            let type = (mediaType ?? "").lowercased()
+            if type == "video" || type == "reel" { return true }
+            if kind == .hub || kind == .reel { return true }
+            if playableVideoURL != nil { return true }
+            if let mediaURL, !mediaURL.isEmpty {
+                let lower = mediaURL.lowercased()
+                if lower.contains(".mp4") || lower.contains(".m3u8") || lower.contains("archive.org")
+                    || lower.contains("\"video\"") || lower.contains("\"reel\"") {
+                    return true
+                }
+            }
+            return false
+        }
+
+        var isHubContent: Bool {
+            kind == .hub || kind == .reel
+                || postID.lowercased().hasPrefix("ia_")
+                || postID.lowercased().hasPrefix("hub_")
+                || (mediaURL?.lowercased().contains("archive.org") == true)
+        }
+
+        /// Same resolution path as feed/hubs (JSON media payloads, relative paths, Archive).
+        var playableVideoURL: URL? {
+            if let resolved = MediaURLResolver.videoURL(for: mediaProbePost) { return resolved }
+            return MediaURLResolver.resolve(mediaURL)
+        }
+
+        var posterImageURL: URL? {
+            if let resolved = MediaURLResolver.posterURL(for: mediaProbePost) { return resolved }
+            return MediaURLResolver.resolve(posterURL)
+        }
+
+        /// Lightweight post used only for MediaURLResolver (does not call `isVideo`).
+        private var mediaProbePost: CountryPost {
+            CountryPost(
+                id: postID,
+                title: title,
+                body: bodyText ?? "",
+                mediaType: mediaType ?? "video",
+                mediaURL: mediaURL,
+                thumbURL: posterURL,
+                createdAt: "",
+                updatedAt: "",
+                authorID: authorID ?? ""
+            )
+        }
+
+        var asCountryPost: CountryPost {
+            let author: PostAuthor? = {
+                guard let authorID, !authorID.isEmpty else { return nil }
+                return PostAuthor(
+                    userID: authorID,
+                    displayName: authorName,
+                    username: nil,
+                    avatarURL: nil,
+                    countryName: nil,
+                    countryCode: nil,
+                    lastReadAt: nil
+                )
+            }()
+            // Prefer a plain https URL so players never receive a JSON media blob.
+            let plainMedia = playableVideoURL?.absoluteString ?? mediaURL
+            return CountryPost(
+                id: postID,
+                title: title,
+                body: bodyText ?? "",
+                mediaType: mediaType ?? (isVideo ? "video" : nil),
+                mediaURL: plainMedia,
+                thumbURL: posterURL ?? posterImageURL?.absoluteString,
+                createdAt: "",
+                updatedAt: "",
+                authorID: authorID ?? "",
+                author: author
+            )
+        }
+
+        var previewLabel: String {
+            if isVideo { return title?.isEmpty == false ? title! : "Video" }
+            return title?.isEmpty == false ? title! : "Post"
+        }
+    }
 
     struct ReplyInfo: Hashable, Sendable {
         let targetID: String
@@ -784,6 +1067,161 @@ struct Message: Identifiable, Hashable, Sendable {
         let quoted = target.displayText ?? target.previewText
         let encoded = encodeBase64(String(quoted.prefix(160)))
         return "\(replyPrefix)id=\(target.id)|text=\(encoded)||\(body)"
+    }
+
+    /// Encodes a post/hub video so chat can render a playable card (not just a bare link).
+    static func buildShareBody(post: CountryPost, note: String = "") -> String {
+        let kind: ShareInfo.Kind
+        if post.isReel {
+            // Hub sparks share as hub cards; plain reels as reels/posts.
+            kind = PlayPlatformBridge.isHubCatalogContent(post) ? .hub : .reel
+        } else if PlayPlatformBridge.isHubCatalogContent(post), post.hasVideo {
+            kind = .hub
+        } else {
+            kind = .post
+        }
+
+        let mediaType = post.mediaType
+            ?? (post.hasVideo ? (post.isReel ? "reel" : "video") : nil)
+        let title = post.displayHeadline ?? post.displayTitle
+        let bodyText: String? = {
+            let body = post.displayBody.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !body.isEmpty { return body }
+            return post.displayCaption
+        }()
+        let author = post.authorDisplayName
+        // Always encode a *playable* https URL — never a JSON media payload blob.
+        let media = post.playableVideoURL?.absoluteString
+            ?? MediaURLResolver.resolve(post.mediaURL)?.absoluteString
+            ?? post.mediaURL
+        let poster = post.posterImageURL?.absoluteString
+            ?? post.feedImageURL?.absoluteString
+            ?? post.thumbURL
+
+        var parts: [String] = [
+            "v=1",
+            "kind=\(kind.rawValue)",
+            "id=\(post.id)",
+        ]
+        if let title, !title.isEmpty { parts.append("title=\(encodeBase64(String(title.prefix(180))))") }
+        if let bodyText, !bodyText.isEmpty { parts.append("body=\(encodeBase64(String(bodyText.prefix(280))))") }
+        if !author.isEmpty { parts.append("author=\(encodeBase64(String(author.prefix(80))))") }
+        if !post.authorID.isEmpty { parts.append("authorId=\(post.authorID)") }
+        if let media, !media.isEmpty, !media.hasPrefix("{") {
+            parts.append("media=\(encodeBase64(media))")
+        } else if let media = post.playableVideoURL?.absoluteString {
+            parts.append("media=\(encodeBase64(media))")
+        }
+        if let poster, !poster.isEmpty, !poster.hasPrefix("{") {
+            parts.append("poster=\(encodeBase64(poster))")
+        }
+        if let mediaType, !mediaType.isEmpty { parts.append("type=\(mediaType)") }
+
+        let meta = parts.joined(separator: "|")
+        let trimmedNote = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedNote.isEmpty {
+            return "\(sharePrefix)\(meta)||"
+        }
+        return "\(sharePrefix)\(meta)||\(trimmedNote)"
+    }
+
+    static func parseShare(_ body: String) -> ShareInfo? {
+        let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix(sharePrefix) {
+            return parseStructuredShare(trimmed)
+        }
+        return parseLegacyShareLink(trimmed)
+    }
+
+    private static func parseStructuredShare(_ trimmed: String) -> ShareInfo? {
+        let withoutPrefix = String(trimmed.dropFirst(sharePrefix.count))
+        let parts = withoutPrefix.components(separatedBy: "||")
+        let meta = parts.first ?? ""
+        let note = parts.dropFirst().joined(separator: "||").trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let id = metaValue(meta, key: "id")
+        guard !id.isEmpty else { return nil }
+
+        let kindRaw = metaValue(meta, key: "kind").lowercased()
+        let kind = ShareInfo.Kind(rawValue: kindRaw) ?? .post
+        let title = nonEmpty(decodeBase64(metaValue(meta, key: "title")))
+        let bodyText = nonEmpty(decodeBase64(metaValue(meta, key: "body")))
+        let authorName = nonEmpty(decodeBase64(metaValue(meta, key: "author")))
+        let authorID = nonEmpty(metaValue(meta, key: "authorId"))
+        let media = nonEmpty(decodeBase64(metaValue(meta, key: "media")))
+        let poster = nonEmpty(decodeBase64(metaValue(meta, key: "poster")))
+        let mediaType = nonEmpty(metaValue(meta, key: "type"))
+            ?? nonEmpty(metaValue(meta, key: "mediaType"))
+
+        return ShareInfo(
+            kind: kind,
+            postID: id,
+            title: title,
+            bodyText: bodyText,
+            authorName: authorName,
+            authorID: authorID,
+            mediaURL: media,
+            posterURL: poster,
+            mediaType: mediaType,
+            note: note
+        )
+    }
+
+    /// Older shares were plain "title\\nhttps://matterya.com/post|play/watch/…".
+    private static func parseLegacyShareLink(_ trimmed: String) -> ShareInfo? {
+        let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+        let range = NSRange(trimmed.startIndex..., in: trimmed)
+        guard let match = detector?.firstMatch(in: trimmed, options: [], range: range),
+              let urlRange = Range(match.range, in: trimmed)
+        else { return nil }
+
+        let urlString = String(trimmed[urlRange])
+        guard let url = URL(string: urlString) else { return nil }
+        let host = (url.host ?? "").lowercased()
+        let isMatterya = host.contains("matterya.com") || url.scheme?.lowercased() == "matterya"
+        guard isMatterya else { return nil }
+
+        var path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if url.scheme?.lowercased() == "matterya", let hostPath = url.host, !hostPath.contains(".") {
+            path = "\(hostPath)/\(path)".trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        }
+        let segments = path.split(separator: "/").map(String.init)
+        guard let first = segments.first?.lowercased() else { return nil }
+
+        let postID: String
+        let kind: ShareInfo.Kind
+        switch first {
+        case "post", "p":
+            guard let id = segments.dropFirst().first, !id.isEmpty else { return nil }
+            postID = id
+            kind = .post
+        case "play":
+            guard segments.count >= 3, segments[1].lowercased() == "watch" else { return nil }
+            postID = segments[2]
+            kind = .hub
+        default:
+            return nil
+        }
+
+        let before = String(trimmed[..<urlRange.lowerBound])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = before
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { !$0.isEmpty })
+
+        return ShareInfo(
+            kind: kind,
+            postID: postID,
+            title: title,
+            bodyText: nil,
+            authorName: nil,
+            authorID: nil,
+            mediaURL: nil,
+            posterURL: nil,
+            mediaType: kind == .hub ? "video" : nil,
+            note: ""
+        )
     }
 
     struct ReactionInfo: Hashable, Sendable {
@@ -841,6 +1279,11 @@ struct Message: Identifiable, Hashable, Sendable {
 
     private static func encodeBase64(_ value: String) -> String {
         Data(value.utf8).base64EncodedString()
+    }
+
+    private static func nonEmpty(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     static func stripTrailingMeta(_ value: String) -> String {

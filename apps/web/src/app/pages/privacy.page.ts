@@ -1,0 +1,814 @@
+import { CommonModule } from '@angular/common';
+import { Component, OnDestroy, OnInit } from '@angular/core';
+import { RouterLink } from '@angular/router';
+
+/**
+ * Public Privacy Policy — no auth.
+ * Store listing: https://matterya.com/privacy
+ * EU/GDPR + German BDSG oriented; contact legal@matterya.com
+ */
+@Component({
+  selector: 'app-privacy-page',
+  standalone: true,
+  imports: [CommonModule, RouterLink],
+  template: `
+    <div class="legal-shell" #scrollRoot>
+      <header class="legal-top">
+        <a class="brand" routerLink="/">Matterya</a>
+        <nav class="legal-nav">
+          <a routerLink="/privacy" class="active">Privacy Policy</a>
+          <a routerLink="/terms">Terms</a>
+        </nav>
+      </header>
+
+      <main class="legal-body">
+        <p class="kicker">Legal · GDPR · EU / Germany</p>
+        <h1>Privacy Policy</h1>
+        <p class="meta">
+          <strong>Matterya</strong><br />
+          Last updated: 4 August 2026<br />
+          Version: 2026-08-04-EU<br />
+          Contact:
+          <a href="mailto:legal@matterya.com">legal@matterya.com</a>
+        </p>
+
+        <nav class="toc" aria-label="Table of contents">
+          <div class="toc-title">Contents</div>
+          <ol>
+            <li><a href="#s1">Introduction and Scope</a></li>
+            <li><a href="#s2">Data Controller</a></li>
+            <li><a href="#s3">Definitions</a></li>
+            <li><a href="#s4">Categories of Personal Data</a></li>
+            <li><a href="#s5">Sources of Personal Data</a></li>
+            <li><a href="#s6">Purposes and Legal Bases</a></li>
+            <li><a href="#s7">Use in Core Features</a></li>
+            <li><a href="#s8">Disclosure</a></li>
+            <li><a href="#s9">Third-Party Services</a></li>
+            <li><a href="#s10">International Transfers</a></li>
+            <li><a href="#s11">Retention</a></li>
+            <li><a href="#s12">Your Rights (EU / Germany)</a></li>
+            <li><a href="#s13">Children and Minors</a></li>
+            <li><a href="#s14">Cookies and Similar Technologies</a></li>
+            <li><a href="#s15">Automated Processing</a></li>
+            <li><a href="#s16">Security</a></li>
+            <li><a href="#s17">Data Breach Notification</a></li>
+            <li><a href="#s18">Device Permissions</a></li>
+            <li><a href="#s19">Changes</a></li>
+            <li><a href="#s20">Contact</a></li>
+            <li><a href="#s21">Governing Language</a></li>
+          </ol>
+        </nav>
+
+
+        <section id="s1">
+          <h2>1. Introduction and Scope</h2>
+          <p>
+            This Privacy Policy (“Policy”) describes how Matterya (“Matterya”, “we”, “us”, or “our”)
+            collects, uses, discloses, transfers, stores, and otherwise processes personal data in
+            connection with the Matterya mobile applications (including iOS and Android), the website
+            available at <a href="https://matterya.com">https://matterya.com</a>, related domains,
+            application programming interfaces, and any other products or services that link to this
+            Policy (collectively, the “Services”).
+          </p>
+          <p>
+            This Policy is intended to meet transparency requirements under the EU General Data
+            Protection Regulation (Regulation (EU) 2016/679) (“GDPR”), the German Federal Data
+            Protection Act (Bundesdatenschutzgesetz – “BDSG”), applicable Member State implementations
+            of the ePrivacy Directive (Directive 2002/58/EC), and, where relevant, other applicable
+            privacy laws. This Policy applies to users located in the European Union and European
+            Economic Area (including Germany), the United Kingdom (to the extent UK GDPR applies by
+            analogy or separate adoption), and other jurisdictions worldwide.
+          </p>
+          <p>
+            Please read this Policy carefully. If you do not agree with this Policy, you should not
+            access or use the Services. Where a particular processing activity requires your consent
+            under applicable law, we will request such consent separately and clearly.
+          </p>
+        </section>
+
+        <section id="s2">
+          <h2>2. Data Controller</h2>
+          <p>
+            The controller of personal data processed under this Policy (i.e., the entity that
+            determines the purposes and means of processing) is:
+          </p>
+          <div class="box">
+            <p><strong>Matterya</strong></p>
+            <p>
+              Privacy / Legal contact:<br />
+              Email: <a href="mailto:legal@matterya.com">legal@matterya.com</a><br />
+              Web: <a href="https://matterya.com" rel="noopener">https://matterya.com</a>
+            </p>
+            <p>
+              For data-protection enquiries, rights requests, or complaints relating to this Policy,
+              please contact <a href="mailto:legal@matterya.com">legal@matterya.com</a>. We aim to
+              respond without undue delay and in any event within one (1) month of receipt, subject
+              to lawful extensions under GDPR Article 12(3).
+            </p>
+          </div>
+          <p>
+            If Matterya designates a representative in the European Union pursuant to GDPR
+            Article 27 (where required), the contact details of such representative will be published
+            on this page or otherwise made available upon request at
+            <a href="mailto:legal@matterya.com">legal@matterya.com</a>.
+          </p>
+        </section>
+
+        <section id="s3">
+          <h2>3. Definitions</h2>
+          <p>For the purposes of this Policy:</p>
+          <ul>
+            <li><strong>“Personal data”</strong> means any information relating to an identified or identifiable natural person (data subject), as defined in GDPR Article 4(1).</li>
+            <li><strong>“Processing”</strong> means any operation performed on personal data, whether or not by automated means, as defined in GDPR Article 4(2).</li>
+            <li><strong>“Special categories of personal data”</strong> means data revealing racial or ethnic origin, political opinions, religious or philosophical beliefs, trade-union membership, genetic data, biometric data for uniquely identifying a natural person, data concerning health, or data concerning a natural person’s sex life or sexual orientation (GDPR Article 9).</li>
+            <li><strong>“You”</strong> means any individual who accesses or uses the Services.</li>
+          </ul>
+        </section>
+
+        <section id="s4">
+          <h2>4. Categories of Personal Data We Process</h2>
+          <p>
+            We process the following categories of personal data, depending on your use of the
+            Services, device settings, and the permissions you grant. We do not require you to
+            provide special category data; if you voluntarily include such information in content
+            you upload (for example, in a post or message), you do so at your own discretion and we
+            process it only as necessary to host and display the content you requested.
+          </p>
+
+          <h3>4.1 Account and identity data</h3>
+          <ul>
+            <li>Email address and authentication credentials (including hashed passwords or tokens managed by our authentication provider)</li>
+            <li>User identifier(s) assigned by our systems</li>
+            <li>Display name, username/handle, profile photograph or avatar, biography, and other profile fields you elect to provide</li>
+            <li>Country, city, or similar location descriptors associated with your profile</li>
+            <li>Account status, verification status, and security-related account metadata</li>
+          </ul>
+
+          <h3>4.2 User-generated content and social data</h3>
+          <ul>
+            <li>Posts, photographs, videos, short-form “Sparks”, captions, comments, reactions, likes, saves/bookmarks, shares, and related metadata</li>
+            <li>Direct messages and any media attached thereto</li>
+            <li>Hubs / long-form video content, channel information, and engagement metrics (including view counts and interactions)</li>
+            <li>Follow and follower relationships, blocks, reports, and similar social-graph data</li>
+            <li>Content you report or that is reported concerning you, and associated moderation records</li>
+          </ul>
+
+          <h3>4.3 Location and geo-contextual data</h3>
+          <ul>
+            <li>Approximate location derived from IP address or network information (e.g., country/region level)</li>
+            <li>Country or place context you select or that is associated with content (e.g., country feed, globe features)</li>
+            <li>Precise device location only if you affirmatively grant location permission in your operating system and use location-enabled features</li>
+            <li>Presence or activity indicators on globe/map features where such features are enabled</li>
+          </ul>
+          <p class="note">
+            Precise geolocation is optional. You may refuse or revoke location permission at any time
+            in your device settings. Certain features may be unavailable or degraded without it.
+          </p>
+
+          <h3>4.4 Device, technical, and diagnostic data</h3>
+          <ul>
+            <li>Device model, operating system and version, app version, language and locale settings</li>
+            <li>IP address, timestamps, request logs, crash reports, performance diagnostics</li>
+            <li>Push notification tokens and delivery status (if notifications are enabled)</li>
+            <li>Security, fraud-prevention, and abuse-detection signals (including rate-limiting and anomaly indicators)</li>
+            <li>Identifiers reasonably necessary for session management, authentication, and service integrity</li>
+          </ul>
+
+          <h3>4.5 Usage and interaction data</h3>
+          <ul>
+            <li>Features and screens accessed (e.g., Feed, Globe, Hubs, Messages, Search, Profile)</li>
+            <li>Engagement with content (views, opens, dwell-related metrics where collected)</li>
+            <li>Search queries and navigation paths within the Services</li>
+            <li>In-app preference and settings choices</li>
+          </ul>
+
+          <h3>4.6 Communications with Matterya</h3>
+          <ul>
+            <li>Contents of emails or messages you send to legal@matterya.com or other Matterya contact channels</li>
+            <li>Support tickets, appeals, and related correspondence</li>
+          </ul>
+
+          <h3>4.7 Payment and commercial data (if and when applicable)</h3>
+          <ul>
+            <li>If paid features, advertising accounts, or similar commercial tools are offered, transaction metadata processed by payment or ad platforms (we typically do not store full payment card numbers)</li>
+          </ul>
+        </section>
+
+        <section id="s5">
+          <h2>5. Sources of Personal Data</h2>
+          <p>We obtain personal data from:</p>
+          <ul>
+            <li><strong>You directly</strong>, when you register, complete a profile, post content, message others, or contact us</li>
+            <li><strong>Your device and the Services automatically</strong>, through standard technical means when you use the App or website</li>
+            <li><strong>Other users</strong>, for example when they mention you, message you, or share content involving you</li>
+            <li><strong>Service providers</strong> acting on our behalf (e.g., authentication, hosting, crash analytics)</li>
+            <li><strong>Publicly available sources</strong>, only where lawful and relevant (e.g., public profile information you choose to make public)</li>
+          </ul>
+        </section>
+
+        <section id="s6">
+          <h2>6. Purposes of Processing and Legal Bases (GDPR Article 6)</h2>
+          <p>
+            We process personal data only where at least one legal basis under GDPR Article 6
+            applies. The primary purposes and corresponding bases are set out below.
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Purpose</th>
+                  <th>Description</th>
+                  <th>Legal basis</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Service provision and contract performance</td>
+                  <td>Creating and maintaining accounts; enabling feeds, profiles, messaging, Hubs, globe/map features, search, and content hosting</td>
+                  <td>Art. 6(1)(b) GDPR — performance of a contract / steps prior to contract</td>
+                </tr>
+                <tr>
+                  <td>Account security and integrity</td>
+                  <td>Authentication, session management, preventing unauthorised access</td>
+                  <td>Art. 6(1)(b) and Art. 6(1)(f) — legitimate interests in securing the Services</td>
+                </tr>
+                <tr>
+                  <td>Safety, abuse prevention, and enforcement</td>
+                  <td>Detecting spam, fraud, scams, harassment, illegal content; investigating reports; applying sanctions</td>
+                  <td>Art. 6(1)(f) — legitimate interests; Art. 6(1)(c) where legally required</td>
+                </tr>
+                <tr>
+                  <td>Communications about the Service</td>
+                  <td>Service notices, security alerts, material changes, responses to support/legal requests</td>
+                  <td>Art. 6(1)(b) and/or Art. 6(1)(f)</td>
+                </tr>
+                <tr>
+                  <td>Push notifications</td>
+                  <td>Delivering alerts for messages and social activity when enabled</td>
+                  <td>Device permission (consent at OS level); Art. 6(1)(b) for delivery of requested features</td>
+                </tr>
+                <tr>
+                  <td>Location-enabled features</td>
+                  <td>Country context, optional presence, location-tagged experiences</td>
+                  <td>Art. 6(1)(a) consent for precise location where required; Art. 6(1)(b) for features you request</td>
+                </tr>
+                <tr>
+                  <td>Product analytics and improvement</td>
+                  <td>Understanding feature usage, performance, and reliability in aggregate or pseudonymised form where feasible</td>
+                  <td>Art. 6(1)(f) legitimate interests; Art. 6(1)(a) where consent is required (e.g., certain cookies/SDKs)</td>
+                </tr>
+                <tr>
+                  <td>Legal compliance and dispute handling</td>
+                  <td>Responding to lawful requests, establishing/exercising/defending legal claims, regulatory compliance</td>
+                  <td>Art. 6(1)(c) legal obligation; Art. 6(1)(f) legitimate interests</td>
+                </tr>
+                <tr>
+                  <td>Business operations</td>
+                  <td>Backups, disaster recovery, internal administration, auditing</td>
+                  <td>Art. 6(1)(f) legitimate interests; Art. 6(1)(b) as needed to operate the contract</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p>
+            <strong>Legitimate interests.</strong> Where we rely on Article 6(1)(f), our interests
+            include operating a secure, reliable social platform; preventing abuse; improving product
+            quality; and protecting Matterya, our users, and the public from harm. We balance these
+            interests against your fundamental rights and freedoms. You may object under Section 12.
+          </p>
+          <p>
+            <strong>Special categories of data (Article 9).</strong> We do not seek to collect special
+            category data as a condition of using Matterya. If such data appears in user-generated
+            content, processing is limited to providing the hosting/display functionality you request,
+            based on your explicit voluntary provision of that content (Article 9(2)(a) or 9(2)(e)
+            where made manifestly public by you), and/or other applicable exceptions. Do not upload
+            special category data relating to others without a lawful basis.
+          </p>
+        </section>
+
+        <section id="s7">
+          <h2>7. How We Use Personal Data in Core Features</h2>
+          <h3>7.1 Social feed, posts, and profiles</h3>
+          <p>
+            Profile and content data are used to display your identity and contributions to other
+            users according to the visibility settings and product design you choose (including
+            public or limited audiences where available).
+          </p>
+          <h3>7.2 Messaging</h3>
+          <p>
+            Message content is processed to deliver communications between participants, store
+            conversation history as needed for the feature, and protect against abuse.
+          </p>
+          <h3>7.3 Globe, maps, and country contexts</h3>
+          <p>
+            Location-related and country-context data may be used to organise content by geography,
+            power globe/map experiences, and personalise country-oriented feeds. Map rendering may
+            involve third-party map providers as described in Section 9.
+          </p>
+          <h3>7.4 Hubs / video</h3>
+          <p>
+            Video and channel data are processed to host, stream, recommend, and measure engagement
+            with long-form or short-form video content.
+          </p>
+          <h3>7.5 Search and discovery</h3>
+          <p>
+            Search inputs and public profile/content metadata may be processed to return relevant
+            results and improve discovery quality.
+          </p>
+        </section>
+
+        <section id="s8">
+          <h2>8. Disclosure of Personal Data</h2>
+          <p><strong>We do not sell personal data.</strong></p>
+          <p>We may disclose personal data only as follows:</p>
+          <h3>8.1 Other users of the Services</h3>
+          <p>
+            Information and content you make available through the Services (including public
+            profiles, public posts, comments, and similar interactions) will be visible to other
+            users as designed. Messages are visible to conversation participants.
+          </p>
+          <h3>8.2 Processors and service providers</h3>
+          <p>
+            We engage carefully selected third parties to process personal data on our behalf
+            (e.g., cloud hosting, database and storage providers, authentication, content delivery,
+            push notification infrastructure, crash reporting, customer communications tooling, and
+            map/globe SDKs). Such providers are bound by contractual obligations consistent with
+            GDPR Article 28, including instructions, confidentiality, security, and deletion/return
+            of data at the end of services, where GDPR applies.
+          </p>
+          <h3>8.3 Professional advisers and corporate transactions</h3>
+          <p>
+            We may share data with lawyers, auditors, or insurers under confidentiality, and in
+            connection with actual or proposed mergers, acquisitions, financing, or asset sales,
+            subject to appropriate safeguards and notice where legally required.
+          </p>
+          <h3>8.4 Legal and safety disclosures</h3>
+          <p>
+            We may disclose data if we reasonably believe disclosure is necessary to: (a) comply
+            with applicable law, regulation, legal process, or governmental request; (b) enforce our
+            terms and policies; (c) detect, prevent, or address fraud, security, or technical issues;
+            or (d) protect the rights, property, or safety of Matterya, our users, or the public.
+          </p>
+        </section>
+
+        <section id="s9">
+          <h2>9. Third-Party Services and Links</h2>
+          <p>
+            The Services may integrate or link to third-party services (including map providers such
+            as Google Maps Platform, analytics, authentication, or media infrastructure). Where such
+            third parties process personal data as independent controllers, their own privacy notices
+            apply. We encourage you to review those notices. Matterya is not responsible for the
+            privacy practices of independent third-party controllers beyond our legal obligations.
+          </p>
+        </section>
+
+        <section id="s10">
+          <h2>10. International Data Transfers</h2>
+          <p>
+            Personal data may be processed in countries outside the European Union and European
+            Economic Area, including countries that may not provide an equivalent level of data
+            protection as under EU law.
+          </p>
+          <p>
+            Where GDPR Chapter V applies to a transfer of personal data to a third country or
+            international organisation, we implement appropriate safeguards, which may include:
+          </p>
+          <ul>
+            <li>Transfers on the basis of an adequacy decision by the European Commission (GDPR Art. 45)</li>
+            <li>Standard Contractual Clauses adopted by the European Commission (GDPR Art. 46(2)(c)), including supplementary measures where appropriate following risk assessment</li>
+            <li>Other transfer mechanisms recognised as valid under GDPR Articles 46–49, where applicable</li>
+          </ul>
+          <p>
+            You may request information about the relevant safeguards by contacting
+            <a href="mailto:legal@matterya.com">legal@matterya.com</a>.
+          </p>
+        </section>
+
+        <section id="s11">
+          <h2>11. Retention</h2>
+          <p>
+            We retain personal data only for as long as necessary to fulfil the purposes described
+            in this Policy, including for the purposes of satisfying any legal, accounting, or
+            reporting requirements, and for the establishment, exercise, or defence of legal claims.
+          </p>
+          <ul>
+            <li><strong>Account data:</strong> retained for the life of the account and deleted or anonymised within a reasonable period after account deletion, subject to legal holds and backup cycles</li>
+            <li><strong>User content:</strong> retained until you delete it or delete your account, subject to residual copies in backups for a limited technical period and any content lawfully retained for safety or legal reasons</li>
+            <li><strong>Messages:</strong> retained as needed to provide messaging functionality and as otherwise required for safety/legal purposes</li>
+            <li><strong>Logs and security data:</strong> retained for limited periods calibrated to security, debugging, and abuse-prevention needs</li>
+            <li><strong>Correspondence with legal@matterya.com:</strong> retained as needed to handle your request and for related compliance records</li>
+          </ul>
+          <p>
+            When personal data is no longer required, we will delete it or irreversibly anonymise it,
+            unless longer retention is required or permitted by law.
+          </p>
+        </section>
+
+        <section id="s12">
+          <h2>12. Your Rights under the GDPR and German Law</h2>
+          <p>
+            If you are in the EU/EEA (including Germany), you have the following rights, subject to
+            statutory conditions and exceptions:
+          </p>
+          <ul>
+            <li><strong>Right of access</strong> (Art. 15 GDPR) — to obtain confirmation as to whether we process your personal data and, where that is the case, access to the data and prescribed information</li>
+            <li><strong>Right to rectification</strong> (Art. 16) — to have inaccurate personal data corrected and incomplete data completed</li>
+            <li><strong>Right to erasure</strong> (Art. 17) — to request deletion in certain circumstances (“right to be forgotten”)</li>
+            <li><strong>Right to restriction of processing</strong> (Art. 18)</li>
+            <li><strong>Right to data portability</strong> (Art. 20) — to receive personal data you provided to us in a structured, commonly used, machine-readable format, and to transmit those data to another controller where technically feasible</li>
+            <li><strong>Right to object</strong> (Art. 21) — to object at any time, on grounds relating to your particular situation, to processing based on legitimate interests; and to object to processing for direct marketing (if applicable)</li>
+            <li><strong>Right to withdraw consent</strong> (Art. 7(3)) — where processing is based on consent, without affecting the lawfulness of processing before withdrawal</li>
+            <li><strong>Right not to be subject to solely automated decisions</strong> with legal or similarly significant effects (Art. 22), subject to exceptions</li>
+            <li><strong>Right to lodge a complaint</strong> with a supervisory authority (Art. 77)</li>
+          </ul>
+          <h3>12.1 Supervisory authorities (Germany / EU)</h3>
+          <p>
+            You may lodge a complaint with a data protection supervisory authority in the Member
+            State of your habitual residence, place of work, or place of the alleged infringement.
+            In Germany, competent authorities include the data protection authorities of the federal
+            states (Länder) and, for certain matters, the
+            <strong>Bundesbeauftragte für den Datenschutz und die Informationsfreiheit (BfDI)</strong>.
+            A list of EU supervisory authorities is maintained by the European Data Protection Board.
+          </p>
+          <h3>12.2 How to exercise your rights</h3>
+          <p>
+            Please email <a href="mailto:legal@matterya.com">legal@matterya.com</a> with the subject
+            line “Data Subject Request” and include: (i) the email address associated with your
+            account; (ii) the nature of your request; and (iii) any information needed to verify
+            your identity. We may request additional information to confirm identity where reasonable
+            and proportionate.
+          </p>
+        </section>
+
+        <section id="s13">
+          <h2>13. Children and Minors</h2>
+          <p>
+            The Services are not directed to children under sixteen (16) years of age in the EU/EEA,
+            or under the age of digital consent applicable in the relevant Member State pursuant to
+            GDPR Article 8 (which may be between 13 and 16). We do not knowingly collect personal data
+            from children below the applicable age. If you believe we have collected such data, please
+            contact <a href="mailto:legal@matterya.com">legal@matterya.com</a> and we will take
+            appropriate steps to delete the data where required.
+          </p>
+        </section>
+
+        <section id="s14">
+          <h2>14. Cookies, Local Storage, and Similar Technologies</h2>
+          <p>
+            On our website and in app WebViews, we may use cookies, local storage, and similar
+            technologies that are:
+          </p>
+          <ul>
+            <li><strong>Strictly necessary</strong> for authentication, security, load balancing, or preference storage required to provide a service you requested</li>
+            <li><strong>Functional or analytics</strong> technologies, where used, subject to consent where required under ePrivacy rules and GDPR</li>
+          </ul>
+          <p>
+            Where non-essential cookies or similar technologies require consent, we will obtain it
+            before use (except where an exemption applies). You may also control cookies through
+            browser settings; blocking certain cookies may affect functionality.
+          </p>
+        </section>
+
+        <section id="s15">
+          <h2>15. Automated Processing and Profiling</h2>
+          <p>
+            We may use automated systems to rank content, recommend posts or videos, detect spam and
+            abusive behaviour, and protect platform integrity. These systems may involve limited
+            profiling of usage patterns. We do not make decisions based solely on automated processing
+            that produce legal effects concerning you or similarly significantly affect you within the
+            meaning of GDPR Article 22, except where permitted by applicable law. You may contact us
+            for further information about relevant logic at a meaningful level of detail, where
+            required.
+          </p>
+        </section>
+
+        <section id="s16">
+          <h2>16. Security Measures</h2>
+          <p>
+            Taking into account the state of the art, implementation costs, and the nature, scope,
+            context, and purposes of processing as well as the risk of varying likelihood and severity
+            for the rights and freedoms of natural persons, we implement appropriate technical and
+            organisational measures designed to protect personal data against accidental or unlawful
+            destruction, loss, alteration, unauthorised disclosure, or access (GDPR Article 32).
+          </p>
+          <p>
+            Measures may include encryption in transit, access controls, least-privilege principles,
+            monitoring, and staff confidentiality obligations. No method of electronic transmission
+            or storage is completely secure. You are responsible for maintaining the confidentiality
+            of your credentials and for activity under your account.
+          </p>
+        </section>
+
+        <section id="s17">
+          <h2>17. Data Breach Notification</h2>
+          <p>
+            In the event of a personal data breach, we will assess the risk to individuals’ rights
+            and freedoms and, where required by GDPR Articles 33 and 34, notify the competent
+            supervisory authority without undue delay and, where required, affected data subjects.
+          </p>
+        </section>
+
+        <section id="s18">
+          <h2>18. Device Permissions</h2>
+          <p>Depending on the platform and features used, the App may request permissions for:</p>
+          <ul>
+            <li>Camera and photo library (creating and uploading media)</li>
+            <li>Microphone (audio/video features where offered)</li>
+            <li>Notifications (message and activity alerts)</li>
+            <li>Location (optional location-aware features)</li>
+            <li>Network and storage access required for ordinary operation</li>
+          </ul>
+          <p>
+            Permission prompts are controlled by your operating system. You may deny or later revoke
+            permissions; some features may not function without them.
+          </p>
+        </section>
+
+        <section id="s19">
+          <h2>19. Changes to this Policy</h2>
+          <p>
+            We may update this Policy from time to time to reflect changes in our practices, the
+            Services, or legal requirements. The updated Policy will be posted at
+            <a href="https://matterya.com/privacy">https://matterya.com/privacy</a> with a revised
+            “Last updated” date. Where required by law, we will provide additional notice (for
+            example, in-app notice or email) for material changes. Your continued use of the Services
+            after the effective date of an update constitutes acknowledgment of the updated Policy,
+            except where consent is required for a particular change.
+          </p>
+        </section>
+
+        <section id="s20">
+          <h2>20. Contact</h2>
+          <div class="box">
+            <p><strong>Privacy and data protection</strong></p>
+            <p>
+              Email: <a class="contact" href="mailto:legal@matterya.com">legal@matterya.com</a><br />
+              Policy URL: <a href="https://matterya.com/privacy">https://matterya.com/privacy</a>
+            </p>
+            <p>
+              Please include the email address associated with your Matterya account and a clear
+              description of your request. For urgent security incidents, include “Security” in the
+              subject line.
+            </p>
+          </div>
+        </section>
+
+        <section id="s21">
+          <h2>21. Governing Language</h2>
+          <p>
+            This Policy may be translated for convenience. In the event of a conflict between a
+            translation and the English version, the English version shall prevail to the extent
+            permitted by applicable law, without prejudice to mandatory consumer protections under
+            German or EU law that cannot be waived.
+          </p>
+        </section>
+
+
+        <footer class="legal-foot">
+          <p>
+            © {{ year }} Matterya. All rights reserved.<br />
+            Store listing privacy policy URL:
+            <a href="https://matterya.com/privacy">https://matterya.com/privacy</a><br />
+            Data protection contact:
+            <a href="mailto:legal@matterya.com">legal@matterya.com</a>
+          </p>
+        </footer>
+      </main>
+    </div>
+  `,
+  styles: [
+    `
+      :host {
+        display: block;
+        height: 100%;
+        min-height: 100%;
+        overflow: hidden;
+        background: var(--m-paper, #f8f6f2);
+        color: var(--m-ink, #2c2825);
+      }
+      .legal-shell {
+        height: 100%;
+        max-height: 100dvh;
+        overflow-x: hidden;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior-y: contain;
+        background: var(--m-paper, #f8f6f2);
+      }
+      .legal-top {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
+        background: rgba(248, 246, 242, 0.94);
+        border-bottom: 0.5px solid var(--m-divider, #e2ded8);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+      }
+      .brand {
+        font-family: var(--m-serif, Georgia, 'Iowan Old Style', serif);
+        font-size: 20px;
+        color: inherit;
+        text-decoration: none;
+      }
+      .legal-nav {
+        display: flex;
+        gap: 14px;
+        font-size: 13px;
+        font-weight: 650;
+      }
+      .legal-nav a {
+        color: var(--m-ink-muted, #948b82);
+        text-decoration: none;
+      }
+      .legal-nav a.active {
+        color: var(--m-ink, #2c2825);
+      }
+      .legal-body {
+        max-width: none;
+        margin: 0;
+        padding: 28px 16px calc(72px + env(safe-area-inset-bottom));
+        line-height: 1.6;
+        font-size: 15px;
+        width: 100%;
+        box-sizing: border-box;
+      }
+      .kicker {
+        margin: 0 0 6px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--m-ink-muted, #948b82);
+      }
+      h1 {
+        margin: 0 0 12px;
+        font-family: var(--m-serif, Georgia, 'Iowan Old Style', serif);
+        font-size: 28px;
+        font-weight: 400;
+        line-height: 1.15;
+      }
+      .meta {
+        margin: 0 0 24px;
+        color: var(--m-ink-secondary, #6b645d);
+        font-size: 14px;
+      }
+      .toc {
+        margin: 0 0 28px;
+        padding: 14px 16px;
+        border-radius: 14px;
+        background: var(--m-surface, #fefdfb);
+        border: 0.5px solid var(--m-border, #ddd8d1);
+      }
+      .toc-title {
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--m-ink-muted, #948b82);
+        margin-bottom: 8px;
+      }
+      .toc ol {
+        margin: 0;
+        padding-left: 1.2em;
+        columns: 1;
+      }
+      @media (min-width: 640px) {
+        .toc ol {
+          columns: 2;
+          column-gap: 24px;
+        }
+      }
+      .toc li {
+        margin: 0 0 6px;
+        break-inside: avoid;
+      }
+      .toc a {
+        color: var(--m-accent-bright, #7b6347);
+        text-decoration: none;
+        font-size: 13.5px;
+      }
+      h2 {
+        margin: 32px 0 10px;
+        font-size: 18px;
+        font-weight: 700;
+        scroll-margin-top: 72px;
+      }
+      h3 {
+        margin: 18px 0 8px;
+        font-size: 15px;
+        font-weight: 700;
+      }
+      p,
+      ul {
+        margin: 0 0 12px;
+      }
+      ul {
+        padding-left: 1.25em;
+      }
+      li {
+        margin-bottom: 6px;
+      }
+      a {
+        color: var(--m-accent-bright, #7b6347);
+      }
+      .box {
+        padding: 14px 16px;
+        border-radius: 12px;
+        background: var(--m-surface, #fefdfb);
+        border: 0.5px solid var(--m-border, #ddd8d1);
+        margin: 0 0 14px;
+      }
+      .box p:last-child {
+        margin-bottom: 0;
+      }
+      .note {
+        font-size: 13px;
+        color: var(--m-ink-muted, #948b82);
+      }
+      .table-wrap {
+        width: 100%;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        margin: 12px 0 16px;
+      }
+      table {
+        width: 100%;
+        min-width: 560px;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+      th,
+      td {
+        border: 0.5px solid var(--m-border, #ddd8d1);
+        padding: 10px 8px;
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        background: var(--m-canvas-muted, #f2f0ec);
+        font-weight: 700;
+      }
+      .contact {
+        font-weight: 700;
+        font-size: 16px;
+      }
+      .legal-foot {
+        margin-top: 40px;
+        padding-top: 18px;
+        border-top: 0.5px solid var(--m-divider, #e2ded8);
+        font-size: 13px;
+        color: var(--m-ink-muted, #948b82);
+      }
+      /* desktop layout */
+
+      @media (min-width: 900px) {
+        .legal-shell {
+          background: var(--m-canvas-muted, #f2f0ec);
+        }
+        .legal-top {
+          padding-left: var(--m-page-padding, 28px);
+          padding-right: var(--m-page-padding, 28px);
+        }
+        .legal-body {
+          max-width: min(900px, 100%);
+          margin: 0 auto;
+          background: var(--m-surface, #fefdfb);
+          border: 0.5px solid var(--m-border, #ddd8d1);
+          border-radius: 16px;
+          padding: 36px 40px 64px;
+          margin-top: 24px;
+          margin-bottom: 48px;
+        }
+        h1 { font-size: 34px; }
+        h2 { font-size: 20px; }
+      }
+
+    `,
+  ],
+})
+export class PrivacyPageComponent implements OnInit, OnDestroy {
+  readonly year = new Date().getFullYear();
+
+  ngOnInit(): void {
+    // Ensure document/body can scroll legal pages even if prior route locked overflow.
+    try {
+      document.documentElement.classList.add('app-bg-feed');
+      document.documentElement.classList.remove('app-bg-globe');
+      document.documentElement.style.overflowY = '';
+      document.body.style.overflowY = 'auto';
+      document.documentElement.style.height = '';
+      document.body.style.height = '';
+    } catch {
+      // ignore
+    }
+  }
+
+  ngOnDestroy(): void {
+    // leave global scroll state to the next route's syncRootBackground
+  }
+}

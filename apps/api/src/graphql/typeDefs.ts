@@ -32,8 +32,18 @@ export const typeDefs = `#graphql
     city_name: String
     bio: String
     is_private: Boolean!
+    account_status: String
+    deactivated_at: String
+    deleted_at: String
     created_at: String
     updated_at: String
+  }
+
+  type AccountActionResult {
+    ok: Boolean!
+    action: String!
+    message: String
+    account_status: String!
   }
 
   # ✅ This is what Query.me returns (not Profile)
@@ -556,6 +566,10 @@ export const typeDefs = `#graphql
     # lat/lng optional: when omitted, server geolocates via the caller's IP.
     detectLocation(lat: Float, lng: Float): DetectedLocation!
     updateProfile(input: UpdateProfileInput!): Profile!
+    deactivateAccount: AccountActionResult!
+    reactivateAccount: AccountActionResult!
+    # confirmation must be "DELETE" or the account username
+    deleteAccount(confirmation: String!): AccountActionResult!
 
     # Presence mutations
     heartbeat(iso: String): HeartbeatResult!

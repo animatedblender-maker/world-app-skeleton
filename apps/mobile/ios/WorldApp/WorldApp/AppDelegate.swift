@@ -1,6 +1,16 @@
 import UIKit
 
 final class AppDelegate: NSObject, UIApplicationDelegate {
+    /// Portrait by default; fullscreen hub video temporarily allows landscape.
+    static var orientationLock: UIInterfaceOrientationMask = .portrait
+
+    func application(
+        _ application: UIApplication,
+        supportedInterfaceOrientationsFor window: UIWindow?
+    ) -> UIInterfaceOrientationMask {
+        AppDelegate.orientationLock
+    }
+
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
@@ -9,14 +19,21 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         // VoIP + CallKit must exist synchronously so a cold-start push can take over the screen.
         VoIPPushService.shared.bootstrap()
         _ = CallKitManager.shared
+        // Notification delegate MUST be set before return — otherwise tap-to-open
+        // on cold start never delivers didReceive and the user lands on home.
+        PushNotificationService.shared.configure()
         application.registerForRemoteNotifications()
 
         if let remotePayload = launchOptions?[.remoteNotification] as? [AnyHashable: Any] {
-            _ = IncomingCallWake.handleIfNeeded(remotePayload)
+            if IncomingCallWake.handleIfNeeded(remotePayload) == false {
+                // Like / comment / message launch-from-notification.
+                Task { @MainActor in
+                    _ = await PushNotificationService.shared.handleRemoteNotification(remotePayload)
+                }
+            }
         }
 
         Task { @MainActor in
-            PushNotificationService.shared.configure()
             VoIPPushService.shared.bootstrap()
             if AuthService.shared.isAuthenticated {
                 CallSessionManager.shared.bootstrap()

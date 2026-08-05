@@ -103,6 +103,20 @@ struct GraphQLSharedPost: Decodable {
         case authorID = "author_id"
     }
 
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+        // Null body on shared embeds must not fail the entire postById decode
+        // (that left PostDetail stuck on a spinner / "not found").
+        body = try container.decodeIfPresent(String.self, forKey: .body) ?? ""
+        mediaType = try container.decodeIfPresent(String.self, forKey: .mediaType)
+        mediaURL = try container.decodeIfPresent(String.self, forKey: .mediaURL)
+        thumbURL = try container.decodeIfPresent(String.self, forKey: .thumbURL)
+        authorID = try container.decodeIfPresent(String.self, forKey: .authorID) ?? ""
+        author = try container.decodeIfPresent(GraphQLAuthor.self, forKey: .author)
+    }
+
     var toPreview: SharedPostPreview {
         SharedPostPreview(
             id: id,
@@ -224,6 +238,9 @@ struct GraphQLProfile: Decodable {
     let countryCode: String?
     let cityName: String?
     let bio: String?
+    let accountStatus: String?
+    let deactivatedAt: String?
+    let deletedAt: String?
     let createdAt: String?
     let updatedAt: String?
 
@@ -237,6 +254,9 @@ struct GraphQLProfile: Decodable {
         case countryCode = "country_code"
         case cityName = "city_name"
         case bio
+        case accountStatus = "account_status"
+        case deactivatedAt = "deactivated_at"
+        case deletedAt = "deleted_at"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
     }
@@ -246,6 +266,7 @@ struct GraphQLProfile: Decodable {
             userID: userID, email: email, displayName: displayName, username: username,
             avatarURL: avatarURL, countryName: countryName, countryCode: countryCode,
             cityName: cityName, bio: bio, followersCount: nil, followingCount: nil,
+            accountStatus: accountStatus, deactivatedAt: deactivatedAt, deletedAt: deletedAt,
             createdAt: createdAt ?? "", updatedAt: updatedAt ?? ""
         )
     }

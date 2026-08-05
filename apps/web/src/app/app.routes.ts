@@ -45,6 +45,24 @@ export const routes: Routes = [
       import('./pages/hubs.page').then((m) => m.HubsPageComponent),
   },
   {
+    path: 'hubs/watch/:id',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pages/hubs-watch.page').then((m) => m.HubsWatchPageComponent),
+  },
+  {
+    path: 'play/watch/:id',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pages/hubs-watch.page').then((m) => m.HubsWatchPageComponent),
+  },
+  {
+    path: 'hubs/channel/:id',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pages/hubs-channel.page').then((m) => m.HubsChannelPageComponent),
+  },
+  {
     path: 'globe',
     canActivate: [authGuard],
     loadComponent: () =>
@@ -61,6 +79,24 @@ export const routes: Routes = [
     canActivate: [authGuard],
     loadComponent: () =>
       import('./pages/messages.page').then((m) => m.MessagesPageComponent),
+  },
+  {
+    path: 'profile',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pages/owner-profile.page').then((m) => m.OwnerProfilePageComponent),
+  },
+  {
+    path: 'settings',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pages/account-settings.page').then((m) => m.AccountSettingsPageComponent),
+  },
+  {
+    path: 'account',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pages/account-settings.page').then((m) => m.AccountSettingsPageComponent),
   },
   {
     path: 'search',
@@ -104,6 +140,12 @@ export const routes: Routes = [
       import('./pages/news.page').then((m) => m.NewsPageComponent),
   },
   {
+    path: 'country/:code',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pages/country-feed.page').then((m) => m.CountryFeedPageComponent),
+  },
+  {
     path: 'ops-portal-2026',
     canActivate: [authGuard],
     loadComponent: () =>
@@ -118,7 +160,36 @@ export const routes: Routes = [
   {
     path: 'user/:slug',
     loadComponent: () =>
+      import('./pages/public-profile.page').then((m) => m.PublicProfilePageComponent),
+  },
+  {
+    path: 'user-edit/:slug',
+    canActivate: [authGuard],
+    loadComponent: () =>
       import('./pages/profile.page').then((m) => m.ProfilePageComponent),
+  },
+
+  
+  // Public legal pages (store listing / GDPR) — no auth
+  {
+    path: 'privacy',
+    loadComponent: () =>
+      import('./pages/privacy.page').then((m) => m.PrivacyPageComponent),
+  },
+  {
+    path: 'legal/privacy',
+    loadComponent: () =>
+      import('./pages/privacy.page').then((m) => m.PrivacyPageComponent),
+  },
+  {
+    path: 'legal',
+    redirectTo: 'privacy',
+    pathMatch: 'full',
+  },
+  {
+    path: 'terms',
+    loadComponent: () =>
+      import('./pages/terms.page').then((m) => m.TermsPageComponent),
   },
 
   { path: '**', redirectTo: '' },

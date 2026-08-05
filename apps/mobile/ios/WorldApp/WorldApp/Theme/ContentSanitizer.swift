@@ -42,17 +42,29 @@ enum ContentSanitizer {
 
     static func clean(_ value: String?) -> String? {
         guard let value else { return nil }
-        let trimmed = stripStoryMarker(value).trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = stripInternalMarkers(value).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !looksLikeId(trimmed) else { return nil }
         return trimmed
     }
 
-    static func stripStoryMarker(_ value: String) -> String {
+    /// Removes client-only body markers (story / hub channel / spark) so cards never show raw tokens.
+    static func stripInternalMarkers(_ value: String) -> String {
         value
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.hasPrefix("__story__|") }
+            .filter { line in
+                if line.isEmpty { return false }
+                if line.hasPrefix("__story__|") { return false }
+                if line.hasPrefix("__hub_channel__") { return false }
+                if line.hasPrefix("__spark__|") { return false }
+                if line.hasPrefix("__reel__|") { return false }
+                return true
+            }
             .joined(separator: "\n")
+    }
+
+    static func stripStoryMarker(_ value: String) -> String {
+        stripInternalMarkers(value)
     }
 
     static func displayName(
@@ -60,8 +72,33 @@ enum ContentSanitizer {
         username: String?,
         fallback: String = "Member"
     ) -> String {
-        if let name = clean(displayName) { return name }
-        if let handle = clean(username) { return handle }
+        if let name = clean(displayName), !DemoPersonNames.isPlaceholderDisplayName(name) {
+            return name
+        }
+        if let handle = clean(username), !DemoPersonNames.isPlaceholderDisplayName(handle) {
+            return handle
+        }
+        return fallback
+    }
+
+    /// Prefer a real-looking name for demo `user_*` authors even when cached as "User 000123".
+    static func displayName(
+        forAuthor author: PostAuthor?,
+        authorID: String,
+        fallback: String = "Member"
+    ) -> String {
+        if let name = clean(author?.displayName), !DemoPersonNames.isPlaceholderDisplayName(name) {
+            return name
+        }
+        if let handle = clean(author?.username), !DemoPersonNames.isPlaceholderDisplayName(handle) {
+            return handle
+        }
+        if authorID.hasPrefix("user_") {
+            return DemoPersonNames.fullName(
+                forAuthorID: authorID,
+                countryCode: author?.countryCode
+            )
+        }
         return fallback
     }
 }

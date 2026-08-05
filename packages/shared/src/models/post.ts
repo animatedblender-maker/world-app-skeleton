@@ -32,8 +32,8 @@ export type CountryPost = {
   country_code: string | null;
   city_name: string | null;
   author: PostAuthor | null;
-  // External news link fields
-  external_ref_type?: 'news' | null;
+  // External link fields (news articles or hub seed catalog)
+  external_ref_type?: 'news' | 'hub' | null;
   external_ref_id?: string | null;
   link_url?: string | null;
   link_title?: string | null;

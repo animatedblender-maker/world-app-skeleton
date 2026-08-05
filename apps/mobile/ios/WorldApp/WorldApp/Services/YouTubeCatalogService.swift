@@ -22,19 +22,30 @@ enum YouTubeMainTab: String, CaseIterable, Identifiable {
     }
 }
 
+/// Hubs home chips — aligned with seed `hub_slug` / HubCategoryClassifier (not YouTube clones).
 enum YouTubeHomeFilter: String, CaseIterable, Identifiable {
-    case all, trending, music, gaming, news, live, recent
+    case all
+    case social, travel, nature, music, food, sports
+    case tech, fitness, film, culture, daily
+    case trending, recent
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .all: "For you"
-        case .trending: "Trending"
+        case .social: "Social"
+        case .travel: "Travel"
+        case .nature: "Nature"
         case .music: "Music"
-        case .gaming: "Gaming"
-        case .news: "News"
-        case .live: "Live"
+        case .food: "Food"
+        case .sports: "Sports"
+        case .tech: "Tech"
+        case .fitness: "Fitness"
+        case .film: "Film"
+        case .culture: "Culture"
+        case .daily: "Daily"
+        case .trending: "Trending"
         case .recent: "Latest"
         }
     }
@@ -42,17 +53,37 @@ enum YouTubeHomeFilter: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .all: "square.grid.2x2"
-        case .trending: "flame"
+        case .social: "person.2"
+        case .travel: "airplane"
+        case .nature: "leaf"
         case .music: "music.note"
-        case .gaming: "gamecontroller"
-        case .news: "newspaper"
-        case .live: "dot.radiowaves.left.and.right"
+        case .food: "fork.knife"
+        case .sports: "sportscourt"
+        case .tech: "desktopcomputer"
+        case .fitness: "figure.run"
+        case .film: "film"
+        case .culture: "theatermasks"
+        case .daily: "sun.max"
+        case .trending: "flame"
         case .recent: "clock"
         }
     }
 
+    /// Seed / category slug for shelf filtering (nil for algorithmic chips).
+    var hubSlug: String? {
+        switch self {
+        case .all, .trending, .recent: return nil
+        default: return rawValue
+        }
+    }
+
+    /// Chips shown under Hubs home (ordered like TF shelves).
     static var hubCategories: [YouTubeHomeFilter] {
-        allCases.filter { $0 != .all }
+        [
+            .social, .travel, .nature, .music, .food, .sports,
+            .tech, .fitness, .film, .culture, .daily,
+            .trending, .recent,
+        ]
     }
 }
 
@@ -182,14 +213,17 @@ final class YouTubeCatalogService {
             }
         case .recent:
             return base.sorted { $0.createdAt > $1.createdAt }
-        case .music:
-            return keywordFilter(base, words: ["music", "song", "album", "concert", "live session", "cover"])
-        case .gaming:
-            return keywordFilter(base, words: ["game", "gaming", "playthrough", "walkthrough", "esports", "minecraft"])
-        case .news:
-            return keywordFilter(base, words: ["news", "report", "breaking", "update", "headline"])
-        case .live:
-            return keywordFilter(base, words: ["live", "stream", "broadcast", "premiere"])
+        case .social, .travel, .nature, .music, .food, .sports,
+                .tech, .fitness, .film, .culture, .daily:
+            let slug = homeFilter.hubSlug ?? homeFilter.rawValue
+            return base.filter { post in
+                let postSlug = (post.hubSlug ?? post.externalRefID ?? "").lowercased()
+                if postSlug == slug || postSlug.hasPrefix(slug + "_") { return true }
+                // Persona parents (e.g. travel_cities → travel) via classifier.
+                let parent = HubCategoryClassifier.parentCategory(of: postSlug)
+                if parent == slug { return true }
+                return false
+            }
         }
     }
 

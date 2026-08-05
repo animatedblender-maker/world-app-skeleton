@@ -7,7 +7,12 @@ enum AppConfig {
     static let graphqlEndpoint = "https://api.matterya.com/graphql"
     static let apiBaseURL = "https://api.matterya.com"
     static let demoDatasetBaseURL = "https://matterya.com"
-    static let useDemoDataset = false
+    /// Merge Reddit / bundled seed into feeds (TestFlight-style density).
+    static let useDemoDataset = true
+    /// Prefer local monorepo + app-bundled seed over remote download.
+    static let demoDatasetAllowRemoteDownload = false
+    /// Cap demo posts held for home-feed filler.
+    static let demoDatasetMaxPosts = 4_000
     static let pexelsAPIKey = "gN9dMuDmlYiMu1AjIEHZcpoemMfHhfWhAmi71jrRssq5I5AIVIl6D3Ll"
     static let appName = "Matterya"
 }

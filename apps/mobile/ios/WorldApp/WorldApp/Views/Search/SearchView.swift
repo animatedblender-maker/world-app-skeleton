@@ -194,7 +194,7 @@ struct SearchView: View {
         Button {
             appState.openPost(post)
         } label: {
-            HStack(alignment: .top, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
                 contentThumbnail(post)
 
                 VStack(alignment: .leading, spacing: 6) {
@@ -210,7 +210,7 @@ struct SearchView: View {
                     }
 
                     let excerpt = post.displayExcerpt
-                    if !excerpt.isEmpty {
+                    if !excerpt.isEmpty, !post.hasVideo {
                         Text(excerpt)
                             .font(.caption)
                             .foregroundStyle(Theme.inkSecondary)
@@ -227,16 +227,17 @@ struct SearchView: View {
                             .font(.caption2)
                             .foregroundStyle(Theme.inkMuted)
                         if post.hasVideo {
-                            Label("Video", systemImage: "play.rectangle.fill")
-                                .font(.caption2)
+                            Text(post.isReel ? MatteryaCopy.spark : "Video")
+                                .font(.caption2.weight(.semibold))
                                 .foregroundStyle(Theme.inkMuted)
                         } else if post.hasImage {
-                            Label("Photo", systemImage: "photo")
+                            Text("Photo")
                                 .font(.caption2)
                                 .foregroundStyle(Theme.inkMuted)
                         }
                     }
                 }
+                Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -245,19 +246,32 @@ struct SearchView: View {
 
     @ViewBuilder
     private func contentThumbnail(_ post: CountryPost) -> some View {
-        let size: CGFloat = 56
-        if let url = post.feedImageURL, post.hasMedia {
-            CachedAsyncImage(url: url, maxPixelSize: size * 2, contentMode: .fill)
-                .frame(width: size, height: size)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        // Videos: eye-friendly 16:9 preview. Text/photo: compact square.
+        if post.hasVideo {
+            let w: CGFloat = post.isReel ? 72 : 128
+            let h: CGFloat = post.isReel ? 128 : 72
+            YouTubeVideoThumbnail(
+                post: post,
+                maxPixelSize: 360,
+                showsPlayIcon: false,
+                frameStyle: .card,
+                extractFrameIfNeeded: false,
+                showsHubBadge: false
+            )
+            .frame(width: w, height: h)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        } else if let url = post.feedImageURL ?? post.resolvedImageURL {
+            CachedAsyncImage(url: url, maxPixelSize: 160, contentMode: .fill)
+                .frame(width: 64, height: 64)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         } else {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Theme.accentSoft)
-                .frame(width: size, height: size)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Theme.canvasMuted)
+                .frame(width: 64, height: 64)
                 .overlay {
-                    Image(systemName: post.hasVideo ? "play.rectangle" : "text.alignleft")
+                    Image(systemName: "text.alignleft")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(Theme.accentBright)
+                        .foregroundStyle(Theme.inkMuted)
                 }
         }
     }
@@ -345,37 +359,52 @@ struct SearchView: View {
             }
         }
 
-        var loadedProfiles: [Profile] = []
-        var loadedContent: [CountryPost] = []
-        var errors: [String] = []
-
-        async let peopleTask: Void = {
+        // Return values from concurrent tasks (do not mutate captured vars — Swift 6).
+        async let peopleOutcome: Result<[Profile], Error> = {
             do {
-                loadedProfiles = try await ProfileService.shared.searchProfiles(
-                    trimmed,
-                    limit: MatteryaSearchEngine.peopleLimit
+                return .success(
+                    try await ProfileService.shared.searchProfiles(
+                        trimmed,
+                        limit: MatteryaSearchEngine.peopleLimit
+                    )
                 )
             } catch {
-                errors.append(error.localizedDescription)
+                return .failure(error)
             }
         }()
 
-        async let contentTask: Void = {
+        async let contentOutcome: Result<[CountryPost], Error> = {
             do {
-                loadedContent = try await PostsService.shared.searchPosts(
-                    trimmed,
-                    limit: MatteryaSearchEngine.contentLimit
+                return .success(
+                    try await PostsService.shared.searchPosts(
+                        trimmed,
+                        limit: MatteryaSearchEngine.contentLimit
+                    )
                 )
             } catch {
-                errors.append(error.localizedDescription)
+                return .failure(error)
             }
         }()
 
-        _ = await (peopleTask, contentTask)
+        let peopleResult = await peopleOutcome
+        let contentResult = await contentOutcome
         guard searchGeneration == generation else { return }
 
-        profiles = loadedProfiles
-        content = loadedContent
+        var errors: [String] = []
+        switch peopleResult {
+        case .success(let loaded):
+            profiles = loaded
+        case .failure(let error):
+            profiles = []
+            errors.append(error.localizedDescription)
+        }
+        switch contentResult {
+        case .success(let loaded):
+            content = loaded
+        case .failure(let error):
+            content = []
+            errors.append(error.localizedDescription)
+        }
 
         if profiles.isEmpty && content.isEmpty && matchedCountries.isEmpty, !errors.isEmpty {
             searchError = errors.first

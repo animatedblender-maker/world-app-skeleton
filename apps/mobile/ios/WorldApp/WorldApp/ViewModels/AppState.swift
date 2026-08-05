@@ -62,6 +62,13 @@ final class AppState {
     var hubPlaybackExpanded = false
     var hubPlaybackPlaying = true
     var hubPlaybackMuted = false
+    /// When a conversation is open, mini player docks under the chat composer (not floating).
+    var hubPlaybackDockInChat: Bool {
+        guard hubPlaybackPost != nil, !hubPlaybackExpanded else { return false }
+        return currentConversationIDOnPath() != nil
+    }
+    /// If set, minimize returns to this chat (opened/expanded from that conversation).
+    private(set) var hubPlaybackReturnConversationID: String?
     var showAppMenu = false
     var floatingPosts: [CountryPost] = []
     var errorMessage: String?
@@ -70,6 +77,8 @@ final class AppState {
     var sharePostSheet: CountryPost?
     var quotedSharePostID: String?
     var pendingSearchQuery: String?
+    /// Bumped to scroll the home feed to the top (after post / share video).
+    var feedScrollToTopToken: Int = 0
 
     /// Queued when a push / in-app notification is tapped before MainTabView is ready.
     private var pendingPushRoute: PendingPushRoute?
@@ -208,7 +217,7 @@ final class AppState {
         async let notificationsTask: Void = { await refreshNotifications() }()
         // Soft network refresh only when home-feed cache is stale; never blocks UI.
         async let feedTask: Void = {
-            _ = await PostsService.shared.loadHomeFeed(forceRefresh: false, networkIfStale: true)
+            _ = await PostsService.shared.loadHomeFeed(forceRefresh: false)
         }()
         _ = await (statsTask, followingTask, savedTask, storiesTask, notificationsTask, feedTask)
         startPresence()
@@ -384,6 +393,47 @@ final class AppState {
         startPolling()
         registerPushInBackground()
         Task { await finishSessionWarmup() }
+        // Signing in reactivates a soft-deactivated account.
+        Task { await reactivateIfNeeded() }
+    }
+
+    /// If the profile was deactivated, restore it on successful sign-in.
+    func reactivateIfNeeded() async {
+        do {
+            let profile = try await profileService.meProfile()
+            if profile?.isDeleted == true {
+                showToast("This account was permanently deleted.", style: .error)
+                logout()
+                return
+            }
+            if profile?.isDeactivated == true {
+                let result = try await profileService.reactivateAccount()
+                if result.ok {
+                    showToast(result.message ?? "Welcome back — account reactivated.", style: .success)
+                    await refreshProfile()
+                }
+            }
+        } catch {
+            // Non-fatal: profile load may still succeed later.
+        }
+    }
+
+    func deactivateAccount() async throws {
+        let result = try await profileService.deactivateAccount()
+        guard result.ok else {
+            throw AuthError.server(result.message ?? "Could not deactivate account.")
+        }
+        showToast(result.message ?? "Account deactivated.", style: .info)
+        logout()
+    }
+
+    func deleteAccount(confirmation: String) async throws {
+        let result = try await profileService.deleteAccount(confirmation: confirmation)
+        guard result.ok else {
+            throw AuthError.server(result.message ?? "Could not delete account.")
+        }
+        showToast(result.message ?? "Account deleted.", style: .info)
+        logout()
     }
 
     func logout() {
@@ -620,8 +670,12 @@ final class AppState {
 
     func openConversation(id: String) {
         pendingConversationID = nil
-        // Keep Hubs audio going as mini while chatting.
-        minimizeHubPlayback()
+        // Keep Hubs audio going as mini while chatting (dock under composer).
+        minimizeHubPlayback(returnToChat: false)
+        // Prefer this chat as the minimize-return target while watching.
+        if hubPlaybackPost != nil {
+            hubPlaybackReturnConversationID = id
+        }
         selectedTab = .messages
         navigationPath.removeAll { destination in
             if case .conversation = destination { return true }
@@ -711,7 +765,7 @@ final class AppState {
     }
 
     /// Start / switch the single global hubs player. Stops feed audio first so nothing doubles.
-    /// - Parameter expanded: full watch chrome only on Hubs. Elsewhere (messages, feed, …) use mini.
+    /// - Parameter expanded: full Hubs watch (player + comments). Elsewhere use mini.
     func startHubPlayback(_ post: CountryPost, expanded: Bool = true) {
         showAppMenu = false
         globePanel = nil
@@ -719,9 +773,11 @@ final class AppState {
         isPlayPresented = false
         clearPendingLivingVideo()
 
-        // Full watch clears stack; mini (e.g. from chat) keeps the current screen.
         if expanded {
+            // Remember chat (if any), then open real Hubs watch — never overlay on chat.
+            rememberHubPlaybackChatReturnIfNeeded()
             navigationPath.removeAll()
+            selectedTab = .hubs
         }
 
         let switchingVideo = hubPlaybackPost?.id != post.id
@@ -739,7 +795,6 @@ final class AppState {
         }
 
         hubPlaybackPlaying = true
-        // Never stay expanded off the Hubs tab.
         if expanded {
             selectedTab = .hubs
             hubPlaybackExpanded = true
@@ -754,20 +809,36 @@ final class AppState {
         ImageCache.shared.prefetchPostThumbnails([post], maxPixelSize: 720)
     }
 
-    func minimizeHubPlayback() {
+    /// Collapse to mini.
+    /// If this session started from a chat and user hasn't navigated elsewhere, restore that chat.
+    /// Chat messages stay warm in `MessagesService` cache so re-open is instant.
+    func minimizeHubPlayback(returnToChat: Bool = true) {
         guard hubPlaybackPost != nil else { return }
         hubPlaybackExpanded = false
         hubPlaybackPlaying = true
+
+        // Drop return target if user already left that chat while minimized.
+        syncHubPlaybackChatReturnWithPath()
+
+        if returnToChat, let conversationID = hubPlaybackReturnConversationID {
+            selectedTab = .messages
+            navigationPath = [.conversation(conversationID)]
+        }
     }
 
     /// Leaving Hubs always collapses to the mini player (keep watching elsewhere).
+    /// Tab switches do not force a chat return — only explicit minimize does.
     func ensureHubPlaybackMinimizedIfNeeded() {
         guard hubPlaybackPost != nil, selectedTab != .hubs else { return }
-        minimizeHubPlayback()
+        minimizeHubPlayback(returnToChat: false)
     }
 
+    /// Tap miniplayer (from chat dock or floating bar) → full Hubs watch with comments.
     func expandHubPlayback() {
         guard hubPlaybackPost != nil else { return }
+        rememberHubPlaybackChatReturnIfNeeded()
+        // Always leave chat / other pushes so Hubs watch (player + comments) is the real screen.
+        navigationPath.removeAll()
         selectedTab = .hubs
         hubPlaybackExpanded = true
         hubPlaybackPlaying = true
@@ -777,10 +848,38 @@ final class AppState {
         hubPlaybackPost = nil
         hubPlaybackExpanded = false
         hubPlaybackPlaying = false
+        hubPlaybackReturnConversationID = nil
         MediaPlaybackCoordinator.shared.stopAllPlayback()
     }
 
+    /// Conversation id currently on the nav stack (if any).
+    func currentConversationIDOnPath() -> String? {
+        for destination in navigationPath.reversed() {
+            if case .conversation(let id) = destination { return id }
+        }
+        return nil
+    }
+
+    /// Remember chat only when the user is currently inside that conversation.
+    private func rememberHubPlaybackChatReturnIfNeeded() {
+        if let id = currentConversationIDOnPath() {
+            hubPlaybackReturnConversationID = id
+        }
+    }
+
+    /// If the user navigated away from the pinned chat while mini, forget return-to-chat.
+    func syncHubPlaybackChatReturnWithPath() {
+        guard let returnID = hubPlaybackReturnConversationID else { return }
+        // While expanded on Hubs, path is cleared — keep the pin until minimize.
+        if hubPlaybackExpanded { return }
+        if currentConversationIDOnPath() != returnID {
+            hubPlaybackReturnConversationID = nil
+        }
+    }
+
     func openLivingVideo(postID: String, tab: YouTubeMainTab? = nil, post: CountryPost? = nil) {
+        // Always open real Hubs watch (player + comments). Remember chat for minimize return.
+        rememberHubPlaybackChatReturnIfNeeded()
         navigationPath.removeAll()
         showAppMenu = false
         globePanel = nil
@@ -796,6 +895,7 @@ final class AppState {
         pendingLivingVideoID = postID
         pendingLivingVideo = (post?.id == postID) ? post : nil
         selectedTab = .hubs
+        hubPlaybackExpanded = true
         // Stop feed audio even while Hubs resolves the id.
         MediaPlaybackCoordinator.shared.stopAllPlayback()
     }
@@ -846,9 +946,11 @@ final class AppState {
     func openPost(_ post: CountryPost) {
         if post.isReel {
             openReelsViewer(startingPost: post)
-        } else if PlayPlatformBridge.isHubFeedCardVideo(post) || PlayPlatformBridge.isLongFormVideo(post) {
+        } else if PlayPlatformBridge.isHubCatalogContent(post), post.hasVideo {
+            // Only true Hubs content opens the Hubs watch surface.
             openLivingVideo(postID: post.id, tab: .home, post: post)
         } else {
+            // Plain feed videos (no channel / no hub marker) → post detail only.
             selectedTab = .feed
             navigationPath.removeAll()
             navigate(to: .post(post.id))
@@ -976,15 +1078,44 @@ final class AppState {
         activeCreateSheet = sheet
     }
 
-    /// Hub long-form: require a channel first, then open the channel video composer.
+    /// Pending hubs composer after first-time channel setup (video vs spark).
+    private var pendingHubCreateSheet: CreateContentSheet?
+
+    /// Hub long-form: only users who want to upload to Hubs get a channel.
+    /// No channel yet → Channel setup, then open the hub video composer.
     func presentHubVideoCreate() async {
         showCreateMenu = false
         if LivingChannelMarker.hasChannel(profile: currentProfile) {
             await presentCreateSheet(.hubVideo)
         } else {
-            // Channel setup does not require home country first, but posting will.
+            pendingHubCreateSheet = .hubVideo
+            // Channel setup does not require home country first; posting after will.
             activeCreateSheet = .channelSetup
         }
+    }
+
+    /// Sparks on Hubs: same channel gate as long-form.
+    func presentHubSparkCreate() async {
+        showCreateMenu = false
+        if LivingChannelMarker.hasChannel(profile: currentProfile) {
+            await presentCreateSheet(.reel)
+        } else {
+            pendingHubCreateSheet = .reel
+            activeCreateSheet = .channelSetup
+        }
+    }
+
+    /// Called when ChannelSetupView finishes — continue to hubs composer.
+    func completeChannelSetupAndContinue() async {
+        let next = pendingHubCreateSheet ?? .hubVideo
+        pendingHubCreateSheet = nil
+        // Refresh profile so hasChannel is true for subsequent opens.
+        if let me = currentProfile {
+            if let fresh = try? await ProfileService.shared.profileByID(me.userID) {
+                currentProfile = fresh
+            }
+        }
+        await presentCreateSheet(next)
     }
 
     func needsRepeatShareWarning(for post: CountryPost) -> Bool {
@@ -1025,6 +1156,23 @@ final class AppState {
             return "Set your home country to share."
         }
 
+        // Video shares: land on feed top with an uploading shadow first.
+        var placeholderID: String?
+        if post.hasVideo, !post.isReel {
+            placeholderID = beginFeedVideoUpload(
+                caption: caption?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                    ? caption!
+                    : (post.displayHeadline ?? post.displayBody),
+                previewImage: nil,
+                isHub: PlayPlatformBridge.isHubCatalogContent(post) || post.isHubSeedVideo
+            )
+            HomeFeedStore.shared.updateVideoUpload(
+                id: placeholderID!,
+                progress: 0.35,
+                phaseLabel: "Sharing"
+            )
+        }
+
         do {
             let created = try await PostsService.shared.sharePostToCountryFeed(
                 post: post,
@@ -1033,18 +1181,27 @@ final class AppState {
                 cityName: profile.cityName,
                 caption: caption
             )
-            ContentCache.shared.invalidate(.homeFeed, .livingVideos)
-            contentLoadGeneration += 1
-            NotificationCenter.default.post(
-                name: .userPostsDidChange,
-                object: nil,
-                userInfo: ["post": created]
-            )
+            if let placeholderID {
+                finishFeedVideoUpload(placeholderID: placeholderID, post: created)
+            } else {
+                ContentCache.shared.invalidate(.homeFeed, .livingVideos)
+                contentLoadGeneration += 1
+                NotificationCenter.default.post(
+                    name: .userPostsDidChange,
+                    object: nil,
+                    userInfo: ["post": created]
+                )
+                HomeFeedStore.shared.insertNewPost(created)
+                goToFeedTop(scroll: true)
+            }
             if let sourceCountry = post.countryName, sourceCountry != countryName {
                 return "Shared from \(sourceCountry) to your \(countryName) feed."
             }
             return "Shared to your \(countryName) feed."
         } catch {
+            if let placeholderID {
+                failFeedVideoUpload(placeholderID: placeholderID, message: error.localizedDescription)
+            }
             return error.localizedDescription
         }
     }
@@ -1052,6 +1209,57 @@ final class AppState {
     func reloadContent() {
         ContentCache.shared.invalidateAllFeeds()
         contentLoadGeneration += 1
+    }
+
+    /// Jump to home feed top — used after posting/sharing a video so the new card is visible.
+    func goToFeedTop(scroll: Bool = true) {
+        showCreateMenu = false
+        activeCreateSheet = nil
+        showAppMenu = false
+        globePanel = nil
+        navigationPath.removeAll()
+        selectedTab = .feed
+        if scroll {
+            feedScrollToTopToken += 1
+        }
+    }
+
+    /// Register an uploading video shadow on the feed and navigate there immediately.
+    @discardableResult
+    func beginFeedVideoUpload(
+        caption: String,
+        previewImage: UIImage?,
+        isHub: Bool
+    ) -> String {
+        let id = HomeFeedStore.shared.beginVideoUpload(
+            caption: caption,
+            previewImage: previewImage,
+            isHub: isHub
+        )
+        goToFeedTop(scroll: true)
+        return id
+    }
+
+    func finishFeedVideoUpload(placeholderID: String, post: CountryPost) {
+        HomeFeedStore.shared.completeVideoUpload(id: placeholderID, post: post)
+        ContentCache.shared.invalidate(.homeFeed, .livingVideos, .profilePosts)
+        NotificationCenter.default.post(
+            name: .userPostsDidChange,
+            object: nil,
+            userInfo: ["post": post]
+        )
+        goToFeedTop(scroll: true)
+        showToast(
+            HubChannelPostMarker.isMarked(post.body)
+                ? "Published to \(MatteryaCopy.matteryaHubs)"
+                : "Posted to your feed",
+            style: .success
+        )
+    }
+
+    func failFeedVideoUpload(placeholderID: String, message: String) {
+        HomeFeedStore.shared.failVideoUpload(id: placeholderID, message: message)
+        showToast(message, style: .error)
     }
 
     func refreshStories() async {

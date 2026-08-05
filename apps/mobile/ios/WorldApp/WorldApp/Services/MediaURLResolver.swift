@@ -123,6 +123,14 @@ enum MediaURLResolver {
     }
 
     static func playbackConfiguration(for url: URL) async -> MediaPlaybackConfiguration {
+        // Internet Archive `/download/` URLs 302 to CDN hosts. AVPlayer often never leaves
+        // the poster if handed the redirect URL — same path used by hub long-form player.
+        if ArchiveVideoPlayback.isArchiveURL(url) {
+            // Resolve CDN first; do NOT attach custom headers to AVPlayer — Archive CDN hangs with them.
+            let resolved = await ArchiveVideoPlayback.resolvedPlaybackURL(for: url)
+            return MediaPlaybackConfiguration(url: resolved, headers: nil)
+        }
+
         guard SupabaseStorageAccess.isPostsBucketURL(url) else {
             return MediaPlaybackConfiguration(url: url, headers: nil)
         }

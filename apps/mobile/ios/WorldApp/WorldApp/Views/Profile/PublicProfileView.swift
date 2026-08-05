@@ -34,6 +34,11 @@ struct PublicProfileView: View {
         profile?.userID == appState.currentProfile?.userID
     }
 
+    /// Same card set as home feed (edge-to-edge FacebookPostCard).
+    private var visiblePosts: [CountryPost] {
+        posts.forProfileFeedGrid()
+    }
+
     var body: some View {
         Group {
             if isLoading {
@@ -49,17 +54,19 @@ struct PublicProfileView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let profile {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
                         profileHeader(profile)
+                            .padding(.horizontal, Theme.pagePadding)
+                            .padding(.bottom, 12)
+
                         postsSection
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, Theme.pagePadding)
                     .padding(.bottom, 24)
                 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .screenBackground()
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(Theme.canvas, for: .navigationBar)
         .task(id: loadKey) { await load() }
@@ -107,7 +114,7 @@ struct PublicProfileView: View {
                     }
 
                     HStack(spacing: 18) {
-                        stat("Posts", posts.count)
+                        stat("Posts", visiblePosts.count)
                         stat("Followers", followCounts.followers)
                         stat("Following", followCounts.following)
                     }
@@ -135,7 +142,7 @@ struct PublicProfileView: View {
                         username: profile.username
                     )
                 } label: {
-                    Label(MatteryaCopy.watchOnHubs, systemImage: "globe.americas")
+                    Label(MatteryaCopy.watchOnHubs, systemImage: "play.rectangle.fill")
                         .font(.subheadline.weight(.semibold))
                         .frame(maxWidth: .infinity)
                 }
@@ -214,10 +221,13 @@ struct PublicProfileView: View {
     }
 
     private var postsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 0) {
             Text("Posts")
                 .font(.headline)
                 .foregroundStyle(Theme.ink)
+                .padding(.horizontal, Theme.pagePadding)
+                .padding(.top, 8)
+                .padding(.bottom, 10)
 
             if let postsErrorMessage {
                 Text(postsErrorMessage)
@@ -226,49 +236,58 @@ struct PublicProfileView: View {
                     .padding(Theme.cardPadding)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
+                    .padding(.horizontal, Theme.pagePadding)
             }
 
-            if posts.isEmpty && postsErrorMessage == nil {
+            if visiblePosts.isEmpty, postsErrorMessage == nil {
                 Text("No posts yet.")
                     .foregroundStyle(Theme.inkMuted)
                     .padding(Theme.cardPadding)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
+                    .padding(.horizontal, Theme.pagePadding)
             } else {
-                LazyVStack(spacing: 18) {
-                    ForEach(posts) { post in
-                        FacebookPostCard(
-                            post: post,
-                            showsAuthorHeader: false,
-                            showsAuthorInJournal: true,
-                            onLikeToggle: { Task { await toggleLike(post) } },
-                            onOpenPost: { appState.navigate(to: .post(post.id)) },
-                            onOpenVideo: PlayPlatformBridge.isLongFormVideo(post)
-                                ? { appState.openPost(post) }
-                                : nil,
-                            onOpenReel: {
-                                var sparks = posts.filter(\.isReel)
-                                if !sparks.contains(where: { $0.id == post.id }) {
-                                    sparks.insert(post, at: 0)
-                                }
-                                appState.openReelsViewer(startingPost: post, seedPosts: sparks)
-                            },
-                            onPostDeleted: { id in posts.removeAll { $0.id == id } },
-                            onPostUpdated: { updated in
-                                if let index = posts.firstIndex(where: { $0.id == updated.id }) {
-                                    posts[index] = updated
-                                }
+                // Full-bleed feed cards — same as home feed.
+                ForEach(visiblePosts) { post in
+                    FacebookPostCard(
+                        post: post,
+                        edgeToEdge: true,
+                        showsAuthorHeader: false,
+                        showsAuthorInJournal: true,
+                        mediaContext: .feed,
+                        onLikeToggle: { Task { await toggleLike(post) } },
+                        onOpenPost: { appState.navigate(to: .post(post.id)) },
+                        onOpenVideo: {
+                            appState.openPost(post)
+                        },
+                        onOpenReel: {
+                            var sparks = posts.filter(\.isReel)
+                            if !sparks.contains(where: { $0.id == post.id }) {
+                                sparks.insert(post, at: 0)
                             }
-                        )
+                            appState.openReelsViewer(startingPost: post, seedPosts: sparks)
+                        },
+                        onPostDeleted: { id in posts.removeAll { $0.id == id } },
+                        onPostUpdated: { updated in
+                            if let index = posts.firstIndex(where: { $0.id == updated.id }) {
+                                posts[index] = updated
+                            }
+                        }
+                    )
+                    .onAppear {
+                        EngagementTracker.shared.feedPostAppeared(post, surface: "profile")
+                    }
+                    .onDisappear {
+                        EngagementTracker.shared.feedPostDisappeared(post)
                     }
                 }
-                .padding(.horizontal, Theme.pagePadding)
             }
         }
     }
 
     private func hasPlayChannel(_ profile: Profile) -> Bool {
-        posts.contains { PlayPlatformBridge.isPlayEligible($0) }
+        LivingChannelMarker.hasChannel(profile: profile)
+            || posts.contains(where: PlayPlatformBridge.isHubCatalogContent)
     }
 
     private func stat(_ label: String, _ value: Int) -> some View {
@@ -298,9 +317,8 @@ struct PublicProfileView: View {
             followCounts = await FollowService.shared.counts(userID: profile.userID)
 
             do {
-                posts = try await PostsService.shared.listForAuthor(profile.userID, limit: 20)
-                    .excludingMoments()
-                    .excludingSparks()
+                let loaded = try await PostsService.shared.listForAuthor(profile.userID, limit: 40)
+                posts = loaded.forProfileFeedGrid()
             } catch {
                 posts = []
                 postsErrorMessage = "Couldn't load posts."
@@ -346,20 +364,16 @@ struct PublicProfileView: View {
                 posts[index] = copyPost(post, likedByMe: true, likeCount: post.likeCount + 1)
             }
         } catch {
-            errorMessage = error.localizedDescription
+            // Keep card on screen — toast would be better; avoid wiping the whole profile.
+            postsErrorMessage = error.localizedDescription
         }
     }
 
     private func copyPost(_ post: CountryPost, likedByMe: Bool, likeCount: Int) -> CountryPost {
-        CountryPost(
-            id: post.id, title: post.title, body: post.body,
-            mediaType: post.mediaType, mediaURL: post.mediaURL, thumbURL: post.thumbURL,
-            mediaCaption: post.mediaCaption, sharedPostID: post.sharedPostID,
-            visibility: post.visibility, likeCount: likeCount, commentCount: post.commentCount,
-            viewCount: post.viewCount, likedByMe: likedByMe, savedByMe: post.savedByMe,
-            createdAt: post.createdAt, updatedAt: post.updatedAt,
-            authorID: post.authorID, countryName: post.countryName,
-            countryCode: post.countryCode, cityName: post.cityName, author: post.author
+        post.withEngagement(
+            likedByMe: likedByMe,
+            likeCount: likeCount,
+            commentCount: post.commentCount
         )
     }
 
@@ -368,5 +382,4 @@ struct PublicProfileView: View {
         guard let root = UIApplication.shared.firstKeyWindow?.rootViewController else { return }
         root.topMostViewController().presentShareSheet(items: items)
     }
-
 }

@@ -232,7 +232,7 @@ import type { CountryPost } from '../core/models/post.model';
         height: 36px;
       }
       .post-card {
-        width: min(720px, 100%);
+        width: min(100%, 100%);
         background: rgba(10, 14, 22, 0.86);
         border-radius: 18px;
         border: 1px solid rgba(255, 255, 255, 0.08);

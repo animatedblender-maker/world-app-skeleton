@@ -142,7 +142,8 @@ final class ShareService {
     }
 
     func sendPostInMessage(post: CountryPost, conversationID: String) async throws {
-        let body = messageBody(for: .post(post))
+        // Structured payload so chat renders a post card / playable hub video (not a bare link).
+        let body = Message.buildShareBody(post: post)
         _ = try await MessagesService.shared.sendMessage(conversationID: conversationID, body: body)
     }
 

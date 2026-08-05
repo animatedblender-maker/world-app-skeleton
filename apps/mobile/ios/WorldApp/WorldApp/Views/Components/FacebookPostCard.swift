@@ -16,10 +16,13 @@ struct FacebookPostCard: View {
     var onOpenReel: (() -> Void)? = nil
     var onPostDeleted: ((String) -> Void)?
     var onPostUpdated: ((CountryPost) -> Void)?
-    var expandsCommentsInline: Bool = false
+    /// Always expand/collapse comments on the card — never jump to post detail for comments.
+    var expandsCommentsInline: Bool = true
     var viewingCountryISO: String? = nil
 
     @State private var commentsExpanded = false
+    /// How many comments to show before “Load more” (stays on the card).
+    @State private var visibleCommentLimit = 8
     @State private var inlineComments: [PostComment] = []
     @State private var commentError: String?
     @State private var showEditSheet = false
@@ -46,6 +49,19 @@ struct FacebookPostCard: View {
         return false
     }
 
+    /// Subtle location under the author name (country name only — no flag).
+    @ViewBuilder
+    private var authorLocationLine: some View {
+        if let location = post.authorLocationLabel {
+            Text(location)
+                .font(.caption)
+                .foregroundStyle(Theme.inkMuted)
+                .lineLimit(1)
+                .accessibilityLabel("From \(location)")
+        }
+    }
+
+    /// Stronger “away from your country” cue — only when browsing a different country.
     private var postedFromLabel: String? {
         guard let viewing = viewingCountryISO?.uppercased(),
               let postISO = post.countryCode?.uppercased(),
@@ -63,51 +79,62 @@ struct FacebookPostCard: View {
 
     @ViewBuilder
     private var postedFromBadge: some View {
-        if let postedFromLabel {
-            Label(postedFromLabel, systemImage: "mappin.and.ellipse")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(Theme.accent)
-                .lineLimit(2)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Theme.accent.opacity(0.1), in: Capsule())
-                .accessibilityLabel(postedFromLabel)
+        // Prefer the subtle always-on location line; keep capsule only when
+        // the post is from outside the country the viewer is currently exploring.
+        if postedFromLabel != nil, viewingCountryISO != nil {
+            if let postedFromLabel {
+                Label(postedFromLabel, systemImage: "mappin.and.ellipse")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(Theme.accent)
+                    .lineLimit(1)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Theme.accent.opacity(0.1), in: Capsule())
+                    .accessibilityLabel(postedFromLabel)
+            }
         }
+    }
+
+    /// Photo posts: caption only above the image (never duplicated below).
+    private var isImageOnlyPost: Bool {
+        post.hasImage && !post.hasVideo && !post.isReel && !post.isStory && post.sharedPost == nil
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // Always show a name card on feed videos (YouTube-frame used to skip this and hide the author).
             if showsAuthorHeader {
                 authorHeader
-            } else if showsPlayLinkInFeed || !usesYouTubeVideoFrame || !post.hasMedia {
+            } else {
                 journalHeader
             }
 
-            if let embed = post.sharedPost {
-                SharedPostEmbedView(embed: embed)
-            } else if post.sharedPostID != nil {
-                SharedPostLoadingEmbed(postID: post.sharedPostID!)
+            // Image posts: body/caption sits above the photo only.
+            if isImageOnlyPost, !post.displayBody.isEmpty {
+                captionBlock(text: post.displayBody, topPadding: 4, bottomPadding: 10)
             }
 
-            if showsPlayLinkInFeed {
-                PlayFeedLinkCard(post: post) {
-                    openPlayVideo()
-                }
+            if let embed = post.sharedPost {
+                // Shared original — hub videos use PlayFeedLinkCard (Hubs chip) inside embed.
+                SharedPostEmbedView(embed: embed)
+            } else if post.sharedPostID != nil, !showsPlayLinkInFeed {
+                // Only wait on embed when this share isn't already a stamped hub re-publish.
+                SharedPostLoadingEmbed(postID: post.sharedPostID!)
+            } else if showsPlayLinkInFeed {
+                // Own hub long-form or re-published hub share (media + Hubs badge on this post).
+                PlayFeedLinkCard(post: post, onOpen: { openPlayVideo() }, edgeToEdge: edgeToEdge)
             } else if post.hasMedia {
                 media
             }
 
-            if !post.displayExcerpt.isEmpty {
-                Text(post.displayExcerpt)
-                    .font(.body)
-                    .foregroundStyle(Theme.inkSecondary)
-                    .lineSpacing(4)
-                    .lineLimit(post.hasMedia ? 4 : 8)
-                    .padding(.horizontal, horizontalGutter)
-                    .padding(.top, post.hasMedia ? 12 : 0)
-                    .padding(.bottom, 4)
-                    .contentShape(Rectangle())
-                    .onTapGesture { openPrimaryDestination() }
+            // Non-image posts keep caption under media (video / text / hub cards).
+            // Image-only posts already rendered caption above — do not repeat.
+            if !isImageOnlyPost, !post.displayExcerpt.isEmpty {
+                captionBlock(
+                    text: post.displayExcerpt,
+                    topPadding: post.hasMedia ? 12 : 8,
+                    bottomPadding: 4
+                )
             }
 
             actions
@@ -121,6 +148,7 @@ struct FacebookPostCard: View {
                     .padding(.bottom, 8)
             }
 
+            // Comments stay on the card — first few + load more. No navigation to post.
             if commentsExpanded {
                 Divider()
                     .padding(.top, 8)
@@ -128,6 +156,18 @@ struct FacebookPostCard: View {
                 PostCommentsView(
                     postID: post.id,
                     comments: $inlineComments,
+                    showsComposer: true,
+                    maxVisibleComments: visibleCommentLimit,
+                    totalCommentCount: max(post.commentCount, inlineComments.count),
+                    onViewAllComments: {
+                        // Load more in place — never open post detail. Grow until full thread.
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            visibleCommentLimit = min(
+                                visibleCommentLimit + 25,
+                                max(inlineComments.count, post.commentCount, visibleCommentLimit + 25)
+                            )
+                        }
+                    },
                     onError: { commentError = $0 }
                 )
                 .padding(.horizontal, horizontalGutter)
@@ -190,22 +230,24 @@ struct FacebookPostCard: View {
             Button {
                 openAuthorProfile()
             } label: {
+                // Always the hand-drawn picture frame on name cards (not the feed circle shortcut).
                 AvatarView(url: post.author?.avatarURL, seed: post.authorID, size: 36)
             }
             .buttonStyle(.plain)
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 3) {
                 Button {
                     openAuthorProfile()
                 } label: {
                     Text(post.authorDisplayName)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Theme.ink)
+                        .lineLimit(1)
                 }
                 .buttonStyle(.plain)
 
+                authorLocationLine
                 postTimestampRow
-
                 postedFromBadge
             }
 
@@ -228,57 +270,116 @@ struct FacebookPostCard: View {
     }
 
     private var journalHeader: some View {
-        HStack(alignment: .top, spacing: 10) {
-            if showsAuthorInJournal {
-                Button {
-                    openAuthorProfile()
-                } label: {
-                    AvatarView(url: post.author?.avatarURL, seed: post.authorID, size: 36)
-                }
-                .buttonStyle(.plain)
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 10) {
+            // Author row only — real title (if any) sits full-width below.
+            HStack(alignment: .center, spacing: 10) {
                 if showsAuthorInJournal {
                     Button {
                         openAuthorProfile()
                     } label: {
-                        Text(post.authorDisplayName)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(Theme.ink)
-                            .lineLimit(1)
+                        // Hand-drawn scrapbook frame — same as pre-perf shortcut on feed name cards.
+                        AvatarView(url: post.author?.avatarURL, seed: post.authorID, size: 36)
                     }
                     .buttonStyle(.plain)
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Button {
+                            openAuthorProfile()
+                        } label: {
+                            Text(post.authorDisplayName)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Theme.ink)
+                                .lineLimit(1)
+                        }
+                        .buttonStyle(.plain)
+
+                        authorLocationLine
+                        postedFromBadge
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    VStack(alignment: .leading, spacing: 3) {
+                        authorLocationLine
+                        postedFromBadge
+                    }
+                    Spacer(minLength: 0)
                 }
 
-                postedFromBadge
+                Spacer(minLength: 8)
+                    .contentShape(Rectangle())
+                    .onTapGesture { openPrimaryDestination() }
 
-                if showsPlayLinkInFeed {
-                    Label(MatteryaCopy.publishedOnHubs, systemImage: "play.tv")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Theme.accentBright)
-                } else if let headline = post.displayHeadline {
-                    Text(headline)
-                        .postHeadlineStyle(lineLimit: 4)
-                        .contentShape(Rectangle())
-                        .onTapGesture { openPrimaryDestination() }
+                VStack(alignment: .trailing, spacing: 8) {
+                    postOptionsMenu
+                    postTimestampRow
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .layoutPriority(1)
+            .padding(.horizontal, horizontalGutter)
 
-            Spacer(minLength: 8)
-                .contentShape(Rectangle())
-                .onTapGesture { openPrimaryDestination() }
+            // Only an explicit post title here — never a body prefix (that duplicated captions).
+            if let title = post.displayTitle, !title.isEmpty {
+                Text(title)
+                    .postHeadlineStyle(lineLimit: 4)
+                    .padding(.horizontal, horizontalGutter)
+                    .contentShape(Rectangle())
+                    .onTapGesture { openPrimaryDestination() }
+            }
 
-            VStack(alignment: .trailing, spacing: 8) {
-                postOptionsMenu
-                postTimestampRow
+            // Hubs channel attribution under the title (share / channel long-form).
+            if showsPlayLinkInFeed, let channelLine = hubChannelAttributionLine {
+                Text(channelLine)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.inkMuted)
+                    .lineLimit(1)
+                    .padding(.horizontal, horizontalGutter)
+                    .padding(.top, post.displayTitle != nil ? 2 : 0)
             }
         }
+        .padding(.top, 16)
+        .padding(.bottom, post.displayTitle != nil || showsPlayLinkInFeed || isImageOnlyPost ? 12 : 10)
+    }
+
+    private func captionBlock(text: String, topPadding: CGFloat, bottomPadding: CGFloat) -> some View {
+        ExpandableBodyText(
+            text: text,
+            collapsedLineLimit: 4,
+            font: .body,
+            color: Theme.inkSecondary,
+            lineSpacing: 4,
+            moreTitle: "See more",
+            lessTitle: "See less",
+            uiTextStyle: .body
+        )
         .padding(.horizontal, horizontalGutter)
-        .padding(.top, 20)
-        .padding(.bottom, 14)
+        .padding(.top, topPadding)
+        .padding(.bottom, bottomPadding)
+        .id("post-body-\(post.id)")
+        .contentShape(Rectangle())
+        .onTapGesture { openPrimaryDestination() }
+    }
+
+    /// For hub shares the card author is the **sharer**; channel lives in mediaCaption / hubSlug.
+    /// Native hub_* posts already show the channel as the author — no extra line.
+    private var hubChannelAttributionLine: String? {
+        guard showsPlayLinkInFeed else { return nil }
+        // Channel is already the name card for seed channels.
+        if post.authorID.hasPrefix("hub_") || post.authorID.hasPrefix("hub_spark_") {
+            return nil
+        }
+        if let caption = post.displayCaption, !caption.isEmpty {
+            if caption.localizedCaseInsensitiveContains("from ") {
+                return caption
+            }
+            return "From \(caption) · \(MatteryaCopy.matteryaHubs)"
+        }
+        if let slug = post.hubSlug, !slug.isEmpty {
+            let name = HubVideoSeedService.channelDisplayName(hubSlug: slug, isSpark: false)
+            return "From \(name) · \(MatteryaCopy.matteryaHubs)"
+        }
+        if post.isHubSeedVideo || HubChannelPostMarker.isMarked(post.body) {
+            return "Shared from \(MatteryaCopy.matteryaHubs)"
+        }
+        return nil
     }
 
     private var postTimestampRow: some View {
@@ -361,41 +462,23 @@ struct FacebookPostCard: View {
     @ViewBuilder
     private var media: some View {
         if let aspect = FacebookMediaLayout.aspectRatio(for: post, context: mediaContext) {
+            let isFeedAutoplayVideo = post.hasVideo
+                && mediaContext == .feed
+                && !opensAsSpark
+                && post.playableVideoURL != nil
+
             Group {
-                if usesYouTubeVideoFrame {
-                    YouTubeVideoFrame(style: .feed) {
-                        if let url = post.playableVideoURL {
-                            InFrameVideoPlayer(
-                                url: url,
-                                posterURL: post.posterImageURL,
-                                placement: nil,
-                                countryCode: post.countryCode,
-                                contentCountryCode: post.countryCode,
-                                postID: post.id,
-                                muted: true,
-                                onViewed: { Task { await PostsService.shared.recordView(post) } }
-                            )
-                        } else {
-                            feedVideoPoster
-                        }
+                if post.hasVideo {
+                    // Feed/profile: one autoplay winner with in-frame scrub/pause (no post navigation).
+                    if isFeedAutoplayVideo, let url = post.playableVideoURL {
+                        feedAutoplayVideo(url: url)
+                    } else {
+                        feedVideoPoster
                     }
-                } else if post.hasVideo, let url = post.playableVideoURL {
-                    InFrameVideoPlayer(
-                        url: url,
-                        posterURL: post.posterImageURL,
-                        placement: post.isReel ? "reel" : nil,
-                        countryCode: post.countryCode,
-                        contentCountryCode: post.countryCode,
-                        postID: post.id,
-                        muted: true,
-                        onViewed: { Task { await PostsService.shared.recordView(post) } }
-                    )
-                } else if post.hasVideo {
-                    feedVideoPoster
                 } else if let url = post.feedImageURL {
                     CachedAsyncImage(
                         url: url,
-                        maxPixelSize: 900,
+                        maxPixelSize: 420,
                         contentMode: .fill,
                         placeholder: AnyView(mediaPlaceholder)
                     )
@@ -404,8 +487,11 @@ struct FacebookPostCard: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .aspectRatio(aspect, contentMode: .fit)
-            .frame(maxHeight: usesYouTubeVideoFrame ? nil : FacebookMediaLayout.maxFeedMediaHeight)
+            .modifier(FeedMediaSizeModifier(
+                isVideo: post.hasVideo && mediaContext == .feed && !opensAsSpark,
+                photoAspect: aspect,
+                usesYouTubeFrame: usesYouTubeVideoFrame
+            ))
             .clipped()
             .overlay(alignment: .bottom) {
                 if !post.hasVideo {
@@ -417,19 +503,32 @@ struct FacebookPostCard: View {
                     .frame(height: 60)
                 }
             }
-            .overlay {
-                if opensAsSpark {
-                    Image(systemName: "play.circle.fill")
-                        .font(.system(size: 52))
-                        .foregroundStyle(Theme.iconFill.opacity(0.95))
-                        .shadow(color: .black.opacity(0.25), radius: 6)
-                        .allowsHitTesting(false)
-                }
-            }
             .contentShape(Rectangle())
-            .onTapGesture { openMedia() }
+            // Autoplay video owns taps (controls/scrub). Posters/images still open media.
+            .onTapGesture {
+                guard !isFeedAutoplayVideo else { return }
+                openMedia()
+            }
             .padding(.top, usesYouTubeVideoFrame || showsAuthorHeader || !post.displayExcerpt.isEmpty ? 0 : 8)
         }
+    }
+
+    @ViewBuilder
+    private func feedAutoplayVideo(url: URL) -> some View {
+        InFrameVideoPlayer(
+            url: url,
+            posterURL: post.posterImageURL,
+            placement: nil,
+            countryCode: post.countryCode,
+            contentCountryCode: post.countryCode,
+            postID: post.id,
+            muted: false,
+            loops: true,
+            preferArchivePlayer: PlayPlatformBridge.isHubCatalogContent(post)
+                || ArchiveVideoPlayback.isArchiveURL(url),
+            showsControls: true,
+            onViewed: { Task { await PostsService.shared.recordView(post) } }
+        )
     }
 
     private var actions: some View {
@@ -442,12 +541,11 @@ struct FacebookPostCard: View {
             .buttonStyle(.plain)
 
             Button {
-                if expandsCommentsInline {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        commentsExpanded.toggle()
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    if !commentsExpanded {
+                        visibleCommentLimit = 3
                     }
-                } else {
-                    onOpenPost()
+                    commentsExpanded.toggle()
                 }
             } label: {
                 Image(systemName: commentsExpanded ? "bubble.right.fill" : "bubble.right")
@@ -495,15 +593,12 @@ struct FacebookPostCard: View {
 
             if post.commentCount > 0, !commentsExpanded {
                 Button {
-                    if expandsCommentsInline {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            commentsExpanded = true
-                        }
-                    } else {
-                        onOpenPost()
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        visibleCommentLimit = 3
+                        commentsExpanded = true
                     }
                 } label: {
-                    Text("\(post.commentCount) \(post.commentCount == 1 ? "comment" : "comments")")
+                    Text("View \(post.commentCount) \(post.commentCount == 1 ? "comment" : "comments")")
                         .font(.subheadline)
                         .foregroundStyle(Theme.inkMuted)
                 }
@@ -533,14 +628,21 @@ struct FacebookPostCard: View {
     private var feedVideoPoster: some View {
         Group {
             if usesYouTubeVideoFrame {
-                YouTubeVideoThumbnail(post: post, maxPixelSize: 900, frameStyle: .feed, embedsFrame: false)
+                // Never extract frames while scrolling the feed — posters only.
+                YouTubeVideoThumbnail(
+                    post: post,
+                    maxPixelSize: 420,
+                    frameStyle: .feed,
+                    embedsFrame: false,
+                    extractFrameIfNeeded: false
+                )
             } else {
                 VideoThumbnailView(
                     post: post,
-                    maxPixelSize: 600,
+                    maxPixelSize: 420,
                     contentMode: .fill,
-                    showsPlayIcon: true,
-                    playIconSize: 52,
+                    showsPlayIcon: false,
+                    extractFrameIfNeeded: false,
                     placeholder: AnyView(mediaPlaceholder)
                 )
             }
@@ -623,11 +725,24 @@ private struct SharedPostLoadingEmbed: View {
     let postID: String
 
     @State private var embed: SharedPostPreview?
+    @State private var loadFailed = false
 
     var body: some View {
         Group {
             if let embed {
                 SharedPostEmbedView(embed: embed)
+            } else if loadFailed {
+                HStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.bubble")
+                        .foregroundStyle(Theme.inkMuted)
+                    Text("Original post unavailable")
+                        .font(.caption)
+                        .foregroundStyle(Theme.inkMuted)
+                }
+                .padding(.horizontal, Theme.pagePadding)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Theme.canvasMuted)
             } else {
                 HStack(spacing: 10) {
                     ProgressView()
@@ -640,7 +755,9 @@ private struct SharedPostLoadingEmbed: View {
             }
         }
         .task(id: postID) {
-            if let post = try? await PostsService.shared.getPostByID(postID) {
+            loadFailed = false
+            if let post = try? await PostsService.shared.getPostByID(postID),
+               post.hasFeedVisibleContent {
                 embed = SharedPostPreview(
                     id: post.id,
                     title: post.title,
@@ -649,8 +766,12 @@ private struct SharedPostLoadingEmbed: View {
                     mediaURL: post.mediaURL,
                     thumbURL: post.thumbURL,
                     authorID: post.authorID,
-                    author: post.author
+                    author: post.author,
+                    externalRefType: post.externalRefType,
+                    externalRefID: post.externalRefID
                 )
+            } else {
+                loadFailed = true
             }
         }
     }
@@ -872,6 +993,26 @@ private struct PostEditSheet: View {
             return PostStoryMarker.buildBody(caption: trimmed, expiresAt: expires)
         }
         return trimmed
+    }
+}
+
+/// Videos use a tall dominant height so two rarely fit on one screen; photos keep aspect ratio.
+private struct FeedMediaSizeModifier: ViewModifier {
+    let isVideo: Bool
+    let photoAspect: CGFloat
+    let usesYouTubeFrame: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isVideo {
+            content
+                .frame(maxWidth: .infinity)
+                .frame(height: FacebookMediaLayout.dominantFeedVideoHeight())
+        } else {
+            content
+                .aspectRatio(photoAspect, contentMode: .fit)
+                .frame(maxHeight: usesYouTubeFrame ? nil : FacebookMediaLayout.maxFeedMediaHeight)
+        }
     }
 }
 

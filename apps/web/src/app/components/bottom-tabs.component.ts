@@ -20,10 +20,13 @@ type TabKey = 'feed' | 'globe' | 'hubs' | 'messages' | 'profile';
   },
   template: `
     <nav class="bottom-tabs" [class.globe-mode]="globeMode" role="navigation" aria-label="Primary">
+      <div class="rail-brand" aria-hidden="true">Matterya</div>
+
       <button type="button" class="tab-btn" aria-label="Feed" [class.active]="active === 'feed'" (click)="goFeed()">
         <svg class="tab-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
           <path d="M4 10.5L12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1v-9.5z" stroke-linejoin="round" />
         </svg>
+        <span class="tab-label">Feed</span>
       </button>
 
       <button type="button" class="tab-btn" aria-label="Globe" [class.active]="active === 'globe'" (click)="goGlobe()">
@@ -31,10 +34,12 @@ type TabKey = 'feed' | 'globe' | 'hubs' | 'messages' | 'profile';
           <circle cx="12" cy="12" r="8.5" />
           <path d="M3.5 12h17M12 3.5c2.4 2.6 3.6 5.4 3.6 8.5S14.4 17.9 12 20.5C9.6 17.9 8.4 15.1 8.4 12S9.6 6.1 12 3.5z" />
         </svg>
+        <span class="tab-label">Globe</span>
       </button>
 
       <button type="button" class="create-btn" aria-label="Create" (click)="toggleCreateMenu($event)">
         <span class="create-plus">+</span>
+        <span class="tab-label">Create</span>
       </button>
 
       <button type="button" class="tab-btn" aria-label="Hubs" [class.active]="active === 'hubs'" (click)="goHubs()">
@@ -44,6 +49,7 @@ type TabKey = 'feed' | 'globe' | 'hubs' | 'messages' | 'profile';
           <rect x="3.5" y="13.5" width="7" height="7" rx="1.2" />
           <rect x="13.5" y="13.5" width="7" height="7" rx="1.2" />
         </svg>
+        <span class="tab-label">Hubs</span>
       </button>
 
       <button
@@ -59,6 +65,7 @@ type TabKey = 'feed' | 'globe' | 'hubs' | 'messages' | 'profile';
             stroke-linejoin="round"
           />
         </svg>
+        <span class="tab-label">Messages</span>
         <span class="tab-dot" *ngIf="messagesUnreadCount > 0"></span>
       </button>
 
@@ -78,6 +85,7 @@ type TabKey = 'feed' | 'globe' | 'hubs' | 'messages' | 'profile';
           />
           <span *ngIf="!avatarUrl">{{ avatarInitials }}</span>
         </span>
+        <span class="tab-label">Profile</span>
       </button>
     </nav>
 
@@ -128,8 +136,15 @@ type TabKey = 'feed' | 'globe' | 'hubs' | 'messages' | 'profile';
         transition: transform 180ms ease, opacity 180ms ease;
       }
       :host.hidden {
-        transform: translateY(calc(var(--tabs-height, 56px) + env(safe-area-inset-bottom) + 6px));
+        transform: translateY(calc(var(--tabs-height, 49px) + env(safe-area-inset-bottom) + 6px));
         opacity: 0;
+        pointer-events: none;
+      }
+      .rail-brand {
+        display: none;
+      }
+      .tab-label {
+        display: none;
       }
       .bottom-tabs {
         pointer-events: auto;
@@ -138,8 +153,8 @@ type TabKey = 'feed' | 'globe' | 'hubs' | 'messages' | 'profile';
         align-items: center;
         width: 100%;
         margin: 0;
-        padding: 4px 6px calc(4px + env(safe-area-inset-bottom));
-        min-height: calc(var(--tabs-height, 56px) + env(safe-area-inset-bottom));
+        padding: 2px 4px calc(2px + env(safe-area-inset-bottom));
+        min-height: calc(var(--tabs-height, 49px) + env(safe-area-inset-bottom));
         background: rgba(253, 252, 250, 0.96);
         border-top: 0.5px solid var(--m-divider, #e2ded8);
         box-shadow: 0 -8px 24px rgba(44, 40, 37, 0.04);
@@ -188,6 +203,7 @@ type TabKey = 'feed' | 'globe' | 'hubs' | 'messages' | 'profile';
         place-items: center;
         cursor: pointer;
         transform: translateY(-8px);
+        color: var(--m-ink, #2c2825);
       }
       .create-plus {
         width: 36px;
@@ -238,12 +254,14 @@ type TabKey = 'feed' | 'globe' | 'hubs' | 'messages' | 'profile';
         right: 0;
         bottom: 0;
         z-index: 92;
+        width: 100%;
         pointer-events: auto;
         background: var(--m-surface, #fefdfb);
         border-radius: 18px 18px 0 0;
         padding: 8px 0 calc(12px + env(safe-area-inset-bottom));
         box-shadow: 0 -16px 40px rgba(44, 40, 37, 0.12);
         border-top: 0.5px solid var(--m-divider, #e2ded8);
+        box-sizing: border-box;
       }
       .create-handle {
         width: 36px;
@@ -301,20 +319,147 @@ type TabKey = 'feed' | 'globe' | 'hubs' | 'messages' | 'profile';
         font-size: 12px;
         color: var(--m-ink-muted, #948b82);
       }
+
+      /* —— Desktop: left navigation rail (same destinations as Android tabs) —— */
       @media (min-width: 900px) {
+        :host {
+          top: 0;
+          bottom: 0;
+          left: 0;
+          right: auto;
+          width: var(--m-sidebar-w, 212px);
+          transform: none !important;
+          opacity: 1 !important;
+          pointer-events: auto;
+          border-right: 0.5px solid var(--m-divider, #e2ded8);
+          background: rgba(254, 253, 251, 0.98);
+          box-shadow: 8px 0 28px rgba(44, 40, 37, 0.04);
+        }
+        :host.hidden {
+          /* Still hide on full-screen reels if desired */
+          transform: translateX(calc(-1 * var(--m-sidebar-w, 212px) - 8px)) !important;
+          opacity: 0 !important;
+          pointer-events: none;
+        }
         .bottom-tabs {
-          max-width: 720px;
-          margin: 0 auto 10px;
-          border-radius: 18px;
-          border: 0.5px solid var(--m-divider, #e2ded8);
-          width: min(720px, calc(100vw - 24px));
+          display: flex;
+          flex-direction: column;
+          align-content: stretch;
+          gap: 4px;
+          height: 100%;
+          min-height: 100%;
+          padding: 18px 12px 20px;
+          border-top: 0;
+          box-shadow: none;
+          background: transparent;
+          width: 100%;
+          max-width: none;
+          margin: 0;
+          border-radius: 0;
+          grid-template-columns: none;
+        }
+        .bottom-tabs.globe-mode {
+          background: transparent;
+        }
+        .rail-brand {
+          display: block;
+          font-family: 'Iowan Old Style', Palatino, Georgia, serif;
+          font-size: 26px;
+          font-weight: 400;
+          letter-spacing: 0.02em;
+          color: var(--m-ink, #2c2825);
+          padding: 6px 12px 18px;
+          margin-bottom: 4px;
+        }
+        .tab-label {
+          display: inline;
+          font-size: 15px;
+          font-weight: 650;
+          letter-spacing: 0.01em;
+        }
+        .tab-btn {
+          display: flex;
+          flex-direction: row;
+          align-items: center;
+          justify-content: flex-start;
+          gap: 14px;
+          width: 100%;
+          min-height: 48px;
+          padding: 10px 14px;
+          border-radius: 14px;
+          place-items: unset;
+        }
+        .tab-btn:hover {
+          background: rgba(44, 40, 37, 0.05);
+        }
+        .tab-btn.active {
+          background: rgba(107, 88, 65, 0.10);
+        }
+        .tab-svg {
+          width: 22px;
+          height: 22px;
+          flex-shrink: 0;
+        }
+        .tab-dot {
+          top: 50%;
+          right: 14px;
+          transform: translateY(-50%);
+        }
+        .create-btn {
+          display: flex;
+          flex-direction: row;
+          align-items: center;
+          justify-content: flex-start;
+          gap: 14px;
+          width: 100%;
+          height: auto;
+          min-height: 48px;
+          padding: 10px 14px;
+          margin: 8px 0 10px;
+          transform: none;
+          border-radius: 14px;
+          background: var(--m-ink, #2c2825);
+          color: var(--m-surface, #fefdfb);
+        }
+        .create-btn:hover {
+          filter: brightness(1.08);
+        }
+        .create-plus {
+          width: 28px;
+          height: 28px;
+          font-size: 22px;
+          border-radius: 8px;
+          color: inherit;
+          background: rgba(255, 255, 255, 0.08);
+        }
+        .create-btn .tab-label {
+          color: inherit;
+        }
+        .profile-tab {
+          margin-top: auto;
+        }
+        .profile-avatar,
+        .profile-avatar.selected {
+          width: 28px;
+          height: 28px;
+        }
+        .create-backdrop {
+          left: var(--m-sidebar-w, 212px);
         }
         .create-sheet {
-          left: 50%;
-          transform: translateX(-50%);
-          width: min(480px, 100vw);
+          left: calc(var(--m-sidebar-w, 212px) + 24px);
+          right: auto;
+          bottom: auto;
+          top: 50%;
+          transform: translateY(-50%);
+          width: min(420px, calc(100vw - var(--m-sidebar-w, 212px) - 48px));
           border-radius: 18px;
-          bottom: calc(var(--tabs-height, 56px) + env(safe-area-inset-bottom) + 16px);
+          border: 0.5px solid var(--m-border, #ddd8d1);
+          box-shadow: 0 24px 60px rgba(44, 40, 37, 0.18);
+          padding-bottom: 12px;
+        }
+        .create-handle {
+          display: none;
         }
       }
     `,

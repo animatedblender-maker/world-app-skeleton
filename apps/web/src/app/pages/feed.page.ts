@@ -13,14 +13,6 @@ import { ProfileService } from '../core/services/profile.service';
 import type { CountryPost } from '../core/models/post.model';
 import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util';
 
-type MomentGroup = {
-  authorId: string;
-  displayName: string;
-  avatarUrl: string | null;
-  countryCode: string | null;
-  posts: CountryPost[];
-};
-
 @Component({
   selector: 'app-feed-page',
   standalone: true,
@@ -34,40 +26,6 @@ type MomentGroup = {
       ></app-matterya-topbar>
 
       <main class="feed-body">
-        <section class="moments-strip" *ngIf="momentGroups.length || meId">
-          <div class="moments-label">
-            <span class="moments-globe">◎</span>
-            Globe moments
-          </div>
-          <div class="moments-row">
-            <button type="button" class="moment-bubble yours" (click)="addMoment()">
-              <div class="bubble-ring">
-                <div class="bubble-avatar">
-                  <img *ngIf="myAvatar" [src]="myAvatar" alt="" />
-                  <span *ngIf="!myAvatar">{{ myInitials }}</span>
-                </div>
-                <span class="bubble-plus">+</span>
-              </div>
-              <span class="bubble-name">Add moment</span>
-            </button>
-            <button
-              type="button"
-              class="moment-bubble"
-              *ngFor="let group of momentGroups; trackBy: trackGroup"
-              (click)="openMomentGroup(group)"
-            >
-              <div class="bubble-ring" [class.live]="true">
-                <div class="bubble-avatar">
-                  <img *ngIf="group.avatarUrl" [src]="group.avatarUrl" alt="" />
-                  <span *ngIf="!group.avatarUrl">{{ group.displayName.slice(0, 2).toUpperCase() }}</span>
-                </div>
-              </div>
-              <span class="bubble-name">{{ group.displayName }}</span>
-              <span class="bubble-code" *ngIf="group.countryCode">{{ group.countryCode }}</span>
-            </button>
-          </div>
-        </section>
-
         <section class="sparks-entry" *ngIf="homeCountry">
           <div class="sparks-copy">
             <div class="sparks-title">Matterya Sparks</div>
@@ -126,31 +84,6 @@ type MomentGroup = {
         </article>
       </main>
 
-      <div class="moment-viewer" *ngIf="viewerGroup as group" (click)="closeMomentViewer()">
-        <div class="viewer-card" (click)="$event.stopPropagation()">
-          <div class="viewer-top">
-            <div class="viewer-name">{{ group.displayName }}</div>
-            <button type="button" class="viewer-close" (click)="closeMomentViewer()">×</button>
-          </div>
-          <div class="viewer-media" *ngIf="viewerPost as post">
-            <img *ngIf="isImage(post)" [src]="mediaUrl(post)" alt="" />
-            <video
-              *ngIf="isVideo(post)"
-              [src]="mediaUrl(post)"
-              autoplay
-              playsinline
-              controls
-            ></video>
-            <p class="viewer-caption" *ngIf="displayBody(post)">{{ displayBody(post) }}</p>
-          </div>
-          <div class="viewer-nav" *ngIf="group.posts.length > 1">
-            <button type="button" (click)="prevMoment()" [disabled]="viewerIndex <= 0">Prev</button>
-            <span>{{ viewerIndex + 1 }} / {{ group.posts.length }}</span>
-            <button type="button" (click)="nextMoment()" [disabled]="viewerIndex >= group.posts.length - 1">Next</button>
-          </div>
-        </div>
-      </div>
-
       <app-bottom-tabs></app-bottom-tabs>
     </div>
   `,
@@ -170,107 +103,12 @@ type MomentGroup = {
           var(--m-paper, #f8f6f2);
       }
       .feed-body {
-        max-width: 640px;
+        /* Normal social-feed column (~FB/X width), not stretched wall-to-wall */
+        max-width: 680px;
         margin: 0 auto;
         padding: 0 0 24px;
-      }
-      .moments-strip {
-        padding: 12px 0 8px;
-        background: linear-gradient(180deg, rgba(120, 160, 180, 0.08), transparent);
-        border-bottom: 0.5px solid var(--m-divider, #e2ded8);
-      }
-      .moments-label {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 0 16px 8px;
-        font-size: 11px;
-        font-weight: 700;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: var(--m-ink-muted, #948b82);
-      }
-      .moments-globe {
-        color: #6a8fa3;
-      }
-      .moments-row {
-        display: flex;
-        gap: 14px;
-        overflow-x: auto;
-        padding: 0 16px 8px;
-        scrollbar-width: none;
-      }
-      .moments-row::-webkit-scrollbar {
-        display: none;
-      }
-      .moment-bubble {
-        border: 0;
-        background: transparent;
-        width: 76px;
-        flex: 0 0 auto;
-        display: grid;
-        justify-items: center;
-        gap: 6px;
-        cursor: pointer;
-        padding: 0;
-        color: var(--m-ink-secondary, #6b645d);
-      }
-      .bubble-ring {
-        position: relative;
-        width: 64px;
-        height: 64px;
-        border-radius: 999px;
-        padding: 2px;
-        background: var(--m-border, #ddd8d1);
-      }
-      .bubble-ring.live {
-        background: linear-gradient(135deg, #8fb8c9, #6b5841);
-      }
-      .bubble-avatar {
         width: 100%;
-        height: 100%;
-        border-radius: 999px;
-        overflow: hidden;
-        background: var(--m-canvas-muted, #f2f0ec);
-        border: 2px solid var(--m-surface, #fefdfb);
-        display: grid;
-        place-items: center;
-        font-size: 12px;
-        font-weight: 700;
-      }
-      .bubble-avatar img {
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-      }
-      .bubble-plus {
-        position: absolute;
-        right: -1px;
-        bottom: -1px;
-        width: 20px;
-        height: 20px;
-        border-radius: 999px;
-        background: var(--m-surface, #fefdfb);
-        border: 0.5px solid var(--m-border, #ddd8d1);
-        color: var(--m-accent, #6b5841);
-        font-size: 14px;
-        line-height: 18px;
-        font-weight: 600;
-      }
-      .bubble-name {
-        font-size: 11px;
-        font-weight: 650;
-        text-align: center;
-        line-height: 1.2;
-        max-width: 76px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      .bubble-code {
-        font-size: 10px;
-        color: var(--m-ink-muted, #948b82);
-        margin-top: -4px;
+        box-sizing: border-box;
       }
       .sparks-entry {
         margin: 12px 16px;
@@ -377,8 +215,17 @@ type MomentGroup = {
       .post-media img {
         display: block;
         width: 100%;
-        max-height: 520px;
+        max-height: 560px;
         object-fit: cover;
+      }
+      .post-media app-video-player,
+      .post-media ::ng-deep .video-shell {
+        max-height: 560px;
+      }
+      .post-media ::ng-deep video {
+        max-height: 560px;
+        object-fit: contain;
+        background: #000;
       }
       .post-actions {
         display: flex;
@@ -405,90 +252,46 @@ type MomentGroup = {
         margin-left: auto;
         color: var(--m-ink-muted, #948b82);
       }
-      .moment-viewer {
-        position: fixed;
-        inset: 0;
-        z-index: 100;
-        background: rgba(44, 40, 37, 0.55);
-        display: grid;
-        place-items: center;
-        padding: 20px;
-      }
-      .viewer-card {
-        width: min(420px, 100%);
-        max-height: 90vh;
-        overflow: auto;
-        background: var(--m-surface, #fefdfb);
-        border-radius: 16px;
-        padding: 14px;
-        color: var(--m-ink, #2c2825);
-      }
-      .viewer-top {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 10px;
-      }
-      .viewer-name {
-        font-weight: 700;
-        font-size: 15px;
-      }
-      .viewer-close {
-        border: 0;
-        background: transparent;
-        font-size: 24px;
-        cursor: pointer;
-        color: var(--m-ink-muted, #948b82);
-        line-height: 1;
-      }
-      .viewer-media img,
-      .viewer-media video {
-        width: 100%;
-        border-radius: 12px;
-        max-height: 60vh;
-        object-fit: contain;
-        background: #111;
-      }
-      .viewer-caption {
-        margin: 10px 0 0;
-        font-size: 14px;
-        line-height: 1.4;
-        white-space: pre-wrap;
-      }
-      .viewer-nav {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-top: 12px;
-        font-size: 13px;
-        color: var(--m-ink-muted, #948b82);
-      }
-      .viewer-nav button {
-        border: 0.5px solid var(--m-border, #ddd8d1);
-        background: var(--m-paper, #f8f6f2);
-        border-radius: 8px;
-        padding: 6px 12px;
-        cursor: pointer;
-        color: var(--m-ink, #2c2825);
-      }
-      .viewer-nav button:disabled {
-        opacity: 0.4;
-        cursor: default;
+      /* Desktop: keep standard card column centered in the content pane */
+      @media (min-width: 900px) {
+        .feed-shell {
+          padding-bottom: 32px;
+          background: var(--m-canvas-muted, #f2f0ec);
+        }
+        .feed-body {
+          max-width: 680px;
+          margin: 0 auto;
+          padding: 16px 0 40px;
+        }
+        .sparks-entry {
+          margin: 0 0 12px;
+        }
+        .post-card {
+          margin: 0 0 12px;
+          padding: 14px 16px 12px;
+          border: 0.5px solid var(--m-border, #ddd8d1);
+          border-radius: 12px;
+          border-bottom: 0.5px solid var(--m-border, #ddd8d1);
+          background: var(--m-surface, #fefdfb);
+        }
+        .post-media {
+          border-radius: 10px;
+        }
+        .post-media img {
+          max-height: 560px;
+        }
       }
     `,
   ],
 })
 export class FeedPageComponent implements OnInit {
   posts: CountryPost[] = [];
-  momentGroups: MomentGroup[] = [];
   loading = true;
   error = '';
   homeCountry: string | null = null;
   meId: string | null = null;
   myAvatar: string | null = null;
   myInitials = 'ME';
-  viewerGroup: MomentGroup | null = null;
-  viewerIndex = 0;
 
   constructor(
     private postsService: PostsService,
@@ -500,10 +303,6 @@ export class FeedPageComponent implements OnInit {
     private cdr: ChangeDetectorRef
   ) {}
 
-  get viewerPost(): CountryPost | null {
-    if (!this.viewerGroup?.posts?.length) return null;
-    return this.viewerGroup.posts[this.viewerIndex] ?? null;
-  }
 
   async ngOnInit(): Promise<void> {
     // Fire-and-forget so a hung network never blocks bootstrap forever.
@@ -523,9 +322,6 @@ export class FeedPageComponent implements OnInit {
     return post.id;
   }
 
-  trackGroup(_: number, group: MomentGroup): string {
-    return group.authorId;
-  }
 
   displayName(post: CountryPost): string {
     return post.author?.display_name || post.author?.username || 'Member';
@@ -609,34 +405,10 @@ export class FeedPageComponent implements OnInit {
     void this.router.navigate(['/sparks', this.homeCountry]);
   }
 
-  addMoment(): void {
-    void this.router.navigate(['/globe'], {
-      queryParams: {
-        country: this.homeCountry || null,
-        tab: 'posts',
-        compose: 'moment',
-      },
-    });
-  }
 
-  openMomentGroup(group: MomentGroup): void {
-    this.viewerGroup = group;
-    this.viewerIndex = 0;
-  }
 
-  closeMomentViewer(): void {
-    this.viewerGroup = null;
-    this.viewerIndex = 0;
-  }
 
-  nextMoment(): void {
-    if (!this.viewerGroup) return;
-    this.viewerIndex = Math.min(this.viewerGroup.posts.length - 1, this.viewerIndex + 1);
-  }
 
-  prevMoment(): void {
-    this.viewerIndex = Math.max(0, this.viewerIndex - 1);
-  }
 
   async toggleLike(post: CountryPost): Promise<void> {
     try {
@@ -652,27 +424,6 @@ export class FeedPageComponent implements OnInit {
     } catch {
       // ignore
     }
-  }
-
-  private groupMoments(moments: CountryPost[]): MomentGroup[] {
-    const map = new Map<string, MomentGroup>();
-    for (const post of moments) {
-      const authorId = post.author_id || post.author?.user_id || 'unknown';
-      if (this.meId && authorId === this.meId) continue;
-      let group = map.get(authorId);
-      if (!group) {
-        group = {
-          authorId,
-          displayName: post.author?.display_name || post.author?.username || 'Member',
-          avatarUrl: this.avatarFor(post),
-          countryCode: (post.author?.country_code || post.country_code || '').toUpperCase() || null,
-          posts: [],
-        };
-        map.set(authorId, group);
-      }
-      group.posts.push(post);
-    }
-    return Array.from(map.values()).slice(0, 12);
   }
 
   private async refresh(): Promise<void> {
@@ -741,7 +492,7 @@ export class FeedPageComponent implements OnInit {
       this.loading = false;
       this.paint();
 
-      // Moments + optional country posts — never block the spinner.
+      // Optional country posts — never block the spinner.
       void this.loadSecondary(authorId, countryCode, followingIds);
     } catch (e: any) {
       this.error = e?.message || 'Feed unavailable';
@@ -756,32 +507,20 @@ export class FeedPageComponent implements OnInit {
   }
 
   private async loadSecondary(
-    authorId: string | null,
+    _authorId: string | null,
     countryCode: string | null,
-    followingIds: string[]
+    _followingIds: string[]
   ): Promise<void> {
     try {
-      const [extra, moments] = await Promise.all([
-        countryCode
-          ? this.withTimeout(
-              this.postsService.listByCountry(countryCode, 20, {
-                demoLimit: 10,
-                skipComments: true,
-              }),
-              6000,
-              'countryFeed'
-            ).catch(() => [] as CountryPost[])
-          : Promise.resolve([] as CountryPost[]),
-        this.withTimeout(
-          this.postsService.listActiveMoments(24, {
-            authorId,
-            followingIds: followingIds.slice(0, 4),
-            countryCode,
-          }),
-          7000,
-          'moments'
-        ).catch(() => [] as CountryPost[]),
-      ]);
+      if (!countryCode) return;
+      const extra = await this.withTimeout(
+        this.postsService.listByCountry(countryCode, 20, {
+          demoLimit: 10,
+          skipComments: true,
+        }),
+        6000,
+        'countryFeed'
+      ).catch(() => [] as CountryPost[]);
 
       if (extra?.length) {
         const seen = new Set(this.posts.map((p) => p.id));
@@ -798,10 +537,8 @@ export class FeedPageComponent implements OnInit {
           return tb - ta;
         });
         this.posts = merged.slice(0, 50);
+        this.paint();
       }
-
-      this.momentGroups = this.groupMoments(moments || []);
-      this.paint();
     } catch {
       // secondary is best-effort
     }

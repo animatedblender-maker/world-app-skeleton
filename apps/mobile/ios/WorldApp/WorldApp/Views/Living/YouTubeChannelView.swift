@@ -185,7 +185,14 @@ struct YouTubeChannelView: View {
     }
 
     private var reelsGrid: some View {
-        LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+        LazyVGrid(
+            columns: Array(
+                repeating: GridItem(.flexible(minimum: 0), spacing: 8),
+                count: 3
+            ),
+            alignment: .center,
+            spacing: 8
+        ) {
             ForEach(channel.reels) { post in
                 PlayReelTile(post: post) {
                     onOpenVideo(post)

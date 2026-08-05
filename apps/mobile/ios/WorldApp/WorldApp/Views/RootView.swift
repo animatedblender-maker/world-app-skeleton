@@ -22,10 +22,17 @@ struct RootView: View {
                 .screenBackground()
             } else {
                 MainTabView()
+                    .onAppear {
+                        // Deliver any push that arrived before the main UI was ready.
+                        appState.flushPendingPushRoute()
+                    }
             }
         }
         .animation(.easeInOut(duration: 0.25), value: appState.isAuthenticated)
         .animation(.easeInOut(duration: 0.25), value: appState.needsProfileSetup)
+        .onChange(of: appState.isSessionReady) { _, ready in
+            if ready { appState.flushPendingPushRoute() }
+        }
         .fullScreenCover(isPresented: Binding(
             get: { callManager.showFullCallUI },
             set: { presented in

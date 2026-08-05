@@ -108,7 +108,7 @@ struct ConnectedHubView: View {
                 linkedPlatformsSection
                 yourStatusSection
                 friendsLiveSection
-                momentRoomsSection
+                // Moments removed from product.
                 comingSoonSection
             }
             .padding(.bottom, 24)
@@ -150,7 +150,7 @@ struct ConnectedHubView: View {
                     }
                 }
 
-                Text("Connect platforms, share status, join moment rooms")
+                Text("Connect platforms and share what you're watching")
                     .font(.subheadline)
                     .foregroundStyle(Theme.inkSecondary)
             }

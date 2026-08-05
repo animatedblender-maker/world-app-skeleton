@@ -140,12 +140,14 @@ struct ProfileView: View {
                 }
             }
 
-            if posts.contains(where: PlayPlatformBridge.isPlayEligible),
+            // Only show Hubs channel entry when a channel exists (or hub-published videos).
+            if LivingChannelMarker.hasChannel(profile: profile)
+                || posts.contains(where: PlayPlatformBridge.isHubCatalogContent),
                let userID = profileUserID {
                 Button {
                     appState.openPlayChannel(authorID: userID, username: profile?.username)
                 } label: {
-                    Label(MatteryaCopy.yourChannelOnHubs, systemImage: "globe.americas")
+                    Label(MatteryaCopy.yourChannelOnHubs, systemImage: "play.rectangle.fill")
                         .font(.subheadline.weight(.semibold))
                         .frame(maxWidth: .infinity)
                 }
@@ -269,12 +271,16 @@ struct ProfileView: View {
     }
 
     private func postCards(_ items: [CountryPost], showsAuthorInJournal: Bool) -> some View {
-        LazyVStack(spacing: 18) {
-            ForEach(items) { post in
+        // Match home feed: edge-to-edge cards, no double horizontal inset.
+        let visible = items.forProfileFeedGrid()
+        return LazyVStack(spacing: 0) {
+            ForEach(visible) { post in
                 FacebookPostCard(
                     post: post,
+                    edgeToEdge: true,
                     showsAuthorHeader: false,
                     showsAuthorInJournal: showsAuthorInJournal,
+                    mediaContext: .feed,
                     onLikeToggle: {
                         Task {
                             await toggleLike(
@@ -284,9 +290,9 @@ struct ProfileView: View {
                         }
                     },
                     onOpenPost: { appState.navigate(to: .post(post.id)) },
-                    onOpenVideo: PlayPlatformBridge.isLongFormVideo(post)
-                        ? { appState.openPost(post) }
-                        : nil,
+                    onOpenVideo: {
+                        appState.openPost(post)
+                    },
                     onOpenReel: {
                         var sparks = items.filter(\.isReel)
                         if !sparks.contains(where: { $0.id == post.id }) {
@@ -310,7 +316,6 @@ struct ProfileView: View {
                 )
             }
         }
-        .padding(.horizontal, Theme.pagePadding)
     }
 
     private var emptyPosts: some View {
@@ -366,9 +371,8 @@ struct ProfileView: View {
             if showSpinner { isLoadingPosts = false }
         }
         do {
-            posts = try await PostsService.shared.listForAuthor(userID, limit: 30)
-                .excludingMoments()
-                .excludingSparks()
+            posts = try await PostsService.shared.listForAuthor(userID, limit: 40)
+                .forProfileFeedGrid()
             ContentCache.shared.setPosts(posts, for: .profilePosts)
         } catch {
             errorMessage = error.localizedDescription

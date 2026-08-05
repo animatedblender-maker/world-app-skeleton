@@ -7,14 +7,16 @@ import { CallService, IncomingCall } from './core/services/call.service';
 import { AuthService } from './core/services/auth.service';
 import { NotificationsService } from './core/services/notifications.service';
 import { NotificationEventsService } from './core/services/notification-events.service';
+import { HubsMiniPlayerComponent } from './hubs/components/hubs-mini-player.component';
 import type { Subscription } from 'rxjs';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, RouterOutlet],
+  imports: [CommonModule, RouterOutlet, HubsMiniPlayerComponent],
   template: `
     <router-outlet />
+    <app-hubs-mini-player />
     <button
       type="button"
       class="global-alert"
@@ -276,6 +278,8 @@ export class AppComponent {
       pathname.startsWith('/welcome') ||
       pathname.startsWith('/admin') ||
       pathname.startsWith('/legal') ||
+      pathname.startsWith('/privacy') ||
+      pathname.startsWith('/terms') ||
       pathname.startsWith('/ads');
     this.isSearchRoute = hasOwnChrome || pathname.startsWith('/search');
     this.showTravelButton = false;
@@ -304,11 +308,17 @@ export class AppComponent {
       pathname === '/' ||
       pathname.startsWith('/feed') ||
       pathname.startsWith('/hubs') ||
+      pathname.startsWith('/country') ||
       pathname.startsWith('/messages') ||
       pathname.startsWith('/me') ||
+      pathname.startsWith('/profile') ||
       pathname.startsWith('/user') ||
       pathname.startsWith('/search') ||
-      pathname.startsWith('/post');
+      pathname.startsWith('/post') ||
+      pathname.startsWith('/privacy') ||
+      pathname.startsWith('/terms') ||
+      pathname.startsWith('/legal');
+
 
     if (isHomeFeed || isCountryFeed) {
       root.classList.add('app-bg-feed');

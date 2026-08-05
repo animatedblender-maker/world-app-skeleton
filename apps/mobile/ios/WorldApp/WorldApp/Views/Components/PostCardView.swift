@@ -50,14 +50,21 @@ struct PostCardView: View {
     private var header: some View {
         HStack(spacing: 10) {
             AvatarView(url: post.author?.avatarURL, seed: post.authorID, size: 32)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(post.author?.username ?? post.author?.displayName ?? "user")
+            VStack(alignment: .leading, spacing: 2) {
+                Text(post.authorDisplayName)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Theme.ink)
-                if let country = post.countryName {
-                    Text(country)
-                        .font(.caption)
-                        .foregroundStyle(Theme.inkMuted)
+                    .lineLimit(1)
+                if let location = post.authorLocationLabel {
+                    HStack(spacing: 4) {
+                        if let flag = post.authorLocationFlag {
+                            Text(flag).font(.caption2)
+                        }
+                        Text(location)
+                            .font(.caption)
+                            .foregroundStyle(Theme.inkMuted)
+                            .lineLimit(1)
+                    }
                 }
             }
             Spacer()
@@ -209,33 +216,126 @@ struct PostCardView: View {
     }
 }
 
+/// Elegant hand-drawn picture frame — soft irregular rounded rect + thin double border.
+/// Reads like a paper photo frame (travel scrapbook), not a stock circle avatar.
+struct HandDrawnPictureFrame: Shape {
+    var seed: String = "matterya"
+
+    func path(in rect: CGRect) -> Path {
+        let inset = min(rect.width, rect.height) * 0.04
+        let r = rect.insetBy(dx: inset, dy: inset)
+        // Gentle seed-based wobble so frames feel drawn, not stamped.
+        let wobble = seedWobble(seed)
+        let corners: [CGPoint] = [
+            CGPoint(x: r.minX + wobble[0], y: r.minY + wobble[1]),
+            CGPoint(x: r.maxX + wobble[2], y: r.minY + wobble[3]),
+            CGPoint(x: r.maxX + wobble[4], y: r.maxY + wobble[5]),
+            CGPoint(x: r.minX + wobble[6], y: r.maxY + wobble[7]),
+        ]
+        let radius = min(r.width, r.height) * 0.16
+        var path = Path()
+        for i in 0..<4 {
+            let curr = corners[i]
+            let next = corners[(i + 1) % 4]
+            let prev = corners[(i + 3) % 4]
+            let toPrev = CGVector(dx: prev.x - curr.x, dy: prev.y - curr.y)
+            let toNext = CGVector(dx: next.x - curr.x, dy: next.y - curr.y)
+            let lenPrev = max(0.001, hypot(toPrev.dx, toPrev.dy))
+            let lenNext = max(0.001, hypot(toNext.dx, toNext.dy))
+            let start = CGPoint(
+                x: curr.x + toPrev.dx / lenPrev * radius,
+                y: curr.y + toPrev.dy / lenPrev * radius
+            )
+            let end = CGPoint(
+                x: curr.x + toNext.dx / lenNext * radius,
+                y: curr.y + toNext.dy / lenNext * radius
+            )
+            if i == 0 { path.move(to: start) } else { path.addLine(to: start) }
+            path.addQuadCurve(to: end, control: curr)
+        }
+        path.closeSubpath()
+        return path
+    }
+
+    private func seedWobble(_ seed: String) -> [CGFloat] {
+        var h: UInt64 = 2166136261
+        for b in seed.utf8 {
+            h ^= UInt64(b)
+            h = h &* 16777619
+        }
+        var values: [CGFloat] = []
+        var x = h
+        for _ in 0..<8 {
+            x = x &* 6364136223846793005 &+ 1
+            let unit = CGFloat(x % 1000) / 1000.0 // 0...1
+            values.append((unit - 0.5) * 1.8) // ±0.9 pt-ish at default sizes
+        }
+        return values
+    }
+}
+
+enum MatteryaAvatarStyle {
+    static func frameAccent(for seed: String) -> Color {
+        var hash: UInt64 = 0
+        for u in seed.utf8 { hash = hash &* 31 &+ UInt64(u) }
+        let hues: [Color] = [
+            Theme.ink.opacity(0.55),
+            Theme.accent.opacity(0.75),
+            Color(red: 0.45, green: 0.38, blue: 0.32),
+            Color(red: 0.32, green: 0.42, blue: 0.40),
+        ]
+        return hues[Int(hash % UInt64(hues.count))]
+    }
+}
+
 struct AvatarView: View {
     let url: String?
     let seed: String
     let size: CGFloat
 
+    private var frameShape: HandDrawnPictureFrame {
+        HandDrawnPictureFrame(seed: seed)
+    }
+
     var body: some View {
-        Group {
-            if let url = MediaService.normalizedAvatarURL(url), let imageURL = URL(string: url) {
-                CachedAsyncImage(
-                    url: imageURL,
-                    maxPixelSize: max(96, size * 2),
-                    contentMode: .fill,
-                    placeholder: AnyView(fallback)
-                )
-            } else {
-                fallback
+        ZStack {
+            // Outer mat / paper edge
+            frameShape
+                .fill(Theme.paper)
+                .shadow(color: Theme.ink.opacity(0.10), radius: size * 0.05, y: size * 0.03)
+
+            // Photo well
+            Group {
+                if let url = MediaService.normalizedAvatarURL(url), let imageURL = URL(string: url) {
+                    CachedAsyncImage(
+                        url: imageURL,
+                        maxPixelSize: max(96, size * 2),
+                        contentMode: .fill,
+                        placeholder: AnyView(fallback)
+                    )
+                } else {
+                    fallback
+                }
             }
+            .frame(width: size * 0.78, height: size * 0.78)
+            .clipShape(HandDrawnPictureFrame(seed: seed + "-inner"))
+
+            // Hand-drawn double line frame
+            frameShape
+                .stroke(MatteryaAvatarStyle.frameAccent(for: seed), lineWidth: max(1.2, size * 0.055))
+            HandDrawnPictureFrame(seed: seed + "-rim")
+                .stroke(MatteryaAvatarStyle.frameAccent(for: seed).opacity(0.45), lineWidth: max(0.7, size * 0.028))
+                .padding(size * 0.055)
         }
         .frame(width: size, height: size)
-        .clipShape(Circle())
     }
 
     private var fallback: some View {
         ZStack {
-            Circle().fill(Theme.canvasMuted)
+            HandDrawnPictureFrame(seed: seed + "-fill")
+                .fill(Theme.canvasMuted)
             Text(initials)
-                .font(.system(size: size * 0.36, weight: .semibold, design: .rounded))
+                .font(.system(size: size * 0.30, weight: .semibold, design: .serif))
                 .foregroundStyle(Theme.inkSecondary)
         }
     }
@@ -318,10 +418,10 @@ private struct AvatarPreviewScreen: View {
                     .aspectRatio(1, contentMode: .fit)
                     .frame(maxWidth: 360)
                     .padding(.horizontal, 24)
-                    .clipShape(Circle())
+                    .clipShape(HandDrawnPictureFrame(seed: seed))
                     .overlay {
-                        Circle()
-                            .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                        HandDrawnPictureFrame(seed: seed)
+                            .stroke(Color.white.opacity(0.28), lineWidth: 1.5)
                     }
                     .shadow(color: .black.opacity(0.35), radius: 24, y: 12)
                 } else {

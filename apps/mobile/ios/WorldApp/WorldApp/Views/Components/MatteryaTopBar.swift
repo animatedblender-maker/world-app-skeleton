@@ -124,19 +124,19 @@ struct NotificationsOverlay: View {
 
     var body: some View {
         if appState.globePanel == .notifications {
-            Color.black.opacity(0.18)
-                .ignoresSafeArea()
-                .onTapGesture { appState.globePanel = nil }
+            // ZStack is required — a TupleView of Color + VStack breaks hit-testing
+            // so row taps never fire (or only dismiss the scrim).
+            ZStack(alignment: .topTrailing) {
+                Color.black.opacity(0.18)
+                    .ignoresSafeArea()
+                    .onTapGesture { appState.globePanel = nil }
 
-            VStack(spacing: 0) {
-                HStack {
-                    Spacer()
-                    NotificationsPanelView()
-                        .padding(.trailing, Theme.pagePadding)
-                }
-                .padding(.top, 52)
-                Spacer()
+                NotificationsPanelView()
+                    .padding(.trailing, Theme.pagePadding)
+                    .padding(.top, 52)
+                    .padding(.leading, Theme.pagePadding)
             }
+            .transition(.opacity)
         }
     }
 }

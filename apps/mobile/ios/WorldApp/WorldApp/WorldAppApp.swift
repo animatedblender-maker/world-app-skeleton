@@ -12,8 +12,13 @@ struct WorldAppApp: App {
                 .environment(appState)
                 .preferredColorScheme(.light)
                 .tint(Theme.accentBright)
+                .onAppear {
+                    // Any screen tap outside the keyboard collapses it (no Done bar).
+                    Keyboard.installDismissOnOutsideTap()
+                }
                 .task {
                     await appState.bootstrap()
+                    Keyboard.installDismissOnOutsideTap()
                 }
                 .onOpenURL { url in
                     appState.handleDeepLink(url)
@@ -25,6 +30,7 @@ struct WorldAppApp: App {
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                     Task { @MainActor in
+                        Keyboard.installDismissOnOutsideTap()
                         CallSessionManager.shared.handleAppDidBecomeActive()
                         VoIPPushService.shared.bootstrap()
                         await appState.handleBecameActive()

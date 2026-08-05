@@ -587,8 +587,10 @@ struct YouTubeAppView: View {
         errorMessage = nil
         defer { isLoading = false }
 
+        // Always force-merge seed catalog on cold open so Hubs is never "empty" when only
+        // Archive hub_videos.jsonl is available (network hub posts may be sparse).
         var videos = await PostsService.shared.loadPlayCatalog(
-            forceRefresh: forceRefresh,
+            forceRefresh: forceRefresh || allVideos.isEmpty,
             viewerCountry: appState.currentProfile?.countryCode,
             followingIDs: appState.followingIDs
         )
@@ -599,7 +601,18 @@ struct YouTubeAppView: View {
                 followingIDs: appState.followingIDs
             )
         }
-        for saved in appState.savedVideoPosts + appState.savedReelPosts where !videos.contains(where: { $0.id == saved.id }) {
+        // Guarantee seeds even if network path returned nothing cached earlier.
+        if videos.filter({ !$0.isReel }).count < 8 {
+            let seeds = await HubVideoSeedService.shared.catalogLongFormVideos(perHub: 12)
+            var seen = Set(videos.map(\.id))
+            for post in seeds where seen.insert(post.id).inserted {
+                videos.append(post)
+            }
+        }
+        // Saved items only join Hubs if they are true hub content (not plain feed videos).
+        for saved in appState.savedVideoPosts + appState.savedReelPosts
+        where PlayPlatformBridge.isHubCatalogContent(saved)
+            && !videos.contains(where: { $0.id == saved.id }) {
             videos.insert(saved, at: 0)
         }
         let filtered = BlockService.shared.filterPosts(videos)
@@ -615,14 +628,37 @@ struct YouTubeAppView: View {
             allVideos = localOnly + filtered
         }
         rebuildChannels()
-        // Warm shelf thumbs into memory so Hubs scroll is not a sea of empty placeholders.
-        ImageCache.shared.prefetchPostThumbnails(Array(allVideos.prefix(48)), maxPixelSize: 320)
-        ImageCache.shared.prefetchPostThumbnails(
-            Array(catalog.historyVideos(from: allVideos).prefix(12)),
-            maxPixelSize: 320
-        )
+        // Butter: thumbs + Archive URL resolve + spark/next-video warm.
+        butterWarmHubCatalog(allVideos)
         await loadChannelProfiles()
         await loadFollowerCounts()
+    }
+
+    /// Prefetch posters + Archive CDN resolves so shelf → watch feels instant.
+    private func butterWarmHubCatalog(_ videos: [CountryPost]) {
+        let longForm = videos.filter { !$0.isReel && $0.playableVideoURL != nil }
+        let sparks = videos.filter(\.isReel)
+        ImageCache.shared.prefetchPostThumbnails(Array(longForm.prefix(48)), maxPixelSize: 320)
+        ImageCache.shared.prefetchPostThumbnails(
+            Array(catalog.historyVideos(from: videos).prefix(12)),
+            maxPixelSize: 320
+        )
+        // Resolve Archive URLs off the critical path (no AVPlayer yet).
+        for post in longForm.prefix(24) {
+            if let url = post.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) {
+                ArchiveVideoPlayback.warmResolve(url)
+            }
+        }
+        // Sparks strip: buffer first few players.
+        if !sparks.isEmpty {
+            SparkWarmPool.shared.prepare(posts: Array(sparks.prefix(16)), around: 0, ahead: 4, behind: 0)
+        }
+        // Visible home shelf (current filter) — warm first 8 playable URLs.
+        for post in homeVideos.prefix(8) {
+            if let url = post.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) {
+                ArchiveVideoPlayback.warmResolve(url)
+            }
+        }
     }
 
     private func rebuildChannels() {
@@ -910,7 +946,7 @@ struct YouTubeAppView: View {
 
     private func openChannel(_ channel: YouTubeChannel) {
         // Leaving watch chrome → keep audio as mini, free the screen for the channel.
-        appState.minimizeHubPlayback()
+        appState.minimizeHubPlayback(returnToChat: false)
         withAnimation(.easeInOut(duration: 0.2)) {
             route = .channel(channel)
         }
@@ -918,7 +954,8 @@ struct YouTubeAppView: View {
 
     private func closeWatch(minimize: Bool) {
         if minimize {
-            appState.minimizeHubPlayback()
+            // Pull-down / close → if we opened from chat, restore that conversation + dock.
+            appState.minimizeHubPlayback(returnToChat: true)
         } else {
             appState.stopHubPlayback()
         }

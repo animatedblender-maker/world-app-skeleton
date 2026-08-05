@@ -50,7 +50,7 @@ for dirpath, _, filenames in os.walk(APP_DIR):
             swift_files.append(rel)
         elif filename.endswith(".entitlements"):
             entitlements_files.append(rel)
-        elif filename.endswith((".json", ".geojson", ".caf")) and "Assets.xcassets" not in dirpath:
+        elif filename.endswith((".json", ".jsonl", ".geojson", ".caf", ".mp3")) and "Assets.xcassets" not in dirpath:
             resource_files.append(rel)
         elif filename.endswith((".jpg", ".jpeg", ".png")) and "GlobeTextures" in dirpath:
             resource_files.append(rel)
@@ -69,30 +69,34 @@ def pick_entitlements(name):
 debug_entitlements_rel = pick_entitlements("Debug")
 release_entitlements_rel = pick_entitlements("Release")
 
-project_id = uid()
-target_id = uid()
-sources_phase = uid()
-resources_phase = uid()
-frameworks_phase = uid()
-project_config_list = uid()
-target_config_list = uid()
-debug_config = uid()
-release_config = uid()
-debug_target_config = uid()
-release_target_config = uid()
-product_ref = uid()
-app_group = uid()
-main_group = uid()
-products_group = uid()
-assets_ref = uid()
-assets_build = uid()
-debug_entitlements_ref = uid() if debug_entitlements_rel else None
-release_entitlements_ref = uid() if release_entitlements_rel else None
-livekit_package_ref = uid()
-livekit_product_dep = uid()
-livekit_framework_build = uid()
-musickit_framework_ref = uid()
-musickit_framework_build = uid()
+# Stable structural IDs — regenerating must not thrash Xcode SPM / DerivedData
+# identity (random UUIDs here caused "Missing package product 'LiveKit'" in the IDE
+# even when CLI resolve succeeded into a different -derivedDataPath).
+project_id = "342E9218D3404F4880EEFE9A"
+target_id = "319B5005A41941D183E9DC69"
+sources_phase = "C9614776B2354AB489C6CC3E"
+resources_phase = "8403CD81A0D34DD3A659F2D8"
+frameworks_phase = "73D0739300834D73AC992A41"
+project_config_list = "43EBFD39BEE24BC398297BC1"
+target_config_list = "92E53585CB9F456AAC200F70"
+debug_config = "66F1E14D27D649FBAA7BE025"
+release_config = "F4EE24BF00E945718881D509"
+debug_target_config = "FC4E637026AD436DBBB63EE5"
+release_target_config = "6CC6B529777C4B2BAD68B91B"
+product_ref = "8700EA8860D543958A2BCFA7"
+app_group = "D73116C912934C29925228A7"
+main_group = "6DECF2874B0E427AB010E52F"
+products_group = "54BB38399DD3402FBF4E80A9"
+assets_ref = "215C7524234340E69BE339DA"
+assets_build = "50A99235BC8B482A9D80D405"
+debug_entitlements_ref = "003DBB651F3B4A0094A00C3E" if debug_entitlements_rel else None
+release_entitlements_ref = "BAEFCF0AACC04E8FA3DAE99B" if release_entitlements_rel else None
+# SPM LiveKit (must stay stable across regenerates)
+livekit_package_ref = "4F466459050A4714A006E5B4"
+livekit_product_dep = "6CE3AE4D8AEE4D45B7480F73"
+livekit_framework_build = "291608D8C6D74F6D9DF4745F"
+musickit_framework_ref = "792ED54A55F04B7690F71846"
+musickit_framework_build = "8B0B3052FE104EC58CA22C2F"
 
 file_refs = {}
 build_files = {}
@@ -328,7 +332,7 @@ for config_id, name, is_target in [
         )
         if entitlements_for_config:
             add(f"\t\t\t\tCODE_SIGN_ENTITLEMENTS = {entitlements_for_config};")
-        add("\t\t\t\tCURRENT_PROJECT_VERSION = 19;")
+        add("\t\t\t\tCURRENT_PROJECT_VERSION = 35;")
         add(f'\t\t\t\tDEVELOPMENT_TEAM = {development_team()};')
         add("\t\t\t\tENABLE_PREVIEWS = YES;")
         add("\t\t\t\tGENERATE_INFOPLIST_FILE = YES;")
@@ -410,50 +414,5 @@ os.makedirs(XCODEPROJ, exist_ok=True)
 with open(PBXPROJ, "w", encoding="utf-8") as f:
     f.write("\n".join(lines) + "\n")
 
-# Shared scheme for Xcode Cloud Archive (must be committed or generated on CI).
-scheme_dir = os.path.join(XCODEPROJ, "xcshareddata", "xcschemes")
-os.makedirs(scheme_dir, exist_ok=True)
-scheme_path = os.path.join(scheme_dir, "WorldApp.xcscheme")
-with open(scheme_path, "w", encoding="utf-8") as f:
-    f.write(
-        """<?xml version="1.0" encoding="UTF-8"?>
-<Scheme LastUpgradeVersion="1500" version="1.7">
-  <BuildAction parallelizeBuildables="YES" buildImplicitDependencies="YES">
-    <BuildActionEntries>
-      <BuildActionEntry buildForTesting="YES" buildForRunning="YES" buildForProfiling="YES" buildForArchiving="YES" buildForAnalyzing="YES">
-        <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="WorldApp" BuildableName="WorldApp.app" BlueprintName="WorldApp" ReferencedContainer="container:WorldApp.xcodeproj"/>
-      </BuildActionEntry>
-    </BuildActionEntries>
-  </BuildAction>
-  <LaunchAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.DebuggerFoundation.Launcher.LLDB" launchStyle="0" useCustomWorkingDirectory="NO" ignoresPersistentStateOnLaunch="NO" debugDocumentVersioning="YES" debugServiceExtension="internal" allowLocationSimulation="YES">
-    <BuildableProductRunnable runnableDebuggingMode="0">
-      <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="WorldApp" BuildableName="WorldApp.app" BlueprintName="WorldApp" ReferencedContainer="container:WorldApp.xcodeproj"/>
-    </BuildableProductRunnable>
-  </LaunchAction>
-  <ProfileAction buildConfiguration="Release" shouldUseLaunchSchemeArgsEnv="YES" savedToolIdentifier="" useCustomWorkingDirectory="NO" debugDocumentVersioning="YES">
-    <BuildableProductRunnable runnableDebuggingMode="0">
-      <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="WorldApp" BuildableName="WorldApp.app" BlueprintName="WorldApp" ReferencedContainer="container:WorldApp.xcodeproj"/>
-    </BuildableProductRunnable>
-  </ProfileAction>
-  <AnalyzeAction buildConfiguration="Debug"/>
-  <ArchiveAction buildConfiguration="Release" revealArchiveInOrganizer="YES"/>
-</Scheme>
-"""
-    )
-
-ws_dir = os.path.join(XCODEPROJ, "project.xcworkspace")
-os.makedirs(ws_dir, exist_ok=True)
-ws_data = os.path.join(ws_dir, "contents.xcworkspacedata")
-if not os.path.exists(ws_data):
-    with open(ws_data, "w", encoding="utf-8") as f:
-        f.write(
-            """<?xml version="1.0" encoding="UTF-8"?>
-<Workspace version="1.0">
-   <FileRef location="self:"/>
-</Workspace>
-"""
-        )
-
 print(f"Wrote {PBXPROJ}")
-print(f"Wrote {scheme_path}")
 print(f"Swift files: {len(swift_files)}")

@@ -1,13 +1,16 @@
+import AVFoundation
 import PhotosUI
 import SwiftUI
 import UIKit
 
 struct ConversationView: View {
+    @Environment(AppState.self) private var appState
+
     let conversation: Conversation
 
-    @State private var messages: [Message] = []
+    @State private var messages: [Message]
     @State private var draft = ""
-    @State private var isLoading = true
+    @State private var isLoading: Bool
     @State private var isSending = false
     @State private var errorMessage: String?
     @State private var selectedPhoto: PhotosPickerItem?
@@ -15,7 +18,24 @@ struct ConversationView: View {
     @State private var pendingMediaImage: UIImage?
     @State private var scrollToBottomToken = 0
     @State private var replyingTo: Message?
+    /// Peer's `last_read_at` — drives Read receipts on my messages.
     @State private var peerLastReadAt: String?
+
+    init(conversation: Conversation) {
+        self.conversation = conversation
+        // Paint from warm cache immediately — no spinner flash on re-open.
+        let cached = MessagesService.shared.cachedMessages(for: conversation.id) ?? []
+        _messages = State(initialValue: cached)
+        _isLoading = State(initialValue: cached.isEmpty)
+        let peerCached = MessagesService.shared.cachedPeerRead(for: conversation.id)
+            ?? conversation.otherMember(currentUserID: AuthService.shared.currentUser?.id ?? "")?.lastReadAt
+        _peerLastReadAt = State(initialValue: peerCached)
+    }
+    /// Fixed chat miniplayer (under composer) — long-form / hub shares only.
+    @State private var chatMiniShare: Message.ShareInfo?
+    @State private var chatMiniPlaying = false
+    @State private var chatMiniExpanded = false
+    @FocusState private var composerFocused: Bool
 
     @Bindable private var callManager = CallSessionManager.shared
 
@@ -23,6 +43,24 @@ struct ConversationView: View {
         messages
             .filter(\.isRenderableInChat)
             .filter { !HiddenMessagesStore.isHidden(conversationID: conversation.id, messageID: $0.id) }
+    }
+
+    /// Latest of my messages the recipient has read (show the "Read" label only here).
+    private var lastReadOwnMessageID: String? {
+        guard let me = currentUserID,
+              let peerLastReadAt,
+              let readDate = RelativeTime.parseDate(peerLastReadAt)
+        else { return nil }
+
+        return visibleMessages
+            .filter { $0.senderID == me && !$0.isCallLog && !$0.id.hasPrefix("pending-") }
+            .filter { message in
+                guard let created = RelativeTime.parseDate(message.createdAt) else { return false }
+                // Small skew so near-simultaneous send/open still counts as read.
+                return readDate.timeIntervalSince(created) >= -2
+            }
+            .last?
+            .id
     }
 
     private var reactionSummaries: [String: MessageReactionSummary] {
@@ -59,13 +97,15 @@ struct ConversationView: View {
                                     message: message,
                                     isMine: message.senderID == currentUserID,
                                     peerLastReadAt: peerLastReadAt,
+                                    isLastReadByPeer: message.id == lastReadOwnMessageID,
                                     reactionSummary: reactionSummaries[message.id],
                                     replyAuthorName: replyAuthorName(for: message),
                                     onReply: { replyingTo = message },
                                     onLike: { Task { await toggleMessageLike(message) } },
                                     onReact: { emoji in Task { await reactToMessage(message, emoji: emoji) } },
                                     onUnsend: { Task { await unsendMessage(message) } },
-                                    onRemoveLocally: { removeMessageLocally(message) }
+                                    onRemoveLocally: { removeMessageLocally(message) },
+                                    onOpenShare: { share in openShareDestination(share) }
                                 )
                                 .id(message.id)
                             }
@@ -92,12 +132,63 @@ struct ConversationView: View {
                     .padding(.horizontal)
             }
 
+            // Hubs continuous mini — FIXED under the thread, above textbox / photo / send.
+            if let hubPost = appState.hubPlaybackPost, !appState.hubPlaybackExpanded {
+                YouTubeMiniPlayerBar(
+                    post: hubPost,
+                    onExpand: {
+                        appState.expandHubPlayback()
+                    },
+                    onClose: {
+                        appState.stopHubPlayback()
+                    },
+                    embedsVideo: true,
+                    isPlaying: Binding(
+                        get: { appState.hubPlaybackPlaying },
+                        set: { appState.hubPlaybackPlaying = $0 }
+                    ),
+                    isMuted: Binding(
+                        get: { appState.hubPlaybackMuted },
+                        set: { appState.hubPlaybackMuted = $0 }
+                    )
+                )
+                .padding(.bottom, 0)
+                .background(Theme.surface)
+                .overlay(alignment: .top) {
+                    Rectangle()
+                        .fill(Theme.border)
+                        .frame(height: 0.5)
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
+            // Optional share-card mini (user-docked) — same fixed band under messages.
+            if let share = chatMiniShare, appState.hubPlaybackPost == nil {
+                ChatFixedMiniPlayer(
+                    share: share,
+                    isPlaying: $chatMiniPlaying,
+                    isExpanded: $chatMiniExpanded,
+                    onClose: {
+                        chatMiniPlaying = false
+                        chatMiniShare = nil
+                        chatMiniExpanded = false
+                    },
+                    onOpenDestination: {
+                        openShareDestination(share)
+                    }
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
             composerBar
         }
+        .animation(.easeInOut(duration: 0.22), value: appState.hubPlaybackPost?.id)
+        .animation(.easeInOut(duration: 0.22), value: chatMiniShare?.postID)
         .screenBackground()
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(Theme.canvas, for: .navigationBar)
+        .scrollDismissesKeyboard(.interactively)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button {
@@ -119,9 +210,16 @@ struct ConversationView: View {
                 .disabled(!callManager.canStartCall)
             }
         }
-        .task {
+        .task(id: conversation.id) {
+            // Seed from conversation members while the network refresh loads.
+            if peerLastReadAt == nil, let me = currentUserID {
+                peerLastReadAt = conversation.otherMember(currentUserID: me)?.lastReadAt
+            }
+            // If we already painted from cache, soft-refresh without a blocking spinner.
             await callManager.ensureSignalingReady()
             await loadMessages()
+            // Keep read receipts fresh while this chat is open.
+            await pollPeerReadReceipts()
         }
         .alert("Call unavailable", isPresented: Binding(
             get: { callManager.errorMessage != nil && !callManager.showUI },
@@ -137,7 +235,53 @@ struct ConversationView: View {
             guard let conversationID = notification.userInfo?["conversationId"] as? String,
                   conversationID == conversation.id
             else { return }
-            Task { await loadMessages() }
+            Task {
+                await loadMessages()
+                await refreshPeerReadReceipt()
+                // Light clear only — avoid re-fetching the full notifications list every message.
+                await PushNotificationService.shared.clearDeliveredNotifications(
+                    forConversation: conversation.id
+                )
+            }
+        }
+        .onAppear {
+            Task { await refreshPeerReadReceipt() }
+        }
+        .onDisappear {
+            chatMiniPlaying = false
+        }
+    }
+
+    // MARK: - Share routing (card tap)
+
+    /// Card / arrow → Sparks, Hubs watch, or post. Never autoplay.
+    private func openShareDestination(_ share: Message.ShareInfo) {
+        chatMiniPlaying = false
+        ChatShareRouting.open(share, appState: appState)
+    }
+
+    /// Poll peer `last_read_at` so "Read" appears soon after they open the chat.
+    private func pollPeerReadReceipts() async {
+        while !Task.isCancelled {
+            // Gentle interval — aggressive polling made chat feel laggy.
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            guard !Task.isCancelled else { return }
+            await refreshPeerReadReceipt()
+        }
+    }
+
+    private func refreshPeerReadReceipt() async {
+        guard let me = currentUserID else { return }
+        guard let refreshed = try? await MessagesService.shared.getConversationById(conversation.id) else {
+            return
+        }
+        let peerRead = refreshed.otherMember(currentUserID: me)?.lastReadAt
+        await MainActor.run {
+            if peerRead != peerLastReadAt {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    peerLastReadAt = peerRead
+                }
+            }
         }
     }
 
@@ -222,6 +366,12 @@ struct ConversationView: View {
 
                 TextField(replyingTo == nil ? "Message…" : "Write a reply…", text: $draft, axis: .vertical)
                     .lineLimit(1...4)
+                    .focused($composerFocused)
+                    .submitLabel(.done)
+                    .onSubmit {
+                        composerFocused = false
+                        Keyboard.dismiss()
+                    }
                     .padding(12)
                     .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.controlRadius))
                     .overlay(
@@ -250,8 +400,9 @@ struct ConversationView: View {
     }
 
     private func loadMessages() async {
-        let showSpinner = messages.isEmpty
-        if showSpinner {
+        let hadLocalMessages = !messages.isEmpty
+        // Only block the UI with a spinner on a cold open (no cache / no local rows).
+        if !hadLocalMessages {
             await MainActor.run { isLoading = true }
         }
         do {
@@ -262,17 +413,32 @@ struct ConversationView: View {
             let peerRead = refreshed?.otherMember(currentUserID: currentUserID ?? "")?.lastReadAt
             await MainActor.run {
                 messages = loaded
-                peerLastReadAt = peerRead
+                if let peerRead { peerLastReadAt = peerRead }
                 errorMessage = nil
-                if showSpinner { isLoading = false }
-                requestScrollToBottom()
+                isLoading = false
+                MessagesService.shared.storeMessages(
+                    loaded,
+                    peerReadAt: peerRead,
+                    for: conversation.id
+                )
+                // Don't yank scroll if we already had content on screen.
+                if !hadLocalMessages {
+                    requestScrollToBottom()
+                }
             }
-            try? await Task.sleep(nanoseconds: 120_000_000)
-            await MainActor.run { requestScrollToBottom() }
+            if !hadLocalMessages {
+                try? await Task.sleep(nanoseconds: 120_000_000)
+                await MainActor.run { requestScrollToBottom() }
+            }
+            // listMessages updates last_read_at server-side — drop banners + tab badge for this chat.
+            await PushNotificationService.shared.clearDeliveredNotifications(forConversation: conversation.id)
         } catch {
             await MainActor.run {
-                errorMessage = error.localizedDescription
-                if showSpinner { isLoading = false }
+                // Keep cached messages visible on a soft refresh failure.
+                if !hadLocalMessages {
+                    errorMessage = error.localizedDescription
+                }
+                isLoading = false
             }
         }
     }
@@ -335,11 +501,14 @@ struct ConversationView: View {
                 sender: nil
             )
             messages.append(placeholder)
+            persistMessageCache()
             requestScrollToBottom()
         }
         draft = ""
         let savedReply = replyingTo
         replyingTo = nil
+        composerFocused = false
+        Keyboard.dismiss()
 
         do {
             if let data = pendingMediaData {
@@ -362,6 +531,7 @@ struct ConversationView: View {
                     replacePendingMessage(id: placeholderID, with: message)
                 } else {
                     messages.append(message)
+                    persistMessageCache()
                 }
                 clearPendingMedia()
             } else {
@@ -370,16 +540,19 @@ struct ConversationView: View {
                     replacePendingMessage(id: placeholderID, with: message)
                 } else {
                     messages.append(message)
+                    persistMessageCache()
                 }
             }
             notifyConversationChanged()
             requestScrollToBottom()
             if let refreshed = try? await MessagesService.shared.getConversationById(conversation.id) {
                 peerLastReadAt = refreshed.otherMember(currentUserID: currentUserID ?? "")?.lastReadAt
+                persistMessageCache()
             }
         } catch {
             if let placeholderID {
                 messages.removeAll { $0.id == placeholderID }
+                persistMessageCache()
             }
             draft = body
             replyingTo = savedReply
@@ -393,9 +566,19 @@ struct ConversationView: View {
         } else {
             messages.append(message)
         }
+        persistMessageCache()
+    }
+
+    private func persistMessageCache() {
+        MessagesService.shared.storeMessages(
+            messages,
+            peerReadAt: peerLastReadAt,
+            for: conversation.id
+        )
     }
 
     private func notifyConversationChanged() {
+        persistMessageCache()
         NotificationCenter.default.post(
             name: .conversationMessagesDidChange,
             object: nil,
@@ -539,9 +722,13 @@ private enum HiddenMessagesStore {
 }
 
 private struct MessageBubble: View {
+    @Environment(AppState.self) private var appState
+
     let message: Message
     let isMine: Bool
     let peerLastReadAt: String?
+    /// True only for the latest of my messages the recipient has read — shows "Read · time".
+    var isLastReadByPeer: Bool = false
     let reactionSummary: MessageReactionSummary?
     let replyAuthorName: String?
     let onReply: () -> Void
@@ -549,10 +736,12 @@ private struct MessageBubble: View {
     let onReact: (String) -> Void
     let onUnsend: () -> Void
     let onRemoveLocally: () -> Void
+    var onOpenShare: ((Message.ShareInfo) -> Void)? = nil
 
     @State private var resolvedImageURL: URL?
     @State private var showsStatusDetail = false
     @State private var swipeOffset: CGFloat = 0
+    @State private var showImageLightbox = false
 
     var body: some View {
         if message.isCallLog {
@@ -619,14 +808,21 @@ private struct MessageBubble: View {
                     bubbleContent
                     reactionStrip
                     messageMeta
+                        // Status detail toggle lives on the timestamp row only —
+                        // never on the whole bubble (that stole share-card taps).
+                        .onTapGesture {
+                            showsStatusDetail.toggle()
+                        }
+                        .onTapGesture(count: 2) {
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            onLike()
+                        }
                 }
                 if !isMine { Spacer(minLength: 48) }
             }
             .offset(x: swipeOffset)
         }
-        .contentShape(Rectangle())
         .simultaneousGesture(swipeToReplyGesture)
-        .gesture(messageTapGesture)
         .contextMenu {
             Menu("Add Emoji", systemImage: "face.smiling") {
                 ForEach(MessageReactionIndex.quickEmojis, id: \.self) { emoji in
@@ -645,17 +841,6 @@ private struct MessageBubble: View {
         .task(id: message.mediaPath) {
             await resolveImageURLIfNeeded()
         }
-    }
-
-    private var messageTapGesture: some Gesture {
-        TapGesture(count: 2)
-            .onEnded { _ in
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                onLike()
-            }
-            .exclusively(before: TapGesture(count: 1).onEnded {
-                showsStatusDetail.toggle()
-            })
     }
 
     private var swipeToReplyGesture: some Gesture {
@@ -702,7 +887,7 @@ private struct MessageBubble: View {
     @ViewBuilder
     private var messageMeta: some View {
         VStack(alignment: isMine ? .trailing : .leading, spacing: 2) {
-            HStack(spacing: 6) {
+            HStack(spacing: 5) {
                 if !message.timestampLabel.isEmpty {
                     Text(message.timestampLabel)
                 }
@@ -714,54 +899,35 @@ private struct MessageBubble: View {
             .font(.caption2)
             .foregroundStyle(Theme.inkMuted)
 
-            if showsStatusDetail {
-                if isMine {
-                    deliveryStatusLines
-                } else if !RelativeTime.formatDateTime(message.createdAt).isEmpty {
-                    Text(RelativeTime.formatDateTime(message.createdAt))
-                        .font(.caption2)
-                        .foregroundStyle(Theme.inkMuted)
-                }
+            // Word only under the last message the recipient has read — no ticks.
+            if isMine, isLastReadByPeer, isReadByPeer {
+                Text("Read")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(Theme.inkMuted)
+                    .accessibilityLabel("Read by recipient")
+            }
+
+            if showsStatusDetail, !isMine, !RelativeTime.formatDateTime(message.createdAt).isEmpty {
+                Text(RelativeTime.formatDateTime(message.createdAt))
+                    .font(.caption2)
+                    .foregroundStyle(Theme.inkMuted)
             }
         }
-    }
-
-    @ViewBuilder
-    private var deliveryStatusLines: some View {
-        VStack(alignment: .trailing, spacing: 2) {
-            statusLine(label: "Sent", timestamp: message.createdAt)
-            if isDelivered {
-                statusLine(label: "Delivered", timestamp: message.createdAt)
-            }
-            if let readAt = readTimestamp {
-                statusLine(label: "Read", timestamp: readAt)
-            }
-        }
-    }
-
-    private func statusLine(label: String, timestamp: String) -> some View {
-        Text("\(label) \(RelativeTime.formatDateTime(timestamp))")
-            .font(.caption2)
-            .foregroundStyle(Theme.inkMuted)
     }
 
     private var isPending: Bool {
         message.id.hasPrefix("pending-")
     }
 
-    private var isDelivered: Bool {
-        guard isMine else { return false }
-        return !isPending && !message.id.isEmpty && !message.createdAt.isEmpty
-    }
-
-    private var readTimestamp: String? {
+    private var isReadByPeer: Bool {
         guard isMine,
+              !isPending,
               let peerLastReadAt,
               let readDate = RelativeTime.parseDate(peerLastReadAt),
               let created = RelativeTime.parseDate(message.createdAt),
-              readDate >= created
-        else { return nil }
-        return peerLastReadAt
+              readDate.timeIntervalSince(created) >= -2
+        else { return false }
+        return true
     }
 
     @ViewBuilder
@@ -771,7 +937,21 @@ private struct MessageBubble: View {
                 replyPreview(reply)
             }
 
-            if message.hasImage {
+            // Shared hub / post / spark card — whole card opens destination (no play button).
+            if let share = message.shareInfo {
+                ChatShareCard(
+                    share: share,
+                    isMine: isMine,
+                    onOpen: { onOpenShare?(share) }
+                )
+            }
+
+            // Native video attachment — open via share routing when possible.
+            if message.shareInfo == nil, message.hasVideoMedia {
+                chatAttachedVideoThumb
+            }
+
+            if message.hasImage, message.shareInfo == nil {
                 messageImage
             }
 
@@ -791,31 +971,94 @@ private struct MessageBubble: View {
                     )
             }
         }
-        .padding(message.hasImage ? 4 : 0)
+        .padding(message.hasImage && message.shareInfo == nil && !message.hasVideoMedia ? 4 : 0)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(message.hasImage ? (isMine ? Theme.accentBright.opacity(0.15) : Theme.surface) : Color.clear)
+                .fill(
+                    message.hasImage && message.shareInfo == nil && !message.hasVideoMedia
+                        ? (isMine ? Theme.accentBright.opacity(0.15) : Theme.surface)
+                        : Color.clear
+                )
         )
+        .fullScreenCover(isPresented: $showImageLightbox) {
+            if let url = resolvedImageURL ?? message.mediaURL.flatMap(URL.init(string:)) {
+                ChatImageLightbox(url: url)
+            }
+        }
+    }
+
+    /// Direct video attachment thumb — no play chrome; tap opens as a share destination.
+    @ViewBuilder
+    private var chatAttachedVideoThumb: some View {
+        let cardW: CGFloat = YouTubeMiniPlayerBar.videoWidth
+        let cardH: CGFloat = YouTubeMiniPlayerBar.videoHeight
+        let rawURL = resolvedImageURL
+            ?? MediaURLResolver.resolve(message.mediaURL)
+            ?? message.mediaURL.flatMap(URL.init(string:))
+        Button {
+            guard let rawURL else { return }
+            let share = Message.ShareInfo(
+                kind: .post,
+                postID: message.id,
+                title: "Video",
+                bodyText: nil,
+                authorName: message.sender?.displayName,
+                authorID: message.senderID,
+                mediaURL: rawURL.absoluteString,
+                posterURL: nil,
+                mediaType: "video",
+                note: ""
+            )
+            onOpenShare?(share)
+        } label: {
+            ZStack {
+                Theme.canvasDeep
+                Image(systemName: "film")
+                    .font(.title3)
+                    .foregroundStyle(Theme.inkMuted)
+            }
+            .frame(width: cardW, height: cardH)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .task(id: message.mediaPath) {
+            guard message.mediaURL == nil, let path = message.mediaPath, !path.isEmpty else { return }
+            if let signed = try? await MediaService.shared.signedMessageURL(path: path) {
+                resolvedImageURL = URL(string: signed)
+            }
+        }
     }
 
     @ViewBuilder
     private var messageImage: some View {
         if let url = resolvedImageURL ?? message.mediaURL.flatMap(URL.init(string:)) {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let image):
-                    image
-                        .resizable()
-                        .scaledToFill()
-                        .frame(maxWidth: 220, maxHeight: 260)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                case .failure:
-                    imagePlaceholder
-                default:
-                    ProgressView()
-                        .frame(width: 180, height: 140)
+            Button {
+                showImageLightbox = true
+            } label: {
+                CachedAsyncImage(
+                    url: url,
+                    maxPixelSize: 720,
+                    contentMode: .fill,
+                    placeholder: AnyView(
+                        ProgressView()
+                            .frame(width: 180, height: 140)
+                    )
+                )
+                .frame(maxWidth: 220, maxHeight: 280)
+                .frame(minWidth: 160, minHeight: 120)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(alignment: .bottomTrailing) {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.white)
+                        .padding(6)
+                        .background(.black.opacity(0.4), in: Circle())
+                        .padding(8)
                 }
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("View photo full screen")
         } else {
             imagePlaceholder
         }

@@ -22,6 +22,12 @@ struct SettingsView: View {
     @State private var incomingCallsReady = false
     @State private var pushEnvironmentLabel = ""
     @State private var isRefreshingCalling = false
+    @State private var showDeactivateConfirm = false
+    @State private var showDeleteConfirm = false
+    @State private var showDeletePhraseSheet = false
+    @State private var deleteConfirmationText = ""
+    @State private var accountActionBusy = false
+    @State private var accountActionError: String?
 
     var body: some View {
         List {
@@ -38,6 +44,56 @@ struct SettingsView: View {
                 Button("Edit profile") {
                     appState.navigate(to: .editProfile)
                 }
+            }
+
+            Section {
+                Button(role: .none) {
+                    showDeactivateConfirm = true
+                } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Deactivate account")
+                                .foregroundStyle(Theme.ink)
+                            Text("Hide your profile and pause activity. You can sign in again anytime to reactivate.")
+                                .font(.caption)
+                                .foregroundStyle(Theme.inkMuted)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer()
+                        if accountActionBusy {
+                            ProgressView()
+                        }
+                    }
+                }
+                .disabled(accountActionBusy)
+
+                Button(role: .destructive) {
+                    deleteConfirmationText = ""
+                    accountActionError = nil
+                    showDeleteConfirm = true
+                } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Delete account")
+                            Text("Permanently delete your account, profile, and posts. This cannot be undone.")
+                                .font(.caption)
+                                .foregroundStyle(Theme.inkMuted)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer()
+                    }
+                }
+                .disabled(accountActionBusy)
+
+                if let accountActionError {
+                    Text(accountActionError)
+                        .font(.caption)
+                        .foregroundStyle(Theme.danger)
+                }
+            } header: {
+                Text("Account control")
+            } footer: {
+                Text("Deactivate is temporary. Delete removes your Matterya identity and content for good.")
             }
 
             Section {
@@ -162,6 +218,71 @@ struct SettingsView: View {
         .task {
             await refreshPushStatus()
             await refreshCallingStatus()
+        }
+        .confirmationDialog(
+            "Deactivate your account?",
+            isPresented: $showDeactivateConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Deactivate", role: .destructive) {
+                Task { await performDeactivate() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Your profile will be hidden and you will be signed out. Sign in again anytime to reactivate.")
+        }
+        .confirmationDialog(
+            "Delete your account permanently?",
+            isPresented: $showDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Continue", role: .destructive) {
+                showDeletePhraseSheet = true
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This cannot be undone. Posts, profile, and login will be removed.")
+        }
+        .alert("Confirm deletion", isPresented: $showDeletePhraseSheet) {
+            TextField("Type DELETE or your username", text: $deleteConfirmationText)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            Button("Delete forever", role: .destructive) {
+                Task { await performDelete() }
+            }
+            Button("Cancel", role: .cancel) {
+                deleteConfirmationText = ""
+            }
+        } message: {
+            let handle = appState.currentProfile?.username.map { "@\($0)" } ?? "your username"
+            Text("Type DELETE or \(handle) to permanently delete this account.")
+        }
+    }
+
+    private func performDeactivate() async {
+        accountActionBusy = true
+        accountActionError = nil
+        defer { accountActionBusy = false }
+        do {
+            try await appState.deactivateAccount()
+        } catch {
+            accountActionError = error.localizedDescription
+        }
+    }
+
+    private func performDelete() async {
+        let confirmation = deleteConfirmationText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !confirmation.isEmpty else {
+            accountActionError = "Enter DELETE or your username to confirm."
+            return
+        }
+        accountActionBusy = true
+        accountActionError = nil
+        defer { accountActionBusy = false }
+        do {
+            try await appState.deleteAccount(confirmation: confirmation)
+        } catch {
+            accountActionError = error.localizedDescription
         }
     }
 

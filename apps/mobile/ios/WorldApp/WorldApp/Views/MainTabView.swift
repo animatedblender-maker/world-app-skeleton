@@ -82,9 +82,9 @@ struct MainTabView: View {
             }
         }
         .onChange(of: appState.selectedTab) { _, tab in
-            // Off Hubs → always mini player so chat / feed / globe stay usable.
+            // Off Hubs → mini player; do not force-return to a chat (only pull-down / minimize does).
             if tab != .hubs {
-                appState.minimizeHubPlayback()
+                appState.minimizeHubPlayback(returnToChat: false)
                 EngagementTracker.shared.hubsLeft()
             } else {
                 EngagementTracker.shared.hubsOpened()
@@ -92,10 +92,16 @@ struct MainTabView: View {
             EngagementTracker.shared.screenOpened(tab.rawValue)
         }
         .onChange(of: appState.navigationPath.count) { _, count in
-            // Opening chat (or any push) while watching → collapse to mini, keep playing.
-            if count > 0 {
-                appState.minimizeHubPlayback()
+            // Opening chat (or any push) while expanded → collapse to mini, keep playing.
+            // returnToChat: false — path already has the destination (including chat).
+            if count > 0, appState.hubPlaybackExpanded {
+                appState.minimizeHubPlayback(returnToChat: false)
             }
+            // Left the pinned chat while mini → never force-return there on next minimize.
+            appState.syncHubPlaybackChatReturnWithPath()
+        }
+        .onChange(of: appState.navigationPath) { _, _ in
+            appState.syncHubPlaybackChatReturnWithPath()
         }
         .onChange(of: appState.activeCreateSheet) { _, sheet in
             if sheet != nil {
@@ -113,7 +119,8 @@ struct MainTabView: View {
             Group {
             if sheet == .channelSetup {
                 ChannelSetupView {
-                    Task { await appState.presentCreateSheet(.hubVideo) }
+                    // After first channel create → hubs video or spark composer.
+                    Task { await appState.completeChannelSetupAndContinue() }
                 }
             } else if let country = appState.composerCountry {
                 switch sheet {
@@ -128,29 +135,20 @@ struct MainTabView: View {
                         Task { await appState.refreshStories() }
                     }
                 case .video:
-                    ReelComposerView(country: country, publishAsReel: false, publishToHubChannel: false) { post in
-                        NotificationCenter.default.post(
-                            name: .userPostsDidChange,
-                            object: nil,
-                            userInfo: ["post": post]
-                        )
-                        appState.reloadContent()
-                        postToOpenAfterCreate = post
+                    // Feed video: composer dismisses early; shadow card + feed top handled inside.
+                    ReelComposerView(country: country, publishAsReel: false, publishToHubChannel: false) { _ in
+                        appState.goToFeedTop(scroll: true)
                     }
                 case .hubVideo:
-                    ReelComposerView(country: country, publishAsReel: false, publishToHubChannel: true) { post in
-                        NotificationCenter.default.post(
-                            name: .userPostsDidChange,
-                            object: nil,
-                            userInfo: ["post": post]
-                        )
-                        appState.reloadContent()
-                        postToOpenAfterCreate = post
+                    // Hubs long-form also lands on feed with shadow card (channel video as post).
+                    ReelComposerView(country: country, publishAsReel: false, publishToHubChannel: true) { _ in
+                        appState.goToFeedTop(scroll: true)
                     }
                 case .channelSetup:
                     EmptyView()
                 case .reel:
-                    ReelComposerView(country: country) { post in
+                    // Sparks from + menu are always Hubs-bound (channel already gated).
+                    ReelComposerView(country: country, publishAsReel: true, publishToHubChannel: true) { post in
                         NotificationCenter.default.post(
                             name: .userPostsDidChange,
                             object: nil,
@@ -160,14 +158,8 @@ struct MainTabView: View {
                         postToOpenAfterCreate = post
                     }
                 case .story:
-                    StoryComposerView(country: country) { post in
-                        NotificationCenter.default.post(
-                            name: .userPostsDidChange,
-                            object: nil,
-                            userInfo: ["post": post]
-                        )
-                        appState.mergeStoryPost(post)
-                    }
+                    // Moments removed from product — keep sheet case for legacy data only.
+                    EmptyView()
                 }
             }
             }
@@ -208,10 +200,11 @@ struct MainTabView: View {
         return Theme.tabBarHeight + (mini ? YouTubeMiniPlayerBar.contentBottomInset - Theme.tabBarHeight : 0)
     }
 
-    /// Extra bottom space on pushed screens (chat, etc.) so content isn't under the mini bar.
+    /// Extra bottom space on pushed screens. Chat docks mini under its own composer — no float inset.
     private var miniPlayerContentInset: CGFloat {
         guard appState.hubPlaybackPost != nil, !appState.hubPlaybackExpanded else { return 0 }
-        // No tab bar on pushed routes — mini bar sits near the home indicator.
+        if appState.hubPlaybackDockInChat { return 0 }
+        // No tab bar on pushed routes — floating mini bar sits near the home indicator.
         return YouTubeMiniPlayerBar.videoHeight + 28
     }
 

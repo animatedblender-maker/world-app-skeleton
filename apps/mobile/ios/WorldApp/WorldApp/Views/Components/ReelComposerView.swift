@@ -9,6 +9,8 @@ struct ReelComposerView: View {
 
     let country: Country
     var publishAsReel: Bool = true
+    /// When false and not a reel: home-feed video. When true: Hubs channel long-form.
+    var publishToHubChannel: Bool = false
     var onPosted: ((CountryPost) -> Void)?
 
     @State private var caption = ""
@@ -33,7 +35,8 @@ struct ReelComposerView: View {
     }
 
     private var navTitle: String {
-        publishAsReel ? MatteryaCopy.newSpark : MatteryaCopy.newVideo
+        if publishAsReel { return MatteryaCopy.newSpark }
+        return publishToHubChannel ? "New channel video" : "New feed video"
     }
 
     var body: some View {
@@ -88,7 +91,7 @@ struct ReelComposerView: View {
                 .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
             VStack(alignment: .leading, spacing: 6) {
-                Text(MatteryaCopy.postToYourFeed)
+                Text(destinationHeadline)
                     .font(.headline.weight(.semibold))
                     .foregroundStyle(Theme.ink)
                     .lineLimit(2)
@@ -104,7 +107,7 @@ struct ReelComposerView: View {
                         .font(.caption)
                         .foregroundStyle(Theme.inkMuted)
                 } else {
-                    Text(publishAsReel ? MatteryaCopy.publishSparkHint : MatteryaCopy.publishVideoHint)
+                    Text(destinationHint)
                         .font(.caption)
                         .foregroundStyle(Theme.inkMuted)
                 }
@@ -278,6 +281,23 @@ struct ReelComposerView: View {
         }
     }
 
+    private var destinationHeadline: String {
+        if publishAsReel { return MatteryaCopy.postToYourFeed }
+        if publishToHubChannel {
+            let name = LivingChannelMarker.parse(from: appState.currentProfile?.bio)
+            return name.map { "Post to \($0)" } ?? "Post to your channel"
+        }
+        return "Post to your feed"
+    }
+
+    private var destinationHint: String {
+        if publishAsReel { return MatteryaCopy.publishSparkHint }
+        if publishToHubChannel {
+            return "Appears on your Hubs channel and as a simple card in the feed."
+        }
+        return "Appears in the home feed like a normal post with video."
+    }
+
     private var compressionPercentText: String {
         "\(Int((compressionProgress * 100).rounded()))%"
     }
@@ -393,62 +413,148 @@ struct ReelComposerView: View {
         uploadPhase = .uploading
         uploadProgress = UploadProgress(fractionCompleted: 0, bytesSent: 0, totalBytes: Int64(preparedVideoSizeBytes))
         errorMessage = nil
-        defer {
+
+        guard FileManager.default.fileExists(atPath: uploadVideoURL.path) else {
             busy = false
             uploadPhase = .idle
             uploadProgress = nil
+            errorMessage = "Video file is missing. Select the video again."
+            return
+        }
+
+        let trimmedCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
+        let localVideoURL = uploadVideoURL
+        let localMime = videoMimeType
+        let localExt = videoFileExtension
+        let localPreview = previewImage
+        let localCountry = country
+        let localProfileCity = profile.cityName
+        let asReel = publishAsReel
+        let toHub = publishToHubChannel
+
+        // Long-form video (feed or hubs): jump to feed top with a shadow card while uploading.
+        // Sparks still publish then open sparks — they don't pin on the home feed list.
+        let landsOnFeed = !asReel
+        let placeholderID: String? = landsOnFeed
+            ? appState.beginFeedVideoUpload(
+                caption: trimmedCaption,
+                previewImage: localPreview,
+                isHub: toHub
+            )
+            : nil
+
+        if landsOnFeed {
+            // Leave composer immediately — upload continues; feed shows the shadow card.
+            busy = false
+            dismiss()
         }
 
         let progressHandler: @Sendable (UploadProgress) -> Void = { progress in
             Task { @MainActor in
-                uploadProgress = progress
+                if let placeholderID {
+                    HomeFeedStore.shared.updateVideoUpload(
+                        id: placeholderID,
+                        progress: max(0.05, progress.fractionCompleted * 0.9),
+                        phaseLabel: "Uploading"
+                    )
+                } else {
+                    uploadProgress = progress
+                }
             }
         }
         let publishingHandler: @Sendable () -> Void = {
             Task { @MainActor in
-                uploadPhase = .publishing
+                if let placeholderID {
+                    HomeFeedStore.shared.updateVideoUpload(
+                        id: placeholderID,
+                        progress: 0.94,
+                        phaseLabel: "Publishing"
+                    )
+                } else {
+                    uploadPhase = .publishing
+                }
             }
         }
 
         do {
-            guard FileManager.default.fileExists(atPath: uploadVideoURL.path) else {
-                throw MediaError.uploadFailed("Video file is missing. Select the video again.")
-            }
-            let trimmedCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
             let post: CountryPost
-            if publishAsReel {
+            if asReel {
+                let sparkBody = toHub
+                    ? HubChannelPostMarker.markBody(trimmedCaption)
+                    : trimmedCaption
                 post = try await PostsService.shared.createReel(
                     authorID: authorID,
+                    body: sparkBody,
+                    countryName: localCountry.name,
+                    countryCode: localCountry.iso,
+                    cityName: localProfileCity,
+                    videoFileURL: localVideoURL,
+                    mimeType: localMime,
+                    fileExtension: localExt,
+                    thumbnailImage: localPreview,
+                    onUploadProgress: progressHandler,
+                    onPublishing: publishingHandler
+                )
+            } else if toHub {
+                post = try await PostsService.shared.createLivingVideo(
+                    authorID: authorID,
                     body: trimmedCaption,
-                    countryName: country.name,
-                    countryCode: country.iso,
-                    cityName: profile.cityName,
-                    videoFileURL: uploadVideoURL,
-                    mimeType: videoMimeType,
-                    fileExtension: videoFileExtension,
-                    thumbnailImage: previewImage,
+                    countryName: localCountry.name,
+                    countryCode: localCountry.iso,
+                    cityName: localProfileCity,
+                    videoFileURL: localVideoURL,
+                    mimeType: localMime,
+                    fileExtension: localExt,
+                    thumbnailImage: localPreview,
+                    publishToHubChannel: true,
                     onUploadProgress: progressHandler,
                     onPublishing: publishingHandler
                 )
             } else {
-                post = try await PostsService.shared.createLivingVideo(
+                post = try await PostsService.shared.createFeedVideo(
                     authorID: authorID,
                     body: trimmedCaption,
-                    countryName: country.name,
-                    countryCode: country.iso,
-                    cityName: profile.cityName,
-                    videoFileURL: uploadVideoURL,
-                    mimeType: videoMimeType,
-                    fileExtension: videoFileExtension,
-                    thumbnailImage: previewImage,
+                    countryName: localCountry.name,
+                    countryCode: localCountry.iso,
+                    cityName: localProfileCity,
+                    videoFileURL: localVideoURL,
+                    mimeType: localMime,
+                    fileExtension: localExt,
+                    thumbnailImage: localPreview,
                     onUploadProgress: progressHandler,
                     onPublishing: publishingHandler
                 )
             }
-            onPosted?(post)
-            dismiss()
+
+            if let placeholderID {
+                appState.finishFeedVideoUpload(placeholderID: placeholderID, post: post)
+            } else {
+                await MainActor.run {
+                    busy = false
+                    uploadPhase = .idle
+                    uploadProgress = nil
+                    onPosted?(post)
+                    dismiss()
+                }
+            }
+            // Notify hubs/profile even when we already finished via finishFeedVideoUpload.
+            if placeholderID == nil {
+                await MainActor.run {
+                    onPosted?(post)
+                }
+            }
         } catch {
-            errorMessage = error.localizedDescription
+            let message = error.localizedDescription
+            if let placeholderID {
+                appState.failFeedVideoUpload(placeholderID: placeholderID, message: message)
+            } else {
+                await MainActor.run {
+                    busy = false
+                    uploadPhase = .idle
+                    uploadProgress = nil
+                    errorMessage = message
+                }
+            }
         }
     }
 }

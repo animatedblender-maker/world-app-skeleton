@@ -70,6 +70,9 @@ extension Profile {
             bio: row["bio"] as? String,
             followersCount: row["followers_count"] as? Int,
             followingCount: row["following_count"] as? Int,
+            accountStatus: row["account_status"] as? String,
+            deactivatedAt: row["deactivated_at"] as? String,
+            deletedAt: row["deleted_at"] as? String,
             createdAt: row["created_at"] as? String ?? "",
             updatedAt: row["updated_at"] as? String ?? ""
         )

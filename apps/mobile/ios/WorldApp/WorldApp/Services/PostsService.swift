@@ -121,12 +121,32 @@ final class PostsService {
             return cached
         }
 
-        await prepareFeedContext()
+        let live = await fetchNetworkHomePosts(limit: max(globalLimit, maxPosts))
+        var demo: [CountryPost] = []
+        if AppConfig.useDemoDataset {
+            demo = await sampleGlobalPosts(limit: min(AppConfig.demoDatasetMaxPosts, max(maxPosts * 4, 80)))
+        }
+        var merged = mergePosts(real: live, demo: demo, limit: max(maxPosts, live.count + min(demo.count, 40)))
+            .excludingMoments()
+            .excludingSparks()
+        if merged.isEmpty {
+            merged = await fallbackFeedPosts(limit: maxPosts).excludingSparks()
+        }
+        if !merged.isEmpty {
+            ContentCache.shared.setPosts(merged, for: .homeFeed)
+        } else {
+            ContentCache.shared.invalidate(.homeFeed)
+        }
+        return merged
+    }
 
-        async let ownTask = fetchOwnPosts(limit: max(globalLimit, 25))
-        async let followingTask = loadFollowingFeed(limitPerAuthor: followingLimitPerAuthor)
-        async let globalTask = fetchRecentPosts(limit: globalLimit)
-        async let homeCountryTask = fetchHomeCountryPosts(limit: max(globalLimit, 25))
+    /// Live network posts only (no demo filler) — used by `HomeFeedStore` bootstrap.
+    func fetchNetworkHomePosts(limit: Int = 80) async -> [CountryPost] {
+        await prepareFeedContext()
+        async let ownTask = fetchOwnPosts(limit: max(limit / 2, 20))
+        async let followingTask = loadFollowingFeed(limitPerAuthor: 4)
+        async let globalTask = fetchRecentPosts(limit: limit)
+        async let homeCountryTask = fetchHomeCountryPosts(limit: max(limit / 2, 25))
 
         let own = await ownTask
         let following = await followingTask
@@ -138,16 +158,45 @@ final class PostsService {
         if !following.isEmpty { batches.append(following) }
         if !global.isEmpty { batches.append(global) }
 
-        var merged = mergeFeedSources(batches, limit: maxPosts).excludingMoments().excludingSparks()
+        var merged = mergeFeedSources(batches, limit: limit).forProfileFeedGrid()
         if merged.isEmpty {
-            merged = await fallbackFeedPosts(limit: maxPosts).excludingSparks()
+            merged = await fallbackFeedPosts(limit: limit).excludingSparks()
         }
-        if !merged.isEmpty {
-            ContentCache.shared.setPosts(merged, for: .homeFeed)
-        } else {
-            ContentCache.shared.invalidate(.homeFeed)
+        return merged.filter { !$0.isSeededOrSynthetic }
+    }
+
+    /// Paginated home page for infinite scroll (cursor = createdAt of last item).
+    func loadHomeFeedPage(
+        after cursor: String?,
+        limit: Int,
+        feedSessionId: String,
+        preferCache: Bool
+    ) async -> HomeFeedPage {
+        _ = feedSessionId
+        if preferCache,
+           cursor == nil,
+           let cached = ContentCache.shared.posts(for: .homeFeed),
+           !cached.isEmpty {
+            let slice = Array(cached.prefix(limit))
+            return HomeFeedPage(
+                items: slice,
+                nextCursor: HomeFeedStore.cursor(from: slice.last),
+                hasMore: cached.count > limit,
+                feedSessionId: feedSessionId
+            )
         }
-        return merged
+
+        let network = await fetchRecentPosts(limit: max(limit, 20), before: cursor)
+            .excludingMoments()
+            .excludingSparks()
+        let items = Array(network.prefix(limit))
+        let next = HomeFeedStore.cursor(from: items.last)
+        return HomeFeedPage(
+            items: items,
+            nextCursor: next,
+            hasMore: items.count >= limit && next != nil && next != cursor,
+            feedSessionId: feedSessionId
+        )
     }
 
     func loadReelsFeed(
@@ -292,7 +341,8 @@ final class PostsService {
         if !forceRefresh,
            ContentCache.shared.isFresh(.livingVideos),
            let cached = ContentCache.shared.posts(for: .livingVideos) {
-            return cached
+            // Re-filter so plain feed uploads never leak from an older cache.
+            return cached.filter(PlayPlatformBridge.isHubCatalogContent)
         }
 
         await prepareFeedContext()
@@ -301,10 +351,15 @@ final class PostsService {
             followingLimitPerAuthor: followingLimitPerAuthor,
             globalLimit: globalLimit
         )
-        var videos = pool.filter { $0.hasVideo && !$0.isReel && !$0.isStory }
+        // Hubs long-form only — never dump plain feed uploads into the catalog.
+        var videos = pool.filter {
+            $0.hasVideo && !$0.isReel && !$0.isStory && PlayPlatformBridge.isHubCatalogContent($0)
+        }
         if videos.isEmpty {
             let own = await fetchOwnPosts(limit: globalLimit)
-            videos = own.filter { $0.hasVideo && !$0.isReel && !$0.isStory }
+            videos = own.filter {
+                $0.hasVideo && !$0.isReel && !$0.isStory && PlayPlatformBridge.isHubCatalogContent($0)
+            }
         }
         if !videos.isEmpty {
             ContentCache.shared.setPosts(videos, for: .livingVideos)
@@ -314,7 +369,8 @@ final class PostsService {
         return videos
     }
 
-    /// Unified Matterya Hubs catalog: long-form videos + reels.
+    /// Unified Matterya Hubs catalog: seed Archive catalog + hub long-form + hub sparks.
+    /// Plain feed videos/reels stay on the home feed (same player, no Hubs badge).
     func loadPlayCatalog(
         followingLimitPerAuthor: Int = 10,
         globalLimit: Int = 40,
@@ -333,14 +389,25 @@ final class PostsService {
             viewerCountry: viewerCountry,
             followingIDs: followingIDs
         )
+        // Seed catalog is the bulk of Matterya Hubs — never omit it.
+        async let seedLongFormTask = HubVideoSeedService.shared.catalogLongFormVideos(perHub: 12)
+        async let seedSparksTask = HubVideoSeedService.shared.sparkSeedVideos(limit: 48)
+
         let longForm = await longFormTask
-        let reels = await reelsTask
+        let reels = (await reelsTask).filter(PlayPlatformBridge.isHubCatalogContent)
+        let seedLong = await seedLongFormTask
+        let seedSparks = await seedSparksTask
 
         var merged: [CountryPost] = []
         var seen = Set<String>()
-        for post in reels + longForm where !seen.contains(post.id) {
+        // Network hub content first, then seeds fill shelves.
+        for post in reels + longForm + seedSparks + seedLong where !seen.contains(post.id) {
             seen.insert(post.id)
             merged.append(post)
+        }
+        // Cache a non-empty catalog so Hubs cold-start has something to show.
+        if !merged.isEmpty {
+            ContentCache.shared.setPosts(merged, for: .livingVideos)
         }
         return merged
     }
@@ -374,6 +441,34 @@ final class PostsService {
         let query = "query($postId: ID!) { postById(post_id: $postId) { \(postFields) } }"
         let result: Response = try await gql.authenticatedRequest(query: query, variables: ["postId": postID])
         return result.postById?.toModel
+    }
+
+    /// Whether likes/comments must stay on-device (seed/hub/missing server rows).
+    func shouldEngageLocally(postID: String) async -> Bool {
+        if HubEngagementStore.usesLocalEngagement(postID: postID) { return true }
+        if let cached = cachedPost(id: postID) {
+            if cached.isHubSeedVideo { return true }
+            let author = cached.authorID.lowercased()
+            if author.hasPrefix("hub_") || author.hasPrefix("hub_spark_") { return true }
+            if let url = cached.mediaURL?.lowercased(), url.contains("archive.org") { return true }
+            if let url = cached.thumbURL?.lowercased(), url.contains("archive.org") { return true }
+        }
+        return false
+    }
+
+    private func cachedPost(id: String) -> CountryPost? {
+        for key in [ContentCacheKey.livingVideos, .homeFeed, .savedPosts, .profilePosts] {
+            if let match = ContentCache.shared.posts(for: key)?.first(where: { $0.id == id }) {
+                return match
+            }
+        }
+        return nil
+    }
+
+    /// Synchronous cache lookup for deep-links / Hubs open-by-id (no network).
+    @MainActor
+    func cachedPostForDetail(id: String) -> CountryPost? {
+        cachedPost(id: id)
     }
 
     func listComments(_ postID: String, limit: Int = 50) async throws -> [PostComment] {
@@ -461,7 +556,8 @@ final class PostsService {
         )
     }
 
-    func createLivingVideo(
+    /// Long-form video for the **home feed** (default). Not shown as a Hubs channel item.
+    func createFeedVideo(
         authorID: String,
         body: String,
         countryName: String,
@@ -474,6 +570,71 @@ final class PostsService {
         thumbnailImage: UIImage? = nil,
         onUploadProgress: (@Sendable (UploadProgress) -> Void)? = nil,
         onPublishing: (@Sendable () -> Void)? = nil
+    ) async throws -> CountryPost {
+        try await createLongFormVideo(
+            authorID: authorID,
+            body: body,
+            countryName: countryName,
+            countryCode: countryCode,
+            cityName: cityName,
+            title: title,
+            videoFileURL: videoFileURL,
+            mimeType: mimeType,
+            fileExtension: fileExtension,
+            thumbnailImage: thumbnailImage,
+            publishToHubChannel: false,
+            onUploadProgress: onUploadProgress,
+            onPublishing: onPublishing
+        )
+    }
+
+    /// Long-form video for the user’s **Hubs channel** (marked for Hubs shelves + simple feed card).
+    func createLivingVideo(
+        authorID: String,
+        body: String,
+        countryName: String,
+        countryCode: String,
+        cityName: String? = nil,
+        title: String? = nil,
+        videoFileURL: URL,
+        mimeType: String = "video/mp4",
+        fileExtension: String = "mp4",
+        thumbnailImage: UIImage? = nil,
+        publishToHubChannel: Bool = true,
+        onUploadProgress: (@Sendable (UploadProgress) -> Void)? = nil,
+        onPublishing: (@Sendable () -> Void)? = nil
+    ) async throws -> CountryPost {
+        try await createLongFormVideo(
+            authorID: authorID,
+            body: body,
+            countryName: countryName,
+            countryCode: countryCode,
+            cityName: cityName,
+            title: title,
+            videoFileURL: videoFileURL,
+            mimeType: mimeType,
+            fileExtension: fileExtension,
+            thumbnailImage: thumbnailImage,
+            publishToHubChannel: publishToHubChannel,
+            onUploadProgress: onUploadProgress,
+            onPublishing: onPublishing
+        )
+    }
+
+    private func createLongFormVideo(
+        authorID: String,
+        body: String,
+        countryName: String,
+        countryCode: String,
+        cityName: String?,
+        title: String?,
+        videoFileURL: URL,
+        mimeType: String,
+        fileExtension: String,
+        thumbnailImage: UIImage?,
+        publishToHubChannel: Bool,
+        onUploadProgress: (@Sendable (UploadProgress) -> Void)?,
+        onPublishing: (@Sendable () -> Void)?
     ) async throws -> CountryPost {
         let upload = try await MediaService.shared.uploadPostMedia(
             fileURL: videoFileURL,
@@ -491,9 +652,10 @@ final class PostsService {
             types: ["video"],
             reel: false
         )
+        let bodyOut = publishToHubChannel ? HubChannelPostMarker.markBody(body) : body
         return try await createPost(
             authorID: authorID,
-            body: body,
+            body: bodyOut,
             countryName: countryName,
             countryCode: countryCode,
             cityName: cityName,
@@ -601,7 +763,8 @@ final class PostsService {
         post: CountryPost,
         countryName: String,
         countryCode: String,
-        cityName: String? = nil
+        cityName: String? = nil,
+        caption: String? = nil
     ) async throws -> CountryPost {
         guard !post.isStory else {
             throw PostsServiceError.momentCannotBeSharedAsPost
@@ -611,8 +774,9 @@ final class PostsService {
         }
         let originalID = post.sharedPostID ?? post.id
         struct Response: Decodable { let createPost: GraphQLPost }
+        let body = (caption ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         var input: [String: Any] = [
-            "body": "",
+            "body": body,
             "country_name": countryName,
             "country_code": countryCode.uppercased(),
             "visibility": "country",
@@ -671,14 +835,32 @@ final class PostsService {
         return created
     }
 
-    func likePost(_ postID: String) async throws {
-        let mutation = "mutation($postId: ID!) { likePost(post_id: $postId) { id } }"
-        let _: EmptyMutation = try await gql.authenticatedRequest(query: mutation, variables: ["postId": postID])
+    /// Like a post. Never throws — seed/hub stay local; GraphQL failures fall back locally.
+    func likePost(_ postID: String, baseLikeCount: Int = 0) async throws {
+        if await shouldEngageLocally(postID: postID) {
+            HubEngagementStore.shared.like(postID, baseLikeCount: baseLikeCount)
+            return
+        }
+        do {
+            let mutation = "mutation($postId: ID!) { likePost(post_id: $postId) { id } }"
+            let _: EmptyMutation = try await gql.authenticatedRequest(query: mutation, variables: ["postId": postID])
+        } catch {
+            HubEngagementStore.shared.like(postID, baseLikeCount: baseLikeCount)
+        }
     }
 
-    func unlikePost(_ postID: String) async throws {
-        let mutation = "mutation($postId: ID!) { unlikePost(post_id: $postId) { id } }"
-        let _: EmptyMutation = try await gql.authenticatedRequest(query: mutation, variables: ["postId": postID])
+    /// Unlike a post. Never throws — same local-first policy as `likePost`.
+    func unlikePost(_ postID: String, baseLikeCount: Int = 0) async throws {
+        if await shouldEngageLocally(postID: postID) {
+            HubEngagementStore.shared.unlike(postID, baseLikeCount: baseLikeCount)
+            return
+        }
+        do {
+            let mutation = "mutation($postId: ID!) { unlikePost(post_id: $postId) { id } }"
+            let _: EmptyMutation = try await gql.authenticatedRequest(query: mutation, variables: ["postId": postID])
+        } catch {
+            HubEngagementStore.shared.unlike(postID, baseLikeCount: baseLikeCount)
+        }
     }
 
     func publishPostChange(_ post: CountryPost) {
@@ -907,6 +1089,9 @@ final class PostsService {
         guard !post.id.isEmpty, !viewedPostIDs.contains(post.id) else { return }
         viewedPostIDs.insert(post.id)
         ReelsRankingEngine.markWatched(post.id)
+        await MainActor.run {
+            EngagementTracker.shared.videoProgress(post: post, progress: 0.05, durationMs: 0, surface: "view")
+        }
     }
 
     private func fetchRealPostsByCountry(_ code: String, limit: Int) async throws -> [CountryPost] {

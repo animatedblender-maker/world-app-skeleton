@@ -125,6 +125,29 @@ import { Router } from '@angular/router';
         border-radius: 999px;
         background: var(--m-danger, #ea000b);
       }
+      @media (min-width: 900px) {
+        .matterya-topbar {
+          min-height: 56px;
+          padding: 0 var(--m-page-padding, 28px);
+          padding-top: env(safe-area-inset-top);
+          grid-template-columns: 48px 1fr auto;
+          background: rgba(254, 253, 251, 0.94);
+        }
+        .topbar-title {
+          text-align: left;
+          font-size: 26px;
+          line-height: 56px;
+          pointer-events: auto;
+        }
+        .topbar-icon {
+          width: 48px;
+          height: 48px;
+        }
+        .topbar-actions {
+          min-width: 96px;
+          gap: 4px;
+        }
+      }
     `,
   ],
 })

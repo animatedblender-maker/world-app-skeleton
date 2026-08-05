@@ -71,12 +71,13 @@ private struct CreateMenuPanel: View {
                     Task { await appState.presentCreateSheet(.post) }
                 }
 
+                // Hubs long-form only — channel is created on demand if missing (not for every user).
                 createRow(
-                    title: "Video",
-                    subtitle: MatteryaCopy.longFormOnHubs,
+                    title: "Hubs video",
+                    subtitle: "Long-form on \(MatteryaCopy.matteryaHubs)",
                     icon: "film"
                 ) {
-                    Task { await appState.presentCreateSheet(.video) }
+                    Task { await appState.presentHubVideoCreate() }
                 }
 
                 createRow(
@@ -84,17 +85,10 @@ private struct CreateMenuPanel: View {
                     subtitle: MatteryaCopy.sparksOnHubs,
                     icon: "sparkles"
                 ) {
-                    Task { await appState.presentCreateSheet(.reel) }
+                    // Sparks also live on Hubs — require channel the same way.
+                    Task { await appState.presentHubSparkCreate() }
                 }
-
-                createRow(
-                    title: "Letter",
-                    subtitle: "5/day to random strangers · local midnight",
-                    icon: "envelope.open"
-                ) {
-                    appState.showCreateMenu = false
-                    appState.presentLetterCompose()
-                }
+                // Moments removed — no create entry.
             }
             .padding(.vertical, 6)
         }

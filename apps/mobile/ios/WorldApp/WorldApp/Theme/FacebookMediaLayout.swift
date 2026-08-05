@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 enum FacebookMediaLayout {
     /// Facebook feed portrait photo (4:5).
@@ -11,15 +12,26 @@ enum FacebookMediaLayout {
     static let feedVideoAspect: CGFloat = 16.0 / 9.0
     /// Facebook Reels / Stories vertical video (9:16).
     static let reelAspect: CGFloat = 9.0 / 16.0
-    /// Max height for in-feed photos and videos — tall enough for 4:5 immersion on phones.
+    /// Max height for in-feed photos — tall enough for 4:5 immersion on phones.
     static let maxFeedMediaHeight: CGFloat = 520
 
+    /// In-feed video height: at least ~55% of screen so two videos rarely fit together.
+    static func dominantFeedVideoHeight(
+        forWidth width: CGFloat = UIScreen.main.bounds.width,
+        screenHeight: CGFloat = UIScreen.main.bounds.height
+    ) -> CGFloat {
+        let classic = width / feedVideoAspect
+        let minDominant = screenHeight * 0.55
+        let maxDominant = screenHeight * 0.68
+        return min(max(classic, minDominant), maxDominant)
+    }
+
     static func mediaHeight(for width: CGFloat, post: CountryPost, context: MediaContext = .feed) -> CGFloat {
+        if post.hasVideo, usesYouTubeFrame(for: post, context: context) || context == .feed {
+            return dominantFeedVideoHeight(forWidth: width)
+        }
         let aspect = aspectRatio(for: post, context: context) ?? photoPortraitAspect
         let natural = width / aspect
-        if usesYouTubeFrame(for: post, context: context) {
-            return natural
-        }
         return min(natural, maxFeedMediaHeight)
     }
 

@@ -105,6 +105,7 @@ struct PostCommentsView: View {
     @State private var isLoading = false
     @State private var isSubmitting = false
     @State private var likingCommentIDs: Set<String> = []
+    @FocusState private var composerFocused: Bool
 
     private struct ReplyTarget {
         /// Thread anchor sent to the API (always the top-level comment).
@@ -114,10 +115,12 @@ struct PostCommentsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if isLoading {
+            // Show spinner while demo threads / GraphQL load — avoids a false "no comments" flash.
+            if isLoading && threadedComments.isEmpty {
                 ProgressView()
                     .tint(Theme.accent)
                     .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
             } else if threadedComments.isEmpty {
                 Text("No comments yet. Be the first to comment.")
                     .font(.subheadline)
@@ -136,10 +139,16 @@ struct PostCommentsView: View {
                 if let maxVisibleComments,
                    threadedComments.count > maxVisibleComments {
                     Button {
+                        // Stay on the card — parent loads more inline (never navigates away).
                         onViewAllComments?()
                     } label: {
                         let total = totalCommentCount ?? threadedComments.count
-                        Text("View all \(total) \(total == 1 ? "comment" : "comments")")
+                        let remaining = max(0, total - maxVisibleComments)
+                        Text(
+                            remaining > 0
+                                ? "Load more comments (\(remaining) more)"
+                                : "Load more comments"
+                        )
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(Theme.inkMuted)
                     }
@@ -152,10 +161,9 @@ struct PostCommentsView: View {
                 composer
             }
         }
+        .dismissKeyboardOnTap()
         .task(id: postID) {
-            if comments.isEmpty {
-                await loadComments()
-            }
+            await loadComments()
         }
     }
 
@@ -203,6 +211,12 @@ struct PostCommentsView: View {
                 )
                 .lineLimit(1...4)
                 .font(.subheadline)
+                .focused($composerFocused)
+                .submitLabel(.done)
+                .onSubmit {
+                    composerFocused = false
+                    Keyboard.dismiss()
+                }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
                 .background(Theme.surface)
@@ -242,12 +256,18 @@ struct PostCommentsView: View {
     }
 
     private func loadComments() async {
-        isLoading = true
+        // Always go through PostsService — it merges demo Reddit threads (comments.jsonl)
+        // with any on-device replies. The old HubEngagementStore-only path left fake posts empty.
+        let showSpinner = comments.isEmpty
+        if showSpinner { isLoading = true }
         defer { isLoading = false }
+
         do {
-            comments = try await PostsService.shared.listComments(postID, limit: 200)
+            let loaded = try await PostsService.shared.listComments(postID, limit: 200)
+            comments = loaded
         } catch {
-            onError?(error.localizedDescription)
+            // Seed / offline fallback — never surface GraphQL "Unexpected error".
+            comments = HubEngagementStore.shared.listComments(postID, limit: 200)
         }
     }
 
@@ -263,7 +283,10 @@ struct PostCommentsView: View {
                 body: body,
                 parentID: parentID
             )
-            var refreshed = try await PostsService.shared.listComments(postID, limit: 200)
+            var refreshed = (try? await PostsService.shared.listComments(postID, limit: 200)) ?? []
+            if !refreshed.contains(where: { $0.id == created.id }) {
+                refreshed.append(created)
+            }
             if let parentID, !parentID.isEmpty {
                 refreshed = refreshed.map { comment in
                     guard comment.id == created.id, comment.parentID == nil else { return comment }
@@ -273,8 +296,33 @@ struct PostCommentsView: View {
             comments = refreshed
             commentDraft = ""
             replyTarget = nil
+            composerFocused = false
+            Keyboard.dismiss()
         } catch {
-            onError?(error.localizedDescription)
+            // Never red-toast: always keep the comment on-device.
+            let profile = ContentCache.shared.cachedProfile()
+            let author = profile.map {
+                PostAuthor(
+                    userID: $0.userID,
+                    displayName: $0.displayName ?? $0.username ?? "You",
+                    username: $0.username,
+                    avatarURL: $0.avatarURL,
+                    countryName: $0.countryName,
+                    countryCode: $0.countryCode,
+                    lastReadAt: nil
+                )
+            }
+            let created = HubEngagementStore.shared.addComment(
+                postID: postID,
+                body: body,
+                parentID: parentID,
+                author: author
+            )
+            comments.append(created)
+            commentDraft = ""
+            replyTarget = nil
+            composerFocused = false
+            Keyboard.dismiss()
         }
     }
 
@@ -282,6 +330,24 @@ struct PostCommentsView: View {
         guard !likingCommentIDs.contains(comment.id) else { return }
         likingCommentIDs.insert(comment.id)
         defer { likingCommentIDs.remove(comment.id) }
+
+        // Optimistic UI first — hub comments never need the network.
+        if let index = comments.firstIndex(where: { $0.id == comment.id }) {
+            let c = comments[index]
+            let liked = !c.likedByMe
+            comments[index] = PostComment(
+                id: c.id,
+                postID: c.postID,
+                parentID: c.parentID,
+                authorID: c.authorID,
+                body: c.body,
+                likeCount: liked ? c.likeCount + 1 : max(0, c.likeCount - 1),
+                likedByMe: liked,
+                createdAt: c.createdAt,
+                updatedAt: c.updatedAt,
+                author: c.author
+            )
+        }
 
         do {
             let updated = comment.likedByMe
@@ -291,7 +357,7 @@ struct PostCommentsView: View {
                 comments[index] = updated
             }
         } catch {
-            onError?(error.localizedDescription)
+            // Keep optimistic state — never surface GraphQL "Unexpected error".
         }
     }
 }
@@ -588,5 +654,90 @@ struct PostCommentsPageView: View {
         .navigationTitle("Comments")
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(Theme.canvas, for: .navigationBar)
+    }
+}
+
+/// Full-screen comments sheet for Sparks / Reels viewer.
+struct ReelsCommentsSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let postID: String
+    @State private var comments: [PostComment] = []
+    @State private var errorMessage: String?
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    PostCommentsView(
+                        postID: postID,
+                        comments: $comments,
+                        showsComposer: true,
+                        onError: { errorMessage = $0 }
+                    )
+
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .font(.caption)
+                            .foregroundStyle(Theme.danger)
+                    }
+                }
+                .padding(Theme.pagePadding)
+                .padding(.bottom, 24)
+            }
+            .screenBackground()
+            .navigationTitle("Comments")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .toolbarBackground(Theme.canvas, for: .navigationBar)
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+}
+
+/// Compact comments panel for Sparks — keeps the video partially visible behind a detented sheet.
+struct SparksCommentsSheet: View {
+    let postID: String
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var comments: [PostComment] = []
+    @State private var errorMessage: String?
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    PostCommentsView(
+                        postID: postID,
+                        comments: $comments,
+                        onError: { errorMessage = $0 }
+                    )
+
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .font(.caption)
+                            .foregroundStyle(Theme.danger)
+                    }
+                }
+                .padding(.horizontal, Theme.pagePadding)
+                .padding(.top, 4)
+                .padding(.bottom, 28)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .dismissKeyboardOnTap()
+            .background(Theme.canvas)
+            .navigationTitle("Comments")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                }
+            }
+        }
     }
 }

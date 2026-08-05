@@ -99,12 +99,13 @@ enum MatteryaPullDownDismiss {
 }
 
 extension View {
-    func matteryaPullDownDismissTransform(offset: CGFloat) -> some View {
+    /// Pull-down motion. Set `fadesContent: false` on the video so only chrome fades.
+    func matteryaPullDownDismissTransform(offset: CGFloat, fadesContent: Bool = true) -> some View {
         let progress = min(max(offset, 0) / 320, 1)
         return self
             .offset(y: offset)
             .scaleEffect(1 - progress * 0.06, anchor: .top)
-            .opacity(Double(1 - progress * 0.35))
+            .opacity(fadesContent ? Double(1 - progress * 0.35) : 1)
     }
 
     func matteryaPullDownToDismiss(

@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { AuthService } from '../core/services/auth.service';
+import { ProfileService } from '../core/services/profile.service';
 
 @Component({
   selector: 'app-auth-page',
@@ -189,6 +190,7 @@ export class AuthPageComponent {
 
   constructor(
     private auth: AuthService,
+    private profiles: ProfileService,
     private router: Router,
     private cdr: ChangeDetectorRef,
     private zone: NgZone
@@ -196,6 +198,26 @@ export class AuthPageComponent {
 
   private forceUi(): void {
     this.zone.run(() => this.cdr.detectChanges());
+  }
+
+  /** Soft-deactivated accounts come back on successful sign-in. */
+  private async reactivateIfNeeded(): Promise<void> {
+    try {
+      const { meProfile } = await this.profiles.meProfile();
+      if (meProfile?.account_status === 'deleted') {
+        await this.auth.logout();
+        throw new Error('This account was permanently deleted.');
+      }
+      if (meProfile?.account_status === 'deactivated') {
+        await this.profiles.reactivateAccount();
+      }
+    } catch (e: any) {
+      const msg = String(e?.message ?? e ?? '');
+      if (msg.includes('permanently deleted') || msg.includes('ACCOUNT_DELETED')) {
+        throw e;
+      }
+      // Non-fatal if profile columns are not migrated yet.
+    }
   }
 
   clearMsgs(): void {
@@ -282,6 +304,7 @@ export class AuthPageComponent {
 
       if (this.tab === 'login') {
         await this.auth.login(email, pass);
+        await this.reactivateIfNeeded();
         await this.router.navigateByUrl('/feed');
         return;
       }

@@ -24,8 +24,18 @@ export type Profile = {
   bio?: string | null;
   followers_count?: number | null;
   following_count?: number | null;
+  account_status?: string | null;
+  deactivated_at?: string | null;
+  deleted_at?: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type AccountActionResult = {
+  ok: boolean;
+  action: string;
+  message?: string | null;
+  account_status: string;
 };
 
 const COUNTRIES_QUERY = `
@@ -54,9 +64,30 @@ query MeProfile {
     country_code
     city_name
     bio
+    account_status
+    deactivated_at
+    deleted_at
     created_at
     updated_at
   }
+}
+`;
+
+const DEACTIVATE_ACCOUNT = `
+mutation DeactivateAccount {
+  deactivateAccount { ok action message account_status }
+}
+`;
+
+const REACTIVATE_ACCOUNT = `
+mutation ReactivateAccount {
+  reactivateAccount { ok action message account_status }
+}
+`;
+
+const DELETE_ACCOUNT = `
+mutation DeleteAccount($confirmation: String!) {
+  deleteAccount(confirmation: $confirmation) { ok action message account_status }
 }
 `;
 
@@ -163,6 +194,20 @@ export class ProfileService {
 
   async meProfile() {
     return this.gql.request<{ meProfile: Profile | null }>(ME_PROFILE);
+  }
+
+  async deactivateAccount() {
+    return this.gql.request<{ deactivateAccount: AccountActionResult }>(DEACTIVATE_ACCOUNT);
+  }
+
+  async reactivateAccount() {
+    return this.gql.request<{ reactivateAccount: AccountActionResult }>(REACTIVATE_ACCOUNT);
+  }
+
+  async deleteAccount(confirmation: string) {
+    return this.gql.request<{ deleteAccount: AccountActionResult }>(DELETE_ACCOUNT, {
+      confirmation,
+    });
   }
 
   async updateProfile(input: {

@@ -81,13 +81,98 @@ final class ProfileService {
         query MeProfile {
           meProfile {
             user_id email display_name username avatar_url
-            country_name country_code city_name bio created_at updated_at
+            country_name country_code city_name bio
+            account_status deactivated_at deleted_at
+            created_at updated_at
           }
         }
         """
 
         let result: Response = try await gql.authenticatedRequest(query: query)
         return result.meProfile?.toModel
+    }
+
+    struct AccountActionResult: Sendable {
+        let ok: Bool
+        let action: String
+        let message: String?
+        let accountStatus: String
+    }
+
+    func deactivateAccount() async throws -> AccountActionResult {
+        struct Response: Decodable {
+            struct Result: Decodable {
+                let ok: Bool
+                let action: String
+                let message: String?
+                let accountStatus: String
+                enum CodingKeys: String, CodingKey {
+                    case ok, action, message
+                    case accountStatus = "account_status"
+                }
+            }
+            let deactivateAccount: Result
+        }
+        let mutation = """
+        mutation DeactivateAccount {
+          deactivateAccount { ok action message account_status }
+        }
+        """
+        let result: Response = try await gql.authenticatedRequest(query: mutation)
+        let r = result.deactivateAccount
+        return AccountActionResult(ok: r.ok, action: r.action, message: r.message, accountStatus: r.accountStatus)
+    }
+
+    func reactivateAccount() async throws -> AccountActionResult {
+        struct Response: Decodable {
+            struct Result: Decodable {
+                let ok: Bool
+                let action: String
+                let message: String?
+                let accountStatus: String
+                enum CodingKeys: String, CodingKey {
+                    case ok, action, message
+                    case accountStatus = "account_status"
+                }
+            }
+            let reactivateAccount: Result
+        }
+        let mutation = """
+        mutation ReactivateAccount {
+          reactivateAccount { ok action message account_status }
+        }
+        """
+        let result: Response = try await gql.authenticatedRequest(query: mutation)
+        let r = result.reactivateAccount
+        return AccountActionResult(ok: r.ok, action: r.action, message: r.message, accountStatus: r.accountStatus)
+    }
+
+    /// `confirmation` must be `"DELETE"` or the account username.
+    func deleteAccount(confirmation: String) async throws -> AccountActionResult {
+        struct Response: Decodable {
+            struct Result: Decodable {
+                let ok: Bool
+                let action: String
+                let message: String?
+                let accountStatus: String
+                enum CodingKeys: String, CodingKey {
+                    case ok, action, message
+                    case accountStatus = "account_status"
+                }
+            }
+            let deleteAccount: Result
+        }
+        let mutation = """
+        mutation DeleteAccount($confirmation: String!) {
+          deleteAccount(confirmation: $confirmation) { ok action message account_status }
+        }
+        """
+        let result: Response = try await gql.authenticatedRequest(
+            query: mutation,
+            variables: ["confirmation": confirmation]
+        )
+        let r = result.deleteAccount
+        return AccountActionResult(ok: r.ok, action: r.action, message: r.message, accountStatus: r.accountStatus)
     }
 
     func updateProfile(

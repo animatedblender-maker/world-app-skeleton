@@ -1,7 +1,7 @@
 import Foundation
 import OSLog
 import UIKit
-import UserNotifications
+@preconcurrency import UserNotifications
 
 @MainActor
 final class PushNotificationService: NSObject, UNUserNotificationCenterDelegate {
@@ -144,13 +144,14 @@ final class PushNotificationService: NSObject, UNUserNotificationCenterDelegate 
 
     func requestAuthorizationAndRegister() async {
         configure()
-        let center = UNUserNotificationCenter.current()
-        let settings = await center.notificationSettings()
+        // Avoid capturing UNUserNotificationCenter across @Sendable boundaries.
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
 
         switch settings.authorizationStatus {
         case .notDetermined:
             do {
-                let granted = try await center.requestAuthorization(options: [.alert, .badge, .sound])
+                let granted = try await UNUserNotificationCenter.current()
+                    .requestAuthorization(options: [.alert, .badge, .sound])
                 guard granted else {
                     lastRegistrationError = "Notification permission denied."
                     return
@@ -566,22 +567,106 @@ final class PushNotificationService: NSObject, UNUserNotificationCenterDelegate 
     ) async -> UNNotificationPresentationOptions {
         let payload = normalizedPayload(notification.request.content.userInfo)
         let isCall = Self.isCallPayload(payload)
-        let useInAppCallUI = await inAppCallUIForForegroundNotification(isCall: isCall)
-        _ = await routePushPayload(payload, presentInAppUI: useInAppCallUI)
         if isCall {
+            // Present CallKit / in-app UI immediately for ringing.
+            let useInAppCallUI = await inAppCallUIForForegroundNotification(isCall: true)
+            _ = await routePushPayload(payload, presentInAppUI: useInAppCallUI)
             return []
         }
+
+        // While the matching chat is open: no banner/sound/badge — just refresh the thread.
+        if await shouldSuppressMessageBanner(for: payload) {
+            await refreshFromForegroundPayload(payload)
+            return []
+        }
+
+        // Social / message banners: refresh badges only — navigate on tap (didReceive).
+        await refreshFromForegroundPayload(payload)
         return [.banner, .sound, .badge]
+    }
+
+    /// True when the user is already inside this conversation's chat screen.
+    @MainActor
+    private func shouldSuppressMessageBanner(for payload: [String: Any]) -> Bool {
+        let type = ((payload["type"] as? String) ?? (payload["category"] as? String) ?? "").lowercased()
+        guard type == "message" else { return false }
+        guard let conversationID = extractConversationID(from: payload) else { return false }
+        return ActiveConversationFocus.isViewing(conversationID)
+    }
+
+    /// Removes Notification Center banners for a chat (call when opening that conversation).
+    @MainActor
+    func clearDeliveredNotifications(forConversation conversationID: String) async {
+        let trimmed = conversationID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let center = UNUserNotificationCenter.current()
+        let delivered = await center.deliveredNotifications()
+        let matchingIDs = delivered.compactMap { notification -> String? in
+            let payload = normalizedPayload(notification.request.content.userInfo)
+            guard extractConversationID(from: payload) == trimmed else { return nil }
+            let type = ((payload["type"] as? String) ?? (payload["category"] as? String) ?? "").lowercased()
+            // Never wipe call alerts when opening a chat — only message banners.
+            if type == "call" || type == "incoming_call" { return nil }
+            return notification.request.identifier
+        }
+
+        if !matchingIDs.isEmpty {
+            center.removeDeliveredNotifications(withIdentifiers: matchingIDs)
+            logger.info("Cleared \(matchingIDs.count, privacy: .public) delivered notifications for conversation")
+        }
+
+        // Also drop any still-pending local requests for this chat (if any).
+        let pending = await center.pendingNotificationRequests()
+        let pendingIDs = pending.compactMap { request -> String? in
+            let payload = normalizedPayload(request.content.userInfo)
+            guard extractConversationID(from: payload) == trimmed else { return nil }
+            let type = ((payload["type"] as? String) ?? (payload["category"] as? String) ?? "").lowercased()
+            if type == "call" { return nil }
+            return request.identifier
+        }
+        if !pendingIDs.isEmpty {
+            center.removePendingNotificationRequests(withIdentifiers: pendingIDs)
+        }
+    }
+
+    private func extractConversationID(from payload: [String: Any]) -> String? {
+        stringValue(payload["conversationId"])
+            ?? stringValue(payload["conversation_id"])
+            ?? stringValue(payload["conversationID"])
+            ?? stringValue(payload["entityId"])
+            ?? stringValue(payload["entity_id"])
     }
 
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse
     ) async {
+        // User tapped the banner / lock-screen notification → open the target post / chat.
         let payload = normalizedPayload(response.notification.request.content.userInfo)
         let isCall = Self.isCallPayload(payload)
         let useInAppCallUI = await inAppCallUIForForegroundNotification(isCall: isCall, preferCallKit: true)
-        _ = await routePushPayload(payload, presentInAppUI: useInAppCallUI)
+        _ = await routePushPayload(payload, presentInAppUI: useInAppCallUI, openDestination: true)
+    }
+
+    @MainActor
+    private func refreshFromForegroundPayload(_ payload: [String: Any]) {
+        let type = ((payload["type"] as? String) ?? (payload["category"] as? String) ?? "").lowercased()
+        if type == "message", let conversationID = extractConversationID(from: payload) {
+            NotificationCenter.default.post(
+                name: .conversationMessagesDidChange,
+                object: nil,
+                userInfo: ["conversationId": conversationID]
+            )
+            return
+        }
+        if Self.socialNotificationTypes.contains(type)
+            || stringValue(payload["postId"]) != nil
+            || stringValue(payload["post_id"]) != nil
+            || stringValue(payload["entityId"]) != nil
+        {
+            NotificationCenter.default.post(name: .socialNotificationsDidChange, object: nil)
+        }
     }
 
     @MainActor
@@ -603,28 +688,48 @@ final class PushNotificationService: NSObject, UNUserNotificationCenterDelegate 
     }
 
     @MainActor
-    private func routePushPayload(_ payload: [String: Any], presentInAppUI: Bool = false) async -> Bool {
+    private func routePushPayload(
+        _ payload: [String: Any],
+        presentInAppUI: Bool = false,
+        openDestination: Bool = true
+    ) async -> Bool {
         if Self.isCallPayload(payload) {
             return await routeIncomingCallPayload(payload, presentInAppUI: presentInAppUI)
         }
 
-        let type = ((payload["type"] as? String) ?? (payload["category"] as? String) ?? "").lowercased()
+        let type = ((payload["type"] as? String)
+            ?? (payload["category"] as? String)
+            ?? "").lowercased()
 
-        if type == "message", let conversationID = stringValue(payload["conversationId"]) {
+        let conversationID = extractConversationID(from: payload)
+
+        if type == "message", let conversationID {
             NotificationCenter.default.post(
                 name: .conversationMessagesDidChange,
                 object: nil,
                 userInfo: ["conversationId": conversationID]
             )
-            postDeepLink(type: type, conversationID: conversationID, postID: nil, username: nil)
-            return false
+            if openDestination {
+                postDeepLink(type: type, conversationID: conversationID, postID: nil, username: nil)
+            }
+            return true
         }
 
-        let postID = stringValue(payload["postId"]) ?? stringValue(payload["entityId"])
-        let username = stringValue(payload["username"]) ?? stringValue(payload["actorUsername"])
-        if Self.socialNotificationTypes.contains(type) || postID != nil {
+        // Accept camelCase + snake_case keys from APNs / legacy payloads.
+        let postID = stringValue(payload["postId"])
+            ?? stringValue(payload["post_id"])
+            ?? stringValue(payload["entityId"])
+            ?? stringValue(payload["entity_id"])
+        let username = stringValue(payload["username"])
+            ?? stringValue(payload["actorUsername"])
+            ?? stringValue(payload["actor_username"])
+
+        if Self.socialNotificationTypes.contains(type) || postID != nil || type == "follow" {
             NotificationCenter.default.post(name: .socialNotificationsDidChange, object: nil)
-            postDeepLink(type: type, conversationID: nil, postID: postID, username: username)
+            if openDestination {
+                postDeepLink(type: type, conversationID: nil, postID: postID, username: username)
+            }
+            return true
         }
 
         return false

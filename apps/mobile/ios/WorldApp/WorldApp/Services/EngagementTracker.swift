@@ -145,6 +145,16 @@ final class EngagementTracker {
         enqueue(type: "hub_video_open", post: post, surface: "hubs")
     }
 
+    /// Explicit like / unlike taps (Kafka algorithm + reports).
+    func enqueueLike(post: CountryPost, liked: Bool) {
+        enqueue(
+            type: liked ? "post_like" : "post_unlike",
+            post: post,
+            surface: "home",
+            meta: ["liked": liked ? "1" : "0"]
+        )
+    }
+
     // MARK: - Profile / follow (also emitted server-side; client adds context)
 
     func profileOpened(userID: String, username: String?) {

@@ -7,8 +7,42 @@ final class MessagesService {
     private let gql = GraphQLService.shared
     private var cachedConversations: [Conversation] = []
     private var cacheUserID: String?
+    /// Keeps chat threads warm so re-opening a conversation paints instantly.
+    private var cachedMessagesByConversation: [String: [Message]] = [:]
+    private var cachedPeerReadByConversation: [String: String] = [:]
 
     private init() {}
+
+    func cachedMessages(for conversationID: String) -> [Message]? {
+        let id = conversationID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return nil }
+        return cachedMessagesByConversation[id]
+    }
+
+    func cachedPeerRead(for conversationID: String) -> String? {
+        let id = conversationID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return nil }
+        return cachedPeerReadByConversation[id]
+    }
+
+    func storeMessages(_ messages: [Message], peerReadAt: String? = nil, for conversationID: String) {
+        let id = conversationID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return }
+        cachedMessagesByConversation[id] = messages
+        if let peerReadAt, !peerReadAt.isEmpty {
+            cachedPeerReadByConversation[id] = peerReadAt
+        }
+        // Bound memory — keep the most recently touched ~12 threads.
+        if cachedMessagesByConversation.count > 12 {
+            let overflow = cachedMessagesByConversation.count - 12
+            for key in cachedMessagesByConversation.keys.prefix(overflow) {
+                if key != id {
+                    cachedMessagesByConversation.removeValue(forKey: key)
+                    cachedPeerReadByConversation.removeValue(forKey: key)
+                }
+            }
+        }
+    }
 
     func listConversations(limit: Int = 40) async throws -> [Conversation] {
         if ScreenshotMode.isActive {
@@ -106,6 +140,7 @@ final class MessagesService {
                 messages[index] = hydrated
             }
         }
+        storeMessages(messages, for: conversationID)
         return messages
     }
 

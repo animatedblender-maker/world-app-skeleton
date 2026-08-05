@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 enum Theme {
     static let paper = Color(red: 0.973, green: 0.965, blue: 0.949)
@@ -261,5 +262,104 @@ extension View {
     /// Sheets and full-screen covers do not reliably inherit `@Observable` environment values.
     func withAppState(_ appState: AppState) -> some View {
         environment(appState)
+    }
+
+    /// Dismiss the software keyboard (comments, messages, composers).
+    func dismissKeyboard() {
+        Keyboard.dismiss()
+    }
+
+    /// Tap empty / non-keyboard space to put the keyboard down.
+    /// Does not block buttons or scroll gestures (simultaneous + content shape).
+    func dismissKeyboardOnTap() -> some View {
+        contentShape(Rectangle())
+            .simultaneousGesture(
+                TapGesture().onEnded { _ in
+                    Keyboard.dismiss()
+                }
+            )
+    }
+}
+
+enum Keyboard {
+    static func dismiss() {
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder),
+            to: nil,
+            from: nil,
+            for: nil
+        )
+    }
+
+    /// Install once on the key window: any touch outside the keyboard collapses it.
+    /// `cancelsTouchesInView = false` so buttons, lists, and fields keep working.
+    @MainActor
+    static func installDismissOnOutsideTap() {
+        KeyboardDismissTapInstaller.shared.installIfNeeded()
+    }
+}
+
+/// Window-level tap that resigns first responder without stealing other touches.
+@MainActor
+private final class KeyboardDismissTapInstaller: NSObject, UIGestureRecognizerDelegate {
+    static let shared = KeyboardDismissTapInstaller()
+
+    private var isInstalled = false
+
+    func installIfNeeded() {
+        guard !isInstalled else { return }
+        guard let window = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .flatMap(\.windows)
+            .first(where: \.isKeyWindow)
+            ?? UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .flatMap(\.windows)
+            .first
+        else { return }
+
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap))
+        tap.cancelsTouchesInView = false
+        tap.requiresExclusiveTouchType = false
+        tap.delegate = self
+        window.addGestureRecognizer(tap)
+        isInstalled = true
+    }
+
+    @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
+        guard gesture.state == .ended else { return }
+        Keyboard.dismiss()
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        true
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldReceive touch: UITouch
+    ) -> Bool {
+        var view = touch.view
+        while let current = view {
+            // Don't dismiss when the user is aiming at a field (would open then snap shut).
+            if current is UITextField || current is UITextView {
+                return false
+            }
+            let name = NSStringFromClass(type(of: current))
+            if name.contains("UIKeyboard")
+                || name.contains("Keyboard")
+                || name.contains("UISearchBar")
+                || name.contains("TextField")
+                || name.contains("TextView")
+                || name.contains("TextInput")
+            {
+                return false
+            }
+            view = current.superview
+        }
+        return true
     }
 }

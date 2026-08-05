@@ -67,6 +67,71 @@ export const profilesResolvers = {
         if ((err?.message ?? '').toLowerCase().includes('handle already taken')) {
           throw new GraphQLError('Handle already taken.', { extensions: { code: 'HANDLE_TAKEN' } });
         }
+        if (err?.code === 'ACCOUNT_DEACTIVATED' || err?.message === 'ACCOUNT_DEACTIVATED') {
+          throw new GraphQLError('Account is deactivated. Reactivate to continue.', {
+            extensions: { code: 'ACCOUNT_DEACTIVATED' },
+          });
+        }
+        if (err?.code === 'ACCOUNT_DELETED' || err?.message === 'ACCOUNT_DELETED') {
+          throw new GraphQLError('Account has been deleted.', {
+            extensions: { code: 'ACCOUNT_DELETED' },
+          });
+        }
+        throw err;
+      }
+    },
+
+    deactivateAccount: async (_: any, __: any, ctx: Context) => {
+      const u = requireAuth(ctx);
+      try {
+        return await svc().deactivateAccount(u.id);
+      } catch (err: any) {
+        if (err?.code === '42703' || String(err?.message ?? '').includes('account_status')) {
+          throw new GraphQLError(
+            'Account lifecycle migration is not applied yet (profiles.account_status).',
+            { extensions: { code: 'MIGRATION_REQUIRED' } }
+          );
+        }
+        throw err;
+      }
+    },
+
+    reactivateAccount: async (_: any, __: any, ctx: Context) => {
+      const u = requireAuth(ctx);
+      try {
+        return await svc().reactivateAccount(u.id);
+      } catch (err: any) {
+        if (err?.code === 'ACCOUNT_DELETED' || err?.message === 'ACCOUNT_DELETED') {
+          throw new GraphQLError('This account was permanently deleted and cannot be restored.', {
+            extensions: { code: 'ACCOUNT_DELETED' },
+          });
+        }
+        if (err?.code === '42703' || String(err?.message ?? '').includes('account_status')) {
+          throw new GraphQLError(
+            'Account lifecycle migration is not applied yet (profiles.account_status).',
+            { extensions: { code: 'MIGRATION_REQUIRED' } }
+          );
+        }
+        throw err;
+      }
+    },
+
+    deleteAccount: async (_: any, args: { confirmation?: string }, ctx: Context) => {
+      const u = requireAuth(ctx);
+      try {
+        return await svc().deleteAccount(u.id, args?.confirmation ?? '');
+      } catch (err: any) {
+        if (err?.code === 'CONFIRMATION_REQUIRED') {
+          throw new GraphQLError(err.message || 'Confirmation required.', {
+            extensions: { code: 'CONFIRMATION_REQUIRED' },
+          });
+        }
+        if (err?.code === '42703' || String(err?.message ?? '').includes('account_status')) {
+          throw new GraphQLError(
+            'Account lifecycle migration is not applied yet (profiles.account_status).',
+            { extensions: { code: 'MIGRATION_REQUIRED' } }
+          );
+        }
         throw err;
       }
     },

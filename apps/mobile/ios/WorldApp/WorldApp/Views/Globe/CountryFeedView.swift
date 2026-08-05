@@ -100,46 +100,50 @@ struct CountryFeedView: View {
 
     private var postsTab: some View {
         ScrollView {
-            LazyVStack(spacing: 18) {
+            // Full-width feed cards — same edge-to-edge style as home feed.
+            LazyVStack(spacing: 0) {
                 composerBar
-                    .padding(.vertical, 4)
+                    .padding(.horizontal, Theme.pagePadding)
+                    .padding(.top, 12)
+                    .padding(.bottom, 8)
                 ForEach(posts) { post in
                     postCard(post)
                 }
             }
-            .padding(.horizontal, Theme.pagePadding)
-            .padding(.vertical, 12)
+            .padding(.bottom, 16)
         }
     }
 
     private var followingTab: some View {
         ScrollView {
-            LazyVStack(spacing: 18) {
+            LazyVStack(spacing: 0) {
                 if followingPosts.isEmpty {
                     emptyState("Follow people to see their posts from around the world here.")
+                        .padding(.horizontal, Theme.pagePadding)
+                        .padding(.vertical, 12)
                 }
                 ForEach(followingPosts) { post in
                     followingPostCard(post)
                 }
             }
-            .padding(.horizontal, Theme.pagePadding)
-            .padding(.vertical, 12)
+            .padding(.bottom, 16)
         }
     }
 
     private var mediaTab: some View {
         ScrollView {
-            LazyVStack(spacing: 18) {
+            LazyVStack(spacing: 0) {
                 let mediaPosts = posts.filter(\.hasMedia)
                 if mediaPosts.isEmpty {
                     emptyState("No photos or videos in \(country.name) yet.")
+                        .padding(.horizontal, Theme.pagePadding)
+                        .padding(.vertical, 12)
                 }
                 ForEach(mediaPosts) { post in
                     postCard(post)
                 }
             }
-            .padding(.horizontal, Theme.pagePadding)
-            .padding(.vertical, 12)
+            .padding(.bottom, 16)
         }
     }
 
@@ -306,11 +310,12 @@ struct CountryFeedView: View {
     private func postCard(_ post: CountryPost) -> some View {
         FacebookPostCard(
             post: post,
+            edgeToEdge: true,
             showsAuthorHeader: false,
             showsAuthorInJournal: true,
             onLikeToggle: { Task { await toggleLike(post) } },
             onOpenPost: { appState.navigate(to: .post(post.id)) },
-            onOpenVideo: PlayPlatformBridge.isLongFormVideo(post)
+            onOpenVideo: PlayPlatformBridge.isHubFeedCardVideo(post) || PlayPlatformBridge.isLongFormVideo(post)
                 ? { appState.openPost(post) }
                 : nil,
             onOpenReel: {
@@ -333,11 +338,12 @@ struct CountryFeedView: View {
     private func followingPostCard(_ post: CountryPost) -> some View {
         FacebookPostCard(
             post: post,
+            edgeToEdge: true,
             showsAuthorHeader: false,
             showsAuthorInJournal: true,
             onLikeToggle: { Task { await toggleFollowingLike(post) } },
             onOpenPost: { appState.navigate(to: .post(post.id)) },
-            onOpenVideo: PlayPlatformBridge.isLongFormVideo(post)
+            onOpenVideo: PlayPlatformBridge.isHubFeedCardVideo(post) || PlayPlatformBridge.isLongFormVideo(post)
                 ? { appState.openPost(post) }
                 : nil,
             onOpenReel: {
@@ -405,31 +411,25 @@ struct CountryFeedView: View {
 
     private func toggleLike(_ post: CountryPost) async {
         guard let index = posts.firstIndex(where: { $0.id == post.id }) else { return }
-        do {
-            if post.likedByMe {
-                try await PostsService.shared.unlikePost(post.id)
-                posts[index] = copyPost(post, likedByMe: false, likeCount: max(0, post.likeCount - 1))
-            } else {
-                try await PostsService.shared.likePost(post.id)
-                posts[index] = copyPost(post, likedByMe: true, likeCount: post.likeCount + 1)
-            }
-        } catch {
-            appState.showToast(error.localizedDescription, style: .error)
+        let nextLiked = !post.likedByMe
+        let nextCount = nextLiked ? post.likeCount + 1 : max(0, post.likeCount - 1)
+        posts[index] = copyPost(post, likedByMe: nextLiked, likeCount: nextCount)
+        if nextLiked {
+            try? await PostsService.shared.likePost(post.id, baseLikeCount: post.likeCount)
+        } else {
+            try? await PostsService.shared.unlikePost(post.id, baseLikeCount: post.likeCount)
         }
     }
 
     private func toggleFollowingLike(_ post: CountryPost) async {
         guard let index = followingPosts.firstIndex(where: { $0.id == post.id }) else { return }
-        do {
-            if post.likedByMe {
-                try await PostsService.shared.unlikePost(post.id)
-                followingPosts[index] = copyPost(post, likedByMe: false, likeCount: max(0, post.likeCount - 1))
-            } else {
-                try await PostsService.shared.likePost(post.id)
-                followingPosts[index] = copyPost(post, likedByMe: true, likeCount: post.likeCount + 1)
-            }
-        } catch {
-            appState.showToast(error.localizedDescription, style: .error)
+        let nextLiked = !post.likedByMe
+        let nextCount = nextLiked ? post.likeCount + 1 : max(0, post.likeCount - 1)
+        followingPosts[index] = copyPost(post, likedByMe: nextLiked, likeCount: nextCount)
+        if nextLiked {
+            try? await PostsService.shared.likePost(post.id, baseLikeCount: post.likeCount)
+        } else {
+            try? await PostsService.shared.unlikePost(post.id, baseLikeCount: post.likeCount)
         }
     }
 

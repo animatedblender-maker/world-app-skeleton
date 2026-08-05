@@ -32,10 +32,11 @@ final class GraphQLService: Sendable {
         return try await request(query: query, variables: variables, token: token)
     }
 
+    /// Call AuthService directly (it is `@MainActor`). Avoid nesting
+    /// `Task { @MainActor in … }.value` from an already-main-actor caller — that
+    /// pattern can stall PostDetail forever.
     private func fetchValidToken() async throws -> String {
-        try await Task { @MainActor in
-            try await AuthService.shared.ensureValidToken()
-        }.value
+        try await AuthService.shared.ensureValidToken()
     }
 
     func request<T: Decodable>(

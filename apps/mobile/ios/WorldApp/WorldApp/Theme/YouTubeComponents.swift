@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 
 enum YouTubeTheme {
@@ -20,10 +21,11 @@ struct PlayBrandMark: View {
 
     var body: some View {
         HStack(spacing: compact ? 5 : 6) {
+            // Hand-drawn TV with Matterya logo on the screen.
+            MatteryaHubsLogoView(size: ringSize + (compact ? 4 : 6))
             wordmark
                 .foregroundStyle(Theme.ink)
                 .matteryaBrandLine(minScale: compact ? 0.82 : 0.88)
-            HandDrawnGlobeStoryRing(size: ringSize, highlighted: true)
         }
         .fixedSize(horizontal: true, vertical: false)
         .accessibilityElement(children: .combine)
@@ -138,7 +140,7 @@ struct YouTubeSubscribeButton: View {
         } label: {
             HStack(spacing: compact ? 4 : 6) {
                 if !isFollowing {
-                    HandDrawnGlobeStoryRing(size: compact ? 14 : 16, highlighted: true)
+                    MatteryaHubsLogoView(size: compact ? 16 : 18)
                 }
                 Text(isFollowing ? MatteryaCopy.following : MatteryaCopy.follow)
                     .font(compact ? .caption.weight(.bold) : .subheadline.weight(.semibold))
@@ -212,7 +214,7 @@ struct YouTubeCompactRelatedRow: View {
     var body: some View {
         Button(action: onTap) {
             VStack(alignment: .leading, spacing: 10) {
-                YouTubeVideoThumbnail(post: post, maxPixelSize: 520, showsPlayIcon: true, frameStyle: .card)
+                YouTubeVideoThumbnail(post: post, maxPixelSize: 520, showsPlayIcon: false, frameStyle: .card)
 
                 VStack(alignment: .leading, spacing: 4) {
                     if let headline = post.displayHeadline {
@@ -275,83 +277,165 @@ struct YouTubeExpandableDescription: View {
     }
 }
 
+/// Shared Sparks chrome — thumbnail + flag + author. Sized by the parent.
+private struct SparksTileChrome: View {
+    let post: CountryPost
+    var playIconSize: CGFloat = 28
+    var maxPixelSize: CGFloat = 420
+
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            VideoThumbnailView(
+                post: post,
+                maxPixelSize: maxPixelSize,
+                contentMode: .fill,
+                showsPlayIcon: false,
+                playIconSize: playIconSize,
+                placeholder: AnyView(
+                    LinearGradient(
+                        colors: [Theme.canvasMuted, Theme.canvasDeep],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+
+            if let code = post.countryCode {
+                Text(CountryFlag.emoji(for: code))
+                    .font(.caption2)
+                    .padding(5)
+                    .background(.black.opacity(0.42), in: Circle())
+                    .padding(6)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .allowsHitTesting(false)
+            }
+
+            LinearGradient(
+                colors: [.clear, .black.opacity(0.55)],
+                startPoint: .center,
+                endPoint: .bottom
+            )
+            .allowsHitTesting(false)
+
+            Text(post.authorDisplayName)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .shadow(color: .black.opacity(0.45), radius: 2, y: 1)
+                .padding(8)
+        }
+    }
+}
+
+/// Shared Sparks tile — fixed size for horizontal strips (Feed / Hubs home).
+struct SparksStripTile: View {
+    let post: CountryPost
+    var width: CGFloat = 108
+    var height: CGFloat = 192
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            SparksTileChrome(post: post, playIconSize: 28, maxPixelSize: 420)
+                .frame(width: width, height: height)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Theme.border.opacity(0.45), lineWidth: 0.5)
+                )
+        }
+        .buttonStyle(.plain)
+        .frame(width: width, height: height)
+        // Hard lock so strip cells never reflow when thumbnails load.
+        .fixedSize()
+    }
+}
+
+/// Uniform 9:16 grid cell for Library / channel Sparks — equal width, equal height, never jumps.
+struct SparksGridTile: View {
+    let post: CountryPost
+    let onTap: () -> Void
+
+    /// Portrait shorts ratio (width / height).
+    private static let aspect: CGFloat = 9.0 / 16.0
+
+    var body: some View {
+        Button(action: onTap) {
+            // Color.clear proposes a stable 9:16 frame from column width.
+            // Thumbnail is overlaid + clipped so image load never changes cell size.
+            Color.clear
+                .aspectRatio(Self.aspect, contentMode: .fit)
+                .overlay {
+                    SparksTileChrome(post: post, playIconSize: 26, maxPixelSize: 480)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Theme.border.opacity(0.5), lineWidth: 0.5)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        // Cell fills column width; height follows 9:16 so every tile matches.
+        .frame(maxWidth: .infinity)
+        .aspectRatio(Self.aspect, contentMode: .fit)
+    }
+}
+
+/// Horizontal Sparks rail — identical chrome on Feed and Hubs.
+struct SparksHorizontalStrip: View {
+    let posts: [CountryPost]
+    var title: String = MatteryaCopy.sparksForYou
+    var subtitle: String = "Swipe the world on Matterya"
+    var showsBrandMark: Bool = true
+    var onOpen: (CountryPost) -> Void
+    var onBrandTap: (() -> Void)? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.headline)
+                        .foregroundStyle(Theme.ink)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(Theme.inkMuted)
+                }
+                Spacer()
+                if showsBrandMark, let onBrandTap {
+                    Button(action: onBrandTap) {
+                        PlayBrandMark(compact: true)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, Theme.pagePadding)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(posts) { post in
+                        SparksStripTile(post: post) {
+                            onOpen(post)
+                        }
+                    }
+                }
+                .padding(.horizontal, Theme.pagePadding)
+            }
+        }
+    }
+}
+
 struct PlayReelTile: View {
     let post: CountryPost
     let onTap: () -> Void
 
     var body: some View {
-        Button(action: onTap) {
-            ZStack(alignment: .bottomLeading) {
-                Group {
-                    if post.playableVideoURL != nil {
-                        VideoThumbnailView(
-                            post: post,
-                            maxPixelSize: 480,
-                            contentMode: .fill,
-                            showsPlayIcon: false,
-                            placeholder: AnyView(reelPlaceholder)
-                        )
-                    } else {
-                        reelPlaceholder
-                    }
-                }
-                .aspectRatio(9.0 / 16.0, contentMode: .fill)
-                .clipped()
-
-                if let code = post.countryCode {
-                    Text(CountryFlag.emoji(for: code))
-                        .font(.caption)
-                        .padding(6)
-                        .background(Theme.surface.opacity(0.88), in: Circle())
-                        .overlay(Circle().stroke(Theme.border, lineWidth: 0.5))
-                        .padding(8)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                        .allowsHitTesting(false)
-                }
-
-                LinearGradient(
-                    colors: [.clear, Theme.ink.opacity(0.55)],
-                    startPoint: .center,
-                    endPoint: .bottom
-                )
-                .allowsHitTesting(false)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    if let headline = post.displayHeadline {
-                        Text(headline)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(Theme.iconFill)
-                            .lineLimit(2)
-                    }
-                    Text(post.authorDisplayName)
-                        .font(.caption2)
-                        .foregroundStyle(Theme.iconFill.opacity(0.85))
-                        .lineLimit(1)
-                }
-                .padding(10)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Theme.border, lineWidth: 0.5)
-            )
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var reelPlaceholder: some View {
-        Rectangle()
-            .fill(
-                LinearGradient(
-                    colors: [Theme.canvasMuted, Theme.accentSoft],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            )
-            .overlay {
-                HandDrawnGlobeStoryRing(size: 32, highlighted: true)
-                    .opacity(0.7)
-            }
+        // Full-width column cell with locked 9:16 — no fixed 108×192 stretch.
+        SparksGridTile(post: post, onTap: onTap)
     }
 }
 
@@ -359,84 +443,157 @@ struct YouTubeMiniPlayerBar: View {
     let post: CountryPost
     let onExpand: () -> Void
     let onClose: () -> Void
+    /// When false, parent draws a continuous player over this clear video slot (no restart).
+    var embedsVideo: Bool = true
+    @Binding var isPlaying: Bool
+    @Binding var isMuted: Bool
 
-    @State private var isPlaying = true
+    /// Video frame size while minimized — large enough to actually watch, still a “mini”.
+    static let videoWidth: CGFloat = 196
+    static let videoHeight: CGFloat = 110
+    /// Space content lists should leave so the bar doesn’t cover the last row.
+    static let contentBottomInset: CGFloat = 148
+    /// Horizontal inset of the bar content (used to align continuous player over the slot).
+    static let barContentLeading: CGFloat = Theme.pagePadding + 12
+    /// Distance from screen bottom to mini video (tab bar + bar outer padding + inner padding).
+    /// Must match GlobalHubPlaybackLayer mini placement.
+    static let videoBottomInset: CGFloat = Theme.tabBarHeight + 4 + 12
 
     var body: some View {
-        HStack(spacing: 12) {
-            ZStack {
-                if let url = post.playableVideoURL {
-                    VideoPlayerView(
-                        url: url,
-                        posterURL: post.posterImageURL,
-                        placement: "living",
-                        postID: post.id,
-                        adsEnabled: false,
-                        isActive: isPlaying,
-                        loops: false,
-                        muted: true,
-                        showsControls: false,
-                        startTime: YouTubeCatalogService.shared.playbackPosition(for: post.id),
-                        persistsPositionOnTeardown: false
-                    )
-                } else {
-                    YouTubeVideoThumbnail(post: post, maxPixelSize: 120, showsPlayIcon: false, frameStyle: .card)
-                }
-
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Theme.border, lineWidth: 0.5)
-                    .allowsHitTesting(false)
-            }
-            .frame(width: 76, height: 42)
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-            Button {
-                isPlaying.toggle()
-            } label: {
+        HStack(alignment: .center, spacing: 12) {
+            Button(action: onExpand) {
                 ZStack {
-                    HandDrawnGlobeStoryRing(size: 22, highlighted: true)
-                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(Theme.accent)
+                    if embedsVideo {
+                        if let url = post.playableVideoURL {
+                            VideoPlayerView(
+                                url: url,
+                                posterURL: post.posterImageURL,
+                                placement: nil,
+                                postID: post.id,
+                                adsEnabled: false,
+                                isActive: isPlaying,
+                                loops: false,
+                                muted: isMuted,
+                                showsControls: false,
+                                startTime: YouTubeCatalogService.shared.playbackPosition(for: post.id),
+                                persistsPositionOnTeardown: true
+                            )
+                        } else {
+                            YouTubeVideoThumbnail(post: post, maxPixelSize: 420, showsPlayIcon: false, frameStyle: .card)
+                        }
+                    } else {
+                        // Hole for the continuous GlobalHubPlaybackLayer player (drawn above this bar).
+                        Color.clear
+                    }
+
+                    VStack {
+                        Spacer()
+                        HStack {
+                            Spacer()
+                            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(.white.opacity(0.9))
+                                .padding(5)
+                                .background(.black.opacity(0.42), in: Circle())
+                                .padding(6)
+                        }
+                    }
+                    .allowsHitTesting(false)
+
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Theme.border, lineWidth: 0.5)
+                        .allowsHitTesting(false)
                 }
-                .frame(width: 32, height: 32)
+                .frame(width: Self.videoWidth, height: Self.videoHeight)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                // Only paint an opaque bed when THIS bar embeds its own player.
+                // When continuous layer owns video, stay clear so playback is visible.
+                .background {
+                    if embedsVideo {
+                        Theme.ink
+                    } else {
+                        Color.clear
+                    }
+                }
+                .shadow(color: Theme.ink.opacity(embedsVideo ? 0.16 : 0), radius: 8, y: 3)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Expand video")
 
-            Button(action: onExpand) {
-                VStack(alignment: .leading, spacing: 2) {
-                    if let headline = post.displayHeadline {
-                        Text(headline)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(Theme.ink)
+            VStack(alignment: .leading, spacing: 10) {
+                Button(action: onExpand) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        if let headline = post.displayHeadline {
+                            Text(headline)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Theme.ink)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                        }
+                        Text(post.authorDisplayName)
+                            .font(.caption)
+                            .foregroundStyle(Theme.inkMuted)
                             .lineLimit(1)
                     }
-                    Text(post.authorDisplayName)
-                        .font(.caption2)
-                        .foregroundStyle(Theme.inkMuted)
-                        .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.plain)
+                .buttonStyle(.plain)
 
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(Theme.inkMuted)
-                    .frame(width: 28, height: 28)
+                HStack(spacing: 10) {
+                    Button {
+                        isPlaying.toggle()
+                    } label: {
+                        ZStack {
+                            Circle()
+                                .fill(Theme.accentBright)
+                                .frame(width: 36, height: 36)
+                                .shadow(color: Theme.ink.opacity(0.18), radius: 4, y: 2)
+                            Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundStyle(Theme.paper)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(isPlaying ? "Pause" : "Play")
+
+                    Button {
+                        isMuted.toggle()
+                    } label: {
+                        Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Theme.ink)
+                            .frame(width: 36, height: 36)
+                            .background(Theme.canvasMuted, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(isMuted ? "Unmute" : "Mute")
+
+                    Spacer(minLength: 0)
+
+                    Button(action: onClose) {
+                        Image(systemName: "xmark")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(Theme.inkMuted)
+                            .frame(width: 32, height: 32)
+                            .background(Theme.canvasMuted, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Close mini player")
+                }
             }
-            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 12)
+        // Background behind chrome only — leave the video slot visually open when
+        // GlobalHubPlaybackLayer paints the continuous player on top.
+        .background {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .fill(Theme.surface)
-                .shadow(color: Theme.ink.opacity(0.12), radius: 16, y: 6)
-        )
+                .shadow(color: Theme.ink.opacity(0.14), radius: 18, y: 8)
+        }
         .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .stroke(Theme.border, lineWidth: 0.5)
         )
         .padding(.horizontal, Theme.pagePadding)
@@ -452,7 +609,7 @@ struct YouTubeChannelCard: View {
             HStack(spacing: 14) {
                 ZStack(alignment: .bottomTrailing) {
                     AvatarView(url: channel.author?.avatarURL, seed: channel.authorID, size: 64)
-                    HandDrawnGlobeStoryRing(size: 18, highlighted: true)
+                    MatteryaAppIconView(size: 18)
                         .offset(x: 4, y: 4)
                 }
 

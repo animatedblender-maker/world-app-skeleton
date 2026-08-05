@@ -7,7 +7,8 @@ struct VideoThumbnailView: View {
     let post: CountryPost
     var maxPixelSize: CGFloat = 480
     var contentMode: ContentMode = .fill
-    var showsPlayIcon = true
+    /// Center play circle — default off (clean thumbs in feed / hubs / search).
+    var showsPlayIcon = false
     var playIconSize: CGFloat = 36
     var extractFrameIfNeeded = true
     var placeholder: AnyView = AnyView(Color.clear)
@@ -31,6 +32,7 @@ struct VideoThumbnailView: View {
                 placeholder
             }
 
+            // Intentionally no center play circle by default.
             if showsPlayIcon, post.hasVideo {
                 Image(systemName: "play.circle.fill")
                     .font(.system(size: playIconSize))

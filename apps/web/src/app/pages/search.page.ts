@@ -1021,6 +1021,27 @@ import type { CountryPost, PostComment, PostLike } from '../core/models/post.mod
       .like-time { font-size: 11px; opacity: 0.55; }
       .comment-submit:disabled { opacity: 0.6; cursor: not-allowed; }
       .comment-hint { font-size: 12px; opacity: 0.6; }
+      /* desktop layout */
+
+      @media (min-width: 900px) {
+        :host {
+          background: var(--m-paper, #f8f6f2);
+        }
+        .search-header {
+          padding-left: 20px;
+          padding-right: 20px;
+        }
+        .results-section {
+          max-width: none;
+          margin: 0;
+          padding: 0 20px 32px;
+        }
+        .search-field input {
+          font-size: 16px;
+          padding: 14px 16px;
+        }
+      }
+
     `,
   ],
 })

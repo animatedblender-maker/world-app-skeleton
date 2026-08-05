@@ -84,13 +84,215 @@ body::before{
   --m-divider: #e2ded8;
   --m-danger: #ea000b;
   --m-success: #00b050;
+  --m-serif: Georgia, 'Iowan Old Style', 'Palatino Linotype', Palatino, serif;
   --app-bg: var(--m-paper);
   --app-bg-light: var(--m-paper);
   --app-bg-feed: var(--m-paper);
   --app-bg-dark: #05070b;
-  --tabs-height: 56px;
+
+  /* Mobile tokens (Theme.swift / Android) */
+  --m-page-padding: 16px;
+  --m-feed-gutter: 14px;
+  --m-card-radius: 12px;
+  --m-control-radius: 8px;
+  --m-sidebar-w: 0px;
+  --m-content-max: 100%;
+  --m-content-max-wide: 100%;
+  --m-content-max-xl: 100%;
+  --m-feed-col: 100%;
+  --m-hubs-cols: 1;
+  --m-text-xs: 11px;
+  --m-text-sm: 13px;
+  --m-text-base: 15px;
+  --m-text-md: 16px;
+  --m-text-lg: 18px;
+  --m-text-xl: 22px;
+  --m-text-display: 28px;
+  --m-control-h: 44px;
+  --m-avatar-sm: 36px;
+  --m-avatar-md: 48px;
+  --m-avatar-lg: 78px;
+  --tabs-height: 49px;
   --tabs-safe: calc(var(--tabs-height) + env(safe-area-inset-bottom, 0px));
 }
+
+/*
+ * DESKTOP LAYOUT (≥900px)
+ * Same Matterya UI language as Android/iOS — different placement for large screens:
+ *  - Left navigation rail (primary tabs + Create)
+ *  - Full-width main canvas
+ *  - Comfortable content columns / multi-column hubs grid
+ *  - Messages already uses two panes; widen list + thread
+ */
+/*
+ * Hubs watch: expand Matterya left menu to fill the open space
+ * left of the player (set via html.hubs-watch-desktop on that route).
+ */
+@media (min-width: 900px) {
+  html.hubs-watch-desktop {
+    --m-sidebar-w: clamp(280px, 20vw, 360px);
+  }
+}
+@media (min-width: 1280px) {
+  html.hubs-watch-desktop {
+    --m-sidebar-w: clamp(300px, 18vw, 380px);
+  }
+}
+@media (min-width: 1600px) {
+  html.hubs-watch-desktop {
+    --m-sidebar-w: clamp(320px, 16vw, 400px);
+  }
+}
+
+@media (min-width: 900px) {
+  :root {
+    --m-sidebar-w: 200px;
+    --m-page-padding: 16px;
+    --m-feed-gutter: 14px;
+    /* Full-bleed content: no artificial narrow columns */
+    --m-content-max: 100%;
+    --m-content-max-wide: 100%;
+    --m-content-max-xl: 100%;
+    --m-feed-col: 100%;
+    --m-hubs-cols: 3;
+    --m-text-base: 15px;
+    --m-text-md: 16px;
+    --m-text-lg: 19px;
+    --m-text-xl: 24px;
+    --m-text-display: 32px;
+    --m-control-h: 48px;
+    --m-avatar-lg: 96px;
+    /* Bottom tab bar becomes side rail — free bottom safe area */
+    --tabs-height: 0px;
+    --tabs-safe: 0px;
+  }
+
+  html.app-bg-feed,
+  html.app-bg-light {
+    background-color: var(--m-paper) !important;
+  }
+  html.app-bg-feed body,
+  html.app-bg-light body {
+    background: var(--m-paper) !important;
+  }
+
+  /* Main app shifts right of the side rail */
+  html.app-bg-feed app-root,
+  html.app-bg-light app-root {
+    display: block;
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    min-height: 100%;
+    min-height: 100dvh;
+    padding-left: var(--m-sidebar-w);
+    box-sizing: border-box;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  /* Sticky topbars span the content area only (not under the rail) */
+  html.app-bg-feed app-matterya-topbar,
+  html.app-bg-light app-matterya-topbar {
+    /* sticky inside padded app-root — full content width */
+  }
+
+  /* Fixed host topbars (if any) align to content pane */
+  html.app-bg-feed app-matterya-topbar.fixed-host,
+  html.app-bg-light app-matterya-topbar.fixed-host {
+    left: var(--m-sidebar-w) !important;
+    right: 0 !important;
+    width: auto !important;
+    transform: none !important;
+  }
+
+  /* Profile fixed full-screen shells fill content pane */
+  html.app-bg-feed app-profile-page,
+  html.app-bg-light app-profile-page,
+  html.app-bg-feed app-me-page,
+  html.app-bg-light app-me-page {
+    left: var(--m-sidebar-w) !important;
+    right: 0 !important;
+    width: auto !important;
+    transform: none !important;
+  }
+  html.app-bg-feed app-profile-page .wrap,
+  html.app-bg-light app-profile-page .wrap {
+    left: var(--m-sidebar-w) !important;
+    right: 0 !important;
+    width: auto !important;
+    transform: none !important;
+  }
+
+  /* Notifications panel on the content side */
+  html.app-bg-feed app-notifications-overlay .panel,
+  html.app-bg-light app-notifications-overlay .panel {
+    right: 24px;
+    left: auto;
+    width: min(400px, calc(100vw - var(--m-sidebar-w) - 48px));
+  }
+
+  /* Shared page max-width helpers for desktop main columns */
+  .m-desktop-main {
+    width: 100%;
+    max-width: var(--m-content-max-wide);
+    margin: 0 auto;
+    padding: 0 var(--m-page-padding);
+    box-sizing: border-box;
+  }
+}
+
+@media (min-width: 1280px) {
+  :root {
+    --m-sidebar-w: 220px;
+    --m-hubs-cols: 4;
+    --m-page-padding: 18px;
+  }
+}
+
+@media (min-width: 1600px) {
+  :root {
+    --m-hubs-cols: 5;
+    --m-page-padding: 20px;
+  }
+}
+
+@media (min-width: 1920px) {
+  :root {
+    --m-hubs-cols: 6;
+  }
+}
+
+/* Shared content column helpers */
+.m-content {
+  width: 100%;
+  max-width: var(--m-content-max);
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: var(--m-page-padding);
+  padding-right: var(--m-page-padding);
+  box-sizing: border-box;
+}
+.m-content-wide {
+  max-width: var(--m-content-max-wide);
+}
+.m-content-xl {
+  max-width: var(--m-content-max-xl);
+}
+
+/* Globe / reels: full-bleed, keep bottom tabs mobile-style on top of map when needed */
+html.app-bg-globe,
+html.app-bg-globe body {
+  background: var(--app-bg-dark) !important;
+}
+html.app-bg-globe app-root {
+  max-width: none !important;
+  margin: 0 !important;
+  padding-left: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+
 html.app-bg-light,
 html.app-bg-feed{
   --app-bg: var(--m-paper);

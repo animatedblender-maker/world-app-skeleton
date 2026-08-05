@@ -634,20 +634,31 @@ def make_comments(country: Country, post: dict, users: list[dict], thread: Sourc
     max_count = min(len(thread.comments), max(1, int(rng.expovariate(1 / average_comments)) + rng.randint(1, 4)))
     rows: list[dict] = []
     root_comment_ids: list[str] = []
+    # One Reddit-style speaker = one Matterya user for the whole thread.
+    # OP is the post author; a single stable partner leaves top-level comments
+    # (and can leave several), so two comments are clearly from the same person.
+    op_id = post["author_id"]
+    partner = users[stable_int(f"partner|{post['id']}") % max(1, len(users))]
+    partner_id = partner["user_id"]
+    speaker_of: dict[str, str] = {}
     for index, body in enumerate(thread.comments[:max_count]):
-        author = rng.choice(users)
         created = base_time + timedelta(minutes=rng.randint(2, 7200))
         is_reply = bool(root_comment_ids) and rng.random() < 0.32
         comment_id = f"seed_cmt_{post['id']}_{index:02d}"
         parent_id = rng.choice(root_comment_ids) if is_reply else None
         if parent_id is None:
             root_comment_ids.append(comment_id)
+            author_id = partner_id
+        else:
+            parent_speaker = speaker_of.get(parent_id, op_id)
+            author_id = partner_id if parent_speaker == op_id else op_id
+        speaker_of[comment_id] = author_id
         rows.append(
             {
                 "id": comment_id,
                 "post_id": post["id"],
                 "parent_id": parent_id,
-                "author_id": author["user_id"],
+                "author_id": author_id,
                 "body": body,
                 "like_count": int((rng.random() ** 2) * 220),
                 "liked_by_me": False,

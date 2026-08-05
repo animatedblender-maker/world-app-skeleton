@@ -38,6 +38,8 @@ struct VideoPlayerView: View {
     @State private var showChrome = true
     @State private var chromeTask: Task<Void, Never>?
     @State private var lastNotedPlaybackSecond: Int = -1
+    /// When the user pauses via chrome, do not auto-resume until they press play or leave the slot.
+    @State private var userWantsPause = false
 
     private var shouldShowAd: Bool {
         adsEnabled && isActive && !adFinished && placement != nil
@@ -105,17 +107,24 @@ struct VideoPlayerView: View {
         .onAppear {
             isMuted = muted
             configureAudioSession()
-            Task { await ensurePlayer() }
+            Task { await ensurePlayer(forceRebuild: player?.currentItem == nil) }
             if showsControls { scheduleChromeHide() }
         }
         .onChange(of: isActive) { _, active in
             if active {
-                Task { await ensurePlayer() }
+                userWantsPause = false
+                // Rebuild if coordinator soft/hard-stopped the item while we stayed mounted.
+                Task { await ensurePlayer(forceRebuild: player?.currentItem == nil) }
             } else {
                 persistPlaybackPosition()
                 player?.pause()
                 isPlaying = false
+                userWantsPause = false
             }
+        }
+        .onChange(of: muted) { _, newValue in
+            isMuted = newValue
+            player?.isMuted = newValue
         }
         .onChange(of: adFinished) { _, finished in
             if finished {
@@ -159,10 +168,13 @@ struct VideoPlayerView: View {
     private func togglePlayback() {
         guard let player else { return }
         if isPlaying {
+            userWantsPause = true
             player.pause()
             isPlaying = false
         } else {
+            userWantsPause = false
             player.play()
+            player.playImmediately(atRate: 1.0)
             isPlaying = true
         }
         scheduleChromeHide()
@@ -207,10 +219,13 @@ struct VideoPlayerView: View {
         }
         guard adFinished || !shouldShowAd else { return }
 
-        if forceRebuild || configuredURL != url {
+        // stopAllPlayback() can nil out currentItem while the view stays mounted (persistent feed).
+        let itemMissing = player != nil && player?.currentItem == nil
+        if forceRebuild || configuredURL != url || itemMissing {
             teardownPlayer()
             configuredURL = url
             didRetryWithPublicURL = false
+            userWantsPause = false
         }
 
         if player == nil {
@@ -221,9 +236,15 @@ struct VideoPlayerView: View {
 
         player?.isMuted = isMuted
         if player?.currentItem?.status == .readyToPlay {
-            player?.play()
-            isPlaying = true
-            reportViewIfNeeded()
+            if userWantsPause {
+                player?.pause()
+                isPlaying = false
+            } else {
+                player?.play()
+                player?.playImmediately(atRate: 1.0)
+                isPlaying = true
+                reportViewIfNeeded()
+            }
         }
     }
 
@@ -246,8 +267,10 @@ struct VideoPlayerView: View {
                         await newPlayer.seek(to: CMTime(seconds: resumeAt, preferredTimescale: 600))
                         currentSeconds = resumeAt
                     }
-                    if isActive {
+                    if isActive, !userWantsPause {
                         newPlayer.play()
+                        // Some Archive CDN items leave rate at 0 after the first play().
+                        newPlayer.playImmediately(atRate: 1.0)
                         isPlaying = true
                         reportViewIfNeeded()
                     }
@@ -273,6 +296,7 @@ struct VideoPlayerView: View {
         }
 
         player = newPlayer
+        MediaPlaybackCoordinator.shared.register(newPlayer)
     }
 
     @MainActor
@@ -327,10 +351,23 @@ struct VideoPlayerView: View {
     }
 
     private func makePlayerItem(for configuration: MediaPlaybackConfiguration) -> AVPlayerItem {
-        if let headers = configuration.headers {
+        // Never attach HTTP headers for Archive URLs — AVPlayer + Archive CDN + headers sticks on the poster.
+        if let headers = configuration.headers, !headers.isEmpty,
+           !ArchiveVideoPlayback.isArchiveURL(configuration.url) {
             let asset = AVURLAsset(
                 url: configuration.url,
                 options: ["AVURLAssetHTTPHeaderFieldsKey": headers]
+            )
+            return AVPlayerItem(asset: asset)
+        }
+        if ArchiveVideoPlayback.isArchiveURL(configuration.url) {
+            let asset = AVURLAsset(
+                url: configuration.url,
+                options: [
+                    AVURLAssetAllowsCellularAccessKey: true,
+                    AVURLAssetAllowsExpensiveNetworkAccessKey: true,
+                    AVURLAssetAllowsConstrainedNetworkAccessKey: true,
+                ]
             )
             return AVPlayerItem(asset: asset)
         }
@@ -371,7 +408,11 @@ struct VideoPlayerView: View {
         persistPlaybackPosition()
         removeTimeObserver()
         teardownPlayerObservers()
-        player?.pause()
+        if let player {
+            player.pause()
+            player.replaceCurrentItem(with: nil)
+            MediaPlaybackCoordinator.shared.unregister(player)
+        }
         player = nil
         configuredURL = nil
         didRetryWithPublicURL = false
@@ -382,7 +423,8 @@ struct VideoPlayerView: View {
 
     private func configureAudioSession() {
         let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .moviePlayback, options: [.mixWithOthers])
+        // Do not mixWithOthers — Sparks/DB video audio must stop when leaving the screen.
+        try? session.setCategory(.playback, mode: .moviePlayback, options: [])
         try? session.setActive(true)
     }
 
@@ -841,33 +883,238 @@ private struct MatteryaScrubber: View {
     }
 }
 
-/// Plays video when the view enters the scroll viewport.
+/// Plays video when it wins feed focus (highest on-screen ratio). Only one plays at a time.
+/// In-feed chrome: scrub, pause, mute — does not navigate away.
 struct InFrameVideoPlayer: View {
+    @Environment(AppState.self) private var appState
+
     let url: URL
     let posterURL: URL?
     var placement: String? = nil
     var countryCode: String? = nil
     var contentCountryCode: String? = nil
     var postID: String? = nil
-    var muted: Bool = true
+    /// Default unmuted so feed videos have sound.
+    var muted: Bool = false
+    var loops: Bool = true
+    var preferArchivePlayer: Bool = false
+    /// Full transport chrome (play/pause + scrubber + mute) while this slot is active.
+    var showsControls: Bool = true
     var onViewed: (() -> Void)? = nil
 
-    @State private var isInFrame = false
+    @State private var isMuted: Bool
+    @State private var isFocusWinner = false
+    /// Debounced play gate — brief focus blips must not hard-pause mid-clip.
+    @State private var playGate = false
+    @State private var deactivateTask: Task<Void, Never>?
+    @State private var lastReportedRatio: CGFloat = -1
+
+    init(
+        url: URL,
+        posterURL: URL?,
+        placement: String? = nil,
+        countryCode: String? = nil,
+        contentCountryCode: String? = nil,
+        postID: String? = nil,
+        muted: Bool = false,
+        loops: Bool = true,
+        preferArchivePlayer: Bool = false,
+        showsControls: Bool = true,
+        onViewed: (() -> Void)? = nil
+    ) {
+        self.url = url
+        self.posterURL = posterURL
+        self.placement = placement
+        self.countryCode = countryCode
+        self.contentCountryCode = contentCountryCode
+        self.postID = postID
+        self.muted = muted
+        self.loops = loops
+        self.preferArchivePlayer = preferArchivePlayer
+        self.showsControls = showsControls
+        self.onViewed = onViewed
+        _isMuted = State(initialValue: muted)
+    }
+
+    private var focusID: String {
+        postID ?? url.absoluteString
+    }
+
+    /// Winner of FeedVideoFocus + allowed surface (feed/profile, no hubs/reels takeover).
+    private var shouldPlay: Bool {
+        isFocusWinner
+            && (appState.selectedTab == .feed || appState.selectedTab == .profile)
+            && appState.reelsViewerContext == nil
+            && appState.hubPlaybackPost == nil
+    }
+
+    private var usesArchivePath: Bool {
+        preferArchivePlayer || ArchiveVideoPlayback.isArchiveURL(url)
+    }
 
     var body: some View {
-        VideoPlayerView(
-            url: url,
-            posterURL: posterURL,
-            placement: placement,
-            countryCode: countryCode,
-            contentCountryCode: contentCountryCode,
-            postID: postID,
-            isActive: isInFrame,
-            loops: false,
-            muted: muted,
-            onViewed: onViewed
-        )
-        .onAppear { isInFrame = true }
-        .onDisappear { isInFrame = false }
+        ZStack {
+            Group {
+                if usesArchivePath {
+                    // Keep player mounted so CDN resolve happens before focus wins.
+                    // isActive uses debounced playGate so brief focus flaps don't pause mid-clip.
+                    MatteryaHubPlayerView(
+                        url: url,
+                        posterURL: posterURL,
+                        isActive: playGate,
+                        startTime: 0,
+                        postID: postID,
+                        // Keep controls mounted; only the active winner should show chrome.
+                        // Tying this to shouldPlay remounted chrome and caused mid-play stutters.
+                        showsControls: showsControls && playGate,
+                        loops: loops,
+                        isMuted: $isMuted,
+                        allowsFullscreen: false,
+                        onReady: { onViewed?() }
+                    )
+                } else {
+                    VideoPlayerView(
+                        url: url,
+                        posterURL: posterURL,
+                        placement: placement,
+                        countryCode: countryCode,
+                        contentCountryCode: contentCountryCode,
+                        postID: postID,
+                        adsEnabled: false,
+                        isActive: playGate,
+                        loops: loops,
+                        muted: isMuted,
+                        showsControls: showsControls && playGate,
+                        allowsFullscreen: false,
+                        onViewed: onViewed
+                    )
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .feedVideoFocusDidChange)) { _ in
+            refreshFocusWinner()
+        }
+        .background(visibilityProbe)
+        .onAppear {
+            isMuted = muted
+            // Kick Archive CDN resolve as soon as the cell appears (not after focus).
+            if usesArchivePath {
+                ArchiveVideoPlayback.warmResolve(url)
+            }
+            refreshFocusWinner()
+            syncPlayGate(immediate: true)
+            if playGate, !isMuted {
+                activatePlaybackAudioIfNeeded(unmuted: true)
+            }
+        }
+        .onDisappear {
+            deactivateTask?.cancel()
+            deactivateTask = nil
+            FeedVideoFocus.shared.clear(id: focusID)
+            isFocusWinner = false
+            playGate = false
+        }
+        .onChange(of: appState.hubPlaybackPost?.id) { _, hubID in
+            syncPlayGate(immediate: hubID != nil)
+            if hubID == nil, shouldPlay, !isMuted {
+                activatePlaybackAudioIfNeeded(unmuted: true)
+            }
+        }
+        .onChange(of: appState.selectedTab) { _, _ in
+            syncPlayGate(immediate: true)
+        }
+        .onChange(of: appState.reelsViewerContext?.id) { _, ctx in
+            syncPlayGate(immediate: ctx != nil)
+        }
+        .onChange(of: shouldPlay) { _, play in
+            syncPlayGate(immediate: play)
+            if play, !isMuted {
+                activatePlaybackAudioIfNeeded(unmuted: true)
+            }
+        }
+    }
+
+    private func refreshFocusWinner() {
+        let win = FeedVideoFocus.shared.isActive(id: focusID)
+        if win != isFocusWinner {
+            isFocusWinner = win
+        }
+        syncPlayGate(immediate: win)
+    }
+
+    /// Instant on for play; short delay off so layout/scroll jitter doesn't hard-pause.
+    private func syncPlayGate(immediate: Bool) {
+        if shouldPlay {
+            deactivateTask?.cancel()
+            deactivateTask = nil
+            if !playGate {
+                playGate = true
+            }
+            return
+        }
+        // Leaving feed / hubs takeover / reels: pause immediately.
+        let leftAutoplaySurface =
+            (appState.selectedTab != .feed && appState.selectedTab != .profile)
+            || appState.reelsViewerContext != nil
+            || appState.hubPlaybackPost != nil
+        if immediate || leftAutoplaySurface {
+            deactivateTask?.cancel()
+            deactivateTask = nil
+            playGate = false
+            return
+        }
+        // Focus lost briefly — hold playback ~280ms before pausing.
+        guard playGate else { return }
+        deactivateTask?.cancel()
+        deactivateTask = Task {
+            try? await Task.sleep(nanoseconds: 280_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                if !shouldPlay {
+                    playGate = false
+                }
+            }
+        }
+    }
+
+    /// Reports on-screen fraction so only the most-visible video plays.
+    private var visibilityProbe: some View {
+        GeometryReader { proxy in
+            let frame = proxy.frame(in: .global)
+            Color.clear
+                .onAppear { reportVisibility(proxy.frame(in: .global)) }
+                .onChange(of: frame.minY) { _, _ in
+                    reportVisibility(proxy.frame(in: .global))
+                }
+                .onChange(of: frame.midY) { _, _ in
+                    reportVisibility(proxy.frame(in: .global))
+                }
+                .onChange(of: frame.height) { _, _ in
+                    reportVisibility(proxy.frame(in: .global))
+                }
+                .onChange(of: appState.selectedTab) { _, _ in
+                    reportVisibility(proxy.frame(in: .global))
+                }
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func reportVisibility(_ frame: CGRect) {
+        let ratio = FeedVideoFocus.visibleRatio(for: frame)
+        // Skip noise when unchanged (avoids recompute thrash while scrolling).
+        if abs(ratio - lastReportedRatio) < 0.04, lastReportedRatio >= 0 {
+            refreshFocusWinner()
+            return
+        }
+        lastReportedRatio = ratio
+        FeedVideoFocus.shared.report(id: focusID, visibleRatio: ratio)
+        refreshFocusWinner()
+    }
+
+    private func activatePlaybackAudioIfNeeded(unmuted: Bool) {
+        guard unmuted else { return }
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playback, mode: .moviePlayback, options: [])
+        try? session.setActive(true)
     }
 }

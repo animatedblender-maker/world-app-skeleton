@@ -1,7 +1,15 @@
+import AVFoundation
 import SwiftUI
 
 enum YouTubeMediaLayout {
     static let aspect: CGFloat = 16.0 / 9.0
+
+    /// Full-bleed watch stage height (about 42–56% of the screen).
+    static func watchPlayerHeight(containerWidth: CGFloat, containerHeight: CGFloat) -> CGFloat {
+        let classic = containerWidth / aspect
+        let preferred = max(classic, containerHeight * 0.42)
+        return min(preferred, containerHeight * 0.56)
+    }
 }
 
 enum MatteryaPlayerFrameStyle {
@@ -22,88 +30,75 @@ struct YouTubeVideoFrame<Content: View>: View {
         switch style {
         case .card: 14
         case .feed: 0
-        case .watch: 16
+        case .watch: 0
         }
     }
 
     var body: some View {
-        Color.clear
-            .aspectRatio(YouTubeMediaLayout.aspect, contentMode: .fit)
-            .frame(maxWidth: .infinity)
-            .background(frameBackground)
-            .overlay(frameBorder)
-            .overlay {
-                content()
-                    .clipShape(innerClip)
+        Group {
+            switch style {
+            case .watch:
+                Color.clear
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Theme.ink)
+                    .overlay {
+                        content().clipShape(Rectangle())
+                    }
+                    .clipShape(Rectangle())
+            case .feed:
+                Color.clear
+                    .aspectRatio(YouTubeMediaLayout.aspect, contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+                    .background(Theme.canvasDeep)
+                    .overlay {
+                        content().clipShape(Rectangle())
+                    }
+                    .clipShape(Rectangle())
+            case .card:
+                Color.clear
+                    .aspectRatio(YouTubeMediaLayout.aspect, contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+                    .background(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .fill(Theme.canvasDeep)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .stroke(Theme.border, lineWidth: 0.5)
+                    )
+                    .overlay {
+                        content()
+                            .clipShape(
+                                RoundedRectangle(cornerRadius: max(0, cornerRadius - 1), style: .continuous)
+                            )
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             }
-            .clipShape(outerClip)
-            .shadow(
-                color: style == .watch ? Theme.ink.opacity(0.08) : .clear,
-                radius: style == .watch ? 12 : 0,
-                y: style == .watch ? 6 : 0
-            )
-    }
-
-    @ViewBuilder
-    private var frameBackground: some View {
-        switch style {
-        case .feed:
-            Theme.canvasDeep
-        case .card, .watch:
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(Theme.canvasDeep)
         }
-    }
-
-    @ViewBuilder
-    private var frameBorder: some View {
-        switch style {
-        case .feed:
-            EmptyView()
-        case .card, .watch:
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .stroke(Theme.border, lineWidth: 0.5)
-        }
-    }
-
-    private var innerClip: AnyShape {
-        switch style {
-        case .feed:
-            AnyShape(Rectangle())
-        case .card, .watch:
-            AnyShape(RoundedRectangle(cornerRadius: max(0, cornerRadius - 1), style: .continuous))
-        }
-    }
-
-    private var outerClip: AnyShape {
-        switch style {
-        case .feed:
-            AnyShape(Rectangle())
-        case .card, .watch:
-            AnyShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        }
-    }
-}
-
-private struct AnyShape: Shape {
-    private let pathBuilder: (CGRect) -> Path
-
-    init<S: Shape>(_ shape: S) {
-        pathBuilder = { rect in shape.path(in: rect) }
-    }
-
-    func path(in rect: CGRect) -> Path {
-        pathBuilder(rect)
+        .shadow(
+            color: style == .watch ? Theme.ink.opacity(0.12) : .clear,
+            radius: style == .watch ? 16 : 0,
+            y: style == .watch ? 8 : 0
+        )
     }
 }
 
 struct YouTubeVideoThumbnail: View {
     let post: CountryPost
     var maxPixelSize: CGFloat = 720
-    var showsPlayIcon = true
+    /// Center play chrome — always off for clean previews (feed / hubs / search).
+    var showsPlayIcon = false
     var frameStyle: MatteryaPlayerFrameStyle = .card
     /// When false, renders only the thumbnail (for use inside an existing frame).
     var embedsFrame: Bool = true
+    /// Feed must never extract video frames on scroll (main-thread hang).
+    var extractFrameIfNeeded: Bool = false
+    /// Hubs badge: only feed share cards (`PlayFeedLinkCard`) — never hubs shelves / search.
+    var showsHubBadge: Bool = false
+
+    private var shouldShowHubBadge: Bool {
+        showsHubBadge && PlayPlatformBridge.isHubCatalogContent(post)
+    }
 
     var body: some View {
         Group {
@@ -115,22 +110,25 @@ struct YouTubeVideoThumbnail: View {
                 thumbnailContent
             }
         }
+        .overlay(alignment: .bottomLeading) {
+            if shouldShowHubBadge {
+                HubsOriginBadge(compact: true)
+                    .padding(8)
+                    .allowsHitTesting(false)
+            }
+        }
     }
 
     private var thumbnailContent: some View {
-        ZStack {
-            VideoThumbnailView(
-                post: post,
-                maxPixelSize: maxPixelSize,
-                contentMode: .fill,
-                showsPlayIcon: false,
-                placeholder: AnyView(matteryaPlaceholder)
-            )
-
-            if showsPlayIcon, post.hasVideo {
-                matteryaPlayChrome
-            }
-        }
+        // Poster / frame only — no center circle.
+        VideoThumbnailView(
+            post: post,
+            maxPixelSize: maxPixelSize,
+            contentMode: .fill,
+            showsPlayIcon: false,
+            extractFrameIfNeeded: extractFrameIfNeeded,
+            placeholder: AnyView(matteryaPlaceholder)
+        )
     }
 
     private var matteryaPlaceholder: some View {
@@ -143,20 +141,10 @@ struct YouTubeVideoThumbnail: View {
                 )
             )
             .overlay {
-                HandDrawnGlobeStoryRing(size: 44, highlighted: false)
-                    .opacity(0.55)
+                Image(systemName: post.hasVideo ? "film" : "photo")
+                    .font(.title3)
+                    .foregroundStyle(Theme.inkMuted.opacity(0.7))
             }
-    }
-
-    private var matteryaPlayChrome: some View {
-        ZStack {
-            Circle()
-                .fill(Theme.surface.opacity(0.92))
-                .frame(width: 58, height: 58)
-                .shadow(color: Theme.ink.opacity(0.12), radius: 8, y: 3)
-            HandDrawnGlobeStoryRing(size: 40, highlighted: true)
-        }
-        .allowsHitTesting(false)
     }
 }
 
@@ -167,7 +155,13 @@ struct YouTubeVideoListRow: View {
     var body: some View {
         Button(action: onTap) {
             VStack(alignment: .leading, spacing: 10) {
-                YouTubeVideoThumbnail(post: post, frameStyle: .card)
+                // Hubs list: clean thumbs, no Hubs badge (badge is feed-share only).
+                YouTubeVideoThumbnail(
+                    post: post,
+                    showsPlayIcon: false,
+                    frameStyle: .card,
+                    showsHubBadge: false
+                )
                 YouTubeVideoMetadataRow(post: post)
             }
             .padding(.horizontal, Theme.pagePadding)
@@ -262,67 +256,157 @@ struct YouTubeVideoMetadataRow: View {
     }
 }
 
-/// Compact Play link preview for the Feed — social awareness without inline video.
+/// Hub video in Feed / shares: same player as Hubs watch + small Hubs badge (hub content only).
 struct PlayFeedLinkCard: View {
+    @Environment(AppState.self) private var appState
+
     let post: CountryPost
+    /// Opens full Matterya Hubs watch (more related videos, shelves, etc.).
     var onOpen: () -> Void
+    var edgeToEdge: Bool = true
 
-    var body: some View {
-        Button(action: onOpen) {
-            HStack(spacing: 12) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Theme.accentSoft)
-                        .frame(width: 52, height: 52)
-                    HandDrawnGlobeStoryRing(size: 34, highlighted: true)
-                }
+    /// Feed hub clips play with audio; user can mute from the overlay.
+    @State private var isMuted = false
+    @State private var isPlaying = true
 
-                VStack(alignment: .leading, spacing: 4) {
-                    if let headline = post.displayHeadline {
-                        Text(headline)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(Theme.ink)
-                            .lineLimit(2)
-                            .multilineTextAlignment(.leading)
-                    }
-
-                    Text(metadataLine)
-                        .font(.caption)
-                        .foregroundStyle(Theme.inkMuted)
-                        .lineLimit(1)
-
-                    HStack(spacing: 4) {
-                        Text(MatteryaCopy.watchOnHubs)
-                            .font(.caption.weight(.bold))
-                            .matteryaBrandLine(minScale: 0.8)
-                        Image(systemName: "arrow.right")
-                            .font(.caption2.weight(.bold))
-                    }
-                    .foregroundStyle(Theme.accentBright)
-                }
-
-                Spacer(minLength: 0)
-            }
-            .padding(12)
-            .background(Theme.canvasMuted)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Theme.border, lineWidth: 0.5)
-            )
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal, Theme.pagePadding)
-        .padding(.top, 8)
+    /// Never fight the global hubs continuous player (double audio).
+    private var feedPlayerActive: Bool {
+        isPlaying
+            && appState.hubPlaybackPost == nil
+            && appState.selectedTab == .feed
     }
 
-    private var metadataLine: String {
-        var parts = [MatteryaCopy.matteryaHubs]
-        if post.viewCount > 0 {
-            parts.append("\(post.viewCount.formatted()) views")
+    private var horizontalPadding: CGFloat {
+        edgeToEdge ? Theme.feedGutter : Theme.pagePadding
+    }
+
+    var body: some View {
+        // Player full-bleed; Hubs badge sits above scrubber chrome so it stays visible.
+        YouTubeVideoFrame(style: .feed) {
+            hubFeedPlayerSurface
         }
-        parts.append(RelativeTime.format(post.createdAt))
-        return parts.joined(separator: " · ")
+        .overlay(alignment: .bottomLeading) {
+            Button(action: onOpen) {
+                HubsOriginBadge()
+            }
+            .buttonStyle(.plain)
+            // Lift above bottom transport (play / scrub) ~40pt.
+            .padding(.leading, 12)
+            .padding(.bottom, 46)
+            .accessibilityLabel(MatteryaCopy.watchOnHubs)
+            .accessibilityHint("Opens this video in Matterya Hubs")
+        }
+        .clipShape(RoundedRectangle(cornerRadius: edgeToEdge ? 0 : 12, style: .continuous))
+        .overlay {
+            if !edgeToEdge {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Theme.border, lineWidth: 0.5)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { onOpen() }
+        .padding(.horizontal, edgeToEdge ? 0 : horizontalPadding)
+        .padding(.top, edgeToEdge ? 0 : 8)
+        .onAppear {
+            // Feed hub videos should be audible (user asked) — activate playback session.
+            let session = AVAudioSession.sharedInstance()
+            try? session.setCategory(.playback, mode: .moviePlayback, options: [])
+            try? session.setActive(true, options: [])
+            isMuted = false
+            isPlaying = appState.hubPlaybackPost == nil
+            YouTubeCatalogService.shared.recordWatch(post.id)
+        }
+        .onChange(of: appState.hubPlaybackPost?.id) { _, id in
+            if id != nil {
+                isPlaying = false
+            }
+        }
+        .onChange(of: appState.selectedTab) { _, tab in
+            if tab != .feed {
+                isPlaying = false
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var hubFeedPlayerSurface: some View {
+        if let url = post.playableVideoURL {
+            if ArchiveVideoPlayback.isArchiveURL(url) || post.isHubSeedVideo {
+                // Same hub player as watch: scrubber + play/pause + mute.
+                MatteryaHubPlayerView(
+                    url: url,
+                    posterURL: post.posterImageURL,
+                    isActive: feedPlayerActive,
+                    startTime: YouTubeCatalogService.shared.playbackPosition(for: post.id),
+                    postID: post.id,
+                    showsControls: true,
+                    loops: false,
+                    isMuted: $isMuted,
+                    allowsFullscreen: false,
+                    onReady: {
+                        Task { await PostsService.shared.recordView(post) }
+                    }
+                )
+                .id("hub-feed-\(post.id)")
+            } else {
+                // Same control surface as Hubs watch for non-archive long-form.
+                VideoPlayerView(
+                    url: url,
+                    posterURL: post.posterImageURL,
+                    placement: nil,
+                    countryCode: post.countryCode,
+                    contentCountryCode: post.countryCode,
+                    postID: post.id,
+                    adsEnabled: false,
+                    isActive: feedPlayerActive,
+                    loops: false,
+                    muted: isMuted,
+                    showsControls: true,
+                    allowsFullscreen: false,
+                    startTime: YouTubeCatalogService.shared.playbackPosition(for: post.id),
+                    persistsPositionOnTeardown: true,
+                    onViewed: { Task { await PostsService.shared.recordView(post) } }
+                )
+                .id("hub-feed-\(post.id)")
+            }
+        } else {
+            YouTubeVideoThumbnail(
+                post: post,
+                maxPixelSize: 900,
+                showsPlayIcon: true,
+                frameStyle: .feed,
+                embedsFrame: false
+            )
+        }
+    }
+
+}
+
+/// Compact mark that a clip lives on Matterya Hubs (not used for plain feed videos).
+struct HubsOriginBadge: View {
+    var compact: Bool = false
+
+    var body: some View {
+        HStack(spacing: compact ? 4 : 6) {
+            MatteryaHubsLogoView(size: compact ? 12 : 16)
+            Text("Hubs")
+                .font(compact ? .caption2.weight(.bold) : .caption.weight(.bold))
+                .tracking(0.35)
+                .foregroundStyle(Color.white)
+        }
+        .padding(.horizontal, compact ? 8 : 10)
+        .padding(.vertical, compact ? 4 : 6)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Theme.accentBright.opacity(0.92))
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .stroke(Color.white.opacity(0.28), lineWidth: 0.5)
+        )
+        .shadow(color: .black.opacity(0.35), radius: 5, y: 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(MatteryaCopy.matteryaHubs)
     }
 }
 
@@ -417,8 +501,14 @@ struct MatteryaHubVideoCard: View {
     var body: some View {
         Button(action: onTap) {
             VStack(alignment: .leading, spacing: 8) {
-                YouTubeVideoThumbnail(post: post, maxPixelSize: 360, showsPlayIcon: true, frameStyle: .card)
-                    .frame(width: width, height: width / YouTubeMediaLayout.aspect)
+                YouTubeVideoThumbnail(
+                    post: post,
+                    maxPixelSize: 360,
+                    showsPlayIcon: false,
+                    frameStyle: .card,
+                    showsHubBadge: false
+                )
+                .frame(width: width, height: width / YouTubeMediaLayout.aspect)
 
                 if let headline = post.displayHeadline {
                     Text(headline)
@@ -444,5 +534,22 @@ struct MatteryaHubVideoCard: View {
         var parts = [post.authorDisplayName]
         if post.viewCount > 0 { parts.append("\(post.viewCount.formatted()) views") }
         return parts.joined(separator: " · ")
+    }
+}
+/// In-app use of the home-screen app icon (`MatteryaAppIcon` imageset ← AppIcon.png).
+struct MatteryaAppIconView: View {
+    var size: CGFloat = 40
+
+    var body: some View {
+        Image("MatteryaAppIcon")
+            .resizable()
+            .scaledToFill()
+            .frame(width: size, height: size)
+            .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
+                    .stroke(Theme.border.opacity(0.35), lineWidth: 0.5)
+            }
+            .accessibilityHidden(true)
     }
 }

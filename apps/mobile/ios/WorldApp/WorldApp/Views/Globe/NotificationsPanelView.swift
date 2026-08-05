@@ -38,11 +38,15 @@ struct NotificationsPanelView: View {
                     LazyVStack(spacing: 8) {
                         ForEach(appState.notifications) { notification in
                             Button {
-                                Task { await appState.openNotification(notification) }
+                                // Open destination on the main actor immediately.
+                                Task { @MainActor in
+                                    await appState.openNotification(notification)
+                                }
                             } label: {
                                 notificationRow(notification)
                             }
                             .buttonStyle(.plain)
+                            .contentShape(Rectangle())
                         }
                     }
                 }

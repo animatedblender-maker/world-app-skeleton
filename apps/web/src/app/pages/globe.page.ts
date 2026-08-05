@@ -1702,7 +1702,7 @@ type CountryIntelligenceData = {
           display:flex;
           flex-direction: column;
       width: 100%;
-      max-width: 720px;
+      max-width: var(--m-content-max-wide, 720px);
       margin: 0 auto;
       box-sizing: border-box;
       position: relative;

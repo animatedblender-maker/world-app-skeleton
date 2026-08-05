@@ -68,6 +68,9 @@ struct ReelsView: View {
             await load()
             scrollPosition = 0
         }
+        .onDisappear {
+            MediaPlaybackCoordinator.shared.stopAllPlayback()
+        }
     }
 
     private func load() async {
@@ -96,18 +99,31 @@ private struct ReelCard: View {
     var body: some View {
         ZStack(alignment: .bottomLeading) {
             if let url = post.playableVideoURL {
-                VideoPlayerView(
-                    url: url,
-                    posterURL: post.posterImageURL,
-                    placement: "reel",
-                    countryCode: country.iso,
-                    contentCountryCode: post.countryCode ?? country.iso,
-                    postID: post.id,
-                    isActive: isActive,
-                    loops: true,
-                    muted: false
-                )
-                .ignoresSafeArea()
+                if ArchiveVideoPlayback.isArchiveURL(url) || post.isHubSeedVideo {
+                    ArchiveVideoPlayerView(
+                        url: url,
+                        posterURL: post.posterImageURL,
+                        isActive: isActive,
+                        muted: false,
+                        startTime: 0
+                    )
+                    .ignoresSafeArea()
+                    .background(Color.black)
+                } else {
+                    VideoPlayerView(
+                        url: url,
+                        posterURL: post.posterImageURL,
+                        placement: "reel",
+                        countryCode: country.iso,
+                        contentCountryCode: post.countryCode ?? country.iso,
+                        postID: post.id,
+                        adsEnabled: false,
+                        isActive: isActive,
+                        loops: true,
+                        muted: false
+                    )
+                    .ignoresSafeArea()
+                }
             }
 
             LinearGradient(colors: [.clear, .black.opacity(0.7)], startPoint: .center, endPoint: .bottom)
@@ -164,16 +180,13 @@ private struct ReelCard: View {
     }
 
     private func toggleLike() async {
-        do {
-            if post.likedByMe {
-                try await PostsService.shared.unlikePost(post.id)
-                post = copyPost(likedByMe: false, likeCount: max(0, post.likeCount - 1))
-            } else {
-                try await PostsService.shared.likePost(post.id)
-                post = copyPost(likedByMe: true, likeCount: post.likeCount + 1)
-            }
-        } catch {
-            appState.showToast(error.localizedDescription, style: .error)
+        let nextLiked = !post.likedByMe
+        let nextCount = nextLiked ? post.likeCount + 1 : max(0, post.likeCount - 1)
+        post = copyPost(likedByMe: nextLiked, likeCount: nextCount)
+        if nextLiked {
+            try? await PostsService.shared.likePost(post.id, baseLikeCount: nextCount - 1)
+        } else {
+            try? await PostsService.shared.unlikePost(post.id, baseLikeCount: nextCount + 1)
         }
     }
 
@@ -186,7 +199,9 @@ private struct ReelCard: View {
             viewCount: post.viewCount, likedByMe: likedByMe, savedByMe: post.savedByMe,
             createdAt: post.createdAt, updatedAt: post.updatedAt,
             authorID: post.authorID, countryName: post.countryName,
-            countryCode: post.countryCode, cityName: post.cityName, author: post.author
+            countryCode: post.countryCode, cityName: post.cityName, author: post.author,
+            linkURL: post.linkURL, linkTitle: post.linkTitle,
+            externalRefType: post.externalRefType, externalRefID: post.externalRefID
         )
     }
 }

@@ -378,6 +378,12 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
     .layout.thread-only .panel{
       display:none;
     }
+    /* Desktop: NEVER hide the conversation list when a chat is open */
+    @media (min-width: 901px){
+      .layout.thread-only .panel{
+        display:flex !important;
+      }
+    }
     .panel{
       display:flex;
       flex-direction:column;
@@ -601,21 +607,23 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
     }
     .message-list{
       flex:1;
-      padding:14px;
+      padding:16px;
       display:flex;
       flex-direction:column;
       gap:10px;
       overflow-y:auto;
       min-height:0;
+      background:var(--m-paper, #f8f6f2);
     }
     .message-day{
       align-self:center;
       font-size:11px;
-      letter-spacing:0.12em;
+      letter-spacing:0.06em;
       text-transform:uppercase;
-      color:rgba(7,20,40,0.55);
-      background:rgba(7,20,40,0.06);
-      border:1px solid rgba(7,20,40,0.08);
+      font-weight:650;
+      color:var(--m-ink-muted, #948b82);
+      background:var(--m-canvas-muted, #f2f0ec);
+      border:0.5px solid var(--m-border, #ddd8d1);
       border-radius:999px;
       padding:6px 12px;
     }
@@ -655,30 +663,35 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       object-fit:cover;
     }
     .bubble{
-      max-width:72%;
+      max-width:min(78%, 420px);
       background:var(--m-surface, #fefdfb);
       border:0.5px solid var(--m-border, #ddd8d1);
       border-radius:18px;
-      padding:10px 12px;
-      font-size:14px;
-      line-height:1.5;
+      padding:10px 14px;
+      font-size:15px;
+      line-height:1.4;
       color:var(--m-ink, #2c2825);
+      box-shadow:none;
     }
+    /* iOS MessageBubble: mine = accentBright, peer = surface + border */
     .message.me .bubble{
-      background:var(--m-ink, #2c2825);
-      border-color:var(--m-ink, #2c2825);
-      color:var(--m-surface, #fefdfb);
+      background:var(--m-accent-bright, #7b6347);
+      border-color:transparent;
+      color:#fff;
     }
     .message.me .bubble .body,
     .message.me .bubble .message-time,
     .message.me .bubble .message-date,
     .message.me .bubble .message-edited,
     .message.me .bubble .message-status{
-      color:rgba(254,253,251,0.92);
+      color:rgba(255,255,255,0.92);
     }
     .message.me .bubble .message-reply,
     .message.me .bubble .message-like{
-      color:rgba(254,253,251,0.88);
+      color:rgba(255,255,255,0.88);
+    }
+    .message.me .msg-avatar{
+      display:none;
     }
     .body{
       white-space:pre-wrap;
@@ -917,10 +930,10 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       display:flex;
       flex-direction:column;
       gap:10px;
-      padding:12px 14px;
-      border-top:1px solid rgba(7,20,40,0.08);
-      background:rgba(255,255,255,0.95);
-      padding-bottom:calc(12px + env(safe-area-inset-bottom));
+      padding:16px;
+      border-top:0.5px solid var(--m-border, #ddd8d1);
+      background:var(--m-surface, #fefdfb);
+      padding-bottom:calc(16px + env(safe-area-inset-bottom));
     }
     .composer-row{
       display:flex;
@@ -932,23 +945,24 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       display:flex;
       flex-direction:column;
       gap:8px;
-      border-radius:16px;
-      border:1px solid rgba(7,20,40,0.14);
-      background:white;
+      border-radius:8px;
+      border:0.5px solid var(--m-border, #ddd8d1);
+      background:var(--m-surface, #fefdfb);
       padding:10px 12px 10px 44px;
-      min-height:56px;
+      min-height:48px;
       position:relative;
     }
     .composer-input{
       width:100%;
       border:0;
       padding:4px 0;
-      font-size:14px;
+      font-size:15px;
       font-family:inherit;
       background:transparent;
-      min-height:32px;
+      color:var(--m-ink, #2c2825);
+      min-height:28px;
       max-height:160px;
-      line-height:1.45;
+      line-height:1.4;
       resize:none;
       overflow-y:hidden;
     }
@@ -959,13 +973,13 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       width:26px;
       height:26px;
       border-radius:50%;
-      border:1px solid rgba(7,20,40,0.15);
-      background:rgba(7,20,40,0.06);
+      border:0;
+      background:transparent;
       font-weight:900;
-      font-size:16px;
+      font-size:20px;
       line-height:1;
       cursor:pointer;
-      color:rgba(7,20,40,0.7);
+      color:var(--m-accent-bright, #7b6347);
       display:grid;
       place-items:center;
     }
@@ -973,18 +987,23 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       display:inline-flex;
       align-items:center;
       justify-content:center;
+      min-width:44px;
+      height:44px;
       min-height:44px;
       border:0;
-      border-radius:12px;
-      padding:10px 18px;
-      background:var(--m-ink, #2c2825);
-      color:var(--m-surface, #fefdfb);
-      font-weight:650;
+      border-radius:999px;
+      padding:0 16px;
+      background:var(--m-accent-bright, #7b6347);
+      color:#fff;
+      font-weight:700;
+      font-size:14px;
       cursor:pointer;
       box-shadow:none;
+      flex-shrink:0;
     }
     .composer-send:disabled{
-      opacity:0.6;
+      background:var(--m-ink-muted, #948b82);
+      opacity:0.85;
       cursor:not-allowed;
       box-shadow:none;
     }
@@ -1188,6 +1207,133 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       background:#d84c4c;
       color:#fff;
     }
+    @media (min-width: 901px){
+      /* Full-height two-pane like a desktop Messages app — iOS visual language */
+      :host{
+        height:100svh;
+      }
+      .wrap{
+        padding:0;
+        height:100%;
+        background:var(--m-paper, #f8f6f2);
+      }
+      .card{
+        height:100%;
+      }
+      .layout{
+        grid-template-columns:minmax(300px, 34vw) minmax(0, 1fr);
+        max-width:none;
+        width:100%;
+        margin:0;
+        border:0;
+        background:var(--m-paper, #f8f6f2);
+        height:100%;
+      }
+      .panel{
+        border-right:0.5px solid var(--m-divider, #e2ded8);
+        background:var(--m-paper, #f8f6f2);
+        padding:12px 10px 16px;
+        gap:6px;
+      }
+      .panel-title{
+        font-size:20px;
+        font-weight:600;
+        font-family:system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        letter-spacing:0;
+        padding:8px 8px 10px;
+        border-bottom:0.5px solid var(--m-divider, #e2ded8);
+        margin-bottom:4px;
+      }
+      .panel-backlink{
+        display:none;
+      }
+      .conversation{
+        border-radius:12px;
+        padding:12px 10px;
+        gap:12px;
+        background:var(--m-surface, #fefdfb);
+        border:0.5px solid transparent;
+        margin-bottom:2px;
+      }
+      .conversation:hover{
+        background:var(--m-surface, #fefdfb);
+        border-color:var(--m-divider, #e2ded8);
+      }
+      .conversation.active{
+        background:var(--m-surface, #fefdfb);
+        border-color:var(--m-border, #ddd8d1);
+        box-shadow:0 1px 0 rgba(44,40,37,0.04);
+      }
+      .avatar{
+        width:48px;
+        height:48px;
+      }
+      .name{
+        font-size:15px;
+        font-weight:650;
+        color:var(--m-ink, #2c2825);
+      }
+      .snippet{
+        font-size:13px;
+        color:var(--m-ink-muted, #948b82);
+        opacity:1;
+      }
+      .time{
+        font-size:12px;
+        color:var(--m-ink-muted, #948b82);
+        opacity:1;
+      }
+      .thread{
+        background:var(--m-paper, #f8f6f2);
+        min-height:0;
+      }
+      .thread-header{
+        background:var(--m-surface, #fefdfb);
+        border-bottom:0.5px solid var(--m-divider, #e2ded8);
+        padding:10px 16px;
+        min-height:56px;
+      }
+      .thread-backlink{
+        display:none;
+      }
+      .thread-name{
+        font-size:16px;
+        font-weight:650;
+        color:var(--m-ink, #2c2825);
+      }
+      .thread-sub{
+        color:var(--m-ink-muted, #948b82);
+        opacity:1;
+      }
+      .call-btn{
+        width:40px;
+        height:40px;
+        border-radius:10px;
+        border:0;
+        background:transparent;
+      }
+      .call-btn:hover{
+        background:rgba(44,40,37,0.05);
+      }
+      .message-list{
+        padding:16px 20px 20px;
+        gap:12px;
+      }
+      .bubble{
+        max-width:min(62%, 480px);
+      }
+      .composer{
+        padding:16px 20px calc(16px + env(safe-area-inset-bottom));
+      }
+      .thread-empty{
+        display:grid;
+        place-items:center;
+        flex:1;
+        font-size:15px;
+        color:var(--m-ink-muted, #948b82);
+        opacity:1;
+      }
+    }
     @media (max-width: 900px){
       .wrap{
         padding:0;
@@ -1375,6 +1521,9 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
 
   async ngOnInit(): Promise<void> {
     this.updateViewportFlag();
+    if (typeof window !== 'undefined') {
+      window.addEventListener('resize', this.onViewportResize);
+    }
     void this.push.syncIfGranted();
     const user = await this.auth.getUser();
     this.meId = user?.id ?? null;
@@ -1447,6 +1596,9 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.destroyed = true;
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('resize', this.onViewportResize);
+    }
     this.routeSub?.unsubscribe();
     this.pendingSub?.unsubscribe();
     this.callSignalSub?.unsubscribe();
@@ -1458,6 +1610,11 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     this.cleanupCall();
     this.clearMedia();
   }
+
+  private onViewportResize = (): void => {
+    this.updateViewportFlag();
+    this.forceUi();
+  };
 
   async loadConversations(selectId?: string | null): Promise<void> {
     this.loadingConversations = true;
@@ -3113,8 +3270,10 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
 
   private enterThreadView(): void {
     if (typeof window === 'undefined') return;
-    this.mobileThreadOnly = window.innerWidth <= 900;
+    // Only stack list/thread on true phone widths. Desktop keeps both panes.
+    this.mobileThreadOnly = window.innerWidth < 900;
     this.updateViewportFlag();
+    this.forceUi();
   }
 
   showConversationList(): void {
@@ -3125,7 +3284,12 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
 
   private updateViewportFlag(): void {
     if (typeof window === 'undefined') return;
-    this.isNarrow = window.innerWidth <= 900;
+    const narrow = window.innerWidth < 900;
+    this.isNarrow = narrow;
+    // Leaving phone width → always show list again
+    if (!narrow) {
+      this.mobileThreadOnly = false;
+    }
   }
 
   private ensureLiveKitLoaded(): Promise<void> {

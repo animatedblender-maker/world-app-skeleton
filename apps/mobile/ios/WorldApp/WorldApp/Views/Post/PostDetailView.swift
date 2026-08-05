@@ -6,37 +6,34 @@ struct PostDetailView: View {
     let postID: String
 
     @State private var post: CountryPost?
-    @State private var didRouteToPlay = false
     @State private var isLoading = true
     @State private var errorMessage: String?
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                if isLoading {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                if isLoading, post == nil {
                     ProgressView()
                         .tint(Theme.facebookBlue)
                         .frame(maxWidth: .infinity)
                         .padding(.top, 40)
-                } else if let errorMessage {
+                } else if let errorMessage, post == nil {
                     Text(errorMessage)
                         .foregroundStyle(Theme.danger)
                         .padding(Theme.pagePadding)
                 } else if let currentPost = post {
-                    if didRouteToPlay {
-                        ProgressView(MatteryaCopy.openingHubs)
-                            .tint(Theme.accentBright)
-                            .frame(maxWidth: .infinity)
-                            .padding(.top, 40)
-                    } else if PlayPlatformBridge.isLongFormVideo(currentPost) {
+                    // Only true hub long-form gets the “open in Hubs” banner.
+                    if PlayPlatformBridge.isHubFeedCardVideo(currentPost) {
                         watchOnPlayBanner(for: currentPost)
-                        postCard(for: currentPost)
-                    } else {
-                        if currentPost.isReel {
-                            watchSparkBanner(for: currentPost)
-                        }
-                        postCard(for: currentPost)
+                    } else if currentPost.isReel {
+                        watchSparkBanner(for: currentPost)
                     }
+                    // Full-bleed feed card — same width/style as home feed.
+                    postCard(for: currentPost)
+                } else {
+                    Text("Post not found.")
+                        .foregroundStyle(Theme.inkMuted)
+                        .padding(Theme.pagePadding)
                 }
             }
             .padding(.bottom, 24)
@@ -45,30 +42,58 @@ struct PostDetailView: View {
         .navigationTitle("Post")
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(Theme.canvas, for: .navigationBar)
-        .task { await load() }
+        .task(id: postID) {
+            await load()
+        }
     }
 
     private func load() async {
         isLoading = true
         errorMessage = nil
-        defer { isLoading = false }
-        do {
-            guard let loaded = try await PostsService.shared.getPostByID(postID) else {
-                errorMessage = "Post not found."
-                return
-            }
-            post = loaded
-            routeLongFormToPlayIfNeeded(loaded)
-        } catch {
-            errorMessage = error.localizedDescription
+
+        // Instant paint from cache if the post was already in feed/hubs/profile.
+        if let cached = PostsService.shared.cachedPostForDetail(id: postID) {
+            post = cached
+            isLoading = false
         }
+
+        // Network / hub fetch with a hard timeout so we never spin forever.
+        let fetched: CountryPost? = await withTimeout(seconds: 12) {
+            try? await PostsService.shared.getPostByID(postID)
+        }
+
+        if let fetched {
+            post = fetched
+            errorMessage = nil
+        } else if post == nil {
+            errorMessage = "Post not found or couldn’t be loaded. Pull back and try again."
+        }
+        isLoading = false
     }
 
-    private func routeLongFormToPlayIfNeeded(_ post: CountryPost) {
-        guard !didRouteToPlay else { return }
-        if PlayPlatformBridge.isLongFormVideo(post) {
-            didRouteToPlay = true
-            appState.openLivingVideo(postID: post.id)
+    /// Race `operation` against a timeout; returns nil on timeout (or if the fetch failed).
+    private func withTimeout<T: Sendable>(
+        seconds: TimeInterval,
+        operation: @escaping @Sendable () async -> T?
+    ) async -> T? {
+        await withTaskGroup(of: (isOperation: Bool, value: T?).self) { group in
+            group.addTask {
+                (true, await operation())
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                return (false, nil)
+            }
+            while let result = await group.next() {
+                if result.isOperation {
+                    group.cancelAll()
+                    return result.value
+                }
+                // Timeout won — stop waiting on a hung request.
+                group.cancelAll()
+                return nil
+            }
+            return nil
         }
     }
 
@@ -76,12 +101,13 @@ struct PostDetailView: View {
     private func postCard(for currentPost: CountryPost) -> some View {
         FacebookPostCard(
             post: currentPost,
+            edgeToEdge: true,
             showsAuthorHeader: false,
             showsAuthorInJournal: true,
             commentsInitiallyExpanded: true,
             onLikeToggle: { Task { await toggleLike(currentPost) } },
             onOpenPost: {},
-            onOpenVideo: PlayPlatformBridge.isLongFormVideo(currentPost)
+            onOpenVideo: currentPost.hasVideo && !currentPost.isReel
                 ? { appState.openPost(currentPost) }
                 : nil,
             onOpenReel: currentPost.isReel
@@ -91,7 +117,6 @@ struct PostDetailView: View {
             onPostUpdated: { updated in handlePostUpdated(updated) },
             expandsCommentsInline: true
         )
-        .padding(.horizontal, Theme.pagePadding)
     }
 
     private func watchSparkBanner(for post: CountryPost) -> some View {
@@ -126,11 +151,17 @@ struct PostDetailView: View {
             appState.openPost(post)
         } label: {
             HStack(spacing: 10) {
-                HandDrawnGlobeStoryRing(size: 28, highlighted: true)
-                Text(MatteryaCopy.watchOnHubs)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Theme.ink)
-                    .matteryaBrandLine(minScale: 0.85)
+                HubsOriginBadge()
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(MatteryaCopy.watchOnHubs)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.ink)
+                        .matteryaBrandLine(minScale: 0.85)
+                    Text("Open in the Hubs player with more like this")
+                        .font(.caption)
+                        .foregroundStyle(Theme.inkMuted)
+                        .lineLimit(1)
+                }
                 Spacer()
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.bold))
@@ -157,18 +188,32 @@ struct PostDetailView: View {
     }
 
     private func toggleLike(_ post: CountryPost) async {
-        do {
-            if post.likedByMe {
-                try await PostsService.shared.unlikePost(post.id)
-            } else {
-                try await PostsService.shared.likePost(post.id)
-            }
-            if let refreshed = try await PostsService.shared.getPostByID(postID) {
-                self.post = refreshed
-                PostsService.shared.publishPostChange(refreshed)
-            }
-        } catch {
-            errorMessage = error.localizedDescription
+        // Optimistic UI first — never wipe the screen with GraphQL "Unexpected error".
+        let nextLiked = !post.likedByMe
+        let nextCount = nextLiked ? post.likeCount + 1 : max(0, post.likeCount - 1)
+        let optimistic = post.withEngagement(
+            likedByMe: nextLiked,
+            likeCount: nextCount,
+            commentCount: post.commentCount
+        )
+        self.post = optimistic
+        errorMessage = nil
+
+        if post.likedByMe {
+            try? await PostsService.shared.unlikePost(post.id, baseLikeCount: post.likeCount)
+        } else {
+            try? await PostsService.shared.likePost(post.id, baseLikeCount: post.likeCount)
+        }
+
+        if let refreshed = try? await PostsService.shared.getPostByID(postID) {
+            self.post = refreshed.withEngagement(
+                likedByMe: nextLiked || refreshed.likedByMe,
+                likeCount: max(nextCount, refreshed.likeCount),
+                commentCount: refreshed.commentCount
+            )
+        }
+        if let current = self.post {
+            PostsService.shared.publishPostChange(current)
         }
     }
 }

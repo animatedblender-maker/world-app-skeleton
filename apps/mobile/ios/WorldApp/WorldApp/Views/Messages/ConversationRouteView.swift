@@ -1,6 +1,24 @@
 import SwiftUI
 
+/// Tracks which conversation chat screen is currently visible (suppresses push banners for that chat).
+@MainActor
+enum ActiveConversationFocus {
+    private static var currentID: String?
+
+    static func set(_ conversationID: String?) {
+        currentID = conversationID
+    }
+
+    static func isViewing(_ conversationID: String) -> Bool {
+        currentID == conversationID
+    }
+
+    static var current: String? { currentID }
+}
+
 struct ConversationRouteView: View {
+    @Environment(AppState.self) private var appState
+
     let conversationID: String
 
     @State private var conversation: Conversation?
@@ -25,7 +43,24 @@ struct ConversationRouteView: View {
         }
         .screenBackground()
         .task(id: conversationID) {
+            // Focus first so in-flight pushes for this chat never show a banner.
+            ActiveConversationFocus.set(conversationID)
+            await appState.clearNotifications(forConversation: conversationID)
             await loadConversation()
+            // Opening messages marks last_read_at on the server — refresh badge after load.
+            await appState.refreshUnreadCounts()
+            await appState.syncAppIconBadge()
+        }
+        .onAppear {
+            ActiveConversationFocus.set(conversationID)
+            Task {
+                await appState.clearNotifications(forConversation: conversationID)
+            }
+        }
+        .onDisappear {
+            if ActiveConversationFocus.isViewing(conversationID) {
+                ActiveConversationFocus.set(nil)
+            }
         }
     }
 

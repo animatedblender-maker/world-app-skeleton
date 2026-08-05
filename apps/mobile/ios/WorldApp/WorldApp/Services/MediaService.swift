@@ -96,7 +96,7 @@ final class MediaService {
         return (path, Self.publicAvatarURL(for: path))
     }
 
-    static func normalizedAvatarURL(_ url: String?) -> String? {
+    nonisolated static func normalizedAvatarURL(_ url: String?) -> String? {
         guard let raw = url?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
         if raw.hasPrefix("data:") || raw.hasPrefix("blob:") { return raw }
 
@@ -120,7 +120,7 @@ final class MediaService {
         return publicAvatarURL(for: raw.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
     }
 
-    private static func publicAvatarURL(for path: String) -> String {
+    nonisolated private static func publicAvatarURL(for path: String) -> String {
         let cleaned = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         return "\(AppConfig.supabaseURL)/storage/v1/object/public/avatars/\(cleaned)"
     }

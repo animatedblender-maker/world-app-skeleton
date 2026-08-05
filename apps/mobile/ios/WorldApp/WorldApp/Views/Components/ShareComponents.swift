@@ -53,9 +53,13 @@ struct SharedPostEmbedView: View {
     var body: some View {
         Group {
             if PlayPlatformBridge.isLongFormVideo(embed.asCountryPost) {
-                PlayFeedLinkCard(post: embed.asCountryPost) {
-                    appState.openPost(embed.asCountryPost)
-                }
+                PlayFeedLinkCard(
+                    post: embed.asCountryPost,
+                    onOpen: { appState.openPost(embed.asCountryPost) },
+                    edgeToEdge: false
+                )
+                .padding(.horizontal, Theme.pagePadding)
+                .padding(.vertical, 8)
             } else {
                 standardEmbed
             }
@@ -63,7 +67,13 @@ struct SharedPostEmbedView: View {
     }
 
     private var standardEmbed: some View {
-        Button {
+        let post = embed.asCountryPost
+        let isVideo = embed.hasVideo
+        // Same height rules as feed cards: photos use 4:5 capped at maxFeedMediaHeight; videos 16:9 tall.
+        let photoAspect = FacebookMediaLayout.aspectRatio(for: post, context: .feed)
+            ?? FacebookMediaLayout.photoPortraitAspect
+
+        return Button {
             appState.navigate(to: .post(embed.id))
         } label: {
             VStack(alignment: .leading, spacing: 0) {
@@ -84,19 +94,19 @@ struct SharedPostEmbedView: View {
 
                 if embed.hasMedia {
                     Group {
-                        if embed.hasVideo {
+                        if isVideo {
                             VideoThumbnailView(
-                                post: embed.asCountryPost,
-                                maxPixelSize: 480,
+                                post: post,
+                                maxPixelSize: 720,
                                 contentMode: .fill,
-                                showsPlayIcon: true,
+                                showsPlayIcon: false,
                                 playIconSize: 36,
                                 placeholder: AnyView(mediaPlaceholder)
                             )
                         } else if let url = embed.feedImageURL {
                             CachedAsyncImage(
                                 url: url,
-                                maxPixelSize: 480,
+                                maxPixelSize: 720,
                                 contentMode: .fill,
                                 placeholder: AnyView(mediaPlaceholder)
                             )
@@ -105,7 +115,10 @@ struct SharedPostEmbedView: View {
                         }
                     }
                     .frame(maxWidth: .infinity)
-                    .aspectRatio(16 / 9, contentMode: .fill)
+                    .modifier(SharedEmbedMediaSizeModifier(
+                        isVideo: isVideo,
+                        photoAspect: photoAspect
+                    ))
                     .clipped()
                 }
 
@@ -137,6 +150,25 @@ struct SharedPostEmbedView: View {
                 Image(systemName: embed.hasVideo ? "video" : "photo")
                     .foregroundStyle(Theme.inkMuted)
             }
+    }
+}
+
+/// Matches `FeedMediaSizeModifier` so shared photos/videos use the same height caps as feed media.
+private struct SharedEmbedMediaSizeModifier: ViewModifier {
+    let isVideo: Bool
+    let photoAspect: CGFloat
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isVideo {
+            content
+                .frame(maxWidth: .infinity)
+                .frame(height: FacebookMediaLayout.dominantFeedVideoHeight())
+        } else {
+            content
+                .aspectRatio(photoAspect, contentMode: .fit)
+                .frame(maxHeight: FacebookMediaLayout.maxFeedMediaHeight)
+        }
     }
 }
 
