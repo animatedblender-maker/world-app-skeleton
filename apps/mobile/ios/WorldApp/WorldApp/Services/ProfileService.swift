@@ -197,19 +197,25 @@ final class ProfileService {
         if let bio { input["bio"] = bio }
         if let avatarURL { input["avatar_url"] = avatarURL }
 
+        // Always send a real input object — empty dict can fail on some GraphQL servers.
+        if input.isEmpty {
+            throw GraphQLError.gql("Nothing to update.")
+        }
+
         let mutation = """
         mutation UpdateProfile($input: UpdateProfileInput!) {
           updateProfile(input: $input) {
             user_id email display_name username avatar_url
-            country_name country_code city_name bio created_at updated_at
+            country_name country_code city_name bio
+            account_status
+            created_at updated_at
           }
         }
         """
 
         let result: Response = try await gql.authenticatedRequest(
             query: mutation,
-            variables: ["input": input],
-
+            variables: ["input": input]
         )
         return result.updateProfile.toModel
     }

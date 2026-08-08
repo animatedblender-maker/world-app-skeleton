@@ -329,10 +329,10 @@ struct SearchView: View {
     }
 
     private func openCountry(_ country: Country) {
+        // Country feeds disabled — content lives on the main feed only.
         appState.selectCountry(country)
-        appState.selectedTab = .globe
+        appState.selectedTab = .feed
         appState.navigationPath.removeAll()
-        appState.navigate(to: .countryFeed(country))
     }
 
     private func loadCountries() async {

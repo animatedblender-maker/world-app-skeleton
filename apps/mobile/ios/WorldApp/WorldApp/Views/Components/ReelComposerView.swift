@@ -14,6 +14,8 @@ struct ReelComposerView: View {
     var onPosted: ((CountryPost) -> Void)?
 
     @State private var caption = ""
+    /// Required for Hubs channel long-form uploads.
+    @State private var videoTitle = ""
     @State private var busy = false
     @State private var uploadPhase: MediaUploadPhase = .idle
     @State private var uploadProgress: UploadProgress?
@@ -28,7 +30,16 @@ struct ReelComposerView: View {
     @State private var videoMimeType = "video/mp4"
     @State private var videoFileExtension = "mp4"
 
-    private var canSubmit: Bool { uploadVideoURL != nil && !isPreparingVideo }
+    private var titleOK: Bool {
+        // Hub long-form always needs a title; feed videos / sparks use caption only.
+        if publishAsReel { return true }
+        if !publishToHubChannel { return true }
+        return !videoTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var canSubmit: Bool {
+        uploadVideoURL != nil && !isPreparingVideo && titleOK
+    }
 
     private var canPostHere: Bool {
         appState.canPostToCountry(country)
@@ -49,6 +60,9 @@ struct ReelComposerView: View {
                     VStack(alignment: .leading, spacing: 22) {
                         composerHeader
                         previewSection
+                        if publishToHubChannel && !publishAsReel {
+                            titleField
+                        }
                         captionField
                         if let errorMessage { errorBanner(errorMessage) }
                     }
@@ -213,6 +227,34 @@ struct ReelComposerView: View {
         }
     }
 
+    private var titleField: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Text("TITLE")
+                    .font(.caption.weight(.semibold))
+                    .tracking(1.2)
+                    .foregroundStyle(Theme.inkMuted)
+                Text("Required")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(Theme.danger)
+            }
+            TextField("Give your video a title", text: $videoTitle)
+                .foregroundStyle(Theme.ink)
+                .padding(14)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
+                        .stroke(
+                            titleOK ? Theme.border : Theme.danger.opacity(0.55),
+                            lineWidth: 0.5
+                        )
+                )
+            Text("Every Hubs channel video needs a title so people can find it.")
+                .font(.caption2)
+                .foregroundStyle(Theme.inkMuted)
+        }
+    }
+
     private var captionField: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("CAPTION")
@@ -246,7 +288,7 @@ struct ReelComposerView: View {
                     Text(statusLabel)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(canPostHere ? Theme.ink : Theme.danger)
-                    Text(canPostHere ? country.name : "Switch to your country feed to post.")
+                    Text(canPostHere ? "Posts to the main feed" : "Add a home country in your profile first.")
                         .font(.caption2)
                         .foregroundStyle(Theme.inkMuted)
                 }
@@ -496,12 +538,19 @@ struct ReelComposerView: View {
                     onPublishing: publishingHandler
                 )
             } else if toHub {
+                let trimmedTitle = await MainActor.run {
+                    videoTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+                guard !trimmedTitle.isEmpty else {
+                    throw MediaError.uploadFailed("Add a title for your Hubs video.")
+                }
                 post = try await PostsService.shared.createLivingVideo(
                     authorID: authorID,
                     body: trimmedCaption,
                     countryName: localCountry.name,
                     countryCode: localCountry.iso,
                     cityName: localProfileCity,
+                    title: trimmedTitle,
                     videoFileURL: localVideoURL,
                     mimeType: localMime,
                     fileExtension: localExt,

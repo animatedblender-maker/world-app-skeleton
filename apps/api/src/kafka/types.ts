@@ -113,15 +113,35 @@ export type EngagementPayload = {
   meta?: Record<string, unknown> | null;
 };
 
+/**
+ * Fired on every platform publish (feed / Spark / Hubs channel / share).
+ * Also mirrored into entity_engagement_events for the admin Uploads report tab.
+ */
 export type ContentPostedPayload = {
+  /** Who performed the upload (actor / posted_by). */
   entityId: string;
   contentId: string;
+  /** Channel owner or post author (may differ from actor for admin publishes). */
+  authorId?: string | null;
   mediaType?: string | null;
   visibility?: string | null;
   countryCode?: string | null;
+  countryName?: string | null;
   cityName?: string | null;
   hubSlug?: string | null;
   isSpark?: boolean;
   isHubLongForm?: boolean;
+  isMoment?: boolean;
   sharedPostId?: string | null;
+  channelId?: string | null;
+  channelName?: string | null;
+  /** owner | admin when published to a Hubs channel */
+  channelRole?: string | null;
+  title?: string | null;
+  /** Plain-language line for the report, e.g. "Maya uploaded a Spark to Matterya Sparks from Germany". */
+  summary: string;
+  surface?: string | null;
+  mediaUrl?: string | null;
+  /** feed | hubs | sparks | share | moment | backend */
+  destination?: string | null;
 };

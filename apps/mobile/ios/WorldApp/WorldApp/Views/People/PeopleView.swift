@@ -95,9 +95,17 @@ struct PeopleView: View {
 struct FollowButton: View {
     @Environment(AppState.self) private var appState
     let userID: String
+    /// Smaller chip for post-card name rows.
+    var compact: Bool = false
+    /// White/outline styling for Sparks and other dark video surfaces.
+    var onDark: Bool = false
     @State private var busy = false
 
     private var isFollowing: Bool { appState.isFollowing(userID) }
+    private var isSelf: Bool {
+        let me = appState.currentProfile?.userID
+        return !userID.isEmpty && userID == me
+    }
 
     var body: some View {
         Button {
@@ -108,18 +116,39 @@ struct FollowButton: View {
             }
         } label: {
             Text(isFollowing ? "Following" : "Follow")
-                .font(.caption.weight(.bold))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 7)
-                .background(
-                    isFollowing ? Theme.surfaceMuted : Theme.accentBright,
-                    in: Capsule()
-                )
+                .font(compact ? .caption2.weight(.bold) : .caption.weight(.bold))
+                .padding(.horizontal, compact ? 10 : 14)
+                .padding(.vertical, compact ? 4 : 7)
+                .background(backgroundFill, in: Capsule())
                 .overlay(
-                    Capsule().stroke(isFollowing ? Theme.border : Color.clear, lineWidth: 0.5)
+                    Capsule().stroke(borderColor, lineWidth: onDark || isFollowing ? 0.5 : 0)
                 )
-                .foregroundStyle(isFollowing ? Theme.inkSecondary : .white)
+                .foregroundStyle(labelColor)
         }
-        .disabled(busy)
+        .buttonStyle(.plain)
+        .disabled(busy || isSelf || userID.isEmpty)
+        .opacity(isSelf ? 0 : 1)
+        .accessibilityLabel(isFollowing ? "Unfollow" : "Follow")
+    }
+
+    private var backgroundFill: Color {
+        if onDark {
+            return isFollowing ? Color.white.opacity(0.14) : Theme.accentBright
+        }
+        return isFollowing ? Theme.surfaceMuted : Theme.accentBright
+    }
+
+    private var borderColor: Color {
+        if onDark {
+            return isFollowing ? Color.white.opacity(0.45) : Color.clear
+        }
+        return isFollowing ? Theme.border : Color.clear
+    }
+
+    private var labelColor: Color {
+        if onDark {
+            return .white
+        }
+        return isFollowing ? Theme.inkSecondary : .white
     }
 }

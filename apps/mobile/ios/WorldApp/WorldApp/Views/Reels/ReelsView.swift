@@ -131,17 +131,23 @@ private struct ReelCard: View {
                 .allowsHitTesting(false)
 
             VStack(alignment: .leading, spacing: 8) {
-                Button {
-                    appState.openPublicProfile(username: post.author?.username, userID: post.authorID)
-                } label: {
-                    HStack {
-                        AvatarView(url: post.author?.avatarURL, seed: post.authorID, size: 36)
-                        Text(post.author?.displayName ?? "Member")
-                            .font(.subheadline.weight(.bold))
-                            .foregroundStyle(.white)
+                HStack(spacing: 10) {
+                    Button {
+                        appState.openPublicProfile(username: post.author?.username, userID: post.authorID)
+                    } label: {
+                        HStack {
+                            AvatarView(url: post.author?.avatarURL, seed: post.authorID, size: 36)
+                            Text(post.author?.displayName ?? "Member")
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(.white)
+                        }
+                    }
+                    .buttonStyle(.plain)
+
+                    if post.authorID != appState.currentProfile?.userID, !post.authorID.isEmpty {
+                        FollowButton(userID: post.authorID, compact: true, onDark: true)
                     }
                 }
-                .buttonStyle(.plain)
 
                 if let text = post.displayCaption ?? post.displayHeadline {
                     Text(text)

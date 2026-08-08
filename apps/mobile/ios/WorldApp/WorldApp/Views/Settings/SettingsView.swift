@@ -22,12 +22,18 @@ struct SettingsView: View {
     @State private var incomingCallsReady = false
     @State private var pushEnvironmentLabel = ""
     @State private var isRefreshingCalling = false
-    @State private var showDeactivateConfirm = false
-    @State private var showDeleteConfirm = false
-    @State private var showDeletePhraseSheet = false
+
+    /// Sheet-based account actions (confirmationDialog inside List often fails to present).
+    @State private var accountSheet: AccountSheet?
     @State private var deleteConfirmationText = ""
     @State private var accountActionBusy = false
     @State private var accountActionError: String?
+
+    private enum AccountSheet: String, Identifiable {
+        case deactivate
+        case delete
+        var id: String { rawValue }
+    }
 
     var body: some View {
         List {
@@ -47,8 +53,9 @@ struct SettingsView: View {
             }
 
             Section {
-                Button(role: .none) {
-                    showDeactivateConfirm = true
+                Button {
+                    accountActionError = nil
+                    accountSheet = .deactivate
                 } label: {
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
@@ -60,9 +67,9 @@ struct SettingsView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         Spacer()
-                        if accountActionBusy {
-                            ProgressView()
-                        }
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Theme.inkMuted)
                     }
                 }
                 .disabled(accountActionBusy)
@@ -70,7 +77,7 @@ struct SettingsView: View {
                 Button(role: .destructive) {
                     deleteConfirmationText = ""
                     accountActionError = nil
-                    showDeleteConfirm = true
+                    accountSheet = .delete
                 } label: {
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
@@ -81,6 +88,9 @@ struct SettingsView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Theme.inkMuted)
                     }
                 }
                 .disabled(accountActionBusy)
@@ -101,10 +111,8 @@ struct SettingsView: View {
                     .onChange(of: pushEnabled) { _, enabled in
                         if enabled {
                             Task { await enablePush() }
-                        } else {
-                            if let url = URL(string: UIApplication.openSettingsURLString) {
-                                UIApplication.shared.open(url)
-                            }
+                        } else if let url = URL(string: UIApplication.openSettingsURLString) {
+                            UIApplication.shared.open(url)
                         }
                     }
 
@@ -219,44 +227,103 @@ struct SettingsView: View {
             await refreshPushStatus()
             await refreshCallingStatus()
         }
-        .confirmationDialog(
-            "Deactivate your account?",
-            isPresented: $showDeactivateConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("Deactivate", role: .destructive) {
-                Task { await performDeactivate() }
+        .sheet(item: $accountSheet) { sheet in
+            NavigationStack {
+                Group {
+                    switch sheet {
+                    case .deactivate:
+                        deactivateSheet
+                    case .delete:
+                        deleteSheet
+                    }
+                }
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") {
+                            accountSheet = nil
+                            accountActionError = nil
+                        }
+                        .disabled(accountActionBusy)
+                    }
+                }
             }
-            Button("Cancel", role: .cancel) {}
-        } message: {
+            .presentationDetents([.medium, .large])
+        }
+    }
+
+    private var deactivateSheet: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Deactivate account?")
+                .font(.title3.weight(.bold))
             Text("Your profile will be hidden and you will be signed out. Sign in again anytime to reactivate.")
-        }
-        .confirmationDialog(
-            "Delete your account permanently?",
-            isPresented: $showDeleteConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("Continue", role: .destructive) {
-                showDeletePhraseSheet = true
+                .foregroundStyle(Theme.inkSecondary)
+            if let accountActionError {
+                Text(accountActionError)
+                    .font(.footnote)
+                    .foregroundStyle(Theme.danger)
             }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This cannot be undone. Posts, profile, and login will be removed.")
+            Spacer()
+            Button {
+                Task { await performDeactivate() }
+            } label: {
+                HStack {
+                    Spacer()
+                    if accountActionBusy { ProgressView().tint(.white) }
+                    Text(accountActionBusy ? "Deactivating…" : "Deactivate")
+                        .fontWeight(.semibold)
+                    Spacer()
+                }
+                .padding(.vertical, 14)
+                .background(Theme.danger, in: RoundedRectangle(cornerRadius: 12))
+                .foregroundStyle(.white)
+            }
+            .disabled(accountActionBusy)
         }
-        .alert("Confirm deletion", isPresented: $showDeletePhraseSheet) {
-            TextField("Type DELETE or your username", text: $deleteConfirmationText)
+        .padding(20)
+        .navigationTitle("Deactivate")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var deleteSheet: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Delete account permanently?")
+                .font(.title3.weight(.bold))
+            Text("This cannot be undone. Posts, profile, and login will be removed.")
+                .foregroundStyle(Theme.inkSecondary)
+            let handle = appState.currentProfile?.username.map { "@\($0)" } ?? "your username"
+            Text("Type DELETE or \(handle) to confirm.")
+                .font(.footnote)
+                .foregroundStyle(Theme.inkMuted)
+            TextField("DELETE or username", text: $deleteConfirmationText)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-            Button("Delete forever", role: .destructive) {
+                .padding(12)
+                .background(Theme.surfaceMuted, in: RoundedRectangle(cornerRadius: 10))
+            if let accountActionError {
+                Text(accountActionError)
+                    .font(.footnote)
+                    .foregroundStyle(Theme.danger)
+            }
+            Spacer()
+            Button {
                 Task { await performDelete() }
+            } label: {
+                HStack {
+                    Spacer()
+                    if accountActionBusy { ProgressView().tint(.white) }
+                    Text(accountActionBusy ? "Deleting…" : "Delete forever")
+                        .fontWeight(.semibold)
+                    Spacer()
+                }
+                .padding(.vertical, 14)
+                .background(Theme.danger, in: RoundedRectangle(cornerRadius: 12))
+                .foregroundStyle(.white)
             }
-            Button("Cancel", role: .cancel) {
-                deleteConfirmationText = ""
-            }
-        } message: {
-            let handle = appState.currentProfile?.username.map { "@\($0)" } ?? "your username"
-            Text("Type DELETE or \(handle) to permanently delete this account.")
+            .disabled(accountActionBusy || deleteConfirmationText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
+        .padding(20)
+        .navigationTitle("Delete")
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     private func performDeactivate() async {
@@ -265,6 +332,7 @@ struct SettingsView: View {
         defer { accountActionBusy = false }
         do {
             try await appState.deactivateAccount()
+            accountSheet = nil
         } catch {
             accountActionError = error.localizedDescription
         }
@@ -281,6 +349,7 @@ struct SettingsView: View {
         defer { accountActionBusy = false }
         do {
             try await appState.deleteAccount(confirmation: confirmation)
+            accountSheet = nil
         } catch {
             accountActionError = error.localizedDescription
         }

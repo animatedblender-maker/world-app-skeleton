@@ -3,6 +3,8 @@ import SwiftUI
 struct MainTabView: View {
     @Environment(AppState.self) private var appState
     @State private var postToOpenAfterCreate: CountryPost?
+    /// Chat mini video hole (global) — continuous hubs player docks here without remounting.
+    @State private var hubContinuousDockSlotGlobal: CGRect?
 
     var body: some View {
         // Mini player lives OUTSIDE NavigationStack so chat / search / profile pushes
@@ -37,12 +39,8 @@ struct MainTabView: View {
                         .id(appState.selectedTab.rawValue)
                     }
 
-                    BottomTabBar()
-                        .zIndex(50)
-                        // Hide custom tab bar when a pushed screen (e.g. chat) is on top —
-                        // same visual as before, but mini player still floats above.
-                        .opacity(appState.navigationPath.isEmpty ? 1 : 0)
-                        .allowsHitTesting(appState.navigationPath.isEmpty)
+                    // Tab bar is drawn in the OUTER ZStack (below) so the mini player
+                    // can sit above it without covering the menu icons.
                 }
                 .sharePostSheet(appState: appState)
                 .overlay {
@@ -65,14 +63,47 @@ struct MainTabView: View {
                 }
             }
 
-            // Always above NavigationStack destinations (chat, profile, etc.).
-            GlobalHubPlaybackLayer()
-                .zIndex(40)
-                .allowsHitTesting(appState.hubPlaybackPost != nil)
+            // Mini chrome only (flush above tab bar). Video surface sits above this chrome
+            // so the continuous player paints into the video hole (not a white box).
+            VStack(spacing: 0) {
+                if showsFloatingMiniBar, let post = appState.hubPlaybackPost {
+                    YouTubeMiniPlayerBar(
+                        post: post,
+                        onExpand: { appState.expandHubPlayback() },
+                        onClose: { appState.stopHubPlayback() },
+                        embedsVideo: false,
+                        isPlaying: Binding(
+                            get: { appState.hubPlaybackPlaying },
+                            set: { appState.hubPlaybackPlaying = $0 }
+                        ),
+                        isMuted: Binding(
+                            get: { appState.hubPlaybackMuted },
+                            set: { appState.hubPlaybackMuted = $0 }
+                        )
+                    )
+                }
+                // Spacer matching tab bar height so mini stays flush above it when tab is shown.
+                if appState.navigationPath.isEmpty {
+                    Color.clear.frame(height: Theme.tabBarHeight)
+                }
+            }
+            .zIndex(50)
+
+            // Continuous AVPlayer — above mini chrome, below tab bar.
+            GlobalHubPlaybackLayer(dockSlotGlobal: hubContinuousDockSlotGlobal)
+                .zIndex(55)
+
+            // Tab bar on top for hit-testing; same vertical stack position as the clear spacer.
+            if appState.navigationPath.isEmpty {
+                BottomTabBar()
+                    .zIndex(70)
+            }
         }
-        // Do NOT ignore the keyboard safe area — that traps the keyboard open app-wide.
-        // Tap anywhere outside the keyboard (or scroll) collapses it — no Done bar.
-        .dismissKeyboardOnTap()
+        .onPreferenceChange(HubContinuousVideoSlotKey.self) { frame in
+            hubContinuousDockSlotGlobal = frame
+        }
+        // Keyboard dismiss is window-level (cancelsTouchesInView = false).
+        // Root dismissKeyboardOnTap() blocked Settings List taps.
         .onAppear {
             Keyboard.installDismissOnOutsideTap()
             appState.ensureHubPlaybackMinimizedIfNeeded()
@@ -90,6 +121,8 @@ struct MainTabView: View {
                 EngagementTracker.shared.hubsOpened()
             }
             EngagementTracker.shared.screenOpened(tab.rawValue)
+            // Feed stays mounted under Profile — clear focus so profile can elect its own winner.
+            FeedVideoFocus.shared.resetAll()
         }
         .onChange(of: appState.navigationPath.count) { _, count in
             // Opening chat (or any push) while expanded → collapse to mini, keep playing.
@@ -99,6 +132,8 @@ struct MainTabView: View {
             }
             // Left the pinned chat while mini → never force-return there on next minimize.
             appState.syncHubPlaybackChatReturnWithPath()
+            // Push/pop (e.g. public profile over feed) — re-elect autoplay on the live surface.
+            FeedVideoFocus.shared.resetAll()
         }
         .onChange(of: appState.navigationPath) { _, _ in
             appState.syncHubPlaybackChatReturnWithPath()
@@ -195,17 +230,23 @@ struct MainTabView: View {
         }
     }
 
+    /// Floating mini above the tab bar (not docked into chat).
+    private var showsFloatingMiniBar: Bool {
+        appState.hubPlaybackPost != nil
+            && !appState.hubPlaybackExpanded
+            && !appState.hubPlaybackDockInChat
+    }
+
     private var tabContentBottomInset: CGFloat {
-        let mini = appState.hubPlaybackPost != nil && !appState.hubPlaybackExpanded
-        return Theme.tabBarHeight + (mini ? YouTubeMiniPlayerBar.contentBottomInset - Theme.tabBarHeight : 0)
+        // Tab bar + mini strip flush on top of it (no gap).
+        Theme.tabBarHeight + (showsFloatingMiniBar ? YouTubeMiniPlayerBar.barHeight : 0)
     }
 
     /// Extra bottom space on pushed screens. Chat docks mini under its own composer — no float inset.
     private var miniPlayerContentInset: CGFloat {
-        guard appState.hubPlaybackPost != nil, !appState.hubPlaybackExpanded else { return 0 }
-        if appState.hubPlaybackDockInChat { return 0 }
-        // No tab bar on pushed routes — floating mini bar sits near the home indicator.
-        return YouTubeMiniPlayerBar.videoHeight + 28
+        guard showsFloatingMiniBar else { return 0 }
+        // No tab bar on pushed routes — mini sits at the bottom of the stack.
+        return YouTubeMiniPlayerBar.barHeight
     }
 
     @ViewBuilder

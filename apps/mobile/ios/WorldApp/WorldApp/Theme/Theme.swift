@@ -45,7 +45,10 @@ enum Theme {
     static let cardRadius: CGFloat = 12
     static let controlRadius: CGFloat = 8
     static let pagePadding: CGFloat = 16
+    /// Outer feed chrome (rarely used — prefer full-width cards + `pagePadding` on text).
     static let feedGutter: CGFloat = 14
+    /// Readable side inset for post body text on full-width feed cards.
+    static let feedTextInset: CGFloat = 16
     static let cardPadding: CGFloat = 12
     static let tabBarHeight: CGFloat = 49
 }
@@ -171,8 +174,8 @@ enum MatteryaCopy {
     static let hubsLoadError = "Couldn't load \(hubsBrand) right now. Pull to refresh or check your connection."
     static let hubsNoChannelVideos = "This creator hub has no videos on \(hubsBrand) yet."
     static let hubsVideoUnavailable = "This video isn't available on \(hubsBrand)."
-    static let postToYourFeed = "Post to your country feed"
-    static let shareToYourFeed = "Share to your country feed"
+    static let postToYourFeed = "Post to the main feed"
+    static let shareToYourFeed = "Share to the main feed"
     static let browsingForeignFeed = "Browsing another country"
     static let shareFromForeignHint = "Tap share on any post to add it to your home feed. You can only write posts in your own country."
     static let homeCountryOnlyPost = "You can only publish in your home country."

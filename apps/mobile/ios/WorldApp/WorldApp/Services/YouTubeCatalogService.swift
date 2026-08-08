@@ -195,8 +195,14 @@ final class YouTubeCatalogService {
     func buildChannels(from videos: [CountryPost], profiles: [String: Profile] = [:]) -> [YouTubeChannel] {
         let eligible = videos.filter(livingEligible)
         // Collapse every Archive / hub seed author into one channel id.
+        // Also: user-authored rows that only re-host Archive media must never form a personal channel.
         let grouped = Dictionary(grouping: eligible) { post -> String in
             if post.isHubSeedVideo || HubVideoSeedService.isArchiveChannelAuthor(post.authorID) {
+                return HubVideoSeedService.archiveChannelAuthorID
+            }
+            // Legacy feed shares of Archive clips (wrong author) → still The Archive, not the sharer.
+            if PlayPlatformBridge.isArchiveCatalogMedia(post),
+               !PlayPlatformBridge.isHubChannelUpload(post) {
                 return HubVideoSeedService.archiveChannelAuthorID
             }
             return post.authorID
@@ -210,7 +216,16 @@ final class YouTubeCatalogService {
             // Sharing a video to the feed must NEVER invent channel uploads for the sharer.
             let channelPosts: [CountryPost]
             if isArchive {
-                channelPosts = posts.filter { !PlayPlatformBridge.isHubOriginShare($0) }
+                // Seeds + catalog only — drop feed re-shares that were wrongly attributed here.
+                channelPosts = posts.filter { post in
+                    if PlayPlatformBridge.isHubFeedReshare(post) { return false }
+                    if PlayPlatformBridge.isHubOriginShare(post) { return false }
+                    // Keep true Archive catalog rows (seed author / seed flag / archive media with archive author).
+                    return post.isHubSeedVideo
+                        || HubVideoSeedService.isArchiveChannelAuthor(post.authorID)
+                        || (PlayPlatformBridge.isArchiveCatalogMedia(post)
+                            && HubVideoSeedService.isArchiveChannelAuthor(post.authorID))
+                }
             } else {
                 channelPosts = posts.filter { PlayPlatformBridge.isHubChannelUpload($0) }
             }
@@ -272,9 +287,27 @@ final class YouTubeCatalogService {
         followingIDs: Set<String>,
         viewerCountry: String?
     ) -> [CountryPost] {
-        let base = videos.filter { livingEligible($0) && !$0.isReel }
+        // For you / category shelves: long-form catalog rows.
+        // Archive seeds (ia_* / hub_archive) always pass — do not depend solely on belongsInHubsCatalog.
+        let base = videos.filter { post in
+            guard !post.isReel, !post.isStory else { return false }
+            guard post.hasVideo || post.playableVideoURL != nil else { return false }
+            let id = post.id.lowercased()
+            if post.isHubSeedVideo
+                || HubVideoSeedService.isArchiveChannelAuthor(post.authorID)
+                || id.hasPrefix("ia_") {
+                return true
+            }
+            return PlayPlatformBridge.belongsInHubsCatalog(post)
+        }
         switch homeFilter {
         case .all:
+            // Full Archive library is thousands of rows — never O(n²) rank the whole set.
+            // Stable order here; callers shuffle ONCE into @State so scroll doesn't re-shuffle
+            // (re-shuffling every body pass was janking Hubs For you + blanking thumbs).
+            if base.count > 40 {
+                return base.sorted { $0.id < $1.id }
+            }
             return ReelsRankingEngine.rank(base, viewerCountry: viewerCountry, followingIDs: followingIDs)
         case .trending:
             return base.sorted {
@@ -298,8 +331,10 @@ final class YouTubeCatalogService {
     }
 
     func reels(from videos: [CountryPost]) -> [CountryPost] {
-        videos.filter { livingEligible($0) && $0.isReel }
-            .sorted { $0.createdAt > $1.createdAt }
+        videos.filter {
+            livingEligible($0) && $0.isReel && PlayPlatformBridge.belongsInHubsCatalog($0)
+        }
+        .sorted { $0.createdAt > $1.createdAt }
     }
 
     func subscriptionFeed(
@@ -308,7 +343,11 @@ final class YouTubeCatalogService {
         followingIDs: Set<String>
     ) -> [CountryPost] {
         videos
-            .filter { livingEligible($0) && followingIDs.contains($0.authorID) }
+            .filter {
+                livingEligible($0)
+                    && followingIDs.contains($0.authorID)
+                    && PlayPlatformBridge.belongsInHubsCatalog($0)
+            }
             .sorted { $0.createdAt > $1.createdAt }
     }
 

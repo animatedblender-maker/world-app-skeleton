@@ -181,17 +181,55 @@ struct ChannelSetupView: View {
         defer { busy = false }
         do {
             let aboutText = about.trimmingCharacters(in: .whitespacesAndNewlines)
-            let profile = try await ProfileService.shared.updateProfile(
-                bio: LivingChannelMarker.buildBio(
-                    displayBio: aboutText,
-                    channelName: name
-                ).nilIfEmpty
+            // First-class channel (creator = this account). Server dual-writes bio marker.
+            _ = try await ChannelsService.shared.createChannel(
+                name: name,
+                about: aboutText.nilIfEmpty,
+                avatarURL: avatarURL
             )
-            appState.currentProfile = profile
+            // Refresh profile for LivingChannelMarker / older UI paths.
+            if let profile = try? await ProfileService.shared.meProfile() {
+                appState.currentProfile = profile
+            } else {
+                // Fallback dual-write if meProfile fails.
+                let profile = try await ProfileService.shared.updateProfile(
+                    bio: LivingChannelMarker.buildBio(
+                        displayBio: aboutText,
+                        channelName: name
+                    ).nilIfEmpty
+                )
+                appState.currentProfile = profile
+            }
             dismiss()
             onFinished?()
         } catch {
-            errorMessage = error.localizedDescription
+            // If channel already exists, still allow bio update and continue.
+            let msg = error.localizedDescription
+            if msg.localizedCaseInsensitiveContains("CHANNEL_ALREADY_EXISTS")
+                || msg.localizedCaseInsensitiveContains("already")
+            {
+                do {
+                    let aboutText = about.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if let existing = try await ChannelsService.shared.myChannel() {
+                        _ = try await ChannelsService.shared.updateChannel(
+                            id: existing.id,
+                            name: name,
+                            about: aboutText.nilIfEmpty,
+                            avatarURL: avatarURL
+                        )
+                    }
+                    if let profile = try? await ProfileService.shared.meProfile() {
+                        appState.currentProfile = profile
+                    }
+                    dismiss()
+                    onFinished?()
+                    return
+                } catch {
+                    errorMessage = error.localizedDescription
+                    return
+                }
+            }
+            errorMessage = msg
         }
     }
 }

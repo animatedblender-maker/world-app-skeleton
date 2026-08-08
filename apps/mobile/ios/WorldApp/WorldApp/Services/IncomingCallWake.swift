@@ -12,6 +12,12 @@ enum IncomingCallWake {
         let displayName: String
     }
 
+    /// True when a remote payload is an incoming call (used to warm CallKit only then).
+    static func looksLikeIncomingCall(_ userInfo: [AnyHashable: Any]?) -> Bool {
+        guard let userInfo else { return false }
+        return parse(userInfo) != nil
+    }
+
     @discardableResult
     static func handleIfNeeded(_ userInfo: [AnyHashable: Any]) -> Bool {
         guard let payload = parse(userInfo) else { return false }

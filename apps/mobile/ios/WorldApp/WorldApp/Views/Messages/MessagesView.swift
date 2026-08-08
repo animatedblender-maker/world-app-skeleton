@@ -32,7 +32,8 @@ struct MessagesView: View {
                             ConversationRow(conversation: conversation)
                                 .contentShape(Rectangle())
                                 .onTapGesture {
-                                    appState.openConversation(id: conversation.id)
+                                    // Pass seed so chat opens this frame — no "Opening chat…".
+                                    appState.openConversation(id: conversation.id, seed: conversation)
                                 }
                                 .listRowBackground(Theme.surface)
                                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
@@ -142,17 +143,19 @@ struct MessagesView: View {
     }
 
     private func openPendingConversation(_ conversationID: String) async {
-        if conversations.contains(where: { $0.id == conversationID }) {
-            appState.openConversation(id: conversationID)
+        if let existing = conversations.first(where: { $0.id == conversationID }) {
+            appState.openConversation(id: conversationID, seed: existing)
             return
         }
+        // Open immediately (placeholder/cache); soft-refresh metadata in the route.
+        appState.openConversation(id: conversationID)
 
         do {
             if let fetched = try await MessagesService.shared.getConversationById(conversationID) {
                 if !conversations.contains(where: { $0.id == fetched.id }) {
                     conversations.insert(fetched, at: 0)
                 }
-                appState.openConversation(id: conversationID)
+                MessagesService.shared.storeConversation(fetched)
             } else {
                 appState.showToast("Conversation not found.", style: .error)
                 appState.pendingConversationID = nil

@@ -88,12 +88,88 @@ final class MediaService {
         return (path, publicURL)
     }
 
+    /// Upload avatar without freezing UI.
+    /// - Token is read on MainActor; encode + HTTP PUT run on a **detached** executor
+    ///   (task-group children of `@MainActor` methods still inherit MainActor and freeze).
     func uploadAvatar(data: Data, fileExtension: String, mimeType: String) async throws -> (path: String, url: String) {
         guard let userID = AuthService.shared.currentUser?.id else { throw MediaError.notAuthenticated }
         if mimeType == "image/gif" { throw MediaError.uploadFailed("GIF avatars are disabled.") }
-        let path = "\(userID)/\(UUID().uuidString).\(fileExtension)"
-        try await upload(bucket: "avatars", path: path, data: data, mimeType: mimeType, upsert: true)
-        return (path, Self.publicAvatarURL(for: path))
+        guard !data.isEmpty else { throw MediaError.uploadFailed("Empty image data.") }
+
+        let token = try await AuthService.shared.ensureValidToken()
+        let anonKey = AppConfig.supabaseAnonKey
+        let supabaseURL = AppConfig.supabaseURL
+        let ext = fileExtension.isEmpty ? "jpg" : fileExtension
+        let path = "\(userID)/\(UUID().uuidString).\(ext)"
+
+        let publicURL = try await Self.putAvatarOffMainActor(
+            data: data,
+            path: path,
+            mimeType: mimeType,
+            token: token,
+            anonKey: anonKey,
+            supabaseURL: supabaseURL
+        )
+        return (path, publicURL)
+    }
+
+    /// Fully off MainActor: optional re-encode + URLSession PUT with timeout.
+    nonisolated private static func putAvatarOffMainActor(
+        data: Data,
+        path: String,
+        mimeType: String,
+        token: String,
+        anonKey: String,
+        supabaseURL: String
+    ) async throws -> String {
+        try await Task.detached(priority: .userInitiated) {
+            var payload = data
+            // Keep avatars small so upload stays snappy.
+            if payload.count > 900_000 {
+                payload = try PhotosPickerMediaLoader.normalizeToJPEG(
+                    payload,
+                    quality: 0.72,
+                    maxEdge: 1024
+                )
+            }
+
+            let encodedPath = path
+                .split(separator: "/")
+                .map { segment in
+                    segment.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? String(segment)
+                }
+                .joined(separator: "/")
+            guard let url = URL(string: "\(supabaseURL)/storage/v1/object/avatars/\(encodedPath)") else {
+                throw MediaError.uploadFailed("Invalid upload URL.")
+            }
+
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.timeoutInterval = 40
+            request.setValue(mimeType, forHTTPHeaderField: "Content-Type")
+            request.setValue(anonKey, forHTTPHeaderField: "apikey")
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue("true", forHTTPHeaderField: "x-upsert")
+            request.httpBody = payload
+
+            let config = URLSessionConfiguration.ephemeral
+            config.timeoutIntervalForRequest = 40
+            config.timeoutIntervalForResource = 45
+            config.waitsForConnectivity = true
+            let session = URLSession(configuration: config)
+            defer { session.invalidateAndCancel() }
+
+            let (responseData, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw MediaError.uploadFailed("No HTTP response.")
+            }
+            guard (200...299).contains(http.statusCode) else {
+                throw MediaError.uploadFailed(
+                    storageErrorMessage(from: responseData, statusCode: http.statusCode)
+                )
+            }
+            return publicAvatarURL(for: path)
+        }.value
     }
 
     nonisolated static func normalizedAvatarURL(_ url: String?) -> String? {
@@ -271,7 +347,7 @@ final class MediaService {
         return request
     }
 
-    private static func storageErrorMessage(from data: Data, statusCode: Int) -> String {
+    nonisolated private static func storageErrorMessage(from data: Data, statusCode: Int) -> String {
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             if let message = json["message"] as? String, !message.isEmpty {
                 return message

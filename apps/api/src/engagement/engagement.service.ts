@@ -2,8 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { pool } from '../db.js';
 import { enqueueOutbox } from '../kafka/outbox.js';
 import {
+  ContentEventTypes,
   EngagementEventTypes,
   KafkaTopics,
+  type ContentPostedPayload,
   type EngagementPayload,
 } from '../kafka/types.js';
 
@@ -248,6 +250,122 @@ export async function ingestEngagementBatch(
   };
 }
 
+/**
+ * Emit a content upload event the moment a post lands on the platform.
+ * - Postgres `entity_engagement_events` (report Uploads tab)
+ * - Kafka `matterya.posts` (ContentPosted) + `matterya.engagement` (live activity feed)
+ */
+export async function emitContentPosted(payload: ContentPostedPayload): Promise<void> {
+  const entityId = String(payload.entityId ?? '').trim();
+  const contentId = String(payload.contentId ?? '').trim();
+  if (!entityId || !contentId) return;
+
+  const client = await pool.connect();
+  const eventId = randomUUID();
+  const summary =
+    payload.summary?.trim() ||
+    `Someone uploaded ${payload.isSpark ? 'a Spark' : 'a post'} to Matterya`;
+  const surface =
+    payload.surface ??
+    (payload.destination === 'hubs'
+      ? 'hubs'
+      : payload.destination === 'sparks'
+        ? 'sparks'
+        : payload.destination === 'share'
+          ? 'feed'
+          : 'feed');
+
+  const engagementPayload: EngagementPayload = {
+    entityId,
+    contentId,
+    authorId: payload.authorId ?? entityId,
+    countryCode: payload.countryCode ?? null,
+    hubSlug: payload.hubSlug ?? payload.channelName ?? null,
+    mediaType: payload.mediaType ?? null,
+    isSpark: !!payload.isSpark,
+    strength: 1,
+    surface,
+    meta: {
+      summary,
+      destination: payload.destination ?? 'feed',
+      title: payload.title ?? null,
+      channelId: payload.channelId ?? null,
+      channelName: payload.channelName ?? null,
+      channelRole: payload.channelRole ?? null,
+      countryName: payload.countryName ?? null,
+      isHubLongForm: !!payload.isHubLongForm,
+      isMoment: !!payload.isMoment,
+      sharedPostId: payload.sharedPostId ?? null,
+      mediaUrl: payload.mediaUrl ? String(payload.mediaUrl).slice(0, 400) : null,
+    },
+  };
+
+  try {
+    await client.query('begin');
+    try {
+      await client.query(
+        `
+        insert into public.entity_engagement_events (
+          event_id, event_type, entity_id, content_id, author_id,
+          country_code, hub_slug, media_type, is_spark, strength,
+          duration_ms, progress, surface, device_class, session_id, meta, occurred_at
+        )
+        values (
+          $1, $2, $3, $4, $5,
+          $6, $7, $8, $9, $10,
+          null, null, $11, $12, null, $13::jsonb, now()
+        )
+        on conflict (event_id) do nothing
+        `,
+        [
+          eventId,
+          ContentEventTypes.Posted,
+          entityId,
+          contentId,
+          payload.authorId ?? entityId,
+          payload.countryCode ?? null,
+          payload.hubSlug ?? payload.channelName ?? null,
+          payload.mediaType ?? null,
+          !!payload.isSpark,
+          1,
+          surface,
+          'server',
+          JSON.stringify(engagementPayload.meta ?? {}),
+        ]
+      );
+    } catch (err: any) {
+      // Table missing — still try Kafka outbox.
+      if (err?.code !== '42P01') throw err;
+    }
+
+    // Domain topic for content lifecycle (R2 sync / stats consumers).
+    await enqueueOutbox(client, {
+      topic: KafkaTopics.POSTS,
+      partitionKey: contentId,
+      eventType: ContentEventTypes.Posted,
+      eventId,
+      producer: 'matterya-api-posts',
+      payload: { ...payload, summary } as unknown as Record<string, unknown>,
+    });
+    // Live activity topic (same console / report feed as likes & watches).
+    await enqueueOutbox(client, {
+      topic: KafkaTopics.ENGAGEMENT,
+      partitionKey: entityId,
+      eventType: ContentEventTypes.Posted,
+      eventId: randomUUID(),
+      producer: 'matterya-api-posts',
+      payload: engagementPayload as unknown as Record<string, unknown>,
+    });
+    await client.query('commit');
+    console.log(`[upload] ${summary}`);
+  } catch (err) {
+    await client.query('rollback');
+    console.warn('[upload] emitContentPosted failed', err);
+  } finally {
+    client.release();
+  }
+}
+
 /** Server-side emit for GraphQL likes/comments (same path → Kafka live feed). */
 export async function emitServerEngagement(opts: {
   entityId: string;
@@ -334,17 +452,23 @@ export const ACTION_LABELS: Record<string, string> = {
   [EngagementEventTypes.HubVideoOpened]: 'Opened a Hubs video',
   [EngagementEventTypes.ScreenOpened]: 'Opened a screen',
   [EngagementEventTypes.ScreenLeft]: 'Left a screen',
+  [ContentEventTypes.Posted]: 'Uploaded content',
+  [ContentEventTypes.Shared]: 'Shared content',
+  [ContentEventTypes.Deleted]: 'Deleted content',
 };
 
 const SURFACE_LABELS: Record<string, string> = {
   home: 'Home feed',
-  hubs: 'Hubs',
+  feed: 'Home feed',
+  hubs: 'Matterya Hubs',
   reels: 'Sparks',
+  sparks: 'Sparks',
   profile: 'Profile',
   search: 'Search',
   country: 'Country feed',
   api: 'App action',
   chat: 'Chat',
+  server: 'Platform / backend',
 };
 
 function actionLabel(eventType: string): string {
@@ -438,6 +562,32 @@ export type HumanEngagementReport = {
    */
   interactions: ActivityRow[];
   interactionCountReturned: number;
+  /**
+   * Every content upload in the window (feed / Spark / Hubs channel / share).
+   * Powered by Kafka ContentPosted → entity_engagement_events.
+   */
+  uploads: UploadActivityRow[];
+  uploadCount: number;
+};
+
+export type UploadActivityRow = {
+  timestamp: string;
+  when: string;
+  whenLocal: string;
+  /** Plain English: "Maya uploaded a Spark … from Germany" */
+  summary: string;
+  personId: string;
+  personName: string | null;
+  personUsername: string | null;
+  postId: string | null;
+  title: string | null;
+  destination: string;
+  where: string;
+  country: string | null;
+  channelName: string | null;
+  mediaType: string | null;
+  isSpark: boolean;
+  isHubLongForm: boolean;
 };
 
 export async function getEngagementReport(windowHours = 24): Promise<HumanEngagementReport> {
@@ -455,6 +605,8 @@ export async function getEngagementReport(windowHours = 24): Promise<HumanEngage
     stoppedToLook: { times: 0, averageLookTime: '—' },
     interactions: [],
     interactionCountReturned: 0,
+    uploads: [],
+    uploadCount: 0,
   };
 
   try {
@@ -583,6 +735,33 @@ export async function getEngagementReport(windowHours = 24): Promise<HumanEngage
     const lookTimes = Number(lookRows[0]?.n ?? 0);
     const avgLookMs = Number(lookRows[0]?.avg_ms ?? 0);
 
+    // Uploads tab — every ContentPosted (R2 / app / backend publish).
+    const { rows: uploadRows } = await pool.query(
+      `
+      select e.event_id::text,
+             e.entity_id::text,
+             e.content_id::text,
+             e.media_type,
+             e.is_spark,
+             e.surface,
+             e.country_code,
+             e.hub_slug,
+             e.meta,
+             e.occurred_at,
+             p.display_name,
+             p.username,
+             po.title as post_title
+      from public.entity_engagement_events e
+      left join public.profiles p on p.user_id = e.entity_id
+      left join public.posts po on po.id::text = e.content_id::text
+      where e.occurred_at > now() - ($1::text || ' hours')::interval
+        and e.event_type = $2
+      order by e.occurred_at desc
+      limit 500
+      `,
+      [String(hours), ContentEventTypes.Posted]
+    );
+
     const interactions: ActivityRow[] = allInteractions.map((r: any) => {
       const t = formatWhen(r.occurred_at);
       const interest = Number(r.strength);
@@ -591,6 +770,12 @@ export async function getEngagementReport(windowHours = 24): Promise<HumanEngage
       else if (interest >= 0.35) interestLabel = 'Interest';
       else if (interest > 0) interestLabel = 'Mild interest';
       else if (interest < 0) interestLabel = 'Low interest / passed by';
+
+      const meta = (r.meta && typeof r.meta === 'object' ? r.meta : {}) as Record<string, unknown>;
+      const summaryPreview =
+        typeof meta.summary === 'string' && meta.summary.trim()
+          ? meta.summary.trim()
+          : r.post_preview ?? null;
 
       return {
         timestamp: t.timestamp,
@@ -602,16 +787,62 @@ export async function getEngagementReport(windowHours = 24): Promise<HumanEngage
         personName: r.display_name ?? null,
         personUsername: r.username ?? null,
         postId: r.content_id,
-        postPreview: r.post_preview ?? null,
+        postPreview: summaryPreview,
         where: surfaceLabel(r.surface),
         lookTime: formatLookTime(r.duration_ms != null ? Number(r.duration_ms) : null),
         interest: interestLabel,
       };
     });
 
+    const uploads: UploadActivityRow[] = uploadRows.map((r: any) => {
+      const t = formatWhen(r.occurred_at);
+      const meta = (r.meta && typeof r.meta === 'object' ? r.meta : {}) as Record<string, unknown>;
+      const summary =
+        typeof meta.summary === 'string' && meta.summary.trim()
+          ? meta.summary.trim()
+          : `${r.display_name || r.username || 'Someone'} uploaded content`;
+      const countryName =
+        typeof meta.countryName === 'string' && meta.countryName.trim()
+          ? meta.countryName.trim()
+          : r.country_code
+            ? String(r.country_code).toUpperCase()
+            : null;
+      return {
+        timestamp: t.timestamp,
+        when: t.when,
+        whenLocal: t.whenLocal,
+        summary,
+        personId: r.entity_id,
+        personName: r.display_name ?? null,
+        personUsername: r.username ?? null,
+        postId: r.content_id,
+        title:
+          (typeof meta.title === 'string' && meta.title.trim()) ||
+          (r.post_title ? String(r.post_title).trim() : null) ||
+          null,
+        destination: String(meta.destination ?? r.surface ?? 'feed'),
+        where: surfaceLabel(r.surface),
+        country: countryName,
+        channelName:
+          typeof meta.channelName === 'string' && meta.channelName.trim()
+            ? meta.channelName.trim()
+            : r.hub_slug
+              ? String(r.hub_slug)
+              : null,
+        mediaType: r.media_type ?? null,
+        isSpark: !!r.is_spark || meta.destination === 'sparks',
+        isHubLongForm: !!meta.isHubLongForm,
+      };
+    });
+
     const summaryParts = [
       `${total} interaction${total === 1 ? '' : 's'} in the last ${hours} hour${hours === 1 ? '' : 's'}.`,
     ];
+    if (uploads.length > 0) {
+      summaryParts.push(
+        `${uploads.length} content upload${uploads.length === 1 ? '' : 's'} synced (feed / Sparks / Hubs).`
+      );
+    }
     if (lookTimes > 0) {
       summaryParts.push(
         `People stopped to look at posts ${lookTimes} time${lookTimes === 1 ? '' : 's'} (avg ${formatLookTime(avgLookMs) ?? '—'}).`
@@ -647,6 +878,8 @@ export async function getEngagementReport(windowHours = 24): Promise<HumanEngage
       },
       interactions,
       interactionCountReturned: interactions.length,
+      uploads,
+      uploadCount: uploads.length,
     };
   } catch (err: any) {
     if (err?.code === '42P01') {
@@ -660,7 +893,7 @@ export async function getEngagementReport(windowHours = 24): Promise<HumanEngage
   }
 }
 
-/** Simple HTML dashboard — open in browser with admin key. */
+/** Simple HTML dashboard — open in browser with admin key. Tabs: Activity | Uploads. */
 export function renderEngagementReportHtml(report: HumanEngagementReport): string {
   const esc = (s: unknown) =>
     String(s ?? '')
@@ -698,6 +931,22 @@ export function renderEngagementReportHtml(report: HumanEngagementReport): strin
     )
     .join('');
 
+  const uploadRows = (report.uploads ?? [])
+    .map(
+      (u) => `<tr>
+      <td style="white-space:nowrap;font-variant-numeric:tabular-nums">${esc(u.when)}</td>
+      <td style="white-space:nowrap;color:#666;font-size:12px">${esc(u.timestamp)}</td>
+      <td>${esc(u.summary)}</td>
+      <td>${esc(u.personName || u.personUsername || (u.personId ? u.personId.slice(0, 8) + '…' : '—'))}</td>
+      <td>${esc(u.title || '—')}</td>
+      <td>${esc(u.where)}</td>
+      <td>${esc(u.country || '—')}</td>
+      <td>${esc(u.channelName || '—')}</td>
+      <td>${esc(u.mediaType || '—')}</td>
+    </tr>`
+    )
+    .join('');
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -705,19 +954,24 @@ export function renderEngagementReportHtml(report: HumanEngagementReport): strin
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>${esc(report.title)}</title>
   <style>
-    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; margin: 24px; color: #111; background: #fafafa; }
-    h1 { font-size: 1.5rem; margin: 0 0 8px; }
-    .sub { color: #555; margin-bottom: 24px; max-width: 52rem; line-height: 1.45; }
-    .cards { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 28px; }
-    .card { background: #fff; border: 1px solid #e5e5e5; border-radius: 12px; padding: 14px 18px; min-width: 140px; }
-    .card b { display: block; font-size: 1.4rem; }
-    .card span { color: #666; font-size: 0.85rem; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; margin: 24px; color: #1c1917; background: #f8f6f2; }
+    h1 { font-size: 1.5rem; margin: 0 0 8px; font-weight: 600; }
+    .sub { color: #57534e; margin-bottom: 20px; max-width: 52rem; line-height: 1.45; }
+    .cards { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
+    .card { background: #fff; border: 1px solid #e7e5e4; border-radius: 12px; padding: 14px 18px; min-width: 140px; }
+    .card b { display: block; font-size: 1.4rem; color: #292524; }
+    .card span { color: #78716c; font-size: 0.85rem; }
+    .tabs { display: flex; gap: 8px; margin: 8px 0 20px; border-bottom: 1px solid #e7e5e4; padding-bottom: 0; }
+    .tab { appearance: none; border: 0; background: transparent; padding: 10px 16px; font: inherit; font-weight: 600; font-size: 13px; color: #78716c; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+    .tab.active { color: #1c1917; border-bottom-color: #7c6a4d; }
+    .panel { display: none; }
+    .panel.active { display: block; }
     h2 { font-size: 1.05rem; margin: 28px 0 10px; }
-    table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #e5e5e5; border-radius: 12px; overflow: hidden; font-size: 13px; }
-    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #eee; vertical-align: top; }
-    th { background: #f3f3f3; font-weight: 600; position: sticky; top: 0; }
-    tr:hover td { background: #f9f9ff; }
-    .meta { color: #888; font-size: 12px; margin-top: 24px; }
+    table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #e7e5e4; border-radius: 12px; overflow: hidden; font-size: 13px; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #f0eeea; vertical-align: top; }
+    th { background: #f3f1ec; font-weight: 600; position: sticky; top: 0; }
+    tr:hover td { background: #faf8f5; }
+    .meta { color: #a8a29e; font-size: 12px; margin-top: 24px; }
   </style>
 </head>
 <body>
@@ -725,35 +979,81 @@ export function renderEngagementReportHtml(report: HumanEngagementReport): strin
   <p class="sub">${esc(report.summary)}</p>
   <div class="cards">
     <div class="card"><b>${esc(report.totalInteractions)}</b><span>Total interactions</span></div>
+    <div class="card"><b>${esc(report.uploadCount ?? 0)}</b><span>Content uploads</span></div>
     <div class="card"><b>${esc(report.windowHours)}h</b><span>Time window</span></div>
     <div class="card"><b>${esc(report.stoppedToLook.times)}</b><span>Stopped to look</span></div>
     <div class="card"><b>${esc(report.stoppedToLook.averageLookTime)}</b><span>Avg look time</span></div>
   </div>
 
-  <h2>What people did</h2>
-  <table><thead><tr><th>Action</th><th>Count</th></tr></thead><tbody>${breakdown || '<tr><td colspan="2">None yet</td></tr>'}</tbody></table>
+  <div class="tabs" role="tablist">
+    <button type="button" class="tab active" data-tab="activity" role="tab">Activity</button>
+    <button type="button" class="tab" data-tab="uploads" role="tab">Uploads</button>
+  </div>
 
-  <h2>Most active people</h2>
-  <table><thead><tr><th>Name</th><th>Username</th><th>Interactions</th></tr></thead><tbody>${people || '<tr><td colspan="3">None yet</td></tr>'}</tbody></table>
+  <div id="panel-activity" class="panel active" role="tabpanel">
+    <h2>What people did</h2>
+    <table><thead><tr><th>Action</th><th>Count</th></tr></thead><tbody>${breakdown || '<tr><td colspan="2">None yet</td></tr>'}</tbody></table>
 
-  <h2>Every interaction (with time)</h2>
-  <p class="sub">Showing ${esc(report.interactionCountReturned)} of ${esc(report.totalInteractions)} (newest first). Each row has an exact timestamp.</p>
-  <table>
-    <thead>
-      <tr>
-        <th>When (UTC)</th>
-        <th>Exact timestamp</th>
-        <th>Action</th>
-        <th>Person</th>
-        <th>Post</th>
-        <th>Where</th>
-        <th>How long they looked</th>
-        <th>Interest</th>
-      </tr>
-    </thead>
-    <tbody>${rows || '<tr><td colspan="8">No interactions yet — open the app and like or view posts.</td></tr>'}</tbody>
-  </table>
-  <p class="meta">Generated ${esc(report.generatedAt)} · Live Kafka topic: matterya.engagement</p>
+    <h2>Most active people</h2>
+    <table><thead><tr><th>Name</th><th>Username</th><th>Interactions</th></tr></thead><tbody>${people || '<tr><td colspan="3">None yet</td></tr>'}</tbody></table>
+
+    <h2>Every interaction (with time)</h2>
+    <p class="sub">Showing ${esc(report.interactionCountReturned)} of ${esc(report.totalInteractions)} (newest first).</p>
+    <table>
+      <thead>
+        <tr>
+          <th>When (UTC)</th>
+          <th>Exact timestamp</th>
+          <th>Action</th>
+          <th>Person</th>
+          <th>Post</th>
+          <th>Where</th>
+          <th>How long they looked</th>
+          <th>Interest</th>
+        </tr>
+      </thead>
+      <tbody>${rows || '<tr><td colspan="8">No interactions yet — open the app and like or view posts.</td></tr>'}</tbody>
+    </table>
+  </div>
+
+  <div id="panel-uploads" class="panel" role="tabpanel">
+    <h2>Everything uploaded to the platform</h2>
+    <p class="sub">
+      Live sync via Kafka (<code>matterya.posts</code> + <code>matterya.engagement</code>).
+      Shows who uploaded, when, where (feed / Sparks / Hubs channel), and a plain-language summary.
+      Showing ${esc(report.uploadCount ?? 0)} upload(s) in this window.
+    </p>
+    <table>
+      <thead>
+        <tr>
+          <th>When (UTC)</th>
+          <th>Exact timestamp</th>
+          <th>What happened</th>
+          <th>Who</th>
+          <th>Title</th>
+          <th>Where</th>
+          <th>Country</th>
+          <th>Channel</th>
+          <th>Type</th>
+        </tr>
+      </thead>
+      <tbody>${uploadRows || '<tr><td colspan="9">No uploads yet — publish a feed post, Spark, or Hubs video (or seed R2 content through createPost).</td></tr>'}</tbody>
+    </table>
+  </div>
+
+  <p class="meta">Generated ${esc(report.generatedAt)} · Kafka: matterya.posts · matterya.engagement</p>
+  <script>
+    document.querySelectorAll('.tab').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var id = btn.getAttribute('data-tab');
+        document.querySelectorAll('.tab').forEach(function (b) { b.classList.remove('active'); });
+        document.querySelectorAll('.panel').forEach(function (p) { p.classList.remove('active'); });
+        btn.classList.add('active');
+        var panel = document.getElementById('panel-' + id);
+        if (panel) panel.classList.add('active');
+      });
+    });
+  </script>
 </body>
 </html>`;
 }

@@ -15,15 +15,19 @@ enum FacebookMediaLayout {
     /// Max height for in-feed photos — tall enough for 4:5 immersion on phones.
     static let maxFeedMediaHeight: CGFloat = 520
 
-    /// In-feed video height: at least ~55% of screen so two videos rarely fit together.
+    /// In-feed video height — Facebook-like tall card (one dominant video per viewport).
+    /// Taller than 16:9 so the post feels immersive; still leaves room for chrome.
     static func dominantFeedVideoHeight(
         forWidth width: CGFloat = UIScreen.main.bounds.width,
         screenHeight: CGFloat = UIScreen.main.bounds.height
     ) -> CGFloat {
-        let classic = width / feedVideoAspect
-        let minDominant = screenHeight * 0.55
-        let maxDominant = screenHeight * 0.68
-        return min(max(classic, minDominant), maxDominant)
+        let classic16x9 = width / feedVideoAspect
+        // FB mobile feed videos read closer to ~4:5 immersion than flat 16:9.
+        let fbLike = width / photoPortraitAspect
+        let minDominant = screenHeight * 0.58
+        let maxDominant = min(screenHeight * 0.72, maxFeedMediaHeight + 80)
+        let preferred = max(classic16x9 * 1.35, min(fbLike, maxDominant))
+        return min(max(preferred, minDominant), maxDominant)
     }
 
     static func mediaHeight(for width: CGFloat, post: CountryPost, context: MediaContext = .feed) -> CGFloat {

@@ -1,5 +1,8 @@
 import { pool } from '../../../db.js';
-import { emitServerEngagement } from '../../../engagement/engagement.service.js';
+import {
+  emitContentPosted,
+  emitServerEngagement,
+} from '../../../engagement/engagement.service.js';
 import { EngagementEventTypes } from '../../../kafka/types.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 
@@ -275,13 +278,18 @@ export class PostsService {
 
   async postsByCountry(code: string, limit: number, viewerId: string | null): Promise<PostRow[]> {
     const iso = (code || '').toUpperCase();
+    // Deep enough for full R2 focus-country catalogs (per-country hundreds of Sparks).
+    const safeLimit = Math.max(1, Math.min(500, limit || 25));
     const savedByMe = await this.savedByMeExpr('$3::uuid');
     const savedByMeShared = await this.savedByMeSharedExpr('$3::uuid');
     const { rows } = await pool.query(
       `
       select
         p.*,
-        (select count(*)::int from public.post_likes pl where pl.post_id = p.id) as like_count,
+        greatest(
+          coalesce(p.like_count, 0),
+          (select count(*)::int from public.post_likes pl where pl.post_id = p.id)
+        ) as like_count,
         (select count(*)::int from public.post_comments pc where pc.post_id = p.id) as comment_count,
         case
           when $3::uuid is not null
@@ -316,7 +324,10 @@ export class PostsService {
             'media_url', sp.media_url,
             'thumb_url', sp.thumb_url,
             'visibility', sp.visibility,
-            'like_count', (select count(*)::int from public.post_likes spl where spl.post_id = sp.id),
+            'like_count', greatest(
+              coalesce(sp.like_count, 0),
+              (select count(*)::int from public.post_likes spl where spl.post_id = sp.id)
+            ),
             'comment_count', (select count(*)::int from public.post_comments spc where spc.post_id = sp.id),
             'liked_by_me', case
               when $3::uuid is not null
@@ -365,7 +376,7 @@ export class PostsService {
       order by p.created_at desc, p.id desc
       limit $2
       `,
-      [iso, Math.max(1, limit), viewerId]
+      [iso, safeLimit, viewerId]
     );
 
     return withoutMoments(rows as PostRow[]);
@@ -394,7 +405,10 @@ export class PostsService {
         `
         select
           p.*,
-          (select count(*)::int from public.post_likes pl where pl.post_id = p.id) as like_count,
+          greatest(
+          coalesce(p.like_count, 0),
+          (select count(*)::int from public.post_likes pl where pl.post_id = p.id)
+        ) as like_count,
           (select count(*)::int from public.post_comments pc where pc.post_id = p.id) as comment_count,
           case
             when $2::uuid is not null
@@ -429,7 +443,10 @@ export class PostsService {
               'media_url', sp.media_url,
               'thumb_url', sp.thumb_url,
               'visibility', sp.visibility,
-              'like_count', (select count(*)::int from public.post_likes spl where spl.post_id = sp.id),
+              'like_count', greatest(
+              coalesce(sp.like_count, 0),
+              (select count(*)::int from public.post_likes spl where spl.post_id = sp.id)
+            ),
               'comment_count', (select count(*)::int from public.post_comments spc where spc.post_id = sp.id),
               'liked_by_me', case
                 when $2::uuid is not null
@@ -474,7 +491,10 @@ export class PostsService {
       `
       select
         p.*,
-        (select count(*)::int from public.post_likes pl where pl.post_id = p.id) as like_count,
+        greatest(
+          coalesce(p.like_count, 0),
+          (select count(*)::int from public.post_likes pl where pl.post_id = p.id)
+        ) as like_count,
         (select count(*)::int from public.post_comments pc where pc.post_id = p.id) as comment_count,
         case
           when $2::uuid is not null
@@ -509,7 +529,10 @@ export class PostsService {
             'media_url', sp.media_url,
             'thumb_url', sp.thumb_url,
             'visibility', sp.visibility,
-            'like_count', (select count(*)::int from public.post_likes spl where spl.post_id = sp.id),
+            'like_count', greatest(
+              coalesce(sp.like_count, 0),
+              (select count(*)::int from public.post_likes spl where spl.post_id = sp.id)
+            ),
             'comment_count', (select count(*)::int from public.post_comments spc where spc.post_id = sp.id),
             'liked_by_me', case
               when $2::uuid is not null
@@ -566,7 +589,8 @@ export class PostsService {
     viewerId: string | null,
     before?: string | null
   ): Promise<PostRow[]> {
-    const safeLimit = Math.max(1, Math.min(100, limit || 25));
+    // Allow deep pages so full R2 focus catalogs (thousands of rows) are reachable via cursor.
+    const safeLimit = Math.max(1, Math.min(500, limit || 25));
     const savedByMe = await this.savedByMeExpr('$2::uuid');
     const savedByMeShared = await this.savedByMeSharedExpr('$2::uuid');
     const params: Array<string | number | null> = [safeLimit, viewerId];
@@ -576,7 +600,10 @@ export class PostsService {
       `
       select
         p.*,
-        (select count(*)::int from public.post_likes pl where pl.post_id = p.id) as like_count,
+        greatest(
+          coalesce(p.like_count, 0),
+          (select count(*)::int from public.post_likes pl where pl.post_id = p.id)
+        ) as like_count,
         (select count(*)::int from public.post_comments pc where pc.post_id = p.id) as comment_count,
         case
           when $2::uuid is not null
@@ -611,7 +638,10 @@ export class PostsService {
             'media_url', sp.media_url,
             'thumb_url', sp.thumb_url,
             'visibility', sp.visibility,
-            'like_count', (select count(*)::int from public.post_likes spl where spl.post_id = sp.id),
+            'like_count', greatest(
+              coalesce(sp.like_count, 0),
+              (select count(*)::int from public.post_likes spl where spl.post_id = sp.id)
+            ),
             'comment_count', (select count(*)::int from public.post_comments spc where spc.post_id = sp.id),
             'liked_by_me', case
               when $2::uuid is not null
@@ -681,7 +711,10 @@ export class PostsService {
       )
       select
         p.*,
-        (select count(*)::int from public.post_likes pl where pl.post_id = p.id) as like_count,
+        greatest(
+          coalesce(p.like_count, 0),
+          (select count(*)::int from public.post_likes pl where pl.post_id = p.id)
+        ) as like_count,
         (select count(*)::int from public.post_comments pc where pc.post_id = p.id) as comment_count,
         case
           when $4::uuid is not null
@@ -716,7 +749,10 @@ export class PostsService {
             'media_url', sp.media_url,
             'thumb_url', sp.thumb_url,
             'visibility', sp.visibility,
-            'like_count', (select count(*)::int from public.post_likes spl where spl.post_id = sp.id),
+            'like_count', greatest(
+              coalesce(sp.like_count, 0),
+              (select count(*)::int from public.post_likes spl where spl.post_id = sp.id)
+            ),
             'comment_count', (select count(*)::int from public.post_comments spc where spc.post_id = sp.id),
             'liked_by_me', case
               when $4::uuid is not null
@@ -841,9 +877,18 @@ export class PostsService {
     const thumbUrl = mediaType === 'none' ? null : (input.thumb_url ?? null);
 
     // Channel publishes: stamp hub channel marker so older clients still catalog as Hubs.
-    // Never stamp channel marker on feed shares (origin / shared_post).
+    // Never stamp channel marker on feed shares (origin / shared_post / Archive re-hosts).
+    const mediaUrlLower = String(mediaUrl ?? '').toLowerCase();
+    const isArchiveMedia =
+      mediaUrlLower.includes('archive.org') ||
+      mediaUrlLower.includes('ia800') ||
+      mediaUrlLower.includes('ia600');
     const isFeedShare =
-      !!sharedPostId || body.includes('__hub_origin__|');
+      !!sharedPostId ||
+      body.includes('__hub_origin__|') ||
+      body.includes('__spark_share__|') ||
+      // Self-contained re-share of Internet Archive catalog media (no shared_post_id).
+      (isArchiveMedia && (mediaType === 'video' || mediaType === 'reel'));
     if (
       channelId &&
       !isMoment &&
@@ -855,7 +900,7 @@ export class PostsService {
     }
 
     // GraphQL Post.body is non-null, so never return null here.
-    const bodyValue = body.length ? body : '';
+    let bodyValue = body.length ? body : '';
 
     // Bind channel_id only for intentional hub-channel publishes — never for feed shares.
     if (!channelId && bodyValue.includes('__hub_channel__|') && !isFeedShare) {
@@ -869,8 +914,17 @@ export class PostsService {
       }
     }
     // Feed shares must not attach to the sharer's channel row.
+    // Also strip a mistaken hub_channel stamp on Archive re-shares so they never
+    // appear as the sharer's own channel uploads.
     if (isFeedShare) {
       channelId = null;
+      if (bodyValue.includes('__hub_channel__|')) {
+        bodyValue = bodyValue
+          .split('\n')
+          .map((l) => l.trim())
+          .filter((l) => l && !l.startsWith('__hub_channel__|') && l !== '__hub_channel__|')
+          .join('\n');
+      }
     }
 
     const { rows } = await pool.query(
@@ -905,7 +959,151 @@ export class PostsService {
 
     const post = await this.postByIdForViewer(createdId, actorId);
     if (!post) throw new Error('Newly created post not found.');
+
+    // Immediate platform sync → Kafka + Uploads report (feed / Spark / Hubs / share).
+    void this.emitUploadEvent({
+      actorId,
+      authorId,
+      postId: createdId,
+      title: input.title?.trim() || null,
+      body: bodyValue,
+      mediaType,
+      mediaUrl,
+      countryCode: iso || null,
+      countryName: input.country_name ?? null,
+      cityName: input.city_name ?? null,
+      channelId,
+      postedByUserId,
+      sharedPostId,
+      isMoment,
+    });
+
     return presentPostRow(post);
+  }
+
+  /** Plain-language upload line + Kafka ContentPosted (stats / report tab). */
+  private async emitUploadEvent(opts: {
+    actorId: string;
+    authorId: string;
+    postId: string;
+    title: string | null;
+    body: string;
+    mediaType: string | null;
+    mediaUrl: string | null;
+    countryCode: string | null;
+    countryName: string | null;
+    cityName: string | null;
+    channelId: string | null;
+    postedByUserId: string | null;
+    sharedPostId: string | null;
+    isMoment: boolean;
+  }): Promise<void> {
+    try {
+      const { rows: actorRows } = await pool.query<{
+        display_name: string | null;
+        username: string | null;
+      }>(
+        `select display_name, username from public.profiles where user_id = $1::uuid limit 1`,
+        [opts.actorId]
+      );
+      const actorName =
+        actorRows[0]?.display_name?.trim() ||
+        (actorRows[0]?.username ? `@${actorRows[0].username}` : null) ||
+        'Someone';
+
+      let channelName: string | null = null;
+      let channelRole: string | null = null;
+      if (opts.channelId) {
+        const { rows: ch } = await pool.query<{ name: string; owner_user_id: string }>(
+          `select name, owner_user_id from public.channels where id = $1::uuid limit 1`,
+          [opts.channelId]
+        );
+        channelName = ch[0]?.name?.trim() || null;
+        if (ch[0]?.owner_user_id) {
+          channelRole = ch[0].owner_user_id === opts.actorId ? 'owner' : 'admin';
+        }
+      }
+
+      const isSpark =
+        opts.mediaType === 'reel' ||
+        opts.body.includes('__spark__|') ||
+        opts.body.includes('__spark_share__|');
+      const isShare = !!opts.sharedPostId || opts.body.includes('__hub_origin__|');
+      const isHubLongForm =
+        !!opts.channelId ||
+        opts.body.includes('__hub_channel__|') ||
+        (!!opts.mediaUrl &&
+          (opts.mediaUrl.toLowerCase().includes('longform/') ||
+            opts.mediaUrl.toLowerCase().includes('matterya-sparks')));
+      const place =
+        opts.cityName?.trim() ||
+        opts.countryName?.trim() ||
+        (opts.countryCode ? opts.countryCode.toUpperCase() : null);
+      const titleBit = opts.title?.trim() ? `"${opts.title.trim()}"` : null;
+
+      let destination = 'feed';
+      let summary: string;
+      if (opts.isMoment) {
+        destination = 'moment';
+        summary = place
+          ? `${actorName} shared a Moment from ${place}`
+          : `${actorName} shared a Moment`;
+      } else if (isShare) {
+        destination = 'share';
+        summary = place
+          ? `${actorName} shared a post to the feed from ${place}`
+          : `${actorName} shared a post to the feed`;
+      } else if (isSpark && opts.channelId) {
+        destination = 'sparks';
+        summary = channelName
+          ? `${actorName} uploaded a Spark${titleBit ? ' ' + titleBit : ''} as ${channelRole || 'staff'} to channel “${channelName}” in Matterya Hubs${place ? ` (${place})` : ''}`
+          : `${actorName} uploaded a Spark${titleBit ? ' ' + titleBit : ''} to a Hubs channel`;
+      } else if (isSpark) {
+        destination = 'sparks';
+        summary = place
+          ? `${actorName} uploaded a Spark${titleBit ? ' ' + titleBit : ''} to Matterya Sparks from ${place}`
+          : `${actorName} uploaded a Spark${titleBit ? ' ' + titleBit : ''} to Matterya Sparks`;
+      } else if (opts.channelId || (isHubLongForm && opts.body.includes('__hub_channel__|'))) {
+        destination = 'hubs';
+        summary = channelName
+          ? `${actorName} uploaded a Hub video${titleBit ? ' ' + titleBit : ''} as ${channelRole || 'staff'} to channel “${channelName}” in Matterya Hubs${place ? ` (${place})` : ''}`
+          : `${actorName} uploaded a Hub video${titleBit ? ' ' + titleBit : ''} to Matterya Hubs${place ? ` from ${place}` : ''}`;
+      } else if (opts.mediaType === 'video' || opts.mediaType === 'image') {
+        destination = 'feed';
+        summary = place
+          ? `${actorName} uploaded a ${opts.mediaType === 'image' ? 'photo' : 'video'} post to the feed from ${place}`
+          : `${actorName} uploaded a ${opts.mediaType === 'image' ? 'photo' : 'video'} post to the feed`;
+      } else {
+        destination = 'feed';
+        summary = place
+          ? `${actorName} published a post to the feed from ${place}`
+          : `${actorName} published a post to the feed`;
+      }
+
+      await emitContentPosted({
+        entityId: opts.actorId,
+        contentId: opts.postId,
+        authorId: opts.authorId,
+        mediaType: opts.mediaType,
+        countryCode: opts.countryCode,
+        countryName: opts.countryName,
+        cityName: opts.cityName,
+        isSpark,
+        isHubLongForm: isHubLongForm && !isSpark,
+        isMoment: opts.isMoment,
+        sharedPostId: opts.sharedPostId,
+        channelId: opts.channelId,
+        channelName,
+        channelRole,
+        title: opts.title,
+        summary,
+        surface: destination === 'hubs' ? 'hubs' : destination === 'sparks' ? 'sparks' : 'feed',
+        mediaUrl: opts.mediaUrl,
+        destination,
+      });
+    } catch (err) {
+      console.warn('[posts] emitUploadEvent failed', err);
+    }
   }
 
   async updatePost(
@@ -1468,7 +1666,10 @@ export class PostsService {
       `
       select
         p.*,
-        (select count(*)::int from public.post_likes pl where pl.post_id = p.id) as like_count,
+        greatest(
+          coalesce(p.like_count, 0),
+          (select count(*)::int from public.post_likes pl where pl.post_id = p.id)
+        ) as like_count,
         (select count(*)::int from public.post_comments pc where pc.post_id = p.id) as comment_count,
         case
           when $2::uuid is not null
@@ -1503,7 +1704,10 @@ export class PostsService {
             'media_url', sp.media_url,
             'thumb_url', sp.thumb_url,
             'visibility', sp.visibility,
-            'like_count', (select count(*)::int from public.post_likes spl where spl.post_id = sp.id),
+            'like_count', greatest(
+              coalesce(sp.like_count, 0),
+              (select count(*)::int from public.post_likes spl where spl.post_id = sp.id)
+            ),
             'comment_count', (select count(*)::int from public.post_comments spc where spc.post_id = sp.id),
             'liked_by_me', case
               when $2::uuid is not null

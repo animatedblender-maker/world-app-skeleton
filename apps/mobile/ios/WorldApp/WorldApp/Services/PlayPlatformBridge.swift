@@ -15,18 +15,90 @@ enum PlayPlatformBridge {
         if HubChannelPostMarker.isMarked(post.body) { return true }
         if HubOriginShareMarker.isMarked(post.body) { return true }
         if HubVideoSeedService.isArchiveChannelAuthor(post.authorID) { return true }
+        // User-authored row that still carries Archive/catalog media (legacy re-share).
+        if isArchiveCatalogMedia(post) { return true }
         let id = post.id.lowercased()
         if id.hasPrefix("ia_") || id.hasPrefix("hub_") || id.hasPrefix("hub_spark_") { return true }
         return false
     }
 
+    /// Internet Archive / seed-catalog media — always The Archive, never a personal upload.
+    static func isArchiveCatalogMedia(_ post: CountryPost) -> Bool {
+        if post.isHubSeedVideo { return true }
+        if let url = post.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) {
+            return true
+        }
+        let media = (post.mediaURL ?? "").lowercased()
+        if media.contains("archive.org") { return true }
+        let thumb = (post.thumbURL ?? "").lowercased()
+        if thumb.contains("archive.org") { return true }
+        // Catalog ids stamped onto media payloads / external refs.
+        let id = post.id.lowercased()
+        if id.hasPrefix("ia_") || id.hasPrefix("hub_spark_") { return true }
+        if let ext = post.externalRefID?.lowercased(),
+           ext.hasPrefix("ia_") || ext.hasPrefix("hub_") {
+            return true
+        }
+        return false
+    }
+
+    /// Feed re-share of Hubs/Archive content (not an intentional channel publish).
+    /// Covers origin stamps **and** legacy shares that only copied Archive media.
+    static func isHubFeedReshare(_ post: CountryPost) -> Bool {
+        isFeedOnlyShare(post)
+    }
+
+    /// Anything that belongs **only** on the home feed as a share card — never Hubs
+    /// “For you”, channels, Sparks-for-you, library uploads, etc.
+    /// Sharer identity is irrelevant on Hubs/Sparks surfaces.
+    static func isFeedOnlyShare(_ post: CountryPost) -> Bool {
+        if post.isStory { return false }
+        // Explicit share stamps.
+        if isHubOriginShare(post) { return true }
+        if SparkShareMarker.isMarked(post.body) { return true }
+        if post.isSparkFeedShare { return true }
+        // Pointer re-post (not an intentional channel publish).
+        if let shared = post.sharedPostID, !shared.isEmpty,
+           !HubChannelPostMarker.isMarked(post.body) {
+            return true
+        }
+        // Real person as author + Archive/catalog media = re-share of The Archive.
+        if isArchiveCatalogMedia(post),
+           !HubVideoSeedService.isArchiveChannelAuthor(post.authorID),
+           !post.isHubSeedVideo {
+            return true
+        }
+        // Live user row with video but no channel-publish marker is never a Hubs catalog item
+        // (includes old shares that only copied media without stamps).
+        if isLikelyLiveUserAuthor(post.authorID),
+           post.hasVideo,
+           !HubChannelPostMarker.isMarked(post.body),
+           !post.isHubSeedVideo,
+           !HubVideoSeedService.isArchiveChannelAuthor(post.authorID) {
+            return true
+        }
+        return false
+    }
+
+    /// True UUID / live account authors (not hub_* / archive personas).
+    static func isLikelyLiveUserAuthor(_ authorID: String) -> Bool {
+        let id = authorID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return false }
+        if HubVideoSeedService.isArchiveChannelAuthor(id) { return false }
+        if id.hasPrefix("hub_") || id.hasPrefix("user_") || id.hasPrefix("demo_") { return false }
+        return UUID(uuidString: id) != nil
+    }
+
     /// Intentional Hubs **channel upload** only (creator/admin published to Hubs).
-    /// Feed shares, re-posts, and origin stamps never count as “my channel” videos.
+    /// Feed shares, re-posts, Archive media, and origin stamps never count as “my channel” videos.
     static func isHubChannelUpload(_ post: CountryPost) -> Bool {
         guard post.hasVideo, !post.isStory else { return false }
         // Sharing someone else’s clip is never an upload to the sharer’s channel.
-        if isHubOriginShare(post) { return false }
+        if isFeedOnlyShare(post) { return false }
         if post.sharedPostID != nil { return false }
+        // Archive media can never become a personal channel video — even if an older
+        // client/server wrongly stamped `__hub_channel__|` on a feed share.
+        if isArchiveCatalogMedia(post) { return false }
         // Requires explicit channel publish marker (createLivingVideo / hub spark publish).
         return HubChannelPostMarker.isMarked(post.body)
     }
@@ -36,16 +108,53 @@ enum PlayPlatformBridge {
         HubOriginShareMarker.isMarked(post.body)
     }
 
+    /// Single gate for **every** Hubs surface (For you, shelves, channels, library, sparks rail in Hubs).
+    /// Feed-only shares never pass. Intentional channel publishes + optional Archive seeds.
+    static func belongsInHubsCatalog(_ post: CountryPost) -> Bool {
+        guard !post.isStory else { return false }
+        let archiveOn = AppConfig.archiveContentEnabled
+        // Archive / seed catalog — only when AppConfig.archiveContentEnabled.
+        if post.isHubSeedVideo {
+            guard archiveOn else { return false }
+            return post.hasVideo || post.playableVideoURL != nil
+        }
+        if HubVideoSeedService.isArchiveChannelAuthor(post.authorID) {
+            guard archiveOn else { return false }
+            return post.hasVideo || post.playableVideoURL != nil
+        }
+        let id = post.id.lowercased()
+        if (id.hasPrefix("ia_") || id.hasPrefix("hub_spark_"))
+            && !isLikelyLiveUserAuthor(post.authorID) {
+            guard archiveOn else { return false }
+            return post.hasVideo || post.playableVideoURL != nil
+        }
+        // Live rows that only re-host archive.org media stay out while Archive is off.
+        if !archiveOn, isArchiveCatalogMedia(post) { return false }
+        guard post.hasVideo else { return false }
+        // Hub origin shares open in Hubs but must not invent a personal channel for the sharer.
+        // They still belong in For you / related rails as catalog content.
+        if isHubOriginShare(post) { return true }
+        if isFeedOnlyShare(post) { return false }
+        // R2 longform + sparks stamped as channel publishes (country Hubs channels).
+        if isHubChannelUpload(post) { return true }
+        // Explicit LongForm R2 path even if marker was stripped.
+        if let media = (post.mediaURL ?? post.playableVideoURL?.absoluteString)?.lowercased() {
+            if media.contains("longform/") || media.contains("/longform") {
+                return !post.isReel
+            }
+            // Other matterya-sparks media: longform videos only (not sparks path).
+            if media.contains("matterya-sparks"), !post.isReel,
+               !media.contains("/spark"), !media.contains("/sparks/") {
+                return true
+            }
+        }
+        return false
+    }
+
     /// Content that may appear in the Hubs catalog shelves — not necessarily “owned” by author.
     /// Excludes feed shares so they never invent a channel for the sharer.
     static func isHubCatalogOwnedContent(_ post: CountryPost) -> Bool {
-        guard post.hasVideo, !post.isStory else { return false }
-        if isHubOriginShare(post) { return false }
-        if post.sharedPostID != nil, !isHubChannelUpload(post) { return false }
-        if post.isHubSeedVideo || HubVideoSeedService.isArchiveChannelAuthor(post.authorID) {
-            return true
-        }
-        return isHubChannelUpload(post)
+        belongsInHubsCatalog(post)
     }
 
     /// Post model used for Hubs watch UI (original channel, not the sharer).
@@ -144,12 +253,29 @@ enum PlayPlatformBridge {
     }
 
     /// Hub catalog long-form only — opens Hubs watch / shows Hubs badge in feed.
+    /// Never Sparks or Spark re-shares (those use SparkFeedCard → infinite Sparks player).
     static func isHubFeedCardVideo(_ post: CountryPost) -> Bool {
-        isHubCatalogContent(post) && post.hasVideo && !post.isReel && !post.isStory
+        guard isHubCatalogContent(post), post.hasVideo, !post.isStory else { return false }
+        // Spark chrome wins over Hubs chrome.
+        if post.isReel || post.isSparkFeedShare || SparkShareMarker.isMarked(post.body) {
+            return false
+        }
+        return true
     }
 
     static func isReelVideo(_ post: CountryPost) -> Bool {
         isPlayEligible(post) && post.isReel
+    }
+
+    /// True when the feed should show a Spark card (original or re-share).
+    static func isSparkFeedCard(_ post: CountryPost) -> Bool {
+        if post.isStory { return false }
+        if post.isSparkFeedShare || SparkShareMarker.isMarked(post.body) { return true }
+        if post.isReel || isReelVideo(post) { return true }
+        if let embed = post.sharedPost?.asCountryPost, embed.isReel || isReelVideo(embed) {
+            return true
+        }
+        return false
     }
 
     static func preferredPlayTab(for post: CountryPost) -> YouTubeMainTab {
@@ -157,6 +283,9 @@ enum PlayPlatformBridge {
     }
 
     static func shareURL(for post: CountryPost) -> URL {
+        if isSparkFeedCard(post) {
+            return URL(string: "https://matterya.com/post/\(post.sharedPostID ?? post.id)")!
+        }
         if isHubCatalogContent(post), post.hasVideo {
             return URL(string: "https://matterya.com/play/watch/\(post.sharedPostID ?? post.id)")!
         }
@@ -165,8 +294,11 @@ enum PlayPlatformBridge {
 
     /// Only true hub long-form gets the feed Hubs card + badge.
     /// Plain feed videos use the normal inline player (same controls, no badge).
+    /// Sparks / Spark shares never take this path.
     static func showsPlayLinkInFeed(_ post: CountryPost, context: MediaContext = .feed) -> Bool {
-        isHubFeedCardVideo(post) && context == .feed
+        guard context == .feed else { return false }
+        if isSparkFeedCard(post) { return false }
+        return isHubFeedCardVideo(post)
     }
 
     static func channelURL(authorID: String, username: String?) -> URL {

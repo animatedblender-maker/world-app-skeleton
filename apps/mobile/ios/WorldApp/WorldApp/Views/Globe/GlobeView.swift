@@ -5,15 +5,17 @@ struct GlobeView: View {
 
     var body: some View {
         ZStack {
-            AppleMapGlobeView(resetGlobe: appState.selectedCountry == nil) { country in
-                appState.selectCountry(country)
-                appState.navigate(to: .countryFeed(country))
-            }
+            // Presence-only globe — countries are not tappable; all posts live on main feed.
+            AppleMapGlobeView(
+                resetGlobe: true,
+                allowsCountrySelection: false,
+                onSelectCountry: { _ in }
+            )
             .ignoresSafeArea()
 
             VStack(spacing: 0) {
                 MatteryaTopBar(showsSearch: true) {
-                    appState.searchPrefersCountries = true
+                    appState.searchPrefersCountries = false
                     appState.navigate(to: .search)
                 }
                 Spacer(minLength: 0)

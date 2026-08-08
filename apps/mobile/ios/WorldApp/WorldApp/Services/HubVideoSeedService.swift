@@ -1,14 +1,43 @@
 import Foundation
 
-/// Internet Archive / hub_video_seed loader for Matterya Hubs + Sparks.
+/// Hub catalog loader for Matterya Hubs + Sparks (Internet Archive / R2 media).
 ///
 /// Loads `hub_videos.jsonl` and maps rows to playable `CountryPost` videos.
+/// **All catalog videos + Sparks belong to one channel: The Archive.**
+/// Category shelves (`hub_slug`) still group content for browsing; channel identity is unified.
 /// **Spark rule:** duration under 60 seconds → `mediaType = "reel"` (Sparks feed).
+///
+/// **Disabled by default** via `AppConfig.archiveContentEnabled` — seed file + helpers stay
+/// so we can re-enable without restoring deleted code. When off, all APIs return empty.
 actor HubVideoSeedService {
     static let shared = HubVideoSeedService()
 
     /// Clips shorter than this become Sparks (vertical reels).
     static let sparkMaxDurationSeconds: Double = 60
+
+    /// Mirror of `AppConfig.archiveContentEnabled` (readable from actor isolation).
+    private static var contentEnabled: Bool { AppConfig.archiveContentEnabled }
+
+    // MARK: - The Archive (single catalog channel)
+
+    /// Stable author id for every hub seed long-form + Spark.
+    static let archiveChannelAuthorID = "hub_archive"
+    /// Public channel name shown on cards, watch, shares, and Sparks.
+    static let archiveChannelDisplayName = "The Archive"
+    /// @handle for The Archive channel.
+    static let archiveChannelUsername = "the_archive"
+
+    /// True for the unified Archive channel (and legacy per-hub seed author ids).
+    static func isArchiveChannelAuthor(_ authorID: String?) -> Bool {
+        guard let raw = authorID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !raw.isEmpty
+        else { return false }
+        if raw == archiveChannelAuthorID { return true }
+        // Legacy seed authors before the single-channel unification.
+        if raw.hasPrefix("hub_spark_") { return true }
+        if raw.hasPrefix("hub_") { return true }
+        return false
+    }
 
     private var videos: [CountryPost] = []
     private var videosByID: [String: CountryPost] = [:]
@@ -29,53 +58,65 @@ actor HubVideoSeedService {
     private var attributions: [String: HubVideoMeta] = [:]
 
     /// Ordered hub shelves (long-form). Keep in sync with `YouTubeHomeFilter.hubCategories`.
-    /// Shorts still land under these hubs as Sparks.
+    /// Shorts still land under these hubs as Sparks — but channel is always The Archive.
     static let hubOrder = [
         "social", "travel", "nature", "music", "food", "sports",
         "tech", "fitness", "film", "culture", "daily",
     ]
 
-    /// Human-readable channel name for hub seed cards / attribution.
+    /// Human-readable channel name — always **The Archive** (single catalog channel).
+    /// `hubSlug` / `isSpark` kept for call-site compatibility; ignored for display.
     static func channelDisplayName(hubSlug: String, isSpark: Bool = false) -> String {
-        let slug = hubSlug.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let titled: String = {
-            switch slug {
-            case "social": return "Social"
-            case "travel": return "Travel"
-            case "nature": return "Nature"
-            case "music": return "Music"
-            case "food": return "Food"
-            case "sports": return "Sports"
-            case "tech": return "Tech"
-            case "fitness": return "Fitness"
-            case "film": return "Film"
-            case "culture": return "Culture"
-            case "daily": return "Daily"
-            case "": return isSpark ? "Sparks" : "Hubs"
-            default:
-                return slug
-                    .split(separator: "_")
-                    .map { $0.prefix(1).uppercased() + $0.dropFirst() }
-                    .joined(separator: " ")
-            }
-        }()
-        return isSpark ? "\(titled) Sparks" : titled
+        _ = hubSlug
+        _ = isSpark
+        return archiveChannelDisplayName
     }
 
     func allVideos() async -> [CountryPost] {
+        guard Self.contentEnabled else { return [] }
         await loadIfNeeded()
+        // If a previous load produced a suspiciously thin catalog, force re-read the seed file.
+        if videos.count < 200 {
+            await forceReload()
+        }
         return videos
+    }
+
+    /// Drop in-memory catalog and re-read the largest available seed file.
+    func forceReload() async {
+        guard Self.contentEnabled else {
+            didLoad = true
+            videos = []
+            videosByID = [:]
+            videosByHub = [:]
+            sparkVideos = []
+            attributions = [:]
+            return
+        }
+        didLoad = false
+        videos = []
+        videosByID = [:]
+        videosByHub = [:]
+        sparkVideos = []
+        attributions = [:]
+        await loadFromDiskOrRemote()
+        didLoad = true
     }
 
     /// Hub long-form only (not Sparks).
     func longFormVideos() async -> [CountryPost] {
+        guard Self.contentEnabled else { return [] }
         await loadIfNeeded()
+        if videos.count < 200 {
+            await forceReload()
+        }
         return videos.filter { !$0.isReel }
     }
 
     /// Slug-capped long-form catalog for Hubs home shelves (matches TF `catalogLongFormVideos`).
     /// Caps per hub so the first paint stays light; full channel lists still use `videos(forHub:)`.
     func catalogLongFormVideos(perHub: Int = 8) async -> [CountryPost] {
+        guard Self.contentEnabled else { return [] }
         await loadIfNeeded()
         var out: [CountryPost] = []
         var counts: [String: Int] = [:]
@@ -94,6 +135,7 @@ actor HubVideoSeedService {
     ///   - limit: Max clips to return (default all).
     ///   - shuffleSeed: When set, deterministic shuffle so each open feels fresh.
     func sparkSeedVideos(limit: Int? = nil, shuffleSeed: UInt64? = nil) async -> [CountryPost] {
+        guard Self.contentEnabled else { return [] }
         await loadIfNeeded()
         var result = sparkVideos
         if let shuffleSeed {
@@ -120,32 +162,82 @@ actor HubVideoSeedService {
     }
 
     func videos(forHub slug: String) async -> [CountryPost] {
+        guard Self.contentEnabled else { return [] }
         await loadIfNeeded()
         return videosByHub[slug.lowercased()] ?? []
     }
 
     func post(id: String) async -> CountryPost? {
+        guard Self.contentEnabled else { return nil }
         await loadIfNeeded()
         return videosByID[id]
     }
 
+    /// Match a feed/share media URL back to the catalog persona channel (not the sharer).
+    func postMatchingMediaURL(_ mediaURL: String?) async -> CountryPost? {
+        guard Self.contentEnabled else { return nil }
+        guard let raw = mediaURL?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            return nil
+        }
+        await loadIfNeeded()
+        let needle = Self.normalizeMediaKey(raw)
+        for post in videos {
+            guard let candidate = post.mediaURL ?? post.playableVideoURL?.absoluteString else { continue }
+            if Self.normalizeMediaKey(candidate) == needle {
+                return post
+            }
+            // Archive items often share the same item path with different derivatives.
+            if needle.contains("archive.org"), candidate.lowercased().contains("archive.org") {
+                if Self.archiveItemKey(needle) == Self.archiveItemKey(candidate.lowercased()),
+                   !Self.archiveItemKey(needle).isEmpty {
+                    return post
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func normalizeMediaKey(_ url: String) -> String {
+        url.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "http://", with: "https://")
+    }
+
+    /// `archive.org/download/<item>/...` → item identifier.
+    private static func archiveItemKey(_ url: String) -> String {
+        guard let range = url.range(of: "archive.org/download/") else { return "" }
+        let rest = url[range.upperBound...]
+        return String(rest.split(separator: "/").first ?? "")
+    }
+
     func meta(forPostID id: String) async -> HubVideoMeta? {
+        guard Self.contentEnabled else { return nil }
         await loadIfNeeded()
         return attributions[id]
     }
 
     func isHubVideoID(_ id: String) async -> Bool {
+        guard Self.contentEnabled else { return false }
         await loadIfNeeded()
         return videosByID[id] != nil
     }
 
     private func loadIfNeeded() async {
         if didLoad { return }
+        // Keep seed pipeline intact; skip disk/network when Archive is gated off.
+        guard Self.contentEnabled else {
+            didLoad = true
+            #if DEBUG
+            print("[HubVideoSeed] SKIPPED — AppConfig.archiveContentEnabled = false")
+            #endif
+            return
+        }
         await loadFromDiskOrRemote()
         didLoad = true
     }
 
     private func loadFromDiskOrRemote() async {
+        guard Self.contentEnabled else { return }
         if let path = Self.resolveJSONLPath() {
             await streamFile(path: path)
         }
@@ -184,8 +276,10 @@ actor HubVideoSeedService {
 
     private func apply(_ batch: [CountryPost]) {
         guard !batch.isEmpty else { return }
+        // Never shrink a healthy catalog with a smaller/corrupt batch.
+        if !videos.isEmpty, batch.count + 50 < videos.count { return }
         videos = batch
-        videosByID = Dictionary(uniqueKeysWithValues: batch.map { ($0.id, $0) })
+        videosByID = Dictionary(batch.map { ($0.id, $0) }, uniquingKeysWith: { _, newest in newest })
         videosByHub = [:]
         sparkVideos = []
         for post in batch {
@@ -209,15 +303,26 @@ actor HubVideoSeedService {
         if lowerURL.contains("video_ts") || lowerURL.hasSuffix(".vob") || lowerURL.hasSuffix(".iso") {
             return nil
         }
-        let thumb = media?["thumb_url"] as? String
+        // Prefer Archive services/img over nested `.thumbs/` (much faster on mobile).
+        let rawThumb = media?["thumb_url"] as? String
+        let thumb: String? = {
+            if let id = MediaURLResolver.archiveItemIdentifier(from: mediaURL) {
+                return "https://archive.org/services/img/\(id)"
+            }
+            if let rawThumb,
+               let id = MediaURLResolver.archiveItemIdentifier(from: rawThumb) {
+                return "https://archive.org/services/img/\(id)"
+            }
+            return rawThumb
+        }()
         let creator = (row["creator"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let attribution = (row["attribution"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
             ?? {
                 let t = title ?? "Untitled"
-                let who = creator ?? "Internet Archive"
+                let who = (creator?.isEmpty == false) ? creator! : Self.archiveChannelDisplayName
                 let lic = (row["license"] as? String) ?? ""
                 let item = (row["item_url"] as? String) ?? ""
-                return "\"\(t)\" by \(who) — Internet Archive — \(lic) — \(item)"
+                return "\"\(t)\" by \(who) — \(Self.archiveChannelDisplayName) — \(lic) — \(item)"
             }()
         let itemURL = row["item_url"] as? String
         let license = row["license"] as? String
@@ -231,12 +336,12 @@ actor HubVideoSeedService {
         let isSpark = (duration != nil && duration! > 0 && duration! <= Self.sparkMaxDurationSeconds) || taggedSpark
         let mediaType = isSpark ? "reel" : "video"
 
-        let authorID = isSpark ? "hub_spark_\(hubSlug)" : "hub_\(hubSlug)"
-        let displayName = (creator?.isEmpty == false) ? creator! : (isSpark ? "Sparks" : "Internet Archive")
+        // One channel owns every catalog long-form + Spark (R2 / Archive media).
+        let authorID = Self.archiveChannelAuthorID
         let author = PostAuthor(
             userID: authorID,
-            displayName: displayName,
-            username: isSpark ? "sparks_\(hubSlug)" : hubSlug,
+            displayName: Self.archiveChannelDisplayName,
+            username: Self.archiveChannelUsername,
             avatarURL: nil,
             countryName: nil,
             countryCode: nil,
@@ -276,8 +381,9 @@ actor HubVideoSeedService {
             cityName: nil,
             author: author,
             linkURL: itemURL,
-            linkTitle: "Internet Archive",
+            linkTitle: Self.archiveChannelDisplayName,
             externalRefType: "hub",
+            // Keep category slug for shelves / filters; channel identity is always The Archive.
             externalRefID: hubSlug
         )
 
@@ -337,14 +443,14 @@ actor HubVideoSeedService {
 
     private static func resolveJSONLPath() -> String? {
         let fm = FileManager.default
-        // v4: large funny/shorts Archive fill — bump so old small caches are replaced.
+        // v6: always prefer the largest seed (bundle) over a thin/corrupt device cache.
         let cacheDir = fm.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("hub_video_seed_v5", isDirectory: true)
+            .appendingPathComponent("hub_video_seed_v6", isDirectory: true)
         try? fm.createDirectory(at: cacheDir, withIntermediateDirectories: true)
         let cacheFile = cacheDir.appendingPathComponent("hub_videos.jsonl").path
 
         let candidates = candidateSeedPaths().filter { fm.fileExists(atPath: $0) }
-        // Largest non-empty source is the best seed.
+        // Largest non-empty source is the best seed (~4MB full Archive library).
         let bestSource = candidates
             .compactMap { path -> (String, Int)? in
                 guard let attrs = try? fm.attributesOfItem(atPath: path),
@@ -359,7 +465,8 @@ actor HubVideoSeedService {
         if let bestSource {
             let bestSize = (try? fm.attributesOfItem(atPath: bestSource)[.size] as? NSNumber)?.intValue ?? 0
             let cacheSize = (try? fm.attributesOfItem(atPath: cacheFile)[.size] as? NSNumber)?.intValue ?? 0
-            if cacheSize < bestSize {
+            // Replace cache whenever source is larger OR cache is suspiciously small (< 1MB).
+            if cacheSize < bestSize || cacheSize < 1_000_000 {
                 try? fm.removeItem(atPath: cacheFile)
                 try? fm.copyItem(atPath: bestSource, toPath: cacheFile)
             }
@@ -367,9 +474,10 @@ actor HubVideoSeedService {
 
         if fm.fileExists(atPath: cacheFile),
            let size = try? fm.attributesOfItem(atPath: cacheFile)[.size] as? NSNumber,
-           size.intValue > 100 {
+           size.intValue > 1_000_000 {
             return cacheFile
         }
+        // Prefer the full bundle file over a tiny cache.
         return bestSource
     }
 }

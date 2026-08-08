@@ -140,57 +140,207 @@ final class PostsService {
         return merged
     }
 
-    /// Live network posts only (no demo filler) — used by `HomeFeedStore` bootstrap.
-    /// Pages past short organic spam so DE forum seeds (with real comments) surface.
+    /// Launch markets — feed must surface all four, not only the viewer's home country.
+    private static let focusMarketCodes = ["US", "DE", "EG", "AL"]
+
+    /// **Smooth first paint** after sign-in / cold open.
+    /// One GraphQL page + tiny own-posts pull. No multi-page walks, no hubs catalog.
+    /// Infinite scroll / pull-to-refresh load the rest.
+    func fetchFirstPaintHomePosts(limit: Int = 40) async -> [CountryPost] {
+        await prepareFeedContext()
+        let pageLimit = min(max(limit, 24), 48)
+        async let recentTask = fetchRecentPosts(limit: pageLimit)
+        async let ownTask = fetchOwnPosts(limit: 8)
+        let recent = await recentTask
+        let own = await ownTask
+
+        var combined = own + recent
+        combined = combined
+            .excludingMoments()
+            .excludingSparks()
+            .excludingArchiveContent()
+            .filter { post in
+                if post.authorID.hasPrefix("user_") || post.id.hasPrefix("post_") { return false }
+                if post.id.hasPrefix("demo_") { return false }
+                if post.isHubSeedVideo { return false }
+                return true
+            }
+        let me = currentAuthorID()
+        var merged = sessionFreshOrder(combined, pinAuthorID: me)
+        if merged.count > pageLimit {
+            merged = Array(merged.prefix(pageLimit))
+        }
+        return merged
+    }
+
+    /// Live network posts for pull-to-refresh / deeper revalidate (still bounded for smoothness).
     func fetchNetworkHomePosts(limit: Int = 80) async -> [CountryPost] {
         await prepareFeedContext()
-        async let ownTask = fetchOwnPosts(limit: max(limit / 2, 20))
-        async let followingTask = loadFollowingFeed(limitPerAuthor: 4)
-        // Walk recent pages — single page is flooded by short organic one-liners.
-        async let globalTask = fetchRecentTextPosts(limit: max(limit, 120))
-        async let homeCountryTask = fetchHomeCountryPosts(limit: max(limit, 60))
+        let cap = min(max(limit, 40), 100)
+        // Parallel but shallow — 1 recent page + light focus sample + own. No 12-page walks.
+        async let ownTask = fetchOwnPosts(limit: 12)
+        async let recentTask = fetchRecentPosts(limit: min(cap, 60))
+        async let focusTask = fetchFocusMarketPosts(limit: min(48, cap))
 
         let own = await ownTask
-        let following = await followingTask
-        let global = await globalTask
-        let homeCountry = await homeCountryTask
+        let recent = await recentTask
+        let focus = await focusTask
 
         var combined: [CountryPost] = []
         combined.append(contentsOf: own)
-        combined.append(contentsOf: homeCountry)
-        combined.append(contentsOf: following)
-        combined.append(contentsOf: global)
+        combined.append(contentsOf: focus)
+        combined.append(contentsOf: recent)
 
-        // Strict newest-first — new posts always surface above older seed/forum content.
+        // No recommender yet — random session order so the feed always feels new.
         var merged = chronologicalNewestFirst(combined)
             .excludingMoments()
-            .excludingSparks()
-        // Keep backend seed posts (real UUIDs — DE MPC / organic). Drop only offline fakes.
-        merged = merged.filter { post in
-            if post.authorID.hasPrefix("user_") || post.id.hasPrefix("post_") { return false }
-            if post.id.hasPrefix("demo_") { return false }
-            if post.isHubSeedVideo { return false }
-            return true
-        }
-        if merged.count > limit {
-            merged = Array(merged.prefix(limit))
+            .excludingSparks() // originals stay in Sparks player; spark *shares* pass through
+            .excludingArchiveContent()
+            .filter { post in
+                if post.authorID.hasPrefix("user_") || post.id.hasPrefix("post_") { return false }
+                if post.id.hasPrefix("demo_") { return false }
+                if post.isHubSeedVideo { return false }
+                return true
+            }
+        merged = balanceFocusMarkets(merged, limit: cap)
+        let me = currentAuthorID()
+        merged = sessionFreshOrder(merged, pinAuthorID: me)
+        if merged.count > cap {
+            merged = Array(merged.prefix(cap))
         }
         if merged.isEmpty {
-            merged = chronologicalNewestFirst(
-                await fallbackFeedPosts(limit: limit).excludingSparks()
-                    .filter { !$0.authorID.hasPrefix("user_") && !$0.id.hasPrefix("post_") }
+            merged = sessionFreshOrder(
+                await fallbackFeedPosts(limit: cap).excludingSparks()
+                    .filter { !$0.authorID.hasPrefix("user_") && !$0.id.hasPrefix("post_") },
+                pinAuthorID: me
             )
         }
         return merged
     }
 
-    /// Walk `recentPosts` pages until we have enough non-spark text/feed items.
-    private func fetchRecentTextPosts(limit: Int) async -> [CountryPost] {
-        var collected: [CountryPost] = []
+    /// Prefer Spark shares and video rows near the head without fully breaking recency.
+    private func rankFeedForSparkDensity(_ posts: [CountryPost]) -> [CountryPost] {
+        guard posts.count > 8 else { return posts }
+        // Soft interleave: take windows of ~12 newest, put spark shares / video first inside each window.
+        var out: [CountryPost] = []
+        out.reserveCapacity(posts.count)
+        let window = 12
+        var i = 0
+        while i < posts.count {
+            let end = min(posts.count, i + window)
+            var slice = Array(posts[i..<end])
+            slice.sort { a, b in
+                let aspark = a.isSparkFeedShare || a.isHubOriginFeedShare || (a.hasVideo && !a.isSpark)
+                let bspark = b.isSparkFeedShare || b.isHubOriginFeedShare || (b.hasVideo && !b.isSpark)
+                if aspark != bspark { return aspark && !bspark }
+                return a.createdAt > b.createdAt
+            }
+            out.append(contentsOf: slice)
+            i = end
+        }
+        return out
+    }
+
+    /// Round-robin US / DE / EG / AL so the home feed isn't one-country heavy.
+    private func balanceFocusMarkets(_ posts: [CountryPost], limit: Int) -> [CountryPost] {
+        guard posts.count > 12 else { return posts }
+        var buckets: [String: [CountryPost]] = Dictionary(
+            uniqueKeysWithValues: Self.focusMarketCodes.map { ($0, []) }
+        )
+        var other: [CountryPost] = []
+        for post in posts {
+            let code = (post.countryCode ?? "").uppercased()
+            if buckets[code] != nil {
+                buckets[code, default: []].append(post)
+            } else {
+                other.append(post)
+            }
+        }
+        var out: [CountryPost] = []
+        out.reserveCapacity(min(limit, posts.count))
+        var indices = Dictionary(uniqueKeysWithValues: Self.focusMarketCodes.map { ($0, 0) })
+        while out.count < limit {
+            var added = false
+            for code in Self.focusMarketCodes {
+                let list = buckets[code] ?? []
+                let i = indices[code] ?? 0
+                guard i < list.count else { continue }
+                out.append(list[i])
+                indices[code] = i + 1
+                added = true
+                if out.count >= limit { break }
+            }
+            if !added { break }
+        }
+        // Append remaining non-focus after a balanced core.
+        if out.count < limit {
+            var seen = Set(out.map(\.id))
+            for post in other where seen.insert(post.id).inserted {
+                out.append(post)
+                if out.count >= limit { break }
+            }
+        }
+        // Fill any leftover slots from unused focus items.
+        if out.count < limit {
+            var seen = Set(out.map(\.id))
+            for code in Self.focusMarketCodes {
+                for post in buckets[code] ?? [] where seen.insert(post.id).inserted {
+                    out.append(post)
+                    if out.count >= limit { break }
+                }
+                if out.count >= limit { break }
+            }
+        }
+        return out
+    }
+
+    /// Explicit pull from each launch market (GraphQL postsByCountry).
+    private func fetchFocusMarketPosts(limit: Int) async -> [CountryPost] {
+        let per = max(10, min(20, limit / max(Self.focusMarketCodes.count, 1)))
+        var combined: [CountryPost] = []
+        await withTaskGroup(of: [CountryPost].self) { group in
+            for code in Self.focusMarketCodes {
+                group.addTask {
+                    ((try? await self.listByCountry(code, limit: per)) ?? [])
+                        .excludingMoments()
+                        .excludingSparks()
+                }
+            }
+            for await batch in group {
+                combined.append(contentsOf: batch)
+            }
+        }
+        return chronologicalNewestFirst(combined)
+    }
+
+    /// Deep pull of R2 Spark *originals* from all four focus countries for the Sparks player.
+    private func fetchFocusMarketSparks(limitPerCountry: Int = 100) async -> [CountryPost] {
+        var combined: [CountryPost] = []
+        await withTaskGroup(of: [CountryPost].self) { group in
+            for code in Self.focusMarketCodes {
+                group.addTask {
+                    let batch = (try? await self.listByCountry(code, limit: limitPerCountry)) ?? []
+                    return batch.filter { ReelsRankingEngine.isSparkEligible($0) }
+                }
+            }
+            for await batch in group {
+                combined.append(contentsOf: batch)
+            }
+        }
+        return combined
+    }
+
+    /// Walk `recentPosts` pages until we have enough feed items (spark shares + text + long video).
+    private func fetchRecentFeedPosts(limit: Int, preferSparkShares: Bool) async -> [CountryPost] {
+        var sparkShares: [CountryPost] = []
+        var other: [CountryPost] = []
         var seen = Set<String>()
         var before: String? = nil
-        for _ in 0..<20 {
-            let batch = await fetchRecentPosts(limit: 100, before: before)
+        // Max 2 pages — smoothness first; scroll load-more covers the long tail.
+        let maxPages = 2
+        let stopAt = max(limit, 80)
+        for _ in 0..<maxPages {
+            let batch = await fetchRecentPosts(limit: min(60, stopAt), before: before)
                 .filter { post in
                     !post.isSpark && !post.isStory
                         && !post.authorID.hasPrefix("user_")
@@ -199,14 +349,30 @@ final class PostsService {
             if batch.isEmpty { break }
             for post in batch {
                 guard seen.insert(post.id).inserted else { continue }
-                collected.append(post)
-                if collected.count >= limit { return collected }
+                if preferSparkShares,
+                   post.isSparkFeedShare
+                    || post.isHubOriginFeedShare
+                    || post.hasVideo {
+                    sparkShares.append(post)
+                } else {
+                    other.append(post)
+                }
             }
             before = batch.last?.createdAt
-            if batch.count < 40 { break }
+            if batch.count < 30 { break }
+            if sparkShares.count + other.count >= stopAt { break }
         }
-        // Keep page order stable as newest-first.
-        return chronologicalNewestFirst(collected)
+        // Lead with spark shares / video, then other feed posts (recency within each group).
+        let head = chronologicalNewestFirst(sparkShares)
+        let tail = chronologicalNewestFirst(other)
+        var merged = head + tail
+        if merged.count > limit { merged = Array(merged.prefix(limit)) }
+        return merged
+    }
+
+    /// Walk `recentPosts` pages until we have enough non-spark text/feed items.
+    private func fetchRecentTextPosts(limit: Int) async -> [CountryPost] {
+        await fetchRecentFeedPosts(limit: limit, preferSparkShares: false)
     }
 
     /// Paginated home page for infinite scroll (cursor = createdAt of last item).
@@ -233,7 +399,8 @@ final class PostsService {
         let network = await fetchRecentPosts(limit: max(limit, 20), before: cursor)
             .excludingMoments()
             .excludingSparks()
-        let items = Array(network.prefix(limit))
+        // Shuffle each page so infinite-scroll never feels chronological.
+        let items = Array(sessionFreshOrder(network).prefix(limit))
         let next = HomeFeedStore.cursor(from: items.last)
         return HomeFeedPage(
             items: items,
@@ -278,13 +445,15 @@ final class PostsService {
         await prepareFeedContext()
 
         var candidates: [CountryPost] = []
-        let recent = await fetchRecentPosts(limit: fetchLimit, before: cursor)
+        // One recent page per request — endless scroll pages the rest.
+        let recent = await fetchRecentPosts(limit: min(max(fetchLimit, 40), 80), before: cursor)
         candidates.append(contentsOf: recent)
 
         if cursor == nil {
+            // First Sparks open only — tiny pool so player presents immediately.
             let pool = await loadReelsPool(
-                followingLimitPerAuthor: followingLimitPerAuthor,
-                globalLimit: max(fetchLimit, 40)
+                followingLimitPerAuthor: min(followingLimitPerAuthor, 4),
+                globalLimit: min(max(fetchLimit, 16), 24)
             )
             candidates.append(contentsOf: pool)
         }
@@ -294,6 +463,8 @@ final class PostsService {
             guard seenCandidateIDs.insert(post.id).inserted else { return false }
             return ReelsRankingEngine.isSparkEligible(post)
         }
+        // No recommender yet — full random order each batch (R2 still preferred over Archive).
+        candidates = ReelsRankingEngine.prioritizeR2First(candidates)
 
         let batch = ReelsRankingEngine.nextBatch(
             from: candidates,
@@ -354,9 +525,11 @@ final class PostsService {
             }
         }
 
-        appendVideos(await fetchOwnPosts(limit: globalLimit))
-        appendVideos(await fetchHomeCountryPosts(limit: globalLimit))
-        appendVideos(await fetchRecentPosts(limit: globalLimit))
+        appendVideos(await fetchOwnPosts(limit: min(globalLimit, 12)))
+        // One recent page only — swipe load-more fills the stack.
+        appendVideos(await fetchRecentPosts(limit: min(max(globalLimit, 24), 40)))
+        // Tiny multi-country sample (not 4×80).
+        appendVideos(await fetchFocusMarketSparks(limitPerCountry: 12))
 
         if !followingIDs.isEmpty {
             await withTaskGroup(of: [CountryPost].self) { group in
@@ -377,92 +550,345 @@ final class PostsService {
         return videos
     }
 
+    /// Country longform channel handles (R2 LongForm seed). Prefer *1 variants.
+    private static let focusLongformChannelHandles: [(code: String, handles: [String])] = [
+        ("US", ["stateside_stories1", "stateside_stories"]),
+        ("DE", ["doku_deutschland1", "doku_deutschland"]),
+        ("EG", ["egypt_docs1", "egypt_docs"]),
+        ("AL", ["dokumentar_al1", "dokumentar_al"]),
+    ]
+
+    /// Cached channel owner UUIDs (handle → userID) so Hubs never re-resolves usernames every open.
+    private var hubOwnerIDByHandle: [String: String] = [:]
+
+    /// In-process Hubs catalog — survives tab switches without disk/network.
+    private(set) var hubsSessionCatalog: [CountryPost] = []
+    private var hubsSessionLoadedAt: Date?
+
+    func rememberHubsSessionCatalog(_ posts: [CountryPost]) {
+        guard !posts.isEmpty else { return }
+        hubsSessionCatalog = posts
+        hubsSessionLoadedAt = Date()
+    }
+
+    /// True when session memory is good enough for an instant Hubs re-open.
+    func hubsSessionIsWarm(minLongForm: Int = 8) -> Bool {
+        hubsSessionCatalog.filter { !$0.isReel }.count >= minLongForm
+    }
+
+    private func resolveHubOwnerID(handles: [String]) async -> String? {
+        for handle in handles {
+            let key = handle.lowercased()
+            if let cached = hubOwnerIDByHandle[key], !cached.isEmpty {
+                return cached
+            }
+        }
+        for handle in handles {
+            let key = handle.lowercased()
+            if let profile = try? await ProfileService.shared.profileByUsername(handle),
+               !profile.userID.isEmpty {
+                hubOwnerIDByHandle[key] = profile.userID
+                // Alias sibling handles to the same owner so next open is free.
+                for h in handles {
+                    hubOwnerIDByHandle[h.lowercased()] = profile.userID
+                }
+                return profile.userID
+            }
+        }
+        return nil
+    }
+
+    /// Resolve all focus longform channel owner UUIDs (cached).
+    func focusHubOwnerIDs() async -> [String] {
+        var ids: [String] = []
+        var seen = Set<String>()
+        for entry in Self.focusLongformChannelHandles {
+            if let ownerID = await resolveHubOwnerID(handles: entry.handles),
+               seen.insert(ownerID).inserted {
+                ids.append(ownerID)
+            }
+        }
+        return ids
+    }
+
+    /// True for R2 longform media paths (matterya-sparks / longform/).
+    private static func isR2LongformMedia(_ post: CountryPost) -> Bool {
+        let media = (post.mediaURL ?? post.playableVideoURL?.absoluteString ?? "").lowercased()
+        guard !media.isEmpty else { return false }
+        return media.contains("longform/")
+            || media.contains("/longform")
+            || media.contains("r2:matterya-sparks")
+            || media.contains("matterya-sparks")
+    }
+
+    /// R2 long-form **and** Sparks from the official country channels — **every** upload.
+    /// - Parameters:
+    ///   - limitPerAuthor: posts per channel owner (server allows up to 500).
+    ///   - includeSparks: when true, keep reels for the Hubs Sparks rail.
+    ///   - topUpRecent: multi-page recent scan for extra hub / R2 longform.
+    func fetchFocusMarketHubCatalog(
+        limitPerAuthor: Int = 500,
+        includeSparks: Bool = true,
+        topUpRecent: Bool = true
+    ) async -> [CountryPost] {
+        if topUpRecent {
+            await prepareFeedContext()
+        }
+        // Pull the full channel catalog (API cap ~500 per author).
+        let per = min(max(limitPerAuthor, 100), 500)
+        var combined: [CountryPost] = []
+
+        await withTaskGroup(of: [CountryPost].self) { group in
+            for entry in Self.focusLongformChannelHandles {
+                group.addTask {
+                    guard let ownerID = await self.resolveHubOwnerID(handles: entry.handles) else {
+                        return []
+                    }
+                    // Entire channel upload list for this R2 owner.
+                    let batch = (try? await self.listForAuthor(ownerID, limit: per)) ?? []
+                    return batch.filter { post in
+                        guard post.hasVideo, !post.isStory else { return false }
+                        if post.isReel {
+                            return includeSparks
+                        }
+                        // Keep every long-form video from these channels (all R2 longform).
+                        return true
+                    }
+                }
+            }
+            for await batch in group {
+                combined.append(contentsOf: batch)
+            }
+        }
+
+        if topUpRecent {
+            var before: String? = nil
+            var seen = Set(combined.map(\.id))
+            // Deep scan so extra R2 longform not only under the four handles still lands.
+            for _ in 0..<12 {
+                let recent = await fetchRecentPosts(limit: 100, before: before)
+                if recent.isEmpty { break }
+                for post in recent {
+                    guard seen.insert(post.id).inserted else { continue }
+                    guard post.hasVideo, !post.isStory else { continue }
+                    if post.isReel {
+                        guard includeSparks else { continue }
+                        if PlayPlatformBridge.belongsInHubsCatalog(post)
+                            || PlayPlatformBridge.isHubChannelUpload(post) {
+                            combined.append(post)
+                        }
+                        continue
+                    }
+                    // Long-form: channel upload, hub catalog, or R2 longform path.
+                    if PlayPlatformBridge.isHubOriginShare(post)
+                        || PlayPlatformBridge.isHubChannelUpload(post)
+                        || PlayPlatformBridge.belongsInHubsCatalog(post)
+                        || Self.isR2LongformMedia(post) {
+                        combined.append(post)
+                    }
+                }
+                before = recent.last?.createdAt
+                if recent.count < 40 { break }
+            }
+        }
+
+        var dedup = Set<String>()
+        return combined.filter { dedup.insert($0.id).inserted }
+    }
+
+    /// Long-form only (For you list) — every R2 longform we can reach.
+    func fetchFocusMarketHubLongform(
+        limitPerCountry: Int = 500,
+        topUpRecent: Bool = true
+    ) async -> [CountryPost] {
+        let all = await fetchFocusMarketHubCatalog(
+            limitPerAuthor: limitPerCountry,
+            includeSparks: false,
+            topUpRecent: topUpRecent
+        )
+        return all.filter { !$0.isReel }
+    }
+
+    /// Sparks from the same R2 country channels (not feed re-shares).
+    func fetchFocusMarketHubSparks(limitPerAuthor: Int = 500) async -> [CountryPost] {
+        let all = await fetchFocusMarketHubCatalog(
+            limitPerAuthor: limitPerAuthor,
+            includeSparks: true,
+            topUpRecent: false
+        )
+        return all.filter { $0.isReel && ReelsRankingEngine.isSparkEligible($0) }
+    }
+
     func loadLivingVideos(
         followingLimitPerAuthor: Int = 10,
         globalLimit: Int = 40,
-        forceRefresh: Bool = false
+        forceRefresh: Bool = false,
+        /// Fast first paint: smaller per-channel pull, no recent top-up.
+        fast: Bool = false
     ) async -> [CountryPost] {
-        if !forceRefresh,
-           ContentCache.shared.isFresh(.livingVideos),
-           let cached = ContentCache.shared.posts(for: .livingVideos) {
-            // Re-filter so plain feed uploads never leak from an older cache.
-            // Own-channel uploads + catalog. Never treat feed shares as "my channel".
-            return cached
-                .filter { PlayPlatformBridge.isHubCatalogOwnedContent($0) }
-                .map { PlayPlatformBridge.hubWatchPresentation(for: $0) }
+        if !forceRefresh {
+            let sessionLong = hubsSessionCatalog.filter { !$0.isReel }
+            // Fast path may reuse a warm session; full path only if already large.
+            // Full path only reuses session when it already looks complete (hundreds of longform).
+            let enough = fast ? sessionLong.count >= 8 : sessionLong.count >= 200
+            if enough {
+                return sessionLong.filter { !$0.isReel && $0.hasVideo }
+            }
+            if fast, let cached = ContentCache.shared.posts(for: .livingVideos) {
+                let filtered = cached.filter { !$0.isReel && $0.hasVideo }
+                if filtered.count >= 6 { return filtered }
+            }
         }
 
-        await prepareFeedContext()
-
-        let pool = await loadReelsPool(
-            followingLimitPerAuthor: followingLimitPerAuthor,
-            globalLimit: globalLimit
+        var videos = await fetchFocusMarketHubLongform(
+            // Fast: first screen only. Full: every longform per channel (up to API 500).
+            limitPerCountry: fast ? min(32, max(20, globalLimit)) : 500,
+            topUpRecent: !fast
         )
-        // Hubs long-form only — never dump plain feed uploads / feed shares into "my channel".
-        var videos = pool
-            .filter {
-                $0.hasVideo && !$0.isReel && !$0.isStory
-                    && PlayPlatformBridge.isHubCatalogOwnedContent($0)
-            }
-            .map { PlayPlatformBridge.hubWatchPresentation(for: $0) }
-        if videos.isEmpty {
-            let own = await fetchOwnPosts(limit: globalLimit)
-            // Only intentional Hubs publishes count as channel uploads.
-            videos = own.filter {
-                $0.hasVideo && !$0.isReel && !$0.isStory && PlayPlatformBridge.isHubChannelUpload($0)
+        if !fast {
+            let own = await fetchOwnPosts(limit: max(globalLimit, 40))
+            for post in own where post.hasVideo && !post.isReel && !post.isStory
+                && PlayPlatformBridge.isHubChannelUpload(post) {
+                if !videos.contains(where: { $0.id == post.id }) {
+                    videos.append(post)
+                }
             }
         }
+        videos = videos.filter { !$0.isReel && !$0.isStory }
+            .excludingArchiveContent()
+
         if !videos.isEmpty {
-            ContentCache.shared.setPosts(videos, for: .livingVideos)
-        } else {
+            ContentCache.shared.setPosts(Array(videos.prefix(ContentCache.maxCachedPosts)), for: .livingVideos)
+            // Merge into session without dropping existing sparks.
+            var merged = hubsSessionCatalog.filter(\.isReel) + videos
+            var seen = Set<String>()
+            merged = merged.filter { seen.insert($0.id).inserted }
+            rememberHubsSessionCatalog(merged)
+        } else if forceRefresh {
             ContentCache.shared.invalidate(.livingVideos)
         }
+        #if DEBUG
+        print("[Hubs] loadLivingVideos longForm=\(videos.count) fast=\(fast) force=\(forceRefresh)")
+        #endif
         return videos
     }
 
-    /// Unified Matterya Hubs catalog: seed Archive catalog + hub long-form + hub sparks.
-    /// Plain feed videos/reels stay on the home feed (same player, no Hubs badge).
+    /// Unified Matterya Hubs catalog: R2 channel longform + channel Sparks (+ Archive if enabled).
+    /// - Parameter fast: first paint — longform only; full loads **all** channel sparks + videos.
     func loadPlayCatalog(
         followingLimitPerAuthor: Int = 10,
         globalLimit: Int = 40,
         forceRefresh: Bool = false,
         viewerCountry: String? = nil,
-        followingIDs: Set<String> = []
+        followingIDs: Set<String> = [],
+        fast: Bool = false
     ) async -> [CountryPost] {
-        async let longFormTask = loadLivingVideos(
-            followingLimitPerAuthor: followingLimitPerAuthor,
-            globalLimit: globalLimit,
-            forceRefresh: forceRefresh
+        let sessionLong = hubsSessionCatalog.filter { !$0.isReel }.count
+        let sessionSparks = hubsSessionCatalog.filter(\.isReel).count
+
+        // Session only short-circuits FAST paint or a truly complete FULL catalog.
+        if !forceRefresh {
+            if fast, sessionLong >= 8 {
+                #if DEBUG
+                print("[Hubs] loadPlayCatalog SESSION fast hit long=\(sessionLong)")
+                #endif
+                return hubsSessionCatalog
+            }
+            // Require a large full catalog before skipping network (R2 has hundreds of longform).
+            if !fast, sessionLong >= 200, sessionSparks >= 24 {
+                #if DEBUG
+                print("[Hubs] loadPlayCatalog SESSION full hit long=\(sessionLong) sparks=\(sessionSparks)")
+                #endif
+                return hubsSessionCatalog
+            }
+        }
+
+        if fast {
+            let longForm = await loadLivingVideos(
+                followingLimitPerAuthor: followingLimitPerAuthor,
+                globalLimit: min(globalLimit, 32),
+                forceRefresh: forceRefresh,
+                fast: true
+            )
+            var merged = longForm
+            var seen = Set(merged.map(\.id))
+            for post in hubsSessionCatalog.filter(\.isReel).prefix(16) where seen.insert(post.id).inserted {
+                merged.append(post)
+            }
+            if !merged.isEmpty {
+                ContentCache.shared.setPosts(Array(merged.prefix(ContentCache.maxCachedPosts)), for: .livingVideos)
+                rememberHubsSessionCatalog(merged)
+            }
+            #if DEBUG
+            print("[Hubs] loadPlayCatalog FAST longForm=\(longForm.count)")
+            #endif
+            return merged
+        }
+
+        // FULL: every longform + sparks from all R2 country channels (limit 500/author).
+        async let channelCatalogTask = fetchFocusMarketHubCatalog(
+            limitPerAuthor: 500,
+            includeSparks: true,
+            topUpRecent: true
         )
-        async let reelsTask = loadReelsFeed(
+        async let feedSparksTask = loadReelsFeed(
             followingLimitPerAuthor: followingLimitPerAuthor,
-            globalLimit: globalLimit,
+            globalLimit: min(max(globalLimit, 48), 80),
             viewerCountry: viewerCountry,
             followingIDs: followingIDs
         )
-        // Seed catalog is the bulk of Matterya Hubs — never omit it.
-        async let seedLongFormTask = HubVideoSeedService.shared.catalogLongFormVideos(perHub: 12)
-        async let seedSparksTask = HubVideoSeedService.shared.sparkSeedVideos(limit: 48)
+        async let ownTask = fetchOwnPosts(limit: 80)
 
-        let longForm = await longFormTask
-        // Sparks in Hubs catalog: archive seeds + real channel spark publishes.
-        // Never feed shares (origin stamps) — those stay on the home feed only.
-        let reels = (await reelsTask).filter { PlayPlatformBridge.isHubCatalogOwnedContent($0) }
-        let seedLong = await seedLongFormTask
-        let seedSparks = await seedSparksTask
+        let channelCatalog = await channelCatalogTask
+        let feedSparks = (await feedSparksTask).filter {
+            $0.isReel
+                && (PlayPlatformBridge.belongsInHubsCatalog($0)
+                    || PlayPlatformBridge.isHubChannelUpload($0)
+                    || ReelsRankingEngine.isSparkEligible($0))
+        }
+        let own = await ownTask
+
+        // Optional Archive seed.
+        let seedAll: [CountryPost]
+        if AppConfig.archiveContentEnabled {
+            if forceRefresh {
+                seedAll = await HubVideoSeedService.shared.allVideos()
+            } else {
+                let slugLong = await HubVideoSeedService.shared.catalogLongFormVideos(perHub: 10)
+                let sparks = await HubVideoSeedService.shared.sparkSeedVideos(limit: 40)
+                seedAll = slugLong + sparks
+            }
+        } else {
+            seedAll = []
+        }
 
         var merged: [CountryPost] = []
         var seen = Set<String>()
-        // Network hub content first, then seeds fill shelves.
-        for post in reels + longForm + seedSparks + seedLong where !seen.contains(post.id) {
-            // Double-guard: origin shares must never enter the Hubs catalog as "my" content.
-            if PlayPlatformBridge.isHubOriginShare(post) { continue }
-            seen.insert(post.id)
+        for post in channelCatalog + feedSparks + own + seedAll where seen.insert(post.id).inserted {
+            guard post.hasVideo || post.playableVideoURL != nil else { continue }
+            if post.isStory { continue }
+            if post.isReel {
+                guard ReelsRankingEngine.isSparkEligible(post)
+                    || PlayPlatformBridge.belongsInHubsCatalog(post)
+                    || PlayPlatformBridge.isHubChannelUpload(post) else { continue }
+            }
             merged.append(post)
         }
-        // Cache a non-empty catalog so Hubs cold-start has something to show.
+        if !AppConfig.archiveContentEnabled {
+            merged = merged.excludingArchiveContent()
+        }
+
+        #if DEBUG
+        let lf = merged.filter { !$0.isReel }.count
+        let sp = merged.filter(\.isReel).count
+        print("[Hubs] loadPlayCatalog FULL longForm=\(lf) sparks=\(sp) total=\(merged.count) channel=\(channelCatalog.count)")
+        #endif
         if !merged.isEmpty {
-            ContentCache.shared.setPosts(merged, for: .livingVideos)
+            // Disk stays capped; session holds the full catalog for this launch.
+            ContentCache.shared.setPosts(Array(merged.prefix(ContentCache.maxCachedPosts)), for: .livingVideos)
+            rememberHubsSessionCatalog(merged)
+        } else if forceRefresh {
+            ContentCache.shared.invalidate(.livingVideos)
         }
         return merged
     }
@@ -530,6 +956,32 @@ final class PostsService {
         if AppConfig.useDemoDataset, await demo.isDemoPostID(postID) {
             return await demo.listComments(postID, limit: limit)
         }
+        var comments = try await fetchCommentsByPost(postID, limit: limit)
+
+        // Spark feed shares often have no rows of their own — surface R2 comments from the original.
+        if comments.count < 3 {
+            if let post = try? await getPostByID(postID) {
+                let originID = SparkShareMarker.originID(from: post.body)
+                    ?? post.sharedPostID
+                    ?? post.sharedPost?.id
+                if let originID, originID != postID {
+                    let originComments = (try? await fetchCommentsByPost(originID, limit: limit)) ?? []
+                    if !originComments.isEmpty {
+                        // Prefer origin (R2) comments; keep any real replies on the share after.
+                        var seen = Set(originComments.map(\.id))
+                        var merged = originComments
+                        for c in comments where seen.insert(c.id).inserted {
+                            merged.append(c)
+                        }
+                        comments = Array(merged.prefix(limit))
+                    }
+                }
+            }
+        }
+        return comments
+    }
+
+    private func fetchCommentsByPost(_ postID: String, limit: Int) async throws -> [PostComment] {
         struct Response: Decodable { let commentsByPost: [GraphQLComment] }
         let query = """
         query($post_id: ID!, $limit: Int) {
@@ -837,20 +1289,23 @@ final class PostsService {
         let captionBody = (caption ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         struct Response: Decodable { let createPost: GraphQLPost }
 
-        // Server posts (UUID) → normal share pointer.
-        // Hubs catalog / Archive seeds are client-only ids (ia_*, hub_*, …) → stamp media
-        // onto a self-contained post so share always works and the feed can show Hubs chrome.
+        // Server posts (UUID) → normal share pointer (except Sparks — always self-contained card).
+        // Hubs catalog / Archive seeds are client-only ids (ia_*, hub_*, …) → stamp media.
         let isServerPost = UUID(uuidString: originalID) != nil
         let isHubCatalog = PlayPlatformBridge.isHubCatalogContent(post) || post.isHubSeedVideo
-        // True Sparks only. Hub long-form / normal videos must NEVER stamp __spark__.
-        // Prefer hub-origin share whenever this is hub catalog content that is not a spark.
-        let isExplicitSpark = post.isReel || PlayPlatformBridge.isReelVideo(post)
-        let isSpark = isExplicitSpark && !(isHubCatalog && !post.isReel)
-        // Hub long-form (including mis-tagged edge cases): always hub-origin, never spark.
-        let isHubLongFormShare = isHubCatalog && !isExplicitSpark
+        // Sparks: original reel, spark-share re-post, or embedded spark — never hub long-form.
+        let isSpark = post.isReel
+            || PlayPlatformBridge.isReelVideo(post)
+            || post.isSparkFeedShare
+            || SparkShareMarker.isMarked(post.body)
+            || (post.sharedPost?.asCountryPost.isReel == true)
+            || (post.sharedPost.map { PlayPlatformBridge.isReelVideo($0.asCountryPost) } == true)
+        // Hub long-form only when this is clearly not a Spark.
+        let isHubLongFormShare = isHubCatalog && !isSpark
 
-        // Stamp media when: non-UUID id, hub catalog, or Spark (needs media + marker for feed card).
-        // shared_post_id alone fails for catalog ids and leaves Sparks unshareable.
+        // Stamp media when: non-UUID id, hub catalog, or any Spark share.
+        // Sparks always get media + SparkShareMarker so the feed shows SparkFeedCard.
+        // NEVER stamp __spark__ on a share (that put re-shares into Sparks-for-you rail).
         let shouldStampMedia = !isServerPost || isHubCatalog || isSpark
 
         var input: [String: Any] = [
@@ -863,16 +1318,34 @@ final class PostsService {
 
         if shouldStampMedia {
             // Self-contained Hubs / Sparks share (media lives on this post).
-            let mediaURL = post.mediaURL
+            var mediaURL = post.mediaURL
                 ?? post.playableVideoURL?.absoluteString
-            let thumb = post.thumbURL
+            var thumb = post.thumbURL
                 ?? post.posterImageURL?.absoluteString
 
-            // Order matters: hub long-form first so shares never become Sparks by accident.
-            if isHubLongFormShare || (isHubCatalog && !isSpark) {
+            // Order matters: Sparks before hub long-form so Archive Sparks stay Spark cards.
+            if isSpark {
+                // Feed re-share of a Spark: media + spark-share marker (NOT __spark__).
+                // Feed shows SparkFeedCard; tap → infinite Sparks player.
+                // Share post itself is NOT isReel (stays out of Sparks-for-you rail).
+                let originForStamp: CountryPost = {
+                    if let embed = post.sharedPost?.asCountryPost,
+                       embed.isReel || embed.playableVideoURL != nil {
+                        return embed
+                    }
+                    return post
+                }()
+                input["body"] = SparkShareMarker.markBody(caption: captionBody, origin: originForStamp)
+                input["media_type"] = "video"
+                mediaURL = originForStamp.mediaURL
+                    ?? originForStamp.playableVideoURL?.absoluteString
+                    ?? mediaURL
+                thumb = originForStamp.thumbURL
+                    ?? originForStamp.posterImageURL?.absoluteString
+                    ?? thumb
+            } else if isHubLongFormShare || isHubCatalog {
                 // Feed share of a Hubs video — stamp catalog/original channel (never the sharer).
                 // NEVER use HubChannelPostMarker (that would pretend the sharer owns a Hubs channel).
-                // NEVER stamp __spark__ here — shared hub videos stay long-form on the feed.
                 let origin = await PlayPlatformBridge.resolveHubWatchPresentation(for: post)
                 input["body"] = HubOriginShareMarker.markBody(caption: captionBody, origin: origin)
                 input["media_type"] = "video"
@@ -880,15 +1353,8 @@ final class PostsService {
                    !title.isEmpty {
                     input["title"] = title
                 }
-            } else if isSpark {
-                // media_type=video (API allow-list) + __spark__ body so iOS treats it as a Spark.
-                let raw = captionBody.isEmpty ? (post.displayCaption ?? post.displayTitle ?? "Spark") : captionBody
-                let cleaned = raw
-                    .replacingOccurrences(of: "__spark__|", with: "")
-                    .replacingOccurrences(of: "__reel__|", with: "")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                input["body"] = "__spark__|\(cleaned.isEmpty ? "Spark" : cleaned)"
-                input["media_type"] = "video"
+                mediaURL = origin.mediaURL ?? origin.playableVideoURL?.absoluteString ?? mediaURL
+                thumb = origin.thumbURL ?? origin.posterImageURL?.absoluteString ?? thumb
             } else {
                 // Plain long-form video share (not Hubs) — self-contained media, no channel claim.
                 input["body"] = captionBody
@@ -902,7 +1368,9 @@ final class PostsService {
             } else {
                 // Cannot stamp without playable media — fall back to pointer if UUID.
                 if isServerPost {
-                    input["body"] = captionBody
+                    input["body"] = isSpark
+                        ? SparkShareMarker.markBody(caption: captionBody, origin: post)
+                        : captionBody
                     input["media_type"] = "none"
                     input["shared_post_id"] = originalID
                     input["visibility"] = "public"
@@ -914,6 +1382,7 @@ final class PostsService {
                 input["thumb_url"] = thumb
             }
         } else {
+            // UUID pointer share (non-spark) — embed original on the feed card.
             input["body"] = captionBody
             input["media_type"] = "none"
             input["shared_post_id"] = originalID
@@ -944,21 +1413,17 @@ final class PostsService {
                 if let thumb = post.thumbURL ?? post.posterImageURL?.absoluteString {
                     retry["thumb_url"] = thumb
                 }
-                // Same priority as primary path: hub long-form → hub origin; true spark → __spark__; else plain.
-                if isHubLongFormShare || (isHubCatalog && !isSpark) {
+                // Same priority: spark card → hub origin → plain.
+                if isSpark {
+                    // NEVER __spark__ on a share — that flooded Sparks-for-you with re-posts.
+                    retry["body"] = SparkShareMarker.markBody(caption: captionBody, origin: post)
+                } else if isHubLongFormShare || isHubCatalog {
                     let origin = await PlayPlatformBridge.resolveHubWatchPresentation(for: post)
                     retry["body"] = HubOriginShareMarker.markBody(caption: captionBody, origin: origin)
                     if let title = origin.displayHeadline ?? origin.displayTitle ?? post.displayHeadline,
                        !title.isEmpty {
                         retry["title"] = title
                     }
-                } else if isSpark {
-                    let raw = captionBody.isEmpty ? (post.displayCaption ?? post.displayTitle ?? "Spark") : captionBody
-                    let cleaned = raw
-                        .replacingOccurrences(of: "__spark__|", with: "")
-                        .replacingOccurrences(of: "__reel__|", with: "")
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    retry["body"] = "__spark__|\(cleaned.isEmpty ? "Spark" : cleaned)"
                 } else {
                     retry["body"] = captionBody
                     if let title = post.displayHeadline ?? post.displayTitle, !title.isEmpty {
@@ -1443,6 +1908,39 @@ final class PostsService {
         return posts
             .filter { seen.insert($0.id).inserted && !$0.isStory }
             .sorted { ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast) }
+    }
+
+    /// Temporary stand-in until a real recommender exists:
+    /// every call returns a **new random order** so feed / rails always feel fresh.
+    /// - Own posts (optional) stay at the front (newest first among them).
+    /// - Explicit `pinIDs` stay ahead of the shuffled rest (stable relative order).
+    func sessionFreshOrder(
+        _ posts: [CountryPost],
+        pinAuthorID: String? = nil,
+        pinIDs: Set<String> = []
+    ) -> [CountryPost] {
+        var seen = Set<String>()
+        let unique = posts.filter { seen.insert($0.id).inserted && !$0.isStory }
+        guard unique.count > 1 else { return unique }
+
+        var pinned: [CountryPost] = []
+        var rest: [CountryPost] = []
+        let own = pinAuthorID.flatMap { $0.isEmpty ? nil : $0 }
+
+        for post in unique {
+            if pinIDs.contains(post.id) {
+                pinned.append(post)
+            } else if let own, post.authorID == own {
+                pinned.append(post)
+            } else {
+                rest.append(post)
+            }
+        }
+
+        // Own / pinned: newest first so a just-created post stays on top.
+        pinned.sort { ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast) }
+        rest.shuffle()
+        return pinned + rest
     }
 
     private func uploadVideoThumbnail(

@@ -16,17 +16,25 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         ImageCache.configureSharedCache()
-        // VoIP + CallKit must exist synchronously so a cold-start push can take over the screen.
-        VoIPPushService.shared.bootstrap()
-        _ = CallKitManager.shared
         // Notification delegate MUST be set before return — otherwise tap-to-open
         // on cold start never delivers didReceive and the user lands on home.
         PushNotificationService.shared.configure()
-        application.registerForRemoteNotifications()
 
-        if let remotePayload = launchOptions?[.remoteNotification] as? [AnyHashable: Any] {
+        // VoIP/CallKit only when already signed in OR cold-start is an incoming call.
+        // Doing this on the login screen hung the main thread (can't type email/password).
+        let launchedFromRemote = launchOptions?[.remoteNotification] as? [AnyHashable: Any]
+        let needsCallStackImmediately =
+            AuthService.shared.isAuthenticated
+            || (launchedFromRemote != nil && IncomingCallWake.looksLikeIncomingCall(launchedFromRemote))
+
+        if needsCallStackImmediately {
+            VoIPPushService.shared.bootstrap()
+            _ = CallKitManager.shared
+            application.registerForRemoteNotifications()
+        }
+
+        if let remotePayload = launchedFromRemote {
             if IncomingCallWake.handleIfNeeded(remotePayload) == false {
-                // Like / comment / message launch-from-notification.
                 Task { @MainActor in
                     _ = await PushNotificationService.shared.handleRemoteNotification(remotePayload)
                 }
@@ -34,11 +42,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         }
 
         Task { @MainActor in
-            VoIPPushService.shared.bootstrap()
             if AuthService.shared.isAuthenticated {
+                VoIPPushService.shared.bootstrap()
                 CallSessionManager.shared.bootstrap()
+                await PushNotificationService.shared.syncWithServer(force: true)
             }
-            await PushNotificationService.shared.syncWithServer(force: true)
         }
         return true
     }

@@ -17,7 +17,7 @@ struct VideoThumbnailView: View {
 
     var body: some View {
         ZStack {
-            if let posterURL = post.posterImageURL ?? post.feedImageURL {
+            if let posterURL = resolvedPosterURL {
                 CachedAsyncImage(
                     url: posterURL,
                     maxPixelSize: maxPixelSize,
@@ -45,19 +45,25 @@ struct VideoThumbnailView: View {
         }
     }
 
+    /// Prefer IA services/img (fast) then other posters — never the mp4 URL.
+    private var resolvedPosterURL: URL? {
+        MediaURLResolver.hubsListPosterURL(for: post)
+            ?? post.posterImageURL
+            ?? post.feedImageURL
+    }
+
     private var thumbnailTaskID: String {
         [
             post.id,
-            post.thumbURL ?? "",
-            post.playableVideoURL?.absoluteString ?? "",
+            resolvedPosterURL?.absoluteString ?? "",
             extractFrameIfNeeded ? "1" : "0",
         ].joined(separator: "|")
     }
 
     private var needsFrameExtraction: Bool {
+        // Only when no remote poster (R2 LongForm uses YouTube CDN; Sparks may extract one frame).
         extractFrameIfNeeded
-            && post.posterImageURL == nil
-            && post.feedImageURL == nil
+            && resolvedPosterURL == nil
             && post.playableVideoURL != nil
     }
 

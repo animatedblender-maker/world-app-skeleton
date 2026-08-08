@@ -197,13 +197,12 @@ struct YouTubeChannelRow: View {
 
     private var followerLine: String {
         var parts: [String] = []
-        if let subscriberCount, subscriberCount > 0 {
-            parts.append("\(subscriberCount.formatted()) \(MatteryaCopy.followers)")
-        }
+        let count = appState.resolvedFollowerCount(for: channel.authorID, base: subscriberCount)
+        parts.append("\(count.formatted()) \(MatteryaCopy.followers)")
         if channel.videoCount > 0 {
             parts.append("\(channel.videoCount) videos")
         }
-        return parts.isEmpty ? (channel.handle ?? MatteryaCopy.creator) : parts.joined(separator: " · ")
+        return parts.joined(separator: " · ")
     }
 }
 
@@ -213,7 +212,7 @@ struct YouTubeCompactRelatedRow: View {
 
     var body: some View {
         Button(action: onTap) {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 0) {
                 YouTubeVideoThumbnail(post: post, maxPixelSize: 520, showsPlayIcon: false, frameStyle: .card)
 
                 VStack(alignment: .leading, spacing: 4) {
@@ -231,6 +230,7 @@ struct YouTubeCompactRelatedRow: View {
                         .foregroundStyle(Theme.inkMuted)
                         .lineLimit(1)
                 }
+                .padding(.top, 10)
             }
         }
         .buttonStyle(.plain)
@@ -277,7 +277,7 @@ struct YouTubeExpandableDescription: View {
     }
 }
 
-/// Shared Sparks chrome — thumbnail + flag + author. Sized by the parent.
+/// Shared Sparks chrome — thumbnail + country name + author. Sized by the parent.
 private struct SparksTileChrome: View {
     let post: CountryPost
     var playIconSize: CGFloat = 28
@@ -291,6 +291,7 @@ private struct SparksTileChrome: View {
                 contentMode: .fill,
                 showsPlayIcon: false,
                 playIconSize: playIconSize,
+                extractFrameIfNeeded: true,
                 placeholder: AnyView(
                     LinearGradient(
                         colors: [Theme.canvasMuted, Theme.canvasDeep],
@@ -302,11 +303,16 @@ private struct SparksTileChrome: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
 
-            if let code = post.countryCode {
-                Text(CountryFlag.emoji(for: code))
-                    .font(.caption2)
-                    .padding(5)
-                    .background(.black.opacity(0.42), in: Circle())
+            // Country name only (shared-from) — no flag emoji.
+            if let countryLabel {
+                Text(countryLabel)
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(.black.opacity(0.48), in: Capsule())
                     .padding(6)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                     .allowsHitTesting(false)
@@ -327,6 +333,16 @@ private struct SparksTileChrome: View {
                 .shadow(color: .black.opacity(0.45), radius: 2, y: 1)
                 .padding(8)
         }
+    }
+
+    private var countryLabel: String? {
+        if let name = post.countryName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            return name
+        }
+        if let code = post.countryCode?.trimmingCharacters(in: .whitespacesAndNewlines), !code.isEmpty {
+            return code.uppercased()
+        }
+        return nil
     }
 }
 
@@ -448,20 +464,43 @@ struct YouTubeMiniPlayerBar: View {
     @Binding var isPlaying: Bool
     @Binding var isMuted: Bool
 
-    /// Video frame size while minimized — large enough to actually watch, still a “mini”.
-    static let videoWidth: CGFloat = 196
-    static let videoHeight: CGFloat = 110
+    /// Default video size (16:9). Prefer `videoSize(forBarWidth:)` so title + X never clip.
+    static let videoWidth: CGFloat = 168
+    static let videoHeight: CGFloat = 94
+    /// Minimum width reserved for title + play/mute + close on the right.
+    static let metaMinWidth: CGFloat = 148
+    /// Vertical padding inside the mini bar chrome (top + bottom).
+    static let barVerticalPadding: CGFloat = 18
+    /// Intrinsic height of the floating mini bar only (not including tab bar).
+    static var barHeight: CGFloat { videoHeight + barVerticalPadding }
     /// Space content lists should leave so the bar doesn’t cover the last row.
-    static let contentBottomInset: CGFloat = 148
+    /// Flush on the tab bar — no extra gap.
+    static var contentBottomInset: CGFloat {
+        barHeight + Theme.tabBarHeight
+    }
     /// Horizontal inset of the bar content (used to align continuous player over the slot).
-    static let barContentLeading: CGFloat = Theme.pagePadding + 12
-    /// Distance from screen bottom to mini video (tab bar + bar outer padding + inner padding).
-    /// Must match GlobalHubPlaybackLayer mini placement.
-    static let videoBottomInset: CGFloat = Theme.tabBarHeight + 4 + 12
+    /// Matches the mini bar’s inner horizontal padding (full-bleed bar, no outer page inset).
+    static let barContentLeading: CGFloat = 12
+    static let barContentTrailing: CGFloat = 16
+    /// Bottom inset for the video hole inside the mini bar chrome (inner padding only).
+    static let videoBottomInset: CGFloat = 8
+
+    /// Fit video so the meta column (title + X) always has room — never overflow the screen.
+    static func videoSize(forBarWidth totalWidth: CGFloat) -> (width: CGFloat, height: CGFloat) {
+        let hPad = barContentLeading + barContentTrailing
+        let gap: CGFloat = 12
+        let available = max(120, totalWidth - hPad - gap - metaMinWidth)
+        // Cap video so it stays a mini preview, not a second stage.
+        let w = min(videoWidth, max(120, available))
+        let h = w * 9 / 16
+        return (w, h)
+    }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            Button(action: onExpand) {
+        GeometryReader { geo in
+            let size = Self.videoSize(forBarWidth: geo.size.width)
+            HStack(alignment: .center, spacing: 12) {
+                // Video slot — tap expands (continuous player drawn on top when embedsVideo is false).
                 ZStack {
                     if embedsVideo {
                         if let url = post.playableVideoURL {
@@ -482,8 +521,16 @@ struct YouTubeMiniPlayerBar: View {
                             YouTubeVideoThumbnail(post: post, maxPixelSize: 420, showsPlayIcon: false, frameStyle: .card)
                         }
                     } else {
-                        // Hole for the continuous GlobalHubPlaybackLayer player (drawn above this bar).
-                        Color.clear
+                        // Hole for GlobalHubPlaybackLayer continuous player (drawn above this chrome).
+                        Theme.ink
+                            .overlay(
+                                GeometryReader { g in
+                                    Color.clear.preference(
+                                        key: HubContinuousVideoSlotKey.self,
+                                        value: g.frame(in: .global)
+                                    )
+                                }
+                            )
                     }
 
                     VStack {
@@ -504,24 +551,18 @@ struct YouTubeMiniPlayerBar: View {
                         .stroke(Theme.border, lineWidth: 0.5)
                         .allowsHitTesting(false)
                 }
-                .frame(width: Self.videoWidth, height: Self.videoHeight)
+                .frame(width: size.width, height: size.height)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                // Only paint an opaque bed when THIS bar embeds its own player.
-                // When continuous layer owns video, stay clear so playback is visible.
-                .background {
-                    if embedsVideo {
-                        Theme.ink
-                    } else {
-                        Color.clear
-                    }
-                }
+                .background(Theme.ink)
                 .shadow(color: Theme.ink.opacity(embedsVideo ? 0.16 : 0), radius: 8, y: 3)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Expand video")
+                .contentShape(Rectangle())
+                .onTapGesture(perform: onExpand)
+                .accessibilityLabel("Expand video")
+                .accessibilityAddTraits(.isButton)
+                .layoutPriority(0)
 
-            VStack(alignment: .leading, spacing: 10) {
-                Button(action: onExpand) {
+                // Title + controls — must not be crushed by a wide video.
+                VStack(alignment: .leading, spacing: 8) {
                     VStack(alignment: .leading, spacing: 3) {
                         if let headline = post.displayHeadline {
                             Text(headline)
@@ -529,6 +570,7 @@ struct YouTubeMiniPlayerBar: View {
                                 .foregroundStyle(Theme.ink)
                                 .lineLimit(2)
                                 .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                         Text(post.authorDisplayName)
                             .font(.caption)
@@ -536,67 +578,93 @@ struct YouTubeMiniPlayerBar: View {
                             .lineLimit(1)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .buttonStyle(.plain)
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: onExpand)
 
-                HStack(spacing: 10) {
-                    Button {
-                        isPlaying.toggle()
-                    } label: {
-                        ZStack {
-                            Circle()
-                                .fill(Theme.accentBright)
-                                .frame(width: 36, height: 36)
-                                .shadow(color: Theme.ink.opacity(0.18), radius: 4, y: 2)
-                            Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                                .font(.system(size: 13, weight: .bold))
-                                .foregroundStyle(Theme.paper)
+                    HStack(spacing: 8) {
+                        Button {
+                            isPlaying.toggle()
+                        } label: {
+                            ZStack {
+                                Circle()
+                                    .fill(Theme.accentBright)
+                                    .frame(width: 34, height: 34)
+                                    .shadow(color: Theme.ink.opacity(0.18), radius: 4, y: 2)
+                                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundStyle(Theme.paper)
+                            }
                         }
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(isPlaying ? "Pause" : "Play")
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(isPlaying ? "Pause" : "Play")
 
-                    Button {
-                        isMuted.toggle()
-                    } label: {
-                        Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(Theme.ink)
-                            .frame(width: 36, height: 36)
-                            .background(Theme.canvasMuted, in: Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(isMuted ? "Unmute" : "Mute")
+                        Button {
+                            isMuted.toggle()
+                        } label: {
+                            Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(Theme.ink)
+                                .frame(width: 34, height: 34)
+                                .background(Theme.canvasMuted, in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(isMuted ? "Unmute" : "Mute")
 
-                    Spacer(minLength: 0)
+                        Spacer(minLength: 2)
 
-                    Button(action: onClose) {
-                        Image(systemName: "xmark")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(Theme.inkMuted)
-                            .frame(width: 32, height: 32)
-                            .background(Theme.canvasMuted, in: Circle())
+                        // Close — always fully on-screen (extra trailing inset).
+                        Button(action: onClose) {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(Theme.ink)
+                                .frame(width: 34, height: 34)
+                                .background(Theme.canvasMuted, in: Circle())
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Close mini player")
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Close mini player")
                 }
+                .frame(minWidth: Self.metaMinWidth, maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(1)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.leading, Self.barContentLeading)
+            .padding(.trailing, Self.barContentTrailing)
+            .padding(.top, 10)
+            .padding(.bottom, 8)
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .center)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 12)
-        // Background behind chrome only — leave the video slot visually open when
-        // GlobalHubPlaybackLayer paints the continuous player on top.
+        .frame(maxWidth: .infinity)
+        .frame(height: Self.barHeight)
         .background {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(Theme.surface)
-                .shadow(color: Theme.ink.opacity(0.14), radius: 18, y: 8)
+            UnevenRoundedRectangle(
+                topLeadingRadius: 14,
+                bottomLeadingRadius: 0,
+                bottomTrailingRadius: 0,
+                topTrailingRadius: 14,
+                style: .continuous
+            )
+            .fill(Theme.surface)
+            .shadow(color: Theme.ink.opacity(0.10), radius: 8, y: -3)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onExpand)
+        }
+        .overlay(alignment: .bottom) {
+            Theme.divider.frame(height: 0.5)
         }
         .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(Theme.border, lineWidth: 0.5)
+            UnevenRoundedRectangle(
+                topLeadingRadius: 14,
+                bottomLeadingRadius: 0,
+                bottomTrailingRadius: 0,
+                topTrailingRadius: 14,
+                style: .continuous
+            )
+            .stroke(Theme.border.opacity(0.6), lineWidth: 0.5)
+            .allowsHitTesting(false)
         )
-        .padding(.horizontal, Theme.pagePadding)
+        .clipped()
     }
 }
 

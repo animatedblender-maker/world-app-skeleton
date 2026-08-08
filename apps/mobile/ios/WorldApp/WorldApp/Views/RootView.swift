@@ -2,11 +2,11 @@ import SwiftUI
 
 struct RootView: View {
     @Environment(AppState.self) private var appState
-    @Bindable private var callManager = CallSessionManager.shared
 
     var body: some View {
         Group {
             if !appState.isAuthenticated {
+                // Auth only — do not touch CallSessionManager (LiveKit/VoIP) here.
                 AuthView()
             } else if appState.needsProfileSetup {
                 ProfileSetupView()
@@ -21,11 +21,7 @@ struct RootView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .screenBackground()
             } else {
-                MainTabView()
-                    .onAppear {
-                        // Deliver any push that arrived before the main UI was ready.
-                        appState.flushPendingPushRoute()
-                    }
+                authenticatedShell
             }
         }
         .animation(.easeInOut(duration: 0.25), value: appState.isAuthenticated)
@@ -33,37 +29,14 @@ struct RootView: View {
         .onChange(of: appState.isSessionReady) { _, ready in
             if ready { appState.flushPendingPushRoute() }
         }
-        .fullScreenCover(isPresented: Binding(
-            get: { callManager.showFullCallUI },
-            set: { presented in
-                if presented {
-                    callManager.expandCall()
-                } else if callManager.isActive || callManager.isConnecting {
-                    callManager.minimizeCall()
-                } else {
-                    callManager.showUI = false
-                }
-            }
-        )) {
-            CallOverlayView(callManager: callManager)
-                .withAppState(appState)
-        }
         .onReceive(NotificationCenter.default.publisher(for: .socialNotificationsDidChange)) { _ in
             Task { await appState.refreshNotifications() }
         }
         .overlay(alignment: .bottom) {
-            CreateMenuOverlay()
-        }
-        .overlay(alignment: .bottom) {
-            if callManager.showCompactCallBar {
-                CallMiniBar(callManager: callManager)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, Theme.tabBarHeight + 10)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .zIndex(250)
+            if appState.isAuthenticated {
+                CreateMenuOverlay()
             }
         }
-        .animation(.easeInOut(duration: 0.22), value: callManager.showCompactCallBar)
         .overlay(alignment: .top) {
             if let toast = appState.toastMessage {
                 ToastBanner(message: toast, style: appState.toastStyle)
@@ -86,5 +59,40 @@ struct RootView: View {
                 username: username
             )
         }
+    }
+
+    /// Call stack only exists once signed in — keeps login typing responsive.
+    @ViewBuilder
+    private var authenticatedShell: some View {
+        @Bindable var callManager = CallSessionManager.shared
+        MainTabView()
+            .onAppear {
+                appState.flushPendingPushRoute()
+            }
+            .fullScreenCover(isPresented: Binding(
+                get: { callManager.showFullCallUI },
+                set: { presented in
+                    if presented {
+                        callManager.expandCall()
+                    } else if callManager.isActive || callManager.isConnecting {
+                        callManager.minimizeCall()
+                    } else {
+                        callManager.showUI = false
+                    }
+                }
+            )) {
+                CallOverlayView(callManager: callManager)
+                    .withAppState(appState)
+            }
+            .overlay(alignment: .bottom) {
+                if callManager.showCompactCallBar {
+                    CallMiniBar(callManager: callManager)
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, Theme.tabBarHeight + 10)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .zIndex(250)
+                }
+            }
+            .animation(.easeInOut(duration: 0.22), value: callManager.showCompactCallBar)
     }
 }

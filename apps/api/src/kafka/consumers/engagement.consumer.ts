@@ -28,6 +28,8 @@ export async function startEngagementConsumer(): Promise<void> {
             durationMs?: number;
             surface?: string;
             progress?: number;
+            summary?: string;
+            meta?: { summary?: string };
           };
         };
         const p = event.payload ?? {};
@@ -42,8 +44,15 @@ export async function startEngagementConsumer(): Promise<void> {
           EngagementScrollDwell: 'Stopped and looked at a post',
           EngagementScrollSkip: 'Scrolled past a post',
           EngagementProfileOpened: 'Opened a profile',
+          ContentPosted: 'Uploaded content',
+          ContentShared: 'Shared content',
         };
-        const action = labels[event.eventType ?? ''] ?? event.eventType ?? '?';
+        const action =
+          (typeof p.summary === 'string' && p.summary.trim()) ||
+          (typeof p.meta?.summary === 'string' && p.meta.summary.trim()) ||
+          labels[event.eventType ?? ''] ||
+          event.eventType ||
+          '?';
         const when = new Date().toISOString();
         const bits = [
           when,

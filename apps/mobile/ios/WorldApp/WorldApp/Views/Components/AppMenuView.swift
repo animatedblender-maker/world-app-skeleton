@@ -75,13 +75,6 @@ private struct AppMenuPanel: View {
             Theme.divider.frame(height: 0.5)
 
             VStack(spacing: 0) {
-                menuRow(
-                    "Notifications",
-                    icon: "bell",
-                    showsUnreadDot: appState.effectiveNotificationsUnreadCount > 0
-                ) {
-                    appState.openNotificationsFromMenu()
-                }
                 menuRow(MatteryaCopy.matteryaHubs, icon: "square.grid.2x2") {
                     appState.openPlayFromMenu()
                 }

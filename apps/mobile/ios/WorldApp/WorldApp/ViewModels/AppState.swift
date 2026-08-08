@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SwiftUI
 import UIKit
 import UserNotifications
 
@@ -29,6 +30,9 @@ final class AppState {
         return notificationsUnreadCount
     }
     var followingIDs: Set<String> = []
+    /// Optimistic follower-count deltas (authorID → ±n) so Hubs channel counts update instantly on Follow.
+    /// Cleared for an author when a fresh server/local count is loaded for them.
+    var followFollowerDeltas: [String: Int] = [:]
     var savedPostIDs: Set<String> = []
     var savedPosts: [CountryPost] = []
     var reelPresentationSavedIDs: Set<String> = []
@@ -62,6 +66,9 @@ final class AppState {
     var hubPlaybackExpanded = false
     var hubPlaybackPlaying = true
     var hubPlaybackMuted = false
+    /// Shared mute for **all** in-feed videos (hub cards, spark cards, autoplay).
+    /// Muting one video mutes every feed video; unmuting one unmutes all.
+    var feedVideosMuted = false
     /// When a conversation is open, mini player docks under the chat composer (not floating).
     var hubPlaybackDockInChat: Bool {
         guard hubPlaybackPost != nil, !hubPlaybackExpanded else { return false }
@@ -103,9 +110,7 @@ final class AppState {
             return
         }
 
-        await AppPermissionsService.shared.requestEssentialPermissionsOnLaunch()
-
-        VoIPPushService.shared.bootstrap()
+        // NEVER request mic/camera/location/push before login — that freezes the auth screen.
         reelPresentationSavedIDs = loadReelPresentationSavedIDs()
         isAuthenticated = auth.isAuthenticated
         guard isAuthenticated else {
@@ -115,6 +120,11 @@ final class AppState {
 
         restoreCachedProfile()
         markSessionReady()
+        // Permissions + VoIP only after we know who the user is.
+        Task(priority: .utility) {
+            await AppPermissionsService.shared.requestEssentialPermissionsOnLaunch()
+        }
+        VoIPPushService.shared.bootstrap()
         CallSessionManager.shared.bootstrap()
         startPolling()
         registerPushInBackground()
@@ -209,21 +219,37 @@ final class AppState {
     }
 
     private func refreshAllInBackground() async {
-        // Lightweight social state first — never await full hub seed (thousands of videos).
-        async let statsTask: Void = { await refreshGlobalStats() }()
+        // Social chrome only — feed owns its own first-paint via HomeFeedStore.
+        // Never loadHomeFeed / loadLivingVideos / loadPlayCatalog here (that froze sign-in).
         async let followingTask: Void = { await refreshFollowingIDs() }()
-        async let savedTask: Void = { await refreshSavedPosts() }()
-        async let storiesTask: Void = { await refreshStories() }()
         async let notificationsTask: Void = { await refreshNotifications() }()
-        // Soft network refresh only when home-feed cache is stale; never blocks UI.
-        async let feedTask: Void = {
-            _ = await PostsService.shared.loadHomeFeed(forceRefresh: false)
-        }()
-        _ = await (statsTask, followingTask, savedTask, storiesTask, notificationsTask, feedTask)
+        _ = await (followingTask, notificationsTask)
         startPresence()
-        // Hubs catalog is on-demand (Hubs tab / play). Slug-capped sample only.
+        // Everything else deferred + low priority so sign-in stays snappy.
         Task(priority: .background) {
-            _ = await PostsService.shared.loadLivingVideos(forceRefresh: false)
+            async let stats: Void = { await refreshGlobalStats() }()
+            async let saved: Void = { await refreshSavedPosts() }()
+            async let stories: Void = { await refreshStories() }()
+            _ = await (stats, saved, stories)
+        }
+        // Warm Hubs longform in the background (fast path only) so first Hubs open is cache-hit.
+        Task(priority: .utility) {
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            guard currentProfile != nil else { return }
+            if PostsService.shared.hubsSessionIsWarm() { return }
+            if ContentCache.shared.isFresh(.livingVideos) {
+                if let cached = ContentCache.shared.posts(for: .livingVideos) {
+                    PostsService.shared.rememberHubsSessionCatalog(cached)
+                }
+                return
+            }
+            _ = await PostsService.shared.loadPlayCatalog(
+                globalLimit: 28,
+                forceRefresh: false,
+                viewerCountry: currentProfile?.countryCode,
+                followingIDs: followingIDs,
+                fast: true
+            )
         }
     }
 
@@ -387,14 +413,29 @@ final class AppState {
 
     func onAuthenticated() async {
         isAuthenticated = true
+        // Per-user watch history / resume points (never share across accounts).
+        YouTubeCatalogService.shared.bindToUser(auth.currentUser?.id)
         restoreCachedProfile()
         markSessionReady()
-        CallSessionManager.shared.bootstrap()
+        // Defer call stack + permissions so login button returns immediately.
+        Task(priority: .utility) {
+            await AppPermissionsService.shared.requestEssentialPermissionsOnLaunch()
+            VoIPPushService.shared.bootstrap()
+            CallSessionManager.shared.bootstrap()
+            await registerPushInBackgroundAsync()
+        }
         startPolling()
-        registerPushInBackground()
         Task { await finishSessionWarmup() }
         // Signing in reactivates a soft-deactivated account.
         Task { await reactivateIfNeeded() }
+    }
+
+    private func registerPushInBackgroundAsync() async {
+        await VoIPPushService.shared.ensureToken()
+        await PushNotificationService.shared.syncWithServer(force: true)
+        await PushNotificationService.shared.registerForRemoteNotificationsIfAuthorized()
+        await VoIPPushService.shared.ensureToken()
+        await PushNotificationService.shared.syncWithServer(force: true)
     }
 
     /// If the profile was deactivated, restore it on successful sign-in.
@@ -443,6 +484,7 @@ final class AppState {
         CallSignalingService.shared.shutdown()
         Task { await presenceService.setOffline() }
         presenceService.stopHeartbeat()
+        YouTubeCatalogService.shared.clearSessionState()
         auth.logout()
         isAuthenticated = false
         isSessionReady = true
@@ -459,6 +501,7 @@ final class AppState {
         clearPendingPlayRouting()
         stopHubPlayback()
         followingIDs = []
+        followFollowerDeltas = [:]
         savedPostIDs = []
         savedPosts = []
         notifications = []
@@ -688,25 +731,61 @@ final class AppState {
     }
 
     func navigate(to destination: AppDestination) {
+        // Country feeds are disabled — everything lives on the main feed.
+        if case .countryFeed = destination {
+            selectedTab = .feed
+            navigationPath.removeAll()
+            selectedCountry = nil
+            return
+        }
         navigationPath.append(destination)
     }
 
-    func openConversation(id: String) {
+    /// Open a chat **instantly**. Optional `seed` avoids any network wait / "Opening chat…".
+    /// Hubs mini player keeps running (only collapses expanded → mini).
+    func openConversation(id: String, seed: Conversation? = nil) {
         pendingConversationID = nil
-        // Keep Hubs audio going as mini while chatting (dock under composer).
-        minimizeHubPlayback(returnToChat: false)
-        // Prefer this chat as the minimize-return target while watching.
-        if hubPlaybackPost != nil {
-            hubPlaybackReturnConversationID = id
+        let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        // Seed cache so ConversationRouteView paints on the same frame (no spinner).
+        if let seed {
+            MessagesService.shared.storeConversation(seed)
         }
+
+        // Keep Hubs audio going as mini while chatting (dock under composer).
+        // Never stop/pause — only collapse expanded watch if needed.
+        if hubPlaybackPost != nil {
+            hubPlaybackPlaying = true
+            if hubPlaybackExpanded {
+                withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.88)) {
+                    hubPlaybackExpanded = false
+                }
+            }
+            hubPlaybackReturnConversationID = trimmed
+        }
+
+        // Already on this chat — don't rebuild the stack (feels like "closing everything").
+        if case .conversation(let openID) = navigationPath.last, openID == trimmed {
+            selectedTab = .messages
+            return
+        }
+
         selectedTab = .messages
+        // Drop other conversation pushes only — keep settings/profile under the stack when possible.
         navigationPath.removeAll { destination in
             if case .conversation = destination { return true }
             return false
         }
-        navigationPath.append(.conversation(id))
-        // Clear banners + unread for this chat as soon as we open it.
-        Task { await clearNotifications(forConversation: id) }
+        navigationPath.append(.conversation(trimmed))
+
+        // Warm messages in the background if not already cached (ConversationView also loads).
+        Task {
+            if MessagesService.shared.cachedMessages(for: trimmed) == nil {
+                _ = try? await MessagesService.shared.listMessages(conversationID: trimmed, limit: 40)
+            }
+            await clearNotifications(forConversation: trimmed)
+        }
     }
 
     /// Removes Notification Center banners and marks server message notifications read for a chat.
@@ -751,13 +830,22 @@ final class AppState {
         showAppMenu = false
         do {
             let conversation = try await MessagesService.shared.startConversation(targetID: userID)
-            openConversation(id: conversation.id)
+            openConversation(id: conversation.id, seed: conversation)
         } catch {
             showToast(error.localizedDescription, style: .error)
         }
     }
 
     func openPublicProfile(username: String?, userID: String) {
+        // Close Sparks / Moments immediately so the profile is visible now —
+        // not after the user dismisses the full-screen player.
+        if reelsViewerContext != nil {
+            MediaPlaybackCoordinator.shared.stopAllPlayback()
+            reelsViewerContext = nil
+        }
+        if storyViewerContext != nil {
+            storyViewerContext = nil
+        }
         globePanel = nil
         showAppMenu = false
         selectedTab = .feed
@@ -790,6 +878,15 @@ final class AppState {
     /// Start / switch the single global hubs player. Stops feed audio first so nothing doubles.
     /// - Parameter expanded: full Hubs watch (player + comments). Elsewhere use mini.
     func startHubPlayback(_ post: CountryPost, expanded: Bool = true) {
+        // Always resolve catalog channel (async) so feed shares never show the sharer.
+        Task { @MainActor in
+            let watchPost = await PlayPlatformBridge.resolveHubWatchPresentation(for: post)
+            applyHubPlayback(watchPost, expanded: expanded)
+        }
+    }
+
+    @MainActor
+    private func applyHubPlayback(_ watchPost: CountryPost, expanded: Bool) {
         showAppMenu = false
         globePanel = nil
         reelsViewerContext = nil
@@ -797,24 +894,21 @@ final class AppState {
         clearPendingLivingVideo()
 
         if expanded {
-            // Remember chat (if any), then open real Hubs watch — never overlay on chat.
             rememberHubPlaybackChatReturnIfNeeded()
             navigationPath.removeAll()
             selectedTab = .hubs
         }
 
-        let switchingVideo = hubPlaybackPost?.id != post.id
+        let switchingVideo = hubPlaybackPost?.id != watchPost.id
         if switchingVideo {
-            // Kill feed / previous hub audio only when the source changes.
-            // Same post re-expand must NOT tear down the continuous AVPlayer.
             MediaPlaybackCoordinator.shared.stopAllPlayback()
-            hubPlaybackPost = post
+            hubPlaybackPost = watchPost
             hubPlaybackMuted = false
-        } else {
-            // Same post — still refresh the model if the new payload has a playable URL.
-            if hubPlaybackPost?.playableVideoURL == nil, post.playableVideoURL != nil {
-                hubPlaybackPost = post
-            }
+        } else if hubPlaybackPost?.playableVideoURL == nil, watchPost.playableVideoURL != nil {
+            hubPlaybackPost = watchPost
+        } else if hubPlaybackPost?.authorID != watchPost.authorID {
+            // Upgrade sharer identity → catalog channel without remounting player.
+            hubPlaybackPost = watchPost
         }
 
         hubPlaybackPlaying = true
@@ -824,21 +918,23 @@ final class AppState {
         } else {
             hubPlaybackExpanded = false
         }
-        YouTubeCatalogService.shared.recordWatch(post.id)
-        // Pre-resolve Archive CDN so first frame appears almost immediately.
-        if let url = post.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) {
+        YouTubeCatalogService.shared.recordWatch(watchPost.id)
+        if let url = watchPost.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) {
             ArchiveVideoPlayback.warmResolve(url)
         }
-        ImageCache.shared.prefetchPostThumbnails([post], maxPixelSize: 720)
+        ImageCache.shared.prefetchPostThumbnails([watchPost], maxPixelSize: 720)
     }
 
-    /// Collapse to mini.
+    /// Collapse to mini — **playback keeps running** (same continuous AVPlayer, only layout changes).
     /// If this session started from a chat and user hasn't navigated elsewhere, restore that chat.
     /// Chat messages stay warm in `MessagesService` cache so re-open is instant.
     func minimizeHubPlayback(returnToChat: Bool = true) {
         guard hubPlaybackPost != nil else { return }
-        hubPlaybackExpanded = false
+        // Never stop/pause for minimize — GlobalHubPlaybackLayer only resizes the stage.
         hubPlaybackPlaying = true
+        withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.88)) {
+            hubPlaybackExpanded = false
+        }
 
         // Drop return target if user already left that chat while minimized.
         syncHubPlaybackChatReturnWithPath()
@@ -857,14 +953,17 @@ final class AppState {
     }
 
     /// Tap miniplayer (from chat dock or floating bar) → full Hubs watch with comments.
+    /// Same continuous player — expand only grows the stage; audio/video never restart.
     func expandHubPlayback() {
         guard hubPlaybackPost != nil else { return }
         rememberHubPlaybackChatReturnIfNeeded()
         // Always leave chat / other pushes so Hubs watch (player + comments) is the real screen.
         navigationPath.removeAll()
         selectedTab = .hubs
-        hubPlaybackExpanded = true
         hubPlaybackPlaying = true
+        withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.88)) {
+            hubPlaybackExpanded = true
+        }
     }
 
     func stopHubPlayback() {
@@ -970,8 +1069,11 @@ final class AppState {
         if post.isReel {
             openReelsViewer(startingPost: post)
         } else if PlayPlatformBridge.isHubCatalogContent(post), post.hasVideo {
-            // Only true Hubs content opens the Hubs watch surface.
-            openLivingVideo(postID: post.id, tab: .home, post: post)
+            // Resolve catalog channel async (Archive hub clips must not show the sharer).
+            Task { @MainActor in
+                let presentation = await PlayPlatformBridge.resolveHubWatchPresentation(for: post)
+                openLivingVideo(postID: presentation.id, tab: .home, post: presentation)
+            }
         } else {
             // Plain feed videos (no channel / no hub marker) → post detail only.
             selectedTab = .feed
@@ -1005,34 +1107,132 @@ final class AppState {
     }
 
     func openReelsViewer(startingPost: CountryPost, seedPosts: [CountryPost] = []) {
+        // Feed / hubs audio must die before Sparks scroll takes over.
+        // Do not drain warm pool here — callers may pre-warm the first few clips.
+        MediaPlaybackCoordinator.shared.pauseAll()
+        hubPlaybackPlaying = false
         reelsViewerContext = ReelsViewerContext(
             startingPost: startingPost,
             seedPosts: seedPosts
         )
     }
 
-    func openReelsFromMenu() async {
-        // Fresh shuffle every open — different recommendations each time.
-        let seed = UInt64.random(in: 1...UInt64.max) ^ UInt64(Date().timeIntervalSince1970 * 1_000)
-        let sparks = await HubVideoSeedService.shared.sparkSeedVideos(limit: 40, shuffleSeed: seed)
+    /// Open endless Sparks from a feed card / share.
+    /// **Snappy:** presents the player immediately with the tapped clip, then expands an
+    /// R2-first Matterya pool (Archive only as last-resort fill).
+    func openGlobalSparksViewer(startingPost: CountryPost) {
+        // Prefer shared original when present; keep playable share media as fallback.
+        let start: CountryPost = {
+            if let embed = startingPost.sharedPost?.asCountryPost,
+               embed.playableVideoURL != nil {
+                return embed
+            }
+            return startingPost
+        }()
+        guard start.playableVideoURL != nil else {
+            Task { @MainActor in
+                var resolved = start
+                // Prefer live R2 original via shared_post / GraphQL id — Archive only if nothing else.
+                if let sid = SparkShareMarker.originID(from: startingPost.body)
+                    ?? startingPost.sharedPostID,
+                   let remote = try? await PostsService.shared.getPostByID(sid),
+                   remote.playableVideoURL != nil {
+                    resolved = remote
+                } else if let sid = SparkShareMarker.originID(from: startingPost.body),
+                          let hub = await HubVideoSeedService.shared.post(id: sid),
+                          hub.playableVideoURL != nil {
+                    resolved = hub
+                } else if let matched = await HubVideoSeedService.shared.postMatchingMediaURL(
+                    startingPost.mediaURL ?? startingPost.playableVideoURL?.absoluteString
+                ), matched.playableVideoURL != nil {
+                    resolved = matched
+                }
+                guard resolved.playableVideoURL != nil else {
+                    showToast("\(MatteryaCopy.noSparksYet) — publish one to get started.", style: .info)
+                    return
+                }
+                openReelsViewer(startingPost: resolved, seedPosts: [resolved])
+                if let url = resolved.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) {
+                    ArchiveVideoPlayback.warmResolve(url)
+                }
+                SparkWarmPool.shared.prepare(posts: [resolved], around: 0, ahead: 4, behind: 0)
+                await prefetchGlobalSparksNeighbors(around: resolved)
+            }
+            return
+        }
+
+        openReelsViewer(startingPost: start, seedPosts: [start])
+        if let url = start.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) {
+            ArchiveVideoPlayback.warmResolve(url)
+        }
+        SparkWarmPool.shared.prepare(posts: [start], around: 0, ahead: 4, behind: 0)
+
+        // Background: warm next R2 Sparks (not Archive) so swipe 2–4 is already buffered.
+        Task { @MainActor in
+            await prefetchGlobalSparksNeighbors(around: start)
+        }
+    }
+
+    /// Prefetch **R2 / network** spark neighbors after the player is on screen. Archive last.
+    @MainActor
+    private func prefetchGlobalSparksNeighbors(around start: CountryPost) async {
+        var pool: [CountryPost] = [start]
+        var seen: Set<String> = [start.id]
+
+        // Network first — includes R2 focus seeds on Supabase.
         let network = await PostsService.shared.loadReelsFeed(
+            globalLimit: 80,
+            viewerCountry: currentProfile?.countryCode,
+            followingIDs: followingIDs
+        )
+        let ranked = ReelsRankingEngine.sessionFreshOrder(network)
+        for post in ranked {
+            guard seen.insert(post.id).inserted else { continue }
+            pool.append(post)
+            if pool.count >= 36 { break }
+        }
+
+        // Archive only if we still need buffer depth.
+        if pool.count < 16 {
+            let seed = UInt64.random(in: 1...UInt64.max) ^ UInt64(Date().timeIntervalSince1970 * 1_000)
+            let archive = await HubVideoSeedService.shared.sparkSeedVideos(limit: 24, shuffleSeed: seed)
+            for post in ReelsRankingEngine.sessionFreshOrder(archive) {
+                guard seen.insert(post.id).inserted else { continue }
+                pool.append(post)
+                if pool.count >= 28 { break }
+            }
+        }
+
+        SparkWarmPool.shared.prepare(posts: pool, around: 0, ahead: 4, behind: 0)
+    }
+
+    func openReelsFromMenu() async {
+        // Always-new order (R2 first, Archive last) — stand-in until recommender.
+        let network = await PostsService.shared.loadReelsFeed(
+            globalLimit: 80,
             viewerCountry: currentProfile?.countryCode,
             followingIDs: followingIDs
         )
         var seen = Set<String>()
         var reels: [CountryPost] = []
-        for post in sparks + network {
+        for post in ReelsRankingEngine.sessionFreshOrder(network) {
             guard seen.insert(post.id).inserted else { continue }
-            guard post.hasVideo, !post.isStory else { continue }
             reels.append(post)
+        }
+        if reels.count < 16 {
+            let seed = UInt64.random(in: 1...UInt64.max) ^ UInt64(Date().timeIntervalSince1970 * 1_000)
+            let archive = await HubVideoSeedService.shared.sparkSeedVideos(limit: 40, shuffleSeed: seed)
+            for post in ReelsRankingEngine.sessionFreshOrder(archive) {
+                guard seen.insert(post.id).inserted else { continue }
+                reels.append(post)
+            }
         }
         guard let first = reels.first else {
             showToast("\(MatteryaCopy.noSparksYet) — publish one to get started.", style: .info)
             openPlay()
             return
         }
-        // Pre-buffer first + next three before the viewer appears.
-        SparkWarmPool.shared.prepare(posts: reels, around: 0, ahead: 3, behind: 0)
+        SparkWarmPool.shared.prepare(posts: reels, around: 0, ahead: 4, behind: 0)
         openReelsViewer(startingPost: first, seedPosts: reels)
     }
 
@@ -1179,9 +1379,17 @@ final class AppState {
             return "Set your home country to share."
         }
 
-        // Video shares: land on feed top with an uploading shadow first.
+        // True Sparks only. Hub long-form / normal videos stay long-form on the feed.
+        let isHubCatalogShare = PlayPlatformBridge.isHubCatalogContent(post) || post.isHubSeedVideo
+        let isSparkShare = (post.isReel || PlayPlatformBridge.isReelVideo(post))
+            && !(isHubCatalogShare && !post.isReel)
+        // Always land on the main feed after sharing a Spark — the share is a feed post card,
+        // never a new item in Sparks-for-you.
+        let stayInSparks = false
+
+        // Long-form video shares: shadow card on feed. Spark shares: light shadow then feed card.
         var placeholderID: String?
-        if post.hasVideo, !post.isReel {
+        if post.hasVideo, !stayInSparks {
             placeholderID = beginFeedVideoUpload(
                 caption: caption?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
                     ? caption!
@@ -1204,27 +1412,38 @@ final class AppState {
                 cityName: profile.cityName,
                 caption: caption
             )
+            // Share is feed-only — purge Hubs cache so For you never paints the re-share.
+            ContentCache.shared.invalidate(.homeFeed, .livingVideos)
+            ContentCache.shared.invalidateAllFeeds()
+            contentLoadGeneration += 1
+            NotificationCenter.default.post(
+                name: .userPostsDidChange,
+                object: nil,
+                userInfo: ["post": created]
+            )
+            // Only insert onto the home feed. Never into Hubs catalog / For you.
+            HomeFeedStore.shared.insertNewPost(created)
+
             if let placeholderID {
                 finishFeedVideoUpload(placeholderID: placeholderID, post: created)
             } else {
-                ContentCache.shared.invalidate(.homeFeed, .livingVideos)
-                contentLoadGeneration += 1
-                NotificationCenter.default.post(
-                    name: .userPostsDidChange,
-                    object: nil,
-                    userInfo: ["post": created]
-                )
-                HomeFeedStore.shared.insertNewPost(created)
                 goToFeedTop(scroll: true)
             }
-            if let sourceCountry = post.countryName, sourceCountry != countryName {
-                return "Shared from \(sourceCountry) to your \(countryName) feed."
+
+            if isSparkShare {
+                return "Spark shared to the main feed."
             }
-            return "Shared to your \(countryName) feed."
+            if let sourceCountry = post.countryName, sourceCountry != countryName {
+                return "Shared from \(sourceCountry) to the main feed."
+            }
+            return "Shared to the main feed."
         } catch {
             if let placeholderID {
                 failFeedVideoUpload(placeholderID: placeholderID, message: error.localizedDescription)
             }
+            #if DEBUG
+            print("[Share] sharePostToCountryFeed failed: \(error)")
+            #endif
             return error.localizedDescription
         }
     }
@@ -1273,7 +1492,7 @@ final class AppState {
         )
         goToFeedTop(scroll: true)
         showToast(
-            HubChannelPostMarker.isMarked(post.body)
+            PlayPlatformBridge.isHubChannelUpload(post)
                 ? "Published to \(MatteryaCopy.matteryaHubs)"
                 : "Posted to your feed",
             style: .success
@@ -1405,6 +1624,22 @@ final class AppState {
         followingIDs.contains(userID)
     }
 
+    /// Display follower count = last fetched base + any local follow/unfollow deltas.
+    func resolvedFollowerCount(for userID: String, base: Int?) -> Int {
+        let id = userID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let delta = followFollowerDeltas[id] ?? 0
+        return max(0, (base ?? 0) + delta)
+    }
+
+    /// Call after loading fresh follower counts so deltas do not double-count.
+    func clearFollowerCountDeltas(for userIDs: some Sequence<String>) {
+        for raw in userIDs {
+            let id = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !id.isEmpty else { continue }
+            followFollowerDeltas.removeValue(forKey: id)
+        }
+    }
+
     func toggleFollow(_ userID: String) async {
         let id = userID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !id.isEmpty, id != currentProfile?.userID else { return }
@@ -1413,8 +1648,10 @@ final class AppState {
         let wasFollowing = followingIDs.contains(id)
         if wasFollowing {
             followingIDs.remove(id)
+            followFollowerDeltas[id, default: 0] -= 1
         } else {
             followingIDs.insert(id)
+            followFollowerDeltas[id, default: 0] += 1
         }
 
         do {
@@ -1423,9 +1660,10 @@ final class AppState {
             } else {
                 try await followService.follow(targetID: id)
             }
-            // Re-merge remote + local so server follows stay in sync.
+            // Re-read from Supabase (source of truth for real UUID accounts).
             followingIDs = await followService.followingIDs()
             contentLoadGeneration += 1
+            // Real accounts: silent success (count already updated). Synthetic: small toast.
             if FollowService.usesLocalFollow(userID: id) {
                 showToast(wasFollowing ? "Unfollowed" : "Following", style: .info)
             }
@@ -1433,8 +1671,10 @@ final class AppState {
             // Roll back optimistic update.
             if wasFollowing {
                 followingIDs.insert(id)
+                followFollowerDeltas[id, default: 0] += 1
             } else {
                 followingIDs.remove(id)
+                followFollowerDeltas[id, default: 0] -= 1
             }
             showToast(error.localizedDescription, style: .error)
         }

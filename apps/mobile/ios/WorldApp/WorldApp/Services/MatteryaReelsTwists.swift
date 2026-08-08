@@ -37,19 +37,16 @@ struct ReelsWorldHopMoment: Equatable {
 }
 
 enum ReelsTwistHaptics {
-    static func worldHop() {
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-            UIImpactFeedbackGenerator(style: .rigid).impactOccurred(intensity: 0.75)
-        }
-    }
+    /// No-op — country hop while scrolling must stay silent (user request).
+    static func worldHop() {}
 
+    /// Soft tap only for intentional globe shuffle button (not scroll).
     static func globeShuffle() {
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.9)
+        UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.4)
     }
 
     static func pullDismiss() {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.85)
+        // Silent — pull-to-dismiss shouldn't buzz either.
     }
 }
 
@@ -168,20 +165,21 @@ struct ReelsWorldHopBanner: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Text(CountryFlag.emoji(for: moment.countryCode))
-                .font(.title2)
+            // Country name only — no flag emoji in Sparks.
+            Image(systemName: moment.isHomeCountry ? "house.fill" : "globe.americas.fill")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(Theme.reelsAccent)
+                .frame(width: 28, height: 28)
             VStack(alignment: .leading, spacing: 2) {
                 Text(moment.isHomeCountry ? "Back home" : "World hop")
                     .font(.caption.weight(.bold))
                     .foregroundStyle(.white.opacity(0.82))
-                Text(locationLine)
+                Text(moment.countryName)
                     .font(.subheadline.weight(.bold))
                     .foregroundStyle(.white)
+                    .lineLimit(1)
             }
             Spacer(minLength: 0)
-            Image(systemName: moment.isHomeCountry ? "house.fill" : "globe.americas.fill")
-                .font(.body.weight(.semibold))
-                .foregroundStyle(Theme.reelsAccent)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -192,13 +190,6 @@ struct ReelsWorldHopBanner: View {
         )
         .shadow(color: .black.opacity(0.28), radius: 14, y: 6)
     }
-
-    private var locationLine: String {
-        if let city = moment.cityName?.trimmingCharacters(in: .whitespacesAndNewlines), !city.isEmpty {
-            return "\(city), \(moment.countryName)"
-        }
-        return moment.countryName
-    }
 }
 
 /// Compact shelf UI that sits below the Dynamic Island during full-screen Reels.
@@ -208,8 +199,7 @@ struct ReelsIslandStrip: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Text(CountryFlag.emoji(for: post?.countryCode))
-                .font(.caption)
+            // Country name only — no flag.
             Text(locationLabel)
                 .font(.caption.weight(.bold))
                 .lineLimit(1)
@@ -232,12 +222,13 @@ struct ReelsIslandStrip: View {
         .accessibilityLabel(islandAccessibilityLabel)
     }
 
+    /// Shared-from country name only (no city, no flag).
     private var locationLabel: String {
         guard let post else { return MatteryaCopy.matteryaSparks }
-        if let city = post.cityName?.trimmingCharacters(in: .whitespacesAndNewlines), !city.isEmpty {
-            return city
+        if let name = post.countryName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            return name
         }
-        return post.countryName ?? post.countryCode?.uppercased() ?? MatteryaCopy.sparks
+        return post.countryCode?.uppercased() ?? MatteryaCopy.sparks
     }
 
     private var islandAccessibilityLabel: String {
@@ -256,10 +247,12 @@ struct ReelsChromeButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.body.weight(.bold))
-                .foregroundStyle(.white)
-                .frame(width: 36, height: 36)
-                .background(Theme.ink.opacity(0.52), in: Circle())
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(Theme.ink)
+                .frame(width: 38, height: 38)
+                .background(Theme.paper.opacity(0.94), in: Circle())
+                .overlay(Circle().stroke(Theme.border.opacity(0.7), lineWidth: 0.5))
+                .shadow(color: Theme.ink.opacity(0.16), radius: 8, y: 3)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(accessibilityLabel)
@@ -273,35 +266,31 @@ struct ReelsCountryChip: View {
 
     var body: some View {
         Button(action: onTap) {
-            HStack(spacing: 6) {
-                Text(CountryFlag.emoji(for: post.countryCode))
-                    .font(.caption)
+            HStack(spacing: 5) {
+                Image(systemName: "mappin.and.ellipse")
+                    .font(.caption2.weight(.bold))
                 Text(chipLabel)
-                    .font(.caption.weight(.semibold))
+                    .font(.caption2.weight(.semibold))
                 if isHomeCountry {
                     Text("Home")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(Theme.reelsAccent)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Theme.accentSoft, in: Capsule())
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(Theme.accentBright)
                 }
-                Image(systemName: "chevron.right")
-                    .font(.caption2.weight(.bold))
-                    .opacity(0.7)
             }
-            .foregroundStyle(.white.opacity(0.9))
+            .foregroundStyle(Theme.inkSecondary)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(.white.opacity(0.14), in: Capsule())
+            .background(Theme.canvasMuted, in: Capsule())
+            .overlay(Capsule().stroke(Theme.border.opacity(0.6), lineWidth: 0.5))
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("Shared from \(chipLabel)")
     }
 
     private var chipLabel: String {
-        if let city = post.cityName?.trimmingCharacters(in: .whitespacesAndNewlines), !city.isEmpty {
-            return city
+        if let name = post.countryName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            return name
         }
-        return post.countryName ?? post.countryCode?.uppercased() ?? "Explore"
+        return post.countryCode?.uppercased() ?? "Explore"
     }
 }

@@ -13,12 +13,15 @@ struct WorldAppApp: App {
                 .preferredColorScheme(.light)
                 .tint(Theme.accentBright)
                 .onAppear {
-                    // Any screen tap outside the keyboard collapses it (no Done bar).
-                    Keyboard.installDismissOnOutsideTap()
+                    // Install after first frame so AuthView text fields stay responsive.
+                    DispatchQueue.main.async {
+                        Keyboard.installDismissOnOutsideTap()
+                    }
                 }
                 .task {
+                    // Yield so login UI paints before any session work.
+                    await Task.yield()
                     await appState.bootstrap()
-                    Keyboard.installDismissOnOutsideTap()
                 }
                 .onOpenURL { url in
                     appState.handleDeepLink(url)

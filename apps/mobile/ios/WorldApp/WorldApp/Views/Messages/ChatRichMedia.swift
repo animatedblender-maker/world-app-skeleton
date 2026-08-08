@@ -3,9 +3,9 @@ import SwiftUI
 
 // MARK: - Shared post / hub / spark card in chat (no play chrome)
 
-/// Tappable share card — **no play button**. Entire card opens the destination:
-/// Sparks → Sparks scroll · Hubs video → Hubs watch · normal post → post detail.
-/// In-chat playback (if any) is only the fixed miniplayer under the composer, never on the card.
+/// Tappable share card — **no in-card playback**. Entire card opens the destination:
+/// Sparks → full-screen Sparks player · Hubs video → Hubs watch · post → post detail.
+/// Sparks use a portrait Shorts-style card; hubs/posts stay landscape.
 struct ChatShareCard: View {
     @Environment(AppState.self) private var appState
 
@@ -23,13 +23,203 @@ struct ChatShareCard: View {
     private var effective: Message.ShareInfo { resolved ?? share }
 
     private var isSparkShare: Bool {
-        effective.kind == .reel
-            || (effective.mediaType ?? "").lowercased() == "reel"
-            || (effective.mediaType ?? "").lowercased() == "spark"
-            || effective.asCountryPost.isReel
+        ChatShareRouting.isSpark(effective)
     }
 
     var body: some View {
+        Group {
+            if isSparkShare {
+                sparkCard
+            } else {
+                standardCard
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: isMine ? .trailing : .leading)
+        .task(id: share.postID) {
+            await hydrateIfNeeded()
+        }
+    }
+
+    // MARK: Spark — portrait Shorts-style chat share
+
+    /// Distinct from Hubs: 9:16 frame, Sparks badge, “Watch Spark” CTA. Tap → Sparks player.
+    private var sparkCard: some View {
+        let portraitW: CGFloat = 168
+        let portraitH: CGFloat = 280
+
+        return Button(action: handleOpen) {
+            VStack(alignment: isMine ? .trailing : .leading, spacing: 8) {
+                if !effective.note.isEmpty {
+                    Text(effective.note)
+                        .font(.subheadline)
+                        .foregroundStyle(isMine ? .white : Theme.ink)
+                        .multilineTextAlignment(isMine ? .trailing : .leading)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(isMine ? Theme.accentBright : Theme.surface)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .stroke(isMine ? Color.clear : Theme.border.opacity(0.6), lineWidth: 0.5)
+                        )
+                }
+
+                ZStack(alignment: .bottom) {
+                    // Full-bleed poster (vertical Spark frame).
+                    Group {
+                        if let poster = effective.posterImageURL {
+                            CachedAsyncImage(
+                                url: poster,
+                                maxPixelSize: 560,
+                                contentMode: .fill,
+                                placeholder: AnyView(sparkPlaceholder)
+                            )
+                        } else {
+                            sparkPlaceholder
+                        }
+                    }
+                    .frame(width: portraitW, height: portraitH)
+                    .clipped()
+
+                    // Soft top vignette so badge stays readable.
+                    LinearGradient(
+                        colors: [Color.black.opacity(0.45), Color.clear],
+                        startPoint: .top,
+                        endPoint: .center
+                    )
+                    .frame(height: 72)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .allowsHitTesting(false)
+
+                    // Bottom meta scrim.
+                    LinearGradient(
+                        colors: [Color.clear, Color.black.opacity(0.78)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: 120)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                    .allowsHitTesting(false)
+
+                    // Sparks brand chip.
+                    VStack {
+                        HStack {
+                            SparksOriginBadge(compact: true)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(10)
+                        Spacer(minLength: 0)
+                    }
+                    .allowsHitTesting(false)
+
+                    // Caption + author + open affordance.
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let caption = sparkCaption {
+                            Text(caption)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                                .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
+                        }
+
+                        HStack(spacing: 6) {
+                            if let author = effective.authorName, !author.isEmpty {
+                                Text(author)
+                                    .font(.caption2.weight(.medium))
+                                    .foregroundStyle(.white.opacity(0.88))
+                                    .lineLimit(1)
+                            }
+                            Spacer(minLength: 4)
+                            HStack(spacing: 4) {
+                                Image(systemName: "play.fill")
+                                    .font(.system(size: 9, weight: .bold))
+                                Text("Watch")
+                                    .font(.system(size: 11, weight: .bold))
+                            }
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(
+                                Capsule()
+                                    .fill(
+                                        LinearGradient(
+                                            colors: [
+                                                Theme.reelsAccent,
+                                                Theme.accentBright.opacity(0.95),
+                                            ],
+                                            startPoint: .leading,
+                                            endPoint: .trailing
+                                        )
+                                    )
+                            )
+                        }
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(width: portraitW, height: portraitH)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    Color(red: 0.985, green: 0.753, blue: 0.176).opacity(0.85),
+                                    Theme.reelsAccent.opacity(0.9),
+                                    Color(red: 0.525, green: 0.224, blue: 0.796).opacity(0.7),
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 1.5
+                        )
+                )
+                .shadow(color: Theme.ink.opacity(0.14), radius: 12, y: 4)
+            }
+        }
+        .buttonStyle(.plain)
+        .contentShape(Rectangle())
+        .accessibilityLabel("Open \(MatteryaCopy.spark)")
+        .accessibilityHint("Opens full-screen \(MatteryaCopy.sparks) player")
+    }
+
+    private var sparkCaption: String? {
+        if let title = effective.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            return title
+        }
+        if let body = effective.bodyText?.trimmingCharacters(in: .whitespacesAndNewlines), !body.isEmpty {
+            // Strip control markers if they leaked into body text.
+            let cleaned = body
+                .replacingOccurrences(of: "__spark__|", with: "")
+                .replacingOccurrences(of: "__reel__|", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return cleaned.isEmpty ? nil : cleaned
+        }
+        return nil
+    }
+
+    private var sparkPlaceholder: some View {
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color(red: 0.18, green: 0.14, blue: 0.12),
+                    Color(red: 0.32, green: 0.24, blue: 0.18),
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            Image(systemName: "sparkles")
+                .font(.system(size: 36, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.55))
+        }
+    }
+
+    // MARK: Hub / post — landscape card
+
+    private var standardCard: some View {
         Button(action: handleOpen) {
             VStack(alignment: .leading, spacing: 8) {
                 headerRow
@@ -78,15 +268,9 @@ struct ChatShareCard: View {
             .shadow(color: Theme.ink.opacity(0.06), radius: 8, y: 2)
         }
         .buttonStyle(.plain)
-        .frame(maxWidth: .infinity, alignment: isMine ? .trailing : .leading)
         .contentShape(Rectangle())
         .accessibilityLabel("Open \(kindLabel)")
-        .task(id: share.postID) {
-            await hydrateIfNeeded()
-        }
     }
-
-    // Hubs badge is feed-only (PlayFeedLinkCard) — never on chat cards.
 
     private var headerRow: some View {
         HStack(spacing: 6) {
@@ -105,13 +289,11 @@ struct ChatShareCard: View {
     }
 
     private var kindIcon: String {
-        if isSparkShare { return "sparkles" }
         if effective.isHubContent { return "play.rectangle.fill" }
         return "doc.text.fill"
     }
 
     private var kindLabel: String {
-        if isSparkShare { return MatteryaCopy.spark }
         if effective.isHubContent { return MatteryaCopy.matteryaHubs }
         return "Post"
     }
@@ -139,7 +321,7 @@ struct ChatShareCard: View {
         Rectangle()
             .fill(Theme.canvasDeep)
             .overlay {
-                Image(systemName: isSparkShare ? "sparkles" : (effective.isVideo ? "film" : "doc.richtext"))
+                Image(systemName: effective.isVideo ? "film" : "doc.richtext")
                     .font(.title3)
                     .foregroundStyle(Theme.inkMuted)
             }
@@ -179,6 +361,10 @@ struct ChatShareCard: View {
             if share.kind == .hub || PlayPlatformBridge.isHubCatalogContent(post) { return .hub }
             return share.kind
         }()
+        let mediaType: String? = {
+            if kind == .reel { return post.mediaType ?? share.mediaType ?? "reel" }
+            return post.mediaType ?? share.mediaType ?? (post.hasVideo ? "video" : nil)
+        }()
         resolved = Message.ShareInfo(
             kind: kind,
             postID: post.id,
@@ -188,7 +374,7 @@ struct ChatShareCard: View {
             authorID: share.authorID ?? post.authorID,
             mediaURL: media,
             posterURL: poster,
-            mediaType: post.mediaType ?? share.mediaType ?? (post.hasVideo ? "video" : nil),
+            mediaType: mediaType,
             note: share.note
         )
     }
@@ -198,10 +384,11 @@ struct ChatShareCard: View {
 
 enum ChatShareRouting {
     static func isSpark(_ share: Message.ShareInfo) -> Bool {
-        share.kind == .reel
-            || (share.mediaType ?? "").lowercased() == "reel"
-            || (share.mediaType ?? "").lowercased() == "spark"
-            || share.asCountryPost.isReel
+        if share.kind == .reel { return true }
+        let type = (share.mediaType ?? "").lowercased()
+        if type == "reel" || type == "spark" { return true }
+        if share.asCountryPost.isReel { return true }
+        return false
     }
 
     @MainActor
@@ -211,7 +398,8 @@ enum ChatShareRouting {
 
         if isSpark(share) {
             let post = share.asCountryPost
-            appState.openReelsViewer(startingPost: post, seedPosts: [post])
+            // Endless Sparks from this clip — same as feed Spark cards.
+            appState.openGlobalSparksViewer(startingPost: post)
             return
         }
 

@@ -61,15 +61,24 @@ final class AuthService {
             return session.accessToken
         }
 
+        // Coalesce concurrent refreshes. Call `refreshAccessToken` directly on this
+        // MainActor context when we own the refresh — wrapping in another `@MainActor`
+        // Task and awaiting it from MainActor can stall under load (avatar upload freeze).
         if let refreshTask {
             return try await refreshTask.value
         }
 
         let task = Task<String, Error> { @MainActor in
             defer { self.refreshTask = nil }
+            // Re-check after winning the race.
+            if let s = self.session, s.expiresAt >= Date().timeIntervalSince1970 + 60 {
+                return s.accessToken
+            }
             return try await self.refreshAccessToken()
         }
         refreshTask = task
+        // Yield so the refresh Task can start immediately on MainActor.
+        await Task.yield()
         return try await task.value
     }
 

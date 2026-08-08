@@ -18,6 +18,7 @@ export type ChannelRow = {
   handle: string | null;
   about: string | null;
   avatar_url: string | null;
+  cover_url: string | null;
   created_at: string;
   updated_at: string;
   owner: PostAuthorRow | null;
@@ -38,6 +39,7 @@ type CreateChannelInput = {
   name: string;
   about?: string | null;
   avatar_url?: string | null;
+  cover_url?: string | null;
   handle?: string | null;
 };
 
@@ -45,6 +47,7 @@ type UpdateChannelInput = {
   name?: string | null;
   about?: string | null;
   avatar_url?: string | null;
+  cover_url?: string | null;
   handle?: string | null;
 };
 
@@ -76,6 +79,7 @@ const CHANNEL_SELECT = `
     c.handle,
     c.about,
     c.avatar_url,
+    c.cover_url,
     c.created_at,
     c.updated_at,
     case
@@ -102,6 +106,11 @@ const CHANNEL_SELECT = `
         and p.channel_hidden_at is null
         and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
         and p.media_type in ('video', 'reel')
+        -- Feed re-shares of Archive/Hubs must never count as channel uploads.
+        and coalesce(p.body, '') not like '%__hub_origin__|%'
+        and coalesce(p.body, '') not like '%__spark_share__|%'
+        and coalesce(p.shared_post_id::text, '') = ''
+        and coalesce(p.media_url, '') not like '%archive.org%'
     ) as video_count
   from public.channels c
   left join public.profiles pr on pr.user_id = c.owner_user_id
@@ -238,15 +247,16 @@ export class ChannelsService {
 
     const about = String(input.about ?? '').trim().slice(0, 2000) || null;
     const avatarUrl = String(input.avatar_url ?? '').trim() || null;
+    const coverUrl = String(input.cover_url ?? '').trim() || null;
 
     try {
       const { rows } = await pool.query<{ id: string }>(
         `
-        insert into public.channels (owner_user_id, name, handle, about, avatar_url)
-        values ($1::uuid, $2, $3, $4, $5)
+        insert into public.channels (owner_user_id, name, handle, about, avatar_url, cover_url)
+        values ($1::uuid, $2, $3, $4, $5, $6)
         returning id
         `,
-        [userId, name, handle, about, avatarUrl]
+        [userId, name, handle, about, avatarUrl, coverUrl]
       );
       const id = rows[0]?.id;
       if (!id) throw new Error('CHANNEL_CREATE_FAILED');
@@ -290,6 +300,10 @@ export class ChannelsService {
       input.avatar_url !== undefined
         ? String(input.avatar_url ?? '').trim() || null
         : undefined;
+    const coverUrl =
+      input.cover_url !== undefined
+        ? String(input.cover_url ?? '').trim() || null
+        : undefined;
 
     try {
       const { rows } = await pool.query<{ id: string }>(
@@ -300,6 +314,7 @@ export class ChannelsService {
           handle = case when $4::boolean then $5 else handle end,
           about = case when $6::boolean then $7 else about end,
           avatar_url = case when $8::boolean then $9 else avatar_url end,
+          cover_url = case when $10::boolean then $11 else cover_url end,
           updated_at = now()
         where id = $1::uuid
         returning id
@@ -314,6 +329,8 @@ export class ChannelsService {
           about ?? null,
           avatarUrl !== undefined,
           avatarUrl ?? null,
+          coverUrl !== undefined,
+          coverUrl ?? null,
         ]
       );
       if (!rows[0]?.id) throw new Error('CHANNEL_NOT_FOUND');

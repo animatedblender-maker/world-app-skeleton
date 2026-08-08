@@ -48,26 +48,31 @@ struct FeedView: View {
             await refreshStrips()
         }
         .task(id: appState.contentLoadGeneration) {
+            // Smooth path: feed first paint only. Strips defer — never hubs catalog here.
             await store.bootstrap(forceRefresh: false)
-            await refreshStrips()
-            _ = await PostsService.shared.loadPlayCatalog(
-                viewerCountry: appState.currentProfile?.countryCode,
-                followingIDs: appState.followingIDs
-            )
-            await refreshContinueWatching()
-            refreshNewOnPlay()
+            Task(priority: .utility) {
+                await refreshStrips()
+            }
         }
         .onAppear {
-            if feedReels.isEmpty || newOnPlay.isEmpty || continueWatching.isEmpty {
-                Task { await refreshStrips() }
+            // Cheap local-only strips; network strips only if still empty after a beat.
+            refreshNewOnPlay()
+            if feedReels.isEmpty || continueWatching.isEmpty {
+                Task(priority: .utility) { await refreshStrips() }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .userPostsDidChange)) { notification in
             guard let changed = notification.userInfo?["post"] as? CountryPost else { return }
             if changed.isStory { return }
-            if changed.isSpark { return }
+            // Original Sparks stay out of the home feed list — but feed re-shares of Sparks
+            // (SparkShareMarker / embed) belong here as Spark cards.
+            if changed.isSpark, !changed.isSparkFeedShare { return }
             // Prefer insert (new posts) over silent update-only.
             store.insertNewPost(changed)
+            // Refresh Sparks-for-you so a mistaken re-share never monopolizes the rail.
+            if changed.isSparkFeedShare || changed.hasVideo {
+                Task { await refreshFeedReels() }
+            }
         }
     }
 
@@ -113,11 +118,8 @@ struct FeedView: View {
                                 appState.openPost(post)
                             },
                             onOpenReel: {
-                                var sparks = store.posts.filter(\.isReel)
-                                if !sparks.contains(where: { $0.id == post.id }) {
-                                    sparks.insert(post, at: 0)
-                                }
-                                appState.openReelsViewer(startingPost: post, seedPosts: sparks)
+                                // Infinite Sparks from all over Matterya (not just this feed page).
+                                appState.openGlobalSparksViewer(startingPost: post)
                             },
                             onPostDeleted: { id in store.removePost(id: id) },
                             onPostUpdated: { updated in store.applyLocalUpdate(updated) }
@@ -167,7 +169,8 @@ struct FeedView: View {
         SparksHorizontalStrip(
             posts: feedReels,
             onOpen: { post in
-                appState.openReelsViewer(startingPost: post, seedPosts: feedReels)
+                // Open endless Sparks (Archive + network), not only the thin strip list.
+                appState.openGlobalSparksViewer(startingPost: post)
             },
             onBrandTap: { appState.openPlay() }
         )
@@ -192,32 +195,11 @@ struct FeedView: View {
             .padding(.horizontal, Theme.pagePadding)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
+                HStack(alignment: .top, spacing: 12) {
                     ForEach(newOnPlay) { post in
-                        Button {
+                        HubsShelfThumbCard(post: post, width: 168) {
                             appState.openPost(post)
-                        } label: {
-                            VStack(alignment: .leading, spacing: 6) {
-                                YouTubeVideoThumbnail(
-                                    post: post,
-                                    maxPixelSize: 320,
-                                    showsPlayIcon: false,
-                                    frameStyle: .card,
-                                    extractFrameIfNeeded: false,
-                                    showsHubBadge: false
-                                )
-                                .frame(width: 168, height: 94)
-                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                                if let headline = post.displayHeadline {
-                                    Text(headline)
-                                        .font(.caption.weight(.semibold))
-                                        .foregroundStyle(Theme.ink)
-                                        .lineLimit(2)
-                                        .frame(width: 168, alignment: .leading)
-                                }
-                            }
                         }
-                        .buttonStyle(.plain)
                     }
                 }
                 .padding(.horizontal, Theme.pagePadding)
@@ -245,32 +227,12 @@ struct FeedView: View {
             .padding(.horizontal, Theme.pagePadding)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
+                // Top-align + fixed card size so every Continue watching tile matches.
+                HStack(alignment: .top, spacing: 12) {
                     ForEach(continueWatching) { post in
-                        Button {
+                        HubsShelfThumbCard(post: post, width: 168) {
                             appState.openPost(post)
-                        } label: {
-                            VStack(alignment: .leading, spacing: 6) {
-                                YouTubeVideoThumbnail(
-                                    post: post,
-                                    maxPixelSize: 320,
-                                    showsPlayIcon: false,
-                                    frameStyle: .card,
-                                    extractFrameIfNeeded: false,
-                                    showsHubBadge: false
-                                )
-                                .frame(width: 168, height: 94)
-                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                                if let headline = post.displayHeadline {
-                                    Text(headline)
-                                        .font(.caption.weight(.semibold))
-                                        .foregroundStyle(Theme.ink)
-                                        .lineLimit(2)
-                                        .frame(width: 168, alignment: .leading)
-                                }
-                            }
                         }
-                        .buttonStyle(.plain)
                     }
                 }
                 .padding(.horizontal, Theme.pagePadding)
@@ -286,14 +248,33 @@ struct FeedView: View {
     }
 
     private func refreshFeedReels() async {
-        let reels = await PostsService.shared.loadReelsFeed(
+        // Tiny Sparks rail — never a full pool rebuild on sign-in.
+        let network = await PostsService.shared.loadReelsFeed(
+            globalLimit: 16,
             viewerCountry: appState.currentProfile?.countryCode,
             followingIDs: appState.followingIDs
         )
-        feedReels = reels
-            .filter { $0.playableVideoURL != nil }
-            .prefix(10)
-            .map { $0 }
+        var seen = Set<String>()
+        var merged: [CountryPost] = []
+        for post in ReelsRankingEngine.sessionFreshOrder(network) {
+            guard post.playableVideoURL != nil else { continue }
+            guard seen.insert(post.id).inserted else { continue }
+            merged.append(post)
+            if merged.count >= 8 { break }
+        }
+        // Archive fill only if gate is on (normally empty).
+        if AppConfig.archiveContentEnabled, merged.count < 6 {
+            let seed = UInt64.random(in: 1...UInt64.max)
+                ^ UInt64(Date().timeIntervalSince1970 * 1_000)
+            let archive = await HubVideoSeedService.shared.sparkSeedVideos(limit: 12, shuffleSeed: seed)
+            for post in ReelsRankingEngine.sessionFreshOrder(archive) {
+                guard post.playableVideoURL != nil else { continue }
+                guard seen.insert(post.id).inserted else { continue }
+                merged.append(post)
+                if merged.count >= 8 { break }
+            }
+        }
+        feedReels = merged.shuffled()
         if !feedReels.isEmpty {
             SparkWarmPool.shared.prepare(posts: feedReels, around: 0, ahead: 2, behind: 0)
         }
@@ -317,9 +298,16 @@ struct FeedView: View {
             .map { $0 }
     }
 
-    /// Hubs resume row — history + partial progress, resolved against living cache + seeds.
+    /// Hubs resume row — only videos this account actually watched (no seed filler).
     private func refreshContinueWatching() async {
         let catalog = YouTubeCatalogService.shared
+        let historyIDs = catalog.historyIDs()
+        // Brand-new accounts (or no watch trail) → hide the section entirely.
+        guard !historyIDs.isEmpty else {
+            continueWatching = []
+            return
+        }
+
         var pool: [CountryPost] = []
         var seen = Set<String>()
         func append(_ posts: [CountryPost]) {
@@ -340,7 +328,7 @@ struct FeedView: View {
         for post in catalog.historyVideos(from: hubLongForm) where orderedIDs.insert(post.id).inserted {
             ordered.append(post)
         }
-        // Also surface anything with a saved resume point (watched mid-video).
+        // Mid-video resume points for this user only (already per-user storage).
         let inProgress = hubLongForm
             .filter { catalog.playbackPosition(for: $0.id) >= 1 }
             .sorted { catalog.playbackPosition(for: $0.id) > catalog.playbackPosition(for: $1.id) }

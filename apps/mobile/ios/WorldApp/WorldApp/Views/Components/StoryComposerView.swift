@@ -219,10 +219,10 @@ struct StoryComposerView: View {
 
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(canPostHere ? "Ready to share" : "Home country only")
+                    Text(canPostHere ? "Ready to share" : "Set your home country")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(canPostHere ? Theme.ink : Theme.danger)
-                    Text(canPostHere ? country.name : "Switch to your country feed to post.")
+                    Text(canPostHere ? "Shared with your country" : "Add a home country in your profile first.")
                         .font(.caption2)
                         .foregroundStyle(Theme.inkMuted)
                 }

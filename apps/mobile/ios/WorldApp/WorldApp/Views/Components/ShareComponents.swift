@@ -45,36 +45,207 @@ struct ToastBanner: View {
     }
 }
 
+/// In-feed Sparks surface: same full-width + dominant height as normal feed video cards,
+/// with Sparks badge + mute chip; tap opens the infinite Sparks player.
+struct SparkFeedCard: View {
+    @Environment(AppState.self) private var appState
+
+    let post: CountryPost
+    var edgeToEdge: Bool = false
+    var autoplaySurface: FeedAutoplaySurface = .home
+    var onOpen: (() -> Void)? = nil
+
+    private var corner: CGFloat { edgeToEdge ? 0 : 12 }
+
+    /// Match `FeedMediaSizeModifier` / long-form feed video height exactly.
+    private var cardHeight: CGFloat {
+        FacebookMediaLayout.dominantFeedVideoHeight()
+    }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Theme.ink
+
+            if let url = post.playableVideoURL {
+                // Full-bleed fill (no black letterbox) — R2 + Archive Sparks alike.
+                InFrameVideoPlayer(
+                    url: url,
+                    posterURL: post.posterImageURL,
+                    placement: "reel",
+                    countryCode: post.countryCode,
+                    contentCountryCode: post.countryCode,
+                    postID: post.id,
+                    muted: appState.feedVideosMuted,
+                    loops: true,
+                    preferArchivePlayer: post.isHubSeedVideo || ArchiveVideoPlayback.isArchiveURL(url),
+                    showsControls: false,
+                    muteOnlyControls: true,
+                    fillsFrame: true,
+                    sharesFeedMute: true,
+                    autoplaySurface: autoplaySurface,
+                    onViewed: { Task { await PostsService.shared.recordView(post) } }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+                .onAppear {
+                    // Start silent buffer before focus elects this card.
+                    SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
+                }
+            } else {
+                VideoThumbnailView(
+                    post: post,
+                    maxPixelSize: 720,
+                    contentMode: .fill,
+                    showsPlayIcon: true,
+                    playIconSize: 36,
+                    placeholder: AnyView(
+                        Rectangle().fill(Theme.canvasDeep)
+                    )
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+            }
+
+            SparksOriginBadge(compact: true)
+                .padding(10)
+                .allowsHitTesting(false)
+
+            // Tap opens full Sparks player; leave top strip free for mute chip.
+            VStack(spacing: 0) {
+                Color.clear
+                    .frame(height: 52)
+                    .allowsHitTesting(false)
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { openFullPlayer() }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: cardHeight)
+        .clipped()
+        .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+        .overlay {
+            if !edgeToEdge {
+                RoundedRectangle(cornerRadius: corner, style: .continuous)
+                    .stroke(Theme.border.opacity(0.5), lineWidth: 0.5)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityHint("Opens \(MatteryaCopy.sparks) full-screen player")
+    }
+
+    private func openFullPlayer() {
+        if let onOpen {
+            onOpen()
+            return
+        }
+        // Endless Sparks from all over Matterya — not a one-clip dead end.
+        appState.openGlobalSparksViewer(startingPost: post)
+    }
+}
+
+/// Compact Sparks brand chip — feed cards + full-screen player.
+struct SparksOriginBadge: View {
+    var compact: Bool = false
+
+    var body: some View {
+        HStack(spacing: compact ? 4 : 6) {
+            Image(systemName: "sparkles")
+                .font(.system(size: compact ? 9 : 11, weight: .bold))
+            Text(MatteryaCopy.sparks)
+                .font(.system(size: compact ? 10 : 12, weight: .bold))
+                .tracking(0.3)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, compact ? 8 : 10)
+        .padding(.vertical, compact ? 4 : 6)
+        .background(
+            Capsule()
+                .fill(
+                    LinearGradient(
+                        colors: [Theme.reelsAccent, Theme.accentBright.opacity(0.92)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+        )
+        .shadow(color: .black.opacity(0.28), radius: 6, y: 2)
+        .accessibilityLabel(MatteryaCopy.sparks)
+    }
+}
+
 struct SharedPostEmbedView: View {
     @Environment(AppState.self) private var appState
 
     let embed: SharedPostPreview
+    var autoplaySurface: FeedAutoplaySurface = .home
+    /// When true (feed cards), media is full-width; text chrome keeps a small side margin.
+    var edgeToEdge: Bool = false
+
+    private var sourcePost: CountryPost { embed.asCountryPost }
+
+    private var mediaSideInset: CGFloat { edgeToEdge ? 0 : Theme.pagePadding }
+
+    /// Shared hub long-form → same player + Hubs badge as native hub feed cards.
+    private var isHubShareVideo: Bool {
+        PlayPlatformBridge.isHubFeedCardVideo(sourcePost)
+    }
 
     var body: some View {
         Group {
-            if PlayPlatformBridge.isLongFormVideo(embed.asCountryPost) {
+            // Sparks first — never mis-route a shared Spark into Hubs long-form chrome.
+            if sourcePost.isReel
+                || PlayPlatformBridge.isReelVideo(sourcePost)
+                || PlayPlatformBridge.isSparkFeedCard(sourcePost) {
+                SparkFeedCard(
+                    post: sourcePost,
+                    edgeToEdge: edgeToEdge,
+                    autoplaySurface: autoplaySurface
+                ) {
+                    appState.openGlobalSparksViewer(startingPost: sourcePost)
+                }
+                .padding(.horizontal, mediaSideInset)
+                .padding(.vertical, edgeToEdge ? 0 : 8)
+            } else if isHubShareVideo || (PlayPlatformBridge.isLongFormVideo(sourcePost)
+                && PlayPlatformBridge.isHubCatalogContent(sourcePost)) {
+                // Hubs origin share — badge + open original channel (never creates a channel for sharer).
                 PlayFeedLinkCard(
-                    post: embed.asCountryPost,
-                    onOpen: { appState.openPost(embed.asCountryPost) },
-                    edgeToEdge: false
+                    post: sourcePost,
+                    onOpen: { appState.openPost(sourcePost) },
+                    edgeToEdge: edgeToEdge,
+                    forceHubsBadge: true,
+                    autoplaySurface: autoplaySurface
                 )
-                .padding(.horizontal, Theme.pagePadding)
-                .padding(.vertical, 8)
+                .padding(.horizontal, mediaSideInset)
+                .padding(.vertical, edgeToEdge ? 0 : 8)
+            } else if PlayPlatformBridge.isLongFormVideo(sourcePost) {
+                // Plain long-form feed share — player only, no Hubs badge/channel claim.
+                PlayFeedLinkCard(
+                    post: sourcePost,
+                    onOpen: { appState.openPost(sourcePost) },
+                    edgeToEdge: edgeToEdge,
+                    forceHubsBadge: false,
+                    autoplaySurface: autoplaySurface
+                )
+                .padding(.horizontal, mediaSideInset)
+                .padding(.vertical, edgeToEdge ? 0 : 8)
             } else {
                 standardEmbed
+                    .padding(.horizontal, edgeToEdge ? Theme.pagePadding : Theme.pagePadding)
             }
         }
     }
 
     private var standardEmbed: some View {
-        let post = embed.asCountryPost
+        let post = sourcePost
         let isVideo = embed.hasVideo
+        let isHub = PlayPlatformBridge.isHubCatalogContent(post)
         // Same height rules as feed cards: photos use 4:5 capped at maxFeedMediaHeight; videos 16:9 tall.
         let photoAspect = FacebookMediaLayout.aspectRatio(for: post, context: .feed)
             ?? FacebookMediaLayout.photoPortraitAspect
 
         return Button {
-            appState.navigate(to: .post(embed.id))
+            appState.openPost(post)
         } label: {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 8) {
@@ -93,33 +264,42 @@ struct SharedPostEmbedView: View {
                 .padding(.bottom, 8)
 
                 if embed.hasMedia {
-                    Group {
-                        if isVideo {
-                            VideoThumbnailView(
-                                post: post,
-                                maxPixelSize: 720,
-                                contentMode: .fill,
-                                showsPlayIcon: false,
-                                playIconSize: 36,
-                                placeholder: AnyView(mediaPlaceholder)
-                            )
-                        } else if let url = embed.feedImageURL {
-                            CachedAsyncImage(
-                                url: url,
-                                maxPixelSize: 720,
-                                contentMode: .fill,
-                                placeholder: AnyView(mediaPlaceholder)
-                            )
-                        } else {
-                            mediaPlaceholder
+                    ZStack(alignment: .topLeading) {
+                        Group {
+                            if isVideo {
+                                VideoThumbnailView(
+                                    post: post,
+                                    maxPixelSize: 720,
+                                    contentMode: .fill,
+                                    showsPlayIcon: false,
+                                    playIconSize: 36,
+                                    placeholder: AnyView(mediaPlaceholder)
+                                )
+                            } else if let url = embed.feedImageURL {
+                                CachedAsyncImage(
+                                    url: url,
+                                    maxPixelSize: 720,
+                                    contentMode: .fill,
+                                    placeholder: AnyView(mediaPlaceholder)
+                                )
+                            } else {
+                                mediaPlaceholder
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .modifier(SharedEmbedMediaSizeModifier(
+                            isVideo: isVideo,
+                            photoAspect: photoAspect
+                        ))
+                        .clipped()
+
+                        // Hubs chip for spark / non-long-form hub shares in the standard embed path.
+                        if isHub, isVideo {
+                            HubsOriginBadge(compact: true)
+                                .padding(10)
+                                .allowsHitTesting(false)
                         }
                     }
-                    .frame(maxWidth: .infinity)
-                    .modifier(SharedEmbedMediaSizeModifier(
-                        isVideo: isVideo,
-                        photoAspect: photoAspect
-                    ))
-                    .clipped()
                 }
 
                 if !embed.displayExcerpt.isEmpty {
@@ -184,6 +364,10 @@ struct SharePostSheet: View {
     @State private var busy = false
     @State private var feedback: String?
 
+    private var isSparkShare: Bool {
+        post.isReel || post.isSparkFeedShare || PlayPlatformBridge.isSparkFeedCard(post)
+    }
+
     private var homeCountryName: String {
         appState.currentProfile?.countryName ?? "your country"
     }
@@ -225,7 +409,7 @@ struct SharePostSheet: View {
                     shareRow(
                         MatteryaCopy.shareToYourFeed,
                         subtitle: shareToFeedSubtitle,
-                        icon: "globe.americas",
+                        icon: "rectangle.stack.fill",
                         tint: Theme.accent
                     ) {
                         if appState.needsRepeatShareWarning(for: post) {
@@ -234,7 +418,14 @@ struct SharePostSheet: View {
                             Task { await shareToCountryFeed() }
                         }
                     }
-                    shareRow("Send in message", subtitle: "Private chat with a friend", icon: "paperplane", tint: Theme.facebookBlue) {
+                    shareRow(
+                        isSparkShare ? "Send \(MatteryaCopy.spark) in chat" : "Send in message",
+                        subtitle: isSparkShare
+                            ? "Friend opens full-screen \(MatteryaCopy.sparks)"
+                            : "Private chat with a friend",
+                        icon: isSparkShare ? "sparkles" : "paperplane",
+                        tint: isSparkShare ? Theme.reelsAccent : Theme.facebookBlue
+                    ) {
                         showMessagePicker = true
                     }
                     shareRow("Repost with quote", subtitle: "Write your take on your home feed", icon: "quote.bubble", tint: Theme.ink) {
@@ -286,10 +477,7 @@ struct SharePostSheet: View {
     }
 
     private var shareToFeedSubtitle: String {
-        if let sourceCountryName, sourceCountryName != homeCountryName {
-            return "Adds this \(sourceCountryName) post to \(homeCountryName)"
-        }
-        return "Posts always land in \(homeCountryName)"
+        "Adds this post to the main feed"
     }
 
     private var repeatShareWarningMessage: String {
@@ -390,7 +578,7 @@ struct ShareMessagePickerSheet: View {
                                     Text(conversation.displayTitle(currentUserID: currentUserID))
                                         .font(.body.weight(.medium))
                                         .foregroundStyle(Theme.ink)
-                                    if let preview = conversation.lastMessage?.body, !preview.isEmpty {
+                                    if let preview = conversation.lastMessage?.previewText, !preview.isEmpty {
                                         Text(preview)
                                             .font(.caption)
                                             .foregroundStyle(Theme.inkMuted)
@@ -402,7 +590,7 @@ struct ShareMessagePickerSheet: View {
                     }
                 }
             }
-            .navigationTitle("Send to…")
+            .navigationTitle(isSparkShare ? "Send \(MatteryaCopy.spark) to…" : "Send to…")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -411,6 +599,10 @@ struct ShareMessagePickerSheet: View {
             }
             .task { await load() }
         }
+    }
+
+    private var isSparkShare: Bool {
+        post.isReel || post.isSparkFeedShare || PlayPlatformBridge.isSparkFeedCard(post)
     }
 
     private func load() async {

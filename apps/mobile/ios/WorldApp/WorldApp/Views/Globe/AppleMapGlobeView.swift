@@ -3,6 +3,8 @@ import MapKit
 
 struct AppleMapGlobeView: View {
     let resetGlobe: Bool
+    /// When false, the globe is view-only (rotate/zoom only — no country feeds).
+    var allowsCountrySelection: Bool = true
     let onSelectCountry: (Country) -> Void
 
     @State private var entries: [CountryMapEntry] = []
@@ -16,6 +18,7 @@ struct AppleMapGlobeView: View {
             resetGlobe: resetGlobe,
             dots: globePresence.dots,
             isActive: true,
+            allowsCountrySelection: allowsCountrySelection,
             onSelectEntry: selectEntry
         )
         .task {
@@ -33,6 +36,7 @@ struct AppleMapGlobeView: View {
     }
 
     private func selectEntry(_ entry: CountryMapEntry) {
+        guard allowsCountrySelection else { return }
         let match = apiCountries.first {
             $0.iso.uppercased() == entry.iso2.uppercased()
                 || $0.iso.uppercased() == entry.iso3.uppercased()
@@ -56,10 +60,11 @@ struct AppleMapGlobeRepresentable: UIViewRepresentable {
     let resetGlobe: Bool
     let dots: [GlobePresenceDot]
     let isActive: Bool
+    var allowsCountrySelection: Bool = true
     let onSelectEntry: (CountryMapEntry) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onSelectEntry: onSelectEntry)
+        Coordinator(onSelectEntry: onSelectEntry, allowsCountrySelection: allowsCountrySelection)
     }
 
     func makeUIView(context: Context) -> MKMapView {
@@ -80,11 +85,14 @@ struct AppleMapGlobeRepresentable: UIViewRepresentable {
         mapView.showsUserLocation = false
         mapView.setCameraZoomRange(nil, animated: false)
 
-        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
-        tap.delegate = context.coordinator
-        mapView.addGestureRecognizer(tap)
+        if allowsCountrySelection {
+            let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
+            tap.delegate = context.coordinator
+            mapView.addGestureRecognizer(tap)
+        }
 
         context.coordinator.mapView = mapView
+        context.coordinator.allowsCountrySelection = allowsCountrySelection
         context.coordinator.showGlobe(animated: false)
         return mapView
     }
@@ -93,6 +101,7 @@ struct AppleMapGlobeRepresentable: UIViewRepresentable {
         context.coordinator.entries = entries
         context.coordinator.apiCountries = apiCountries
         context.coordinator.dots = dots
+        context.coordinator.allowsCountrySelection = allowsCountrySelection
         mapView.isHidden = !isActive
         mapView.alpha = isActive ? 1 : 0
         if !isActive {
@@ -112,6 +121,7 @@ struct AppleMapGlobeRepresentable: UIViewRepresentable {
 
     final class Coordinator: NSObject, MKMapViewDelegate, UIGestureRecognizerDelegate {
         let onSelectEntry: (CountryMapEntry) -> Void
+        var allowsCountrySelection: Bool
         weak var mapView: MKMapView?
 
         var entries: [CountryMapEntry] = []
@@ -125,8 +135,12 @@ struct AppleMapGlobeRepresentable: UIViewRepresentable {
         private let globeDistance: CLLocationDistance = 42_000_000
         private let focusDistance: CLLocationDistance = 2_800_000
 
-        init(onSelectEntry: @escaping (CountryMapEntry) -> Void) {
+        init(
+            onSelectEntry: @escaping (CountryMapEntry) -> Void,
+            allowsCountrySelection: Bool = true
+        ) {
             self.onSelectEntry = onSelectEntry
+            self.allowsCountrySelection = allowsCountrySelection
             super.init()
         }
 
@@ -183,6 +197,7 @@ struct AppleMapGlobeRepresentable: UIViewRepresentable {
         }
 
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {
+            guard allowsCountrySelection else { return }
             guard let mapView, gesture.state == .ended else { return }
             let point = gesture.location(in: mapView)
             let coordinate = mapView.convert(point, toCoordinateFrom: mapView)

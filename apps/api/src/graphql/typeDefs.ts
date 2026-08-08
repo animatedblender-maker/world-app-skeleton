@@ -116,6 +116,7 @@ export const typeDefs = `#graphql
     handle: String
     about: String
     avatar_url: String
+    cover_url: String
     created_at: String!
     updated_at: String!
     owner: PostAuthor
@@ -137,6 +138,7 @@ export const typeDefs = `#graphql
     name: String!
     about: String
     avatar_url: String
+    cover_url: String
     handle: String
   }
 
@@ -144,6 +146,7 @@ export const typeDefs = `#graphql
     name: String
     about: String
     avatar_url: String
+    cover_url: String
     handle: String
   }
 

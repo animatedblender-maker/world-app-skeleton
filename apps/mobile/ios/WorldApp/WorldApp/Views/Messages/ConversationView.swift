@@ -86,9 +86,9 @@ struct ConversationView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if isLoading {
-                ProgressView().tint(Theme.accentBright).frame(maxHeight: .infinity)
-            } else {
+            // Always paint the thread chrome immediately — never a full-screen loader
+            // that covers the hubs mini player or freezes open-chat.
+            ZStack {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 10) {
@@ -123,7 +123,15 @@ struct ConversationView: View {
                         scrollToBottom(proxy: proxy)
                     }
                 }
+
+                if isLoading && visibleMessages.isEmpty {
+                    ProgressView()
+                        .tint(Theme.accentBright)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .allowsHitTesting(false)
+                }
             }
+            .frame(maxHeight: .infinity)
 
             if let errorMessage {
                 Text(errorMessage)
@@ -132,7 +140,9 @@ struct ConversationView: View {
                     .padding(.horizontal)
             }
 
-            // Hubs continuous mini — FIXED under the thread, above textbox / photo / send.
+            // Hubs continuous mini chrome — FIXED under the thread.
+            // Video itself stays in GlobalHubPlaybackLayer (embedsVideo: false) so
+            // expand/minimize never restarts the AVPlayer.
             if let hubPost = appState.hubPlaybackPost, !appState.hubPlaybackExpanded {
                 YouTubeMiniPlayerBar(
                     post: hubPost,
@@ -142,7 +152,7 @@ struct ConversationView: View {
                     onClose: {
                         appState.stopHubPlayback()
                     },
-                    embedsVideo: true,
+                    embedsVideo: false,
                     isPlaying: Binding(
                         get: { appState.hubPlaybackPlaying },
                         set: { appState.hubPlaybackPlaying = $0 }
@@ -152,6 +162,7 @@ struct ConversationView: View {
                         set: { appState.hubPlaybackMuted = $0 }
                     )
                 )
+                // Video hole reports HubContinuousVideoSlotKey from YouTubeMiniPlayerBar (embedsVideo: false).
                 .padding(.bottom, 0)
                 .background(Theme.surface)
                 .overlay(alignment: .top) {
@@ -211,10 +222,13 @@ struct ConversationView: View {
             }
         }
         .task(id: conversation.id) {
+            // Keep hubs mini playing for the whole chat session.
+            if appState.hubPlaybackPost != nil {
+                appState.hubPlaybackPlaying = true
+            }
             // Seed from conversation members while the network refresh loads.
             if peerLastReadAt == nil, let me = currentUserID {
-                peerLastReadAt = conversation.otherMember(currentUserID: me)?.lastReadAt
-            }
+                peerLastReadAt = conversation.otherMember(currentUserID: me)?.lastReadAt            }
             // If we already painted from cache, soft-refresh without a blocking spinner.
             await callManager.ensureSignalingReady()
             await loadMessages()

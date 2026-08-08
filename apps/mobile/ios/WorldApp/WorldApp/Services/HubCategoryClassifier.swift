@@ -219,13 +219,11 @@ enum HubCategoryClassifier {
         return s
     }
 
+    /// Catalog channel display — always **The Archive** (single R2 / hub channel).
     nonisolated static func displayName(forPersonaSlug slug: String, isSpark: Bool) -> String {
-        let parent = parentCategory(of: slug)
-        if let match = personasByCategory[parent]?.first(where: { $0.slug == slug }) {
-            return isSpark ? "\(match.displayName) Sparks" : match.displayName
-        }
-        let pretty = slug.replacingOccurrences(of: "_", with: " ").capitalized
-        return isSpark ? "\(pretty) Sparks" : pretty
+        _ = slug
+        _ = isSpark
+        return HubVideoSeedService.archiveChannelDisplayName
     }
 
     nonisolated private static func stableHash(_ value: String) -> UInt64 {

@@ -7,6 +7,8 @@ struct ProfileView: View {
     @State private var followCounts = FollowCounts(followers: 0, following: 0)
     @State private var isLoadingPosts = false
     @State private var errorMessage: String?
+    /// Real Hubs channel only — not feed re-shares of Hubs content.
+    @State private var hasOwnHubsChannel = false
 
     private var profile: Profile? { appState.currentProfile }
 
@@ -45,10 +47,16 @@ struct ProfileView: View {
         }
         .onChange(of: appState.selectedTab) { _, tab in
             guard tab == .profile else { return }
+            // Re-elect autoplay winner for profile cards (feed was holding focus while mounted).
+            FeedVideoFocus.shared.resetAll()
             Task {
                 await loadPosts()
                 await loadCounts()
             }
+        }
+        .onChange(of: appState.profileLibrarySection) { _, _ in
+            // Posts ↔ Saved swaps the visible video list — clear so the new ≥50% winner can play.
+            FeedVideoFocus.shared.resetAll()
         }
         .onReceive(NotificationCenter.default.publisher(for: .userPostsDidChange)) { notification in
             if let created = notification.userInfo?["post"] as? CountryPost,
@@ -140,10 +148,8 @@ struct ProfileView: View {
                 }
             }
 
-            // Only show Hubs channel entry when a channel exists (or hub-published videos).
-            if LivingChannelMarker.hasChannel(profile: profile)
-                || posts.contains(where: PlayPlatformBridge.isHubCatalogContent),
-               let userID = profileUserID {
+            // Only show Hubs channel entry when a real channel exists (not re-shares).
+            if hasOwnHubsChannel, let userID = profileUserID {
                 Button {
                     appState.openPlayChannel(authorID: userID, username: profile?.username)
                 } label: {
@@ -281,6 +287,7 @@ struct ProfileView: View {
                     showsAuthorHeader: false,
                     showsAuthorInJournal: showsAuthorInJournal,
                     mediaContext: .feed,
+                    autoplaySurface: .profile,
                     onLikeToggle: {
                         Task {
                             await toggleLike(
@@ -314,6 +321,12 @@ struct ProfileView: View {
                         }
                     }
                 )
+                .onAppear {
+                    EngagementTracker.shared.feedPostAppeared(post, surface: "profile")
+                }
+                .onDisappear {
+                    EngagementTracker.shared.feedPostDisappeared(post)
+                }
             }
         }
     }
@@ -376,6 +389,19 @@ struct ProfileView: View {
             ContentCache.shared.setPosts(posts, for: .profilePosts)
         } catch {
             errorMessage = error.localizedDescription
+        }
+        hasOwnHubsChannel = await resolveHasOwnHubsChannel(userID: userID)
+    }
+
+    private func resolveHasOwnHubsChannel(userID: String) async -> Bool {
+        if LivingChannelMarker.hasChannel(profile: profile) { return true }
+        if let channel = try? await ChannelsService.shared.channelByOwner(userID: userID),
+           !channel.id.isEmpty {
+            return true
+        }
+        // Intentional Hubs long-form publishes only — never origin/feed re-shares.
+        return posts.contains { post in
+            !post.isReel && PlayPlatformBridge.isHubChannelUpload(post)
         }
     }
 

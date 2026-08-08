@@ -60,23 +60,35 @@ struct YouTubeWatchView: View {
 
     var body: some View {
         GeometryReader { geo in
-            // Content-space stage height. Parent continuous player extends under the
-            // status bar by +topInset; the spacer here must stay stage-only so title
-            // sits flush under the video (no white band).
-            let stageHeight = YouTubeMediaLayout.watchPlayerHeight(
-                containerWidth: geo.size.width,
-                containerHeight: geo.size.height
-            )
-            VStack(spacing: 0) {
-                playerSection
-                    .frame(width: geo.size.width, height: stageHeight)
-                    .background(Theme.ink)
+            // Continuous player starts just below the notch (safeTop).
+            // Watch chrome is already in the safe area, so reserve the full stage height.
+            let stageHeight = embedsPlayer
+                ? YouTubeMediaLayout.watchPlayerHeight(
+                    containerWidth: geo.size.width,
+                    containerHeight: geo.size.height
+                )
+                : YouTubeMediaLayout.hubsContinuousStageHeight(containerWidth: geo.size.width)
+            let reservedPlayerHeight = max(120, stageHeight)
 
+            VStack(spacing: 0) {
+                // Sticky player — stays put while everything below scrolls (YouTube-style).
+                playerSection
+                    .frame(width: geo.size.width, height: reservedPlayerHeight)
+                    .background(Theme.ink)
+                    .zIndex(2)
+
+                // Title, channel, actions, comments, related — all scroll under the player
+                // so the related shelf gets the full remaining height.
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        Color.clear
+                            .frame(height: 8)
+                            .frame(maxWidth: .infinity)
+
                         titleSection
                         channelSection
                         actionSection
+
                         descriptionSection
                             .padding(.horizontal, Theme.pagePadding)
                             .id("desc-\(currentPost.id)")
@@ -84,13 +96,27 @@ struct YouTubeWatchView: View {
                         Divider().padding(.horizontal, Theme.pagePadding)
 
                         commentsSection
-                        relatedSection
+
+                        if !related.isEmpty || !relatedWindow.isEmpty {
+                            relatedHeader
+                            ForEach(relatedWindow) { item in
+                                YouTubeVideoListRow(post: item.post) {
+                                    onOpenVideo(item.post)
+                                }
+                                .onAppear {
+                                    if item.id == relatedWindow.last?.id {
+                                        appendRelatedPage()
+                                    }
+                                    warmRelatedAround(item)
+                                }
+                            }
+                        }
                     }
-                    // Clear gap under the video so the title isn’t covered by the player.
-                    .padding(.top, 14)
-                    .padding(.bottom, 24)
+                    .padding(.bottom, 28)
                 }
                 .scrollDismissesKeyboard(.interactively)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Theme.canvas)
                 .opacity(chromeOpacity)
                 .allowsHitTesting(chromeOpacity > 0.2 && !isPullingToMinimize)
             }
@@ -285,7 +311,7 @@ struct YouTubeWatchView: View {
             Text(headline)
                 .postHeadlineStyle(lineLimit: 4)
                 .padding(.horizontal, Theme.pagePadding)
-                .padding(.top, 6)
+                .padding(.top, 4)
         }
     }
 
@@ -399,35 +425,15 @@ struct YouTubeWatchView: View {
         .padding(.bottom, 8)
     }
 
-    @ViewBuilder
-    private var relatedSection: some View {
-        if !related.isEmpty || !relatedWindow.isEmpty {
-            VStack(alignment: .leading, spacing: 14) {
-                Text(MatteryaCopy.moreOnHubs)
-                    .font(.system(.headline, design: .serif))
-                    .fontWeight(.regular)
-                    .foregroundStyle(Theme.ink)
-                    .matteryaBrandLine()
-                    .padding(.horizontal, Theme.pagePadding)
-
-                // Same full-width card + thumbnail chrome as the Hubs home scroll.
-                LazyVStack(spacing: 18) {
-                    ForEach(relatedWindow) { item in
-                        YouTubeVideoListRow(post: item.post) {
-                            // Stay on watch — switch video (player stays expanded).
-                            onOpenVideo(item.post)
-                        }
-                        .onAppear {
-                            if item.id == relatedWindow.last?.id {
-                                appendRelatedPage()
-                            }
-                            // Prefetch thumbs a few rows ahead (same size as Hubs shelves).
-                            warmRelatedAround(item)
-                        }
-                    }
-                }
-            }
-        }
+    private var relatedHeader: some View {
+        Text(MatteryaCopy.moreOnHubs)
+            .font(.system(.headline, design: .serif))
+            .fontWeight(.regular)
+            .foregroundStyle(Theme.ink)
+            .matteryaBrandLine()
+            .padding(.horizontal, Theme.pagePadding)
+            .padding(.top, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private struct RelatedShelfItem: Identifiable {
@@ -460,10 +466,10 @@ struct YouTubeWatchView: View {
 
     private func warmRelatedAround(_ item: RelatedShelfItem) {
         guard let idx = relatedWindow.firstIndex(where: { $0.id == item.id }) else { return }
-        // Only the immediate next row — bulk warm was flooding the network.
-        let end = min(relatedWindow.count, idx + 2)
+        // Next few posters only — never Archive CDN resolve on scroll (that was the lag).
+        let end = min(relatedWindow.count, idx + 5)
         guard idx < end else { return }
-        warmRelatedMedia(prefix: end - idx, from: Array(relatedWindow[idx..<end]), resolveArchive: idx == 0)
+        warmRelatedMedia(prefix: end - idx, from: Array(relatedWindow[idx..<end]), resolveArchive: false)
     }
 
     private func warmRelatedMedia(
@@ -473,11 +479,15 @@ struct YouTubeWatchView: View {
     ) {
         let slice = items ?? Array(relatedWindow.prefix(prefix))
         let posts = slice.map(\.post)
-        // Thumbnails only (cheap). Archive resolve is limited to the next 1–2 clips.
-        // Match Hubs home list / MatteryaHubVideoCard warm size.
-        ImageCache.shared.prefetchPostThumbnails(posts, maxPixelSize: 420)
+        // Thumbnails only (cheap JPEG posters). Match list maxPixelSize.
+        ImageCache.shared.prefetchPostThumbnails(
+            posts,
+            maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel,
+            aggressive: true
+        )
         guard resolveArchive else { return }
-        for post in posts.prefix(2) {
+        // At most the next play candidate — never a bulk CDN storm under the player.
+        for post in posts.prefix(1) {
             if let url = post.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) {
                 ArchiveVideoPlayback.warmResolve(url)
             }

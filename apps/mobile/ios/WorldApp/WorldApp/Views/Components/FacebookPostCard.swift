@@ -9,6 +9,8 @@ struct FacebookPostCard: View {
     var showsAuthorHeader: Bool = true
     var showsAuthorInJournal: Bool = false
     var mediaContext: MediaContext = .feed
+    /// Home feed vs profile — same autoplay (≥50% visible, one winner).
+    var autoplaySurface: FeedAutoplaySurface = .home
     var commentsInitiallyExpanded: Bool = false
     var onLikeToggle: (() -> Void)?
     var onOpenPost: () -> Void
@@ -36,18 +38,92 @@ struct FacebookPostCard: View {
         return post.authorID == userID
     }
 
-    private var horizontalGutter: CGFloat {
-        edgeToEdge ? Theme.feedGutter : Theme.pagePadding
+    /// Readable side margin for text, headers, actions, comments (~16pt as before).
+    /// Media / Spark / Hubs video stay full-bleed when `edgeToEdge` (card is always full width).
+    private var textGutter: CGFloat {
+        Theme.feedTextInset
     }
 
+    /// Legacy alias — all chrome/text insets use the readable text gutter.
+    private var horizontalGutter: CGFloat { textGutter }
+
+    /// Spark chrome on feed: original Sparks + feed re-shares of Sparks (not long-form / Hubs).
     private var opensAsSpark: Bool {
-        if post.isReel || PlayPlatformBridge.isReelVideo(post) { return true }
-        if post.hasVideo,
-           FacebookMediaLayout.aspectRatio(for: post, context: mediaContext) == FacebookMediaLayout.reelAspect {
+        PlayPlatformBridge.isSparkFeedCard(post)
+    }
+
+    /// Hub origin share (or archive media share) — show original channel, not the sharer as “owner”.
+    private var isHubOriginShareCard: Bool {
+        if opensAsSpark { return false }
+        if PlayPlatformBridge.isHubOriginShare(post) { return true }
+        if PlayPlatformBridge.isFeedOnlyShare(post),
+           PlayPlatformBridge.isArchiveCatalogMedia(post) {
             return true
         }
-        return false
+        return showsPlayLinkInFeed
+            && !PlayPlatformBridge.isHubChannelUpload(post)
+            && !HubVideoSeedService.isArchiveChannelAuthor(post.authorID)
     }
+
+    /// Name on the card: original channel for hub shares; sharer is never the “creator”.
+    private var cardPrimaryName: String {
+        if let origin = HubOriginShareMarker.originPresentation(from: post) {
+            let name = origin.authorDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !name.isEmpty { return name }
+        }
+        if isHubOriginShareCard {
+            return HubVideoSeedService.archiveChannelDisplayName
+        }
+        if opensAsSpark, PlayPlatformBridge.isArchiveCatalogMedia(post) {
+            return HubVideoSeedService.archiveChannelDisplayName
+        }
+        return post.authorDisplayName
+    }
+
+    private var cardPrimaryAvatarURL: String? {
+        if let origin = HubOriginShareMarker.originPresentation(from: post) {
+            return origin.author?.avatarURL
+        }
+        if isHubOriginShareCard { return nil }
+        return post.author?.avatarURL
+    }
+
+    private var cardPrimaryAvatarSeed: String {
+        if let origin = HubOriginShareMarker.originPresentation(from: post) {
+            return origin.authorID
+        }
+        if isHubOriginShareCard || (opensAsSpark && PlayPlatformBridge.isArchiveCatalogMedia(post)) {
+            return HubVideoSeedService.archiveChannelAuthorID
+        }
+        return post.authorID
+    }
+
+    /// Author / channel to follow — matches the name shown on the card.
+    private var cardPrimaryFollowID: String {
+        if let origin = HubOriginShareMarker.originPresentation(from: post) {
+            return origin.authorID
+        }
+        if isHubOriginShareCard || (opensAsSpark && PlayPlatformBridge.isArchiveCatalogMedia(post)) {
+            return HubVideoSeedService.archiveChannelAuthorID
+        }
+        return post.authorID
+    }
+
+    private var showsFollowNextToName: Bool {
+        let id = cardPrimaryFollowID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return false }
+        if id == appState.currentProfile?.userID { return false }
+        // Own post (and not a hub-origin presentation of someone else).
+        if isOwnPost,
+           HubOriginShareMarker.originPresentation(from: post) == nil,
+           !isHubOriginShareCard {
+            return false
+        }
+        return true
+    }
+
+    /// Sharer is irrelevant on Hubs/Spark share cards — never show “Shared by …”.
+    private var sharedByLine: String? { nil }
 
     /// Subtle location under the author name (country name only — no flag).
     @ViewBuilder
@@ -114,25 +190,48 @@ struct FacebookPostCard: View {
                 captionBlock(text: post.displayBody, topPadding: 4, bottomPadding: 10)
             }
 
-            if let embed = post.sharedPost {
-                // Shared original — hub videos use PlayFeedLinkCard (Hubs chip) inside embed.
-                SharedPostEmbedView(embed: embed)
+            // Sparks first — shared Sparks must be Spark cards (never Hubs long-form chrome).
+            // Tap → infinite Matterya Sparks player (up/down).
+            if opensAsSpark, mediaContext == .feed {
+                SparkFeedCard(
+                    post: sparkCardPresentationPost,
+                    edgeToEdge: edgeToEdge,
+                    autoplaySurface: autoplaySurface
+                ) {
+                    openReel()
+                }
+                // Full-width media — no side inset.
+                .padding(.top, showsAuthorHeader || !post.displayExcerpt.isEmpty ? 0 : 8)
+            } else if let embed = post.sharedPost {
+                // Shared original — full-width media when edge-to-edge feed card.
+                SharedPostEmbedView(
+                    embed: embed,
+                    autoplaySurface: autoplaySurface,
+                    edgeToEdge: edgeToEdge
+                )
             } else if post.sharedPostID != nil, !showsPlayLinkInFeed {
                 // Only wait on embed when this share isn't already a stamped hub re-publish.
                 SharedPostLoadingEmbed(postID: post.sharedPostID!)
+                    .padding(.horizontal, textGutter)
             } else if showsPlayLinkInFeed {
-                // Own hub long-form or re-published hub share (media + Hubs badge on this post).
-                PlayFeedLinkCard(post: post, onOpen: { openPlayVideo() }, edgeToEdge: edgeToEdge)
+                // Hub long-form or hub-origin feed share (badge). Opens original channel, never "creates" one.
+                PlayFeedLinkCard(
+                    post: post,
+                    onOpen: { openPlayVideo() },
+                    edgeToEdge: edgeToEdge,
+                    forceHubsBadge: PlayPlatformBridge.isHubCatalogContent(post),
+                    autoplaySurface: autoplaySurface
+                )
             } else if post.hasMedia {
+                // Full-width photo / video.
                 media
             }
 
-            // Non-image posts keep caption under media (video / text / hub cards).
-            // Image-only posts already rendered caption above — do not repeat.
+            // Body text always has a small readable side margin (never edge-to-edge).
             if !isImageOnlyPost, !post.displayExcerpt.isEmpty {
                 captionBlock(
                     text: post.displayExcerpt,
-                    topPadding: post.hasMedia ? 12 : 8,
+                    topPadding: post.hasMedia || opensAsSpark || showsPlayLinkInFeed || post.sharedPost != nil ? 12 : 10,
                     bottomPadding: 4
                 )
             }
@@ -231,22 +330,39 @@ struct FacebookPostCard: View {
                 openAuthorProfile()
             } label: {
                 // Always the hand-drawn picture frame on name cards (not the feed circle shortcut).
-                AvatarView(url: post.author?.avatarURL, seed: post.authorID, size: 36)
+                AvatarView(
+                    url: cardPrimaryAvatarURL,
+                    seed: cardPrimaryAvatarSeed,
+                    size: 36
+                )
             }
             .buttonStyle(.plain)
 
             VStack(alignment: .leading, spacing: 3) {
-                Button {
-                    openAuthorProfile()
-                } label: {
-                    Text(post.authorDisplayName)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Theme.ink)
-                        .lineLimit(1)
-                }
-                .buttonStyle(.plain)
+                HStack(alignment: .center, spacing: 8) {
+                    Button {
+                        openAuthorProfile()
+                    } label: {
+                        Text(cardPrimaryName)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.ink)
+                            .lineLimit(1)
+                    }
+                    .buttonStyle(.plain)
 
-                authorLocationLine
+                    if showsFollowNextToName {
+                        FollowButton(userID: cardPrimaryFollowID, compact: true)
+                    }
+                }
+
+                if let sharedByLine {
+                    Text(sharedByLine)
+                        .font(.caption)
+                        .foregroundStyle(Theme.inkMuted)
+                        .lineLimit(1)
+                } else {
+                    authorLocationLine
+                }
                 postTimestampRow
                 postedFromBadge
             }
@@ -278,22 +394,39 @@ struct FacebookPostCard: View {
                         openAuthorProfile()
                     } label: {
                         // Hand-drawn scrapbook frame — same as pre-perf shortcut on feed name cards.
-                        AvatarView(url: post.author?.avatarURL, seed: post.authorID, size: 36)
+                        AvatarView(
+                            url: cardPrimaryAvatarURL,
+                            seed: cardPrimaryAvatarSeed,
+                            size: 36
+                        )
                     }
                     .buttonStyle(.plain)
 
                     VStack(alignment: .leading, spacing: 3) {
-                        Button {
-                            openAuthorProfile()
-                        } label: {
-                            Text(post.authorDisplayName)
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(Theme.ink)
-                                .lineLimit(1)
-                        }
-                        .buttonStyle(.plain)
+                        HStack(alignment: .center, spacing: 8) {
+                            Button {
+                                openAuthorProfile()
+                            } label: {
+                                Text(cardPrimaryName)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(Theme.ink)
+                                    .lineLimit(1)
+                            }
+                            .buttonStyle(.plain)
 
-                        authorLocationLine
+                            if showsFollowNextToName {
+                                FollowButton(userID: cardPrimaryFollowID, compact: true)
+                            }
+                        }
+
+                        if let sharedByLine {
+                            Text(sharedByLine)
+                                .font(.caption)
+                                .foregroundStyle(Theme.inkMuted)
+                                .lineLimit(1)
+                        } else {
+                            authorLocationLine
+                        }
                         postedFromBadge
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -350,7 +483,8 @@ struct FacebookPostCard: View {
             lessTitle: "See less",
             uiTextStyle: .body
         )
-        .padding(.horizontal, horizontalGutter)
+        // Small side margin so multi-line text stays readable on full-width cards.
+        .padding(.horizontal, textGutter)
         .padding(.top, topPadding)
         .padding(.bottom, bottomPadding)
         .id("post-body-\(post.id)")
@@ -362,8 +496,8 @@ struct FacebookPostCard: View {
     /// Native hub_* posts already show the channel as the author — no extra line.
     private var hubChannelAttributionLine: String? {
         guard showsPlayLinkInFeed else { return nil }
-        // Channel is already the name card for seed channels.
-        if post.authorID.hasPrefix("hub_") || post.authorID.hasPrefix("hub_spark_") {
+        // Channel is already the name card for The Archive / hub seed posts.
+        if HubVideoSeedService.isArchiveChannelAuthor(post.authorID) {
             return nil
         }
         if let caption = post.displayCaption, !caption.isEmpty {
@@ -372,11 +506,10 @@ struct FacebookPostCard: View {
             }
             return "From \(caption) · \(MatteryaCopy.matteryaHubs)"
         }
-        if let slug = post.hubSlug, !slug.isEmpty {
-            let name = HubVideoSeedService.channelDisplayName(hubSlug: slug, isSpark: false)
-            return "From \(name) · \(MatteryaCopy.matteryaHubs)"
+        if post.hubSlug != nil || post.isHubSeedVideo {
+            return "From \(HubVideoSeedService.archiveChannelDisplayName) · \(MatteryaCopy.matteryaHubs)"
         }
-        if post.isHubSeedVideo || HubChannelPostMarker.isMarked(post.body) {
+        if HubChannelPostMarker.isMarked(post.body) {
             return "Shared from \(MatteryaCopy.matteryaHubs)"
         }
         return nil
@@ -459,8 +592,18 @@ struct FacebookPostCard: View {
         )
     }
 
+    /// Media for the Spark card — prefer self-contained share media, else embedded original.
+    private var sparkCardPresentationPost: CountryPost {
+        if post.playableVideoURL != nil { return post }
+        if let embed = post.sharedPost?.asCountryPost, embed.playableVideoURL != nil {
+            return embed
+        }
+        return post
+    }
+
     @ViewBuilder
     private var media: some View {
+        // Sparks are handled above the hub/share branches so they never become Hubs cards.
         if let aspect = FacebookMediaLayout.aspectRatio(for: post, context: mediaContext) {
             let isFeedAutoplayVideo = post.hasVideo
                 && mediaContext == .feed
@@ -527,6 +670,8 @@ struct FacebookPostCard: View {
             preferArchivePlayer: PlayPlatformBridge.isHubCatalogContent(post)
                 || ArchiveVideoPlayback.isArchiveURL(url),
             showsControls: true,
+            fillsFrame: true,
+            autoplaySurface: autoplaySurface,
             onViewed: { Task { await PostsService.shared.recordView(post) } }
         )
     }
@@ -674,11 +819,8 @@ struct FacebookPostCard: View {
     }
 
     private func openReel() {
-        if let onOpenReel {
-            onOpenReel()
-        } else {
-            appState.openReelsViewer(startingPost: post, seedPosts: [post])
-        }
+        // Always endless Sparks from all over Matterya (up/down), never a single-clip dead end.
+        appState.openGlobalSparksViewer(startingPost: sparkCardPresentationPost)
     }
 
     private func openPlayVideo() {
@@ -690,6 +832,19 @@ struct FacebookPostCard: View {
     }
 
     private func openAuthorProfile() {
+        // Hub origin shares → original channel (e.g. The Archive), not the sharer.
+        if let origin = HubOriginShareMarker.originPresentation(from: post) {
+            if HubVideoSeedService.isArchiveChannelAuthor(origin.authorID) {
+                appState.openPlayChannel(authorID: HubVideoSeedService.archiveChannelAuthorID)
+                return
+            }
+            appState.openPlayChannel(authorID: origin.authorID)
+            return
+        }
+        if isHubOriginShareCard {
+            appState.openPlayChannel(authorID: HubVideoSeedService.archiveChannelAuthorID)
+            return
+        }
         appState.openPublicProfile(username: post.author?.username, userID: post.authorID)
     }
 

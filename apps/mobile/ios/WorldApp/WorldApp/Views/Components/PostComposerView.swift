@@ -271,10 +271,10 @@ struct PostComposerView: View {
             Theme.divider.frame(height: 0.5)
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(canPostHere ? "Ready to publish" : "Home country only")
+                    Text(canPostHere ? "Ready to publish" : "Set your home country")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(canPostHere ? Theme.ink : Theme.danger)
-                    Text(canPostHere ? country.name : "Switch to your country feed to post.")
+                    Text(canPostHere ? "Posts to the main feed" : "Add a home country in your profile first.")
                         .font(.caption2)
                         .foregroundStyle(Theme.inkMuted)
                 }
@@ -393,6 +393,7 @@ struct PostComposerView: View {
                 mediaURL = upload.publicURL
             }
 
+            // Always main feed (public) — country is metadata only, not a separate feed.
             let post = try await PostsService.shared.createPost(
                 authorID: authorID,
                 body: trimmedBody,
@@ -400,7 +401,7 @@ struct PostComposerView: View {
                 countryCode: country.iso,
                 cityName: profile.cityName,
                 title: title.nilIfEmpty,
-                visibility: visibility,
+                visibility: .public,
                 mediaType: mediaType,
                 mediaURL: mediaURL,
                 sharedPostID: appState.quotedSharePostID

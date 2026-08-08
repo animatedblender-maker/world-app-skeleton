@@ -56,6 +56,8 @@ enum ContentSanitizer {
                 if line.isEmpty { return false }
                 if line.hasPrefix("__story__|") { return false }
                 if line.hasPrefix("__hub_channel__") { return false }
+                if line.hasPrefix("__hub_origin__") { return false }
+                if line.hasPrefix("__spark_share__|") { return false }
                 if line.hasPrefix("__spark__|") { return false }
                 if line.hasPrefix("__reel__|") { return false }
                 return true

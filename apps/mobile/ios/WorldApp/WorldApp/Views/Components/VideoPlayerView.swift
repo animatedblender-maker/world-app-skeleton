@@ -3,6 +3,8 @@ import SwiftUI
 import UIKit
 
 struct VideoPlayerView: View {
+    @Environment(AppState.self) private var appState
+
     let url: URL
     let posterURL: URL?
     var placement: String? = nil
@@ -18,7 +20,18 @@ struct VideoPlayerView: View {
     var startTime: Double? = nil
     /// When false, teardown won't write a lower position over an existing resume point (mini player).
     var persistsPositionOnTeardown: Bool = true
+    /// When true, mute/unmute updates app-wide feed mute (all feed videos stay in sync).
+    var sharesFeedMute: Bool = false
+    /// When true, crop to fill the card — no black bars. Always preferred for Hubs / feed video.
+    var fillsFrame: Bool = true
+    /// When true, build/buffer a silent player even while `isActive` is false (feed Sparks).
+    var preloadsWhenInactive: Bool = false
     var onViewed: (() -> Void)? = nil
+    /// Progress callback for Sparks timeline scrubber: (currentSeconds, durationSeconds).
+    var onProgress: ((Double, Double) -> Void)? = nil
+    /// When set to a non-nil value, seek there once then clear via `onSeekConsumed`.
+    var seekToSeconds: Double? = nil
+    var onSeekConsumed: (() -> Void)? = nil
 
     @State private var adFinished = false
     @State private var player: AVPlayer?
@@ -62,8 +75,9 @@ struct VideoPlayerView: View {
                     onComplete: { adFinished = true }
                 )
             } else if let player {
-                MatteryaVideoSurface(player: player)
+                MatteryaVideoSurface(player: player, fillsFrame: fillsFrame)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
                     .contentShape(Rectangle())
                     .onTapGesture {
                         guard showsControls else { return }
@@ -95,20 +109,34 @@ struct VideoPlayerView: View {
                 CachedAsyncImage(
                     url: posterURL,
                     maxPixelSize: 600,
-                    contentMode: .fit,
+                    contentMode: fillsFrame ? .fill : .fit,
                     placeholder: AnyView(ProgressView().tint(Theme.accentBright))
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
             } else {
                 ProgressView().tint(Theme.accentBright)
             }
         }
         .clipped()
         .onAppear {
-            isMuted = muted
+            isMuted = sharesFeedMute ? appState.feedVideosMuted : muted
             configureAudioSession()
+            // Feed Sparks: start buffering immediately (silent) — don't wait for focus win.
             Task { await ensurePlayer(forceRebuild: player?.currentItem == nil) }
             if showsControls { scheduleChromeHide() }
+        }
+        // Screenshot / Control Center must not leave video paused.
+        .onReceive(NotificationCenter.default.publisher(for: .matteryaResumePlaybackAfterInterrupt)) { _ in
+            guard isActive, !userWantsPause, let player, player.currentItem != nil else { return }
+            if player.rate < 0.01 {
+                MediaPlaybackCoordinator.shared.soloSparkAudio(keeping: player)
+                player.isMuted = isMuted
+                player.volume = isMuted ? 0 : 1
+                player.play()
+                player.safePlayImmediately(atRate: 1.0)
+                isPlaying = true
+            }
         }
         .onChange(of: isActive) { _, active in
             if active {
@@ -117,14 +145,23 @@ struct VideoPlayerView: View {
                 Task { await ensurePlayer(forceRebuild: player?.currentItem == nil) }
             } else {
                 persistPlaybackPosition()
+                // Hard silence — pause alone left audio bleeding into the next Spark.
                 player?.pause()
+                player?.isMuted = true
+                player?.volume = 0
                 isPlaying = false
                 userWantsPause = false
             }
         }
         .onChange(of: muted) { _, newValue in
+            guard !sharesFeedMute else { return }
             isMuted = newValue
             player?.isMuted = newValue
+        }
+        .onChange(of: appState.feedVideosMuted) { _, globalMuted in
+            guard sharesFeedMute else { return }
+            isMuted = globalMuted
+            player?.isMuted = globalMuted
         }
         .onChange(of: adFinished) { _, finished in
             if finished {
@@ -133,6 +170,17 @@ struct VideoPlayerView: View {
         }
         .onChange(of: url) { _, _ in
             Task { await ensurePlayer(forceRebuild: true) }
+        }
+        .onChange(of: seekToSeconds) { _, target in
+            guard let target else { return }
+            seek(to: target)
+            currentSeconds = target
+            if isActive, !userWantsPause {
+                player?.play()
+                player?.safePlayImmediately(atRate: 1.0)
+                isPlaying = true
+            }
+            onSeekConsumed?()
         }
         .onDisappear {
             teardownPlayer()
@@ -172,9 +220,13 @@ struct VideoPlayerView: View {
             player.pause()
             isPlaying = false
         } else {
+            // Resume: inactive path force-mutes — restore user mute state or audio is gone.
             userWantsPause = false
+            MediaPlaybackCoordinator.shared.soloSparkAudio(keeping: player)
+            player.isMuted = isMuted
+            player.volume = isMuted ? 0 : 1
             player.play()
-            player.playImmediately(atRate: 1.0)
+            player.safePlayImmediately(atRate: 1.0)
             isPlaying = true
         }
         scheduleChromeHide()
@@ -183,6 +235,10 @@ struct VideoPlayerView: View {
     private func toggleMute() {
         isMuted.toggle()
         player?.isMuted = isMuted
+        player?.volume = isMuted ? 0 : 1
+        if sharesFeedMute {
+            appState.feedVideosMuted = isMuted
+        }
         scheduleChromeHide()
     }
 
@@ -212,12 +268,18 @@ struct VideoPlayerView: View {
 
     @MainActor
     private func ensurePlayer(forceRebuild: Bool = false) async {
-        guard isActive else {
+        // Inactive + no preload → hard silence and bail.
+        if !isActive, !preloadsWhenInactive {
             player?.pause()
+            player?.isMuted = true
+            player?.volume = 0
             isPlaying = false
             return
         }
-        guard adFinished || !shouldShowAd else { return }
+        // Ads only when actively playing the slot.
+        if isActive {
+            guard adFinished || !shouldShowAd else { return }
+        }
 
         // stopAllPlayback() can nil out currentItem while the view stays mounted (persistent feed).
         let itemMissing = player != nil && player?.currentItem == nil
@@ -230,29 +292,131 @@ struct VideoPlayerView: View {
 
         if player == nil {
             loadFailed = false
-            let configuration = await MediaURLResolver.playbackConfiguration(for: url)
-            installPlayer(using: configuration)
+            // Instagram-speed: adopt a pre-buffered SparkWarmPool player when available.
+            if let postID, let claimed = SparkWarmPool.shared.claim(postID: postID) {
+                installClaimedPlayer(claimed)
+            } else {
+                if let postID { SparkWarmPool.shared.markInUse(postID: postID) }
+                // R2 / plain HTTPS: skip Archive CDN resolve (that was multi-second for Sparks).
+                let configuration: MediaPlaybackConfiguration
+                if ArchiveVideoPlayback.isArchiveURL(url) {
+                    configuration = await MediaURLResolver.playbackConfiguration(for: url)
+                } else {
+                    configuration = MediaPlaybackConfiguration(url: url, headers: nil)
+                }
+                installPlayer(using: configuration)
+            }
         }
 
-        player?.isMuted = isMuted
-        if player?.currentItem?.status == .readyToPlay {
+        // Preload only: stay silent and paused while bytes buffer for instant focus win.
+        if !isActive {
+            player?.pause()
+            player?.isMuted = true
+            player?.volume = 0
+            isPlaying = false
+            return
+        }
+
+        // Solo this player — kill every other Spark / feed / warm-pool voice.
+        if let player {
+            MediaPlaybackCoordinator.shared.soloSparkAudio(keeping: player)
+            player.isMuted = isMuted
+            player.volume = isMuted ? 0 : 1
+        }
+        if player?.currentItem?.status == .readyToPlay, player?.status == .readyToPlay {
             if userWantsPause {
                 player?.pause()
                 isPlaying = false
             } else {
                 player?.play()
-                player?.playImmediately(atRate: 1.0)
+                // Only playImmediately when fully ready — otherwise AVPlayer throws and kills the app.
+                player?.safePlayImmediately(atRate: 1.0)
                 isPlaying = true
                 reportViewIfNeeded()
             }
+        } else if !userWantsPause {
+            // Soft kick only — never playImmediately until ready (crash: preroll/not ready).
+            player?.play()
+            isPlaying = true
+        }
+    }
+
+    @MainActor
+    private func installClaimedPlayer(_ claimed: AVPlayer) {
+        // Warm pool kept it muted/paused — only unmute if this card is the active Spark.
+        claimed.automaticallyWaitsToMinimizeStalling = false
+        claimed.actionAtItemEnd = loops ? .none : .pause
+        MediaPlaybackCoordinator.shared.register(claimed)
+        MediaPlaybackCoordinator.shared.soloSparkAudio(keeping: claimed)
+        if isActive {
+            claimed.isMuted = isMuted
+            claimed.volume = isMuted ? 0 : 1
+        } else {
+            claimed.pause()
+            claimed.isMuted = true
+            claimed.volume = 0
+        }
+        if let item = claimed.currentItem {
+            item.preferredForwardBufferDuration = 6
+            statusObserver = item.observe(\.status, options: [.new, .initial]) { item, _ in
+                Task { @MainActor in
+                    switch item.status {
+                    case .readyToPlay:
+                        loadFailed = false
+                        updateDuration(from: item)
+                        if isActive, !userWantsPause {
+                            MediaPlaybackCoordinator.shared.soloSparkAudio(keeping: claimed)
+                            claimed.isMuted = isMuted
+                            claimed.volume = isMuted ? 0 : 1
+                            claimed.play()
+                            claimed.safePlayImmediately(atRate: 1.0)
+                            isPlaying = true
+                            reportViewIfNeeded()
+                        } else {
+                            claimed.pause()
+                            claimed.isMuted = true
+                            claimed.volume = 0
+                        }
+                    case .failed:
+                        // Cold rebuild if warm item died.
+                        teardownPlayer()
+                        Task { await ensurePlayer(forceRebuild: true) }
+                    default:
+                        break
+                    }
+                }
+            }
+            if loops {
+                loopObserver = NotificationCenter.default.addObserver(
+                    forName: .AVPlayerItemDidPlayToEndTime,
+                    object: item,
+                    queue: .main
+                ) { _ in
+                    guard isActive, !userWantsPause else { return }
+                    claimed.seek(to: .zero)
+                    claimed.play()
+                }
+            }
+        }
+        attachTimeObserver(to: claimed)
+        player = claimed
+        if isActive, !userWantsPause {
+            claimed.play()
+            claimed.safePlayImmediately(atRate: 1.0)
+            isPlaying = true
+            reportViewIfNeeded()
         }
     }
 
     @MainActor
     private func installPlayer(using configuration: MediaPlaybackConfiguration) {
         let item = makePlayerItem(for: configuration)
+        // Tiny forward buffer = first frame ASAP on feed Sparks / R2.
+        item.preferredForwardBufferDuration = preloadsWhenInactive || fillsFrame ? 2 : 4
+        item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         let newPlayer = AVPlayer(playerItem: item)
-        newPlayer.isMuted = isMuted
+        newPlayer.isMuted = isActive ? isMuted : true
+        newPlayer.volume = (isActive && !isMuted) ? 1 : 0
         newPlayer.automaticallyWaitsToMinimizeStalling = false
         newPlayer.actionAtItemEnd = loops ? .none : .pause
 
@@ -268,11 +432,20 @@ struct VideoPlayerView: View {
                         currentSeconds = resumeAt
                     }
                     if isActive, !userWantsPause {
+                        MediaPlaybackCoordinator.shared.soloSparkAudio(keeping: newPlayer)
+                        newPlayer.isMuted = isMuted
+                        newPlayer.volume = isMuted ? 0 : 1
                         newPlayer.play()
                         // Some Archive CDN items leave rate at 0 after the first play().
-                        newPlayer.playImmediately(atRate: 1.0)
+                        newPlayer.safePlayImmediately(atRate: 1.0)
                         isPlaying = true
                         reportViewIfNeeded()
+                    } else {
+                        // Preload path: keep buffering silently.
+                        newPlayer.pause()
+                        newPlayer.isMuted = true
+                        newPlayer.volume = 0
+                        isPlaying = false
                     }
                 case .failed:
                     await handlePlaybackFailure(for: configuration.url)
@@ -290,6 +463,7 @@ struct VideoPlayerView: View {
                 object: item,
                 queue: .main
             ) { _ in
+                guard isActive, !userWantsPause else { return }
                 newPlayer.seek(to: .zero)
                 newPlayer.play()
             }
@@ -297,6 +471,17 @@ struct VideoPlayerView: View {
 
         player = newPlayer
         MediaPlaybackCoordinator.shared.register(newPlayer)
+        if !isActive {
+            newPlayer.pause()
+            newPlayer.isMuted = true
+            newPlayer.volume = 0
+        } else {
+            MediaPlaybackCoordinator.shared.soloSparkAudio(keeping: newPlayer)
+            if !userWantsPause {
+                newPlayer.safePlayImmediately(atRate: 1.0)
+                isPlaying = true
+            }
+        }
     }
 
     @MainActor
@@ -311,6 +496,7 @@ struct VideoPlayerView: View {
                 }
                 isPlaying = player.rate > 0.01
                 trackPlaybackPositionIfNeeded()
+                onProgress?(currentSeconds, durationSeconds)
             }
         }
         timeObserverPlayer = player
@@ -408,6 +594,9 @@ struct VideoPlayerView: View {
         persistPlaybackPosition()
         removeTimeObserver()
         teardownPlayerObservers()
+        if let postID {
+            SparkWarmPool.shared.release(postID: postID)
+        }
         if let player {
             player.pause()
             player.replaceCurrentItem(with: nil)
@@ -623,6 +812,8 @@ private struct MatteryaFullscreenPlayer: View {
         scheduleChromeHide()
     }
 
+    // Note: fullscreen player keeps local mute only (not feed-wide).
+
     private func scheduleChromeHide() {
         chromeTask?.cancel()
         chromeTask = Task {
@@ -668,16 +859,18 @@ private struct MatteryaFullscreenPlayer: View {
 
 private struct MatteryaVideoSurface: UIViewRepresentable {
     let player: AVPlayer
+    var fillsFrame: Bool = true
 
     func makeUIView(context: Context) -> MatteryaPlayerUIView {
         let view = MatteryaPlayerUIView()
         view.playerLayer.player = player
-        view.playerLayer.videoGravity = .resizeAspect
+        view.applyFill(fillsFrame)
         return view
     }
 
     func updateUIView(_ uiView: MatteryaPlayerUIView, context: Context) {
         uiView.playerLayer.player = player
+        uiView.applyFill(fillsFrame)
     }
 }
 
@@ -689,11 +882,16 @@ private final class MatteryaPlayerUIView: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .black
-        playerLayer.videoGravity = .resizeAspect
+        // Always fill by default — no black bars on sides or top.
+        playerLayer.videoGravity = .resizeAspectFill
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    func applyFill(_ fillsFrame: Bool) {
+        playerLayer.videoGravity = fillsFrame ? .resizeAspectFill : .resizeAspect
     }
 
     override func layoutSubviews() {
@@ -702,6 +900,7 @@ private final class MatteryaPlayerUIView: UIView {
     }
 }
 
+/// Shared transport chrome: center −10s · play · +10s, scrubber bottom (matches Hubs player).
 private struct MatteryaVideoControls: View {
     let isPlaying: Bool
     let isMuted: Bool
@@ -716,44 +915,35 @@ private struct MatteryaVideoControls: View {
     let onExitFullscreen: (() -> Void)?
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                if isFullscreen, let onExitFullscreen {
-                    controlIconButton(systemName: "xmark", action: onExitFullscreen)
-                }
-                Spacer()
-                controlIconButton(
-                    systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill",
-                    action: onMuteToggle
-                )
-                if showsFullscreen, let onFullscreen {
-                    controlIconButton(
-                        systemName: "arrow.up.left.and.arrow.down.right",
-                        action: onFullscreen
-                    )
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, isFullscreen ? 0 : 10)
-            .safeAreaPadding(.top, isFullscreen ? 6 : 0)
-
-            Spacer()
-
-            VStack(spacing: 10) {
-                HStack(spacing: 12) {
-                    Button(action: onPlayPause) {
-                        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                            .font(.system(size: 18, weight: .bold))
-                            .foregroundStyle(Theme.paper)
-                            .frame(width: 42, height: 42)
-                            .background(Theme.accentBright, in: Circle())
-                            .shadow(color: Theme.ink.opacity(0.25), radius: 8, y: 3)
+        ZStack {
+            VStack(spacing: 0) {
+                HStack {
+                    if isFullscreen, let onExitFullscreen {
+                        controlIconButton(systemName: "xmark", action: onExitFullscreen)
                     }
-                    .buttonStyle(.plain)
+                    Spacer()
+                    controlIconButton(
+                        systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill",
+                        action: onMuteToggle
+                    )
+                    if showsFullscreen, let onFullscreen {
+                        controlIconButton(
+                            systemName: "arrow.up.left.and.arrow.down.right",
+                            action: onFullscreen
+                        )
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, isFullscreen ? 0 : 10)
+                .safeAreaPadding(.top, isFullscreen ? 6 : 0)
 
+                Spacer(minLength: 0)
+
+                HStack(spacing: 10) {
                     Text(formatTime(currentSeconds))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.white.opacity(0.9))
+                        .frame(width: 42, alignment: .leading)
 
                     MatteryaScrubber(
                         value: scrubberValue,
@@ -772,18 +962,42 @@ private struct MatteryaVideoControls: View {
                     Text(formatTime(durationSeconds))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.white.opacity(0.75))
+                        .frame(width: 42, alignment: .trailing)
                 }
                 .padding(.horizontal, 14)
                 .padding(.bottom, isFullscreen ? 0 : 14)
+                .padding(.top, 12)
                 .safeAreaPadding(.bottom, isFullscreen ? 10 : 0)
-            }
-            .background(
-                LinearGradient(
-                    colors: [.clear, Theme.ink.opacity(0.72)],
-                    startPoint: .top,
-                    endPoint: .bottom
+                .background(
+                    LinearGradient(
+                        colors: [.clear, Theme.ink.opacity(0.72)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
                 )
-            )
+            }
+
+            // Dead-center transport (Hubs-style).
+            HStack(spacing: 40) {
+                controlIconButton(systemName: "gobackward.10", size: 46) {
+                    onSeek(max(0, currentSeconds - 10))
+                }
+                Button(action: onPlayPause) {
+                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 28, weight: .bold))
+                        .foregroundStyle(Theme.paper)
+                        .frame(width: 68, height: 68)
+                        .background(Theme.accentBright, in: Circle())
+                        .shadow(color: Theme.ink.opacity(0.34), radius: 12, y: 4)
+                }
+                .buttonStyle(.plain)
+                controlIconButton(systemName: "goforward.10", size: 46) {
+                    let next = durationSeconds > 0
+                        ? min(durationSeconds, currentSeconds + 10)
+                        : currentSeconds + 10
+                    onSeek(next)
+                }
+            }
         }
     }
 
@@ -792,12 +1006,16 @@ private struct MatteryaVideoControls: View {
         return min(1, max(0, currentSeconds / durationSeconds))
     }
 
-    private func controlIconButton(systemName: String, action: @escaping () -> Void) -> some View {
+    private func controlIconButton(
+        systemName: String,
+        size: CGFloat = 34,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: size > 36 ? 18 : 14, weight: .semibold))
                 .foregroundStyle(.white)
-                .frame(width: 34, height: 34)
+                .frame(width: size, height: size)
                 .background(Theme.ink.opacity(0.45), in: Circle())
         }
         .buttonStyle(.plain)
@@ -900,6 +1118,14 @@ struct InFrameVideoPlayer: View {
     var preferArchivePlayer: Bool = false
     /// Full transport chrome (play/pause + scrubber + mute) while this slot is active.
     var showsControls: Bool = true
+    /// When true, only a mute chip is shown (Sparks feed) — no scrubber / play-pause.
+    var muteOnlyControls: Bool = false
+    /// Full-bleed fill — never black bars on sides/top.
+    var fillsFrame: Bool = true
+    /// When true, mute chip drives app-wide feed mute (all feed videos stay in sync).
+    var sharesFeedMute: Bool = true
+    /// Home feed vs profile — prevents opacity-0 feed cards from stealing profile autoplay.
+    var autoplaySurface: FeedAutoplaySurface = .home
     var onViewed: (() -> Void)? = nil
 
     @State private var isMuted: Bool
@@ -920,6 +1146,11 @@ struct InFrameVideoPlayer: View {
         loops: Bool = true,
         preferArchivePlayer: Bool = false,
         showsControls: Bool = true,
+        muteOnlyControls: Bool = false,
+        fillsFrame: Bool = true,
+        forceSilentUntilUnmute: Bool = false,
+        sharesFeedMute: Bool = true,
+        autoplaySurface: FeedAutoplaySurface = .home,
         onViewed: (() -> Void)? = nil
     ) {
         self.url = url
@@ -932,24 +1163,38 @@ struct InFrameVideoPlayer: View {
         self.loops = loops
         self.preferArchivePlayer = preferArchivePlayer
         self.showsControls = showsControls
+        self.muteOnlyControls = muteOnlyControls
+        self.fillsFrame = fillsFrame
+        self.sharesFeedMute = sharesFeedMute
+        self.autoplaySurface = autoplaySurface
         self.onViewed = onViewed
-        _isMuted = State(initialValue: muted)
+        // Initial mute: prefer global feed mute when sharing; else constructor flag.
+        _isMuted = State(initialValue: muted || forceSilentUntilUnmute)
     }
 
     private var focusID: String {
-        postID ?? url.absoluteString
+        // Prefix so the same post on feed + profile don't collide in the focus map.
+        "\(autoplaySurface.rawValue):\(postID ?? url.absoluteString)"
+    }
+
+    private var surfaceLive: Bool {
+        autoplaySurface.isLive(appState: appState)
     }
 
     /// Winner of FeedVideoFocus + allowed surface (feed/profile, no hubs/reels takeover).
     private var shouldPlay: Bool {
         isFocusWinner
-            && (appState.selectedTab == .feed || appState.selectedTab == .profile)
+            && surfaceLive
             && appState.reelsViewerContext == nil
             && appState.hubPlaybackPost == nil
     }
 
     private var usesArchivePath: Bool {
         preferArchivePlayer || ArchiveVideoPlayback.isArchiveURL(url)
+    }
+
+    private var transportChrome: Bool {
+        showsControls && !muteOnlyControls && playGate
     }
 
     var body: some View {
@@ -964,11 +1209,18 @@ struct InFrameVideoPlayer: View {
                         isActive: playGate,
                         startTime: 0,
                         postID: postID,
-                        // Keep controls mounted; only the active winner should show chrome.
-                        // Tying this to shouldPlay remounted chrome and caused mid-play stutters.
-                        showsControls: showsControls && playGate,
+                        showsControls: transportChrome,
                         loops: loops,
-                        isMuted: $isMuted,
+                        fillsFrame: fillsFrame,
+                        isMuted: Binding(
+                            get: { isMuted },
+                            set: { newValue in
+                                isMuted = newValue
+                                if sharesFeedMute {
+                                    appState.feedVideosMuted = newValue
+                                }
+                            }
+                        ),
                         allowsFullscreen: false,
                         onReady: { onViewed?() }
                     )
@@ -984,10 +1236,42 @@ struct InFrameVideoPlayer: View {
                         isActive: playGate,
                         loops: loops,
                         muted: isMuted,
-                        showsControls: showsControls && playGate,
+                        showsControls: transportChrome,
                         allowsFullscreen: false,
+                        sharesFeedMute: sharesFeedMute,
+                        fillsFrame: fillsFrame,
+                        // Feed Sparks: buffer as soon as the cell mounts, play when focused.
+                        preloadsWhenInactive: muteOnlyControls || placement == "reel",
                         onViewed: onViewed
                     )
+                }
+            }
+
+            if muteOnlyControls {
+                VStack {
+                    HStack {
+                        Spacer(minLength: 0)
+                        Button {
+                            let next = !isMuted
+                            isMuted = next
+                            if sharesFeedMute {
+                                appState.feedVideosMuted = next
+                            }
+                            if !next {
+                                activatePlaybackAudioIfNeeded(unmuted: true)
+                            }
+                        } label: {
+                            Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 34, height: 34)
+                                .background(Theme.ink.opacity(0.45), in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(isMuted ? "Unmute" : "Mute")
+                    }
+                    .padding(10)
+                    Spacer(minLength: 0)
                 }
             }
         }
@@ -996,14 +1280,36 @@ struct InFrameVideoPlayer: View {
         }
         .background(visibilityProbe)
         .onAppear {
-            isMuted = muted
+            // Sync to global feed mute so every card matches.
+            if sharesFeedMute {
+                isMuted = appState.feedVideosMuted
+            } else {
+                isMuted = muted
+            }
             // Kick Archive CDN resolve as soon as the cell appears (not after focus).
             if usesArchivePath {
                 ArchiveVideoPlayback.warmResolve(url)
             }
+            // Pre-warm R2 Sparks into the pool the moment the card mounts.
+            if let postID, !usesArchivePath {
+                SparkWarmPool.shared.warmSingle(postID: postID, url: url)
+            }
             refreshFocusWinner()
             syncPlayGate(immediate: true)
+            // Never auto-activate audible session while still muted.
             if playGate, !isMuted {
+                activatePlaybackAudioIfNeeded(unmuted: true)
+            }
+        }
+        .onChange(of: appState.feedVideosMuted) { _, globalMuted in
+            guard sharesFeedMute else { return }
+            isMuted = globalMuted
+            if !globalMuted {
+                activatePlaybackAudioIfNeeded(unmuted: true)
+            }
+        }
+        .onChange(of: isMuted) { _, mutedNow in
+            if !mutedNow {
                 activatePlaybackAudioIfNeeded(unmuted: true)
             }
         }
@@ -1021,6 +1327,11 @@ struct InFrameVideoPlayer: View {
             }
         }
         .onChange(of: appState.selectedTab) { _, _ in
+            lastReportedRatio = -1
+            syncPlayGate(immediate: true)
+        }
+        .onChange(of: appState.navigationPath.count) { _, _ in
+            lastReportedRatio = -1
             syncPlayGate(immediate: true)
         }
         .onChange(of: appState.reelsViewerContext?.id) { _, ctx in
@@ -1035,14 +1346,16 @@ struct InFrameVideoPlayer: View {
     }
 
     private func refreshFocusWinner() {
-        let win = FeedVideoFocus.shared.isActive(id: focusID)
+        let win = surfaceLive && FeedVideoFocus.shared.isActive(id: focusID)
         if win != isFocusWinner {
             isFocusWinner = win
         }
-        syncPlayGate(immediate: win)
+        // Pause immediately when we lose the ≥50% slot; start immediately when we win.
+        syncPlayGate(immediate: true)
     }
 
     /// Instant on for play; short delay off so layout/scroll jitter doesn't hard-pause.
+    /// Losing ≥50% visibility clears focus immediately via `immediate: true` from refresh.
     private func syncPlayGate(immediate: Bool) {
         if shouldPlay {
             deactivateTask?.cancel()
@@ -1052,9 +1365,9 @@ struct InFrameVideoPlayer: View {
             }
             return
         }
-        // Leaving feed / hubs takeover / reels: pause immediately.
+        // Leaving surface / hubs takeover / reels / lost focus: pause promptly.
         let leftAutoplaySurface =
-            (appState.selectedTab != .feed && appState.selectedTab != .profile)
+            !surfaceLive
             || appState.reelsViewerContext != nil
             || appState.hubPlaybackPost != nil
         if immediate || leftAutoplaySurface {
@@ -1063,11 +1376,11 @@ struct InFrameVideoPlayer: View {
             playGate = false
             return
         }
-        // Focus lost briefly — hold playback ~280ms before pausing.
+        // Focus lost briefly (layout flap) — hold ~120ms then pause.
         guard playGate else { return }
         deactivateTask?.cancel()
         deactivateTask = Task {
-            try? await Task.sleep(nanoseconds: 280_000_000)
+            try? await Task.sleep(nanoseconds: 120_000_000)
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 if !shouldPlay {
@@ -1095,14 +1408,28 @@ struct InFrameVideoPlayer: View {
                 .onChange(of: appState.selectedTab) { _, _ in
                     reportVisibility(proxy.frame(in: .global))
                 }
+                .onChange(of: appState.navigationPath.count) { _, _ in
+                    reportVisibility(proxy.frame(in: .global))
+                }
         }
         .allowsHitTesting(false)
     }
 
     private func reportVisibility(_ frame: CGRect) {
+        // Hidden feed (still mounted under Profile) must not steal the ≥50% winner.
+        guard surfaceLive else {
+            if lastReportedRatio >= 0 {
+                lastReportedRatio = -1
+                FeedVideoFocus.shared.clear(id: focusID)
+            }
+            if isFocusWinner { isFocusWinner = false }
+            syncPlayGate(immediate: true)
+            return
+        }
+
         let ratio = FeedVideoFocus.visibleRatio(for: frame)
-        // Skip noise when unchanged (avoids recompute thrash while scrolling).
-        if abs(ratio - lastReportedRatio) < 0.04, lastReportedRatio >= 0 {
+        // Skip tiny noise; still re-check winner so 50% threshold is respected promptly.
+        if abs(ratio - lastReportedRatio) < 0.02, lastReportedRatio >= 0 {
             refreshFocusWinner()
             return
         }

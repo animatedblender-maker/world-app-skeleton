@@ -206,7 +206,8 @@ enum LivingChannelMarker {
     }
 }
 
-/// Marks long-form uploads that belong on a user's Hubs channel (vs plain feed video).
+/// Marks long-form uploads that belong on a user's **own** Hubs channel
+/// (intentional Hubs publish only — never used for feed shares).
 enum HubChannelPostMarker {
     static let token = "__hub_channel__|"
 
@@ -229,6 +230,160 @@ enum HubChannelPostMarker {
     static func isMarked(_ body: String?) -> Bool {
         guard let body else { return false }
         return body.contains(token)
+    }
+}
+
+/// Feed share of a **Spark** — shows as a Spark card on the home feed only.
+/// Must **never** use `__spark__|` (that would enter the Sparks swipe pool as an original).
+///
+/// Header line: `__spark_share__|sid=…`
+/// Optional caption lines follow.
+enum SparkShareMarker {
+    static let token = "__spark_share__|"
+
+    static func isMarked(_ body: String?) -> Bool {
+        guard let body else { return false }
+        return body.contains(token)
+    }
+
+    static func markBody(caption: String, origin: CountryPost) -> String {
+        let sid = (origin.sharedPostID ?? origin.id)
+            .replacingOccurrences(of: "|", with: "")
+        let header = "\(token)sid=\(sid)"
+        let cap = caption.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cap.isEmpty { return header }
+        return "\(header)\n\(cap)"
+    }
+
+    static func strip(_ body: String) -> String {
+        body
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.hasPrefix(token) }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Original spark id when this post is a feed re-share of a Spark.
+    static func originID(from body: String?) -> String? {
+        guard let body else { return nil }
+        for line in body.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.hasPrefix(token) else { continue }
+            let rest = String(trimmed.dropFirst(token.count))
+            for part in rest.split(separator: "|") {
+                if part.hasPrefix("sid=") {
+                    let id = String(part.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines)
+                    return id.isEmpty ? nil : id
+                }
+            }
+        }
+        return nil
+    }
+}
+
+/// Feed share of a Hubs video — **does not** create a channel for the sharer.
+/// Preserves original channel/author so Hubs watch shows the real creator.
+///
+/// Header line: `__hub_origin__|sid=…|aid=…|an=…|au=…`
+/// Optional caption lines follow.
+enum HubOriginShareMarker {
+    static let token = "__hub_origin__|"
+
+    static func isMarked(_ body: String?) -> Bool {
+        guard let body else { return false }
+        return body.contains(token)
+    }
+
+    static func markBody(caption: String, origin: CountryPost) -> String {
+        let sid = (origin.sharedPostID ?? origin.id)
+            .replacingOccurrences(of: "|", with: "")
+        let aid = origin.authorID.replacingOccurrences(of: "|", with: "")
+        let an = (origin.author?.displayName ?? origin.authorDisplayName)
+            .replacingOccurrences(of: "|", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let au = (origin.author?.username ?? "")
+            .replacingOccurrences(of: "|", with: "")
+        var header = "\(token)sid=\(sid)|aid=\(aid)|an=\(an)"
+        if !au.isEmpty {
+            header += "|au=\(au)"
+        }
+        let cap = caption.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cap.isEmpty { return header }
+        return "\(header)\n\(cap)"
+    }
+
+    static func strip(_ body: String) -> String {
+        body
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.hasPrefix(token) && !$0.hasPrefix("__hub_channel__") }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Rebuild a presentation post for Hubs watch: same media as the share, original channel author.
+    static func originPresentation(from share: CountryPost) -> CountryPost? {
+        guard let fields = parseFields(from: share.body) else { return nil }
+        let originAuthorID = fields["aid"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let originAuthorID, !originAuthorID.isEmpty else { return nil }
+        let name = fields["an"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let username = fields["au"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sourceID = fields["sid"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let author = PostAuthor(
+            userID: originAuthorID,
+            displayName: (name?.isEmpty == false) ? name : share.author?.displayName,
+            username: (username?.isEmpty == false) ? username : nil,
+            avatarURL: nil,
+            countryName: share.author?.countryName,
+            countryCode: share.author?.countryCode,
+            lastReadAt: nil
+        )
+        // Keep share media (self-contained stamp) but show original channel identity.
+        return CountryPost(
+            id: (sourceID?.isEmpty == false) ? sourceID! : share.id,
+            title: share.title,
+            body: strip(share.body),
+            mediaType: share.mediaType,
+            mediaURL: share.mediaURL,
+            thumbURL: share.thumbURL,
+            mediaCaption: share.mediaCaption,
+            sharedPostID: share.sharedPostID,
+            sharedPost: share.sharedPost,
+            visibility: share.visibility,
+            likeCount: share.likeCount,
+            commentCount: share.commentCount,
+            viewCount: share.viewCount,
+            likedByMe: share.likedByMe,
+            savedByMe: share.savedByMe,
+            createdAt: share.createdAt,
+            updatedAt: share.updatedAt,
+            authorID: originAuthorID,
+            countryName: share.countryName,
+            countryCode: share.countryCode,
+            cityName: share.cityName,
+            author: author,
+            externalRefType: share.externalRefType ?? "hub",
+            externalRefID: share.externalRefID ?? sourceID
+        )
+    }
+
+    static func parseFields(from body: String?) -> [String: String]? {
+        guard let body else { return nil }
+        guard let line = body.components(separatedBy: .newlines)
+            .map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) })
+            .first(where: { $0.hasPrefix(token) })
+        else { return nil }
+        let payload = String(line.dropFirst(token.count))
+        var out: [String: String] = [:]
+        for part in payload.split(separator: "|") {
+            let s = String(part)
+            guard let eq = s.firstIndex(of: "=") else { continue }
+            let key = String(s[..<eq])
+            let val = String(s[s.index(after: eq)...])
+            if !key.isEmpty { out[key] = val }
+        }
+        return out.isEmpty ? nil : out
     }
 }
 
@@ -502,17 +657,40 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
         return []
     }
 
+    /// True only for **original** Sparks (short vertical reels) — never long-form,
+    /// hub watch videos, or **feed shares** of Sparks (`SparkShareMarker`).
+    /// Markers must be explicit; do not infer from duration, aspect, or "has a video URL".
     var isReel: Bool {
+        // Feed re-shares of Sparks are feed cards only — never first-class Sparks.
+        if SparkShareMarker.isMarked(body) { return false }
         let type = (mediaType ?? "").lowercased()
         if type == "reel" || type == "spark" { return true }
         if mediaPayload?.isReel == true { return true }
         if let mediaURL {
             let normalized = mediaURL.lowercased()
+            // JSON payload flag only — avoid matching unrelated substrings.
             if normalized.contains("\"reel\":true") || normalized.contains("\"reel\": true") {
                 return true
             }
         }
-        if body.contains("__spark__|") || body.contains("__reel__|") { return true }
+        // Explicit body markers (line-prefix), not a mid-caption substring false positive.
+        if Self.bodyHasSparkMarker(body) { return true }
+        return false
+    }
+
+    /// Feed card should render Spark chrome (letterbox + badge) without being a swipe-pool Spark.
+    var isSparkFeedShare: Bool {
+        SparkShareMarker.isMarked(body)
+            || (sharedPost.map { $0.asCountryPost.isReel } == true)
+    }
+
+    /// `__spark__|` / `__reel__|` only when used as a control line (start or after newline).
+    private static func bodyHasSparkMarker(_ body: String) -> Bool {
+        guard !body.isEmpty else { return false }
+        // Never treat spark-share control lines as original Spark markers.
+        if SparkShareMarker.isMarked(body) { return false }
+        if body.hasPrefix("__spark__|") || body.hasPrefix("__reel__|") { return true }
+        if body.contains("\n__spark__|") || body.contains("\n__reel__|") { return true }
         return false
     }
 
@@ -524,6 +702,29 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
 
     /// Sparks belong in the vertical sparks scroll only — not the home feed or profile grids.
     var isSpark: Bool { isReel }
+
+    /// Cloudflare R2 focus packs (US/DE/EG/AL seed) — preferred Sparks source.
+    var isR2HostedMedia: Bool {
+        let media = (mediaURL ?? "").lowercased()
+        if media.contains("r2.cloudflarestorage.com") { return true }
+        if media.contains("matterya-sparks") { return true }
+        if media.contains("\"r2_key\"") || media.contains("r2_key") { return true }
+        if media.contains("r2_focus_seed") || media.contains("r2_spark") { return true }
+        if media.contains("\"source\":\"r2") { return true }
+        let thumb = (thumbURL ?? "").lowercased()
+        if thumb.contains("r2.cloudflarestorage.com") || thumb.contains("matterya-sparks") { return true }
+        return false
+    }
+
+    /// Internet Archive / local hub seed catalog — lowest priority in Sparks player.
+    var isArchiveSparkSource: Bool {
+        if isHubSeedVideo { return true }
+        if HubVideoSeedService.isArchiveChannelAuthor(authorID) { return true }
+        let id = id.lowercased()
+        if id.hasPrefix("ia_") || id.hasPrefix("hub_spark_") { return true }
+        if PlayPlatformBridge.isArchiveCatalogMedia(self) { return true }
+        return false
+    }
 
     var storyExpiresAt: Date? {
         if let expiresAt = mediaPayload?.expiresAt { return expiresAt }
@@ -543,14 +744,44 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
     var displayBody: String { ContentSanitizer.clean(body) ?? "" }
 
     var displayCaption: String? {
-        ContentSanitizer.clean(mediaCaption)
+        if let caption = ContentSanitizer.clean(mediaCaption) { return caption }
+        // Sparks store the R2/source caption in body after markers (`__spark__|…`).
+        if isReel || isSparkFeedShare {
+            let fromBody = displayBody
+            if !fromBody.isEmpty { return fromBody }
+            // Feed spark share: prefer original caption when embed is present.
+            if let origin = sharedPost?.asCountryPost {
+                if let c = ContentSanitizer.clean(origin.mediaCaption), !c.isEmpty { return c }
+                let originBody = origin.displayBody
+                if !originBody.isEmpty { return originBody }
+                if let t = origin.displayTitle { return t }
+            }
+        }
+        return nil
+    }
+
+    /// Caption line for Sparks player / feed Spark cards — never synthetic seeder fluff.
+    var sparkDisplayCaption: String? {
+        displayCaption ?? displayHeadline
+    }
+
+    /// Feed share of a Hubs channel video (`__hub_origin__|…`).
+    var isHubOriginFeedShare: Bool {
+        HubOriginShareMarker.isMarked(body)
     }
 
     var displayHeadline: String? {
         if let title = displayTitle { return title }
+        // Spark shares: body after stripping markers may be empty or a weak share line —
+        // prefer embedded original when available.
+        if isSparkFeedShare, let origin = sharedPost?.asCountryPost {
+            if let t = origin.displayTitle { return t }
+            let originBody = origin.displayBody
+            if !originBody.isEmpty { return String(originBody.prefix(120)) }
+        }
         let text = displayBody
         if text.isEmpty { return nil }
-        return String(text.prefix(72))
+        return String(text.prefix(120))
     }
 
     var displayExcerpt: String {
@@ -612,6 +843,12 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
 }
 
 extension Array where Element == CountryPost {
+    /// Drop Internet Archive seed / archive.org media when `AppConfig.archiveContentEnabled` is false.
+    func excludingArchiveContent() -> [CountryPost] {
+        guard !AppConfig.archiveContentEnabled else { return self }
+        return filter { !$0.isArchiveSparkSource && !PlayPlatformBridge.isArchiveCatalogMedia($0) }
+    }
+
     func excludingSparks() -> [CountryPost] {
         filter { !$0.isSpark }
     }
@@ -841,7 +1078,8 @@ struct Message: Identifiable, Hashable, Sendable {
         if let share = shareInfo {
             if !share.note.isEmpty { return share.note }
             switch share.kind {
-            case .hub, .reel: return share.isVideo ? "Shared a video" : "Shared from Hubs"
+            case .reel: return "Shared a \(MatteryaCopy.spark)"
+            case .hub: return share.isVideo ? "Shared a video" : "Shared from Hubs"
             case .post: return share.isVideo ? "Shared a video" : "Shared a post"
             }
         }
@@ -979,10 +1217,15 @@ struct Message: Identifiable, Hashable, Sendable {
         }
 
         var isHubContent: Bool {
-            kind == .hub || kind == .reel
+            // Reels/Sparks are never Hubs long-form — keep them on the Sparks path.
+            if kind == .reel { return false }
+            let type = (mediaType ?? "").lowercased()
+            if type == "reel" || type == "spark" { return false }
+            return kind == .hub
                 || postID.lowercased().hasPrefix("ia_")
                 || postID.lowercased().hasPrefix("hub_")
-                || (mediaURL?.lowercased().contains("archive.org") == true)
+                || (mediaURL?.lowercased().contains("archive.org") == true
+                    && kind != .post)
         }
 
         /// Same resolution path as feed/hubs (JSON media payloads, relative paths, Archive).
@@ -1026,11 +1269,23 @@ struct Message: Identifiable, Hashable, Sendable {
             }()
             // Prefer a plain https URL so players never receive a JSON media blob.
             let plainMedia = playableVideoURL?.absoluteString ?? mediaURL
+            let isSpark = kind == .reel
+                || (mediaType ?? "").lowercased() == "reel"
+                || (mediaType ?? "").lowercased() == "spark"
+            // Stamp spark marker so open path treats this as a first-class Spark.
+            let body: String = {
+                let raw = (bodyText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if isSpark {
+                    if raw.hasPrefix("__spark__|") || raw.hasPrefix("__reel__|") { return raw }
+                    return "__spark__|\(raw.isEmpty ? "Spark" : raw)"
+                }
+                return raw
+            }()
             return CountryPost(
                 id: postID,
                 title: title,
-                body: bodyText ?? "",
-                mediaType: mediaType ?? (isVideo ? "video" : nil),
+                body: body,
+                mediaType: isSpark ? (mediaType ?? "reel") : (mediaType ?? (isVideo ? "video" : nil)),
                 mediaURL: plainMedia,
                 thumbURL: posterURL ?? posterImageURL?.absoluteString,
                 createdAt: "",
@@ -1041,6 +1296,7 @@ struct Message: Identifiable, Hashable, Sendable {
         }
 
         var previewLabel: String {
+            if kind == .reel { return title?.isEmpty == false ? title! : MatteryaCopy.spark }
             if isVideo { return title?.isEmpty == false ? title! : "Video" }
             return title?.isEmpty == false ? title! : "Post"
         }
@@ -1069,12 +1325,15 @@ struct Message: Identifiable, Hashable, Sendable {
         return "\(replyPrefix)id=\(target.id)|text=\(encoded)||\(body)"
     }
 
-    /// Encodes a post/hub video so chat can render a playable card (not just a bare link).
+    /// Encodes a post/hub video / Spark so chat can render a rich card (not just a bare link).
     static func buildShareBody(post: CountryPost, note: String = "") -> String {
         let kind: ShareInfo.Kind
-        if post.isReel {
-            // Hub sparks share as hub cards; plain reels as reels/posts.
-            kind = PlayPlatformBridge.isHubCatalogContent(post) ? .hub : .reel
+        // Sparks first — including spark feed shares — so chat never paints them as Hubs.
+        if post.isReel
+            || post.isSparkFeedShare
+            || PlayPlatformBridge.isSparkFeedCard(post)
+            || PlayPlatformBridge.isReelVideo(post) {
+            kind = .reel
         } else if PlayPlatformBridge.isHubCatalogContent(post), post.hasVideo {
             kind = .hub
         } else {
@@ -1082,7 +1341,7 @@ struct Message: Identifiable, Hashable, Sendable {
         }
 
         let mediaType = post.mediaType
-            ?? (post.hasVideo ? (post.isReel ? "reel" : "video") : nil)
+            ?? (post.hasVideo ? (kind == .reel ? "reel" : "video") : nil)
         let title = post.displayHeadline ?? post.displayTitle
         let bodyText: String? = {
             let body = post.displayBody.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1373,6 +1632,50 @@ struct Conversation: Identifiable, Hashable, Sendable {
     func otherMember(currentUserID: String) -> PostAuthor? {
         members.first { $0.userID != currentUserID }
     }
+}
+
+// MARK: - Channel admins (creator + selected admins)
+
+enum ChannelMemberRole: String, Codable, Sendable, Hashable {
+    case owner
+    case admin
+
+    var isStaff: Bool { self == .owner || self == .admin }
+    var displayTitle: String {
+        switch self {
+        case .owner: return "Creator"
+        case .admin: return "Admin"
+        }
+    }
+}
+
+struct HubChannel: Identifiable, Hashable, Sendable {
+    let id: String
+    let ownerUserID: String
+    let name: String
+    let handle: String?
+    let about: String?
+    let avatarURL: String?
+    /// Wide banner / cover image on the channel page (separate from avatar).
+    let coverURL: String?
+    let createdAt: String
+    let updatedAt: String
+    let owner: PostAuthor?
+    let myRole: ChannelMemberRole?
+    let videoCount: Int
+
+    var isStaff: Bool { myRole?.isStaff == true }
+    var isOwner: Bool { myRole == .owner }
+}
+
+struct ChannelMember: Identifiable, Hashable, Sendable {
+    var id: String { "\(channelID):\(userID)" }
+    let channelID: String
+    let userID: String
+    let role: ChannelMemberRole
+    let invitedBy: String?
+    let createdAt: String
+    let profile: PostAuthor?
 }
 
 struct NotificationItem: Identifiable, Hashable, Sendable {

@@ -75,7 +75,8 @@ final class HomeFeedStore {
 
     // MARK: - Lifecycle
 
-    /// Must happen now: paint cache. Later: soft revalidate.
+    /// Smooth open: cache → tiny first-paint network → done.
+    /// Never multi-page GraphQL or hubs catalog on this path.
     func bootstrap(forceRefresh: Bool = false) async {
         generation += 1
         let gen = generation
@@ -88,53 +89,71 @@ final class HomeFeedStore {
             return
         }
 
-        // 1) Instant paint from cache if any (may be demo-only — network still runs below).
+        // 1) Instant paint from cache (sign-in / relaunch must not wait on network).
         if posts.isEmpty, let cached = ContentCache.shared.posts(for: .homeFeed), !cached.isEmpty {
-            applyPosts(
-                BlockService.shared.filterPosts(cached.forProfileFeedGrid()),
-                replace: true,
-                sessionId: feedSessionId
-            )
-            isBootstrapping = false
-            didPaint = true
-            warmHead()
+            let clean = Self.liveOnlyPosts(cached)
+            if clean.isEmpty {
+                ContentCache.shared.invalidate(.homeFeed)
+            } else {
+                applyPosts(
+                    PostsService.shared.sessionFreshOrder(
+                        BlockService.shared.filterPosts(clean.excludingMoments().excludingSparks())
+                    ),
+                    replace: true,
+                    sessionId: feedSessionId
+                )
+                isBootstrapping = false
+                didPaint = true
+                warmHead()
+            }
         }
 
-        // 2) Network live posts + demo filler in parallel.
-        //    Critical: never skip network because a fat demo cache is "fresh".
-        async let liveTask = PostsService.shared.fetchNetworkHomePosts(limit: 80)
-        async let demoTask: [CountryPost] = {
-            guard AppConfig.useDemoDataset else { return [] }
-            return await PostsService.shared.sampleGlobalPosts(limit: AppConfig.demoDatasetMaxPosts)
-        }()
-
-        let live = await liveTask
-        let demoRaw = await demoTask
+        // 2) One light network round-trip — first paint algorithm only.
+        let live = Self.liveOnlyPosts(await PostsService.shared.fetchFirstPaintHomePosts(limit: 40))
         guard gen == generation else { return }
 
-        let demo = BlockService.shared.filterPosts(demoRaw.forProfileFeedGrid())
-        // Keep any live rows already in memory (e.g. just-created post) + fresh network.
-        let existingLive = posts.filter { !$0.isSeededOrSynthetic && !$0.isStory && !$0.isSpark }
-        let realBatch = live + existingLive
-        let merged = PostsService.shared.mergePosts(
-            real: realBatch,
-            demo: demo,
-            limit: max(demo.count + realBatch.count, 50)
-        )
+        let existingLive = posts.filter { !$0.isStory }
+        // Prefer fresh network; keep on-screen pins so list doesn't jump.
+        let pinIDs = Set(posts.prefix(2).map(\.id))
+        let realBatch = Self.liveOnlyPosts(live + existingLive)
+        let merged = PostsService.shared.sessionFreshOrder(realBatch, pinIDs: pinIDs)
+        let capped = Array(merged.prefix(min(merged.count, 48)))
 
-        if !merged.isEmpty {
-            applyPosts(merged, replace: true, sessionId: feedSessionId)
-            ContentCache.shared.setPosts(merged, for: .homeFeed)
+        if !capped.isEmpty {
+            applyPosts(capped, replace: true, sessionId: feedSessionId)
+            ContentCache.shared.setPosts(posts, for: .homeFeed)
             didPaint = true
             warmHead()
-            hasMore = windowLimit < posts.count
+            hasMore = true // always allow scroll-to-load (catalog is huge)
             #if DEBUG
-            let liveN = merged.filter(\.isRealPersonFeedPost).count
-            print("[HomeFeed] bootstrap live=\(liveN) total=\(merged.count) networkRaw=\(live.count)")
+            print("[HomeFeed] firstPaint total=\(capped.count) network=\(live.count)")
             #endif
+        } else if posts.isEmpty {
+            applyPosts([], replace: true, sessionId: feedSessionId)
+            ContentCache.shared.invalidate(.homeFeed)
         }
 
         isBootstrapping = false
+    }
+
+    /// Drop offline Reddit / catalog fakes; keep real UUID-backed posts only
+    /// (includes DE Million Post Corpus seeds + their comments).
+    private static func liveOnlyPosts(_ posts: [CountryPost]) -> [CountryPost] {
+        posts.filter { post in
+            if post.authorID.hasPrefix("user_") { return false }
+            if post.id.hasPrefix("post_") || post.id.hasPrefix("demo_") { return false }
+            if post.id.hasPrefix("ia_") || post.id.hasPrefix("hub_") { return false }
+            if post.isStory { return false }
+            // Shared / live Sparks with video are OK on main feed (SparkFeedCard).
+            // Offline hub catalog fakes only — never drop real UUID backend rows.
+            if post.isHubSeedVideo { return false }
+            // Archive seed / archive.org media — gated off (see AppConfig.archiveContentEnabled).
+            if !AppConfig.archiveContentEnabled {
+                if post.isArchiveSparkSource { return false }
+                if PlayPlatformBridge.isArchiveCatalogMedia(post) { return false }
+            }
+            return true
+        }
     }
 
     // MARK: - Scroll / prefetch
@@ -160,10 +179,23 @@ final class HomeFeedStore {
         }
 
         // Media: fling = small ahead buffer; settled = normal prefetch.
-        let ahead = fling ? 2 : 5
+        let ahead = fling ? 3 : 6
         let end = min(displayedPosts.count, index + ahead)
         if index < end {
-            ImageCache.shared.prefetchFeedMedia(Array(displayedPosts[index..<end]), maxPixelSize: fling ? 280 : 360)
+            let window = Array(displayedPosts[index..<end])
+            ImageCache.shared.prefetchFeedMedia(window, maxPixelSize: fling ? 280 : 360)
+            // Pre-buffer upcoming feed Sparks so first frame is almost instant.
+            let sparkPosts = window.filter {
+                $0.isSparkFeedShare || $0.isReel || PlayPlatformBridge.isSparkFeedCard($0)
+            }
+            if !sparkPosts.isEmpty {
+                SparkWarmPool.shared.prepare(
+                    posts: sparkPosts,
+                    around: 0,
+                    ahead: max(0, sparkPosts.count - 1),
+                    behind: 0
+                )
+            }
         }
 
         // Don't kick network load-more mid-fling (causes hitch + image storms).
@@ -204,21 +236,13 @@ final class HomeFeedStore {
     }
 
     func insertNewPost(_ post: CountryPost) {
-        guard !post.isSpark, !post.isStory else { return }
-        if posts.contains(where: { $0.id == post.id }) {
-            applyLocalUpdate(post)
-            return
+        // Sparks allowed (shared sparks show as SparkFeedCard). Moments stay off the main feed.
+        guard !post.isStory else { return }
+        if let index = posts.firstIndex(where: { $0.id == post.id }) {
+            posts.remove(at: index)
         }
-        // New live posts always pin to the top of the feed (above demo seed).
-        if post.isSeededOrSynthetic {
-            if let firstSeed = posts.firstIndex(where: \.isSeededOrSynthetic) {
-                posts.insert(post, at: firstSeed)
-            } else {
-                posts.append(post)
-            }
-        } else {
-            posts.insert(post, at: 0)
-        }
+        // Brand-new posts always pin to top; do not re-chronological-sort the whole feed.
+        posts.insert(post, at: 0)
         windowLimit = max(windowLimit, firstWindow)
         ContentCache.shared.setPosts(posts, for: .homeFeed)
     }
@@ -284,22 +308,12 @@ final class HomeFeedStore {
         nextCursor = nil
         hasMore = true
 
-        async let liveTask = PostsService.shared.fetchNetworkHomePosts(limit: 80)
-        async let demoTask: [CountryPost] = {
-            guard AppConfig.useDemoDataset else { return [] }
-            return await PostsService.shared.sampleGlobalPosts(limit: AppConfig.demoDatasetMaxPosts)
-        }()
-
-        let live = await liveTask
-        let demoRaw = await demoTask
+        // Pull-to-refresh may go a bit deeper than first paint, still capped.
+        let live = Self.liveOnlyPosts(await PostsService.shared.fetchNetworkHomePosts(limit: 60))
         guard gen == generation else { return }
 
-        let demo = BlockService.shared.filterPosts(demoRaw.forProfileFeedGrid())
-        let filtered = PostsService.shared.mergePosts(
-            real: live,
-            demo: demo,
-            limit: max(demo.count + live.count, 50)
-        )
+        // New session id → full reshuffle every pull-to-refresh.
+        let filtered = PostsService.shared.sessionFreshOrder(live)
         applyPosts(filtered, replace: true, sessionId: feedSessionId)
         nextCursor = Self.cursor(from: filtered.last)
         hasMore = filtered.count >= pageSize || windowLimit < posts.count
@@ -307,6 +321,8 @@ final class HomeFeedStore {
         warmHead()
         if !filtered.isEmpty {
             ContentCache.shared.setPosts(posts, for: .homeFeed)
+        } else {
+            ContentCache.shared.invalidate(.homeFeed)
         }
         #if DEBUG
         print("[HomeFeed] hardRefresh live=\(live.count) total=\(filtered.count)")
@@ -353,17 +369,8 @@ final class HomeFeedStore {
             hasMore = page.hasMore && page.nextCursor != cursor
             return
         }
-        // Real people from the new page slot into the people tier; seed stays below.
-        let people = appended.filter(\.isRealPersonFeedPost)
-        let filler = appended.filter { !$0.isRealPersonFeedPost }
-        if people.isEmpty {
-            posts.append(contentsOf: filler)
-        } else if let firstSeed = posts.firstIndex(where: { !$0.isRealPersonFeedPost }) {
-            posts.insert(contentsOf: people, at: firstSeed)
-            posts.append(contentsOf: filler)
-        } else {
-            posts.append(contentsOf: people + filler)
-        }
+        // Append shuffled page — never re-order the whole feed chronologically.
+        posts.append(contentsOf: appended.shuffled())
         nextCursor = page.nextCursor
         hasMore = page.hasMore || windowLimit < posts.count
         ContentCache.shared.setPosts(posts, for: .homeFeed)
@@ -372,27 +379,33 @@ final class HomeFeedStore {
 
     private func applyPosts(_ next: [CountryPost], replace: Bool, sessionId: String) {
         feedSessionId = sessionId
-        // Trust caller order (`mergePosts` already puts network live above demo).
-        // Do NOT re-run prioritizeRealPeopleFeed here — it can bury edge-case live rows.
+        // Already session-shuffled by fetch / hardRefresh; only re-shuffle if still chronological-looking.
+        let ordered = next
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) {
+            posts = ordered
             if replace {
-                posts = next
-                windowLimit = min(firstWindow, max(next.count, 0))
-            } else {
-                posts = next
+                windowLimit = min(firstWindow, max(ordered.count, 0))
             }
         }
-        if !next.isEmpty {
-            nextCursor = Self.cursor(from: next.last)
+        if !ordered.isEmpty {
+            nextCursor = Self.cursor(from: ordered.last)
             // Endless while local pool still has rows to reveal.
-            hasMore = windowLimit < posts.count || next.count >= pageSize
+            hasMore = windowLimit < posts.count || ordered.count >= pageSize
         }
     }
 
     private func warmHead() {
-        ImageCache.shared.prefetchFeedMedia(Array(posts.prefix(firstWindow + 2)), maxPixelSize: 360)
+        // Only what the first screen can show — never warm the whole pool.
+        let head = Array(posts.prefix(firstWindow))
+        ImageCache.shared.prefetchFeedMedia(head, maxPixelSize: 320)
+        let sparks = head.prefix(2).filter {
+            $0.isSparkFeedShare || $0.isReel || PlayPlatformBridge.isSparkFeedCard($0)
+        }
+        if !sparks.isEmpty {
+            SparkWarmPool.shared.prepare(posts: Array(sparks), around: 0, ahead: 1, behind: 0)
+        }
     }
 
     /// Opaque cursor for GraphQL `before` (created_at timestamptz).

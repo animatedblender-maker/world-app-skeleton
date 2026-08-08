@@ -1,14 +1,83 @@
 import AVFoundation
 import SwiftUI
+import UIKit
 
 enum YouTubeMediaLayout {
     static let aspect: CGFloat = 16.0 / 9.0
 
-    /// Full-bleed watch stage height (about 42–56% of the screen).
+    /// Full phone height (points) — use for stage math so feed/watch/overlay agree.
+    static var keyWindowHeight: CGFloat {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        if let h = scenes.flatMap(\.windows).first(where: \.isKeyWindow)?.bounds.height, h > 0 {
+            return h
+        }
+        if let h = scenes.flatMap(\.windows).first?.bounds.height, h > 0 {
+            return h
+        }
+        return UIScreen.main.bounds.height
+    }
+
+    /// Status-bar / notch inset from the key window (overlay GeometryReaders often report 0).
+    static var keyWindowSafeTop: CGFloat {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        if let top = scenes.flatMap(\.windows).first(where: \.isKeyWindow)?.safeAreaInsets.top, top > 0 {
+            return top
+        }
+        if let top = scenes.flatMap(\.windows).first?.safeAreaInsets.top, top > 0 {
+            return top
+        }
+        // Dynamic Island / notch phones fall in ~47–59; home-button iPhones ~20.
+        return 59
+    }
+
+    /// Home-indicator inset (0 on home-button phones).
+    static var keyWindowSafeBottom: CGFloat {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        if let bottom = scenes.flatMap(\.windows).first(where: \.isKeyWindow)?.safeAreaInsets.bottom {
+            return bottom
+        }
+        if let bottom = scenes.flatMap(\.windows).first?.safeAreaInsets.bottom {
+            return bottom
+        }
+        return 0
+    }
+
+    /// Space reserved under the continuous player for title + channel (always visible).
+    static let hubsWatchMetaReserve: CGFloat = 120
+
+    /// Content column height **above** the custom bottom tab bar (tab bar not included).
+    static var hubsContentColumnHeight: CGFloat {
+        max(320, keyWindowHeight - Theme.tabBarHeight)
+    }
+
+    /// Single max-pixel size for Hubs For you / related / shelf thumbs.
+    /// Prefetch + display MUST match or ImageCache keys miss and every row re-downloads.
+    static let hubsListThumbMaxPixel: CGFloat = 320
+
+    /// Hubs watch stage height — large (≈ half the area above the tab bar), never smaller than 16:9.
+    /// Video uses `.resizeAspectFill` so the stage is always edge-to-edge (no black bars).
+    static func hubsContinuousStageHeight(containerWidth: CGFloat) -> CGFloat {
+        let w = max(1, containerWidth)
+        let contentH = hubsContentColumnHeight
+        let classic16x9 = w / aspect
+        // Tall watch stage (user-preferred) — about half the content column above the tab bar.
+        let halfAboveTab = contentH * 0.48
+        let preferred = max(classic16x9, halfAboveTab)
+        let maxH = max(classic16x9, contentH - hubsWatchMetaReserve)
+        return min(preferred, maxH)
+    }
+
+    /// Embedded watch player — same tall stage as continuous hubs playback.
     static func watchPlayerHeight(containerWidth: CGFloat, containerHeight: CGFloat) -> CGFloat {
-        let classic = containerWidth / aspect
-        let preferred = max(classic, containerHeight * 0.42)
-        return min(preferred, containerHeight * 0.56)
+        let w = max(1, containerWidth)
+        let classic16x9 = w / aspect
+        if containerHeight > 200 {
+            let half = containerHeight * 0.48
+            let preferred = max(classic16x9, half)
+            let maxH = max(classic16x9, containerHeight - hubsWatchMetaReserve)
+            return min(preferred, maxH)
+        }
+        return hubsContinuousStageHeight(containerWidth: w)
     }
 }
 
@@ -46,15 +115,17 @@ struct YouTubeVideoFrame<Content: View>: View {
                     }
                     .clipShape(Rectangle())
             case .feed:
+                // Facebook-style in-feed height (~55–68% of screen), not short 16:9.
                 Color.clear
-                    .aspectRatio(YouTubeMediaLayout.aspect, contentMode: .fit)
                     .frame(maxWidth: .infinity)
-                    .background(Theme.canvasDeep)
+                    .frame(height: FacebookMediaLayout.dominantFeedVideoHeight())
+                    .background(Theme.ink)
                     .overlay {
                         content().clipShape(Rectangle())
                     }
                     .clipShape(Rectangle())
             case .card:
+                // Shelf / search cards stay compact 16:9.
                 Color.clear
                     .aspectRatio(YouTubeMediaLayout.aspect, contentMode: .fit)
                     .frame(maxWidth: .infinity)
@@ -124,6 +195,7 @@ struct YouTubeVideoThumbnail: View {
         VideoThumbnailView(
             post: post,
             maxPixelSize: maxPixelSize,
+            // Fill the 16:9 card — never black margins on sides/top.
             contentMode: .fill,
             showsPlayIcon: false,
             extractFrameIfNeeded: extractFrameIfNeeded,
@@ -151,22 +223,35 @@ struct YouTubeVideoThumbnail: View {
 struct YouTubeVideoListRow: View {
     let post: CountryPost
     let onTap: () -> Void
+    /// Optional: called when the row appears so parents can prefetch neighbors.
+    var onAppearRow: (() -> Void)? = nil
 
     var body: some View {
         Button(action: onTap) {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 0) {
                 // Hubs list: clean thumbs, no Hubs badge (badge is feed-share only).
                 YouTubeVideoThumbnail(
                     post: post,
+                    maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel,
                     showsPlayIcon: false,
                     frameStyle: .card,
+                    // R2 LongForm → YouTube poster URL; Sparks without poster extract one frame (cached).
+                    extractFrameIfNeeded: true,
                     showsHubBadge: false
                 )
                 YouTubeVideoMetadataRow(post: post)
+                    // Small air gap between video frame and title row.
+                    .padding(.top, 10)
             }
+            // Full-width card with side inset — avoid double padding / horizontal crop.
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, Theme.pagePadding)
         }
         .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear {
+            onAppearRow?()
+        }
     }
 }
 
@@ -257,6 +342,7 @@ struct YouTubeVideoMetadataRow: View {
 }
 
 /// Hub video in Feed / shares: same player as Hubs watch + small Hubs badge (hub content only).
+/// Participates in `FeedVideoFocus` — only one feed video plays; needs ≥50% on-screen.
 struct PlayFeedLinkCard: View {
     @Environment(AppState.self) private var appState
 
@@ -264,37 +350,66 @@ struct PlayFeedLinkCard: View {
     /// Opens full Matterya Hubs watch (more related videos, shelves, etc.).
     var onOpen: () -> Void
     var edgeToEdge: Bool = true
+    /// Feed shares always show the Hubs logo even when stamp markers were lost.
+    var forceHubsBadge: Bool = false
+    /// Home feed vs profile — same ≥50% autoplay rules on both.
+    var autoplaySurface: FeedAutoplaySurface = .home
 
-    /// Feed hub clips play with audio; user can mute from the overlay.
-    @State private var isMuted = false
-    @State private var isPlaying = true
-
-    /// Never fight the global hubs continuous player (double audio).
-    private var feedPlayerActive: Bool {
-        isPlaying
-            && appState.hubPlaybackPost == nil
-            && appState.selectedTab == .feed
+    /// Bound to app-wide feed mute — one mute/unmute affects every feed video.
+    private var feedMutedBinding: Binding<Bool> {
+        Binding(
+            get: { appState.feedVideosMuted },
+            set: { appState.feedVideosMuted = $0 }
+        )
     }
+
+    @State private var isFocusWinner = false
+    @State private var playGate = false
+    @State private var lastReportedRatio: CGFloat = -1
+    @State private var deactivateTask: Task<Void, Never>?
+
+    private var focusID: String { "\(autoplaySurface.rawValue):\(post.id)" }
+
+    private var surfaceLive: Bool {
+        autoplaySurface.isLive(appState: appState)
+    }
+
+    /// Winner of FeedVideoFocus + allowed surface (no hubs/reels takeover).
+    private var shouldPlay: Bool {
+        isFocusWinner
+            && surfaceLive
+            && appState.hubPlaybackPost == nil
+            && appState.reelsViewerContext == nil
+    }
+
+    private var feedPlayerActive: Bool { playGate }
 
     private var horizontalPadding: CGFloat {
         edgeToEdge ? Theme.feedGutter : Theme.pagePadding
     }
 
+    /// Hub catalog clips + forced share path show the Hubs origin chip.
+    private var showsHubsOriginBadge: Bool {
+        forceHubsBadge || PlayPlatformBridge.isHubCatalogContent(post)
+    }
+
     var body: some View {
-        // Player full-bleed; Hubs badge sits above scrubber chrome so it stays visible.
+        // Player full-bleed. Hubs badge is top-leading so transport chrome never covers it.
         YouTubeVideoFrame(style: .feed) {
             hubFeedPlayerSurface
         }
-        .overlay(alignment: .bottomLeading) {
-            Button(action: onOpen) {
-                HubsOriginBadge()
+        .overlay(alignment: .topLeading) {
+            if showsHubsOriginBadge {
+                Button(action: onOpen) {
+                    HubsOriginBadge()
+                }
+                .buttonStyle(.plain)
+                .padding(.leading, 12)
+                .padding(.top, 12)
+                .zIndex(40)
+                .accessibilityLabel(MatteryaCopy.watchOnHubs)
+                .accessibilityHint("Opens this video in Matterya Hubs")
             }
-            .buttonStyle(.plain)
-            // Lift above bottom transport (play / scrub) ~40pt.
-            .padding(.leading, 12)
-            .padding(.bottom, 46)
-            .accessibilityLabel(MatteryaCopy.watchOnHubs)
-            .accessibilityHint("Opens this video in Matterya Hubs")
         }
         .clipShape(RoundedRectangle(cornerRadius: edgeToEdge ? 0 : 12, style: .continuous))
         .overlay {
@@ -303,28 +418,45 @@ struct PlayFeedLinkCard: View {
                     .stroke(Theme.border, lineWidth: 0.5)
             }
         }
-        .contentShape(Rectangle())
-        .onTapGesture { onOpen() }
         .padding(.horizontal, edgeToEdge ? 0 : horizontalPadding)
         .padding(.top, edgeToEdge ? 0 : 8)
+        .background(visibilityProbe)
+        .onReceive(NotificationCenter.default.publisher(for: .feedVideoFocusDidChange)) { _ in
+            refreshFocusWinner()
+        }
         .onAppear {
-            // Feed hub videos should be audible (user asked) — activate playback session.
-            let session = AVAudioSession.sharedInstance()
-            try? session.setCategory(.playback, mode: .moviePlayback, options: [])
-            try? session.setActive(true, options: [])
-            isMuted = false
-            isPlaying = appState.hubPlaybackPost == nil
+            if !appState.feedVideosMuted {
+                let session = AVAudioSession.sharedInstance()
+                try? session.setCategory(.playback, mode: .moviePlayback, options: [])
+                try? session.setActive(true, options: [])
+            }
             YouTubeCatalogService.shared.recordWatch(post.id)
+            refreshFocusWinner()
+            syncPlayGate(immediate: true)
+        }
+        .onDisappear {
+            deactivateTask?.cancel()
+            deactivateTask = nil
+            FeedVideoFocus.shared.clear(id: focusID)
+            isFocusWinner = false
+            playGate = false
         }
         .onChange(of: appState.hubPlaybackPost?.id) { _, id in
-            if id != nil {
-                isPlaying = false
-            }
+            syncPlayGate(immediate: id != nil)
         }
-        .onChange(of: appState.selectedTab) { _, tab in
-            if tab != .feed {
-                isPlaying = false
-            }
+        .onChange(of: appState.selectedTab) { _, _ in
+            lastReportedRatio = -1
+            syncPlayGate(immediate: true)
+        }
+        .onChange(of: appState.navigationPath.count) { _, _ in
+            lastReportedRatio = -1
+            syncPlayGate(immediate: true)
+        }
+        .onChange(of: appState.reelsViewerContext?.id) { _, ctx in
+            syncPlayGate(immediate: ctx != nil)
+        }
+        .onChange(of: shouldPlay) { _, play in
+            syncPlayGate(immediate: play)
         }
     }
 
@@ -332,7 +464,6 @@ struct PlayFeedLinkCard: View {
     private var hubFeedPlayerSurface: some View {
         if let url = post.playableVideoURL {
             if ArchiveVideoPlayback.isArchiveURL(url) || post.isHubSeedVideo {
-                // Same hub player as watch: scrubber + play/pause + mute.
                 MatteryaHubPlayerView(
                     url: url,
                     posterURL: post.posterImageURL,
@@ -341,7 +472,7 @@ struct PlayFeedLinkCard: View {
                     postID: post.id,
                     showsControls: true,
                     loops: false,
-                    isMuted: $isMuted,
+                    isMuted: feedMutedBinding,
                     allowsFullscreen: false,
                     onReady: {
                         Task { await PostsService.shared.recordView(post) }
@@ -349,7 +480,6 @@ struct PlayFeedLinkCard: View {
                 )
                 .id("hub-feed-\(post.id)")
             } else {
-                // Same control surface as Hubs watch for non-archive long-form.
                 VideoPlayerView(
                     url: url,
                     posterURL: post.posterImageURL,
@@ -360,11 +490,12 @@ struct PlayFeedLinkCard: View {
                     adsEnabled: false,
                     isActive: feedPlayerActive,
                     loops: false,
-                    muted: isMuted,
+                    muted: appState.feedVideosMuted,
                     showsControls: true,
                     allowsFullscreen: false,
                     startTime: YouTubeCatalogService.shared.playbackPosition(for: post.id),
                     persistsPositionOnTeardown: true,
+                    sharesFeedMute: true,
                     onViewed: { Task { await PostsService.shared.recordView(post) } }
                 )
                 .id("hub-feed-\(post.id)")
@@ -377,9 +508,91 @@ struct PlayFeedLinkCard: View {
                 frameStyle: .feed,
                 embedsFrame: false
             )
+            .contentShape(Rectangle())
+            .onTapGesture { onOpen() }
         }
     }
 
+    private var visibilityProbe: some View {
+        GeometryReader { proxy in
+            let frame = proxy.frame(in: .global)
+            Color.clear
+                .onAppear { reportVisibility(proxy.frame(in: .global)) }
+                .onChange(of: frame.minY) { _, _ in
+                    reportVisibility(proxy.frame(in: .global))
+                }
+                .onChange(of: frame.midY) { _, _ in
+                    reportVisibility(proxy.frame(in: .global))
+                }
+                .onChange(of: frame.height) { _, _ in
+                    reportVisibility(proxy.frame(in: .global))
+                }
+                .onChange(of: appState.selectedTab) { _, _ in
+                    reportVisibility(proxy.frame(in: .global))
+                }
+                .onChange(of: appState.navigationPath.count) { _, _ in
+                    reportVisibility(proxy.frame(in: .global))
+                }
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func reportVisibility(_ frame: CGRect) {
+        guard surfaceLive else {
+            if lastReportedRatio >= 0 {
+                lastReportedRatio = -1
+                FeedVideoFocus.shared.clear(id: focusID)
+            }
+            if isFocusWinner { isFocusWinner = false }
+            syncPlayGate(immediate: true)
+            return
+        }
+
+        let ratio = FeedVideoFocus.visibleRatio(for: frame)
+        if abs(ratio - lastReportedRatio) < 0.03, lastReportedRatio >= 0 {
+            refreshFocusWinner()
+            return
+        }
+        lastReportedRatio = ratio
+        FeedVideoFocus.shared.report(id: focusID, visibleRatio: ratio)
+        refreshFocusWinner()
+    }
+
+    private func refreshFocusWinner() {
+        let win = surfaceLive && FeedVideoFocus.shared.isActive(id: focusID)
+        if win != isFocusWinner {
+            isFocusWinner = win
+        }
+        syncPlayGate(immediate: win)
+    }
+
+    private func syncPlayGate(immediate: Bool) {
+        if shouldPlay {
+            deactivateTask?.cancel()
+            deactivateTask = nil
+            playGate = true
+            return
+        }
+        let leaveSurface =
+            !surfaceLive
+            || appState.reelsViewerContext != nil
+            || appState.hubPlaybackPost != nil
+        if immediate || leaveSurface {
+            deactivateTask?.cancel()
+            deactivateTask = nil
+            playGate = false
+            return
+        }
+        guard playGate else { return }
+        deactivateTask?.cancel()
+        deactivateTask = Task {
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                if !shouldPlay { playGate = false }
+            }
+        }
+    }
 }
 
 /// Compact mark that a clip lives on Matterya Hubs (not used for plain feed videos).
@@ -429,6 +642,7 @@ struct YouTubeFeedVideoCard: View {
                         contentCountryCode: post.countryCode,
                         postID: post.id,
                         muted: true,
+                        fillsFrame: true,
                         onViewed: { Task { await PostsService.shared.recordView(post) } }
                     )
                 } else {
@@ -492,6 +706,78 @@ struct YouTubeWatchPlayer<Content: View>: View {
     }
 }
 
+/// Fixed-size horizontal shelf card (Continue watching / New on Hubs / Hubs rails).
+/// Every card shares the same width, 16:9 thumb, and title block so the row stays aligned.
+struct HubsShelfThumbCard: View {
+    let post: CountryPost
+    var width: CGFloat = 168
+    /// When true, show a one-line meta row under the title (channel · views).
+    var showsMetadata: Bool = false
+    var titleFont: Font = .caption.weight(.semibold)
+    var onTap: () -> Void
+
+    private var thumbHeight: CGFloat { (width / YouTubeMediaLayout.aspect).rounded() }
+    /// Reserve space for exactly two caption lines so missing/short titles don't shift neighbors.
+    private var titleBlockHeight: CGFloat { 34 }
+    private var metaBlockHeight: CGFloat { showsMetadata ? 16 : 0 }
+
+    var body: some View {
+        Button(action: onTap) {
+            VStack(alignment: .leading, spacing: 0) {
+                // `embedsFrame: false` — outer frame owns size; avoid card aspect fighting fixed height.
+                YouTubeVideoThumbnail(
+                    post: post,
+                    maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel,
+                    showsPlayIcon: false,
+                    frameStyle: .card,
+                    embedsFrame: false,
+                    extractFrameIfNeeded: true,
+                    showsHubBadge: false
+                )
+                .frame(width: width, height: thumbHeight)
+                .clipped()
+                .background(Theme.canvasDeep)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Theme.border.opacity(0.6), lineWidth: 0.5)
+                )
+
+                Text(post.displayHeadline ?? " ")
+                    .font(titleFont)
+                    .foregroundStyle(post.displayHeadline == nil ? Color.clear : Theme.ink)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .frame(width: width, height: titleBlockHeight, alignment: .topLeading)
+                    .padding(.top, 6)
+
+                if showsMetadata {
+                    Text(metadataLine)
+                        .font(.caption2)
+                        .foregroundStyle(Theme.inkMuted)
+                        .lineLimit(1)
+                        .frame(width: width, height: metaBlockHeight, alignment: .topLeading)
+                        .padding(.top, 2)
+                }
+            }
+            .frame(width: width, alignment: .topLeading)
+        }
+        .buttonStyle(.plain)
+        // Lock total cell height so HStack top-aligns every card identically.
+        .frame(
+            width: width,
+            height: thumbHeight + 6 + titleBlockHeight + (showsMetadata ? 2 + metaBlockHeight : 0),
+            alignment: .top
+        )
+    }
+
+    private var metadataLine: String {
+        var parts = [post.authorDisplayName]
+        if post.viewCount > 0 { parts.append("\(post.viewCount.formatted()) views") }
+        return parts.joined(separator: " · ")
+    }
+}
+
 /// Vertical Matterya card for related / shelf thumbnails — not a side-by-side YT row.
 struct MatteryaHubVideoCard: View {
     let post: CountryPost
@@ -499,41 +785,13 @@ struct MatteryaHubVideoCard: View {
     let onTap: () -> Void
 
     var body: some View {
-        Button(action: onTap) {
-            VStack(alignment: .leading, spacing: 8) {
-                YouTubeVideoThumbnail(
-                    post: post,
-                    maxPixelSize: 360,
-                    showsPlayIcon: false,
-                    frameStyle: .card,
-                    showsHubBadge: false
-                )
-                .frame(width: width, height: width / YouTubeMediaLayout.aspect)
-
-                if let headline = post.displayHeadline {
-                    Text(headline)
-                        .font(.system(.caption, design: .serif))
-                        .fontWeight(.medium)
-                        .foregroundStyle(Theme.ink)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                        .frame(width: width, alignment: .leading)
-                }
-
-                Text(metadataLine)
-                    .font(.caption2)
-                    .foregroundStyle(Theme.inkMuted)
-                    .lineLimit(1)
-                    .frame(width: width, alignment: .leading)
-            }
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var metadataLine: String {
-        var parts = [post.authorDisplayName]
-        if post.viewCount > 0 { parts.append("\(post.viewCount.formatted()) views") }
-        return parts.joined(separator: " · ")
+        HubsShelfThumbCard(
+            post: post,
+            width: width,
+            showsMetadata: true,
+            titleFont: .system(.caption, design: .serif).weight(.medium),
+            onTap: onTap
+        )
     }
 }
 /// In-app use of the home-screen app icon (`MatteryaAppIcon` imageset ← AppIcon.png).

@@ -25,6 +25,41 @@ final class MessagesService {
         return cachedPeerReadByConversation[id]
     }
 
+    /// Instant chat open — conversation row / previous fetch without waiting on network.
+    func cachedConversation(id conversationID: String) -> Conversation? {
+        let id = conversationID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return nil }
+        return cachedConversations.first { $0.id == id }
+    }
+
+    /// Seed / update a single conversation so `ConversationRouteView` can paint immediately.
+    func storeConversation(_ conversation: Conversation) {
+        let id = conversation.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return }
+        if let idx = cachedConversations.firstIndex(where: { $0.id == id }) {
+            cachedConversations[idx] = conversation
+        } else {
+            cachedConversations.insert(conversation, at: 0)
+        }
+        if let userID = AuthService.shared.currentUser?.id {
+            cacheUserID = userID
+        }
+    }
+
+    /// Lightweight placeholder so chat UI can appear before network metadata returns.
+    func placeholderConversation(id conversationID: String) -> Conversation {
+        let id = conversationID.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Conversation(
+            id: id,
+            isDirect: true,
+            createdAt: "",
+            updatedAt: "",
+            lastMessageAt: nil,
+            members: [],
+            lastMessage: nil
+        )
+    }
+
     func storeMessages(_ messages: [Message], peerReadAt: String? = nil, for conversationID: String) {
         let id = conversationID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !id.isEmpty else { return }
@@ -44,6 +79,18 @@ final class MessagesService {
         }
     }
 
+    /// Warm the first few threads so tapping a chat is instant (messages already local).
+    func prefetchRecentThreads(limit: Int = 4) {
+        let ids = cachedConversations.prefix(limit).map(\.id)
+        guard !ids.isEmpty else { return }
+        Task { @MainActor in
+            for id in ids {
+                if cachedMessages(for: id) != nil { continue }
+                _ = try? await listMessages(conversationID: id, limit: 40)
+            }
+        }
+    }
+
     func listConversations(limit: Int = 40) async throws -> [Conversation] {
         if ScreenshotMode.isActive {
             return Array(ScreenshotMode.demoConversations.prefix(limit))
@@ -57,6 +104,8 @@ final class MessagesService {
                 cacheUserID = userID
                 cachedConversations = conversations
             }
+            // Warm top threads in the background — open chat without "Opening chat…".
+            prefetchRecentThreads(limit: 4)
             return conversations
         } catch {
             if let userID = AuthService.shared.currentUser?.id,
@@ -168,7 +217,9 @@ final class MessagesService {
             query: mutation,
             variables: ["targetId": targetID]
         )
-        return result.startConversation.toModel
+        let conversation = result.startConversation.toModel
+        storeConversation(conversation)
+        return conversation
     }
 
     func getConversationById(_ conversationID: String) async throws -> Conversation? {
@@ -208,6 +259,7 @@ final class MessagesService {
                 lastMessage: await hydrateMedia(last)
             )
         }
+        storeConversation(conversation)
         return conversation
     }
 

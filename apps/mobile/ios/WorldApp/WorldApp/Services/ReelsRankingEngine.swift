@@ -18,13 +18,38 @@ enum ReelsRankingEngine {
         sessionWatchedIDs.removeAll()
     }
 
+    /// Only **original** Sparks (Archive seeds when enabled, channel sparks, user-published sparks).
+    /// Feed re-shares of Sparks stay on the home feed card only — never this pool.
     static func isSparkEligible(_ post: CountryPost) -> Bool {
         guard post.hasVideo, !post.isStory else { return false }
-        if post.isReel { return true }
-        return post.playableVideoURL != nil
+        guard post.isReel, post.playableVideoURL != nil else { return false }
+        // Archive seed / archive.org media gated off until re-enabled in AppConfig.
+        if !AppConfig.archiveContentEnabled,
+           post.isArchiveSparkSource || PlayPlatformBridge.isArchiveCatalogMedia(post) {
+            return false
+        }
+        // Explicit feed re-share stamps — never enter Sparks-for-you / swipe pool as “new” Sparks.
+        if SparkShareMarker.isMarked(post.body) { return false }
+        if post.isSparkFeedShare { return false }
+        if PlayPlatformBridge.isHubOriginShare(post) { return false }
+        // Pointer re-post of someone else’s Spark.
+        if let shared = post.sharedPostID, !shared.isEmpty,
+           !HubChannelPostMarker.isMarked(post.body) {
+            return false
+        }
+        // Live user + Archive media + no channel marker = re-hosted catalog clip, not original.
+        if PlayPlatformBridge.isArchiveCatalogMedia(post),
+           PlayPlatformBridge.isLikelyLiveUserAuthor(post.authorID),
+           !post.isHubSeedVideo,
+           !HubChannelPostMarker.isMarked(post.body) {
+            return false
+        }
+        return true
     }
 
-    /// Picks the next ranked batch for endless spark scrolling.
+    /// Picks the next batch for endless spark scrolling.
+    /// Until a real recommender exists: **always random** so every open/scroll feels new.
+    /// Light author/country diversity is applied on top of the shuffle (no engagement ranking).
     static func nextBatch(
         from candidates: [CountryPost],
         excluding existingIDs: Set<String>,
@@ -35,6 +60,8 @@ enum ReelsRankingEngine {
         allowRecycle: Bool = false
     ) -> [CountryPost] {
         guard limit > 0 else { return [] }
+        _ = viewerCountry
+        _ = followingIDs
 
         var pool = candidates.filter { !existingIDs.contains($0.id) && isSparkEligible($0) }
         if pool.isEmpty, allowRecycle {
@@ -45,45 +72,41 @@ enum ReelsRankingEngine {
         }
         guard !pool.isEmpty else { return [] }
 
+        // Fresh random order every call — not chronological, not engagement-ranked.
+        var remaining = prioritizeR2First(pool)
         var context = tail
         var picked: [CountryPost] = []
-        var remaining = pool
-        let viewerCode = viewerCountry?.uppercased()
 
         while picked.count < limit, !remaining.isEmpty {
-            var bestIndex = 0
-            var bestScore = -Double.infinity
-
+            // Soft diversity: prefer not repeating author/country from recent tail when options exist.
             let recentAuthors = Set(context.suffix(diversityWindow).map(\.authorID))
             let recentCountries = Set(
                 context.suffix(countryDiversityWindow).compactMap { $0.countryCode?.uppercased() }
             )
-
-            for (index, post) in remaining.enumerated() {
-                var score = baseScore(
-                    for: post,
-                    viewerCountry: viewerCode,
-                    followingIDs: followingIDs,
-                    softenWatchedPenalty: allowRecycle
-                )
-                if recentAuthors.contains(post.authorID) {
-                    score *= diversityPenalty
-                }
+            let diverse = remaining.enumerated().filter { _, post in
+                if recentAuthors.contains(post.authorID) { return false }
                 if let code = post.countryCode?.uppercased(), recentCountries.contains(code) {
-                    score *= countryDiversityPenalty
+                    return false
                 }
-                if score > bestScore {
-                    bestScore = score
-                    bestIndex = index
-                }
+                return true
             }
-
-            let choice = remaining.remove(at: bestIndex)
+            let choiceIndex: Int
+            if let pick = diverse.randomElement() {
+                choiceIndex = pick.offset
+            } else {
+                choiceIndex = remaining.indices.randomElement() ?? 0
+            }
+            let choice = remaining.remove(at: choiceIndex)
             picked.append(choice)
             context.append(choice)
         }
 
         return picked
+    }
+
+    /// Full reshuffle for Sparks player / rails (R2 ahead of Archive, all random within).
+    static func sessionFreshOrder(_ posts: [CountryPost]) -> [CountryPost] {
+        prioritizeR2First(posts.filter(isSparkEligible))
     }
 
     static func rank(
@@ -92,50 +115,11 @@ enum ReelsRankingEngine {
         followingIDs: Set<String>,
         softenWatchedPenalty: Bool = false
     ) -> [CountryPost] {
-        let viewerCode = viewerCountry?.uppercased()
-        let scored = posts.map { post in
-            (
-                post: post,
-                score: baseScore(
-                    for: post,
-                    viewerCountry: viewerCode,
-                    followingIDs: followingIDs,
-                    softenWatchedPenalty: softenWatchedPenalty
-                )
-            )
-        }
-
-        var remaining = scored
-        var result: [CountryPost] = []
-
-        while !remaining.isEmpty {
-            var bestIndex = 0
-            var bestAdjusted = -Double.infinity
-
-            let recentAuthors = Set(result.suffix(diversityWindow).map(\.authorID))
-            let recentCountries = Set(
-                result.suffix(countryDiversityWindow).compactMap { $0.countryCode?.uppercased() }
-            )
-
-            for (index, item) in remaining.enumerated() {
-                var adjusted = item.score
-                if recentAuthors.contains(item.post.authorID) {
-                    adjusted *= diversityPenalty
-                }
-                if let code = item.post.countryCode?.uppercased(), recentCountries.contains(code) {
-                    adjusted *= countryDiversityPenalty
-                }
-                if adjusted > bestAdjusted {
-                    bestAdjusted = adjusted
-                    bestIndex = index
-                }
-            }
-
-            let picked = remaining.remove(at: bestIndex)
-            result.append(picked.post)
-        }
-
-        return result
+        // Stand-in for recommender: always random (still R2-first buckets).
+        _ = viewerCountry
+        _ = followingIDs
+        _ = softenWatchedPenalty
+        return sessionFreshOrder(posts)
     }
 
     private static func baseScore(
@@ -166,11 +150,29 @@ enum ReelsRankingEngine {
             score *= 1.2
         }
 
+        // R2 focus catalog dominates Sparks swipe; Archive is last resort fill.
+        if post.isR2HostedMedia {
+            score *= 4.5
+        } else if post.isArchiveSparkSource {
+            score *= 0.08
+        }
+
         if sessionWatchedIDs.contains(post.id) {
             score *= softenWatchedPenalty ? recycleWatchedPenalty : watchedPenalty
         }
 
         return score
+    }
+
+    /// Prefer R2 originals, then live network sparks, Archive last (when enabled).
+    static func prioritizeR2First(_ posts: [CountryPost]) -> [CountryPost] {
+        let r2 = posts.filter(\.isR2HostedMedia)
+        let live = posts.filter { !$0.isR2HostedMedia && !$0.isArchiveSparkSource }
+        guard AppConfig.archiveContentEnabled else {
+            return r2.shuffled() + live.shuffled()
+        }
+        let archive = posts.filter(\.isArchiveSparkSource)
+        return r2.shuffled() + live.shuffled() + archive.shuffled()
     }
 
     private static func hoursSince(_ iso: String) -> Double {

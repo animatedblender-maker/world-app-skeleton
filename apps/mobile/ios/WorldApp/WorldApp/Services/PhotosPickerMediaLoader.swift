@@ -56,10 +56,53 @@ enum PhotosPickerMediaLoader {
         }
     }
 
-    /// JPEG data ready for upload / preview (max long edge ~2400).
-    static func loadJPEGData(from item: PhotosPickerItem, compressionQuality: CGFloat = 0.88) async throws -> Data {
+    /// JPEG data ready for upload / preview.
+    /// Heavy decode/resize runs off the main actor so avatar upload never freezes the UI.
+    static func loadJPEGData(
+        from item: PhotosPickerItem,
+        compressionQuality: CGFloat = 0.82,
+        maxEdge: CGFloat = 1280
+    ) async throws -> Data {
         let raw = try await loadRawImageData(from: item)
-        return try normalizeToJPEG(raw, quality: compressionQuality)
+        // UIImage work is CPU-heavy — never block MainActor (SwiftUI) during avatar upload.
+        return try await Task.detached(priority: .userInitiated) {
+            try normalizeToJPEG(raw, quality: compressionQuality, maxEdge: maxEdge)
+        }.value
+    }
+
+    /// Load + compress with a hard timeout so the UI never spins forever.
+    static func loadJPEGData(
+        from item: PhotosPickerItem,
+        timeoutSeconds: TimeInterval,
+        compressionQuality: CGFloat = 0.82,
+        maxEdge: CGFloat = 1280
+    ) async throws -> Data {
+        try await withThrowingTaskGroup(of: Data.self) { group in
+            group.addTask {
+                try await loadJPEGData(
+                    from: item,
+                    compressionQuality: compressionQuality,
+                    maxEdge: maxEdge
+                )
+            }
+            group.addTask {
+                let ns = UInt64(max(5, timeoutSeconds) * 1_000_000_000)
+                try await Task.sleep(nanoseconds: ns)
+                throw LoadError.underlying(
+                    NSError(
+                        domain: "PhotosPickerMediaLoader",
+                        code: NSURLErrorTimedOut,
+                        userInfo: [
+                            NSLocalizedDescriptionKey:
+                                "Loading that photo took too long. Try a smaller image or download it from iCloud first.",
+                        ]
+                    )
+                )
+            }
+            let data = try await group.next()!
+            group.cancelAll()
+            return data
+        }
     }
 
     /// Best-effort multi-path load. Prefer PhotoKit (can pull from iCloud) over Transferable.
@@ -203,17 +246,27 @@ enum PhotosPickerMediaLoader {
 
     // MARK: - Normalize
 
-    static func normalizeToJPEG(_ raw: Data, quality: CGFloat = 0.88) throws -> Data {
+    /// Safe to call from any executor (not MainActor-bound).
+    nonisolated static func normalizeToJPEG(
+        _ raw: Data,
+        quality: CGFloat = 0.82,
+        maxEdge: CGFloat = 1280
+    ) throws -> Data {
         guard let image = UIImage(data: raw) else {
             throw LoadError.notAnImage
         }
-        let maxEdge: CGFloat = 2400
-        let longest = max(image.size.width, image.size.height)
+        let longest = max(image.size.width * image.scale, image.size.height * image.scale)
         let scaled: UIImage
         if longest > maxEdge, longest > 0 {
             let scale = maxEdge / longest
-            let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-            let renderer = UIGraphicsImageRenderer(size: size)
+            let size = CGSize(
+                width: max(1, image.size.width * scale),
+                height: max(1, image.size.height * scale)
+            )
+            let format = UIGraphicsImageRendererFormat.default()
+            format.scale = 1
+            format.opaque = true
+            let renderer = UIGraphicsImageRenderer(size: size, format: format)
             scaled = renderer.image { _ in
                 image.draw(in: CGRect(origin: .zero, size: size))
             }

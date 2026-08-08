@@ -13,6 +13,8 @@ struct PublicProfileView: View {
     @State private var isLoading = true
     @State private var errorMessage: String?
     @State private var postsErrorMessage: String?
+    /// True only when this user actually owns a Hubs channel (not merely shared a Hubs clip).
+    @State private var hasHubsChannel = false
 
     init(username: String) {
         self.username = username
@@ -135,7 +137,8 @@ struct PublicProfileView: View {
                     .foregroundStyle(Theme.accent)
             }
 
-            if hasPlayChannel(profile) {
+            // Only for real Hubs channel owners — never for people who only re-shared a Hubs video.
+            if hasHubsChannel {
                 Button {
                     appState.openPlayChannel(
                         authorID: profile.userID,
@@ -255,6 +258,7 @@ struct PublicProfileView: View {
                         showsAuthorHeader: false,
                         showsAuthorInJournal: true,
                         mediaContext: .feed,
+                        autoplaySurface: .profile,
                         onLikeToggle: { Task { await toggleLike(post) } },
                         onOpenPost: { appState.navigate(to: .post(post.id)) },
                         onOpenVideo: {
@@ -283,11 +287,6 @@ struct PublicProfileView: View {
                 }
             }
         }
-    }
-
-    private func hasPlayChannel(_ profile: Profile) -> Bool {
-        LivingChannelMarker.hasChannel(profile: profile)
-            || posts.contains(where: PlayPlatformBridge.isHubCatalogContent)
     }
 
     private func stat(_ label: String, _ value: Int) -> some View {
@@ -323,8 +322,26 @@ struct PublicProfileView: View {
                 posts = []
                 postsErrorMessage = "Couldn't load posts."
             }
+
+            // Resolve real Hubs channel (bio marker, Channels table, or intentional channel publishes).
+            hasHubsChannel = await resolveHasHubsChannel(profile: profile, posts: posts)
         } catch {
             errorMessage = error.localizedDescription
+            hasHubsChannel = false
+        }
+    }
+
+    /// Hubs entry only when they own a channel — not when they merely re-shared a Hubs clip.
+    private func resolveHasHubsChannel(profile: Profile, posts: [CountryPost]) async -> Bool {
+        if LivingChannelMarker.hasChannel(profile: profile) { return true }
+        // First-class channels table.
+        if let channel = try? await ChannelsService.shared.channelByOwner(userID: profile.userID),
+           !channel.id.isEmpty {
+            return true
+        }
+        // Intentional Hubs long-form publishes only (never origin/feed shares of Archive).
+        return posts.contains { post in
+            !post.isReel && PlayPlatformBridge.isHubChannelUpload(post)
         }
     }
 
