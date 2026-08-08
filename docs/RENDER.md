@@ -11,6 +11,21 @@ After any change under `apps/api/` (or anything the API must serve):
 
 Do **not** leave API work only local — the live iOS client hits `api.matterya.com` on this deploy.
 
+## Platform reports (password page)
+
+| | |
+|--|--|
+| **URL** | https://api.matterya.com/reports |
+| **Password** | env `REPORTS_PAGE_PASSWORD` (default set in code for this project) |
+| **Tabs** | Activity · Uploads |
+
+Optional env:
+
+| Key | Purpose |
+|-----|---------|
+| `REPORTS_PAGE_PASSWORD` | Login password for `/reports` |
+| `REPORTS_COOKIE_SECRET` | Signs the session cookie (defaults to admin key) |
+
 ## Critical: Dashboard overrides Blueprint
 
 `render.yaml` is **not always applied** to an existing Web Service.  

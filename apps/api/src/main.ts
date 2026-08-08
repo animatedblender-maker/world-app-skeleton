@@ -44,6 +44,12 @@ import {
   renderEngagementReportHtml,
 } from './engagement/engagement.service.js';
 import {
+  handleReportsGet,
+  handleReportsLogin,
+  handleReportsLogout,
+  hasReportsAccess,
+} from './reports/reports-page.js';
+import {
   authMailStatus,
   confirmEmailWithToken,
   resendConfirmation,
@@ -200,6 +206,7 @@ function hasAdminAccess(req: Request): boolean {
 }
 
 app.use(express.json({ limit: '200kb' }));
+app.use(express.urlencoded({ extended: false, limit: '32kb' }));
 app.use(
   cors({
     origin: (incomingOrigin, callback) => {
@@ -212,6 +219,16 @@ app.use(
     credentials: true,
   })
 );
+
+// ── Matterya reports page (password gate) ─────────────────────────────
+// https://api.matterya.com/reports  ·  password via REPORTS_PAGE_PASSWORD
+app.get('/reports', (req, res) => {
+  void handleReportsGet(req, res);
+});
+app.post('/reports/login', handleReportsLogin);
+app.get('/reports/logout', handleReportsLogout);
+// Friendly alias
+app.get('/report', (_req, res) => res.redirect(302, '/reports'));
 
 // ✅ health endpoint (typed _req to avoid implicit any)
 app.get('/health', (_req: Request, res: Response) =>
@@ -551,7 +568,8 @@ app.post('/v1/engagement/batch', async (req: Request, res: Response) => {
  * People activity report (plain language + timestamp on every interaction).
  * JSON:  GET /v1/engagement/report?hours=24
  * HTML:  GET /v1/engagement/report?hours=24&format=html
- * Auth:  Bearer JWT  or  ?key= / x-admin-key
+ * Auth:  Bearer JWT  ·  admin key  ·  reports page cookie (password gate)
+ * Prefer the Matterya UI: https://api.matterya.com/reports
  */
 app.get('/v1/engagement/report', async (req: Request, res: Response) => {
   const user = await getUserFromRequest(req);
@@ -559,7 +577,9 @@ app.get('/v1/engagement/report', async (req: Request, res: Response) => {
     req.headers['x-admin-key'] ?? req.query.key ?? ''
   ).trim();
   const isAdmin = !!ADMIN_PORTAL_KEY && adminKey === ADMIN_PORTAL_KEY;
-  if (!user?.id && !isAdmin) return res.status(401).json({ error: 'unauthenticated' });
+  if (!user?.id && !isAdmin && !hasReportsAccess(req)) {
+    return res.status(401).json({ error: 'unauthenticated' });
+  }
   try {
     const hours = Number(req.query.hours ?? 24);
     const report = await getEngagementReport(hours);

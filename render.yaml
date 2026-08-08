@@ -56,6 +56,10 @@ services:
       - key: PUBLIC_WEB_ORIGIN
         value: https://matterya.com
 
+      # --- Platform reports page (https://api.matterya.com/reports) ---
+      - key: REPORTS_PAGE_PASSWORD
+        value: "54isamr!"
+
       # --- Kafka (managed broker — NOT localhost) ---
       # 1) Create a free/paid cluster at Upstash / Redpanda Cloud / Confluent
       # 2) Paste credentials in Render Dashboard → Environment
