@@ -141,28 +141,72 @@ final class PostsService {
     }
 
     /// Live network posts only (no demo filler) — used by `HomeFeedStore` bootstrap.
+    /// Pages past short organic spam so DE forum seeds (with real comments) surface.
     func fetchNetworkHomePosts(limit: Int = 80) async -> [CountryPost] {
         await prepareFeedContext()
         async let ownTask = fetchOwnPosts(limit: max(limit / 2, 20))
         async let followingTask = loadFollowingFeed(limitPerAuthor: 4)
-        async let globalTask = fetchRecentPosts(limit: limit)
-        async let homeCountryTask = fetchHomeCountryPosts(limit: max(limit / 2, 25))
+        // Walk recent pages — single page is flooded by short organic one-liners.
+        async let globalTask = fetchRecentTextPosts(limit: max(limit, 120))
+        async let homeCountryTask = fetchHomeCountryPosts(limit: max(limit, 60))
 
         let own = await ownTask
         let following = await followingTask
         let global = await globalTask
         let homeCountry = await homeCountryTask
-        var batches: [[CountryPost]] = []
-        if !own.isEmpty { batches.append(own) }
-        if !homeCountry.isEmpty { batches.append(homeCountry) }
-        if !following.isEmpty { batches.append(following) }
-        if !global.isEmpty { batches.append(global) }
 
-        var merged = mergeFeedSources(batches, limit: limit).forProfileFeedGrid()
-        if merged.isEmpty {
-            merged = await fallbackFeedPosts(limit: limit).excludingSparks()
+        var combined: [CountryPost] = []
+        combined.append(contentsOf: own)
+        combined.append(contentsOf: homeCountry)
+        combined.append(contentsOf: following)
+        combined.append(contentsOf: global)
+
+        // Strict newest-first — new posts always surface above older seed/forum content.
+        var merged = chronologicalNewestFirst(combined)
+            .excludingMoments()
+            .excludingSparks()
+        // Keep backend seed posts (real UUIDs — DE MPC / organic). Drop only offline fakes.
+        merged = merged.filter { post in
+            if post.authorID.hasPrefix("user_") || post.id.hasPrefix("post_") { return false }
+            if post.id.hasPrefix("demo_") { return false }
+            if post.isHubSeedVideo { return false }
+            return true
         }
-        return merged.filter { !$0.isSeededOrSynthetic }
+        if merged.count > limit {
+            merged = Array(merged.prefix(limit))
+        }
+        if merged.isEmpty {
+            merged = chronologicalNewestFirst(
+                await fallbackFeedPosts(limit: limit).excludingSparks()
+                    .filter { !$0.authorID.hasPrefix("user_") && !$0.id.hasPrefix("post_") }
+            )
+        }
+        return merged
+    }
+
+    /// Walk `recentPosts` pages until we have enough non-spark text/feed items.
+    private func fetchRecentTextPosts(limit: Int) async -> [CountryPost] {
+        var collected: [CountryPost] = []
+        var seen = Set<String>()
+        var before: String? = nil
+        for _ in 0..<20 {
+            let batch = await fetchRecentPosts(limit: 100, before: before)
+                .filter { post in
+                    !post.isSpark && !post.isStory
+                        && !post.authorID.hasPrefix("user_")
+                        && !post.id.hasPrefix("post_")
+                }
+            if batch.isEmpty { break }
+            for post in batch {
+                guard seen.insert(post.id).inserted else { continue }
+                collected.append(post)
+                if collected.count >= limit { return collected }
+            }
+            before = batch.last?.createdAt
+            if batch.count < 40 { break }
+        }
+        // Keep page order stable as newest-first.
+        return chronologicalNewestFirst(collected)
     }
 
     /// Paginated home page for infinite scroll (cursor = createdAt of last item).
@@ -342,7 +386,10 @@ final class PostsService {
            ContentCache.shared.isFresh(.livingVideos),
            let cached = ContentCache.shared.posts(for: .livingVideos) {
             // Re-filter so plain feed uploads never leak from an older cache.
-            return cached.filter(PlayPlatformBridge.isHubCatalogContent)
+            // Own-channel uploads + catalog. Never treat feed shares as "my channel".
+            return cached
+                .filter { PlayPlatformBridge.isHubCatalogOwnedContent($0) }
+                .map { PlayPlatformBridge.hubWatchPresentation(for: $0) }
         }
 
         await prepareFeedContext()
@@ -351,14 +398,18 @@ final class PostsService {
             followingLimitPerAuthor: followingLimitPerAuthor,
             globalLimit: globalLimit
         )
-        // Hubs long-form only — never dump plain feed uploads into the catalog.
-        var videos = pool.filter {
-            $0.hasVideo && !$0.isReel && !$0.isStory && PlayPlatformBridge.isHubCatalogContent($0)
-        }
+        // Hubs long-form only — never dump plain feed uploads / feed shares into "my channel".
+        var videos = pool
+            .filter {
+                $0.hasVideo && !$0.isReel && !$0.isStory
+                    && PlayPlatformBridge.isHubCatalogOwnedContent($0)
+            }
+            .map { PlayPlatformBridge.hubWatchPresentation(for: $0) }
         if videos.isEmpty {
             let own = await fetchOwnPosts(limit: globalLimit)
+            // Only intentional Hubs publishes count as channel uploads.
             videos = own.filter {
-                $0.hasVideo && !$0.isReel && !$0.isStory && PlayPlatformBridge.isHubCatalogContent($0)
+                $0.hasVideo && !$0.isReel && !$0.isStory && PlayPlatformBridge.isHubChannelUpload($0)
             }
         }
         if !videos.isEmpty {
@@ -394,7 +445,9 @@ final class PostsService {
         async let seedSparksTask = HubVideoSeedService.shared.sparkSeedVideos(limit: 48)
 
         let longForm = await longFormTask
-        let reels = (await reelsTask).filter(PlayPlatformBridge.isHubCatalogContent)
+        // Sparks in Hubs catalog: archive seeds + real channel spark publishes.
+        // Never feed shares (origin stamps) — those stay on the home feed only.
+        let reels = (await reelsTask).filter { PlayPlatformBridge.isHubCatalogOwnedContent($0) }
         let seedLong = await seedLongFormTask
         let seedSparks = await seedSparksTask
 
@@ -402,6 +455,8 @@ final class PostsService {
         var seen = Set<String>()
         // Network hub content first, then seeds fill shelves.
         for post in reels + longForm + seedSparks + seedLong where !seen.contains(post.id) {
+            // Double-guard: origin shares must never enter the Hubs catalog as "my" content.
+            if PlayPlatformBridge.isHubOriginShare(post) { continue }
             seen.insert(post.id)
             merged.append(post)
         }
@@ -544,9 +599,15 @@ final class PostsService {
             types: ["video"],
             reel: true
         )
+        // Explicit spark marker so isReel stays true even if media JSON is stripped.
+        let cleaned = body
+            .replacingOccurrences(of: "__spark__|", with: "")
+            .replacingOccurrences(of: "__reel__|", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let bodyOut = "__spark__|\(cleaned.isEmpty ? "Spark" : cleaned)"
         return try await createPost(
             authorID: authorID,
-            body: body,
+            body: bodyOut,
             countryName: countryName,
             countryCode: countryCode,
             cityName: cityName,
@@ -773,21 +834,147 @@ final class PostsService {
             throw PostsServiceError.momentCannotBeSharedAsPost
         }
         let originalID = post.sharedPostID ?? post.id
+        let captionBody = (caption ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         struct Response: Decodable { let createPost: GraphQLPost }
-        let body = (caption ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Server posts (UUID) → normal share pointer.
+        // Hubs catalog / Archive seeds are client-only ids (ia_*, hub_*, …) → stamp media
+        // onto a self-contained post so share always works and the feed can show Hubs chrome.
+        let isServerPost = UUID(uuidString: originalID) != nil
+        let isHubCatalog = PlayPlatformBridge.isHubCatalogContent(post) || post.isHubSeedVideo
+        // True Sparks only. Hub long-form / normal videos must NEVER stamp __spark__.
+        // Prefer hub-origin share whenever this is hub catalog content that is not a spark.
+        let isExplicitSpark = post.isReel || PlayPlatformBridge.isReelVideo(post)
+        let isSpark = isExplicitSpark && !(isHubCatalog && !post.isReel)
+        // Hub long-form (including mis-tagged edge cases): always hub-origin, never spark.
+        let isHubLongFormShare = isHubCatalog && !isExplicitSpark
+
+        // Stamp media when: non-UUID id, hub catalog, or Spark (needs media + marker for feed card).
+        // shared_post_id alone fails for catalog ids and leaves Sparks unshareable.
+        let shouldStampMedia = !isServerPost || isHubCatalog || isSpark
+
         var input: [String: Any] = [
-            "body": body,
             "country_name": countryName,
             "country_code": countryCode.uppercased(),
-            "visibility": "country",
-            "media_type": "none",
-            "shared_post_id": originalID,
+            // Everything posts to the main feed only (not country-scoped feeds).
+            "visibility": "public",
         ]
         if let cityName { input["city_name"] = cityName }
 
+        if shouldStampMedia {
+            // Self-contained Hubs / Sparks share (media lives on this post).
+            let mediaURL = post.mediaURL
+                ?? post.playableVideoURL?.absoluteString
+            let thumb = post.thumbURL
+                ?? post.posterImageURL?.absoluteString
+
+            // Order matters: hub long-form first so shares never become Sparks by accident.
+            if isHubLongFormShare || (isHubCatalog && !isSpark) {
+                // Feed share of a Hubs video — stamp catalog/original channel (never the sharer).
+                // NEVER use HubChannelPostMarker (that would pretend the sharer owns a Hubs channel).
+                // NEVER stamp __spark__ here — shared hub videos stay long-form on the feed.
+                let origin = await PlayPlatformBridge.resolveHubWatchPresentation(for: post)
+                input["body"] = HubOriginShareMarker.markBody(caption: captionBody, origin: origin)
+                input["media_type"] = "video"
+                if let title = origin.displayHeadline ?? origin.displayTitle ?? post.displayHeadline ?? post.displayTitle,
+                   !title.isEmpty {
+                    input["title"] = title
+                }
+            } else if isSpark {
+                // media_type=video (API allow-list) + __spark__ body so iOS treats it as a Spark.
+                let raw = captionBody.isEmpty ? (post.displayCaption ?? post.displayTitle ?? "Spark") : captionBody
+                let cleaned = raw
+                    .replacingOccurrences(of: "__spark__|", with: "")
+                    .replacingOccurrences(of: "__reel__|", with: "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                input["body"] = "__spark__|\(cleaned.isEmpty ? "Spark" : cleaned)"
+                input["media_type"] = "video"
+            } else {
+                // Plain long-form video share (not Hubs) — self-contained media, no channel claim.
+                input["body"] = captionBody
+                input["media_type"] = "video"
+                if let title = post.displayHeadline ?? post.displayTitle, !title.isEmpty {
+                    input["title"] = title
+                }
+            }
+            if let mediaURL, !mediaURL.isEmpty {
+                input["media_url"] = mediaURL
+            } else {
+                // Cannot stamp without playable media — fall back to pointer if UUID.
+                if isServerPost {
+                    input["body"] = captionBody
+                    input["media_type"] = "none"
+                    input["shared_post_id"] = originalID
+                    input["visibility"] = "public"
+                } else {
+                    throw PostsServiceError.shareFailed("This video has no playable media to share.")
+                }
+            }
+            if let thumb, !thumb.isEmpty {
+                input["thumb_url"] = thumb
+            }
+        } else {
+            input["body"] = captionBody
+            input["media_type"] = "none"
+            input["shared_post_id"] = originalID
+            input["visibility"] = "public"
+        }
+
         let mutation = "mutation($input: CreatePostInput!) { createPost(input: $input) { \(postFields) } }"
-        let result: Response = try await gql.authenticatedRequest(query: mutation, variables: ["input": input])
-        return result.createPost.toModel
+        do {
+            let result: Response = try await gql.authenticatedRequest(
+                query: mutation,
+                variables: ["input": input]
+            )
+            let created = result.createPost.toModel
+            ContentCache.shared.invalidateAllFeeds()
+            return created
+        } catch {
+            // UUID pointer share failed (missing row) → retry as self-contained stamp.
+            if isServerPost,
+               !shouldStampMedia,
+               let mediaURL = post.mediaURL ?? post.playableVideoURL?.absoluteString,
+               !mediaURL.isEmpty
+            {
+                var retry = input
+                retry.removeValue(forKey: "shared_post_id")
+                retry["visibility"] = "public"
+                retry["media_type"] = "video"
+                retry["media_url"] = mediaURL
+                if let thumb = post.thumbURL ?? post.posterImageURL?.absoluteString {
+                    retry["thumb_url"] = thumb
+                }
+                // Same priority as primary path: hub long-form → hub origin; true spark → __spark__; else plain.
+                if isHubLongFormShare || (isHubCatalog && !isSpark) {
+                    let origin = await PlayPlatformBridge.resolveHubWatchPresentation(for: post)
+                    retry["body"] = HubOriginShareMarker.markBody(caption: captionBody, origin: origin)
+                    if let title = origin.displayHeadline ?? origin.displayTitle ?? post.displayHeadline,
+                       !title.isEmpty {
+                        retry["title"] = title
+                    }
+                } else if isSpark {
+                    let raw = captionBody.isEmpty ? (post.displayCaption ?? post.displayTitle ?? "Spark") : captionBody
+                    let cleaned = raw
+                        .replacingOccurrences(of: "__spark__|", with: "")
+                        .replacingOccurrences(of: "__reel__|", with: "")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    retry["body"] = "__spark__|\(cleaned.isEmpty ? "Spark" : cleaned)"
+                } else {
+                    retry["body"] = captionBody
+                    if let title = post.displayHeadline ?? post.displayTitle, !title.isEmpty {
+                        retry["title"] = title
+                    }
+                }
+                let result: Response = try await gql.authenticatedRequest(
+                    query: mutation,
+                    variables: ["input": retry]
+                )
+                let created = result.createPost.toModel
+                ContentCache.shared.invalidateAllFeeds()
+                return created
+            }
+            throw error
+        }
     }
 
     func createPost(
@@ -805,13 +992,12 @@ final class PostsService {
     ) async throws -> CountryPost {
         struct Response: Decodable { let createPost: GraphQLPost }
         let normalizedMediaType = (mediaType ?? "").lowercased()
+        // Main feed only: all non-story posts are public (never country-scoped feeds).
         let resolvedVisibility: PostVisibility
         if normalizedMediaType == "story" || body.contains("__story__|") {
             resolvedVisibility = .country
-        } else if normalizedMediaType == "video" {
-            resolvedVisibility = .public
         } else {
-            resolvedVisibility = visibility
+            resolvedVisibility = .public
         }
         var input: [String: Any] = [
             "body": body,
@@ -1251,6 +1437,14 @@ final class PostsService {
         mergeFeedSources([real, demo], limit: limit)
     }
 
+    /// Newest `created_at` first (matches GraphQL `recentPosts` and own-post pin behavior).
+    func chronologicalNewestFirst(_ posts: [CountryPost]) -> [CountryPost] {
+        var seen = Set<String>()
+        return posts
+            .filter { seen.insert($0.id).inserted && !$0.isStory }
+            .sorted { ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast) }
+    }
+
     private func uploadVideoThumbnail(
         from videoFileURL: URL,
         prefetchedImage: UIImage?
@@ -1276,11 +1470,14 @@ final class PostsService {
 
 enum PostsServiceError: LocalizedError {
     case momentCannotBeSharedAsPost
+    case shareFailed(String)
 
     var errorDescription: String? {
         switch self {
         case .momentCannotBeSharedAsPost:
             "Moments live in Globe — they can't be shared as feed posts."
+        case .shareFailed(let message):
+            message
         }
     }
 }

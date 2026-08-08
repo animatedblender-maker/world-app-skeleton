@@ -841,9 +841,13 @@ export class PostsService {
     const thumbUrl = mediaType === 'none' ? null : (input.thumb_url ?? null);
 
     // Channel publishes: stamp hub channel marker so older clients still catalog as Hubs.
+    // Never stamp channel marker on feed shares (origin / shared_post).
+    const isFeedShare =
+      !!sharedPostId || body.includes('__hub_origin__|');
     if (
       channelId &&
       !isMoment &&
+      !isFeedShare &&
       (mediaType === 'video' || mediaType === 'reel') &&
       !body.includes('__hub_channel__|')
     ) {
@@ -853,8 +857,8 @@ export class PostsService {
     // GraphQL Post.body is non-null, so never return null here.
     const bodyValue = body.length ? body : '';
 
-    // If no explicit channel_id but body has hub marker, bind to actor's owned channel when present.
-    if (!channelId && bodyValue.includes('__hub_channel__|')) {
+    // Bind channel_id only for intentional hub-channel publishes — never for feed shares.
+    if (!channelId && bodyValue.includes('__hub_channel__|') && !isFeedShare) {
       const { rows: ownCh } = await pool.query<{ id: string }>(
         `select id from public.channels where owner_user_id = $1::uuid limit 1`,
         [actorId]
@@ -863,6 +867,10 @@ export class PostsService {
         channelId = ownCh[0].id;
         postedByUserId = actorId;
       }
+    }
+    // Feed shares must not attach to the sharer's channel row.
+    if (isFeedShare) {
+      channelId = null;
     }
 
     const { rows } = await pool.query(

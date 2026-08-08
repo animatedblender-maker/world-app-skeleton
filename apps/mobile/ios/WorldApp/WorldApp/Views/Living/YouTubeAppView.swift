@@ -86,11 +86,14 @@ struct YouTubeAppView: View {
                     switch route {
                     case .watch(let post):
                         // Video is drawn by GlobalHubPlaybackLayer — reserve stage + meta only.
+                        // Origin shares present the original channel, never the feed sharer.
+                        // hubPlaybackPost is already catalog-resolved when opened from feed share.
+                        let watchPost = PlayPlatformBridge.hubWatchPresentation(for: post)
                         YouTubeWatchView(
-                            post: post,
-                            channel: catalog.channel(for: post.authorID, in: channels),
-                            related: catalog.relatedVideos(to: post, from: allVideos, limit: 400),
-                            subscriberCount: followerCounts[post.authorID],
+                            post: watchPost,
+                            channel: channelForWatch(watchPost),
+                            related: catalog.relatedVideos(to: watchPost, from: allVideos, limit: 400),
+                            subscriberCount: followerCounts[watchPost.authorID],
                             embedsPlayer: false,
                             onBack: { closeWatch(minimize: true) },
                             onOpenVideo: { openVideo($0) },
@@ -609,10 +612,12 @@ struct YouTubeAppView: View {
                 videos.append(post)
             }
         }
-        // Saved items only join Hubs if they are true hub content (not plain feed videos).
+        // Saved items only join Hubs if they are real hub catalog content —
+        // never feed shares that would appear under the saver’s “channel”.
         for saved in appState.savedVideoPosts + appState.savedReelPosts
-        where PlayPlatformBridge.isHubCatalogContent(saved)
-            && !videos.contains(where: { $0.id == saved.id }) {
+        where PlayPlatformBridge.isHubCatalogOwnedContent(saved)
+            && !videos.contains(where: { $0.id == saved.id })
+        {
             videos.insert(saved, at: 0)
         }
         let filtered = BlockService.shared.filterPosts(videos)
@@ -775,54 +780,53 @@ struct YouTubeAppView: View {
     }
 
     private func openChannel(authorID: String) async {
-        // Hub seed channels: load full slug corpus only when the user opens the channel
-        // (catalog shelves stay capped for performance).
-        if authorID.hasPrefix("hub_spark_") || authorID.hasPrefix("hub_") {
-            let slug: String
-            let isSpark: Bool
-            if authorID.hasPrefix("hub_spark_") {
-                slug = String(authorID.dropFirst("hub_spark_".count))
-                isSpark = true
-            } else {
-                slug = String(authorID.dropFirst("hub_".count))
-                isSpark = false
-            }
-            let hubPosts = await HubVideoSeedService.shared.videos(forHub: slug)
-            let eligible = hubPosts.filter {
-                catalog.livingEligible($0) && (isSpark ? $0.isReel : !$0.isReel)
-            }
-            if let built = catalog.buildChannels(from: eligible).first(where: { $0.authorID == authorID }) {
-                openChannel(built)
-                return
-            }
-            // Fall through: maybe mixed long-form under hub_ id.
-            if let built = catalog.buildChannels(from: hubPosts.filter(catalog.livingEligible))
-                .first(where: { $0.authorID == authorID }) {
-                openChannel(built)
+        // The Archive (and legacy hub_* seed authors): full catalog as one channel.
+        if HubVideoSeedService.isArchiveChannelAuthor(authorID) {
+            let allHub = await HubVideoSeedService.shared.allVideos()
+            let eligible = allHub.filter(catalog.livingEligible)
+            if let built = catalog.buildChannels(from: eligible)
+                .first(where: { HubVideoSeedService.isArchiveChannelAuthor($0.authorID) })
+                ?? catalog.buildChannels(from: eligible).first
+            {
+                // Force display name in case mixed legacy ids remain in memory.
+                let archive = YouTubeChannel(
+                    id: HubVideoSeedService.archiveChannelAuthorID,
+                    authorID: HubVideoSeedService.archiveChannelAuthorID,
+                    title: HubVideoSeedService.archiveChannelDisplayName,
+                    handle: "@\(HubVideoSeedService.archiveChannelUsername)",
+                    author: PostAuthor(
+                        userID: HubVideoSeedService.archiveChannelAuthorID,
+                        displayName: HubVideoSeedService.archiveChannelDisplayName,
+                        username: HubVideoSeedService.archiveChannelUsername,
+                        avatarURL: nil,
+                        countryName: nil,
+                        countryCode: nil,
+                        lastReadAt: nil
+                    ),
+                    videos: built.videos,
+                    reels: built.reels,
+                    hasCustomChannelName: true
+                )
+                openChannel(archive)
                 return
             }
         }
 
-        if let channel = catalog.channel(for: authorID, in: channels) {
-            // Expand hub channel from catalog sample → full slug list when possible.
-            if authorID.hasPrefix("hub_"), !authorID.hasPrefix("hub_spark_") {
-                let slug = String(authorID.dropFirst("hub_".count))
-                let hubPosts = await HubVideoSeedService.shared.videos(forHub: slug)
-                let longForm = hubPosts.filter { catalog.livingEligible($0) && !$0.isReel }
-                if longForm.count > channel.videos.count,
-                   let built = catalog.buildChannels(from: longForm).first(where: { $0.authorID == authorID }) {
-                    openChannel(built)
-                    return
-                }
-            }
+        if let channel = catalog.channel(for: authorID, in: channels),
+           !channel.videos.isEmpty || !channel.reels.isEmpty {
             openChannel(channel)
             return
         }
 
+        // Only intentional Hubs channel publishes — feed shares never open a personal channel.
         let posts = (try? await PostsService.shared.listForAuthor(authorID, limit: 40)) ?? []
-        let eligible = posts.filter { catalog.livingEligible($0) }
+        let eligible = posts.filter {
+            catalog.livingEligible($0) && PlayPlatformBridge.isHubChannelUpload($0)
+        }
         if let built = catalog.buildChannels(from: eligible).first(where: { $0.authorID == authorID }) {
-            if !allVideos.contains(where: { $0.authorID == authorID }) {
+            if !allVideos.contains(where: {
+                $0.authorID == authorID && PlayPlatformBridge.isHubChannelUpload($0)
+            }) {
                 allVideos.insert(contentsOf: eligible, at: 0)
                 rebuildChannels()
             }
@@ -870,9 +874,10 @@ struct YouTubeAppView: View {
     /// Keep watch route in sync with the global continuous player session.
     private func syncRouteFromHubSession() {
         if appState.hubPlaybackExpanded, let post = appState.hubPlaybackPost {
-            if case .watch(let existing) = route, existing.id == post.id { return }
+            let watchPost = PlayPlatformBridge.hubWatchPresentation(for: post)
+            if case .watch(let existing) = route, existing.id == watchPost.id { return }
             withAnimation(.easeInOut(duration: 0.18)) {
-                route = .watch(post)
+                route = .watch(watchPost)
             }
         } else if case .watch = route {
             // Collapse watch → stay in library if we came from there; otherwise home.
@@ -882,15 +887,73 @@ struct YouTubeAppView: View {
         }
     }
 
-    private func openVideo(_ post: CountryPost) {
-        EngagementTracker.shared.hubVideoOpened(post)
-        if post.isReel {
-            openReelsPlayback(starting: post, seed: playReels)
-            return
+    /// Channel row for watch: catalog match, else synthetic from the post's author
+    /// (critical for origin shares so the sharer never appears as the channel).
+    private func channelForWatch(_ post: CountryPost) -> YouTubeChannel? {
+        // Catalog / Archive clips always show The Archive.
+        if post.isHubSeedVideo || HubVideoSeedService.isArchiveChannelAuthor(post.authorID) {
+            if let existing = catalog.channel(for: HubVideoSeedService.archiveChannelAuthorID, in: channels)
+                ?? catalog.channel(for: post.authorID, in: channels)
+            {
+                return YouTubeChannel(
+                    id: HubVideoSeedService.archiveChannelAuthorID,
+                    authorID: HubVideoSeedService.archiveChannelAuthorID,
+                    title: HubVideoSeedService.archiveChannelDisplayName,
+                    handle: "@\(HubVideoSeedService.archiveChannelUsername)",
+                    author: existing.author,
+                    videos: existing.videos,
+                    reels: existing.reels,
+                    hasCustomChannelName: true
+                )
+            }
+            return YouTubeChannel(
+                id: HubVideoSeedService.archiveChannelAuthorID,
+                authorID: HubVideoSeedService.archiveChannelAuthorID,
+                title: HubVideoSeedService.archiveChannelDisplayName,
+                handle: "@\(HubVideoSeedService.archiveChannelUsername)",
+                author: PostAuthor(
+                    userID: HubVideoSeedService.archiveChannelAuthorID,
+                    displayName: HubVideoSeedService.archiveChannelDisplayName,
+                    username: HubVideoSeedService.archiveChannelUsername,
+                    avatarURL: nil,
+                    countryName: nil,
+                    countryCode: nil,
+                    lastReadAt: nil
+                ),
+                videos: post.isReel ? [] : [post],
+                reels: post.isReel ? [post] : [],
+                hasCustomChannelName: true
+            )
         }
-        appState.startHubPlayback(post, expanded: true)
-        withAnimation(.easeInOut(duration: 0.2)) {
-            route = .watch(post)
+        if let existing = catalog.channel(for: post.authorID, in: channels) {
+            return existing
+        }
+        let title = post.author?.displayName
+            ?? post.authorDisplayName
+        return YouTubeChannel(
+            id: post.authorID,
+            authorID: post.authorID,
+            title: title,
+            handle: post.author?.username.map { "@\($0)" },
+            author: post.author,
+            videos: [post],
+            reels: [],
+            hasCustomChannelName: false
+        )
+    }
+
+    private func openVideo(_ post: CountryPost) {
+        Task { @MainActor in
+            let watchPost = await PlayPlatformBridge.resolveHubWatchPresentation(for: post)
+            EngagementTracker.shared.hubVideoOpened(watchPost)
+            if watchPost.isReel {
+                openReelsPlayback(starting: watchPost, seed: playReels)
+                return
+            }
+            appState.startHubPlayback(watchPost, expanded: true)
+            withAnimation(.easeInOut(duration: 0.2)) {
+                route = .watch(watchPost)
+            }
         }
     }
 

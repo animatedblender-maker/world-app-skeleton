@@ -133,18 +133,59 @@ struct YouTubeChannel: Identifiable, Hashable {
 final class YouTubeCatalogService {
     static let shared = YouTubeCatalogService()
 
-    private let historyKey = "matterya.play.watch_history_v1"
+    /// Device-wide legacy keys (pre-user-scoping). Never write these for new accounts.
+    private let legacyGlobalHistoryKey = "matterya.play.watch_history_v1"
     private let legacyHistoryKey = "youtube.watch_history_v1"
-    private let playbackPositionsKey = "matterya.play.playback_positions_v1"
+    private let legacyGlobalPositionsKey = "matterya.play.playback_positions_v1"
+
+    private var activeUserID: String?
     private var playbackPositions: [String: Double] = [:]
     private var livePlaybackPositions: [String: Double] = [:]
     private var lastDiskPersistAt: [String: Date] = [:]
 
     private init() {
-        if let stored = UserDefaults.standard.dictionary(forKey: playbackPositionsKey) as? [String: Double] {
-            playbackPositions = stored
-            livePlaybackPositions = stored
+        // Bind to current session if already signed in (app relaunch).
+        bindToUser(AuthService.shared.currentUser?.id)
+    }
+
+    /// Call on login / logout so Continue watching never leaks between accounts.
+    func bindToUser(_ userID: String?) {
+        let normalized = userID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let next = (normalized?.isEmpty == false) ? normalized : nil
+        guard next != activeUserID else { return }
+        activeUserID = next
+        lastDiskPersistAt = [:]
+        livePlaybackPositions = [:]
+        playbackPositions = [:]
+        if let uid = next {
+            let key = positionsKey(for: uid)
+            if let stored = UserDefaults.standard.dictionary(forKey: key) as? [String: Double] {
+                playbackPositions = stored
+                livePlaybackPositions = stored
+            }
+            // One-time migrate device-wide history into this user only if their
+            // personal history is empty (avoids wiping on upgrade).
+            migrateLegacyHistoryIfNeeded(for: uid)
         }
+    }
+
+    private func historyKey(for userID: String) -> String {
+        "matterya.play.watch_history_v1.\(userID)"
+    }
+
+    private func positionsKey(for userID: String) -> String {
+        "matterya.play.playback_positions_v1.\(userID)"
+    }
+
+    private func migrateLegacyHistoryIfNeeded(for userID: String) {
+        let personalKey = historyKey(for: userID)
+        let existing = UserDefaults.standard.stringArray(forKey: personalKey) ?? []
+        guard existing.isEmpty else { return }
+        // Do NOT migrate legacy global history into brand-new accounts — that
+        // was the bug (new users saw prior device watch history).
+        // Legacy keys stay only for users who already had personal keys empty
+        // after a prior app version; we intentionally leave them unused.
+        _ = personalKey
     }
 
     func livingEligible(_ post: CountryPost) -> Bool {
@@ -153,22 +194,51 @@ final class YouTubeCatalogService {
 
     func buildChannels(from videos: [CountryPost], profiles: [String: Profile] = [:]) -> [YouTubeChannel] {
         let eligible = videos.filter(livingEligible)
-        let grouped = Dictionary(grouping: eligible) { $0.authorID }
+        // Collapse every Archive / hub seed author into one channel id.
+        let grouped = Dictionary(grouping: eligible) { post -> String in
+            if post.isHubSeedVideo || HubVideoSeedService.isArchiveChannelAuthor(post.authorID) {
+                return HubVideoSeedService.archiveChannelAuthorID
+            }
+            return post.authorID
+        }
         var channels: [YouTubeChannel] = []
 
         for (authorID, posts) in grouped {
-            let longForm = posts.filter { !$0.isReel }.sorted { $0.createdAt > $1.createdAt }
-            let reels = posts.filter(\.isReel).sorted { $0.createdAt > $1.createdAt }
+            let isArchive = authorID == HubVideoSeedService.archiveChannelAuthorID
+
+            // Real users: only intentional Hubs publishes belong on their channel.
+            // Sharing a video to the feed must NEVER invent channel uploads for the sharer.
+            let channelPosts: [CountryPost]
+            if isArchive {
+                channelPosts = posts.filter { !PlayPlatformBridge.isHubOriginShare($0) }
+            } else {
+                channelPosts = posts.filter { PlayPlatformBridge.isHubChannelUpload($0) }
+            }
+
+            let longForm = channelPosts.filter { !$0.isReel }.sorted { $0.createdAt > $1.createdAt }
+            let reels = channelPosts.filter(\.isReel).sorted { $0.createdAt > $1.createdAt }
+            // No channel row without real channel content (setup-only profiles stay off Hubs rails).
             guard !longForm.isEmpty || !reels.isEmpty else { continue }
 
             let profile = profiles[authorID]
             let customName = LivingChannelMarker.parse(from: profile?.bio)
-            let author = longForm.first?.author ?? reels.first?.author
-            let title = customName
-                ?? author?.displayName
-                ?? author?.username
-                ?? "Channel"
-            let handle = author?.username.map { "@\($0)" }
+            let author: PostAuthor? = isArchive
+                ? PostAuthor(
+                    userID: HubVideoSeedService.archiveChannelAuthorID,
+                    displayName: HubVideoSeedService.archiveChannelDisplayName,
+                    username: HubVideoSeedService.archiveChannelUsername,
+                    avatarURL: nil,
+                    countryName: nil,
+                    countryCode: nil,
+                    lastReadAt: nil
+                )
+                : (longForm.first?.author ?? reels.first?.author)
+            let title = isArchive
+                ? HubVideoSeedService.archiveChannelDisplayName
+                : (customName ?? author?.displayName ?? author?.username ?? "Channel")
+            let handle = isArchive
+                ? "@\(HubVideoSeedService.archiveChannelUsername)"
+                : author?.username.map { "@\($0)" }
 
             channels.append(
                 YouTubeChannel(
@@ -179,7 +249,7 @@ final class YouTubeCatalogService {
                     author: author,
                     videos: longForm,
                     reels: reels,
-                    hasCustomChannelName: customName != nil
+                    hasCustomChannelName: isArchive || customName != nil
                 )
             )
         }
@@ -251,9 +321,15 @@ final class YouTubeCatalogService {
             .sorted { $0.createdAt > $1.createdAt }
     }
 
+    /// Videos this user **published to Hubs** (channel uploads). Feed shares never count.
     func myUploads(_ videos: [CountryPost], userID: String?) -> [CountryPost] {
         guard let userID else { return [] }
-        return videos.filter { livingEligible($0) && $0.authorID == userID }
+        return videos
+            .filter {
+                livingEligible($0)
+                    && $0.authorID == userID
+                    && PlayPlatformBridge.isHubChannelUpload($0)
+            }
             .sorted { $0.createdAt > $1.createdAt }
     }
 
@@ -278,10 +354,12 @@ final class YouTubeCatalogService {
     }
 
     func recordWatch(_ postID: String) {
+        // No signed-in user → no continue-watching trail (and never write globals).
+        guard let userID = activeUserID else { return }
         var history = historyIDs()
         history.removeAll { $0 == postID }
         history.insert(postID, at: 0)
-        UserDefaults.standard.set(Array(history.prefix(120)), forKey: historyKey)
+        UserDefaults.standard.set(Array(history.prefix(120)), forKey: historyKey(for: userID))
     }
 
     func playbackPosition(for postID: String) -> Double {
@@ -328,6 +406,7 @@ final class YouTubeCatalogService {
     }
 
     private func persistPlaybackPositions() {
+        guard let userID = activeUserID else { return }
         let trimmed = Dictionary(
             uniqueKeysWithValues: playbackPositions
                 .sorted { $0.value > $1.value }
@@ -335,20 +414,25 @@ final class YouTubeCatalogService {
                 .map { ($0.key, $0.value) }
         )
         playbackPositions = trimmed
-        UserDefaults.standard.set(trimmed, forKey: playbackPositionsKey)
+        UserDefaults.standard.set(trimmed, forKey: positionsKey(for: userID))
     }
 
     func historyIDs() -> [String] {
-        if let current = UserDefaults.standard.stringArray(forKey: historyKey), !current.isEmpty {
-            return current
-        }
-        return UserDefaults.standard.stringArray(forKey: legacyHistoryKey) ?? []
+        // New / signed-out accounts: never fall back to device-wide legacy history.
+        guard let userID = activeUserID else { return [] }
+        return UserDefaults.standard.stringArray(forKey: historyKey(for: userID)) ?? []
     }
 
     func historyVideos(from catalog: [CountryPost]) -> [CountryPost] {
         let ids = historyIDs()
+        guard !ids.isEmpty else { return [] }
         let map = Dictionary(uniqueKeysWithValues: catalog.map { ($0.id, $0) })
         return ids.compactMap { map[$0] }
+    }
+
+    /// Wipe in-memory trail on logout (disk stays per-user for next login).
+    func clearSessionState() {
+        bindToUser(nil)
     }
 
     func relatedVideos(to post: CountryPost, from catalog: [CountryPost], limit: Int = 12) -> [CountryPost] {
