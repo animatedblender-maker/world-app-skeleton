@@ -69,6 +69,8 @@ type CreatePostInput = {
   media_url?: string | null;
   thumb_url?: string | null;
   shared_post_id?: string | null;
+  /** Post as this channel (actor must be owner/admin). author_id becomes channel owner. */
+  channel_id?: string | null;
 };
 
 function isMomentRow(row: { body?: string | null; media_type?: string | null } | null | undefined): boolean {
@@ -784,10 +786,10 @@ export class PostsService {
     return post ? presentPostRow(post) : null;
   }
 
-  async createPost(authorId: string, input: CreatePostInput): Promise<PostRow> {
+  async createPost(actorId: string, input: CreatePostInput): Promise<PostRow> {
     const sharedPostId = input.shared_post_id ? String(input.shared_post_id) : null;
     if (sharedPostId) {
-      await this.ensurePostAccess(sharedPostId, authorId);
+      await this.ensurePostAccess(sharedPostId, actorId);
       const { rows: sharedRows } = await pool.query<{ body: string; media_type: string | null }>(
         `select body, media_type from public.posts where id = $1 limit 1`,
         [sharedPostId]
@@ -796,9 +798,35 @@ export class PostsService {
         throw new Error('Moments cannot be shared as feed posts.');
       }
     }
+
+    // Optional post-as-channel: author becomes channel owner; actor is posted_by.
+    let authorId = actorId;
+    let channelId: string | null = null;
+    let postedByUserId: string | null = actorId;
+    const rawChannelId = input.channel_id ? String(input.channel_id).trim() : '';
+    if (rawChannelId) {
+      const { rows: staffRows } = await pool.query<{ ok: boolean; owner_user_id: string | null }>(
+        `
+        select
+          public.is_channel_admin_or_owner($1::uuid, $2::uuid) as ok,
+          c.owner_user_id
+        from public.channels c
+        where c.id = $1::uuid
+        limit 1
+        `,
+        [rawChannelId, actorId]
+      );
+      if (!staffRows[0]?.ok || !staffRows[0].owner_user_id) {
+        throw new Error('CHANNEL_FORBIDDEN');
+      }
+      channelId = rawChannelId;
+      authorId = staffRows[0].owner_user_id;
+      postedByUserId = actorId;
+    }
+
     const categoryId = await this.resolveCategoryId(input.country_code);
     const iso = (input.country_code || '').toUpperCase();
-    const body = (input.body ?? '').trim();
+    let body = (input.body ?? '').trim();
     const isMomentBody = body.includes('__story__|');
     const normalizedInputType = String(input.media_type ?? '').trim().toLowerCase();
     const isMoment = isMomentBody || normalizedInputType === 'story' || normalizedInputType === 'moment';
@@ -811,15 +839,39 @@ export class PostsService {
       : this.normalizeMediaType(input.media_type, input.media_url);
     const mediaUrl = mediaType === 'none' ? null : (input.media_url ?? null);
     const thumbUrl = mediaType === 'none' ? null : (input.thumb_url ?? null);
+
+    // Channel publishes: stamp hub channel marker so older clients still catalog as Hubs.
+    if (
+      channelId &&
+      !isMoment &&
+      (mediaType === 'video' || mediaType === 'reel') &&
+      !body.includes('__hub_channel__|')
+    ) {
+      body = body.length ? `__hub_channel__|\n${body}` : '__hub_channel__|';
+    }
+
     // GraphQL Post.body is non-null, so never return null here.
     const bodyValue = body.length ? body : '';
+
+    // If no explicit channel_id but body has hub marker, bind to actor's owned channel when present.
+    if (!channelId && bodyValue.includes('__hub_channel__|')) {
+      const { rows: ownCh } = await pool.query<{ id: string }>(
+        `select id from public.channels where owner_user_id = $1::uuid limit 1`,
+        [actorId]
+      );
+      if (ownCh[0]?.id) {
+        channelId = ownCh[0].id;
+        postedByUserId = actorId;
+      }
+    }
 
     const { rows } = await pool.query(
       `
       insert into public.posts
-        (author_id, category_id, country_name, country_code, city_name, title, body, visibility, media_type, media_url, thumb_url, shared_post_id)
+        (author_id, category_id, country_name, country_code, city_name, title, body, visibility,
+         media_type, media_url, thumb_url, shared_post_id, channel_id, posted_by_user_id)
       values
-        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
       returning id
       `,
       [
@@ -835,13 +887,15 @@ export class PostsService {
         mediaUrl,
         thumbUrl,
         sharedPostId,
+        channelId,
+        postedByUserId,
       ]
     );
 
     const createdId = rows[0]?.id;
     if (!createdId) throw new Error('Failed to create post.');
 
-    const post = await this.postByIdForViewer(createdId, authorId);
+    const post = await this.postByIdForViewer(createdId, actorId);
     if (!post) throw new Error('Newly created post not found.');
     return presentPostRow(post);
   }
@@ -894,7 +948,14 @@ export class PostsService {
         media_url = case when $6::boolean then $8 else media_url end,
         thumb_url = case when $6::boolean then $9 else thumb_url end,
         updated_at = now()
-      where id = $1 and author_id = $2
+      where id = $1
+        and (
+          author_id = $2
+          or (
+            channel_id is not null
+            and public.is_channel_admin_or_owner(channel_id, $2::uuid)
+          )
+        )
       returning id
       `,
       [
@@ -1344,7 +1405,14 @@ export class PostsService {
           p.media_path,
           p.thumb_path
         from public.posts p
-        where p.id = $1 and p.author_id = $2
+        where p.id = $1
+          and (
+            p.author_id = $2
+            or (
+              p.channel_id is not null
+              and public.is_channel_admin_or_owner(p.channel_id, $2::uuid)
+            )
+          )
         returning original_post_id
         `,
         [postId, authorId]
@@ -1358,7 +1426,14 @@ export class PostsService {
       await client.query(
         `
         delete from public.posts
-        where id = $1 and author_id = $2
+        where id = $1
+          and (
+            author_id = $2
+            or (
+              channel_id is not null
+              and public.is_channel_admin_or_owner(channel_id, $2::uuid)
+            )
+          )
         `,
         [postId, authorId]
       );

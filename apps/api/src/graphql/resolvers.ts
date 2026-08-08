@@ -12,6 +12,7 @@ import { adsResolvers } from './modules/ads/ads.resolver.js';
 import { newsResolvers } from './modules/news/news.resolver.js';
 import { streamingResolvers } from './modules/streaming/streaming.resolver.js';
 import { locationResolvers } from './modules/location/location.resolver.js';
+import { channelsResolvers } from './modules/channels/channels.resolver.js';
 
 export const resolvers = {
   Query: {
@@ -28,6 +29,7 @@ export const resolvers = {
     ...(newsResolvers.Query ?? {}),
     ...(streamingResolvers.Query ?? {}),
     ...(locationResolvers.Query ?? {}),
+    ...(channelsResolvers.Query ?? {}),
   },
 
   Mutation: {
@@ -41,5 +43,10 @@ export const resolvers = {
     ...(adsResolvers.Mutation ?? {}),
     ...(newsResolvers.Mutation ?? {}),
     ...(streamingResolvers.Mutation ?? {}),
+    ...(channelsResolvers.Mutation ?? {}),
+  },
+
+  Channel: {
+    ...(channelsResolvers.Channel ?? {}),
   },
 };

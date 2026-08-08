@@ -99,6 +99,52 @@ export const typeDefs = `#graphql
     created_at: String!
     updated_at: String!
     author: PostAuthor
+    channel_id: ID
+    posted_by_user_id: ID
+    channel_hidden_at: String
+  }
+
+  enum ChannelMemberRole {
+    owner
+    admin
+  }
+
+  type Channel {
+    id: ID!
+    owner_user_id: ID!
+    name: String!
+    handle: String
+    about: String
+    avatar_url: String
+    created_at: String!
+    updated_at: String!
+    owner: PostAuthor
+    members: [ChannelMember!]!
+    my_role: ChannelMemberRole
+    video_count: Int
+  }
+
+  type ChannelMember {
+    channel_id: ID!
+    user_id: ID!
+    role: ChannelMemberRole!
+    invited_by: ID
+    created_at: String!
+    profile: PostAuthor
+  }
+
+  input CreateChannelInput {
+    name: String!
+    about: String
+    avatar_url: String
+    handle: String
+  }
+
+  input UpdateChannelInput {
+    name: String
+    about: String
+    avatar_url: String
+    handle: String
   }
 
   type PostComment {
@@ -263,6 +309,8 @@ export const typeDefs = `#graphql
     media_url: String
     thumb_url: String
     shared_post_id: ID
+    """When set, post as this channel (actor must be owner or admin)."""
+    channel_id: ID
   }
 
   input UpdatePostInput {
@@ -515,6 +563,14 @@ export const typeDefs = `#graphql
     postById(post_id: ID!): Post
     commentsByPost(post_id: ID!, limit: Int, before: String): [PostComment!]!
     postLikes(post_id: ID!, limit: Int): [PostLike!]!
+
+    # Channels (creator + admins)
+    myChannel: Channel
+    channel(id: ID!): Channel
+    channelByOwner(user_id: ID!): Channel
+    channelByHandle(handle: String!): Channel
+    channelMembers(channel_id: ID!): [ChannelMember!]!
+    channelsIAdmin: [Channel!]!
     countryConflictUpdates(country_code: String!, limit: Int, offset: Int): [ExternalNewsItem!]!
     globalConflictUpdates(limit: Int, offset: Int): [ExternalNewsItem!]!
     externalNewsItem(news_item_id: ID!): ExternalNewsItem
@@ -588,6 +644,16 @@ export const typeDefs = `#graphql
     likeComment(comment_id: ID!): PostComment!
     unlikeComment(comment_id: ID!): PostComment!
     reportComment(comment_id: ID!, reason: String!): Boolean!
+
+    # Channels
+    createChannel(input: CreateChannelInput!): Channel!
+    updateChannel(id: ID!, input: UpdateChannelInput!): Channel!
+    deleteChannel(id: ID!): Boolean!
+    addChannelAdmin(channel_id: ID!, user_id: ID!): ChannelMember!
+    removeChannelAdmin(channel_id: ID!, user_id: ID!): Boolean!
+    transferChannelOwnership(channel_id: ID!, new_owner_user_id: ID!): Channel!
+    setChannelPostHidden(post_id: ID!, hidden: Boolean!): Boolean!
+    deleteChannelComment(comment_id: ID!): Boolean!
     addExternalNewsComment(news_item_id: ID!, body: String!, parent_id: ID): ExternalNewsComment!
     likeExternalNews(news_item_id: ID!): ExternalNewsItem!
     unlikeExternalNews(news_item_id: ID!): ExternalNewsItem!
