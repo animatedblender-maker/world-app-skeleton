@@ -1,5 +1,16 @@
 # Render deploy (matterya-api)
 
+## Always redeploy after API changes
+
+Render tracks branch **`ios-native`** (not `main`).
+
+After any change under `apps/api/` (or anything the API must serve):
+
+1. Commit on `ios-native`
+2. `git push origin ios-native` → Render auto-deploys
+
+Do **not** leave API work only local — the live iOS client hits `api.matterya.com` on this deploy.
+
 ## Critical: Dashboard overrides Blueprint
 
 `render.yaml` is **not always applied** to an existing Web Service.  
