@@ -67,8 +67,8 @@ enum MatteryaPullDownDismiss {
     ) {
         let vertical = value.translation.height
         let horizontal = abs(value.translation.width)
-        // Need a clear downward intent — avoid fighting vertical ScrollViews under sticky video.
-        guard vertical > 22, vertical > horizontal * 1.25 else {
+        // Engage on clear downward drag (horizontal pans still ignored).
+        guard vertical > 16, vertical > horizontal * 0.85 else {
             if isDragging, vertical <= 4 {
                 isDragging = false
                 offset = 0
