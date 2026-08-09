@@ -25,9 +25,14 @@ struct GlobalHubPlaybackLayer: View {
 
     @State private var dragOffset: CGFloat = 0
     @State private var isPullingMinimize = false
+    /// Aspect-fill only when fully mini — flipped *after* morph so release never hitch-crops.
+    @State private var preferMiniFill = false
 
     private var expanded: Bool { appState.hubPlaybackExpanded }
     private var docked: Bool { appState.hubPlaybackDockInChat }
+
+    /// Single spring for expand ↔ mini — no stacked second phase (that felt “stuck”).
+    private static let morphSpring = Animation.spring(response: 0.30, dampingFraction: 0.92, blendDuration: 0.12)
 
     private var hasDockSlot: Bool {
         docked
@@ -59,6 +64,11 @@ struct GlobalHubPlaybackLayer: View {
         return 0
     }
 
+    /// Hide transport while dragging or morphing — avoids chrome flash mid-animation.
+    private var showTransportChrome: Bool {
+        expanded && !isPullingMinimize && dragOffset < 2
+    }
+
     var body: some View {
         Group {
             if let post = appState.hubPlaybackPost {
@@ -71,31 +81,37 @@ struct GlobalHubPlaybackLayer: View {
                 .ignoresSafeArea(edges: .top)
             }
         }
-        // Smooth morph expand ↔ mini (interactive spring matches pull-down release).
-        .animation(.interactiveSpring(response: 0.42, dampingFraction: 0.86), value: expanded)
-        .animation(.interactiveSpring(response: 0.38, dampingFraction: 0.88), value: hasDockSlot)
-        .animation(.easeOut(duration: 0.2), value: appState.hubPlaybackPost?.id)
-        .animation(.easeOut(duration: 0.2), value: appState.navigationPath.isEmpty)
+        // Dock slot can lag one frame — ease only that, not expand (caller owns expand spring).
+        .animation(Self.morphSpring, value: hasDockSlot)
         .onChange(of: expanded) { _, isExpanded in
-            if !isExpanded {
-                // Clear pull offset after layout settles into mini.
-                withAnimation(.interactiveSpring(response: 0.32, dampingFraction: 0.9)) {
-                    dragOffset = 0
-                    isPullingMinimize = false
-                }
+            // Offset is cleared in the *same* animation as collapse — never a second settle phase.
+            if isExpanded {
+                dragOffset = 0
+                isPullingMinimize = false
+                preferMiniFill = false
             } else {
                 dragOffset = 0
                 isPullingMinimize = false
+                // Fill after the morph finishes so release doesn't hitch on gravity change.
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 280_000_000)
+                    guard !appState.hubPlaybackExpanded else { return }
+                    preferMiniFill = true
+                }
             }
         }
         .onChange(of: appState.hubPlaybackPost?.id) { _, _ in
             dragOffset = 0
             isPullingMinimize = false
+            preferMiniFill = !appState.hubPlaybackExpanded
         }
         .onChange(of: appState.hubPlaybackPlaying) { _, playing in
             // Chat → Hubs / mini play: re-assert AVPlayer the moment AppState wants sound.
             guard playing, appState.hubPlaybackPost != nil else { return }
             NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
+        }
+        .onAppear {
+            preferMiniFill = !expanded
         }
     }
 
@@ -104,6 +120,7 @@ struct GlobalHubPlaybackLayer: View {
     @ViewBuilder
     private func continuousStage(post: CountryPost, geo: GeometryProxy) -> some View {
         let layout = playerLayout(in: geo)
+        let liveY = layout.y + (expanded ? dragOffset : 0)
 
         ZStack(alignment: .topLeading) {
             // Never claim empty space for hits.
@@ -113,50 +130,24 @@ struct GlobalHubPlaybackLayer: View {
 
             // Continuous video surface — stable id across expand/mini/dock.
             // Mini chrome is owned by MainTabView’s bottom stack (flush on the tab bar).
-            // This layer only draws into the video hole — never a full-width black bar.
-            playerSurface(for: post, showControls: expanded && !isPullingMinimize)
+            playerSurface(for: post, showControls: showTransportChrome)
                 .frame(width: layout.width, height: layout.height)
-                // Ink only under expanded stage (16:9 letterbox); mini hole stays transparent.
-                .background(expanded ? Theme.ink : Color.clear)
+                .background(expanded && !isPullingMinimize ? Theme.ink : Color.clear)
                 .clipShape(
                     RoundedRectangle(
-                        cornerRadius: expanded ? (isPullingMinimize ? 12 : 0) : 8,
+                        cornerRadius: expanded ? (isPullingMinimize ? 14 : 0) : 0,
                         style: .continuous
                     )
                 )
-                .shadow(
-                    color: expanded
-                        ? Theme.ink.opacity(isPullingMinimize ? 0.22 : 0)
-                        : Theme.ink.opacity(0.18),
-                    radius: expanded ? (isPullingMinimize ? 16 : 0) : 8,
-                    y: expanded ? (isPullingMinimize ? 8 : 0) : 3
-                )
-                // Live pull: shrink + slide toward mini as the finger moves.
-                .scaleEffect(
-                    expanded ? pullScale : 1,
-                    anchor: .top
-                )
-                .offset(x: layout.x, y: layout.y + (expanded ? dragOffset * 0.92 : 0))
-                .opacity(expanded && isPullingMinimize ? Double(1 - min(dragProgress * 0.12, 0.12)) : 1)
-                .overlay {
-                    if expanded, isPullingMinimize, dragOffset > 28 {
-                        VStack {
-                            Spacer()
-                            Label(
-                                dragProgress > 0.55 ? "Release for mini player" : "Pull down for mini",
-                                systemImage: "rectangle.bottomhalf.inset.filled"
-                            )
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(Theme.paper)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(Theme.ink.opacity(0.55), in: Capsule())
-                            .padding(.bottom, 16)
-                            .transition(.opacity.combined(with: .move(edge: .bottom)))
-                        }
-                        .allowsHitTesting(false)
-                    }
-                }
+                // Follow the finger 1:1 while dragging (no spring lag).
+                .offset(x: layout.x, y: liveY)
+                .scaleEffect(expanded && isPullingMinimize ? pullScale : 1, anchor: .top)
+                // Explicit frame animation only when not finger-tracking.
+                .animation(isPullingMinimize ? nil : Self.morphSpring, value: expanded)
+                .animation(isPullingMinimize ? nil : Self.morphSpring, value: layout.width)
+                .animation(isPullingMinimize ? nil : Self.morphSpring, value: layout.height)
+                .animation(isPullingMinimize ? nil : Self.morphSpring, value: layout.x)
+                .animation(isPullingMinimize ? nil : Self.morphSpring, value: layout.y)
                 .simultaneousGesture(minimizeGesture)
                 .onTapGesture {
                     // Mini / dock: tap video → maximize. Expanded: transport owns taps.
@@ -171,7 +162,7 @@ struct GlobalHubPlaybackLayer: View {
         // Only the video rect receives hits — mini chrome is outside this layer now.
         .modifier(HubHitShapeModifier(
             enabled: true,
-            rect: hitRect(for: layout, geo: geo)
+            rect: CGRect(x: layout.x, y: liveY, width: layout.width, height: layout.height)
         ))
     }
 
@@ -265,13 +256,12 @@ struct GlobalHubPlaybackLayer: View {
                 postID: post.id,
                 showsControls: showControls,
                 loops: false,
-                // Expanded: aspect-fit 16:9 (no crop). Mini: fill the whole card under chrome.
-                fillsFrame: !showControls,
+                // Expanded: fit (no crop). Mini fill applied after morph (preferMiniFill).
+                fillsFrame: preferMiniFill && !expanded,
                 isMuted: mutedBinding,
                 allowsFullscreen: showControls,
                 onReady: {
                     Task { await PostsService.shared.recordView(post) }
-                    // Re-assert play if something paused us during mount.
                     if appState.hubPlaybackPlaying {
                         NotificationCenter.default.post(
                             name: .matteryaResumePlaybackAfterInterrupt,
@@ -298,6 +288,7 @@ struct GlobalHubPlaybackLayer: View {
     private func expand() {
         dragOffset = 0
         isPullingMinimize = false
+        preferMiniFill = false
         appState.expandHubPlayback()
     }
 
@@ -309,25 +300,29 @@ struct GlobalHubPlaybackLayer: View {
 
     /// 0…1 progress while pulling expanded stage toward mini.
     private var dragProgress: CGFloat {
-        min(max(dragOffset / 220, 0), 1)
+        min(max(dragOffset / 200, 0), 1)
     }
 
-    /// Subtle shrink while dragging — eases into the mini morph.
+    /// Mild shrink while dragging — release morphs frame, not a second scale phase.
     private var pullScale: CGFloat {
         guard expanded, isPullingMinimize else { return 1 }
-        return 1 - dragProgress * 0.12
+        return 1 - dragProgress * 0.08
     }
 
     private var minimizeGesture: some Gesture {
-        DragGesture(minimumDistance: 10, coordinateSpace: .local)
+        DragGesture(minimumDistance: 8, coordinateSpace: .local)
             .onChanged { value in
                 guard expanded else { return }
                 var offset = dragOffset
                 var dragging = isPullingMinimize
                 MatteryaPullDownDismiss.applyChanged(value, offset: &offset, isDragging: &dragging)
-                // Follow the finger immediately (no laggy spring on change).
-                dragOffset = offset
-                isPullingMinimize = dragging
+                // 1:1 finger tracking — never animate dragOffset while pulling.
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) {
+                    dragOffset = offset
+                    isPullingMinimize = dragging
+                }
             }
             .onEnded { value in
                 guard expanded else {
@@ -336,17 +331,18 @@ struct GlobalHubPlaybackLayer: View {
                     return
                 }
                 let shouldMini = MatteryaPullDownDismiss.shouldDismiss(value)
-                    || dragOffset > 110
+                    || dragOffset > 100
+                    || value.predictedEndTranslation.height > 180
                 if shouldMini {
-                    // Keep current offset so the spring morph continues from the finger,
-                    // then collapse into the mini slot.
-                    withAnimation(.interactiveSpring(response: 0.42, dampingFraction: 0.86)) {
+                    ReelsTwistHaptics.pullDismiss()
+                    // One atomic morph: zero drag + collapse. No nested onChange settle.
+                    withAnimation(Self.morphSpring) {
+                        dragOffset = 0
                         isPullingMinimize = false
-                        appState.minimizeHubPlayback()
+                        appState.minimizeHubPlayback(returnToChat: true, animated: false)
                     }
-                    // Offset clears in onChange(of: expanded).
                 } else {
-                    withAnimation(.interactiveSpring(response: 0.38, dampingFraction: 0.84)) {
+                    withAnimation(Self.morphSpring) {
                         dragOffset = 0
                         isPullingMinimize = false
                     }

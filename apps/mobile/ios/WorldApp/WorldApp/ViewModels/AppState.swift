@@ -1213,22 +1213,34 @@ final class AppState {
     /// Collapse to mini — **playback keeps running** (same continuous AVPlayer, only layout changes).
     /// If this session started from a chat and user hasn't navigated elsewhere, restore that chat.
     /// Chat messages stay warm in `MessagesService` cache so re-open is instant.
-    func minimizeHubPlayback(returnToChat: Bool = true) {
+    /// - Parameter animated: when false, caller already owns the spring (pull-to-mini release).
+    func minimizeHubPlayback(returnToChat: Bool = true, animated: Bool = true) {
         guard hubPlaybackPost != nil else { return }
         // Never stop/pause mini — GlobalHubPlaybackLayer only resizes the stage.
-        // Feed/profile autoplay must yield while mini is on.
         hubPlaybackPlaying = true
-        withAnimation(.interactiveSpring(response: 0.42, dampingFraction: 0.86)) {
+        if animated {
+            withAnimation(.spring(response: 0.30, dampingFraction: 0.92, blendDuration: 0.12)) {
+                hubPlaybackExpanded = false
+            }
+        } else {
             hubPlaybackExpanded = false
         }
-        FeedVideoFocus.shared.resetAll()
 
-        // Drop return target if user already left that chat while minimized.
-        syncHubPlaybackChatReturnWithPath()
-
-        if returnToChat, let conversationID = hubPlaybackReturnConversationID {
-            selectedTab = .messages
-            navigationPath = [.conversation(conversationID)]
+        // Defer heavy side-effects so they never hitch the release frame.
+        let shouldReturn = returnToChat
+        let conversationID = hubPlaybackReturnConversationID
+        Task { @MainActor in
+            // Let the morph start painting first.
+            try? await Task.sleep(nanoseconds: 40_000_000)
+            FeedVideoFocus.shared.resetAll()
+            syncHubPlaybackChatReturnWithPath()
+            // Navigation after morph is underway — avoids sticky “freeze then jump”.
+            if shouldReturn, let conversationID {
+                try? await Task.sleep(nanoseconds: 120_000_000)
+                guard hubPlaybackPost != nil, !hubPlaybackExpanded else { return }
+                selectedTab = .messages
+                navigationPath = [.conversation(conversationID)]
+            }
         }
     }
 
@@ -1248,7 +1260,7 @@ final class AppState {
         navigationPath.removeAll()
         selectedTab = .hubs
         hubPlaybackPlaying = true
-        withAnimation(.interactiveSpring(response: 0.42, dampingFraction: 0.86)) {
+        withAnimation(.spring(response: 0.30, dampingFraction: 0.92, blendDuration: 0.12)) {
             hubPlaybackExpanded = true
         }
     }
