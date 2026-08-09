@@ -212,8 +212,8 @@ struct MatteryaHubPlayerView: View {
     /// When false (mini player), hide chrome but keep the same AVPlayer alive.
     var showsControls: Bool = true
     var loops: Bool = false
-    /// When true, crop to fill (Sparks). Hubs long-form should pass **false** (aspectFit, no crop).
-    var fillsFrame: Bool = false
+    /// When true, crop to fill the stage (no black letterbox bars). Hubs always fills.
+    var fillsFrame: Bool = true
     @Binding var isMuted: Bool
     var onReady: (() -> Void)? = nil
     /// Keeps AppState.hubPlaybackPlaying in sync when chrome play/pause is used.
@@ -224,7 +224,8 @@ struct MatteryaHubPlayerView: View {
     var seekToSeconds: Double? = nil
     var onSeekConsumed: (() -> Void)? = nil
 
-    var allowsFullscreen: Bool = true
+    /// Hubs watch never shows a fullscreen control (top or bottom).
+    var allowsFullscreen: Bool = false
 
     @StateObject private var bridge = ArchivePlayerBridge()
     @State private var showChrome = true
@@ -243,9 +244,9 @@ struct MatteryaHubPlayerView: View {
         postID: String? = nil,
         showsControls: Bool = true,
         loops: Bool = false,
-        fillsFrame: Bool = false,
+        fillsFrame: Bool = true,
         isMuted: Binding<Bool> = .constant(false),
-        allowsFullscreen: Bool = true,
+        allowsFullscreen: Bool = false,
         onReady: (() -> Void)? = nil,
         onPlayingChange: ((Bool) -> Void)? = nil,
         onProgress: ((Double, Double) -> Void)? = nil,
@@ -445,7 +446,7 @@ struct MatteryaHubPlayerView: View {
             youtubeGestureLayer
                 .zIndex(0)
 
-            // Top tools (mute · fullscreen)
+            // Top tools — mute only (no fullscreen control on Hubs watch).
             VStack {
                 HStack(spacing: 10) {
                     Spacer(minLength: 0)
@@ -457,15 +458,6 @@ struct MatteryaHubPlayerView: View {
                         bridge.controller?.setMuted(isMuted)
                         bridge.publishMuted(isMuted)
                         scheduleChromeHide()
-                    }
-                    if allowsFullscreen {
-                        youtubeTopIcon(
-                            systemName: "arrow.up.left.and.arrow.down.right",
-                            label: "Fullscreen"
-                        ) {
-                            showFullscreen = true
-                            chromeHideTask?.cancel()
-                        }
                     }
                 }
                 .padding(.horizontal, 12)
@@ -1319,8 +1311,8 @@ final class ArchiveVideoPlayerController: UIViewController {
         CATransaction.commit()
     }
 
-    /// Default aspect-fit — Sparks pass fit; Hubs pass fill. Never flip after first frame.
-    private var preferredVideoGravity: AVLayerVideoGravity = .resizeAspect
+    /// Prefer fill so a late gravity call never flashes letterbox bars on Hubs.
+    private var preferredVideoGravity: AVLayerVideoGravity = .resizeAspectFill
 
     func applyVideoGravity(_ gravity: AVLayerVideoGravity) {
         preferredVideoGravity = gravity
@@ -1333,7 +1325,9 @@ final class ArchiveVideoPlayerController: UIViewController {
         }
         CATransaction.commit()
         posterView.contentMode = gravity == .resizeAspectFill ? .scaleAspectFill : .scaleAspectFit
-        posterView.backgroundColor = .black
+        // Match fill: no ink/black slab peeking around poster or first frame.
+        posterView.backgroundColor = gravity == .resizeAspectFill ? .clear : .black
+        view.backgroundColor = gravity == .resizeAspectFill ? .clear : .black
     }
 
     func configure(url: URL, posterURL: URL?, muted: Bool, startTime: Double, active: Bool) {

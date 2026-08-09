@@ -39,7 +39,7 @@ import { HubsPlaybackService } from '../hubs/hubs-playback.service';
               [preload]="'auto'"
               [showMute]="true"
               [showsControls]="true"
-              [allowsFullscreen]="true"
+              [allowsFullscreen]="false"
               centerOverlayMode="always"
               (timeUpdate)="onTime($event)"
               (playState)="onPlayState($event)"
@@ -82,13 +82,42 @@ import { HubsPlaybackService } from '../hubs/hubs-playback.service';
             </div>
 
             <div class="actions">
-              <button type="button" class="action" (click)="toggleLike()" [class.on]="p.liked_by_me">
-                {{ p.liked_by_me ? '♥' : '♡' }} {{ p.like_count || 0 }}
+              <button type="button" class="action" (click)="toggleLike()" [class.on]="p.liked_by_me" aria-label="Like">
+                <svg *ngIf="!p.liked_by_me" class="ico" viewBox="0 0 24 24" aria-hidden="true">
+                  <path fill="none" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round"
+                    d="M12.001 20.727s-7.35-4.48-7.35-9.2a4.12 4.12 0 0 1 7.35-2.55 4.12 4.12 0 0 1 7.35 2.55c0 4.72-7.35 9.2-7.35 9.2z"/>
+                </svg>
+                <svg *ngIf="p.liked_by_me" class="ico" viewBox="0 0 24 24" aria-hidden="true">
+                  <path fill="currentColor"
+                    d="M12.001 20.727s-7.35-4.48-7.35-9.2a4.12 4.12 0 0 1 7.35-2.55 4.12 4.12 0 0 1 7.35 2.55c0 4.72-7.35 9.2-7.35 9.2z"/>
+                </svg>
+                <span>{{ p.like_count || 0 }}</span>
               </button>
-              <button type="button" class="action" (click)="toggleSave()" [class.on]="saved">
-                {{ saved ? '★ Saved' : '☆ Save' }}
+              <button type="button" class="action muted" (click)="focusComments()" aria-label="Comment">
+                <svg class="ico" viewBox="0 0 24 24" aria-hidden="true">
+                  <path fill="none" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round"
+                    d="M4.75 17.25V8.6A3.1 3.1 0 0 1 7.85 5.5h8.3A3.1 3.1 0 0 1 19.25 8.6v5.55a3.1 3.1 0 0 1-3.1 3.1H10.1L4.75 19.8v-2.55z"/>
+                </svg>
+                <span>{{ comments.length || p.comment_count || 0 }}</span>
               </button>
-              <button type="button" class="action" (click)="share()">Share</button>
+              <button type="button" class="action" (click)="share()" aria-label="Share">
+                <svg class="ico ico-share" viewBox="0 0 24 24" aria-hidden="true">
+                  <path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"
+                    d="M9.5 7.25V4.5L18.5 12l-9 7.5v-2.85c-5.1 0-7.65 1.35-9.15 4.1 0-5.4 2.55-9.35 9.15-9.9z"/>
+                </svg>
+                <span>Share</span>
+              </button>
+              <button type="button" class="action" (click)="toggleSave()" [class.on-ink]="saved" [class.muted]="!saved" aria-label="Save">
+                <svg *ngIf="!saved" class="ico" viewBox="0 0 24 24" aria-hidden="true">
+                  <path fill="none" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round"
+                    d="M7.25 4.25h9.5A1.75 1.75 0 0 1 18.5 6v13.25L12 15.75 5.5 19.25V6A1.75 1.75 0 0 1 7.25 4.25z"/>
+                </svg>
+                <svg *ngIf="saved" class="ico" viewBox="0 0 24 24" aria-hidden="true">
+                  <path fill="currentColor"
+                    d="M7.25 4.25h9.5A1.75 1.75 0 0 1 18.5 6v13.25L12 15.75 5.5 19.25V6A1.75 1.75 0 0 1 7.25 4.25z"/>
+                </svg>
+                <span>{{ saved ? 'Saved' : 'Save' }}</span>
+              </button>
             </div>
 
             <div class="description" *ngIf="description">
@@ -288,20 +317,26 @@ import { HubsPlaybackService } from '../hubs/hubs-playback.service';
 
           <section class="share-section">
             <div class="share-section-label">Outside Matterya</div>
-            <button type="button" class="share-row" (click)="shareAnywhere()">
-              <span class="share-ico" aria-hidden="true">↗</span>
-              <span class="share-row-text">
-                <span class="share-row-title">Share anywhere</span>
-                <span class="share-row-sub">Messages, Mail, social apps</span>
-              </span>
-            </button>
             <button type="button" class="share-row" (click)="copyShareLink()">
               <span class="share-ico" aria-hidden="true">🔗</span>
               <span class="share-row-text">
                 <span class="share-row-title">Copy link</span>
-                <span class="share-row-sub">Share the public video link</span>
+                <span class="share-row-sub">Best on desktop — paste anywhere</span>
               </span>
             </button>
+            <button type="button" class="share-row" (click)="shareAnywhere()">
+              <span class="share-ico" aria-hidden="true">↗</span>
+              <span class="share-row-text">
+                <span class="share-row-title">Share anywhere</span>
+                <span class="share-row-sub">System share, email, or X / Facebook</span>
+              </span>
+            </button>
+            <div class="share-web-row">
+              <button type="button" class="share-chip" (click)="shareViaEmail()">Email</button>
+              <button type="button" class="share-chip" (click)="shareViaX()">X</button>
+              <button type="button" class="share-chip" (click)="shareViaFacebook()">Facebook</button>
+              <button type="button" class="share-chip" (click)="shareViaWhatsApp()">WhatsApp</button>
+            </div>
           </section>
 
           <section class="share-section">
@@ -329,7 +364,14 @@ import { HubsPlaybackService } from '../hubs/hubs-playback.service';
             </button>
           </section>
 
-          <div class="share-feedback" *ngIf="shareFeedback">{{ shareFeedback }}</div>
+          <div
+            class="share-feedback"
+            *ngIf="shareFeedback"
+            [class.ok]="shareFeedbackKind === 'ok'"
+            [class.err]="shareFeedbackKind === 'err'"
+          >
+            {{ shareFeedback }}
+          </div>
         </div>
       </div>
     </div>
@@ -374,18 +416,17 @@ import { HubsPlaybackService } from '../hubs/hubs-playback.service';
         padding: 0 14px 16px;
       }
       /*
-       * Matterya player chrome on a YouTube-style 16:9 stage.
-       * NEVER crop (object-fit: contain).
+       * Compact 16:9 stage — not half-screen. Video cover-fills so no black bars.
        */
       .player-stage {
         position: relative;
         width: calc(100% - 24px);
         max-width: none;
         margin: 10px auto 0;
-        background: var(--m-ink, #2c2825);
+        background: transparent;
         aspect-ratio: 16 / 9;
         height: auto;
-        max-height: min(72vh, 100%);
+        max-height: min(42vh, 100%);
         touch-action: pan-y;
         will-change: transform;
         overflow: hidden;
@@ -408,13 +449,14 @@ import { HubsPlaybackService } from '../hubs/hubs-playback.service';
         max-height: none !important;
         background: var(--m-ink, #2c2825) !important;
       }
-      /* Fill stage without crop: stage AR matches video; video uses contain */
+      /* Full-bleed cover: no letterbox bars top/bottom */
       :host ::ng-deep .hubs-watch-player,
       :host ::ng-deep .hubs-watch-player .video-shell {
         position: absolute !important;
         inset: 0 !important;
         width: 100% !important;
         height: 100% !important;
+        background: transparent !important;
       }
       :host ::ng-deep .hubs-watch-player video {
         position: absolute !important;
@@ -422,9 +464,9 @@ import { HubsPlaybackService } from '../hubs/hubs-playback.service';
         width: 100% !important;
         height: 100% !important;
         max-height: none !important;
-        object-fit: contain !important;
+        object-fit: cover !important;
         object-position: center center !important;
-        background: var(--m-ink, #2c2825) !important;
+        background: transparent !important;
       }
       :host ::ng-deep .hubs-watch-player .video-overlay {
         display: none !important;
@@ -475,11 +517,9 @@ import { HubsPlaybackService } from '../hubs/hubs-playback.service';
            */
           --watch-side: clamp(380px, 34vw, 520px);
           /*
-           * Shorter player so title + comments under the video get more room.
-           * Stage follows native video AR (no letterbox gaps); height is capped.
+           * Compact 16:9 stage — title/comments get the rest of the viewport.
            */
-          /* ~1/3 taller than previous ~70vh stage */
-          --watch-player-max-h: min(93vh, 980px);
+          --watch-player-max-h: min(42vh, 520px);
           --watch-title: 26px;
           --watch-body: 17px;
           --watch-meta: 15px;
@@ -533,21 +573,17 @@ import { HubsPlaybackService } from '../hubs/hubs-playback.service';
           position: sticky;
           top: var(--watch-sticky-top);
           z-index: 6;
-          /*
-           * Full width. Height from native video aspect ratio so contain
-           * fills the stage completely with ZERO crop and no letterbox.
-           * Soft cap only — if hit, height wins and width stays full (bars possible).
-           */
+          /* Fixed compact 16:9 + cover fill — no black margins, no half-screen stage. */
           width: 100%;
           max-width: none;
           margin: 0;
-          aspect-ratio: var(--watch-video-ar, 16 / 9);
+          aspect-ratio: 16 / 9;
           height: auto;
           max-height: var(--watch-player-max-h);
-          min-height: 200px;
+          min-height: 160px;
           border-radius: 12px;
           box-shadow: 0 8px 16px rgba(44, 40, 37, 0.12);
-          background: var(--m-ink, #2c2825);
+          background: transparent;
         }
         .watch-meta {
           /* Larger block under the shorter player — title, actions, comments */
@@ -813,7 +849,8 @@ import { HubsPlaybackService } from '../hubs/hubs-playback.service';
       .actions {
         display: flex;
         flex-wrap: wrap;
-        gap: 8px;
+        align-items: center;
+        gap: 10px;
         margin-bottom: 14px;
       }
       .action {
@@ -824,12 +861,33 @@ import { HubsPlaybackService } from '../hubs/hubs-playback.service';
         font-size: 13px;
         font-weight: 600;
         cursor: pointer;
-        color: inherit;
+        color: var(--m-ink, #2c2825);
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        line-height: 1;
       }
+      .action.muted {
+        color: var(--m-ink-muted, #948b82);
+      }
+      .action .ico {
+        width: 18px;
+        height: 18px;
+        display: block;
+        flex-shrink: 0;
+      }
+      .action .ico-share {
+        width: 17px;
+        height: 17px;
+      }
+      /* liked heart — Theme.like red, not inverted chip */
       .action.on {
-        background: #2c2825;
-        color: #fefdfb;
-        border-color: #2c2825;
+        color: var(--m-danger, #ea000b);
+        background: var(--m-surface, #fefdfb);
+        border-color: var(--m-border, #ddd8d1);
+      }
+      .action.on-ink {
+        color: var(--m-ink, #2c2825);
       }
       .description {
         background: var(--m-canvas-muted, #f2f0ec);
@@ -1033,7 +1091,11 @@ import { HubsPlaybackService } from '../hubs/hubs-playback.service';
         gap: 10px;
       }
       .comment-row.is-reply {
+        /* iOS CommentThreadLayout.indentPerLevel = 44 */
         margin-left: 44px;
+        padding-left: 10px;
+        border-left: 2px solid color-mix(in srgb, var(--m-accent, #7b6347) 45%, transparent);
+        box-sizing: border-box;
       }
       .c-main {
         flex: 1;
@@ -1190,7 +1252,7 @@ import { HubsPlaybackService } from '../hubs/hubs-playback.service';
       .share-root {
         position: fixed;
         inset: 0;
-        z-index: 80;
+        z-index: 200;
         background: rgba(20, 16, 14, 0.45);
         display: flex;
         align-items: flex-end;
@@ -1327,6 +1389,33 @@ import { HubsPlaybackService } from '../hubs/hubs-playback.service';
         font-weight: 600;
         color: var(--m-ink-secondary, #6b645d);
       }
+      .share-feedback.ok {
+        background: rgba(107, 88, 65, 0.14);
+        color: var(--m-ink, #2c2825);
+      }
+      .share-feedback.err {
+        background: rgba(234, 0, 11, 0.1);
+        color: var(--m-danger, #ea000b);
+      }
+      .share-web-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 4px 10px 12px;
+      }
+      .share-chip {
+        border: 0.5px solid var(--m-border, #ddd8d1);
+        background: var(--m-paper, #f8f6f2);
+        color: var(--m-ink, #2c2825);
+        border-radius: 999px;
+        padding: 8px 12px;
+        font-size: 12px;
+        font-weight: 650;
+        cursor: pointer;
+      }
+      .share-chip:hover {
+        background: var(--m-canvas-muted, #f2f0ec);
+      }
     `,
   ],
 })
@@ -1363,6 +1452,7 @@ export class HubsWatchPageComponent implements OnInit, OnDestroy {
   shareOpen = false;
   shareBusy = false;
   shareFeedback = '';
+  shareFeedbackKind: 'ok' | 'err' | '' = '';
   private shareFeedbackTimer: ReturnType<typeof setTimeout> | null = null;
   homeCountryName = 'your country';
   homeCountryCode: string | null = null;
@@ -1801,6 +1891,18 @@ export class HubsWatchPageComponent implements OnInit, OnDestroy {
     this.paint();
   }
 
+  /** Scroll to comments — same affordance as feed bubble.right */
+  focusComments(): void {
+    const el = document.querySelector('.comments');
+    if (el instanceof HTMLElement) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      const ta = el.querySelector('textarea');
+      if (ta instanceof HTMLTextAreaElement) {
+        setTimeout(() => ta.focus(), 280);
+      }
+    }
+  }
+
   /** Open iOS-style share sheet (desktop + mobile web). Never minimize / mini-player. */
   share(): void {
     if (!this.post) return;
@@ -1819,80 +1921,162 @@ export class HubsWatchPageComponent implements OnInit, OnDestroy {
     this.paint();
   }
 
-  private flashShare(msg: string, closeAfter = false): void {
+  private flashShare(msg: string, kind: 'ok' | 'err' = 'ok', closeAfter = false): void {
     this.shareFeedback = msg;
+    this.shareFeedbackKind = kind;
     this.paint();
     if (this.shareFeedbackTimer) clearTimeout(this.shareFeedbackTimer);
     this.shareFeedbackTimer = setTimeout(() => {
       this.shareFeedback = '';
+      this.shareFeedbackKind = '';
       if (closeAfter) this.closeShare();
       else this.paint();
-    }, 1600);
+    }, closeAfter ? 1400 : 2800);
+  }
+
+  private async writeClipboard(text: string): Promise<boolean> {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch {
+      // fall through
+    }
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      return ok;
+    } catch {
+      return false;
+    }
   }
 
   async shareAnywhere(): Promise<void> {
     if (!this.post) return;
-    // Stay on the watch page; do not minimize playback for system share.
     if (this.playback.post) this.playback.expand();
     const url = this.shareUrl;
     const title = this.catalog.displayHeadline(this.post);
     const text = this.shareText;
+    // Desktop browsers rarely support navigator.share — still try, then always copy.
+    let usedSystem = false;
     try {
       if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
         await navigator.share({ title, text, url });
-        this.closeShare();
+        usedSystem = true;
+        this.flashShare('Shared', 'ok', true);
         return;
       }
     } catch {
-      // cancelled or unavailable — fall through to copy
+      // user cancelled or share failed
     }
-    try {
-      await navigator.clipboard.writeText(url);
-      this.flashShare('Link copied — paste it anywhere', true);
-    } catch {
-      this.flashShare('Could not open system share');
+    const copied = await this.writeClipboard(`${text}\n${url}`);
+    if (copied) {
+      this.flashShare(
+        usedSystem ? 'Shared' : 'Link copied — paste into Messages, Mail, or social apps',
+        'ok',
+        true
+      );
+    } else {
+      this.flashShare('Copy failed — use Email / X / Facebook below', 'err');
     }
   }
 
   async copyShareLink(): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(this.shareUrl);
-      this.flashShare('Link copied', true);
-    } catch {
-      this.flashShare('Copy failed');
-    }
+    const ok = await this.writeClipboard(this.shareUrl);
+    if (ok) this.flashShare('Link copied', 'ok', true);
+    else this.flashShare('Copy failed — select the link manually', 'err');
+  }
+
+  shareViaEmail(): void {
+    const subject = encodeURIComponent(this.shareText);
+    const body = encodeURIComponent(`${this.shareText}\n\n${this.shareUrl}`);
+    window.open(`mailto:?subject=${subject}&body=${body}`, '_blank');
+    this.flashShare('Opening email…', 'ok');
+  }
+
+  shareViaX(): void {
+    const text = encodeURIComponent(this.shareText);
+    const url = encodeURIComponent(this.shareUrl);
+    window.open(`https://twitter.com/intent/tweet?text=${text}&url=${url}`, '_blank', 'noopener');
+    this.flashShare('Opening X…', 'ok');
+  }
+
+  shareViaFacebook(): void {
+    const url = encodeURIComponent(this.shareUrl);
+    window.open(`https://www.facebook.com/sharer/sharer.php?u=${url}`, '_blank', 'noopener');
+    this.flashShare('Opening Facebook…', 'ok');
+  }
+
+  shareViaWhatsApp(): void {
+    const text = encodeURIComponent(`${this.shareText}\n${this.shareUrl}`);
+    window.open(`https://wa.me/?text=${text}`, '_blank', 'noopener');
+    this.flashShare('Opening WhatsApp…', 'ok');
   }
 
   async shareToCountryFeed(): Promise<void> {
     if (!this.post) return;
     if (!this.meId) {
-      this.flashShare('Sign in to share to your feed');
+      this.flashShare('Sign in to share to your feed', 'err');
       return;
     }
+    // Refresh profile country if missing (common after cold load)
+    if (!this.homeCountryCode || this.homeCountryName === 'your country') {
+      try {
+        const { meProfile } = await this.profiles.meProfile();
+        this.homeCountryName = meProfile?.country_name || this.homeCountryName;
+        this.homeCountryCode = meProfile?.country_code || null;
+      } catch {
+        // ignore
+      }
+    }
     if (!this.homeCountryCode || !this.homeCountryName || this.homeCountryName === 'your country') {
-      this.flashShare('Set your home country first');
+      this.flashShare('Set your home country in Profile first', 'err');
       return;
     }
     if (this.shareBusy) return;
     this.shareBusy = true;
     this.paint();
     try {
-      const originalId = this.post.shared_post_id || this.post.id;
+      const p = this.post;
+      const originalId = p.shared_post_id || p.id;
+      const isHubSeed =
+        this.engagement.usesLocalEngagement(originalId) ||
+        originalId.startsWith('ia_') ||
+        originalId.startsWith('hub_');
+      const media = this.catalog.mediaUrl(p) || this.mediaSrc || null;
+      const thumb = p.thumb_url || this.poster || null;
+      const title = this.catalog.displayHeadline(p);
+      // Hub/archive IDs are not real GraphQL posts — share as a video post with media.
+      // Stamp body with "Shared from Hubs" so feed cards show the Hubs badge (iOS).
+      // Real posts use shared_post_id like the iOS app.
       await this.posts.createPost({
         authorId: this.meId,
-        title: null,
-        body: '',
+        title: isHubSeed ? title : null,
+        body: isHubSeed
+          ? `__hub__|id=${originalId}\nShared from Hubs · ${this.catalog.displayAuthor(p)}`
+          : `Shared from Hubs`,
         countryName: this.homeCountryName,
         countryCode: this.homeCountryCode,
         visibility: 'country',
-        mediaType: 'none',
-        mediaUrl: null,
-        thumbUrl: null,
-        sharedPostId: originalId,
+        mediaType: isHubSeed && media ? 'video' : 'none',
+        mediaUrl: isHubSeed ? media : null,
+        thumbUrl: isHubSeed ? thumb : null,
+        sharedPostId: isHubSeed ? null : originalId,
+        externalRefType: isHubSeed ? 'hub' : null,
+        externalRefId: isHubSeed ? originalId : null,
       });
-      this.flashShare(`Shared to ${this.homeCountryName}`, true);
+      this.flashShare(`Shared to ${this.homeCountryName}`, 'ok', true);
     } catch (e: any) {
-      this.flashShare(e?.message || 'Share failed');
+      const msg = e?.message || e?.error?.message || 'Share failed';
+      this.flashShare(String(msg).slice(0, 160), 'err');
     } finally {
       this.shareBusy = false;
       this.paint();
@@ -1903,6 +2087,20 @@ export class HubsWatchPageComponent implements OnInit, OnDestroy {
     if (!this.post) return;
     const url = this.shareUrl;
     const text = this.shareText;
+    // Leave a draft for Messages to pick up even if query params are ignored
+    try {
+      sessionStorage.setItem(
+        'matterya.share.draft',
+        JSON.stringify({
+          postId: this.post.id,
+          url,
+          text,
+          at: Date.now(),
+        })
+      );
+    } catch {
+      // ignore
+    }
     this.closeShare();
     void this.router.navigate(['/messages'], {
       queryParams: { shareUrl: url, shareText: text, sharePost: this.post.id },
@@ -1913,10 +2111,25 @@ export class HubsWatchPageComponent implements OnInit, OnDestroy {
   repostWithQuote(): void {
     if (!this.post) return;
     if (!this.meId) {
-      this.flashShare('Sign in to repost');
+      this.flashShare('Sign in to repost', 'err');
       return;
     }
     const quoteId = this.post.shared_post_id || this.post.id;
+    const title = this.catalog.displayHeadline(this.post);
+    try {
+      sessionStorage.setItem(
+        'matterya.share.quote',
+        JSON.stringify({
+          postId: quoteId,
+          title,
+          url: this.shareUrl,
+          mediaUrl: this.catalog.mediaUrl(this.post) || this.mediaSrc,
+          at: Date.now(),
+        })
+      );
+    } catch {
+      // ignore
+    }
     this.closeShare();
     void this.router.navigate(['/feed'], {
       queryParams: { compose: 'post', quote: quoteId },

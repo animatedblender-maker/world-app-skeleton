@@ -140,7 +140,8 @@ struct GlobalHubPlaybackLayer: View {
             ZStack {
                 playerSurface(for: post, showControls: showTransportChrome)
                     .frame(width: layout.width, height: layout.height)
-                    .background(expanded && !isPullingMinimize ? Theme.ink : Color.clear)
+                    // No ink bed under filled video — ink read as black top/bottom margins.
+                    .background(Color.clear)
                     .clipped()
 
                 if !expanded, !isPullingMinimize {

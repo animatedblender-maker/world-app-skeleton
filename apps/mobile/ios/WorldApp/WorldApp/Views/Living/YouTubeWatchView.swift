@@ -88,7 +88,8 @@ struct YouTubeWatchView: View {
                 // never leaves a black rectangle at the top of Hubs.
                 playerSection
                     .frame(width: geo.size.width, height: reservedPlayerHeight)
-                    .background(embedsPlayer ? Theme.ink : Color.clear)
+                    // Clear under filled video — ink beds read as black top/bottom margins.
+                    .background(Color.clear)
                     .zIndex(2)
 
                 // Title, channel, actions, comments, related — all scroll under the player
@@ -317,7 +318,8 @@ struct YouTubeWatchView: View {
                         loops: false,
                         muted: false,
                         showsControls: true,
-                        allowsFullscreen: true,
+                        allowsFullscreen: false,
+                        fillsFrame: true,
                         startTime: YouTubeCatalogService.shared.playbackPosition(for: currentPost.id),
                         onViewed: { Task { await PostsService.shared.recordView(currentPost) } }
                     )

@@ -54,14 +54,15 @@ enum YouTubeMediaLayout {
     /// Prefetch + display MUST match or ImageCache keys miss and every row re-downloads.
     static let hubsListThumbMaxPixel: CGFloat = 320
 
-    /// Hubs watch stage = **true 16:9** of width (compact — not half-screen).
+    /// Hubs watch stage = compact **16:9** of width (never half-screen / never taller than classic).
     /// Pair with `fillsFrame: true` so the clip fills edge-to-edge with no black letterbox bars.
     static func hubsContinuousStageHeight(containerWidth: CGFloat) -> CGFloat {
         let w = max(1, containerWidth)
+        // Strict 16:9 — do not grow above classic (that created black top/bottom slabs).
         let classic16x9 = w / aspect
         let contentH = hubsContentColumnHeight
-        let maxH = max(180, contentH - hubsWatchMetaReserve)
-        return min(classic16x9, maxH)
+        let maxH = max(160, min(classic16x9, contentH - hubsWatchMetaReserve))
+        return max(160, min(classic16x9, maxH))
     }
 
     /// Embedded watch player — same compact 16:9 stage as continuous hubs playback.
@@ -69,8 +70,8 @@ enum YouTubeMediaLayout {
         let w = max(1, containerWidth)
         let classic16x9 = w / aspect
         if containerHeight > 200 {
-            let maxH = max(180, containerHeight - hubsWatchMetaReserve)
-            return min(classic16x9, maxH)
+            let maxH = max(160, min(classic16x9, containerHeight - hubsWatchMetaReserve))
+            return max(160, min(classic16x9, maxH))
         }
         return hubsContinuousStageHeight(containerWidth: w)
     }
