@@ -469,7 +469,8 @@ struct MatteryaHubPlayerView: View {
                     }
                 }
                 .padding(.horizontal, 12)
-                .padding(.top, 10)
+                // Clear of Dynamic Island / notch when stage is edge-to-edge.
+                .padding(.top, 10 + YouTubeMediaLayout.keyWindowSafeTop)
                 Spacer(minLength: 0)
             }
             .zIndex(5)

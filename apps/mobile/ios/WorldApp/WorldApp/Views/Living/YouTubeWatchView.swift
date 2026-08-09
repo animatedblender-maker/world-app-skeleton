@@ -73,18 +73,21 @@ struct YouTubeWatchView: View {
 
     var body: some View {
         GeometryReader { geo in
-            // Continuous player starts just below the notch (safeTop).
-            // Watch chrome is already in the safe area, so reserve the full stage height.
-            let stageHeight = embedsPlayer
+            // Match continuous player: stage from physical top (under island/notch), no gap.
+            let safeTop = geo.safeAreaInsets.top > 1
+                ? geo.safeAreaInsets.top
+                : YouTubeMediaLayout.keyWindowSafeTop
+            let bodyH = embedsPlayer
                 ? YouTubeMediaLayout.watchPlayerHeight(
                     containerWidth: geo.size.width,
-                    containerHeight: geo.size.height
+                    containerHeight: max(200, geo.size.height + safeTop)
                 )
                 : YouTubeMediaLayout.hubsContinuousStageHeight(containerWidth: geo.size.width)
-            let reservedPlayerHeight = max(120, stageHeight)
+            // Include safe-top bleed so spacer matches GlobalHubPlaybackLayer (y=0).
+            let reservedPlayerHeight = max(120, bodyH + max(0, safeTop))
 
             VStack(spacing: 0) {
-                // Sticky player — stays put while everything below scrolls (YouTube-style).
+                // Sticky player — edge-to-edge under Dynamic Island / notch.
                 // When embedsPlayer is false, keep the stage transparent so minimize
                 // never leaves a black rectangle at the top of Hubs.
                 playerSection
@@ -140,6 +143,8 @@ struct YouTubeWatchView: View {
         // During grab: pure video over clear/ink — no paper canvas behind.
         .background(isMinimizingGrab ? Theme.ink : Theme.canvas)
         .animation(nil, value: isMinimizingGrab)
+        // Player bleeds under Dynamic Island / notch (same as continuous layer).
+        .ignoresSafeArea(edges: .top)
         // Feed / non-expanded share still uses the sheet. Expanded Hubs uses an overlay so
         // GlobalHubPlaybackLayer never pauses or collapses to mini.
         .sharePostSheet(appState: appState)
@@ -239,7 +244,7 @@ struct YouTubeWatchView: View {
             .allowsHitTesting(false)
             .opacity(embedsPlayer ? chromeOpacity : 1)
 
-            // Minimize / close — over player, YouTube mini-player entry.
+            // Minimize / close — over player, clear of Dynamic Island.
             Button(action: { onBack() }) {
                 Image(systemName: "chevron.down")
                     .font(.body.weight(.bold))
@@ -248,7 +253,7 @@ struct YouTubeWatchView: View {
                     .background(Color.black.opacity(0.45), in: Circle())
             }
             .buttonStyle(.plain)
-            .safeAreaPadding(.top, 8)
+            .padding(.top, 8 + YouTubeMediaLayout.keyWindowSafeTop)
             .padding(.horizontal, 12)
             .opacity(embedsPlayer ? chromeOpacity : 1)
             .allowsHitTesting(embedsPlayer ? (chromeOpacity > 0.2 && !isPullingToMinimize) : true)

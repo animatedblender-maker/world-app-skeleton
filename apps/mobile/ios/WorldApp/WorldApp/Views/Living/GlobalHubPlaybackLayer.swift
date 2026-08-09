@@ -200,11 +200,14 @@ struct GlobalHubPlaybackLayer: View {
 
     private func playerLayout(in geo: GeometryProxy) -> PlayerLayout {
         if expanded {
+            // Flush to the physical top — under Dynamic Island / notch, no gap.
+            // Height includes safe-top bleed so the stage still feels tall below the island.
             let safeTop = geo.safeAreaInsets.top > 1
                 ? geo.safeAreaInsets.top
                 : YouTubeMediaLayout.keyWindowSafeTop
-            let stageHeight = YouTubeMediaLayout.hubsContinuousStageHeight(containerWidth: geo.size.width)
-            return PlayerLayout(x: 0, y: safeTop, width: geo.size.width, height: stageHeight)
+            let bodyH = YouTubeMediaLayout.hubsContinuousStageHeight(containerWidth: geo.size.width)
+            let stageHeight = bodyH + max(0, safeTop)
+            return PlayerLayout(x: 0, y: 0, width: geo.size.width, height: stageHeight)
         }
 
         // Prefer stable fallback for floating mini (full width ¼-screen).
