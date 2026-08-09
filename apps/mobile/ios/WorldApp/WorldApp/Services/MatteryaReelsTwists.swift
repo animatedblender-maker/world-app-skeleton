@@ -67,8 +67,8 @@ enum MatteryaPullDownDismiss {
     ) {
         let vertical = value.translation.height
         let horizontal = abs(value.translation.width)
-        // Engage sooner (16pt) so the mini morph tracks the finger quickly.
-        guard vertical > 16, vertical > horizontal * 0.75 else {
+        // Need a clear downward intent — avoid fighting vertical ScrollViews under sticky video.
+        guard vertical > 22, vertical > horizontal * 1.25 else {
             if isDragging, vertical <= 4 {
                 isDragging = false
                 offset = 0

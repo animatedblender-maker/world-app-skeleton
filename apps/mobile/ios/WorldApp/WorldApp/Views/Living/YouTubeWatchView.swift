@@ -260,13 +260,15 @@ struct YouTubeWatchView: View {
             .zIndex(20)
 
             // Pull-down only when this view embeds its own player (not GlobalHub).
+            // Keep the band short so it never steals ScrollView pans on the page below.
             if embedsPlayer {
                 Color.clear
-                    .frame(height: 72)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .frame(height: 56)
+                    .frame(maxWidth: .infinity, alignment: .top)
                     .contentShape(Rectangle())
-                    .highPriorityGesture(minimizeDragGesture)
+                    .gesture(minimizeDragGesture)
                     .opacity(chromeOpacity)
+                    .allowsHitTesting(chromeOpacity > 0.2 && !isPullingToMinimize)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

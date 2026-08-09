@@ -130,19 +130,18 @@ struct GlobalHubPlaybackLayer: View {
     private func continuousStage(post: CountryPost, geo: GeometryProxy) -> some View {
         let layout = playerLayout(in: geo)
         let liveY = layout.y + (expanded ? dragOffset : 0)
+        // Pull-to-mini only from this top strip — not the whole stage / not the page below.
+        let grabBandH = min(layout.height * 0.22, 72)
+            + (expanded ? min(YouTubeMediaLayout.keyWindowSafeTop, 54) : 0)
 
         ZStack(alignment: .topLeading) {
-            Color.clear
-                .frame(width: geo.size.width, height: geo.size.height)
-                .allowsHitTesting(false)
-
+            // Video + chrome only occupy `layout` — no full-screen hit target.
             ZStack {
                 playerSurface(for: post, showControls: showTransportChrome)
                     .frame(width: layout.width, height: layout.height)
                     .background(expanded && !isPullingMinimize ? Theme.ink : Color.clear)
                     .clipped()
 
-                // Mini controls ON TOP of continuous video (bar chrome is under zIndex 55).
                 if !expanded, !isPullingMinimize {
                     HubMiniPlayerChrome(
                         isPlaying: playingBinding,
@@ -156,7 +155,22 @@ struct GlobalHubPlaybackLayer: View {
                         }
                     )
                     .frame(width: layout.width, height: layout.height)
-                    .allowsHitTesting(true)
+                }
+
+                // Expanded: minimize drag ONLY on the top grab band.
+                // Scrolling comments/related (or scrubbing the bottom rail) must not shrink the player.
+                if expanded {
+                    VStack(spacing: 0) {
+                        Color.clear
+                            .frame(height: max(48, grabBandH))
+                            .frame(maxWidth: .infinity)
+                            .contentShape(Rectangle())
+                            .gesture(minimizeGesture)
+                            .accessibilityLabel("Drag down for mini player")
+                        Spacer(minLength: 0)
+                            .allowsHitTesting(false)
+                    }
+                    .frame(width: layout.width, height: layout.height, alignment: .top)
                 }
             }
             .frame(width: layout.width, height: layout.height)
@@ -167,26 +181,24 @@ struct GlobalHubPlaybackLayer: View {
                 )
             )
             .offset(x: layout.x, y: liveY)
-            // Animate layout only when not finger-dragging.
             .animation(isPullingMinimize ? nil : Self.morphAnim, value: expanded)
             .animation(isPullingMinimize ? nil : Self.morphAnim, value: layout.width)
             .animation(isPullingMinimize ? nil : Self.morphAnim, value: layout.height)
             .animation(isPullingMinimize ? nil : Self.morphAnim, value: layout.x)
             .animation(isPullingMinimize ? nil : Self.morphAnim, value: layout.y)
-            .simultaneousGesture(minimizeGesture)
             .onTapGesture {
                 guard !expanded else { return }
                 expand()
             }
             .id("global-hub-continuous-\(post.id)")
-            .allowsHitTesting(true)
             .zIndex(5)
         }
+        // Limit hit-testing to the video rect so ScrollView under the stage receives pans.
         .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
-        .modifier(HubHitShapeModifier(
-            enabled: true,
-            rect: CGRect(x: layout.x, y: liveY, width: layout.width, height: layout.height)
-        ))
+        .contentShape(
+            .interaction,
+            Path(CGRect(x: layout.x, y: liveY, width: layout.width, height: layout.height))
+        )
     }
 
     // MARK: - Layout
@@ -290,21 +302,31 @@ struct GlobalHubPlaybackLayer: View {
     }
 
     private var minimizeGesture: some Gesture {
-        DragGesture(minimumDistance: 6, coordinateSpace: .local)
+        // Stricter than page scroll: need a clear downward intent (not a lazy ScrollView pan).
+        DragGesture(minimumDistance: 20, coordinateSpace: .local)
             .onChanged { value in
                 guard expanded else { return }
-                var offset = dragOffset
-                var dragging = isPullingMinimize
-                MatteryaPullDownDismiss.applyChanged(value, offset: &offset, isDragging: &dragging)
+                let vertical = value.translation.height
+                let horizontal = abs(value.translation.width)
+                // Ignore mostly-horizontal or upward pans (scroll / scrub).
+                guard vertical > 18, vertical > horizontal * 1.35 else {
+                    if isPullingMinimize, vertical < 8 {
+                        var t = Transaction()
+                        t.disablesAnimations = true
+                        withTransaction(t) {
+                            dragOffset = 0
+                            isPullingMinimize = false
+                            appState.hubPlaybackPullProgress = 0
+                        }
+                    }
+                    return
+                }
                 var t = Transaction()
                 t.disablesAnimations = true
                 withTransaction(t) {
-                    dragOffset = offset
-                    isPullingMinimize = dragging
-                    // Instant: watch page chrome disappears the moment the grab engages.
-                    appState.hubPlaybackPullProgress = dragging
-                        ? min(1, max(0.08, offset / 100))
-                        : 0
+                    dragOffset = vertical > 280 ? 280 + (vertical - 280) * 0.35 : vertical
+                    isPullingMinimize = true
+                    appState.hubPlaybackPullProgress = min(1, max(0.08, dragOffset / 100))
                 }
             }
             .onEnded { value in
@@ -348,17 +370,3 @@ struct GlobalHubPlaybackLayer: View {
     }
 }
 
-// MARK: - Hit shape helper
-
-private struct HubHitShapeModifier: ViewModifier {
-    let enabled: Bool
-    let rect: CGRect
-
-    func body(content: Content) -> some View {
-        if enabled {
-            content.contentShape(.interaction, Path(rect))
-        } else {
-            content
-        }
-    }
-}
