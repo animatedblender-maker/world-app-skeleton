@@ -23,13 +23,7 @@ import {
   pickCaption,
   stripBodyMarkers,
 } from './text.js';
-import {
-  isSparkSurface,
-  type PipelineOptions,
-  type PipelineStats,
-  type ProfileOwner,
-  type R2Pack,
-} from './types.js';
+import type { PipelineOptions, PipelineStats, ProfileOwner, R2Pack } from './types.js';
 
 function emptyStats(dryRun: boolean): PipelineStats {
   return {
@@ -113,16 +107,18 @@ export async function runContentPipeline(opts: PipelineOptions = {}): Promise<Pi
       return stats;
     }
 
-    pipelineLog('Discovering complete packs in R2 (Sparks + ShortForm + LongForm)…', 'step');
+    pipelineLog('Discovering complete packs in R2 (Sparks incl. ShortForm + LongForm)…', 'step');
     const packs = await discoverPacks(client);
     stats.discovered = packs.length;
-    const byKind = {
-      spark: packs.filter((p) => p.kind === 'spark').length,
-      shortform: packs.filter((p) => p.kind === 'shortform').length,
-      longform: packs.filter((p) => p.kind === 'longform').length,
-    };
+    const sparkTikTok = packs.filter(
+      (p) => p.kind === 'spark' && !p.videoKey.startsWith('ShortForm/')
+    ).length;
+    const sparkShorts = packs.filter(
+      (p) => p.kind === 'spark' && p.videoKey.startsWith('ShortForm/')
+    ).length;
+    const longform = packs.filter((p) => p.kind === 'longform').length;
     pipelineLog(
-      `Discovered ${packs.length} pack(s) · sparks=${byKind.spark} shortform=${byKind.shortform} longform=${byKind.longform}`,
+      `Discovered ${packs.length} pack(s) · sparks=${sparkTikTok + sparkShorts} (tiktok=${sparkTikTok} youtube_shorts=${sparkShorts}) longform=${longform}`,
       'ok'
     );
 
@@ -137,9 +133,11 @@ export async function runContentPipeline(opts: PipelineOptions = {}): Promise<Pi
       'step'
     );
 
-    // Prefer short vertical (TikTok + YouTube Shorts) before Hubs longform.
-    const kindRank = (k: string) => (k === 'spark' ? 0 : k === 'shortform' ? 1 : 2);
-    missing.sort((a, b) => kindRank(a.kind) - kindRank(b.kind));
+    // Prefer Sparks (TikTok + YouTube Shorts) before Hubs longform.
+    missing.sort((a, b) => {
+      if (a.kind === b.kind) return 0;
+      return a.kind === 'spark' ? -1 : 1;
+    });
 
     let n = 0;
     for (const pack of missing) {
@@ -322,8 +320,7 @@ async function ingestOriginal(
   const signed = await presignGet(client, pack.videoKey);
   const mediaUrl = encodeMediaUrl({
     signedUrl: signed,
-    // TikTok Sparks + YouTube ShortForm both play as Sparks (reel).
-    reel: isSparkSurface(pack.kind),
+    reel: pack.kind === 'spark',
     r2Key: pack.videoKey,
     sourceId: `${pack.countryFolder}/${pack.videoId}`,
     kind: pack.kind,
@@ -422,7 +419,6 @@ async function ingestOriginal(
     pipelineLog(`  comments seed failed: ${err?.message ?? err}`, 'warn');
   }
 
-  const sparkSurface = isSparkSurface(pack.kind);
   void emitContentPosted({
     entityId: author.userId,
     contentId: postId,
@@ -431,23 +427,22 @@ async function ingestOriginal(
     countryCode: pack.countryCode,
     countryName: author.countryName || pack.countryName,
     cityName: author.cityName,
-    isSpark: sparkSurface,
+    isSpark: pack.kind === 'spark',
     isHubLongForm: pack.kind === 'longform',
     title: caption,
     summary:
       pack.kind === 'spark'
-        ? `Catalog Spark published for ${pack.countryName}`
-        : pack.kind === 'shortform'
-          ? `Catalog YouTube Short published for ${pack.countryName}`
-          : `Catalog Hubs video published for ${pack.countryName}`,
-    destination: sparkSurface ? 'sparks' : 'hubs',
-    surface: sparkSurface ? 'sparks' : 'hubs',
+        ? pack.videoKey.startsWith('ShortForm/')
+          ? `Catalog Spark (YouTube Shorts) published for ${pack.countryName}`
+          : `Catalog Spark published for ${pack.countryName}`
+        : `Catalog Hubs video published for ${pack.countryName}`,
+    destination: pack.kind === 'spark' ? 'sparks' : 'hubs',
+    surface: pack.kind === 'spark' ? 'sparks' : 'hubs',
     mediaUrl,
   });
 
   // Immediate spark share for feed density — uses **same original caption**.
-  // TikTok Sparks + YouTube ShortForm both get a feed share stamp.
-  if (sparkSurface) {
+  if (pack.kind === 'spark') {
     const shared = await createSparkShare({
       originId: postId,
       originMediaUrl: mediaUrl,
@@ -1064,7 +1059,7 @@ async function resignExpiring(
           const kind = packKindFromR2Key(key);
           next = encodeMediaUrl({
             signedUrl: signed,
-            reel: isSparkSurface(kind),
+            reel: kind === 'spark',
             r2Key: key,
             sourceId: key,
             kind,
@@ -1074,7 +1069,7 @@ async function resignExpiring(
         const kind = packKindFromR2Key(key);
         next = encodeMediaUrl({
           signedUrl: signed,
-          reel: isSparkSurface(kind),
+          reel: kind === 'spark',
           r2Key: key,
           sourceId: key,
           kind,

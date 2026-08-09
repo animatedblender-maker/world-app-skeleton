@@ -82,10 +82,11 @@ export async function getObjectJson(client: S3Client, key: string): Promise<unkn
 /**
  * List complete packs (video.mp4 present). meta.json optional but preferred.
  * Layout (bucket matterya-sparks):
- *   Sparks:     <Country>/<tiktok_id>/video.mp4
- *   ShortForm:  ShortForm/<Country>/<youtube_id>/video.mp4   (YouTube Shorts ≤60s)
- *   LongForm:   LongForm/<Country>/<youtube_id>/video.mp4
+ *   Sparks (TikTok):        <Country>/<tiktok_id>/video.mp4
+ *   Sparks (YouTube Shorts): ShortForm/<Country>/<youtube_id>/video.mp4  ← still kind=spark
+ *   LongForm (Hubs):         LongForm/<Country>/<youtube_id>/video.mp4
  *
+ * ShortForm is Sparks — same product surface, different R2 folder only.
  * @see AGENT_HANDOFF_YOUTUBE_SHORTFORM.md
  */
 export async function discoverPacks(
@@ -97,13 +98,11 @@ export async function discoverPacks(
   const seen = new Set<string>();
 
   for (const c of FOCUS_COUNTRIES) {
-    // Sparks (TikTok) under country root — skip nested LongForm/ShortForm keys
-    // by matching only one segment after country: Country/<id>/video.mp4
+    // Sparks (TikTok) under country root — only Country/<id>/video.mp4 (depth 1)
     const sparkIds = await listVideoPackIds(client, `${c.folder}/`, maxKeys, {
       depth: 1,
     });
     for (const videoId of sparkIds) {
-      // Guard: never treat LongForm/ShortForm folder names as video ids
       if (videoId === 'LongForm' || videoId === 'ShortForm') continue;
       const videoKey = `${c.folder}/${videoId}/video.mp4`;
       const mediaPath = `r2:${getBucket()}/${videoKey}`;
@@ -122,7 +121,7 @@ export async function discoverPacks(
       });
     }
 
-    // YouTube Shorts (ShortForm) — same pack shape, Sparks surface in app
+    // YouTube Shorts live under ShortForm/ but are **Sparks** in the app.
     const sfIds = await listVideoPackIds(client, `ShortForm/${c.folder}/`, maxKeys);
     for (const videoId of sfIds) {
       const videoKey = `ShortForm/${c.folder}/${videoId}/video.mp4`;
@@ -130,7 +129,7 @@ export async function discoverPacks(
       if (seen.has(mediaPath)) continue;
       seen.add(mediaPath);
       packs.push({
-        kind: 'shortform',
+        kind: 'spark',
         countryFolder: c.folder,
         countryCode: c.code,
         countryName: c.name,
@@ -142,7 +141,7 @@ export async function discoverPacks(
       });
     }
 
-    // LongForm (YouTube long) — Hubs surface
+    // LongForm (YouTube long) — Hubs only
     const lfIds = await listVideoPackIds(client, `LongForm/${c.folder}/`, maxKeys);
     for (const videoId of lfIds) {
       const videoKey = `LongForm/${c.folder}/${videoId}/video.mp4`;
@@ -166,10 +165,10 @@ export async function discoverPacks(
   return packs;
 }
 
-/** Infer pack kind from an R2 object key. */
+/** Infer product kind from an R2 object key. ShortForm → spark. */
 export function packKindFromR2Key(key: string): PackKind {
   if (key.includes('LongForm/') || key.startsWith('LongForm/')) return 'longform';
-  if (key.includes('ShortForm/') || key.startsWith('ShortForm/')) return 'shortform';
+  // ShortForm/… and country-root TikTok packs are both Sparks.
   return 'spark';
 }
 

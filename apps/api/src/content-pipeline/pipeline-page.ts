@@ -160,7 +160,7 @@ function loginHtml(err?: string): string {
   <form class="card" method="post" action="/pipeline/login">
     <div class="mark">Matterya</div>
     <h1>Content pipeline</h1>
-    <p class="sub">Pull new R2 Sparks (TikTok) + ShortForm (YouTube Shorts) + LongForm (Hubs) into Supabase as owned posts + feed shares. Same password as Reports unless you set CONTENT_PIPELINE_PASSWORD.</p>
+    <p class="sub">Pull new R2 Sparks (TikTok + YouTube Shorts under ShortForm/) + LongForm (Hubs) into Supabase as owned posts + feed shares. ShortForm is Sparks. Same password as Reports unless you set CONTENT_PIPELINE_PASSWORD.</p>
     ${error}
     <label for="password">Password</label>
     <input id="password" name="password" type="password" required autofocus/>
