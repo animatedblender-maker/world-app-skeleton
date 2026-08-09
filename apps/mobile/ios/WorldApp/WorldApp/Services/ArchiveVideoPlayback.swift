@@ -538,20 +538,6 @@ struct MatteryaHubPlayerView: View {
                             .foregroundStyle(Theme.paper.opacity(0.72))
 
                         Spacer(minLength: 0)
-
-                        if allowsFullscreen {
-                            Button {
-                                showFullscreen = true
-                                chromeHideTask?.cancel()
-                            } label: {
-                                Image(systemName: "arrow.up.left.and.arrow.down.right")
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(Theme.paper.opacity(0.95))
-                                    .frame(width: 32, height: 28)
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Fullscreen")
-                        }
                     }
                     .padding(.horizontal, 14)
                     .padding(.bottom, 10)

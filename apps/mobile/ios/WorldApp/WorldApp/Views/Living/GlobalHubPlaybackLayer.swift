@@ -192,11 +192,8 @@ struct GlobalHubPlaybackLayer: View {
 
     private func playerLayout(in geo: GeometryProxy) -> PlayerLayout {
         if expanded {
-            let safeTop = geo.safeAreaInsets.top > 1
-                ? geo.safeAreaInsets.top
-                : YouTubeMediaLayout.keyWindowSafeTop
-            let bodyH = YouTubeMediaLayout.hubsContinuousStageHeight(containerWidth: geo.size.width)
-            let stageHeight = bodyH + max(0, safeTop)
+            // Flush under Dynamic Island; height = compact 16:9 (no extra safe-top pad → no letterbox slab).
+            let stageHeight = YouTubeMediaLayout.hubsContinuousStageHeight(containerWidth: geo.size.width)
             return PlayerLayout(x: 0, y: 0, width: geo.size.width, height: stageHeight)
         }
 
@@ -236,9 +233,10 @@ struct GlobalHubPlaybackLayer: View {
                 postID: post.id,
                 showsControls: showControls,
                 loops: false,
-                fillsFrame: preferMiniFill && !expanded,
+                // Always fill the stage — no black bars top/bottom (mini + expanded).
+                fillsFrame: true,
                 isMuted: mutedBinding,
-                allowsFullscreen: showControls,
+                allowsFullscreen: false,
                 onReady: {
                     Task { await PostsService.shared.recordView(post) }
                     if appState.hubPlaybackPlaying {

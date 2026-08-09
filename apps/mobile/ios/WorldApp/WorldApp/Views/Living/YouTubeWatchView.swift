@@ -73,18 +73,14 @@ struct YouTubeWatchView: View {
 
     var body: some View {
         GeometryReader { geo in
-            // Match continuous player: stage from physical top (under island/notch), no gap.
-            let safeTop = geo.safeAreaInsets.top > 1
-                ? geo.safeAreaInsets.top
-                : YouTubeMediaLayout.keyWindowSafeTop
+            // Match continuous player: compact 16:9 from physical top (y=0), no extra pad.
             let bodyH = embedsPlayer
                 ? YouTubeMediaLayout.watchPlayerHeight(
                     containerWidth: geo.size.width,
-                    containerHeight: max(200, geo.size.height + safeTop)
+                    containerHeight: geo.size.height
                 )
                 : YouTubeMediaLayout.hubsContinuousStageHeight(containerWidth: geo.size.width)
-            // Include safe-top bleed so spacer matches GlobalHubPlaybackLayer (y=0).
-            let reservedPlayerHeight = max(120, bodyH + max(0, safeTop))
+            let reservedPlayerHeight = max(120, bodyH)
 
             VStack(spacing: 0) {
                 // Sticky player — edge-to-edge under Dynamic Island / notch.
