@@ -31,6 +31,8 @@ export type PipelineOptions = {
   maxShares?: number;
   /** Max media_url re-signs this tick */
   maxResign?: number;
+  /** Max share/origin caption repairs this tick (replace seeder fluff with R2 meta text) */
+  maxCaptionRepairs?: number;
   /** Soft deadline ms from start */
   maxMs?: number;
   /** Only resign (skip discover/ingest) */
@@ -45,6 +47,8 @@ export type PipelineStats = {
   discovered: number;
   insertedOriginals: number;
   insertedShares: number;
+  /** Share bodies rewritten to real R2 meta captions */
+  repairedCaptions: number;
   skippedNoOwner: number;
   skippedExisting: number;
   skippedIncomplete: number;

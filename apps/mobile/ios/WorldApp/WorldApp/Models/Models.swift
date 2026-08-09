@@ -818,25 +818,33 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
     var displayBody: String { ContentSanitizer.clean(body) ?? "" }
 
     var displayCaption: String? {
-        if let caption = ContentSanitizer.clean(mediaCaption) { return caption }
-        // Sparks store the R2/source caption in body after markers (`__spark__|…`).
+        // Sparks / spark shares: prefer body (R2 meta text after markers) over AI media_caption.
         if isReel || isSparkFeedShare {
             let fromBody = displayBody
             if !fromBody.isEmpty { return fromBody }
             // Feed spark share: prefer original caption when embed is present.
             if let origin = sharedPost?.asCountryPost {
-                if let c = ContentSanitizer.clean(origin.mediaCaption), !c.isEmpty { return c }
                 let originBody = origin.displayBody
                 if !originBody.isEmpty { return originBody }
                 if let t = origin.displayTitle { return t }
+                if let c = ContentSanitizer.clean(origin.mediaCaption), !c.isEmpty { return c }
             }
+            if let caption = ContentSanitizer.clean(mediaCaption) { return caption }
+            return nil
         }
+        if let caption = ContentSanitizer.clean(mediaCaption) { return caption }
         return nil
     }
 
-    /// Caption line for Sparks player / feed Spark cards — never synthetic seeder fluff.
+    /// Caption line for Sparks player / feed Spark cards — R2 meta text, never seeder fluff.
     var sparkDisplayCaption: String? {
-        displayCaption ?? displayHeadline
+        // Prefer body/meta over title/headline so we never surface filler.
+        if let c = displayCaption, !c.isEmpty { return c }
+        if isSparkFeedShare, let origin = sharedPost?.asCountryPost {
+            if let c = origin.displayCaption, !c.isEmpty { return c }
+            if let t = origin.displayTitle { return t }
+        }
+        return displayHeadline
     }
 
     /// Feed share of a Hubs channel video (`__hub_origin__|…`).

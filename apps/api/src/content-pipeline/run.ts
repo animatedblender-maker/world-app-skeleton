@@ -14,25 +14,15 @@ import {
 } from './r2.js';
 import { clearPipelineLog, pipelineLog } from './log.js';
 import { defaultCategoryId, loadOwnersByCountry, pickOwner, pickSharer } from './owners.js';
-import { extractCommentTexts, markShareBody, pickBody, pickTitle } from './text.js';
+import {
+  extractCommentTexts,
+  isFakeShareCaption,
+  markShareBody,
+  pickBody,
+  pickCaption,
+  stripBodyMarkers,
+} from './text.js';
 import type { PipelineOptions, PipelineStats, ProfileOwner, R2Pack } from './types.js';
-
-const SHARE_CAPTIONS = [
-  '',
-  'this one 🔥',
-  'need this on loop',
-  'sending this to everyone',
-  'no notes',
-  'how is this real',
-  'ok wait',
-  'the audio though',
-  "I'm obsessed",
-  'more of this please',
-  'mood',
-  'saw this and had to share',
-  'too good',
-  'watch till the end',
-];
 
 function emptyStats(dryRun: boolean): PipelineStats {
   return {
@@ -41,6 +31,7 @@ function emptyStats(dryRun: boolean): PipelineStats {
     discovered: 0,
     insertedOriginals: 0,
     insertedShares: 0,
+    repairedCaptions: 0,
     skippedNoOwner: 0,
     skippedExisting: 0,
     skippedIncomplete: 0,
@@ -217,6 +208,18 @@ export async function runContentPipeline(opts: PipelineOptions = {}): Promise<Pi
         'ok'
       );
     }
+
+    // Replace seeder fluff on existing shares with the origin's real R2 meta caption.
+    if (!timedOut() && !opts.resignOnly) {
+      pipelineLog('Repairing share captions from R2 origin meta text…', 'step');
+      await repairShareCaptions({
+        dryRun,
+        maxRepair: opts.maxCaptionRepairs ?? 500,
+        stats,
+        timedOut,
+      });
+      pipelineLog(`Caption repairs: ${stats.repairedCaptions}`, stats.repairedCaptions ? 'ok' : 'info');
+    }
   } catch (err: any) {
     stats.ok = false;
     stats.errors.push(err?.message ?? String(err));
@@ -229,7 +232,7 @@ export async function runContentPipeline(opts: PipelineOptions = {}): Promise<Pi
   }
   pipelineLog('──────────────────────────────────────', 'step');
   pipelineLog(
-    `DONE ok=${stats.ok} · discovered=${stats.discovered} · originals=+${stats.insertedOriginals} · shares=+${stats.insertedShares} · resigned=${stats.resigned} · noOwner=${stats.skippedNoOwner} · existing=${stats.skippedExisting} · ${stats.ms}ms`,
+    `DONE ok=${stats.ok} · discovered=${stats.discovered} · originals=+${stats.insertedOriginals} · shares=+${stats.insertedShares} · captionsFixed=${stats.repairedCaptions} · resigned=${stats.resigned} · noOwner=${stats.skippedNoOwner} · existing=${stats.skippedExisting} · ${stats.ms}ms`,
     stats.ok ? 'ok' : 'error'
   );
   if (stats.errors.length) {
@@ -277,8 +280,13 @@ async function ingestOriginal(
       ? (metaRaw as Record<string, unknown>)
       : {};
 
-  const title = pickTitle(meta, pack.kind, pack.videoId);
-  const body = pickBody(pack.kind, title, meta);
+  const caption = pickCaption(meta, pack.kind, pack.videoId);
+  const body = pickBody(pack.kind, caption, meta);
+  pipelineLog(
+    `  caption: ${caption.slice(0, 100)}${caption.length > 100 ? '…' : ''}`,
+    caption.startsWith('Spark ') || caption.startsWith('Video ') ? 'warn' : 'info'
+  );
+
   const signed = await presignGet(client, pack.videoKey);
   const mediaUrl = encodeMediaUrl({
     signedUrl: signed,
@@ -295,6 +303,8 @@ async function ingestOriginal(
 
   // DB check allows none|image|video|link — Sparks are media_type=video + body/JSON reel markers.
   const mediaType = 'video';
+  // Always store real caption in title too (feed cards / search).
+  const titleCol = caption.slice(0, 200) || null;
   let postId: string | undefined;
   try {
     const { rows } = await pool.query<{ id: string }>(
@@ -315,12 +325,12 @@ async function ingestOriginal(
         author.countryName || pack.countryName,
         pack.countryCode,
         author.cityName,
-        pack.kind === 'longform' ? title : null,
+        titleCol,
         body,
         mediaType,
         mediaUrl,
         pack.mediaPath,
-        Math.min(5000, Math.max(0, Number(meta.digg_count ?? meta.like_count ?? 0) || 0)),
+        Math.min(5000, Math.max(0, Number(meta.digg_count ?? meta.like_count ?? meta.play_count ?? 0) || 0)),
         createdAt,
       ]
     );
@@ -332,6 +342,20 @@ async function ingestOriginal(
     throw e;
   }
   if (!postId) return 'skip';
+
+  // Optional media_caption table (used by insights / web) — best-effort.
+  try {
+    await pool.query(
+      `
+      insert into public.post_media_captions (post_id, caption)
+      values ($1::uuid, $2)
+      on conflict (post_id) do update set caption = excluded.caption
+      `,
+      [postId, caption]
+    );
+  } catch {
+    /* table may not exist */
+  }
 
   // Seed a few comments from R2 json (other real users as authors).
   try {
@@ -351,6 +375,9 @@ async function ingestOriginal(
         [postId, cAuthor.userId, text, String(2 + (i % 200))]
       );
     }
+    if (texts.length) {
+      pipelineLog(`  comments seeded: ${Math.min(25, texts.length)}`, 'info');
+    }
   } catch {
     /* comments optional */
   }
@@ -365,6 +392,7 @@ async function ingestOriginal(
     cityName: author.cityName,
     isSpark: pack.kind === 'spark',
     isHubLongForm: pack.kind === 'longform',
+    title: caption,
     summary:
       pack.kind === 'spark'
         ? `Catalog Spark published for ${pack.countryName}`
@@ -374,12 +402,13 @@ async function ingestOriginal(
     mediaUrl,
   });
 
-  // Immediate spark share for feed density (counted by caller via return flag).
+  // Immediate spark share for feed density — uses **same original caption**.
   if (pack.kind === 'spark') {
     const shared = await createSparkShare({
       originId: postId,
       originMediaUrl: mediaUrl,
       originAuthorId: author.userId,
+      originCaption: caption,
       owners,
       categoryId,
       countryCode: pack.countryCode,
@@ -397,6 +426,8 @@ async function createSparkShare(opts: {
   originId: string;
   originMediaUrl: string;
   originAuthorId: string;
+  /** Real caption from R2 meta (not filler). */
+  originCaption?: string;
   owners: ProfileOwner[];
   categoryId: string | null;
   countryCode: string;
@@ -420,7 +451,19 @@ async function createSparkShare(opts: {
 
   if (opts.dryRun) return true;
 
-  const caption = SHARE_CAPTIONS[Math.abs(hashStr(opts.seed)) % SHARE_CAPTIONS.length] ?? '';
+  // Prefer caption from caller; else load real text from origin (never seeder fluff).
+  let caption = (opts.originCaption || '').trim();
+  if (isFakeShareCaption(caption)) caption = '';
+  if (!caption) {
+    const { rows: originRows } = await pool.query<{ title: string | null; body: string | null }>(
+      `select title, body from public.posts where id = $1::uuid limit 1`,
+      [opts.originId]
+    );
+    const o = originRows[0];
+    const fromBody = stripBodyMarkers(o?.body);
+    if (fromBody) caption = fromBody;
+    else if (o?.title?.trim() && !isFakeShareCaption(o.title)) caption = o.title.trim();
+  }
   const body = markShareBody(opts.originId, caption);
   const sharePath = opts.seed.startsWith('r2:')
     ? `r2-share:${opts.seed.slice(3)}`
@@ -450,8 +493,8 @@ async function createSparkShare(opts: {
        like_count, comment_count, created_at, updated_at, moderation_status)
     values
       ($1, $2, $3, $4, $5,
-       null, $6, 'video', $7, $8, $9::uuid, 'public',
-       0, 0, $10::timestamptz, $10::timestamptz, 'active')
+       $6, $7, 'video', $8, $9, $10::uuid, 'public',
+       0, 0, $11::timestamptz, $11::timestamptz, 'active')
     returning id
     `,
     [
@@ -460,6 +503,7 @@ async function createSparkShare(opts: {
       sharer.countryName || opts.countryName,
       opts.countryCode,
       sharer.cityName,
+      caption ? caption.slice(0, 200) : null,
       body,
       mediaUrl,
       sharePath,
@@ -471,6 +515,21 @@ async function createSparkShare(opts: {
   const shareId = rows[0]?.id;
   if (!shareId) return false;
 
+  try {
+    if (caption) {
+      await pool.query(
+        `
+        insert into public.post_media_captions (post_id, caption)
+        values ($1::uuid, $2)
+        on conflict (post_id) do update set caption = excluded.caption
+        `,
+        [shareId, caption]
+      );
+    }
+  } catch {
+    /* optional */
+  }
+
   void emitContentPosted({
     entityId: sharer.userId,
     contentId: shareId,
@@ -480,6 +539,7 @@ async function createSparkShare(opts: {
     countryName: sharer.countryName || opts.countryName,
     isSpark: true,
     sharedPostId: opts.originId,
+    title: caption || null,
     summary: `Spark shared to the home feed from ${opts.countryName}`,
     destination: 'share',
     surface: 'feed',
@@ -536,6 +596,7 @@ async function ensureSparkShares(opts: {
         originId: row.id,
         originMediaUrl: row.media_url || '',
         originAuthorId: row.author_id,
+        // Caption loaded from origin post title/body inside createSparkShare
         owners,
         categoryId: opts.categoryId,
         countryCode: cc || 'US',
@@ -548,6 +609,143 @@ async function ensureSparkShares(opts: {
       opts.stats.errors.push(`share ${row.id}: ${err?.message ?? err}`);
     }
   }
+}
+
+/**
+ * Rewrite existing spark *shares* that still carry seeder fluff captions
+ * (`the audio though`, `mood`, …) to the origin post's real R2 meta caption.
+ * Also fills empty `title` on originals when body has the meta text.
+ */
+async function repairShareCaptions(opts: {
+  dryRun: boolean;
+  maxRepair: number;
+  stats: PipelineStats;
+  timedOut: () => boolean;
+}): Promise<void> {
+  const { rows: shares } = await pool.query<{
+    id: string;
+    body: string | null;
+    title: string | null;
+    shared_post_id: string | null;
+  }>(
+    `
+    select id, body, title, shared_post_id
+    from public.posts
+    where media_path like 'r2-share:%'
+      and body like '%__spark_share__|%'
+    order by created_at desc
+    limit $1
+    `,
+    [Math.max(50, opts.maxRepair * 3)]
+  );
+
+  pipelineLog(`  share rows scanned: ${shares.length}`, 'info');
+  let checked = 0;
+
+  for (const share of shares) {
+    if (opts.timedOut() || opts.stats.repairedCaptions >= opts.maxRepair) break;
+    checked += 1;
+
+    const currentCap = stripBodyMarkers(share.body);
+    // Already has a real (non-fluff) caption and a title → skip.
+    const titleOk = !!(share.title && share.title.trim() && !isFakeShareCaption(share.title));
+    if (currentCap && !isFakeShareCaption(currentCap) && titleOk) continue;
+
+    // Resolve origin id from column or body marker.
+    let originId = share.shared_post_id || '';
+    if (!originId && share.body) {
+      const m = share.body.match(/__spark_share__\|sid=([0-9a-f-]{36})/i);
+      if (m?.[1]) originId = m[1];
+    }
+    if (!originId) continue;
+
+    const { rows: originRows } = await pool.query<{
+      id: string;
+      title: string | null;
+      body: string | null;
+    }>(`select id, title, body from public.posts where id = $1::uuid limit 1`, [originId]);
+    const origin = originRows[0];
+    if (!origin) continue;
+
+    let caption = stripBodyMarkers(origin.body);
+    if (!caption && origin.title?.trim() && !isFakeShareCaption(origin.title)) {
+      caption = origin.title.trim();
+    }
+    if (!caption) continue;
+
+    // Origin may still have empty title — fill from body meta text.
+    if (!opts.dryRun && (!origin.title || !origin.title.trim())) {
+      try {
+        await pool.query(
+          `update public.posts set title = $2, updated_at = now() where id = $1::uuid and (title is null or title = '')`,
+          [origin.id, caption.slice(0, 200)]
+        );
+      } catch {
+        /* non-fatal */
+      }
+    }
+
+    // Share already correct text but missing title?
+    if (currentCap === caption && !titleOk) {
+      if (!opts.dryRun) {
+        await pool.query(
+          `update public.posts set title = $2, updated_at = now() where id = $1::uuid`,
+          [share.id, caption.slice(0, 200)]
+        );
+      }
+      opts.stats.repairedCaptions += 1;
+      continue;
+    }
+
+    // Replace fluff / empty with real origin caption.
+    if (currentCap && currentCap === caption) continue;
+    if (currentCap && !isFakeShareCaption(currentCap) && currentCap.length > 8) {
+      // Different real caption already set by user — leave it.
+      continue;
+    }
+
+    const newBody = markShareBody(originId, caption);
+    if (opts.dryRun) {
+      opts.stats.repairedCaptions += 1;
+      continue;
+    }
+
+    try {
+      await pool.query(
+        `
+        update public.posts
+        set body = $2,
+            title = $3,
+            updated_at = now()
+        where id = $1::uuid
+        `,
+        [share.id, newBody, caption.slice(0, 200)]
+      );
+      try {
+        await pool.query(
+          `
+          insert into public.post_media_captions (post_id, caption)
+          values ($1::uuid, $2)
+          on conflict (post_id) do update set caption = excluded.caption
+          `,
+          [share.id, caption]
+        );
+      } catch {
+        /* optional table */
+      }
+      opts.stats.repairedCaptions += 1;
+      if (opts.stats.repairedCaptions === 1 || opts.stats.repairedCaptions % 50 === 0) {
+        pipelineLog(
+          `  repaired ${opts.stats.repairedCaptions} · sample: ${caption.slice(0, 80)}${caption.length > 80 ? '…' : ''}`,
+          'info'
+        );
+      }
+    } catch (err: any) {
+      opts.stats.errors.push(`repair ${share.id}: ${err?.message ?? err}`);
+    }
+  }
+
+  pipelineLog(`  share caption check done (scanned=${checked})`, 'info');
 }
 
 async function resignExpiring(
@@ -639,8 +837,4 @@ async function resignExpiring(
   }
 }
 
-function hashStr(s: string): number {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
-  return h;
-}
+

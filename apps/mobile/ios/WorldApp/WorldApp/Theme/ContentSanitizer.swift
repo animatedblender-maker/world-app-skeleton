@@ -65,21 +65,64 @@ enum ContentSanitizer {
     }
 
     /// Removes client-only body markers (story / hub channel / spark) so cards never show raw tokens.
+    /// Keeps real caption text that sits on the **same line** after a marker, e.g.
+    /// `__spark__|My favourite English teacher` → `My favourite English teacher`.
     static func stripInternalMarkers(_ value: String) -> String {
-        value
+        let markerPrefixes = [
+            "__story__|",
+            "__hub_channel__|",
+            "__hub_channel__",
+            "__hub_origin__|",
+            "__hub_origin__",
+            "__spark_share__|",
+            "__spark__|",
+            "__reel__|",
+        ]
+        // Seeder fluff that used to be written on spark *shares* — never show as caption.
+        let fakeShareCaptions: Set<String> = [
+            "this one 🔥",
+            "need this on loop",
+            "sending this to everyone",
+            "no notes",
+            "how is this real",
+            "ok wait",
+            "the audio though",
+            "I'm obsessed",
+            "more of this please",
+            "mood",
+            "saw this and had to share",
+            "too good",
+            "watch till the end",
+            "😂😂😂",
+            "//",
+        ]
+
+        let kept = value
             .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { line in
-                if line.isEmpty { return false }
-                if line.hasPrefix("__story__|") { return false }
-                if line.hasPrefix("__hub_channel__") { return false }
-                if line.hasPrefix("__hub_origin__") { return false }
-                if line.hasPrefix("__spark_share__|") { return false }
-                if line.hasPrefix("__spark__|") { return false }
-                if line.hasPrefix("__reel__|") { return false }
-                return true
+            .compactMap { raw -> String? in
+                var line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                if line.isEmpty { return nil }
+
+                for prefix in markerPrefixes {
+                    guard line.hasPrefix(prefix) else { continue }
+                    line = String(line.dropFirst(prefix.count))
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    // Share header is `sid=…|aid=…` with no human caption on that line.
+                    if prefix.hasPrefix("__spark_share__"),
+                       line.hasPrefix("sid=") || line.isEmpty {
+                        return nil
+                    }
+                    break
+                }
+
+                if line.isEmpty { return nil }
+                // Drop leftover pure control tokens.
+                if line.hasPrefix("__"), line.contains("|") { return nil }
+                if fakeShareCaptions.contains(line) { return nil }
+                return line
             }
-            .joined(separator: "\n")
+
+        return kept.joined(separator: "\n")
     }
 
     static func stripStoryMarker(_ value: String) -> String {
