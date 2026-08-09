@@ -137,8 +137,9 @@ private struct SparksTimelineBar: View {
     @State private var dragFraction: Double = 0
 
     private var fraction: Double {
-        guard durationSeconds > 0.35 else { return 0 }
+        guard durationSeconds.isFinite, durationSeconds > 0.35 else { return 0 }
         if isScrubbing { return min(1, max(0, dragFraction)) }
+        guard currentSeconds.isFinite else { return 0 }
         return min(1, max(0, currentSeconds / durationSeconds))
     }
 
@@ -167,6 +168,8 @@ private struct SparksTimelineBar: View {
                     Capsule()
                         .fill(Theme.accentBright.opacity(0.95))
                         .frame(width: max(trackH, geo.size.width * fraction), height: trackH)
+                        // Smooth advance between ~10 Hz player ticks (no jumpy rail).
+                        .animation(isScrubbing ? nil : .linear(duration: 0.1), value: fraction)
                     if isScrubbing {
                         Circle()
                             .fill(Theme.paper)
@@ -366,9 +369,10 @@ struct ReelsPagerCard: View {
                             interactive: false,
                             onReady: { Task { await PostsService.shared.recordView(post) } },
                             onProgress: { current, duration in
-                                guard isActive, !isScrubbingTimeline else { return }
-                                progressSeconds = current
-                                if duration > 0.25 { durationSeconds = duration }
+                                // Do NOT gate on `isActive` here — the player may attach its
+                                // time observer while preloading (isActive=false). That closure
+                                // would capture a stale false and freeze the timeline forever.
+                                applyTimelineProgress(current: current, duration: duration)
                             },
                             seekToSeconds: seekToSeconds,
                             onSeekConsumed: { seekToSeconds = nil },
@@ -391,9 +395,8 @@ struct ReelsPagerCard: View {
                             preloadsWhenInactive: true,
                             onViewed: { Task { await PostsService.shared.recordView(post) } },
                             onProgress: { current, duration in
-                                guard isActive, !isScrubbingTimeline else { return }
-                                progressSeconds = current
-                                if duration > 0.25 { durationSeconds = duration }
+                                // Same as Archive path — never capture stale isActive=false.
+                                applyTimelineProgress(current: current, duration: duration)
                             },
                             seekToSeconds: seekToSeconds,
                             onSeekConsumed: { seekToSeconds = nil },
@@ -594,6 +597,17 @@ struct ReelsPagerCard: View {
             .overlay(Capsule().stroke(Theme.paper.opacity(0.14), lineWidth: 0.5))
         }
         .buttonStyle(.plain)
+    }
+
+    /// Update Sparks timeline from AVPlayer ticks.
+    /// Safe to call from a preloaded (inactive) time-observer closure — @State storage is shared.
+    private func applyTimelineProgress(current: Double, duration: Double) {
+        guard !isScrubbingTimeline else { return }
+        let cur = current.isFinite ? max(0, current) : 0
+        progressSeconds = cur
+        if duration.isFinite, duration > 0.25 {
+            durationSeconds = duration
+        }
     }
 
     /// Single-tap pause with a short delay so double-tap like can cancel it.

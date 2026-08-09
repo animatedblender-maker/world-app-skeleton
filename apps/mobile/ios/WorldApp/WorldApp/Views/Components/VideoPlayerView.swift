@@ -168,6 +168,7 @@ struct VideoPlayerView: View {
         .onAppear {
             liveGate.isActive = isActive
             liveGate.userWantsPause = userWantsPause
+            liveGate.onProgress = onProgress
             // Only cover cold mounts — reclaiming a warm player must not flash poster/black.
             if player?.currentItem?.status != .readyToPlay {
                 showPosterCover = true
@@ -202,6 +203,7 @@ struct VideoPlayerView: View {
         }
         .onChange(of: isActive) { _, active in
             liveGate.isActive = active
+            liveGate.onProgress = onProgress
             if active {
                 // Bind to the current page epoch so late observers from prior pages cannot re-solo.
                 liveGate.pageEpoch = MediaPlaybackCoordinator.shared.sparkPageEpoch
@@ -220,6 +222,18 @@ struct VideoPlayerView: View {
                 let ready = player?.currentItem?.status == .readyToPlay
                 if !ready {
                     showPosterCover = true
+                }
+                // Re-bind progress + ensure observer is alive after focus (preload path).
+                if let player {
+                    attachTimeObserver(to: player)
+                    // Push one immediate tick so the rail isn't stuck at 0 until the next interval.
+                    let t = player.currentTime().seconds
+                    let cur = t.isFinite ? max(0, t) : 0
+                    currentSeconds = cur
+                    if let item = player.currentItem {
+                        updateDuration(from: item)
+                    }
+                    liveGate.onProgress?(cur, durationSeconds)
                 }
                 handleActivationOrMount(forceRebuild: false)
             } else {
@@ -795,16 +809,24 @@ struct VideoPlayerView: View {
     @MainActor
     private func attachTimeObserver(to player: AVPlayer) {
         removeTimeObserver()
-        let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
+        // Keep liveGate.onProgress current so preloaded Sparks still tick the timeline.
+        liveGate.onProgress = onProgress
+        // ~10 Hz — smooth enough for Sparks timeline without burning main-thread budget.
+        let interval = CMTime(seconds: 0.1, preferredTimescale: 600)
+        let gate = liveGate
         timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
             Task { @MainActor in
-                currentSeconds = max(0, time.seconds)
+                let seconds = time.seconds
+                let cur = seconds.isFinite ? max(0, seconds) : 0
+                currentSeconds = cur
                 if let item = player.currentItem {
                     updateDuration(from: item)
                 }
                 isPlaying = player.rate > 0.01
                 trackPlaybackPositionIfNeeded()
-                onProgress?(currentSeconds, durationSeconds)
+                // Always publish — parent decides whether to paint the rail.
+                // Prefer liveGate so we never call a stale View-struct capture.
+                gate.onProgress?(cur, durationSeconds)
             }
         }
         timeObserverPlayer = player
@@ -964,6 +986,8 @@ private final class VideoPlayerLiveGate {
     var isMuted = false
     /// Snapshot of `MediaPlaybackCoordinator.sparkPageEpoch` when this card last became active.
     var pageEpoch: UInt64 = 0
+    /// Latest progress handler — time observers must not capture a stale View struct closure.
+    var onProgress: ((Double, Double) -> Void)?
 }
 
 // MARK: - Fullscreen

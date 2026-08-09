@@ -1723,7 +1723,8 @@ final class ArchiveVideoPlayerController: UIViewController {
         let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
         timeObserver = observed.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
             guard let self else { return }
-            let current = max(0, time.seconds)
+            let raw = time.seconds
+            let current = raw.isFinite ? max(0, raw) : 0
             let duration = item.duration.seconds
             let dur = duration.isFinite && duration > 0 ? duration : 0
             let playing = observed.rate > 0.01
@@ -1733,6 +1734,7 @@ final class ArchiveVideoPlayerController: UIViewController {
                 // While scrubbing, UI owns the playhead — don't fight the thumb or publish pause.
                 if !scrubbing {
                     self.lastKnownSeconds = current
+                    // Always publish — parent must not rely on stale isActive captures.
                     self.onProgress?(current, dur)
                     self.onPlayingChanged?(playing)
                 }
