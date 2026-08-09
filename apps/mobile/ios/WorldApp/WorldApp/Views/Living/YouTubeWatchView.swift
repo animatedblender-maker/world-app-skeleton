@@ -387,7 +387,7 @@ struct YouTubeWatchView: View {
         }
     }
 
-    /// Matterya action chips (Like · Share · Save) — pill chips, warm paper chrome.
+    /// Matterya action chips (Like · Send · Keep) — pill chips, warm paper chrome.
     private var actionSection: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 10) {
@@ -401,7 +401,7 @@ struct YouTubeWatchView: View {
                 }
                 .disabled(isLiking)
 
-                watchActionChip(icon: "arrowshape.turn.up.right", label: "Share") {
+                watchActionChip(icon: "arrowshape.turn.up.right", label: "Send") {
                     appState.hubPlaybackPlaying = true
                     appState.presentShareSheet(for: currentPost)
                     NotificationCenter.default.post(
@@ -412,7 +412,7 @@ struct YouTubeWatchView: View {
 
                 watchActionChip(
                     icon: appState.isPostSaved(currentPost.id) ? "bookmark.fill" : "bookmark",
-                    label: appState.isPostSaved(currentPost.id) ? "Saved" : "Save",
+                    label: appState.isPostSaved(currentPost.id) ? "Kept" : "Keep",
                     accent: appState.isPostSaved(currentPost.id)
                 ) {
                     Task { _ = await appState.toggleSavePost(currentPost) }
