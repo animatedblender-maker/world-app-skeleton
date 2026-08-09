@@ -24,6 +24,9 @@ struct BottomTabBar: View {
         }
         .frame(height: Theme.tabBarHeight)
         .frame(maxWidth: .infinity)
+        // Keep icons in the bar; extend surface into the home-indicator so nothing
+        // white peeks under the tab bar mid-screen.
+        .padding(.bottom, 0)
         .background {
             Theme.surface.opacity(0.96)
                 .overlay(alignment: .top) {
@@ -31,6 +34,7 @@ struct BottomTabBar: View {
                 }
                 .ignoresSafeArea(edges: .bottom)
         }
+        .accessibilityElement(children: .contain)
     }
 
     private var createButton: some View {

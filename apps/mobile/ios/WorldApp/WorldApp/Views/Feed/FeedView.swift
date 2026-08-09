@@ -9,6 +9,12 @@ struct FeedView: View {
     @State private var newOnPlay: [CountryPost] = []
     @State private var feedReels: [CountryPost] = []
     @State private var errorMessage: String?
+    /// Prevents hammering strip network when task re-runs.
+    @State private var stripsNetworkGeneration = 0
+
+    private var hasAnyStrip: Bool {
+        !feedReels.isEmpty || !continueWatching.isEmpty || !newOnPlay.isEmpty
+    }
 
     var body: some View {
         ZStack {
@@ -18,17 +24,20 @@ struct FeedView: View {
                 }
 
                 Group {
-                    if store.showsSkeleton {
+                    // Full-screen spinner only when we have nothing at all to show.
+                    // Hubs / Sparks rails paint from cache even while posts still load.
+                    if store.showsSkeleton && !hasAnyStrip {
                         ProgressView("Loading feed…")
                             .tint(Theme.accent)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else if let err = store.errorMessage ?? errorMessage, store.displayedPosts.isEmpty {
+                    } else if let err = store.errorMessage ?? errorMessage,
+                              store.displayedPosts.isEmpty, !hasAnyStrip {
                         ContentUnavailableView(
                             "Feed unavailable",
                             systemImage: "exclamationmark.triangle",
                             description: Text(err)
                         )
-                    } else if store.displayedPosts.isEmpty {
+                    } else if store.displayedPosts.isEmpty && !hasAnyStrip {
                         ContentUnavailableView(
                             "Your feed is quiet",
                             systemImage: "newspaper",
@@ -44,34 +53,29 @@ struct FeedView: View {
         }
         .toolbar(.hidden, for: .navigationBar)
         .refreshable {
-            await store.bootstrap(forceRefresh: true)
-            await refreshStrips()
+            paintStripsFromCache()
+            async let boot: Void = store.beginFreshSession()
+            async let strips: Void = refreshStrips(network: true)
+            _ = await (boot, strips)
         }
-        .task(id: appState.contentLoadGeneration) {
-            // Smooth path: feed first paint only. Strips defer — never hubs catalog here.
-            await store.bootstrap(forceRefresh: false)
-            Task(priority: .utility) {
-                await refreshStrips()
-            }
+        .task(id: "\(appState.contentLoadGeneration)-\(appState.feedFreshSessionToken)") {
+            // App open / login / 3+ min away: new mix of user shares + Sparks rails.
+            paintStripsFromCache()
+            async let boot: Void = store.beginFreshSession()
+            async let strips: Void = refreshStrips(network: true)
+            _ = await (boot, strips)
+            paintStripsFromCache()
         }
         .onAppear {
-            // Cheap local-only strips; network strips only if still empty after a beat.
-            refreshNewOnPlay()
-            if feedReels.isEmpty || continueWatching.isEmpty {
-                Task(priority: .utility) { await refreshStrips() }
-            }
+            paintStripsFromCache()
         }
         .onReceive(NotificationCenter.default.publisher(for: .userPostsDidChange)) { notification in
             guard let changed = notification.userInfo?["post"] as? CountryPost else { return }
             if changed.isStory { return }
-            // Original Sparks stay out of the home feed list — but feed re-shares of Sparks
-            // (SparkShareMarker / embed) belong here as Spark cards.
             if changed.isSpark, !changed.isSparkFeedShare { return }
-            // Prefer insert (new posts) over silent update-only.
             store.insertNewPost(changed)
-            // Refresh Sparks-for-you so a mistaken re-share never monopolizes the rail.
             if changed.isSparkFeedShare || changed.hasVideo {
-                Task { await refreshFeedReels() }
+                Task { await refreshFeedReels(network: true) }
             }
         }
     }
@@ -82,7 +86,6 @@ struct FeedView: View {
                 LazyVStack(spacing: 0) {
                     Color.clear.frame(height: 1).id("feed-top")
 
-                    // Uploading video shadows pin above everything else.
                     ForEach(store.pendingUploads) { draft in
                         FeedUploadingShadowCard(draft: draft)
                             .id("upload-\(draft.id)")
@@ -94,7 +97,7 @@ struct FeedView: View {
                             )
                     }
 
-                    // Sparks → Continue watching (Hubs) → New on Hubs → posts.
+                    // Sparks → Continue watching (Hubs) → New on Hubs — always above posts.
                     if !feedReels.isEmpty {
                         feedReelsStrip
                     }
@@ -103,6 +106,13 @@ struct FeedView: View {
                     }
                     if !newOnPlay.isEmpty {
                         newOnPlayStrip
+                    }
+
+                    // Posts still bootstrapping but rails already visible.
+                    if store.showsSkeleton && store.displayedPosts.isEmpty {
+                        ProgressView()
+                            .padding(.vertical, 28)
+                            .frame(maxWidth: .infinity)
                     }
 
                     ForEach(store.displayedPosts) { post in
@@ -114,11 +124,9 @@ struct FeedView: View {
                             onLikeToggle: { Task { await toggleLike(post) } },
                             onOpenPost: { appState.navigate(to: .post(post.id)) },
                             onOpenVideo: {
-                                // Hub long-form → Hubs watch; plain feed video → post detail.
                                 appState.openPost(post)
                             },
                             onOpenReel: {
-                                // Infinite Sparks from all over Matterya (not just this feed page).
                                 appState.openGlobalSparksViewer(startingPost: post)
                             },
                             onPostDeleted: { id in store.removePost(id: id) },
@@ -169,7 +177,6 @@ struct FeedView: View {
         SparksHorizontalStrip(
             posts: feedReels,
             onOpen: { post in
-                // Open endless Sparks (Archive + network), not only the thin strip list.
                 appState.openGlobalSparksViewer(startingPost: post)
             },
             onBrandTap: { appState.openPlay() }
@@ -211,9 +218,10 @@ struct FeedView: View {
     private var continueWatchingStrip: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Continue watching")
+                Text(MatteryaCopy.continueWatching)
                     .font(.headline)
                     .foregroundStyle(Theme.ink)
+                    .layoutPriority(1)
                 Spacer()
                 Button {
                     appState.openPlay(tab: .home)
@@ -227,7 +235,6 @@ struct FeedView: View {
             .padding(.horizontal, Theme.pagePadding)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                // Top-align + fixed card size so every Continue watching tile matches.
                 HStack(alignment: .top, spacing: 12) {
                     ForEach(continueWatching) { post in
                         HubsShelfThumbCard(post: post, width: 168) {
@@ -241,83 +248,168 @@ struct FeedView: View {
         .padding(.bottom, 12)
     }
 
-    private func refreshStrips() async {
-        await refreshFeedReels()
-        await refreshContinueWatching()
+    // MARK: - Strips (instant cache → light network)
+
+    /// Zero-network paint so Hubs / Sparks rails appear with the first frame.
+    private func paintStripsFromCache() {
+        let living = ContentCache.shared.posts(for: .livingVideos) ?? []
+        let catalog = PostsService.shared.sparksCatalogSnapshot()
+        let home = ContentCache.shared.posts(for: .homeFeed) ?? store.posts
+        let sessionHubs = PostsService.shared.hubsSessionCatalog
+
+        // Sparks-for-you rail — only seed when empty. Session reshuffle lives in
+        // `refreshFeedReels` (pure shuffle of the R2 catalog). Re-ranking here used to
+        // overwrite that shuffle with the same sticky discovery order every paint.
+        if feedReels.isEmpty {
+            var seen = Set<String>()
+            var reels: [CountryPost] = []
+            let pool = (catalog + living + home + sessionHubs)
+                .filter { ReelsRankingEngine.isSparkEligible($0) && $0.playableVideoURL != nil }
+                .shuffled()
+            for post in pool {
+                guard seen.insert(post.id).inserted else { continue }
+                reels.append(post)
+                if reels.count >= 14 { break }
+            }
+            if !reels.isEmpty {
+                feedReels = reels
+            }
+        }
+
+        // New on Hubs — always fill from cache pools.
+        refreshNewOnPlay(from: living)
+
+        // Continue watching — cache + history only (no Archive seed walk, no network).
+        if continueWatching.isEmpty {
+            continueWatching = buildContinueWatching(
+                pools: [living, home, sessionHubs],
+                allowSeed: false
+            )
+        }
+    }
+
+    private func refreshStrips(network: Bool) async {
+        // Always re-paint cache first so UI updates even if network is slow.
+        paintStripsFromCache()
+        guard network else { return }
+
+        stripsNetworkGeneration += 1
+        let gen = stripsNetworkGeneration
+
+        // Parallel light fetches — never sequential deep walks.
+        async let reelsDone: Void = refreshFeedReels(network: true)
+        async let contDone: Void = refreshContinueWatching(network: true)
+        async let hubsDone: Void = refreshNewOnPlayNetwork(gen: gen)
+        _ = await (reelsDone, contDone, hubsDone)
+        guard gen == stripsNetworkGeneration else { return }
         refreshNewOnPlay()
     }
 
-    private func refreshFeedReels() async {
-        // Tiny Sparks rail — never a full pool rebuild on sign-in.
-        let network = await PostsService.shared.loadReelsFeed(
-            globalLimit: 16,
-            viewerCountry: appState.currentProfile?.countryCode,
-            followingIDs: appState.followingIDs
-        )
+    private func refreshFeedReels(network: Bool) async {
+        // Top Sparks strip: fresh shuffle from the full session pool every refresh.
+        var pool: [CountryPost] = PostsService.shared.sparksCatalogSnapshot()
+        if network {
+            // Full catalog pull + shuffle (same source as the Sparks player).
+            pool = await PostsService.shared.beginFreshSparksSession(preferStart: nil)
+        } else if pool.count > 1 {
+            pool.shuffle()
+        }
+
         var seen = Set<String>()
         var merged: [CountryPost] = []
-        for post in ReelsRankingEngine.sessionFreshOrder(network) {
-            guard post.playableVideoURL != nil else { continue }
+        for post in pool {
+            guard ReelsRankingEngine.isSparkEligible(post), post.playableVideoURL != nil else { continue }
             guard seen.insert(post.id).inserted else { continue }
             merged.append(post)
-            if merged.count >= 8 { break }
+            if merged.count >= 16 { break }
         }
-        // Archive fill only if gate is on (normally empty).
-        if AppConfig.archiveContentEnabled, merged.count < 6 {
-            let seed = UInt64.random(in: 1...UInt64.max)
-                ^ UInt64(Date().timeIntervalSince1970 * 1_000)
-            let archive = await HubVideoSeedService.shared.sparkSeedVideos(limit: 12, shuffleSeed: seed)
-            for post in ReelsRankingEngine.sessionFreshOrder(archive) {
-                guard post.playableVideoURL != nil else { continue }
-                guard seen.insert(post.id).inserted else { continue }
-                merged.append(post)
-                if merged.count >= 8 { break }
-            }
-        }
-        feedReels = merged.shuffled()
-        if !feedReels.isEmpty {
-            SparkWarmPool.shared.prepare(posts: feedReels, around: 0, ahead: 2, behind: 0)
+        if !merged.isEmpty {
+            feedReels = merged
+            SparkWarmPool.shared.prepare(posts: Array(feedReels.prefix(3)), around: 0, ahead: 2, behind: 0)
         }
     }
 
-    private func refreshNewOnPlay() {
-        let living = ContentCache.shared.posts(for: .livingVideos) ?? []
+    private func refreshNewOnPlay(from livingOverride: [CountryPost]? = nil) {
+        let living = livingOverride ?? ContentCache.shared.posts(for: .livingVideos) ?? []
         let following = appState.followingIDs
-        // Strip is hub-only (same rule as Hubs catalog).
         var candidates = living.filter {
-            PlayPlatformBridge.isHubFeedCardVideo($0) && following.contains($0.authorID)
+            PlayPlatformBridge.isHubFeedCardVideo($0)
+                && (following.isEmpty || following.contains($0.authorID))
         }
         if candidates.isEmpty {
-            candidates = store.posts.filter {
-                PlayPlatformBridge.isHubFeedCardVideo($0) && following.contains($0.authorID)
-            }
+            candidates = living.filter { PlayPlatformBridge.isHubFeedCardVideo($0) }
         }
+        if candidates.isEmpty {
+            candidates = store.posts.filter { PlayPlatformBridge.isHubFeedCardVideo($0) }
+        }
+        // Session hubs catalog (may already be warm from Hubs tab).
+        if candidates.count < 4 {
+            let session = PostsService.shared.hubsSessionCatalog.filter {
+                PlayPlatformBridge.isHubFeedCardVideo($0)
+            }
+            candidates.append(contentsOf: session)
+        }
+        var seen = Set<String>()
         newOnPlay = candidates
+            .filter { seen.insert($0.id).inserted }
             .sorted { $0.createdAt > $1.createdAt }
             .prefix(8)
             .map { $0 }
     }
 
-    /// Hubs resume row — only videos this account actually watched (no seed filler).
-    private func refreshContinueWatching() async {
+    /// Light hubs longform for New on Hubs when disk/session cache is thin.
+    private func refreshNewOnPlayNetwork(gen: Int) async {
+        let living = ContentCache.shared.posts(for: .livingVideos) ?? []
+        let sessionLong = PostsService.shared.hubsSessionCatalog.filter {
+            PlayPlatformBridge.isHubFeedCardVideo($0)
+        }
+        guard living.count + sessionLong.count < 6 else { return }
+        let fast = await PostsService.shared.loadLivingVideos(
+            globalLimit: 16,
+            forceRefresh: false,
+            fast: true
+        )
+        guard gen == stripsNetworkGeneration else { return }
+        if !fast.isEmpty {
+            refreshNewOnPlay(from: fast)
+        }
+    }
+
+    private func refreshContinueWatching(network: Bool) async {
         let catalog = YouTubeCatalogService.shared
-        let historyIDs = catalog.historyIDs()
-        // Brand-new accounts (or no watch trail) → hide the section entirely.
-        guard !historyIDs.isEmpty else {
+        guard !catalog.historyIDs().isEmpty else {
             continueWatching = []
             return
         }
+        var pools: [[CountryPost]] = [
+            ContentCache.shared.posts(for: .livingVideos) ?? [],
+            store.posts,
+            PostsService.shared.hubsSessionCatalog,
+        ]
+        // Only hit network if we still have nothing to show from cache.
+        if network, buildContinueWatching(pools: pools, allowSeed: false).isEmpty {
+            let fast = await PostsService.shared.loadLivingVideos(
+                globalLimit: 16,
+                forceRefresh: false,
+                fast: true
+            )
+            pools.append(fast)
+        }
+        continueWatching = buildContinueWatching(pools: pools, allowSeed: false)
+    }
 
+    private func buildContinueWatching(pools: [[CountryPost]], allowSeed: Bool) -> [CountryPost] {
+        let catalog = YouTubeCatalogService.shared
         var pool: [CountryPost] = []
         var seen = Set<String>()
-        func append(_ posts: [CountryPost]) {
-            for post in posts where seen.insert(post.id).inserted {
+        for batch in pools {
+            for post in batch where seen.insert(post.id).inserted {
                 pool.append(post)
             }
         }
-        append(ContentCache.shared.posts(for: .livingVideos) ?? [])
-        append(store.posts)
-        append(await HubVideoSeedService.shared.longFormVideos())
+        if allowSeed, AppConfig.archiveContentEnabled {
+            // Intentionally skipped on hot path.
+        }
 
         let hubLongForm = pool.filter {
             !$0.isReel && PlayPlatformBridge.isHubCatalogContent($0) && $0.playableVideoURL != nil
@@ -328,15 +420,15 @@ struct FeedView: View {
         for post in catalog.historyVideos(from: hubLongForm) where orderedIDs.insert(post.id).inserted {
             ordered.append(post)
         }
-        // Mid-video resume points for this user only (already per-user storage).
         let inProgress = hubLongForm
             .filter { catalog.playbackPosition(for: $0.id) >= 1 }
-            .sorted { catalog.playbackPosition(for: $0.id) > catalog.playbackPosition(for: $1.id) }
+            .sorted {
+                catalog.playbackPosition(for: $0.id) > catalog.playbackPosition(for: $1.id)
+            }
         for post in inProgress where orderedIDs.insert(post.id).inserted {
             ordered.append(post)
         }
-
-        continueWatching = Array(ordered.prefix(8))
+        return Array(ordered.prefix(8))
     }
 
     private func toggleLike(_ post: CountryPost) async {
@@ -349,7 +441,6 @@ struct FeedView: View {
                     likeCount: max(0, post.likeCount - 1),
                     commentCount: post.commentCount
                 )
-                EngagementTracker.shared.enqueueLike(post: post, liked: false)
             } else {
                 try await PostsService.shared.likePost(post.id, baseLikeCount: post.likeCount)
                 updated = post.withEngagement(
@@ -357,10 +448,8 @@ struct FeedView: View {
                     likeCount: post.likeCount + 1,
                     commentCount: post.commentCount
                 )
-                EngagementTracker.shared.enqueueLike(post: post, liked: true)
             }
             store.applyLocalUpdate(updated)
-            PostsService.shared.publishPostChange(updated)
         } catch {
             errorMessage = error.localizedDescription
         }

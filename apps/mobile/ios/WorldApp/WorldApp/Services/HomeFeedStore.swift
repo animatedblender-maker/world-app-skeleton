@@ -75,8 +75,64 @@ final class HomeFeedStore {
 
     // MARK: - Lifecycle
 
+    /// New browsing session (app open / 3+ min away / pull): **newest upload on top**.
+    /// Network recency wins so R2 / backend pipeline posts always surface first.
+    func beginFreshSession() async {
+        generation += 1
+        let gen = generation
+        errorMessage = nil
+        feedSessionId = UUID().uuidString
+        nextCursor = nil
+        hasMore = true
+        isRefreshing = true
+        defer { isRefreshing = false }
+
+        // 1) Instant paint from memory / disk — still newest-first (not shuffled).
+        var pool: [CountryPost] = posts
+        if pool.isEmpty, let cached = ContentCache.shared.posts(for: .homeFeed) {
+            pool = Self.liveOnlyPosts(cached)
+        }
+        pool = Self.liveOnlyPosts(
+            BlockService.shared.filterPosts(pool.excludingMoments().excludingSparks())
+        )
+        if !pool.isEmpty {
+            let fresh = PostsService.shared.chronologicalNewestFirst(pool)
+            applyPosts(Array(fresh.prefix(48)), replace: true, sessionId: feedSessionId)
+            isBootstrapping = false
+            didPaint = true
+            warmHead()
+        } else {
+            isBootstrapping = true
+        }
+
+        // 2) Network page — last uploaded always at top.
+        let live = Self.liveOnlyPosts(await PostsService.shared.fetchFirstPaintHomePosts(limit: 48))
+        guard gen == generation else { return }
+
+        let realBatch = Self.liveOnlyPosts(live + posts)
+        let merged = PostsService.shared.chronologicalNewestFirst(realBatch)
+        let capped = Array(merged.prefix(min(merged.count, 48)))
+
+        if !capped.isEmpty {
+            applyPosts(capped, replace: true, sessionId: feedSessionId)
+            ContentCache.shared.setPosts(posts, for: .homeFeed)
+            didPaint = true
+            warmHead()
+            hasMore = true
+            #if DEBUG
+            print("[HomeFeed] freshSession total=\(capped.count) network=\(live.count) newest=\(capped.first?.id.prefix(8) ?? "-")")
+            #endif
+        } else if posts.isEmpty {
+            applyPosts([], replace: true, sessionId: feedSessionId)
+            ContentCache.shared.invalidate(.homeFeed)
+        }
+
+        isBootstrapping = false
+    }
+
     /// Smooth open: cache → tiny first-paint network → done.
     /// Never multi-page GraphQL or hubs catalog on this path.
+    /// Prefer `beginFreshSession()` when the user should see a **new** mix.
     func bootstrap(forceRefresh: Bool = false) async {
         generation += 1
         let gen = generation
@@ -96,7 +152,7 @@ final class HomeFeedStore {
                 ContentCache.shared.invalidate(.homeFeed)
             } else {
                 applyPosts(
-                    PostsService.shared.sessionFreshOrder(
+                    PostsService.shared.chronologicalNewestFirst(
                         BlockService.shared.filterPosts(clean.excludingMoments().excludingSparks())
                     ),
                     replace: true,
@@ -108,15 +164,14 @@ final class HomeFeedStore {
             }
         }
 
-        // 2) One light network round-trip — first paint algorithm only.
+        // 2) Light network first paint ONLY — never await full Sparks catalog here
+        // (that blocked @MainActor for minutes and froze the feed).
         let live = Self.liveOnlyPosts(await PostsService.shared.fetchFirstPaintHomePosts(limit: 40))
         guard gen == generation else { return }
 
         let existingLive = posts.filter { !$0.isStory }
-        // Prefer fresh network; keep on-screen pins so list doesn't jump.
-        let pinIDs = Set(posts.prefix(2).map(\.id))
         let realBatch = Self.liveOnlyPosts(live + existingLive)
-        let merged = PostsService.shared.sessionFreshOrder(realBatch, pinIDs: pinIDs)
+        let merged = PostsService.shared.chronologicalNewestFirst(realBatch)
         let capped = Array(merged.prefix(min(merged.count, 48)))
 
         if !capped.isEmpty {
@@ -124,7 +179,7 @@ final class HomeFeedStore {
             ContentCache.shared.setPosts(posts, for: .homeFeed)
             didPaint = true
             warmHead()
-            hasMore = true // always allow scroll-to-load (catalog is huge)
+            hasMore = true
             #if DEBUG
             print("[HomeFeed] firstPaint total=\(capped.count) network=\(live.count)")
             #endif
@@ -134,6 +189,10 @@ final class HomeFeedStore {
         }
 
         isBootstrapping = false
+
+        // 3) Do NOT warm the deep Sparks catalog here.
+        // PostsService is @MainActor — a 4-country / hundreds-of-rows pull freezes the feed
+        // mid-scroll. Sparks player loads a light catalog when opened; deep expands later.
     }
 
     /// Drop offline Reddit / catalog fakes; keep real UUID-backed posts only
@@ -312,8 +371,8 @@ final class HomeFeedStore {
         let live = Self.liveOnlyPosts(await PostsService.shared.fetchNetworkHomePosts(limit: 60))
         guard gen == generation else { return }
 
-        // New session id → full reshuffle every pull-to-refresh.
-        let filtered = PostsService.shared.sessionFreshOrder(live)
+        // Newest upload first — pull-to-refresh must surface brand-new R2/backend posts.
+        let filtered = PostsService.shared.chronologicalNewestFirst(live)
         applyPosts(filtered, replace: true, sessionId: feedSessionId)
         nextCursor = Self.cursor(from: filtered.last)
         hasMore = filtered.count >= pageSize || windowLimit < posts.count
@@ -369,8 +428,8 @@ final class HomeFeedStore {
             hasMore = page.hasMore && page.nextCursor != cursor
             return
         }
-        // Append shuffled page — never re-order the whole feed chronologically.
-        posts.append(contentsOf: appended.shuffled())
+        // Append older page in recency order (cursor already walks older).
+        posts.append(contentsOf: PostsService.shared.chronologicalNewestFirst(appended))
         nextCursor = page.nextCursor
         hasMore = page.hasMore || windowLimit < posts.count
         ContentCache.shared.setPosts(posts, for: .homeFeed)
@@ -379,7 +438,7 @@ final class HomeFeedStore {
 
     private func applyPosts(_ next: [CountryPost], replace: Bool, sessionId: String) {
         feedSessionId = sessionId
-        // Already session-shuffled by fetch / hardRefresh; only re-shuffle if still chronological-looking.
+        // Callers pass newest-first; keep order as-is.
         let ordered = next
         var t = Transaction()
         t.disablesAnimations = true

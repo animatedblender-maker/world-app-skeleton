@@ -67,7 +67,7 @@ struct SparkFeedCard: View {
             Theme.ink
 
             if let url = post.playableVideoURL {
-                // Full-bleed fill (no black letterbox) — R2 + Archive Sparks alike.
+                // Aspect-fit — never crop shared Sparks on the feed (full picture, letterbox OK).
                 InFrameVideoPlayer(
                     url: url,
                     posterURL: post.posterImageURL,
@@ -76,26 +76,26 @@ struct SparkFeedCard: View {
                     contentCountryCode: post.countryCode,
                     postID: post.id,
                     muted: appState.feedVideosMuted,
+                    // Shared Sparks on the feed must loop like the full Sparks player.
                     loops: true,
                     preferArchivePlayer: post.isHubSeedVideo || ArchiveVideoPlayback.isArchiveURL(url),
                     showsControls: false,
                     muteOnlyControls: true,
-                    fillsFrame: true,
+                    fillsFrame: false,
                     sharesFeedMute: true,
                     autoplaySurface: autoplaySurface,
                     onViewed: { Task { await PostsService.shared.recordView(post) } }
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
                 .onAppear {
-                    // Start silent buffer before focus elects this card.
+                    // Start silent buffer before focus elects this card (and again after park).
                     SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
                 }
             } else {
                 VideoThumbnailView(
                     post: post,
                     maxPixelSize: 720,
-                    contentMode: .fill,
+                    contentMode: .fit,
                     showsPlayIcon: true,
                     playIconSize: 36,
                     placeholder: AnyView(
@@ -103,7 +103,6 @@ struct SparkFeedCard: View {
                     )
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
             }
 
             SparksOriginBadge(compact: true)
@@ -357,6 +356,10 @@ struct SharePostSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     let post: CountryPost
+    /// When set (Sparks overlay), close via this instead of sheet dismiss — playback keeps running.
+    var onClose: (() -> Void)? = nil
+    /// Stay in Sparks after in-app share actions (no chat navigation / no Sparks dismiss).
+    var keepsSparksPlaying: Bool = false
 
     @State private var showSystemShare = false
     @State private var showMessagePicker = false
@@ -366,6 +369,14 @@ struct SharePostSheet: View {
 
     private var isSparkShare: Bool {
         post.isReel || post.isSparkFeedShare || PlayPlatformBridge.isSparkFeedCard(post)
+    }
+
+    private func closeShareUI() {
+        if let onClose {
+            onClose()
+        } else {
+            dismiss()
+        }
     }
 
     private var homeCountryName: String {
@@ -401,7 +412,7 @@ struct SharePostSheet: View {
                     shareRow("Copy link", subtitle: "Share the public post link", icon: "link", tint: Theme.accent) {
                         ShareService.shared.copyLink(for: .post(post))
                         appState.showToast("Link copied")
-                        dismiss()
+                        closeShareUI()
                     }
                 }
 
@@ -428,8 +439,10 @@ struct SharePostSheet: View {
                     ) {
                         showMessagePicker = true
                     }
-                    shareRow("Repost with quote", subtitle: "Write your take on your home feed", icon: "quote.bubble", tint: Theme.ink) {
-                        Task { await repostWithQuote() }
+                    if !keepsSparksPlaying {
+                        shareRow("Repost with quote", subtitle: "Write your take on your home feed", icon: "quote.bubble", tint: Theme.ink) {
+                            Task { await repostWithQuote() }
+                        }
                     }
                 }
 
@@ -445,12 +458,13 @@ struct SharePostSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { dismiss() }
+                    Button("Close") { closeShareUI() }
                 }
             }
             .sheet(isPresented: $showSystemShare) {
                 ShareSheet(items: ShareService.shared.activityItems(for: .post(post))) {
-                    dismiss()
+                    // System share finished — stay in Sparks when overlay mode.
+                    closeShareUI()
                 }
             }
             .confirmationDialog(
@@ -467,13 +481,20 @@ struct SharePostSheet: View {
             }
             .sheet(isPresented: $showMessagePicker) {
                 ShareMessagePickerSheet(post: post) { conversationID in
-                    appState.openConversation(id: conversationID)
-                    appState.showToast("Sent in message")
-                    dismiss()
+                    if keepsSparksPlaying {
+                        // Silent send — toast only, keep watching.
+                        appState.showToast("Sent in message")
+                        closeShareUI()
+                    } else {
+                        appState.openConversation(id: conversationID)
+                        appState.showToast("Sent in message")
+                        closeShareUI()
+                    }
                 }
             }
         }
-        .presentationDetents([.medium, .large])
+        // Sheet-only chrome (feed share). Sparks uses an overlay host — no presentation detents.
+        .modifier(ShareSheetPresentationModifier(enabled: !keepsSparksPlaying))
     }
 
     private var shareToFeedSubtitle: String {
@@ -523,7 +544,7 @@ struct SharePostSheet: View {
         defer { busy = false }
         let message = await appState.sharePostToCountryFeed(post)
         appState.showToast(message, style: message.localizedCaseInsensitiveContains("shared") ? .success : .info)
-        dismiss()
+        closeShareUI()
     }
 
     private func repostWithQuote() async {
@@ -536,7 +557,7 @@ struct SharePostSheet: View {
         appState.composerCountry = home
         appState.activeCreateSheet = .post
         appState.quotedSharePostID = post.sharedPostID ?? post.id
-        dismiss()
+        closeShareUI()
     }
 }
 
@@ -649,14 +670,88 @@ extension UIApplication {
     }
 }
 
+private struct ShareSheetPresentationModifier: ViewModifier {
+    let enabled: Bool
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content
+                .presentationDetents([.medium, .large])
+        } else {
+            content
+        }
+    }
+}
+
 extension View {
     func sharePostSheet(appState: AppState) -> some View {
+        // Sparks full-screen + expanded Hubs watch use in-place overlays so AVPlayer
+        // never pauses and Hubs never collapses to the mini player.
         sheet(item: Binding(
-            get: { appState.sharePostSheet },
+            get: {
+                if appState.reelsViewerContext != nil { return nil }
+                if appState.hubPlaybackPost != nil, appState.hubPlaybackExpanded { return nil }
+                return appState.sharePostSheet
+            },
             set: { appState.sharePostSheet = $0 }
         )) { post in
             SharePostSheet(post: post)
                 .withAppState(appState)
+        }
+    }
+}
+
+/// Bottom share card over expanded Hubs watch — continuous player keeps playing underneath.
+struct HubsShareOverlay: View {
+    @Environment(AppState.self) private var appState
+    let post: CountryPost
+    let onClose: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            Color.black.opacity(0.28)
+                .ignoresSafeArea()
+                .onTapGesture(perform: onClose)
+                .allowsHitTesting(true)
+
+            SharePostSheet(
+                post: post,
+                onClose: onClose,
+                // Same as Sparks: stay on watch, no chat jump / no mini collapse.
+                keepsSparksPlaying: true
+            )
+            .withAppState(appState)
+            .clipShape(
+                UnevenRoundedRectangle(
+                    topLeadingRadius: 18,
+                    bottomLeadingRadius: 0,
+                    bottomTrailingRadius: 0,
+                    topTrailingRadius: 18,
+                    style: .continuous
+                )
+            )
+            .background(
+                UnevenRoundedRectangle(
+                    topLeadingRadius: 18,
+                    bottomLeadingRadius: 0,
+                    bottomTrailingRadius: 0,
+                    topTrailingRadius: 18,
+                    style: .continuous
+                )
+                .fill(Theme.surface)
+                .shadow(color: .black.opacity(0.35), radius: 20, y: -4)
+            )
+            .frame(maxHeight: UIScreen.main.bounds.height * 0.52)
+            .ignoresSafeArea(edges: .bottom)
+        }
+        .ignoresSafeArea()
+        .onAppear {
+            appState.hubPlaybackPlaying = true
+            NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
+        }
+        .onDisappear {
+            appState.hubPlaybackPlaying = true
+            NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
         }
     }
 }

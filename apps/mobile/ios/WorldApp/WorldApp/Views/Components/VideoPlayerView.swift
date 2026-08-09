@@ -32,6 +32,12 @@ struct VideoPlayerView: View {
     /// When set to a non-nil value, seek there once then clear via `onSeekConsumed`.
     var seekToSeconds: Double? = nil
     var onSeekConsumed: (() -> Void)? = nil
+    /// Sparks player: bump when the page becomes focused so playback always starts at 0
+    /// (independent of pause/unpause, which only toggles `isActive`).
+    var restartFromBeginningToken: UInt = 0
+    /// User pause on the focused Spark — freezes the **current frame** (does not deactivate
+    /// the page, seek to 0, or swap to poster/black).
+    var isPausedByUser: Bool = false
 
     @State private var adFinished = false
     @State private var player: AVPlayer?
@@ -53,6 +59,15 @@ struct VideoPlayerView: View {
     @State private var lastNotedPlaybackSecond: Int = -1
     /// When the user pauses via chrome, do not auto-resume until they press play or leave the slot.
     @State private var userWantsPause = false
+    /// Live flags for AVPlayer observers — View `isActive` is a struct capture and goes stale
+    /// when LazyVStack keeps inactive Spark cards mounted (ghost audio from 1–2 pages ago).
+    @State private var liveGate = VideoPlayerLiveGate()
+    /// Last Sparks page-focus restart we already applied (so unpause doesn't re-seek → black flash).
+    @State private var lastHandledRestartToken: UInt = 0
+    /// Hide AVPlayerLayer while seeking to t=0 so the poster underlay stays visible (no black flash).
+    @State private var isRestartSeeking = false
+    /// Keep poster on top until AVPlayer is actually producing frames (not just “play() called”).
+    @State private var showPosterCover = true
 
     private var shouldShowAd: Bool {
         adsEnabled && isActive && !adFinished && placement != nil
@@ -62,9 +77,34 @@ struct VideoPlayerView: View {
         showsControls && showChrome && player != nil && !shouldShowAd
     }
 
+    /// Poster only when we truly have no usable video surface.
+    /// Never cover just because `!isPlaying` — that re-flashes black/poster on every swipe.
+    /// User-paused keeps the live video layer visible so the frame freezes in place.
+    private var shouldShowPosterCover: Bool {
+        if isPausedByUser, player != nil, !isRestartSeeking { return false }
+        if player == nil { return true }
+        // Mid hard-seek with no ready item: keep poster. Once ready, leave layer visible.
+        if isRestartSeeking, player?.currentItem?.status != .readyToPlay { return true }
+        return showPosterCover
+    }
+
     var body: some View {
         ZStack {
+            // Never pure black under Sparks — poster or dark paper while buffering.
             Color.black
+
+            // Always paint poster under the layer when available.
+            if let posterURL {
+                CachedAsyncImage(
+                    url: posterURL,
+                    maxPixelSize: 900,
+                    contentMode: fillsFrame ? .fill : .fit,
+                    placeholder: AnyView(Color.black)
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+                .allowsHitTesting(false)
+            }
 
             if shouldShowAd, let placement {
                 AdPrerollView(
@@ -78,6 +118,9 @@ struct VideoPlayerView: View {
                 MatteryaVideoSurface(player: player, fillsFrame: fillsFrame)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .clipped()
+                    // Always keep the layer visible once mounted. Hiding it on swipe
+                    // (opacity ~0) caused the black "refresh" even when the item was ready.
+                    .opacity(1)
                     .contentShape(Rectangle())
                     .onTapGesture {
                         guard showsControls else { return }
@@ -105,63 +148,148 @@ struct VideoPlayerView: View {
                 }
             } else if loadFailed {
                 unavailableState
-            } else if let posterURL {
-                CachedAsyncImage(
-                    url: posterURL,
-                    maxPixelSize: 600,
-                    contentMode: fillsFrame ? .fill : .fit,
-                    placeholder: AnyView(ProgressView().tint(Theme.accentBright))
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
-            } else {
+            } else if posterURL == nil {
                 ProgressView().tint(Theme.accentBright)
             }
+
+            // Poster cover only while cold — same gravity as video (no fill/fit mismatch zoom).
+            if let posterURL, shouldShowPosterCover {
+                CachedAsyncImage(
+                    url: posterURL,
+                    maxPixelSize: 900,
+                    contentMode: fillsFrame ? .fill : .fit,
+                    placeholder: AnyView(Color.black)
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .allowsHitTesting(false)
+            }
         }
-        .clipped()
+        .background(Color.black)
         .onAppear {
+            liveGate.isActive = isActive
+            liveGate.userWantsPause = userWantsPause
+            // Only cover cold mounts — reclaiming a warm player must not flash poster/black.
+            if player?.currentItem?.status != .readyToPlay {
+                showPosterCover = true
+            } else {
+                showPosterCover = false
+            }
+            if isActive {
+                liveGate.pageEpoch = MediaPlaybackCoordinator.shared.sparkPageEpoch
+            }
             isMuted = sharesFeedMute ? appState.feedVideosMuted : muted
+            liveGate.isMuted = isMuted
             configureAudioSession()
-            // Feed Sparks: start buffering immediately (silent) — don't wait for focus win.
-            Task { await ensurePlayer(forceRebuild: player?.currentItem == nil) }
+            // Buffer the moment the cell mounts (feed + Sparks) — don't wait for focus.
+            handleActivationOrMount(forceRebuild: player?.currentItem == nil)
             if showsControls { scheduleChromeHide() }
         }
         // Screenshot / Control Center must not leave video paused.
         .onReceive(NotificationCenter.default.publisher(for: .matteryaResumePlaybackAfterInterrupt)) { _ in
-            guard isActive, !userWantsPause, let player, player.currentItem != nil else { return }
+            // liveGate + solo only — never resume an off-screen / non-solo Spark
+            // (comments overlay used to wake “older” pages that still had isActive=true).
+            guard liveGate.isActive, !liveGate.userWantsPause, let player, player.currentItem != nil else { return }
+            // Must already be solo — do not claim solo here (that stole audio from the current Spark).
+            guard MediaPlaybackCoordinator.shared.isSolo(player) else {
+                player.pause()
+                player.isMuted = true
+                player.volume = 0
+                return
+            }
             if player.rate < 0.01 {
-                MediaPlaybackCoordinator.shared.soloSparkAudio(keeping: player)
-                player.isMuted = isMuted
-                player.volume = isMuted ? 0 : 1
-                player.play()
-                player.safePlayImmediately(atRate: 1.0)
-                isPlaying = true
+                kickAudiblePlayback(on: player)
             }
         }
         .onChange(of: isActive) { _, active in
+            liveGate.isActive = active
             if active {
-                userWantsPause = false
-                // Rebuild if coordinator soft/hard-stopped the item while we stayed mounted.
-                Task { await ensurePlayer(forceRebuild: player?.currentItem == nil) }
+                // Bind to the current page epoch so late observers from prior pages cannot re-solo.
+                liveGate.pageEpoch = MediaPlaybackCoordinator.shared.sparkPageEpoch
+                // Respect user pause if they paused then we re-entered the same page.
+                userWantsPause = isPausedByUser
+                liveGate.userWantsPause = isPausedByUser
+                if isPausedByUser {
+                    // Stay on frozen frame — no poster swap, no restart seek.
+                    player?.pause()
+                    isPlaying = false
+                    showPosterCover = false
+                    return
+                }
+                // Warm / ready items already have a decoded frame — do NOT slam poster cover
+                // (that was the black "refresh" on every swipe).
+                let ready = player?.currentItem?.status == .readyToPlay
+                if !ready {
+                    showPosterCover = true
+                }
+                handleActivationOrMount(forceRebuild: false)
             } else {
-                persistPlaybackPosition()
-                // Hard silence — pause alone left audio bleeding into the next Spark.
+                // Page left the viewport — not a user pause.
+                if restartFromBeginningToken == 0 {
+                    persistPlaybackPosition()
+                }
                 player?.pause()
                 player?.isMuted = true
                 player?.volume = 0
                 isPlaying = false
+                // Keep last decoded frame under the next page; don't force poster swap.
+                isRestartSeeking = false
                 userWantsPause = false
+                liveGate.userWantsPause = false
+                // Pre-seek to 0 while OFF-SCREEN so next focus can play without a seek flash.
+                if restartFromBeginningToken > 0 {
+                    softSeekToBeginning(playAfter: false)
+                }
             }
+        }
+        .onChange(of: isPausedByUser) { _, paused in
+            liveGate.userWantsPause = paused
+            userWantsPause = paused
+            guard liveGate.isActive, let player, player.currentItem != nil else { return }
+            if paused {
+                // Freeze current frame — keep AVPlayer layer visible (no poster / black).
+                player.pause()
+                isPlaying = false
+                showPosterCover = false
+                isRestartSeeking = false
+            } else {
+                kickAudiblePlayback(on: player)
+            }
+        }
+        .onChange(of: restartFromBeginningToken) { _, token in
+            guard token > 0, token != lastHandledRestartToken else { return }
+            guard !isPausedByUser else {
+                lastHandledRestartToken = token
+                return
+            }
+            // Never force poster on warm ready players (black flash on swipe).
+            if player?.currentItem?.status != .readyToPlay {
+                showPosterCover = true
+            } else {
+                showPosterCover = false
+            }
+            guard isActive || liveGate.isActive else {
+                softSeekToBeginning(playAfter: false)
+                return
+            }
+            handleActivationOrMount(forceRebuild: false)
         }
         .onChange(of: muted) { _, newValue in
             guard !sharesFeedMute else { return }
             isMuted = newValue
+            liveGate.isMuted = newValue
             player?.isMuted = newValue
         }
         .onChange(of: appState.feedVideosMuted) { _, globalMuted in
             guard sharesFeedMute else { return }
             isMuted = globalMuted
+            liveGate.isMuted = globalMuted
             player?.isMuted = globalMuted
+        }
+        .onChange(of: userWantsPause) { _, paused in
+            liveGate.userWantsPause = paused
+        }
+        .onChange(of: isMuted) { _, mutedNow in
+            liveGate.isMuted = mutedNow
         }
         .onChange(of: adFinished) { _, finished in
             if finished {
@@ -217,19 +345,191 @@ struct VideoPlayerView: View {
         guard let player else { return }
         if isPlaying {
             userWantsPause = true
+            liveGate.userWantsPause = true
             player.pause()
             isPlaying = false
         } else {
             // Resume: inactive path force-mutes — restore user mute state or audio is gone.
             userWantsPause = false
-            MediaPlaybackCoordinator.shared.soloSparkAudio(keeping: player)
-            player.isMuted = isMuted
-            player.volume = isMuted ? 0 : 1
-            player.play()
-            player.safePlayImmediately(atRate: 1.0)
-            isPlaying = true
+            liveGate.userWantsPause = false
+            kickAudiblePlayback(on: player)
         }
         scheduleChromeHide()
+    }
+
+    /// Solo + play only when this card is the live focused Spark / feed winner.
+    @MainActor
+    private func kickAudiblePlayback(on player: AVPlayer) {
+        guard liveGate.isActive, !liveGate.userWantsPause else {
+            player.pause()
+            player.isMuted = true
+            player.volume = 0
+            isPlaying = false
+            return
+        }
+        // Re-sync epoch so feed Sparks keep looping after a prior full-screen Sparks session.
+        liveGate.pageEpoch = MediaPlaybackCoordinator.shared.sparkPageEpoch
+        let epoch = liveGate.pageEpoch
+        guard MediaPlaybackCoordinator.shared.soloSparkAudio(keeping: player, pageEpoch: epoch) else {
+            isPlaying = false
+            return
+        }
+        guard MediaPlaybackCoordinator.shared.allowPlaybackIfSolo(player, pageEpoch: epoch) else {
+            isPlaying = false
+            return
+        }
+        player.isMuted = liveGate.isMuted
+        player.volume = liveGate.isMuted ? 0 : 1
+        player.play()
+        player.safePlayImmediately(atRate: 1.0)
+        isPlaying = true
+        isRestartSeeking = false
+        reportViewIfNeeded()
+        // Warm / ready: drop poster *now* — no poll delay (that felt like a refresh).
+        let itemReady = player.currentItem?.status == .readyToPlay
+        let alreadyHasRate = player.rate > 0.01
+            || player.timeControlStatus == .playing
+            || player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+        if itemReady || alreadyHasRate {
+            showPosterCover = false
+        } else {
+            revealPlayerWhenFramesReady(player)
+        }
+    }
+
+    /// Drop poster cover only after AVPlayer is producing frames (cold path only).
+    @MainActor
+    private func revealPlayerWhenFramesReady(_ player: AVPlayer) {
+        Task { @MainActor in
+            for _ in 0..<16 {
+                try? await Task.sleep(nanoseconds: 16_000_000) // ~1 frame @60fps
+                guard liveGate.isActive, !liveGate.userWantsPause else { return }
+                let rateOK = player.rate > 0.01
+                let statusOK = player.timeControlStatus == .playing
+                    || player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+                let itemOK = player.currentItem?.status == .readyToPlay
+                if rateOK || (statusOK && itemOK) {
+                    isRestartSeeking = false
+                    showPosterCover = false
+                    return
+                }
+            }
+            // Fallback: reveal anyway so we never stick on poster forever.
+            if liveGate.isActive {
+                isRestartSeeking = false
+                showPosterCover = false
+            }
+        }
+    }
+
+    /// Restart from 0 for looping Sparks (feed shares + full player).
+    @MainActor
+    private func restartLoop(on player: AVPlayer) {
+        guard liveGate.isActive, !liveGate.userWantsPause else { return }
+        // Soft keyframe loop — exact zero seek flashes black every loop.
+        player.seek(
+            to: .zero,
+            toleranceBefore: .positiveInfinity,
+            toleranceAfter: .positiveInfinity
+        ) { [weak player] finished in
+            guard finished, let player else { return }
+            Task { @MainActor in
+                self.kickAudiblePlayback(on: player)
+            }
+        }
+    }
+
+    /// Activate / mount: Sparks page-focus restarts from 0 once per token; unpause resumes mid-clip.
+    @MainActor
+    private func handleActivationOrMount(forceRebuild: Bool) {
+        let needsRestart = restartFromBeginningToken > 0
+            && restartFromBeginningToken != lastHandledRestartToken
+        if needsRestart {
+            lastHandledRestartToken = restartFromBeginningToken
+            restartPlaybackFromBeginning()
+            return
+        }
+        resumeOrEnsurePlayer(forceRebuild: forceRebuild)
+    }
+
+    /// Prefer sync resume when a buffered player already exists; async only for cold start.
+    @MainActor
+    private func resumeOrEnsurePlayer(forceRebuild: Bool) {
+        if !forceRebuild, let player, player.currentItem != nil {
+            if liveGate.isActive, !liveGate.userWantsPause {
+                kickAudiblePlayback(on: player)
+                if player.status != .readyToPlay || player.currentItem?.status != .readyToPlay {
+                    Task { await ensurePlayer(forceRebuild: false) }
+                }
+                return
+            }
+            if preloadsWhenInactive || postID != nil || liveGate.isActive {
+                player.pause()
+                player.isMuted = true
+                player.volume = 0
+                isPlaying = false
+                return
+            }
+        }
+        Task { await ensurePlayer(forceRebuild: forceRebuild || player?.currentItem == nil) }
+    }
+
+    /// Soft seek to start. When already near 0, play immediately with no cover swap.
+    @MainActor
+    private func softSeekToBeginning(playAfter: Bool) {
+        currentSeconds = 0
+        lastNotedPlaybackSecond = -1
+        guard let player, player.currentItem != nil else {
+            isRestartSeeking = false
+            if playAfter, liveGate.isActive, !liveGate.userWantsPause {
+                // Cold — cover until item installs.
+                showPosterCover = true
+            }
+            return
+        }
+        let t = player.currentTime().seconds
+        // Already at the start — no seek, no poster, just play (instant swipe).
+        if t.isFinite, t >= 0, t < 1.0 {
+            isRestartSeeking = false
+            showPosterCover = false
+            if playAfter, liveGate.isActive, !liveGate.userWantsPause {
+                kickAudiblePlayback(on: player)
+            }
+            return
+        }
+        // Mid-clip → 0: keep layer visible (decoded frames) while keyframe-seeking.
+        // Do not force poster — that was the black refresh on scroll-back.
+        isRestartSeeking = true
+        player.seek(
+            to: .zero,
+            toleranceBefore: .positiveInfinity,
+            toleranceAfter: .positiveInfinity
+        ) { [weak player] finished in
+            guard finished, let player else { return }
+            Task { @MainActor in
+                self.currentSeconds = 0
+                self.isRestartSeeking = false
+                if playAfter, self.liveGate.isActive, !self.liveGate.userWantsPause {
+                    self.kickAudiblePlayback(on: player)
+                }
+            }
+        }
+    }
+
+    /// Sparks page focus: play from t=0 without a black flash when already parked at start.
+    @MainActor
+    private func restartPlaybackFromBeginning() {
+        if let player, player.currentItem != nil {
+            softSeekToBeginning(playAfter: true)
+            return
+        }
+        // Cold path — ensure player (installClaimed also soft-seeks to 0).
+        Task {
+            await ensurePlayer(forceRebuild: player?.currentItem == nil)
+            await MainActor.run {
+                self.softSeekToBeginning(playAfter: true)
+            }
+        }
     }
 
     private func toggleMute() {
@@ -268,8 +568,10 @@ struct VideoPlayerView: View {
 
     @MainActor
     private func ensurePlayer(forceRebuild: Bool = false) async {
+        // Always preload when we have a post id (feed Sparks / hubs shares / reels pager).
+        let shouldPreload = preloadsWhenInactive || postID != nil
         // Inactive + no preload → hard silence and bail.
-        if !isActive, !preloadsWhenInactive {
+        if !isActive, !shouldPreload {
             player?.pause()
             player?.isMuted = true
             player?.volume = 0
@@ -284,7 +586,8 @@ struct VideoPlayerView: View {
         // stopAllPlayback() can nil out currentItem while the view stays mounted (persistent feed).
         let itemMissing = player != nil && player?.currentItem == nil
         if forceRebuild || configuredURL != url || itemMissing {
-            teardownPlayer()
+            // Don't park a broken/wrong URL player — rebuild cold.
+            teardownPlayer(park: false)
             configuredURL = url
             didRetryWithPublicURL = false
             userWantsPause = false
@@ -292,7 +595,7 @@ struct VideoPlayerView: View {
 
         if player == nil {
             loadFailed = false
-            // Instagram-speed: adopt a pre-buffered SparkWarmPool player when available.
+            // Instagram-speed: adopt a pre-buffered / parked SparkWarmPool player when available.
             if let postID, let claimed = SparkWarmPool.shared.claim(postID: postID) {
                 installClaimedPlayer(claimed)
             } else {
@@ -319,25 +622,14 @@ struct VideoPlayerView: View {
 
         // Solo this player — kill every other Spark / feed / warm-pool voice.
         if let player {
-            MediaPlaybackCoordinator.shared.soloSparkAudio(keeping: player)
-            player.isMuted = isMuted
-            player.volume = isMuted ? 0 : 1
-        }
-        if player?.currentItem?.status == .readyToPlay, player?.status == .readyToPlay {
-            if userWantsPause {
-                player?.pause()
-                isPlaying = false
+            if liveGate.isActive, !liveGate.userWantsPause {
+                kickAudiblePlayback(on: player)
             } else {
-                player?.play()
-                // Only playImmediately when fully ready — otherwise AVPlayer throws and kills the app.
-                player?.safePlayImmediately(atRate: 1.0)
-                isPlaying = true
-                reportViewIfNeeded()
+                player.pause()
+                player.isMuted = true
+                player.volume = 0
+                isPlaying = false
             }
-        } else if !userWantsPause {
-            // Soft kick only — never playImmediately until ready (crash: preroll/not ready).
-            player?.play()
-            isPlaying = true
         }
     }
 
@@ -347,39 +639,63 @@ struct VideoPlayerView: View {
         claimed.automaticallyWaitsToMinimizeStalling = false
         claimed.actionAtItemEnd = loops ? .none : .pause
         MediaPlaybackCoordinator.shared.register(claimed)
-        MediaPlaybackCoordinator.shared.soloSparkAudio(keeping: claimed)
-        if isActive {
-            claimed.isMuted = isMuted
-            claimed.volume = isMuted ? 0 : 1
+        // Parked players may sit mid-clip — soft-seek to 0 only when Sparks needs a clean start.
+        let mustStartAtZero = restartFromBeginningToken > 0 || (loops && liveGate.isActive)
+        if mustStartAtZero {
+            let t = claimed.currentTime().seconds
+            if !(t.isFinite && t >= 0 && t < 0.35) {
+                claimed.seek(
+                    to: .zero,
+                    toleranceBefore: .positiveInfinity,
+                    toleranceAfter: .positiveInfinity
+                )
+            }
+            currentSeconds = 0
+        }
+        if liveGate.isActive {
+            _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
+                keeping: claimed,
+                pageEpoch: liveGate.pageEpoch
+            )
+            claimed.isMuted = liveGate.isMuted
+            claimed.volume = liveGate.isMuted ? 0 : 1
         } else {
             claimed.pause()
             claimed.isMuted = true
             claimed.volume = 0
         }
+        let gate = liveGate
+        let startAtZero = mustStartAtZero
         if let item = claimed.currentItem {
-            item.preferredForwardBufferDuration = 6
+            item.preferredForwardBufferDuration = 8
             statusObserver = item.observe(\.status, options: [.new, .initial]) { item, _ in
                 Task { @MainActor in
                     switch item.status {
                     case .readyToPlay:
                         loadFailed = false
                         updateDuration(from: item)
-                        if isActive, !userWantsPause {
-                            MediaPlaybackCoordinator.shared.soloSparkAudio(keeping: claimed)
-                            claimed.isMuted = isMuted
-                            claimed.volume = isMuted ? 0 : 1
-                            claimed.play()
-                            claimed.safePlayImmediately(atRate: 1.0)
-                            isPlaying = true
-                            reportViewIfNeeded()
+                        if startAtZero {
+                            let t = claimed.currentTime().seconds
+                            if !(t.isFinite && t >= 0 && t < 0.35) {
+                                claimed.seek(
+                                    to: .zero,
+                                    toleranceBefore: .positiveInfinity,
+                                    toleranceAfter: .positiveInfinity
+                                )
+                            }
+                            currentSeconds = 0
+                        }
+                        if gate.isActive, !gate.userWantsPause {
+                            kickAudiblePlayback(on: claimed)
                         } else {
                             claimed.pause()
                             claimed.isMuted = true
                             claimed.volume = 0
+                            isPlaying = false
                         }
                     case .failed:
                         // Cold rebuild if warm item died.
-                        teardownPlayer()
+                        teardownPlayer(park: false)
                         Task { await ensurePlayer(forceRebuild: true) }
                     default:
                         break
@@ -392,34 +708,34 @@ struct VideoPlayerView: View {
                     object: item,
                     queue: .main
                 ) { _ in
-                    guard isActive, !userWantsPause else { return }
-                    claimed.seek(to: .zero)
-                    claimed.play()
+                    Task { @MainActor in
+                        guard gate.isActive, !gate.userWantsPause else { return }
+                        restartLoop(on: claimed)
+                    }
                 }
             }
         }
         attachTimeObserver(to: claimed)
         player = claimed
-        if isActive, !userWantsPause {
-            claimed.play()
-            claimed.safePlayImmediately(atRate: 1.0)
-            isPlaying = true
-            reportViewIfNeeded()
+        // Claimed players are already buffered — play immediately on the same runloop.
+        if liveGate.isActive, !liveGate.userWantsPause {
+            kickAudiblePlayback(on: claimed)
         }
     }
 
     @MainActor
     private func installPlayer(using configuration: MediaPlaybackConfiguration) {
         let item = makePlayerItem(for: configuration)
-        // Tiny forward buffer = first frame ASAP on feed Sparks / R2.
-        item.preferredForwardBufferDuration = preloadsWhenInactive || fillsFrame ? 2 : 4
+        // Deep forward buffer so scroll-back / next-page feel instant.
+        item.preferredForwardBufferDuration = (preloadsWhenInactive || fillsFrame || postID != nil) ? 8 : 4
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         let newPlayer = AVPlayer(playerItem: item)
-        newPlayer.isMuted = isActive ? isMuted : true
-        newPlayer.volume = (isActive && !isMuted) ? 1 : 0
+        newPlayer.isMuted = liveGate.isActive ? liveGate.isMuted : true
+        newPlayer.volume = (liveGate.isActive && !liveGate.isMuted) ? 1 : 0
         newPlayer.automaticallyWaitsToMinimizeStalling = false
         newPlayer.actionAtItemEnd = loops ? .none : .pause
 
+        let gate = liveGate
         statusObserver = item.observe(\.status, options: [.new, .initial]) { item, _ in
             Task { @MainActor in
                 switch item.status {
@@ -431,15 +747,8 @@ struct VideoPlayerView: View {
                         await newPlayer.seek(to: CMTime(seconds: resumeAt, preferredTimescale: 600))
                         currentSeconds = resumeAt
                     }
-                    if isActive, !userWantsPause {
-                        MediaPlaybackCoordinator.shared.soloSparkAudio(keeping: newPlayer)
-                        newPlayer.isMuted = isMuted
-                        newPlayer.volume = isMuted ? 0 : 1
-                        newPlayer.play()
-                        // Some Archive CDN items leave rate at 0 after the first play().
-                        newPlayer.safePlayImmediately(atRate: 1.0)
-                        isPlaying = true
-                        reportViewIfNeeded()
+                    if gate.isActive, !gate.userWantsPause {
+                        kickAudiblePlayback(on: newPlayer)
                     } else {
                         // Preload path: keep buffering silently.
                         newPlayer.pause()
@@ -463,24 +772,23 @@ struct VideoPlayerView: View {
                 object: item,
                 queue: .main
             ) { _ in
-                guard isActive, !userWantsPause else { return }
-                newPlayer.seek(to: .zero)
-                newPlayer.play()
+                Task { @MainActor in
+                    guard gate.isActive, !gate.userWantsPause else { return }
+                    restartLoop(on: newPlayer)
+                }
             }
         }
 
         player = newPlayer
         MediaPlaybackCoordinator.shared.register(newPlayer)
-        if !isActive {
+        if liveGate.isActive, !liveGate.userWantsPause {
+            kickAudiblePlayback(on: newPlayer)
+        } else {
+            // Inactive preload: stay silent but keep the item warming.
             newPlayer.pause()
             newPlayer.isMuted = true
             newPlayer.volume = 0
-        } else {
-            MediaPlaybackCoordinator.shared.soloSparkAudio(keeping: newPlayer)
-            if !userWantsPause {
-                newPlayer.safePlayImmediately(atRate: 1.0)
-                isPlaying = true
-            }
+            isPlaying = false
         }
     }
 
@@ -561,6 +869,10 @@ struct VideoPlayerView: View {
     }
 
     private func resolvedStartTime() -> Double {
+        // Sparks player always opens / re-focuses at 0 — ignore Hubs resume points.
+        if restartFromBeginningToken > 0 {
+            return 0
+        }
         if let startTime, startTime > 0 {
             return startTime
         }
@@ -590,17 +902,26 @@ struct VideoPlayerView: View {
         )
     }
 
-    private func teardownPlayer() {
+    private func teardownPlayer(park: Bool = true) {
         persistPlaybackPosition()
         removeTimeObserver()
         teardownPlayerObservers()
-        if let postID {
-            SparkWarmPool.shared.release(postID: postID)
-        }
         if let player {
             player.pause()
-            player.replaceCurrentItem(with: nil)
-            MediaPlaybackCoordinator.shared.unregister(player)
+            player.isMuted = true
+            player.volume = 0
+            if park, let postID, player.currentItem != nil, player.status != .failed {
+                // Keep the buffered item for instant re-entry when the user scrolls back.
+                SparkWarmPool.shared.park(postID: postID, player: player)
+            } else {
+                if let postID {
+                    SparkWarmPool.shared.release(postID: postID)
+                }
+                player.replaceCurrentItem(with: nil)
+                MediaPlaybackCoordinator.shared.unregister(player)
+            }
+        } else if let postID {
+            SparkWarmPool.shared.release(postID: postID)
         }
         player = nil
         configuredURL = nil
@@ -631,6 +952,18 @@ struct VideoPlayerView: View {
         didReportView = true
         onViewed?()
     }
+}
+
+// MARK: - Live gate (observer-safe)
+
+/// Reference type so KVO / NotificationCenter closures always read the *current* active/mute state.
+@MainActor
+private final class VideoPlayerLiveGate {
+    var isActive = false
+    var userWantsPause = false
+    var isMuted = false
+    /// Snapshot of `MediaPlaybackCoordinator.sparkPageEpoch` when this card last became active.
+    var pageEpoch: UInt64 = 0
 }
 
 // MARK: - Fullscreen
@@ -863,40 +1196,81 @@ private struct MatteryaVideoSurface: UIViewRepresentable {
 
     func makeUIView(context: Context) -> MatteryaPlayerUIView {
         let view = MatteryaPlayerUIView()
+        // Gravity BEFORE player attach — first decoded frame already correct.
+        view.lockGravity(fillsFrame: fillsFrame)
         view.playerLayer.player = player
-        view.applyFill(fillsFrame)
         return view
     }
 
     func updateUIView(_ uiView: MatteryaPlayerUIView, context: Context) {
-        uiView.playerLayer.player = player
-        uiView.applyFill(fillsFrame)
+        // Only re-assert locked gravity — never flip fill↔fit on updates.
+        uiView.lockGravity(fillsFrame: fillsFrame)
+        if uiView.playerLayer.player !== player {
+            uiView.playerLayer.player = player
+        }
     }
 }
 
 private final class MatteryaPlayerUIView: UIView {
+    /// AVPlayerLayer **is** the view's layer — never set `playerLayer.frame`.
     override class var layerClass: AnyClass { AVPlayerLayer.self }
 
     var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
 
+    private var lockedGravity: AVLayerVideoGravity = .resizeAspect
+    private var gravityLocked = false
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .black
-        // Always fill by default — no black bars on sides or top.
-        playerLayer.videoGravity = .resizeAspectFill
+        // Sparks: fit. Set before any frames decode.
+        playerLayer.videoGravity = .resizeAspect
+        lockedGravity = .resizeAspect
+        isUserInteractionEnabled = false
+        clipsToBounds = true
+        // Disable implicit CA animations on gravity/bounds (layout settle used to zoom).
+        playerLayer.actions = [
+            "bounds": NSNull(),
+            "position": NSNull(),
+            "contents": NSNull(),
+            "videoGravity": NSNull(),
+        ]
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func applyFill(_ fillsFrame: Bool) {
-        playerLayer.videoGravity = fillsFrame ? .resizeAspectFill : .resizeAspect
+    /// Lock gravity once; later calls with the same mode are no-ops.
+    func lockGravity(fillsFrame: Bool) {
+        let gravity: AVLayerVideoGravity = fillsFrame ? .resizeAspectFill : .resizeAspect
+        if gravityLocked, lockedGravity == gravity {
+            // Still re-assert in case UIKit reset it — without animation.
+            if playerLayer.videoGravity != gravity {
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                playerLayer.videoGravity = gravity
+                CATransaction.commit()
+            }
+            return
+        }
+        gravityLocked = true
+        lockedGravity = gravity
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        playerLayer.videoGravity = gravity
+        playerLayer.backgroundColor = UIColor.black.cgColor
+        CATransaction.commit()
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        playerLayer.frame = bounds
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if playerLayer.videoGravity != lockedGravity {
+            playerLayer.videoGravity = lockedGravity
+        }
+        CATransaction.commit()
     }
 }
 
@@ -1024,9 +1398,14 @@ private struct MatteryaVideoControls: View {
     private func formatTime(_ seconds: Double) -> String {
         guard seconds.isFinite, seconds >= 0 else { return "0:00" }
         let total = Int(seconds.rounded(.down))
-        let minutes = total / 60
-        let remainder = total % 60
-        return String(format: "%d:%02d", minutes, remainder)
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        let secs = total % 60
+        // Long Hubs videos: 1:01:00 not 61:00
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, secs)
+        }
+        return String(format: "%d:%02d", minutes, secs)
     }
 }
 
@@ -1181,7 +1560,8 @@ struct InFrameVideoPlayer: View {
         autoplaySurface.isLive(appState: appState)
     }
 
-    /// Winner of FeedVideoFocus + allowed surface (feed/profile, no hubs/reels takeover).
+    /// Winner of FeedVideoFocus + allowed surface.
+    /// Mini or expanded Hubs continuous player → no feed/profile autoplay.
     private var shouldPlay: Bool {
         isFocusWinner
             && surfaceLive
@@ -1240,8 +1620,8 @@ struct InFrameVideoPlayer: View {
                         allowsFullscreen: false,
                         sharesFeedMute: sharesFeedMute,
                         fillsFrame: fillsFrame,
-                        // Feed Sparks: buffer as soon as the cell mounts, play when focused.
-                        preloadsWhenInactive: muteOnlyControls || placement == "reel",
+                        // Always buffer while mounted — scroll away/back must be instant.
+                        preloadsWhenInactive: true,
                         onViewed: onViewed
                     )
                 }
@@ -1290,8 +1670,8 @@ struct InFrameVideoPlayer: View {
             if usesArchivePath {
                 ArchiveVideoPlayback.warmResolve(url)
             }
-            // Pre-warm R2 Sparks into the pool the moment the card mounts.
-            if let postID, !usesArchivePath {
+            // Pre-warm into the pool the moment the card mounts (R2 + hubs shares).
+            if let postID {
                 SparkWarmPool.shared.warmSingle(postID: postID, url: url)
             }
             refreshFocusWinner()
@@ -1320,9 +1700,15 @@ struct InFrameVideoPlayer: View {
             isFocusWinner = false
             playGate = false
         }
-        .onChange(of: appState.hubPlaybackPost?.id) { _, hubID in
-            syncPlayGate(immediate: hubID != nil)
-            if hubID == nil, shouldPlay, !isMuted {
+        .onChange(of: appState.hubPlaybackPost?.id) { _, postID in
+            syncPlayGate(immediate: postID != nil)
+            if shouldPlay, !isMuted {
+                activatePlaybackAudioIfNeeded(unmuted: true)
+            }
+        }
+        .onChange(of: appState.hubPlaybackExpanded) { _, _ in
+            syncPlayGate(immediate: appState.hubPlaybackPost != nil)
+            if shouldPlay, !isMuted {
                 activatePlaybackAudioIfNeeded(unmuted: true)
             }
         }
@@ -1338,6 +1724,7 @@ struct InFrameVideoPlayer: View {
             syncPlayGate(immediate: ctx != nil)
         }
         .onChange(of: shouldPlay) { _, play in
+            // Start immediately; delay pause so layout noise never kills a fully visible card.
             syncPlayGate(immediate: play)
             if play, !isMuted {
                 activatePlaybackAudioIfNeeded(unmuted: true)
@@ -1350,37 +1737,38 @@ struct InFrameVideoPlayer: View {
         if win != isFocusWinner {
             isFocusWinner = win
         }
-        // Pause immediately when we lose the ≥50% slot; start immediately when we win.
-        syncPlayGate(immediate: true)
+        // Win → play now. Lose → soft pause (debounced) unless surface left.
+        syncPlayGate(immediate: win)
     }
 
-    /// Instant on for play; short delay off so layout/scroll jitter doesn't hard-pause.
-    /// Losing ≥50% visibility clears focus immediately via `immediate: true` from refresh.
+    /// Instant on for play; delayed off so GeometryReader glitches don't pause full-screen cards.
     private func syncPlayGate(immediate: Bool) {
         if shouldPlay {
             deactivateTask?.cancel()
             deactivateTask = nil
-            if !playGate {
-                playGate = true
-            }
+            playGate = true
             return
         }
-        // Leaving surface / hubs takeover / reels / lost focus: pause promptly.
+        // Hard stop when leaving feed surface, opening Sparks, or any Hubs mini/expanded player.
         let leftAutoplaySurface =
             !surfaceLive
             || appState.reelsViewerContext != nil
             || appState.hubPlaybackPost != nil
-        if immediate || leftAutoplaySurface {
+        if leftAutoplaySurface {
             deactivateTask?.cancel()
             deactivateTask = nil
             playGate = false
             return
         }
-        // Focus lost briefly (layout flap) — hold ~120ms then pause.
+        // Focus lost (scrolled away / another winner) — hold briefly, then pause.
+        // Never hard-cut on `immediate` alone; that was pausing 100%-visible videos on layout ticks.
         guard playGate else { return }
+        if immediate {
+            // Still debounce — "immediate" only means we schedule sooner, not kill this frame.
+        }
         deactivateTask?.cancel()
         deactivateTask = Task {
-            try? await Task.sleep(nanoseconds: 120_000_000)
+            try? await Task.sleep(nanoseconds: 280_000_000)
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 if !shouldPlay {
@@ -1416,7 +1804,7 @@ struct InFrameVideoPlayer: View {
     }
 
     private func reportVisibility(_ frame: CGRect) {
-        // Hidden feed (still mounted under Profile) must not steal the ≥50% winner.
+        // Hidden feed (still mounted under Profile) must not steal the autoplay winner.
         guard surfaceLive else {
             if lastReportedRatio >= 0 {
                 lastReportedRatio = -1
@@ -1428,8 +1816,8 @@ struct InFrameVideoPlayer: View {
         }
 
         let ratio = FeedVideoFocus.visibleRatio(for: frame)
-        // Skip tiny noise; still re-check winner so 50% threshold is respected promptly.
-        if abs(ratio - lastReportedRatio) < 0.02, lastReportedRatio >= 0 {
+        // Skip tiny noise; still re-check winner (pause only when >70% off-screen).
+        if abs(ratio - lastReportedRatio) < 0.03, lastReportedRatio >= 0 {
             refreshFocusWinner()
             return
         }

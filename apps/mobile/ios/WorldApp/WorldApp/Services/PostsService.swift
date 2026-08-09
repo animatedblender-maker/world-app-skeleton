@@ -144,12 +144,12 @@ final class PostsService {
     private static let focusMarketCodes = ["US", "DE", "EG", "AL"]
 
     /// **Smooth first paint** after sign-in / cold open.
-    /// One GraphQL page + tiny own-posts pull. No multi-page walks, no hubs catalog.
-    /// Infinite scroll / pull-to-refresh load the rest.
+    /// Newest upload first so backend / R2 pipeline posts surface immediately at the top.
     func fetchFirstPaintHomePosts(limit: Int = 40) async -> [CountryPost] {
         await prepareFeedContext()
         let pageLimit = min(max(limit, 24), 48)
-        async let recentTask = fetchRecentPosts(limit: pageLimit)
+        // Dense spark-share walk, then sort by created_at (newest first).
+        async let recentTask = fetchRecentFeedPosts(limit: pageLimit, preferSparkShares: true)
         async let ownTask = fetchOwnPosts(limit: 8)
         let recent = await recentTask
         let own = await ownTask
@@ -165,8 +165,8 @@ final class PostsService {
                 if post.isHubSeedVideo { return false }
                 return true
             }
-        let me = currentAuthorID()
-        var merged = sessionFreshOrder(combined, pinAuthorID: me)
+        // Last uploaded always on top — no shuffle.
+        var merged = chronologicalNewestFirst(combined)
         if merged.count > pageLimit {
             merged = Array(merged.prefix(pageLimit))
         }
@@ -177,7 +177,6 @@ final class PostsService {
     func fetchNetworkHomePosts(limit: Int = 80) async -> [CountryPost] {
         await prepareFeedContext()
         let cap = min(max(limit, 40), 100)
-        // Parallel but shallow — 1 recent page + light focus sample + own. No 12-page walks.
         async let ownTask = fetchOwnPosts(limit: 12)
         async let recentTask = fetchRecentPosts(limit: min(cap, 60))
         async let focusTask = fetchFocusMarketPosts(limit: min(48, cap))
@@ -191,7 +190,6 @@ final class PostsService {
         combined.append(contentsOf: focus)
         combined.append(contentsOf: recent)
 
-        // No recommender yet — random session order so the feed always feels new.
         var merged = chronologicalNewestFirst(combined)
             .excludingMoments()
             .excludingSparks() // originals stay in Sparks player; spark *shares* pass through
@@ -202,17 +200,14 @@ final class PostsService {
                 if post.isHubSeedVideo { return false }
                 return true
             }
-        merged = balanceFocusMarkets(merged, limit: cap)
-        let me = currentAuthorID()
-        merged = sessionFreshOrder(merged, pinAuthorID: me)
+        // Pure recency — last uploaded always at top (no density reshuffle).
         if merged.count > cap {
             merged = Array(merged.prefix(cap))
         }
         if merged.isEmpty {
-            merged = sessionFreshOrder(
+            merged = chronologicalNewestFirst(
                 await fallbackFeedPosts(limit: cap).excludingSparks()
-                    .filter { !$0.authorID.hasPrefix("user_") && !$0.id.hasPrefix("post_") },
-                pinAuthorID: me
+                    .filter { !$0.authorID.hasPrefix("user_") && !$0.id.hasPrefix("post_") }
             )
         }
         return merged
@@ -315,11 +310,12 @@ final class PostsService {
 
     /// Deep pull of R2 Spark *originals* from all four focus countries for the Sparks player.
     private func fetchFocusMarketSparks(limitPerCountry: Int = 100) async -> [CountryPost] {
+        let per = min(max(limitPerCountry, 40), 500)
         var combined: [CountryPost] = []
         await withTaskGroup(of: [CountryPost].self) { group in
             for code in Self.focusMarketCodes {
                 group.addTask {
-                    let batch = (try? await self.listByCountry(code, limit: limitPerCountry)) ?? []
+                    let batch = (try? await self.listByCountry(code, limit: per)) ?? []
                     return batch.filter { ReelsRankingEngine.isSparkEligible($0) }
                 }
             }
@@ -330,10 +326,216 @@ final class PostsService {
         return combined
     }
 
+    /// Whether a usable Sparks pool is already in memory (no network).
+    var sparksCatalogIsWarm: Bool {
+        sparksSessionCatalog.count >= 40
+    }
+
+    /// Snapshot of the in-memory Sparks pool (may be empty).
+    func sparksCatalogSnapshot() -> [CountryPost] {
+        sparksSessionCatalog
+    }
+
+    /// Session Sparks pool.
+    /// - `deep: false`: medium fill for feed rails / first swipe (safe on feed open).
+    /// - `deep: true`: large R2 channel + country sample for the Sparks player.
+    /// Always re-ranks on return so order is never frozen for 20 minutes.
+    func loadSparksDiscoveryCatalog(forceRefresh: Bool = false, deep: Bool = false) async -> [CountryPost] {
+        let minWarm = deep ? 120 : 40
+        let cacheTTL: TimeInterval = deep ? 8 * 60 : 3 * 60
+        let cacheOK = !forceRefresh
+            && sparksSessionCatalog.count >= minWarm
+            && !(deep && sparksSessionCatalog.count < 120)
+            && sparksSessionLoadedAt.map { Date().timeIntervalSince($0) < cacheTTL } == true
+
+        if cacheOK {
+            // Same pool, **pure shuffle** every call — discovery rank was sticky across opens.
+            let snapshot = sparksSessionCatalog
+            return await Task.detached(priority: .utility) {
+                snapshot.shuffled()
+            }.value
+        }
+
+        await prepareFeedContext()
+        await Task.yield()
+
+        if !deep {
+            // Wider light pull so rails aren't stuck on ~8–16 IDs.
+            async let country = fetchFocusMarketSparks(limitPerCountry: 100)
+            async let hubSparks = fetchFocusMarketHubSparks(limitPerAuthor: 200)
+            async let recent = fetchRecentPosts(limit: 80)
+            let countryBatch = await country
+            let hubBatch = await hubSparks
+            let recentBatch = await recent
+            await Task.yield()
+
+            var merged: [CountryPost] = []
+            var seen = Set<String>()
+            // Prefer existing catalog so we grow, not thrash.
+            for post in sparksSessionCatalog + hubBatch + countryBatch + recentBatch {
+                guard seen.insert(post.id).inserted else { continue }
+                guard ReelsRankingEngine.isSparkEligible(post) else { continue }
+                merged.append(post)
+            }
+            let shuffled = await Task.detached(priority: .utility) {
+                merged.shuffled()
+            }.value
+            if shuffled.count >= sparksSessionCatalog.count || sparksSessionCatalog.isEmpty {
+                sparksSessionCatalog = shuffled
+                sparksSessionLoadedAt = Date()
+            }
+            #if DEBUG
+            print("[Sparks] light catalog size=\(sparksSessionCatalog.count)")
+            #endif
+            if sparksSessionCatalog.isEmpty { return shuffled }
+            let snapshot = sparksSessionCatalog
+            return await Task.detached(priority: .utility) {
+                snapshot.shuffled()
+            }.value
+        }
+
+        // Deep: max channel lists (API cap 500/author) + multi-country + recent pages.
+        // Goal: entire R2 Spark library available in-session (thousands when seeded).
+        async let hubSparks = fetchFocusMarketHubSparks(limitPerAuthor: 500)
+        async let countrySparks = fetchFocusMarketSparks(limitPerCountry: 500)
+        async let recent = fetchRecentPosts(limit: 120)
+        let hubBatch = await hubSparks
+        await Task.yield()
+        let countryBatch = await countrySparks
+        await Task.yield()
+        let recentBatch = await recent
+        await Task.yield()
+
+        var merged: [CountryPost] = []
+        var seen = Set<String>()
+        for post in hubBatch + countryBatch + recentBatch + sparksSessionCatalog {
+            guard seen.insert(post.id).inserted else { continue }
+            guard ReelsRankingEngine.isSparkEligible(post) else { continue }
+            merged.append(post)
+        }
+
+        // Page further recent posts for more Sparks (new R2 uploads land here first).
+        var before: String? = recentBatch.last?.createdAt
+        for _ in 0..<6 {
+            let page = await fetchRecentPosts(limit: 100, before: before)
+            if page.isEmpty { break }
+            var added = 0
+            for post in page {
+                guard seen.insert(post.id).inserted else { continue }
+                guard ReelsRankingEngine.isSparkEligible(post) else { continue }
+                merged.append(post)
+                added += 1
+            }
+            before = page.last?.createdAt
+            if page.count < 40 || added == 0 { break }
+            await Task.yield()
+        }
+
+        // Optional Archive seed top-up (when enabled).
+        if AppConfig.archiveContentEnabled {
+            let seed = UInt64.random(in: 1...UInt64.max) ^ UInt64(Date().timeIntervalSince1970 * 1_000)
+            let archive = await HubVideoSeedService.shared.sparkSeedVideos(limit: nil, shuffleSeed: seed)
+            for post in archive {
+                guard seen.insert(post.id).inserted else { continue }
+                guard ReelsRankingEngine.isSparkEligible(post) else { continue }
+                merged.append(post)
+            }
+        }
+
+        // Store unsorted pool; callers that need a fresh order use beginFreshSparksSession / shuffle.
+        sparksSessionCatalog = merged
+        sparksSessionLoadedAt = Date()
+        #if DEBUG
+        print("[Sparks] deep catalog size=\(merged.count)")
+        #endif
+        // Return a shuffled view so even cache-less deep loads feel random.
+        let seed = UInt64.random(in: 1...UInt64.max) ^ UInt64(merged.count)
+        var rng = SeededRNG(seed: seed)
+        var shuffled = merged
+        shuffled.shuffle(using: &rng)
+        return shuffled
+    }
+
+    /// Thread-safe snapshot for detached ranking (avoid capturing mutable actor state oddly).
+    private func sparksSessionCatalogSnapshot() -> [CountryPost] {
+        sparksSessionCatalog
+    }
+
+    /// Drop session pool so next open must re-fetch + re-rank (call when leaving Sparks / feed long enough).
+    func invalidateSparksDiscoveryCatalog() {
+        sparksSessionLoadedAt = nil
+    }
+
+    /// **Every Sparks player open** (feed / chat / Hubs / strip / menu): full catalog + pure shuffle.
+    /// Returns only **eligible originals** so the queue is thousands of distinct Sparks, not recycled shares.
+    func beginFreshSparksSession(preferStart: CountryPost? = nil) async -> [CountryPost] {
+        SparkDiscoveryEngine.resetSession()
+        ReelsRankingEngine.resetSession()
+        invalidateSparksDiscoveryCatalog()
+
+        // Always deep + force — max R2 channel lists + multi-country sparks.
+        var catalog = await loadSparksDiscoveryCatalog(forceRefresh: true, deep: true)
+
+        // Extra recent pages so brand-new uploads join the pool this session.
+        var seen = Set(catalog.map(\.id))
+        var before: String? = nil
+        for _ in 0..<8 {
+            let page = await fetchRecentPosts(limit: 100, before: before)
+            if page.isEmpty { break }
+            for post in page where seen.insert(post.id).inserted {
+                guard ReelsRankingEngine.isSparkEligible(post) else { continue }
+                catalog.append(post)
+            }
+            before = page.last?.createdAt
+            if page.count < 40 { break }
+        }
+
+        // Hard filter — drop any share shells / long-form that slipped in.
+        catalog = catalog.filter { ReelsRankingEngine.isSparkEligible($0) && $0.playableVideoURL != nil }
+        seen = Set(catalog.map(\.id))
+
+        // Pure random order every open (not sticky “rank” order).
+        let seed = UInt64.random(in: 1...UInt64.max)
+            ^ UInt64(Date().timeIntervalSince1970 * 1_000_000)
+            ^ UInt64(catalog.count &<< 12)
+        var rng = SeededRNG(seed: seed)
+        catalog.shuffle(using: &rng)
+
+        if let rawStart = preferStart {
+            let start = ReelsRankingEngine.resolvePlayerStart(rawStart)
+            if start.playableVideoURL != nil {
+                catalog.removeAll { $0.id == start.id }
+                catalog.insert(start, at: 0)
+                seen.insert(start.id)
+            }
+        }
+
+        sparksSessionCatalog = catalog
+        sparksSessionLoadedAt = Date()
+        #if DEBUG
+        print("[Sparks] fresh session size=\(catalog.count) seed=\(seed)")
+        #endif
+        return catalog
+    }
+
+    /// Deterministic PRNG for session shuffles (Swift RandomNumberGenerator).
+    private struct SeededRNG: RandomNumberGenerator {
+        private var state: UInt64
+        init(seed: UInt64) { state = seed == 0 ? 0x9E3779B97F4A7C15 : seed }
+        mutating func next() -> UInt64 {
+            state &+= 0x9E3779B97F4A7C15
+            var z = state
+            z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9
+            z = (z ^ (z >> 27)) &* 0x94D049BB133111EB
+            return z ^ (z >> 31)
+        }
+    }
+
     /// Walk `recentPosts` pages until we have enough feed items (spark shares + text + long video).
+    /// Always returns **newest upload first** so R2/backend posts land at the top of the feed.
     private func fetchRecentFeedPosts(limit: Int, preferSparkShares: Bool) async -> [CountryPost] {
-        var sparkShares: [CountryPost] = []
-        var other: [CountryPost] = []
+        _ = preferSparkShares // density is product preference; recency is the hard rule
+        var collected: [CountryPost] = []
         var seen = Set<String>()
         var before: String? = nil
         // Max 2 pages — smoothness first; scroll load-more covers the long tail.
@@ -349,23 +551,13 @@ final class PostsService {
             if batch.isEmpty { break }
             for post in batch {
                 guard seen.insert(post.id).inserted else { continue }
-                if preferSparkShares,
-                   post.isSparkFeedShare
-                    || post.isHubOriginFeedShare
-                    || post.hasVideo {
-                    sparkShares.append(post)
-                } else {
-                    other.append(post)
-                }
+                collected.append(post)
             }
             before = batch.last?.createdAt
             if batch.count < 30 { break }
-            if sparkShares.count + other.count >= stopAt { break }
+            if collected.count >= stopAt { break }
         }
-        // Lead with spark shares / video, then other feed posts (recency within each group).
-        let head = chronologicalNewestFirst(sparkShares)
-        let tail = chronologicalNewestFirst(other)
-        var merged = head + tail
+        var merged = chronologicalNewestFirst(collected)
         if merged.count > limit { merged = Array(merged.prefix(limit)) }
         return merged
     }
@@ -399,8 +591,8 @@ final class PostsService {
         let network = await fetchRecentPosts(limit: max(limit, 20), before: cursor)
             .excludingMoments()
             .excludingSparks()
-        // Shuffle each page so infinite-scroll never feels chronological.
-        let items = Array(sessionFreshOrder(network).prefix(limit))
+        // Newest first (cursor pages are already recent → older).
+        let items = Array(chronologicalNewestFirst(network).prefix(limit))
         let next = HomeFeedStore.cursor(from: items.last)
         return HomeFeedPage(
             items: items,
@@ -430,7 +622,7 @@ final class PostsService {
         return page.posts
     }
 
-    /// Paginated endless spark feed — ranks diversity, following, home country, and engagement.
+    /// Paginated endless spark feed — discovery ranking; never blocks UI on a full-catalog pull.
     func loadReelsFeedPage(
         excludingIDs: Set<String>,
         cursor: String? = nil,
@@ -444,18 +636,22 @@ final class PostsService {
     ) async -> ReelsFeedPage {
         await prepareFeedContext()
 
-        var candidates: [CountryPost] = []
-        // One recent page per request — endless scroll pages the rest.
-        let recent = await fetchRecentPosts(limit: min(max(fetchLimit, 40), 80), before: cursor)
-        candidates.append(contentsOf: recent)
+        // Prefer in-memory catalog; otherwise light fill (deep catalog warms in background).
+        var candidates: [CountryPost]
+        if sparksCatalogIsWarm {
+            candidates = sparksSessionCatalog
+        } else {
+            candidates = await loadSparksDiscoveryCatalog(forceRefresh: false, deep: false)
+        }
 
-        if cursor == nil {
-            // First Sparks open only — tiny pool so player presents immediately.
-            let pool = await loadReelsPool(
-                followingLimitPerAuthor: min(followingLimitPerAuthor, 4),
-                globalLimit: min(max(fetchLimit, 16), 24)
-            )
-            candidates.append(contentsOf: pool)
+        // Top up with a cursor page of recent so brand-new uploads appear quickly.
+        let recent = await fetchRecentPosts(limit: min(max(fetchLimit, 24), 60), before: cursor)
+        candidates.append(contentsOf: recent.filter { ReelsRankingEngine.isSparkEligible($0) })
+
+        if cursor == nil, followingLimitPerAuthor > 0 {
+            // Light own/following only — do not re-run full country walks.
+            let own = await fetchOwnPosts(limit: 12)
+            candidates.append(contentsOf: own.filter { ReelsRankingEngine.isSparkEligible($0) })
         }
 
         var seenCandidateIDs = Set<String>()
@@ -463,8 +659,6 @@ final class PostsService {
             guard seenCandidateIDs.insert(post.id).inserted else { return false }
             return ReelsRankingEngine.isSparkEligible(post)
         }
-        // No recommender yet — full random order each batch (R2 still preferred over Archive).
-        candidates = ReelsRankingEngine.prioritizeR2First(candidates)
 
         let batch = ReelsRankingEngine.nextBatch(
             from: candidates,
@@ -476,8 +670,13 @@ final class PostsService {
             allowRecycle: allowRecycle
         )
 
+        let remainingUnseen = candidates.contains {
+            !excludingIDs.contains($0.id)
+                && !batch.map(\.id).contains($0.id)
+                && ReelsRankingEngine.isSparkEligible($0)
+        }
         let nextCursor = recent.last?.createdAt
-        let hasMore = recent.count >= max(8, fetchLimit / 3)
+        let hasMore = remainingUnseen || recent.count >= max(8, fetchLimit / 4) || !batch.isEmpty
 
         return ReelsFeedPage(posts: batch, nextCursor: nextCursor, hasMore: hasMore)
     }
@@ -525,11 +724,12 @@ final class PostsService {
             }
         }
 
-        appendVideos(await fetchOwnPosts(limit: min(globalLimit, 12)))
-        // One recent page only — swipe load-more fills the stack.
-        appendVideos(await fetchRecentPosts(limit: min(max(globalLimit, 24), 40)))
-        // Tiny multi-country sample (not 4×80).
-        appendVideos(await fetchFocusMarketSparks(limitPerCountry: 12))
+        // Prefer the big discovery catalog when warm.
+        appendVideos(sparksSessionCatalog)
+        appendVideos(await fetchOwnPosts(limit: min(globalLimit, 16)))
+        appendVideos(await fetchRecentPosts(limit: min(max(globalLimit, 40), 80)))
+        // Deep multi-country sample so we never recycle ~12 IDs.
+        appendVideos(await fetchFocusMarketSparks(limitPerCountry: min(200, max(80, globalLimit * 4))))
 
         if !followingIDs.isEmpty {
             await withTaskGroup(of: [CountryPost].self) { group in
@@ -547,7 +747,7 @@ final class PostsService {
         if AppConfig.useDemoDataset {
             appendVideos(await sampleGlobalPosts(limit: globalLimit))
         }
-        return videos
+        return videos.filter { ReelsRankingEngine.isSparkEligible($0) || $0.hasVideo }
     }
 
     /// Country longform channel handles (R2 LongForm seed). Prefer *1 variants.
@@ -564,6 +764,11 @@ final class PostsService {
     /// In-process Hubs catalog — survives tab switches without disk/network.
     private(set) var hubsSessionCatalog: [CountryPost] = []
     private var hubsSessionLoadedAt: Date?
+
+    /// Large Sparks catalog for the four focus countries (session cache).
+    /// Avoids re-fetching thousands of rows every swipe while still rotating novelty.
+    private var sparksSessionCatalog: [CountryPost] = []
+    private var sparksSessionLoadedAt: Date?
 
     func rememberHubsSessionCatalog(_ posts: [CountryPost]) {
         guard !posts.isEmpty else { return }
@@ -664,9 +869,9 @@ final class PostsService {
         if topUpRecent {
             var before: String? = nil
             var seen = Set(combined.map(\.id))
-            // Deep scan so extra R2 longform not only under the four handles still lands.
-            for _ in 0..<12 {
-                let recent = await fetchRecentPosts(limit: 100, before: before)
+            // Bounded scan — 12×100 recent pages froze Hubs open on MainActor.
+            for _ in 0..<3 {
+                let recent = await fetchRecentPosts(limit: 60, before: before)
                 if recent.isEmpty { break }
                 for post in recent {
                     guard seen.insert(post.id).inserted else { continue }
@@ -786,7 +991,7 @@ final class PostsService {
         let sessionLong = hubsSessionCatalog.filter { !$0.isReel }.count
         let sessionSparks = hubsSessionCatalog.filter(\.isReel).count
 
-        // Session only short-circuits FAST paint or a truly complete FULL catalog.
+        // Session only short-circuits FAST paint or a useful FULL catalog.
         if !forceRefresh {
             if fast, sessionLong >= 8 {
                 #if DEBUG
@@ -794,8 +999,8 @@ final class PostsService {
                 #endif
                 return hubsSessionCatalog
             }
-            // Require a large full catalog before skipping network (R2 has hundreds of longform).
-            if !fast, sessionLong >= 200, sessionSparks >= 24 {
+            // 40 longform is enough for Hubs UI — don't re-pull thousands of rows every open.
+            if !fast, sessionLong >= 40 {
                 #if DEBUG
                 print("[Hubs] loadPlayCatalog SESSION full hit long=\(sessionLong) sparks=\(sessionSparks)")
                 #endif
@@ -806,13 +1011,13 @@ final class PostsService {
         if fast {
             let longForm = await loadLivingVideos(
                 followingLimitPerAuthor: followingLimitPerAuthor,
-                globalLimit: min(globalLimit, 32),
+                globalLimit: min(globalLimit, 28),
                 forceRefresh: forceRefresh,
                 fast: true
             )
             var merged = longForm
             var seen = Set(merged.map(\.id))
-            for post in hubsSessionCatalog.filter(\.isReel).prefix(16) where seen.insert(post.id).inserted {
+            for post in hubsSessionCatalog.filter(\.isReel).prefix(12) where seen.insert(post.id).inserted {
                 merged.append(post)
             }
             if !merged.isEmpty {
@@ -825,19 +1030,21 @@ final class PostsService {
             return merged
         }
 
-        // FULL: every longform + sparks from all R2 country channels (limit 500/author).
+        // FULL: deeper channel sample. Cap well below API 500 — that froze Hubs for seconds.
+        // Pull-to-refresh still goes deeper; background warm stays modest.
+        let perAuthor = forceRefresh ? 120 : 48
         async let channelCatalogTask = fetchFocusMarketHubCatalog(
-            limitPerAuthor: 500,
+            limitPerAuthor: perAuthor,
             includeSparks: true,
-            topUpRecent: true
+            topUpRecent: forceRefresh
         )
         async let feedSparksTask = loadReelsFeed(
             followingLimitPerAuthor: followingLimitPerAuthor,
-            globalLimit: min(max(globalLimit, 48), 80),
+            globalLimit: min(max(globalLimit, 24), 48),
             viewerCountry: viewerCountry,
             followingIDs: followingIDs
         )
-        async let ownTask = fetchOwnPosts(limit: 80)
+        async let ownTask = fetchOwnPosts(limit: forceRefresh ? 40 : 16)
 
         let channelCatalog = await channelCatalogTask
         let feedSparks = (await feedSparksTask).filter {
@@ -952,29 +1159,27 @@ final class PostsService {
         cachedPost(id: id)
     }
 
-    func listComments(_ postID: String, limit: Int = 50) async throws -> [PostComment] {
+    func listComments(_ postID: String, limit: Int = 2000) async throws -> [PostComment] {
         if AppConfig.useDemoDataset, await demo.isDemoPostID(postID) {
             return await demo.listComments(postID, limit: limit)
         }
         var comments = try await fetchCommentsByPost(postID, limit: limit)
 
-        // Spark feed shares often have no rows of their own — surface R2 comments from the original.
-        if comments.count < 3 {
-            if let post = try? await getPostByID(postID) {
-                let originID = SparkShareMarker.originID(from: post.body)
-                    ?? post.sharedPostID
-                    ?? post.sharedPost?.id
-                if let originID, originID != postID {
-                    let originComments = (try? await fetchCommentsByPost(originID, limit: limit)) ?? []
-                    if !originComments.isEmpty {
-                        // Prefer origin (R2) comments; keep any real replies on the share after.
-                        var seen = Set(originComments.map(\.id))
-                        var merged = originComments
-                        for c in comments where seen.insert(c.id).inserted {
-                            merged.append(c)
-                        }
-                        comments = Array(merged.prefix(limit))
+        // Spark feed shares may have a partial seed thread — prefer the fuller R2 origin thread.
+        if let post = try? await getPostByID(postID) {
+            let originID = SparkShareMarker.originID(from: post.body)
+                ?? post.sharedPostID
+                ?? post.sharedPost?.id
+            if let originID, originID != postID {
+                let originComments = (try? await fetchCommentsByPost(originID, limit: limit)) ?? []
+                if originComments.count > comments.count {
+                    // Prefer origin (R2) comments; keep any real replies on the share after.
+                    var seen = Set(originComments.map(\.id))
+                    var merged = originComments
+                    for c in comments where seen.insert(c.id).inserted {
+                        merged.append(c)
                     }
+                    comments = Array(merged.prefix(limit))
                 }
             }
         }
@@ -1584,25 +1789,78 @@ final class PostsService {
     }
 
     func loadBookmarkedPosts(localIDs: Set<String>, limit: Int = 100) async -> [CountryPost] {
-        if Self.usesLocalBookmarksOnly {
-            return await resolveLocalBookmarks(ids: localIDs, limit: limit)
-        }
-        do {
-            return try await savedPosts(limit: limit)
-        } catch {
-            if Self.isUnsupportedBookmarkError(error) {
-                Self.usesLocalBookmarksOnly = true
-                return await resolveLocalBookmarks(ids: localIDs, limit: limit)
+        var server: [CountryPost] = []
+        if !Self.usesLocalBookmarksOnly {
+            do {
+                server = try await savedPosts(limit: limit)
+            } catch {
+                if Self.isUnsupportedBookmarkError(error) {
+                    Self.usesLocalBookmarksOnly = true
+                } else if let cached = ContentCache.shared.posts(for: .savedPosts), !cached.isEmpty {
+                    // Network blip — still resolve local-only Sparks below.
+                    server = cached.filter { localIDs.contains($0.id) || localIDs.isEmpty }
+                }
             }
-            if let cached = ContentCache.shared.posts(for: .savedPosts), !cached.isEmpty {
-                return cached
-            }
-            return await resolveLocalBookmarks(ids: localIDs, limit: limit)
         }
+
+        // Always re-hydrate IDs the server never stores (ia_*, hub_*, seed Sparks).
+        let serverIDs = Set(server.map(\.id))
+        let missing = localIDs.subtracting(serverIDs)
+        let localOnly = await resolveLocalBookmarks(ids: missing.isEmpty && server.isEmpty ? localIDs : missing, limit: limit)
+
+        var byID: [String: CountryPost] = [:]
+        for post in server {
+            byID[post.id] = post.withSavedByMe(true)
+        }
+        for post in localOnly {
+            // Prefer rich local Spark media over a thin server row if both exist.
+            if let existing = byID[post.id] {
+                let localPlayable = post.playableVideoURL != nil || !(post.mediaURL ?? "").isEmpty
+                let serverPlayable = existing.playableVideoURL != nil || !(existing.mediaURL ?? "").isEmpty
+                if localPlayable, !serverPlayable || post.isReel || post.isSparkFeedShare {
+                    byID[post.id] = post.withSavedByMe(true)
+                }
+            } else {
+                byID[post.id] = post.withSavedByMe(true)
+            }
+        }
+        return byID.values.sorted { $0.createdAt > $1.createdAt }
+    }
+
+    /// Seed / Archive / non-UUID Sparks cannot hit `savePost` on the server — keep on device.
+    static func mustBookmarkLocally(_ post: CountryPost) -> Bool {
+        if UUID(uuidString: post.id) == nil { return true }
+        if post.isHubSeedVideo || post.isSeededOrSynthetic { return true }
+        if post.isArchiveSparkSource { return true }
+        let id = post.id.lowercased()
+        if id.hasPrefix("ia_") || id.hasPrefix("hub_") || id.hasPrefix("demo_") || id.hasPrefix("post_") {
+            return true
+        }
+        let author = post.authorID.lowercased()
+        if author.hasPrefix("hub_") || author.hasPrefix("hub_spark_") || author.hasPrefix("user_") {
+            return true
+        }
+        return false
+    }
+
+    static func isMissingPostBookmarkError(_ error: Error) -> Bool {
+        let message = error.localizedDescription.lowercased()
+        return message.contains("not found")
+            || message.contains("does not exist")
+            || message.contains("foreign key")
+            || message.contains("invalid input")
+            || message.contains("invalid uuid")
+            || message.contains("no rows")
+            || message.contains("pgrst")
+            || message.contains("22p02")
     }
 
     func toggleBookmark(for post: CountryPost, saved: Bool) async throws -> CountryPost {
-        if Self.usesLocalBookmarksOnly {
+        // Always succeed locally for catalog/seed Sparks — server has no row to bookmark.
+        if Self.usesLocalBookmarksOnly || Self.mustBookmarkLocally(post) {
+            return post.withSavedByMe(saved)
+        }
+        if await shouldEngageLocally(postID: post.id) {
             return post.withSavedByMe(saved)
         }
         do {
@@ -1615,6 +1873,10 @@ final class PostsService {
                 Self.usesLocalBookmarksOnly = true
                 return post.withSavedByMe(saved)
             }
+            // Post missing on server (deleted / bad id) — still keep in Saved Sparks on device.
+            if Self.isMissingPostBookmarkError(error) || Self.mustBookmarkLocally(post) {
+                return post.withSavedByMe(saved)
+            }
             throw error
         }
     }
@@ -1622,22 +1884,45 @@ final class PostsService {
     private func resolveLocalBookmarks(ids: Set<String>, limit: Int) async -> [CountryPost] {
         guard !ids.isEmpty else { return [] }
 
+        var byID: [String: CountryPost] = [:]
+
+        // 1) Disk/memory saved cache (full Spark rows with media).
         if let cached = ContentCache.shared.posts(for: .savedPosts) {
-            let filtered = cached
-                .filter { ids.contains($0.id) }
-                .map { $0.withSavedByMe(true) }
-            if !filtered.isEmpty {
-                return filtered.sorted { $0.createdAt > $1.createdAt }
+            for post in cached where ids.contains(post.id) {
+                byID[post.id] = post.withSavedByMe(true)
             }
         }
 
-        var resolved: [CountryPost] = []
-        for id in ids.prefix(limit) {
+        // 2) Resolve remaining IDs (network UUID, then seed/archive catalog).
+        let remaining = ids.subtracting(byID.keys)
+        for id in remaining.prefix(limit) {
             if let post = try? await getPostByID(id) {
-                resolved.append(post.withSavedByMe(true))
+                byID[id] = post.withSavedByMe(true)
+                continue
+            }
+            // Catalog / R2 / Archive Sparks never exist as server posts.
+            if let seed = await HubVideoSeedService.shared.post(id: id) {
+                byID[id] = seed.withSavedByMe(true)
+                continue
+            }
+            // Last resort: any feed/hubs cache that still holds the row.
+            if let fromFeeds = Self.lookupPostInCaches(id: id) {
+                byID[id] = fromFeeds.withSavedByMe(true)
             }
         }
-        return resolved.sorted { $0.createdAt > $1.createdAt }
+
+        return byID.values.sorted { $0.createdAt > $1.createdAt }
+    }
+
+    /// Find a post by id across warm in-memory caches (seed Sparks after process restart).
+    private static func lookupPostInCaches(id: String) -> CountryPost? {
+        let keys: [ContentCacheKey] = [.savedPosts, .homeFeed, .livingVideos, .profilePosts]
+        for key in keys {
+            if let hit = ContentCache.shared.posts(for: key)?.first(where: { $0.id == id }) {
+                return hit
+            }
+        }
+        return nil
     }
 
     func updatePost(
@@ -1739,7 +2024,7 @@ final class PostsService {
     func recordView(_ post: CountryPost) async {
         guard !post.id.isEmpty, !viewedPostIDs.contains(post.id) else { return }
         viewedPostIDs.insert(post.id)
-        ReelsRankingEngine.markWatched(post.id)
+        SparkDiscoveryEngine.markWatched(post.id)
         await MainActor.run {
             EngagementTracker.shared.videoProgress(post: post, progress: 0.05, durationMs: 0, surface: "view")
         }
@@ -1910,36 +2195,31 @@ final class PostsService {
             .sorted { ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast) }
     }
 
-    /// Temporary stand-in until a real recommender exists:
-    /// every call returns a **new random order** so feed / rails always feel fresh.
-    /// - Own posts (optional) stay at the front (newest first among them).
-    /// - Explicit `pinIDs` stay ahead of the shuffled rest (stable relative order).
+    /// Home feed order: **newest upload first** so R2 / backend / user posts always surface at top.
+    /// Optional pinIDs stay above the timeline (e.g. in-flight local posts); no shuffle.
     func sessionFreshOrder(
         _ posts: [CountryPost],
         pinAuthorID: String? = nil,
         pinIDs: Set<String> = []
     ) -> [CountryPost] {
+        _ = pinAuthorID // no longer sticky-own-first — global recency wins
         var seen = Set<String>()
         let unique = posts.filter { seen.insert($0.id).inserted && !$0.isStory }
         guard unique.count > 1 else { return unique }
 
         var pinned: [CountryPost] = []
         var rest: [CountryPost] = []
-        let own = pinAuthorID.flatMap { $0.isEmpty ? nil : $0 }
 
         for post in unique {
             if pinIDs.contains(post.id) {
-                pinned.append(post)
-            } else if let own, post.authorID == own {
                 pinned.append(post)
             } else {
                 rest.append(post)
             }
         }
 
-        // Own / pinned: newest first so a just-created post stays on top.
         pinned.sort { ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast) }
-        rest.shuffle()
+        rest.sort { ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast) }
         return pinned + rest
     }
 
@@ -1976,6 +2256,224 @@ enum PostsServiceError: LocalizedError {
             "Moments live in Globe — they can't be shared as feed posts."
         case .shareFailed(let message):
             message
+        }
+    }
+}
+
+// MARK: - Temporary Spark discovery (same file as PostsService so Xcode always compiles it)
+
+/// Pre-launch stand-in for the official recommender: novelty + diversity over the full R2 catalog.
+enum SparkDiscoveryEngine {
+    private static let defaultsKey = "spark.discovery.impressions.v1"
+    private static let maxPersisted = 2_500
+    private static let impressionTTLDays: Double = 21
+    private static let lock = NSLock()
+
+    private static var impressions: [String: TimeInterval] = load()
+    private static var sessionServed: Set<String> = []
+
+    static func markImpressed(_ postID: String) {
+        guard !postID.isEmpty else { return }
+        lock.lock()
+        sessionServed.insert(postID)
+        impressions[postID] = Date().timeIntervalSince1970
+        lock.unlock()
+        trimAndSave()
+    }
+
+    static func markImpressed(_ posts: [CountryPost]) {
+        let now = Date().timeIntervalSince1970
+        lock.lock()
+        for post in posts {
+            sessionServed.insert(post.id)
+            impressions[post.id] = now
+        }
+        lock.unlock()
+        trimAndSave()
+    }
+
+    static func markWatched(_ postID: String) {
+        markImpressed(postID)
+        ReelsRankingEngine.markWatched(postID)
+    }
+
+    static func resetSession() {
+        lock.lock()
+        sessionServed.removeAll()
+        lock.unlock()
+        ReelsRankingEngine.resetSession()
+    }
+
+    static func clearAllHistory() {
+        lock.lock()
+        sessionServed.removeAll()
+        impressions.removeAll()
+        lock.unlock()
+        UserDefaults.standard.removeObject(forKey: defaultsKey)
+        ReelsRankingEngine.resetSession()
+    }
+
+    /// Unseen first, then least-recently-seen; R2 + author/country spacing.
+    static func rankForDiscovery(
+        _ candidates: [CountryPost],
+        excluding: Set<String> = [],
+        limit: Int? = nil
+    ) -> [CountryPost] {
+        var seen = Set<String>()
+        var pool = candidates.filter { post in
+            guard seen.insert(post.id).inserted else { return false }
+            guard !excluding.contains(post.id) else { return false }
+            return true
+        }
+        guard !pool.isEmpty else { return [] }
+
+        let now = Date().timeIntervalSince1970
+        let ttl = impressionTTLDays * 24 * 3600
+
+        lock.lock()
+        let sessionSnap = sessionServed
+        let impSnap = impressions
+        lock.unlock()
+
+        var fresh: [CountryPost] = []
+        var stale: [CountryPost] = []
+        var recent: [CountryPost] = []
+
+        for post in pool {
+            if sessionSnap.contains(post.id) {
+                recent.append(post)
+                continue
+            }
+            if let t = impSnap[post.id], now - t < ttl {
+                if now - t > 2 * 24 * 3600 {
+                    stale.append(post)
+                } else {
+                    recent.append(post)
+                }
+            } else {
+                fresh.append(post)
+            }
+        }
+
+        func diversityShuffle(_ items: [CountryPost]) -> [CountryPost] {
+            guard items.count > 2 else { return items.shuffled() }
+            let r2 = items.filter(\.isR2HostedMedia).shuffled()
+            let rest = items.filter { !$0.isR2HostedMedia }.shuffled()
+            return spacedPick(from: r2 + rest, limit: items.count)
+        }
+
+        var out = diversityShuffle(fresh) + diversityShuffle(stale) + diversityShuffle(recent)
+        out = spacedPick(from: out, limit: out.count)
+
+        if let limit, limit > 0, out.count > limit {
+            return Array(out.prefix(limit))
+        }
+        return out
+    }
+
+    static func nextBatch(
+        from candidates: [CountryPost],
+        excluding existingIDs: Set<String>,
+        limit: Int,
+        tail: [CountryPost] = [],
+        allowRecycle: Bool = false
+    ) -> [CountryPost] {
+        guard limit > 0 else { return [] }
+
+        lock.lock()
+        let sessionSnap = sessionServed
+        lock.unlock()
+
+        var pool = candidates.filter {
+            !existingIDs.contains($0.id) && ReelsRankingEngine.isSparkEligible($0)
+        }
+        if pool.isEmpty, allowRecycle {
+            pool = candidates.filter {
+                !existingIDs.contains($0.id)
+                    && ReelsRankingEngine.isSparkEligible($0)
+                    && !sessionSnap.contains($0.id)
+            }
+        }
+        if pool.isEmpty, allowRecycle {
+            pool = candidates.filter { ReelsRankingEngine.isSparkEligible($0) }
+        }
+        guard !pool.isEmpty else { return [] }
+
+        let ranked = rankForDiscovery(pool, excluding: existingIDs)
+        var picked: [CountryPost] = []
+        var context = tail
+        var remaining = ranked
+
+        while picked.count < limit, !remaining.isEmpty {
+            let recentAuthors = Set(context.suffix(3).map(\.authorID))
+            let recentCountries = Set(context.suffix(2).compactMap { $0.countryCode?.uppercased() })
+
+            let diverse = remaining.enumerated().filter { _, post in
+                if recentAuthors.contains(post.authorID) { return false }
+                if let c = post.countryCode?.uppercased(), recentCountries.contains(c) { return false }
+                return true
+            }
+
+            let choice: CountryPost
+            if let d = diverse.first {
+                choice = remaining.remove(at: d.offset)
+            } else {
+                choice = remaining.removeFirst()
+            }
+            picked.append(choice)
+            context.append(choice)
+        }
+
+        // Do NOT markImpressed here — that burned entire batches as “seen” before the
+        // user watched them and recycled the same handful of Sparks. markWatched only
+        // when a Spark is actually focused in the player / feed.
+        return picked
+    }
+
+    private static func spacedPick(from items: [CountryPost], limit: Int) -> [CountryPost] {
+        guard !items.isEmpty else { return [] }
+        var remaining = items
+        var out: [CountryPost] = []
+        var lastAuthor: String?
+        var lastCountry: String?
+
+        while out.count < limit, !remaining.isEmpty {
+            let idx = remaining.firstIndex { post in
+                if let lastAuthor, post.authorID == lastAuthor { return false }
+                if let lastCountry,
+                   let c = post.countryCode?.uppercased(),
+                   c == lastCountry {
+                    return false
+                }
+                return true
+            } ?? remaining.startIndex
+            let post = remaining.remove(at: idx)
+            out.append(post)
+            lastAuthor = post.authorID
+            lastCountry = post.countryCode?.uppercased()
+        }
+        return out
+    }
+
+    private static func load() -> [String: TimeInterval] {
+        guard let data = UserDefaults.standard.data(forKey: defaultsKey),
+              let decoded = try? JSONDecoder().decode([String: TimeInterval].self, from: data)
+        else { return [:] }
+        let now = Date().timeIntervalSince1970
+        let ttl = impressionTTLDays * 24 * 3600
+        return decoded.filter { now - $0.value < ttl }
+    }
+
+    private static func trimAndSave() {
+        lock.lock()
+        if impressions.count > maxPersisted {
+            let sorted = impressions.sorted { $0.value > $1.value }
+            impressions = Dictionary(uniqueKeysWithValues: sorted.prefix(maxPersisted).map { ($0.key, $0.value) })
+        }
+        let snap = impressions
+        lock.unlock()
+        if let data = try? JSONEncoder().encode(snap) {
+            UserDefaults.standard.set(data, forKey: defaultsKey)
         }
     }
 }

@@ -50,46 +50,33 @@ struct YouTubeAppView: View {
     }
 
     /// Build home/discover lists once per catalog or chip change. Never reshuffle mid-scroll.
-    private func rebuildStableHomeLists(shuffleForYou: Bool = true) {
-        let filtered = catalog.filterVideos(
+    /// - Parameter remountList: only true for filter/shuffle — background merges must NOT remount
+    ///   the LazyVStack (that caused multi-second lag after open).
+    private func rebuildStableHomeLists(shuffleForYou: Bool = true, remountList: Bool = true) {
+        // Strict long-form only — Sparks live on the Sparks strip, never For you / chips.
+        var home = catalog.filterVideos(
             allVideos,
             homeFilter: homeFilter,
             followingIDs: appState.followingIDs,
             viewerCountry: appState.currentProfile?.countryCode
-        )
-        var home = filtered
-        // Always prefer long-form for the main list (Sparks stay on the Sparks strip).
-        if homeFilter == .all {
-            let longForm = allVideos.filter {
-                !$0.isReel && !$0.isStory
-                    && ($0.hasVideo || $0.playableVideoURL != nil)
-                    && (PlayPlatformBridge.belongsInHubsCatalog($0)
-                        || PlayPlatformBridge.isHubChannelUpload($0)
-                        || PlayPlatformBridge.isHubOriginShare($0))
-            }
-            if longForm.count > home.filter({ !$0.isReel }).count {
-                home = longForm
-            } else if home.isEmpty {
-                home = longForm
-            } else {
-                // Drop reels from For you grid — they already have a strip.
-                let onlyLong = home.filter { !$0.isReel }
-                if !onlyLong.isEmpty { home = onlyLong }
-            }
+        ).filter { PlayPlatformBridge.isHubsForYouLongForm($0) }
+
+        if home.isEmpty {
+            home = allVideos.filter { PlayPlatformBridge.isHubsForYouLongForm($0) }
         }
         if homeFilter == .all, shuffleForYou, home.count > 1 {
             home = home.shuffled()
         }
-        stableHomeVideos = home
-
-        if homeFilter == .all, !subscriptionVideos.isEmpty {
-            let subscriptionIDs = Set(subscriptionVideos.map(\.id))
-            let rest = home.filter { !subscriptionIDs.contains($0.id) }
-            stableDiscoverVideos = rest.count >= 12 ? rest : home
-        } else {
-            stableDiscoverVideos = home
+        // Cap what the home LazyVStack holds — thousands of rows after full catalog = lag.
+        let displayCap = homeFilter == .all ? 48 : 80
+        if home.count > displayCap {
+            home = Array(home.prefix(displayCap))
         }
-        homeListEpoch &+= 1
+        stableHomeVideos = home
+        stableDiscoverVideos = home
+        if remountList {
+            homeListEpoch &+= 1
+        }
     }
 
     private var subscriptionVideos: [CountryPost] {
@@ -98,6 +85,8 @@ struct YouTubeAppView: View {
             channels: channels,
             followingIDs: appState.followingIDs
         )
+        // Following rail on home is long-form only — Sparks stay on the Sparks strip.
+        .filter { PlayPlatformBridge.isHubsForYouLongForm($0) }
     }
 
     private var subscriptionChannels: [YouTubeChannel] {
@@ -175,19 +164,22 @@ struct YouTubeAppView: View {
             await consumePendingLivingVideoIfNeeded()
             // 1) Instant paint (session / disk) — never blocks.
             paintInstantHubsIfPossible()
-            // 2) Fast network only if still thin (never blocks a warm session).
+            // App open: always reshuffle For you so it never feels static.
+            if !allVideos.isEmpty {
+                rebuildStableHomeLists(shuffleForYou: true, remountList: true)
+            }
+            // 2) Fast network only if still thin — keeps open snappy.
             if allVideos.filter({ !$0.isReel }).count < 8 {
                 await loadVideos(forceRefresh: false, mode: .fast)
+                rebuildStableHomeLists(shuffleForYou: true, remountList: true)
             } else {
                 isLoading = false
             }
             await reshuffleSparksStrip()
             await consumePendingRoutingIfNeeded()
-            // 3) ALWAYS load full channel catalogs (all longform + sparks) in background.
-            Task(priority: .utility) {
-                await loadVideos(forceRefresh: false, mode: .full)
-                await reshuffleSparksStrip()
-            }
+            // 3) Defer deep catalog — full 4×500 pulls were freezing Hubs for seconds after open.
+            //    Pull-to-refresh still loads full immediately; idle expand is soft-merge only.
+            scheduleDeferredFullCatalogWarm()
         }
         .onAppear {
             paintInstantHubsIfPossible()
@@ -196,11 +188,13 @@ struct YouTubeAppView: View {
             if appState.selectedTab == .hubs {
                 EngagementTracker.shared.hubsOpened()
                 Task {
-                    if allVideos.isEmpty {
+                    // Only fill if empty — never re-hit network on every appear when warm.
+                    if allVideos.filter({ !$0.isReel }).count < 8 {
                         await loadVideos(forceRefresh: false, mode: .fast)
                     }
                     await reshuffleSparksStrip()
-                    warmSlugShelvesInBackground()
+                    // Light poster warm only (not every slug shelf).
+                    butterWarmHubCatalog(allVideos)
                 }
             }
         }
@@ -209,27 +203,38 @@ struct YouTubeAppView: View {
             EngagementTracker.shared.hubsOpened()
             paintInstantHubsIfPossible()
             isLoading = false
+            // New For you order every time user opens Hubs.
+            if !allVideos.isEmpty {
+                rebuildStableHomeLists(shuffleForYou: true, remountList: true)
+            }
             Task {
                 // Re-open: session/memory only — skip network if warm.
                 if allVideos.filter({ !$0.isReel }).count < 8 {
                     await loadVideos(forceRefresh: false, mode: .fast)
                 }
                 await reshuffleSparksStrip()
-                warmSlugShelvesInBackground()
             }
+        }
+        .onChange(of: appState.hubsFreshSessionToken) { _, token in
+            guard token > 0 else { return }
+            // App open: reshuffle For you when catalog is ready.
+            if !allVideos.isEmpty {
+                rebuildStableHomeLists(shuffleForYou: true, remountList: true)
+            }
+            Task { await reshuffleSparksStrip() }
         }
         .onChange(of: homeFilter) { _, filter in
             // Rebuild once per chip — shuffle only when returning to For you.
-            rebuildStableHomeLists(shuffleForYou: filter == .all)
-            // Prefetch the whole slug shelf so category chips feel instant.
+            rebuildStableHomeLists(shuffleForYou: filter == .all, remountList: true)
+            // Prefetch only the first screen of the shelf — full-shelf storms lagged navigation.
             let thumbPx = YouTubeMediaLayout.hubsListThumbMaxPixel
             if let slug = filter.hubSlug {
-                ImageCache.shared.prefetchHubSlug(slug, from: allVideos, limit: 60, maxPixelSize: thumbPx)
+                ImageCache.shared.prefetchHubSlug(slug, from: allVideos, limit: 16, maxPixelSize: thumbPx)
             } else if filter == .all {
                 ImageCache.shared.prefetchPostThumbnails(
-                    Array(stableDiscoverVideos.prefix(80)),
+                    Array(stableDiscoverVideos.prefix(12)),
                     maxPixelSize: thumbPx,
-                    aggressive: true
+                    aggressive: false
                 )
             }
             EngagementTracker.shared.hubShelfSelected(filter.rawValue)
@@ -340,12 +345,12 @@ struct YouTubeAppView: View {
                                 YouTubeVideoListRow(post: post, onTap: {
                                     openVideo(post)
                                 }, onAppearRow: {
-                                    // Same maxPixelSize as YouTubeVideoListRow so prefetch hits memory.
+                                    // Tight window — wide aggressive prefetch was saturating the network on open.
                                     ImageCache.shared.prefetchHubsWindow(
                                         posts: stableDiscoverVideos,
                                         around: index,
-                                        behind: 8,
-                                        ahead: 28,
+                                        behind: 2,
+                                        ahead: 8,
                                         maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel
                                     )
                                 })
@@ -836,7 +841,8 @@ struct YouTubeAppView: View {
     private func applyHubCatalog(
         _ videos: [CountryPost],
         shuffleForYou: Bool,
-        persist: Bool
+        persist: Bool,
+        remountList: Bool = true
     ) {
         allVideos = videos
         if persist, !videos.isEmpty {
@@ -846,17 +852,57 @@ struct YouTubeAppView: View {
             )
         }
         rebuildChannels()
-        rebuildStableHomeLists(shuffleForYou: shuffleForYou)
+        rebuildStableHomeLists(shuffleForYou: shuffleForYou, remountList: remountList)
+    }
+
+    /// Soft-merge background catalog into session without nuking the visible list.
+    private func softMergeHubCatalog(_ videos: [CountryPost]) {
+        guard !videos.isEmpty else { return }
+        var byID = Dictionary(uniqueKeysWithValues: allVideos.map { ($0.id, $0) })
+        var added = 0
+        for post in videos {
+            if byID[post.id] == nil { added += 1 }
+            byID[post.id] = post
+        }
+        let merged = Array(byID.values)
+        allVideos = merged
+        PostsService.shared.rememberHubsSessionCatalog(merged)
+        ContentCache.shared.setPosts(
+            Array(merged.prefix(ContentCache.maxCachedPosts)),
+            for: .livingVideos
+        )
+        rebuildChannels()
+        // Keep current For you order — only top-up display if thin.
+        if stableDiscoverVideos.count < 24, added > 0 {
+            rebuildStableHomeLists(shuffleForYou: false, remountList: false)
+        }
+        #if DEBUG
+        print("[Hubs] soft-merge +\(added) total=\(merged.count) display=\(stableDiscoverVideos.count)")
+        #endif
     }
 
     private func warmSlugShelvesInBackground() {
         let videos = allVideos
         guard !videos.isEmpty else { return }
         let thumbPx = YouTubeMediaLayout.hubsListThumbMaxPixel
-        Task.detached(priority: .utility) {
-            for slug in HubVideoSeedService.hubOrder {
-                ImageCache.shared.prefetchHubSlug(slug, from: videos, limit: 24, maxPixelSize: thumbPx)
+        // Only warm the first few shelves — full hubOrder × 24 was a download storm.
+        Task.detached(priority: .background) {
+            for slug in HubVideoSeedService.hubOrder.prefix(3) {
+                ImageCache.shared.prefetchHubSlug(slug, from: videos, limit: 10, maxPixelSize: thumbPx)
             }
+        }
+    }
+
+    /// Full catalog after the UI is idle — never races first paint.
+    private func scheduleDeferredFullCatalogWarm() {
+        Task(priority: .background) {
+            try? await Task.sleep(nanoseconds: 4_500_000_000)
+            guard appState.selectedTab == .hubs || appState.isPlayPresented else { return }
+            let longForm = allVideos.filter { !$0.isReel }.count
+            // Already rich enough for shelves / search.
+            if longForm >= 40 { return }
+            if PostsService.shared.hubsSessionCatalog.filter({ !$0.isReel }).count >= 40 { return }
+            await loadVideos(forceRefresh: false, mode: .full)
         }
     }
 
@@ -867,6 +913,7 @@ struct YouTubeAppView: View {
 
         let longFormNow = allVideos.filter { !$0.isReel }.count
         let sparksNow = allVideos.filter(\.isReel).count
+        let hadPaint = !allVideos.isEmpty
         // Warm UI: skip network when we already have enough for this mode.
         if !forceRefresh {
             if mode == .fast, longFormNow >= 8 {
@@ -877,14 +924,11 @@ struct YouTubeAppView: View {
                 #endif
                 return
             }
-            // Full catalog only skip when we already have a rich R2 session.
-            if mode == .full, longFormNow >= 200, sparksNow >= 24 {
+            // Full: session already useful — don't re-pull 4×500.
+            if mode == .full, longFormNow >= 40 || PostsService.shared.hubsSessionCatalog.filter({ !$0.isReel }).count >= 40 {
                 isLoading = false
-                butterWarmHubCatalog(allVideos)
-                warmSlugShelvesInBackground()
-                Task(priority: .utility) {
-                    await loadChannelProfiles()
-                    await loadFollowerCounts()
+                if sparksNow < 8 {
+                    // Optional light spark top-up only — no full channel walk.
                 }
                 #if DEBUG
                 print("[Hubs] skip FULL network — \(longFormNow) longform \(sparksNow) sparks")
@@ -906,9 +950,9 @@ struct YouTubeAppView: View {
             uniqueKeysWithValues: allVideos.map { ($0.id, $0) }
         )
 
-        // Network: FAST = longform only; FULL = every R2 longform + channel sparks.
+        // Network: FAST = longform only; FULL = deeper channel sample (not 500×4 on open).
         let network = await PostsService.shared.loadPlayCatalog(
-            globalLimit: forceRefresh ? 500 : (mode == .fast ? 32 : 500),
+            globalLimit: forceRefresh ? 200 : (mode == .fast ? 28 : 100),
             forceRefresh: forceRefresh,
             viewerCountry: appState.currentProfile?.countryCode,
             followingIDs: appState.followingIDs,
@@ -949,24 +993,36 @@ struct YouTubeAppView: View {
         }
 
         if !videos.isEmpty {
-            let painted = Self.slugCappedFirstPaint(videos, perSlug: mode == .fast ? 12 : 20)
-            var ordered = painted
-            var seen = Set(painted.map(\.id))
-            for post in videos where seen.insert(post.id).inserted {
-                ordered.append(post)
+            if hadPaint, mode == .full, !forceRefresh {
+                // Background expand: merge quietly — no list remount / reshuffle.
+                softMergeHubCatalog(videos)
+            } else {
+                let painted = Self.slugCappedFirstPaint(videos, perSlug: mode == .fast ? 10 : 14)
+                var ordered = painted
+                var seen = Set(painted.map(\.id))
+                for post in videos where seen.insert(post.id).inserted {
+                    ordered.append(post)
+                }
+                let shouldShuffle = homeFilter == .all && (forceRefresh || !hadPaint)
+                applyHubCatalog(
+                    ordered,
+                    shuffleForYou: shouldShuffle,
+                    persist: true,
+                    remountList: !hadPaint || forceRefresh || shouldShuffle
+                )
+                PostsService.shared.rememberHubsSessionCatalog(ordered)
             }
-            let shouldShuffle = homeFilter == .all && (forceRefresh || allVideos.isEmpty)
-            applyHubCatalog(ordered, shuffleForYou: shouldShuffle, persist: true)
-            PostsService.shared.rememberHubsSessionCatalog(ordered)
         }
 
         #if DEBUG
         let longForm = allVideos.filter { !$0.isReel }.count
-        print("[Hubs] applied mode=\(mode) longForm=\(longForm) total=\(allVideos.count) force=\(forceRefresh)")
+        print("[Hubs] applied mode=\(mode) longForm=\(longForm) total=\(allVideos.count) force=\(forceRefresh) hadPaint=\(hadPaint)")
         #endif
-        butterWarmHubCatalog(allVideos)
+        if !hadPaint || forceRefresh {
+            butterWarmHubCatalog(allVideos)
+        }
 
-        if mode == .full || forceRefresh {
+        if forceRefresh {
             Task(priority: .utility) {
                 await loadChannelProfiles()
                 await loadFollowerCounts()
@@ -980,25 +1036,27 @@ struct YouTubeAppView: View {
         let head = stableDiscoverVideos.isEmpty
             ? videos.filter { !$0.isReel && $0.playableVideoURL != nil }
             : stableDiscoverVideos
-        // First screen only (~12 rows) — was 120 and flooded the network.
+        // First screen only — was flooding downloads and lagging open.
         ImageCache.shared.prefetchPostThumbnails(
-            Array(head.prefix(16)),
+            Array(head.prefix(8)),
             maxPixelSize: thumbPx,
-            aggressive: true
+            aggressive: false
         )
         ImageCache.shared.prefetchPostThumbnails(
-            Array(catalog.historyVideos(from: videos).prefix(6)),
+            Array(catalog.historyVideos(from: videos).prefix(4)),
             maxPixelSize: thumbPx,
-            aggressive: true
+            aggressive: false
         )
-        // Defer slug shelf + sparks warm so For you paints first.
-        Task(priority: .utility) {
-            for slug in HubVideoSeedService.hubOrder.prefix(4) {
-                ImageCache.shared.prefetchHubSlug(slug, from: videos, limit: 8, maxPixelSize: thumbPx)
-            }
+        // Sparks strip thumbs later — never compete with For you.
+        Task(priority: .background) {
+            try? await Task.sleep(nanoseconds: 800_000_000)
             let sparks = videos.filter(\.isReel)
             if !sparks.isEmpty {
-                SparkWarmPool.shared.prepare(posts: Array(sparks.prefix(6)), around: 0, ahead: 2, behind: 0)
+                ImageCache.shared.prefetchPostThumbnails(
+                    Array(sparks.prefix(6)),
+                    maxPixelSize: 240,
+                    aggressive: false
+                )
             }
         }
     }
@@ -1297,17 +1355,27 @@ struct YouTubeAppView: View {
         )
     }
 
+    /// Opens the **Hubs long-form player** only.
+    /// Sparks player is only via `openReelsPlayback` (Sparks strip / library Sparks).
     private func openVideo(_ post: CountryPost) {
+        // Instant open — no await before first paint/play (resolve upgrades in background).
+        var watchPost = PlayPlatformBridge.hubWatchPresentation(for: post)
+        if watchPost.isReel || watchPost.isSpark || ReelsRankingEngine.isSparkEligible(watchPost) {
+            watchPost = post
+        }
+        EngagementTracker.shared.hubVideoOpened(watchPost)
+        appState.startHubPlayback(watchPost, expanded: true)
+        withAnimation(.easeInOut(duration: 0.15)) {
+            route = .watch(watchPost)
+        }
+        // Optional catalog upgrade (channel name / better media) without blocking start.
         Task { @MainActor in
-            let watchPost = await PlayPlatformBridge.resolveHubWatchPresentation(for: post)
-            EngagementTracker.shared.hubVideoOpened(watchPost)
-            if watchPost.isReel {
-                openReelsPlayback(starting: watchPost, seed: playReels)
-                return
-            }
-            appState.startHubPlayback(watchPost, expanded: true)
-            withAnimation(.easeInOut(duration: 0.2)) {
-                route = .watch(watchPost)
+            let resolved = await PlayPlatformBridge.resolveHubWatchPresentation(for: post)
+            guard !resolved.isReel, !ReelsRankingEngine.isSparkEligible(resolved) else { return }
+            if case .watch(let current) = route, current.id == post.id || current.id == watchPost.id {
+                if resolved.authorID != current.authorID {
+                    route = .watch(resolved)
+                }
             }
         }
     }

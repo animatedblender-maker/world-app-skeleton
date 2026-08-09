@@ -258,7 +258,9 @@ struct ProfileView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, Theme.pagePadding)
             } else {
-                postCards(posts, showsAuthorInJournal: true)
+                // Saved Sparks must NOT use forProfileFeedGrid (that strips isReel/Sparks).
+                let allowSparks = appState.profileLibrarySection == .savedReels
+                postCards(posts, showsAuthorInJournal: true, allowSparks: allowSparks)
             }
         }
     }
@@ -276,9 +278,16 @@ struct ProfileView: View {
         .padding(.horizontal, Theme.pagePadding)
     }
 
-    private func postCards(_ items: [CountryPost], showsAuthorInJournal: Bool) -> some View {
+    private func postCards(
+        _ items: [CountryPost],
+        showsAuthorInJournal: Bool,
+        allowSparks: Bool = false
+    ) -> some View {
         // Match home feed: edge-to-edge cards, no double horizontal inset.
-        let visible = items.forProfileFeedGrid()
+        // Posts tab strips Sparks; Saved Sparks must keep them.
+        let visible: [CountryPost] = allowSparks
+            ? items.excludingMoments().filter(\.hasFeedVisibleContent)
+            : items.forProfileFeedGrid()
         return LazyVStack(spacing: 0) {
             ForEach(visible) { post in
                 FacebookPostCard(
@@ -301,7 +310,10 @@ struct ProfileView: View {
                         appState.openPost(post)
                     },
                     onOpenReel: {
-                        var sparks = items.filter(\.isReel)
+                        // Prefer full saved-sparks list, not only isReel (player Keeps may be tagged differently).
+                        var sparks = allowSparks
+                            ? items
+                            : items.filter { $0.isReel || AppState.belongsInSavedSparks($0) }
                         if !sparks.contains(where: { $0.id == post.id }) {
                             sparks.insert(post, at: 0)
                         }
@@ -311,6 +323,7 @@ struct ProfileView: View {
                         posts.removeAll { $0.id == id }
                         appState.savedPosts.removeAll { $0.id == id }
                         appState.savedPostIDs.remove(id)
+                        appState.reelPresentationSavedIDs.remove(id)
                     },
                     onPostUpdated: { updated in
                         if let index = posts.firstIndex(where: { $0.id == updated.id }) {

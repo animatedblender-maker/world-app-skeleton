@@ -353,7 +353,8 @@ export class PostsService {
 
   async commentsByPost(postId, limit, before, viewerId) {
     await this.ensurePostAccess(postId, viewerId);
-    const safeLimit = Math.max(1, Math.min(100, limit || 20));
+    // Allow full R2 comments.json threads (often 50–200+); still bounded for safety.
+    const safeLimit = Math.max(1, Math.min(5000, limit || 200));
     const params = [postId, safeLimit];
     const beforeClause = before ? `and c.created_at < $3::timestamptz` : '';
     if (before) params.push(before);

@@ -11,8 +11,8 @@ enum FeedAutoplaySurface: String, Equatable, Sendable {
     @MainActor
     func isLive(appState: AppState) -> Bool {
         guard appState.reelsViewerContext == nil else { return false }
-        // Expanded hubs watch owns audio/video; mini may continue separately.
-        if appState.hubPlaybackPost != nil, appState.hubPlaybackExpanded { return false }
+        // Mini or expanded Hubs continuous player owns audio — no feed/profile autoplay.
+        if appState.hubPlaybackPost != nil { return false }
 
         switch self {
         case .home:
@@ -36,8 +36,11 @@ enum FeedAutoplaySurface: String, Equatable, Sendable {
     }
 }
 
-/// Exactly **one** feed video plays at a time — the one with the highest on-screen
-/// visibility. Stops when less than half the video remains in the viewport.
+/// Exactly **one** feed video plays at a time — the most visible eligible card.
+///
+/// Pause rule (product): only stop when **more than 70% is off-screen**
+/// (visible ratio &lt; 0.30). Fully on-screen video must never pause due to
+/// layout noise, mini-player presence, or tiny ratio flaps.
 @MainActor
 final class FeedVideoFocus {
     static let shared = FeedVideoFocus()
@@ -48,28 +51,52 @@ final class FeedVideoFocus {
     private(set) var generation: Int = 0
 
     private var ratios: [String: CGFloat] = [:]
+    /// Last non-zero ratio per id — used to ignore single-frame 0 glitches from GeometryReader.
+    private var stickyRatios: [String: CGFloat] = [:]
+    private var zeroStreak: [String: Int] = [:]
 
-    /// Must be at least this visible to play (or keep playing).
-    /// “More than 50% out of the frame” → stop (visible ratio < 0.5).
-    private let minVisibleRatio: CGFloat = 0.50
-    /// When two videos both qualify, the higher ratio always wins (tiny epsilon only).
-    private let stealEpsilon: CGFloat = 0.01
+    /// Must be at least this visible to *start* (or take over) autoplay.
+    private let minVisibleToPlay: CGFloat = 0.30
+    /// Keep current winner until it drops below this (same as start — 70% off-screen rule).
+    private let minVisibleToKeep: CGFloat = 0.30
+    /// Challenger must beat the current winner by this much to steal focus.
+    private let stealEpsilon: CGFloat = 0.08
+    /// Ignore this many consecutive near-zero layout reports before clearing a candidate.
+    private let zeroGlitchTolerance = 3
 
     private init() {}
 
     /// Report geometry for a candidate. `ratio` is 0…1 (share of the player height on screen).
     func report(id: String, visibleRatio: CGFloat) {
         let clamped = max(0, min(1, visibleRatio))
+
+        // GeometryReader often reports 0 for a frame during LazyVStack recycle —
+        // that used to pause fully visible videos. Stick to last good ratio briefly.
         if clamped < 0.02 {
+            let streak = (zeroStreak[id] ?? 0) + 1
+            zeroStreak[id] = streak
+            if streak < zeroGlitchTolerance, let sticky = stickyRatios[id], sticky >= minVisibleToKeep {
+                ratios[id] = sticky
+                recompute()
+                return
+            }
             ratios.removeValue(forKey: id)
-        } else {
-            ratios[id] = clamped
+            stickyRatios.removeValue(forKey: id)
+            zeroStreak.removeValue(forKey: id)
+            recompute()
+            return
         }
+
+        zeroStreak[id] = 0
+        ratios[id] = clamped
+        stickyRatios[id] = clamped
         recompute()
     }
 
     func clear(id: String) {
         ratios.removeValue(forKey: id)
+        stickyRatios.removeValue(forKey: id)
+        zeroStreak.removeValue(forKey: id)
         recompute()
     }
 
@@ -77,6 +104,8 @@ final class FeedVideoFocus {
     func resetAll() {
         guard !ratios.isEmpty || activeID != nil else { return }
         ratios.removeAll(keepingCapacity: true)
+        stickyRatios.removeAll(keepingCapacity: true)
+        zeroStreak.removeAll(keepingCapacity: true)
         publish(winner: nil, previous: activeID)
     }
 
@@ -87,25 +116,27 @@ final class FeedVideoFocus {
     private func recompute() {
         let previous = activeID
 
-        // Eligible = ≥ 50% of the video still in the viewport.
-        guard let best = bestCandidate(minRatio: minVisibleRatio) else {
-            // Nobody ≥ 50% visible → stop everything.
-            publish(winner: nil, previous: previous)
-            return
-        }
-
-        // Always prefer the most-visible card. Keep current only on a pure tie.
+        // Current winner holds until < 30% visible (more than 70% off-screen).
         if let current = activeID,
            let currentRatio = ratios[current],
-           currentRatio >= minVisibleRatio,
-           best.key != current,
-           best.value < currentRatio + stealEpsilon
-        {
-            // Current still ≥ 50% and challenger is not meaningfully more visible.
+           currentRatio >= minVisibleToKeep {
+            // Only yield if a challenger is clearly more visible.
+            if let best = bestCandidate(minRatio: minVisibleToPlay),
+               best.key != current,
+               best.value >= currentRatio + stealEpsilon {
+                publish(winner: best.key, previous: previous)
+            }
+            // else keep current — even if another card is slightly higher.
             return
         }
 
-        publish(winner: best.key, previous: previous)
+        // No sticky winner (or it fell below 30%) — elect the most visible ≥ 30%.
+        if let best = bestCandidate(minRatio: minVisibleToPlay) {
+            publish(winner: best.key, previous: previous)
+            return
+        }
+
+        publish(winner: nil, previous: previous)
     }
 
     private func bestCandidate(minRatio: CGFloat) -> (key: String, value: CGFloat)? {
@@ -125,12 +156,33 @@ final class FeedVideoFocus {
         NotificationCenter.default.post(name: .feedVideoFocusDidChange, object: winner)
     }
 
-    /// Visible height of `frame` inside the screen, divided by the frame’s own height.
-    /// Pure visibility — no center bias (highest percentage in frame wins).
+    /// Visible height of `frame` inside the **usable viewport** (screen minus typical
+    /// top safe area + tab bar), divided by the frame’s own height.
     static func visibleRatio(for frame: CGRect, in screen: CGRect? = nil) -> CGFloat {
-        let bounds = screen ?? UIScreen.main.bounds
+        let full = screen ?? UIScreen.main.bounds
         guard frame.height > 1, frame.width > 1 else { return 0 }
-        let intersection = frame.intersection(bounds)
+
+        // Prefer the key window's layout bounds (handles split / Mac Catalyst better).
+        let viewport: CGRect
+        if let window = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .flatMap(\.windows)
+            .first(where: { $0.isKeyWindow }) {
+            let bounds = window.bounds
+            let safe = window.safeAreaInsets
+            // Exclude status/island band + home indicator; keep tab bar in the math
+            // only loosely so tall video cards aren't "half off" while fully readable.
+            viewport = CGRect(
+                x: bounds.minX,
+                y: bounds.minY + safe.top,
+                width: bounds.width,
+                height: max(1, bounds.height - safe.top - safe.bottom)
+            )
+        } else {
+            viewport = full
+        }
+
+        let intersection = frame.intersection(viewport)
         guard !intersection.isNull, intersection.height > 0 else { return 0 }
         return min(1, max(0, intersection.height / frame.height))
     }

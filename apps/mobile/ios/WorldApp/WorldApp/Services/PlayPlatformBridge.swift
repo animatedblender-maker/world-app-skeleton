@@ -167,6 +167,108 @@ enum PlayPlatformBridge {
         return post
     }
 
+    /// Creator identity for list/cards: **channel**, never the person who re-shared/saved.
+    /// Fixes “channel name + my profile picture” on Saved Videos.
+    static func displayCreator(for post: CountryPost) -> (
+        name: String,
+        avatarURL: String?,
+        seed: String,
+        authorID: String,
+        username: String?
+    ) {
+        // 1) Explicit hub-origin stamp (feed share of a Hubs video).
+        if let origin = HubOriginShareMarker.originPresentation(from: post) {
+            let name = origin.authorDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let avatar = origin.author?.avatarURL
+                ?? post.sharedPost?.asCountryPost.author?.avatarURL
+            // Never fall back to the sharer's face when we know a different channel id.
+            return (
+                name.isEmpty ? HubVideoSeedService.archiveChannelDisplayName : name,
+                avatar,
+                origin.authorID,
+                origin.authorID,
+                origin.author?.username
+            )
+        }
+
+        // 2) Archive / seed catalog — always The Archive channel.
+        if isArchiveCatalogMedia(post) || HubVideoSeedService.isArchiveChannelAuthor(post.authorID) {
+            return (
+                HubVideoSeedService.archiveChannelDisplayName,
+                nil,
+                HubVideoSeedService.archiveChannelAuthorID,
+                HubVideoSeedService.archiveChannelAuthorID,
+                HubVideoSeedService.archiveChannelUsername
+            )
+        }
+
+        // 3) Shared embed is the real channel / creator (pointer share).
+        if let embed = post.sharedPost?.asCountryPost,
+           !embed.authorID.isEmpty,
+           embed.authorID != post.authorID,
+           (embed.isHubSeedVideo || isHubCatalogContent(embed) || embed.authorID.hasPrefix("hub_")) {
+            return (
+                embed.authorDisplayName,
+                embed.author?.avatarURL,
+                embed.authorID,
+                embed.authorID,
+                embed.author?.username
+            )
+        }
+
+        // 4) Native channel / creator row.
+        return (
+            post.authorDisplayName,
+            post.author?.avatarURL,
+            post.authorID,
+            post.authorID,
+            post.author?.username
+        )
+    }
+
+    /// Rewrite author fields to the Hubs channel for local Saved / library display.
+    /// Keeps the same post `id` so bookmarks still match the server row.
+    static func withChannelIdentity(_ post: CountryPost, from channel: CountryPost) -> CountryPost {
+        guard !channel.authorID.isEmpty else { return post }
+        let author = channel.author ?? PostAuthor(
+            userID: channel.authorID,
+            displayName: channel.authorDisplayName,
+            username: channel.author?.username,
+            avatarURL: channel.author?.avatarURL,
+            countryName: channel.countryName,
+            countryCode: channel.countryCode,
+            lastReadAt: nil
+        )
+        return CountryPost(
+            id: post.id,
+            title: post.title ?? channel.title,
+            body: post.body,
+            mediaType: post.mediaType ?? channel.mediaType,
+            mediaURL: post.mediaURL ?? channel.mediaURL,
+            thumbURL: post.thumbURL ?? channel.thumbURL,
+            mediaCaption: post.mediaCaption ?? channel.mediaCaption,
+            sharedPostID: post.sharedPostID,
+            sharedPost: post.sharedPost,
+            visibility: post.visibility,
+            likeCount: post.likeCount,
+            commentCount: post.commentCount,
+            viewCount: post.viewCount,
+            likedByMe: post.likedByMe,
+            savedByMe: post.savedByMe,
+            createdAt: post.createdAt,
+            updatedAt: post.updatedAt,
+            authorID: channel.authorID,
+            countryName: channel.countryName ?? post.countryName,
+            countryCode: channel.countryCode ?? post.countryCode,
+            cityName: post.cityName,
+            author: author,
+            linkURL: post.linkURL ?? channel.linkURL,
+            linkTitle: post.linkTitle ?? channel.linkTitle,
+            externalRefType: post.externalRefType ?? channel.externalRefType,
+            externalRefID: post.externalRefID ?? channel.externalRefID
+        )
+    }
+
     /// Resolve the **catalog / original** channel for a feed share or re-publish.
     /// Archive hub clips always map back to the hub persona — never the person who shared.
     @MainActor
@@ -249,7 +351,28 @@ enum PlayPlatformBridge {
     }
 
     static func isLongFormVideo(_ post: CountryPost) -> Bool {
-        isPlayEligible(post) && !post.isReel
+        isPlayEligible(post) && !post.isReel && !post.isSpark && !isSparkFeedCard(post)
+    }
+
+    /// Hubs **For you** / category shelves only — never Sparks (those have their own strip).
+    /// Prevents a long-form-looking row that opens the Sparks player.
+    static func isHubsForYouLongForm(_ post: CountryPost) -> Bool {
+        guard isPlayEligible(post), !post.isStory else { return false }
+        // Any Spark identity → out of For you.
+        if post.isReel || post.isSpark || isSparkFeedCard(post) { return false }
+        if ReelsRankingEngine.isSparkEligible(post) { return false }
+        let type = (post.mediaType ?? "").lowercased()
+        if type == "reel" || type == "spark" { return false }
+        // Must be hub / channel long-form (not a random feed clip).
+        if post.isHubSeedVideo
+            || HubVideoSeedService.isArchiveChannelAuthor(post.authorID)
+            || post.id.lowercased().hasPrefix("ia_") {
+            return true
+        }
+        return isHubCatalogContent(post)
+            || isHubChannelUpload(post)
+            || isHubOriginShare(post)
+            || isHubFeedCardVideo(post)
     }
 
     /// Hub catalog long-form only — opens Hubs watch / shows Hubs badge in feed.

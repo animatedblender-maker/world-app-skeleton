@@ -166,9 +166,9 @@ final class ArchivePlayerBridge: ObservableObject {
         isPlaying = controller?.isPlaying ?? false
     }
 
-    func seek(to seconds: Double) {
-        controller?.seek(to: seconds)
+    func seek(to seconds: Double, resumeIfWanted: Bool = false) {
         currentSeconds = seconds
+        controller?.seek(to: seconds, resumeIfWanted: resumeIfWanted)
     }
 
     func toggleMute() {
@@ -179,16 +179,23 @@ final class ArchivePlayerBridge: ObservableObject {
 
     func skip(by delta: Double) {
         let target = max(0, min(durationSeconds, currentSeconds + delta))
-        seek(to: target)
+        // ±10s must keep playing from the new time (never land paused).
+        seek(to: target, resumeIfWanted: true)
+        isPlaying = true
     }
 
     func beginScrub() {
         controller?.beginScrub()
     }
 
-    func endScrub() {
-        controller?.endScrub()
-        isPlaying = controller?.isPlaying ?? isPlaying
+    /// Finish scrub at `seconds` and always resume if the user was watching.
+    func endScrub(at seconds: Double? = nil) {
+        if let seconds {
+            currentSeconds = seconds
+        }
+        controller?.endScrub(at: seconds ?? currentSeconds)
+        // Scrub pause must never stick — UI + AppState stay "playing".
+        isPlaying = true
     }
 }
 
@@ -391,6 +398,9 @@ struct MatteryaHubPlayerView: View {
             bridge.publishMuted(muted)
         }
         .onChange(of: bridge.isPlaying) { _, playing in
+            // Never push "paused" while scrubbing — that cleared hubPlaybackPlaying and
+            // left the clip frozen after the timeline seek.
+            guard !isScrubbing else { return }
             // Chrome play/pause must update hubPlaybackPlaying so mini bar + isActive stay aligned.
             onPlayingChange?(playing)
         }
@@ -474,8 +484,10 @@ struct MatteryaHubPlayerView: View {
                                 chromeHideTask?.cancel()
                                 bridge.beginScrub()
                             } else if bridge.durationSeconds > 0 {
-                                bridge.seek(to: bridge.currentSeconds)
-                                bridge.endScrub()
+                                // Land on scrub time and keep playing (never pause at seek).
+                                let target = bridge.currentSeconds
+                                bridge.endScrub(at: target)
+                                onPlayingChange?(true)
                                 scheduleChromeHide()
                             }
                         },
@@ -547,8 +559,13 @@ struct MatteryaHubPlayerView: View {
     private func formatTime(_ seconds: Double) -> String {
         guard seconds.isFinite, seconds >= 0 else { return "0:00" }
         let total = Int(seconds.rounded(.down))
-        let m = total / 60
+        let h = total / 3600
+        let m = (total % 3600) / 60
         let s = total % 60
+        // Long Hubs videos: 1:01:00 not 61:00
+        if h > 0 {
+            return String(format: "%d:%02d:%02d", h, m, s)
+        }
         return String(format: "%d:%02d", m, s)
     }
 }
@@ -676,8 +693,7 @@ struct MatteryaLandscapeFullscreenPlayer: View {
                                 chromeHideTask?.cancel()
                                 bridge.beginScrub()
                             } else if bridge.durationSeconds > 0 {
-                                bridge.seek(to: bridge.currentSeconds)
-                                bridge.endScrub()
+                                bridge.endScrub(at: bridge.currentSeconds)
                                 scheduleChromeHide()
                             }
                         },
@@ -775,8 +791,13 @@ struct MatteryaLandscapeFullscreenPlayer: View {
     private func formatTime(_ seconds: Double) -> String {
         guard seconds.isFinite, seconds >= 0 else { return "0:00" }
         let total = Int(seconds.rounded(.down))
-        let m = total / 60
+        let h = total / 3600
+        let m = (total % 3600) / 60
         let s = total % 60
+        // Long Hubs videos: 1:01:00 not 61:00
+        if h > 0 {
+            return String(format: "%d:%02d:%02d", h, m, s)
+        }
         return String(format: "%d:%02d", m, s)
     }
 
@@ -858,6 +879,8 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
     var fillsFrame: Bool = true
     /// Optional content id for continuity / engagement (not required for playback).
     var postID: String? = nil
+    /// When false (Sparks pager), UIView does not eat pans — ScrollView can page immediately.
+    var interactive: Bool = true
     var bridge: ArchivePlayerBridge? = nil
     var onReady: (() -> Void)? = nil
     var onFailed: ((String) -> Void)? = nil
@@ -865,12 +888,18 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
     /// When set, seek once then clear via `onSeekConsumed`.
     var seekToSeconds: Double? = nil
     var onSeekConsumed: (() -> Void)? = nil
+    /// Sparks player: bump on page focus so clip always starts at t=0.
+    var restartFromBeginningToken: UInt = 0
+    /// User pause while page is still focused — freeze frame, don't deactivate / seek to 0.
+    var isPausedByUser: Bool = false
 
     final class Coordinator {
         var lastURL: URL?
         var lastActive: Bool?
         var lastMuted: Bool?
         var lastSeekToken: Double?
+        var lastRestartToken: UInt = 0
+        var lastUserPaused: Bool = false
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -883,6 +912,7 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
         let vc = ArchiveVideoPlayerController()
         vc.loops = loops
         vc.postID = postID
+        vc.restartsFromBeginningOnFocus = restartFromBeginningToken > 0
         vc.onReady = onReady
         vc.onFailed = onFailed
         vc.onProgress = onProgress
@@ -894,18 +924,29 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
         context.coordinator.lastURL = url
         context.coordinator.lastActive = isActive
         context.coordinator.lastMuted = muted
-        vc.configure(url: url, posterURL: posterURL, muted: muted, startTime: startTime, active: isActive)
+        context.coordinator.lastRestartToken = restartFromBeginningToken
+        // Gravity BEFORE configure/install — never play one frame at fill then snap to fit.
         vc.applyVideoGravity(videoGravity)
+        // Sparks always start at 0.
+        let initialStart = restartFromBeginningToken > 0 ? 0 : startTime
+        vc.configure(url: url, posterURL: posterURL, muted: muted, startTime: initialStart, active: isActive)
+        // Sparks: pass all touches through to the SwiftUI ScrollView (critical for first swipe).
+        vc.view.isUserInteractionEnabled = interactive
+        vc.view.isMultipleTouchEnabled = false
         return vc
     }
 
     func updateUIViewController(_ vc: ArchiveVideoPlayerController, context: Context) {
+        // Gravity first on every update so install paths never see the wrong default.
+        vc.applyVideoGravity(videoGravity)
         vc.loops = loops
         vc.postID = postID
+        vc.restartsFromBeginningOnFocus = restartFromBeginningToken > 0
         vc.onReady = onReady
         vc.onFailed = onFailed
         vc.onProgress = onProgress
-        vc.applyVideoGravity(videoGravity)
+        vc.view.isUserInteractionEnabled = interactive
+        vc.view.isMultipleTouchEnabled = false
         vc.onPlayingChanged = { [weak bridge] playing in
             bridge?.publishPlaying(playing)
         }
@@ -914,12 +955,20 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
         let urlChanged = context.coordinator.lastURL != url
         let activeChanged = context.coordinator.lastActive != isActive
         let mutedChanged = context.coordinator.lastMuted != muted
+        let restartChanged = context.coordinator.lastRestartToken != restartFromBeginningToken
+        let pauseChanged = context.coordinator.lastUserPaused != isPausedByUser
 
         if urlChanged {
             context.coordinator.lastURL = url
             context.coordinator.lastActive = isActive
             context.coordinator.lastMuted = muted
-            vc.configure(url: url, posterURL: posterURL, muted: muted, startTime: startTime, active: isActive)
+            context.coordinator.lastRestartToken = restartFromBeginningToken
+            context.coordinator.lastUserPaused = isPausedByUser
+            let initialStart = restartFromBeginningToken > 0 ? 0 : startTime
+            vc.configure(url: url, posterURL: posterURL, muted: muted, startTime: initialStart, active: isActive && !isPausedByUser)
+            if isActive, isPausedByUser {
+                vc.pauseKeepingFrame()
+            }
             return
         }
 
@@ -929,12 +978,42 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
             context.coordinator.lastMuted = muted
             vc.setMuted(muted)
         }
-        if activeChanged {
-            context.coordinator.lastActive = isActive
-            if isActive {
-                // pauseAll() may have forced player.isMuted = true; restore SwiftUI mute flag.
+        // User pause/unpause while still on the page — freeze frame, never seek to 0.
+        if pauseChanged {
+            context.coordinator.lastUserPaused = isPausedByUser
+            if isPausedByUser {
+                vc.pauseKeepingFrame()
+            } else if isActive {
                 vc.setMuted(muted)
                 vc.setActive(true)
+            }
+        }
+        // Focus restart is token-only. Never also restart on active flip — that double-fired
+        // (play in wrong frame → re-layout → play again = “angle then center”).
+        if restartChanged {
+            context.coordinator.lastRestartToken = restartFromBeginningToken
+            context.coordinator.lastActive = isActive
+            if isActive, !isPausedByUser, restartFromBeginningToken > 0 {
+                vc.setMuted(muted)
+                vc.restartFromBeginningAndPlay()
+            } else if isActive, isPausedByUser {
+                vc.pauseKeepingFrame()
+            } else if !isActive {
+                vc.restartsFromBeginningOnFocus = restartFromBeginningToken > 0
+                vc.setActive(false)
+            }
+        } else if activeChanged {
+            context.coordinator.lastActive = isActive
+            if isActive {
+                vc.setMuted(muted)
+                if isPausedByUser {
+                    vc.pauseKeepingFrame()
+                } else if restartFromBeginningToken > 0 {
+                    // Token already applied earlier this focus — resume only, do not re-seek.
+                    vc.ensureContinuingPlayback()
+                } else {
+                    vc.setActive(true)
+                }
             } else {
                 vc.setActive(false)
             }
@@ -993,10 +1072,14 @@ final class ArchiveVideoPlayerController: UIViewController {
     private var userWantsPlayback = true
     /// True while scrubbing timeline (paused for seek, but intent may still be play).
     private var isScrubbing = false
+    /// Remember play intent across a scrub (pause-for-seek must not clear it).
+    private var resumeAfterScrub = true
     /// Last known playhead — used when remounting so mini↔full never restarts at 0.
     private var lastKnownSeconds: Double = 0
     /// Chrome / user mute — separate from forced silence when the Spark page is inactive.
     private var mutedFlag = false
+    /// Epoch captured when this surface last became active (invalidated on page change).
+    private var activePageEpoch: UInt64 = 0
     private var interruptResumeObserver: NSObjectProtocol?
 
     var isPlaying: Bool {
@@ -1019,7 +1102,11 @@ final class ArchiveVideoPlayerController: UIViewController {
         view.backgroundColor = .black
         view.clipsToBounds = true
 
-        posterView.contentMode = .scaleAspectFit
+        // Match video gravity (updated in applyVideoGravity) — avoid poster/video framing jump.
+        // Default fill so Sparks never flash fit→fill on first layout.
+        posterView.contentMode = .scaleAspectFill
+        posterView.clipsToBounds = true
+        posterView.backgroundColor = .black
         posterView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(posterView)
 
@@ -1066,20 +1153,30 @@ final class ArchiveVideoPlayerController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        // Disable implicit animations so mini expand/collapse doesn't blank the layer for a frame.
+        // Only size when host has real bounds — never animate gravity/frame (Sparks zoom jump).
+        guard view.bounds.width > 2, view.bounds.height > 2 else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         playerLayer?.frame = view.bounds
-        // Keep the picture filling the mini slot (196×110) and full watch stage by default.
         playerLayer?.videoGravity = preferredVideoGravity
         CATransaction.commit()
     }
 
-    private var preferredVideoGravity: AVLayerVideoGravity = .resizeAspectFill
+    /// Default aspect-fit — Sparks pass fit; Hubs pass fill. Never flip after first frame.
+    private var preferredVideoGravity: AVLayerVideoGravity = .resizeAspect
 
     func applyVideoGravity(_ gravity: AVLayerVideoGravity) {
         preferredVideoGravity = gravity
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         playerLayer?.videoGravity = gravity
+        // Only size when host has real bounds (zero-size install was the zoom pop).
+        if view.bounds.width > 2, view.bounds.height > 2 {
+            playerLayer?.frame = view.bounds
+        }
+        CATransaction.commit()
+        posterView.contentMode = gravity == .resizeAspectFill ? .scaleAspectFill : .scaleAspectFit
+        posterView.backgroundColor = .black
     }
 
     func configure(url: URL, posterURL: URL?, muted: Bool, startTime: Double, active: Bool) {
@@ -1103,25 +1200,40 @@ final class ArchiveVideoPlayerController: UIViewController {
         loadPoster(posterURL)
         setMuted(muted)
         if active {
-            startPlayback(url: url, muted: muted, startTime: startTime)
+            startPlayback(url: url, muted: muted, startTime: startTime, autoplay: true)
         } else {
-            pauseOnly()
+            // Always pre-buffer off-screen Sparks (silent) so swipe-in is pure play — no black flash.
+            startPlayback(url: url, muted: true, startTime: restartsFromBeginningOnFocus ? 0 : startTime, autoplay: false)
         }
     }
+
+    /// When true (Sparks player), becoming focused always seeks to t=0.
+    var restartsFromBeginningOnFocus = false
 
     func setActive(_ active: Bool) {
         if active {
             userWantsPlayback = true
-            // Restore audible output after inactive force-silence (must not stick after play).
+            activePageEpoch = MediaPlaybackCoordinator.shared.sparkPageEpoch
+            // Do NOT restart-from-0 here. Sparks focus restarts only via
+            // `restartFromBeginningAndPlay()` (token). Calling both caused
+            // play → re-layout → play (video “jumps to center” and restarts).
             if let player {
                 applyUserAudioOutput(on: player)
+                if player.currentItem != nil {
+                    player.play()
+                    player.safePlayImmediately(atRate: 1.0)
+                    DispatchQueue.main.async { [weak self] in
+                        self?.onPlayingChanged?(true)
+                    }
+                }
             }
-            // If we already have a player, resume gently; don't re-resolve or seek to 0.
             if player != nil {
                 ensureContinuingPlayback()
             } else if let sourceURL {
                 // Remount recovery — resume near last progress, never hard-restart at 0.
-                let resume = max(lastKnownSeconds, currentSeconds)
+                let resume = restartsFromBeginningOnFocus
+                    ? 0
+                    : max(lastKnownSeconds, currentSeconds)
                 startPlayback(
                     url: sourceURL,
                     muted: mutedFlag,
@@ -1135,23 +1247,146 @@ final class ArchiveVideoPlayerController: UIViewController {
             player?.pause()
             player?.isMuted = true
             player?.volume = 0
+            // Keep last frame painted (no poster) so a fast swipe-back never blacks out.
+            posterView.isHidden = true
+            spinner.stopAnimating()
+            // Pre-seek to start while off-screen so next focus is a pure play().
+            if restartsFromBeginningOnFocus {
+                softSeekToBeginning(playAfter: false)
+            }
             DispatchQueue.main.async { [weak self] in
                 self?.onPlayingChanged?(false)
             }
         }
     }
 
+    /// User pause on focused Spark — freeze current frame (no seek, no poster swap).
+    func pauseKeepingFrame() {
+        userWantsPlayback = false
+        isScrubbing = false
+        player?.pause()
+        // Keep layer visible + unmuted flag for instant resume; volume can stay.
+        posterView.isHidden = true
+        spinner.stopAnimating()
+        DispatchQueue.main.async { [weak self] in
+            self?.onPlayingChanged?(false)
+        }
+    }
+
+    /// Soft start seek — skip if already near 0; never swap to poster (that was the swipe black flash).
+    private func softSeekToBeginning(playAfter: Bool) {
+        lastKnownSeconds = 0
+        guard let player, player.currentItem != nil else { return }
+        let t = player.currentTime().seconds
+        // Wide near-zero: skip seek (seek = swipe flicker).
+        if t.isFinite, t >= 0, t < 1.0 {
+            // Keep decoded first frame visible — no poster swap.
+            posterView.isHidden = true
+            spinner.stopAnimating()
+            if playAfter, userWantsPlayback {
+                applyUserAudioOutput(on: player)
+                _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
+                    keeping: player,
+                    pageEpoch: activePageEpoch
+                )
+                player.play()
+                player.safePlayImmediately(atRate: 1.0)
+                onPlayingChanged?(true)
+            }
+            return
+        }
+        // Mid-clip → 0: keep the live layer (last frame) while keyframe-seeking.
+        // Showing poster here felt like a full refresh on scroll.
+        posterView.isHidden = true
+        player.seek(
+            to: .zero,
+            toleranceBefore: .positiveInfinity,
+            toleranceAfter: .positiveInfinity
+        ) { [weak self] finished in
+            guard finished, let self else { return }
+            Task { @MainActor in
+                self.lastKnownSeconds = 0
+                self.posterView.isHidden = true
+                self.spinner.stopAnimating()
+                guard playAfter, self.userWantsPlayback else { return }
+                _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
+                    keeping: player,
+                    pageEpoch: self.activePageEpoch
+                )
+                self.applyUserAudioOutput(on: player)
+                player.play()
+                player.safePlayImmediately(atRate: 1.0)
+                self.onPlayingChanged?(true)
+                let duration = player.currentItem?.duration.seconds ?? 0
+                let dur = (duration.isFinite && duration > 0) ? duration : 0
+                self.onProgress?(0, dur)
+            }
+        }
+    }
+
+    /// Sparks page focus / scroll-to: play from t=0 instantly when already parked there.
+    func restartFromBeginningAndPlay() {
+        userWantsPlayback = true
+        isScrubbing = false
+        activePageEpoch = MediaPlaybackCoordinator.shared.sparkPageEpoch
+        lastKnownSeconds = 0
+        posterView.isHidden = true
+        spinner.stopAnimating()
+        if let player, player.currentItem != nil {
+            // Instant path: item ready + near 0 → solo + play on this runloop (no async hop).
+            let t = player.currentTime().seconds
+            let nearZero = t.isFinite && t >= 0 && t < 1.0
+            let ready = player.currentItem?.status == .readyToPlay
+                || player.status == .readyToPlay
+            // Even if not "ready", kick play first — seek only when clearly mid-clip.
+            if nearZero {
+                posterView.isHidden = true
+                spinner.stopAnimating()
+                applyUserAudioOutput(on: player)
+                _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
+                    keeping: player,
+                    pageEpoch: activePageEpoch
+                )
+                applyUserAudioOutput(on: player)
+                player.play()
+                player.safePlayImmediately(atRate: 1.0)
+                onPlayingChanged?(true)
+                return
+            }
+            if ready {
+                applyUserAudioOutput(on: player)
+                softSeekToBeginning(playAfter: true)
+                return
+            }
+            // Not ready and mid-clip: play now, soft-seek without blanking.
+            applyUserAudioOutput(on: player)
+            player.play()
+            softSeekToBeginning(playAfter: true)
+            return
+        }
+        if let sourceURL {
+            startPlayback(url: sourceURL, muted: mutedFlag, startTime: 0)
+        }
+    }
+
     /// Resume only if genuinely stalled — never re-seek or re-create the item.
+    /// Never **steal** solo from another Spark (comments overlay used to wake older pages).
     func ensureContinuingPlayback() {
         guard userWantsPlayback, !isScrubbing, let player else { return }
+        // Only the current solo may resume. Off-screen / previous Sparks stay silent.
+        guard MediaPlaybackCoordinator.shared.isSolo(player) else {
+            player.pause()
+            player.isMuted = true
+            player.volume = 0
+            return
+        }
         applyUserAudioOutput(on: player)
-        // Avoid fighting a healthy playhead (rate can briefly report 0 while buffering).
-        if player.rate < 0.05, player.timeControlStatus != .waitingToPlayAtSpecifiedRate {
+        if player.rate < 0.05 {
             player.play()
             player.safePlayImmediately(atRate: 1.0)
-            DispatchQueue.main.async { [weak self] in
-                self?.onPlayingChanged?(true)
-            }
+        }
+        DispatchQueue.main.async { [weak self] in
+            self?.onPlayingChanged?(true)
         }
     }
 
@@ -1165,7 +1400,20 @@ final class ArchiveVideoPlayerController: UIViewController {
 
     /// Restore mute/volume from the user's mute chrome (not the inactive force-silence).
     private func applyUserAudioOutput(on player: AVPlayer) {
-        MediaPlaybackCoordinator.shared.soloSparkAudio(keeping: player)
+        // Only claim solo when this surface still wants playback — otherwise a
+        // late readyToPlay on a previous Spark steals audio from the current page.
+        guard userWantsPlayback else {
+            player.pause()
+            player.isMuted = true
+            player.volume = 0
+            return
+        }
+        guard MediaPlaybackCoordinator.shared.soloSparkAudio(
+            keeping: player,
+            pageEpoch: activePageEpoch
+        ) else {
+            return
+        }
         configureAudioSession()
         player.isMuted = mutedFlag
         player.volume = mutedFlag ? 0 : 1
@@ -1192,22 +1440,69 @@ final class ArchiveVideoPlayerController: UIViewController {
         }
     }
 
-    func seek(to seconds: Double) {
+    func seek(to seconds: Double, resumeIfWanted: Bool = false) {
         guard let player else { return }
         let time = CMTime(seconds: max(0, seconds), preferredTimescale: 600)
-        player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+        lastKnownSeconds = max(0, seconds)
+        // Precise scrub seek, then resume from the landed frame when requested.
+        let shouldResume = resumeIfWanted || (userWantsPlayback && !isScrubbing)
+        player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+            guard finished, let self else { return }
+            DispatchQueue.main.async {
+                self.lastKnownSeconds = max(0, seconds)
+                guard shouldResume, self.userWantsPlayback, !self.isScrubbing else { return }
+                self.applyUserAudioOutput(on: player)
+                player.play()
+                player.safePlayImmediately(atRate: 1.0)
+                self.onPlayingChanged?(true)
+            }
+        }
     }
 
-    /// Pause only for timeline scrub — does not clear play intent.
+    /// Pause only for timeline scrub — does **not** clear play intent / AppState playing.
     func beginScrub() {
+        // Scrub while watching → always resume after; scrub while already paused stays paused
+        // only if the user had intentionally paused (userWantsPlayback false).
+        resumeAfterScrub = userWantsPlayback
         isScrubbing = true
+        // Soft pause for a stable scrub frame — do NOT publish "paused" (that killed Hubs play).
         player?.pause()
     }
 
-    func endScrub() {
+    /// Seek to the scrubbed time and keep playing from that moment.
+    func endScrub(at seconds: Double? = nil) {
         isScrubbing = false
-        if userWantsPlayback {
-            ensureContinuingPlayback()
+        if resumeAfterScrub {
+            userWantsPlayback = true
+        }
+        // Hubs continuous player may have had epoch bumped while we scrubbed — re-bind.
+        activePageEpoch = MediaPlaybackCoordinator.shared.sparkPageEpoch
+        let target = seconds ?? lastKnownSeconds
+        lastKnownSeconds = max(0, target)
+        guard let player else {
+            if resumeAfterScrub { onPlayingChanged?(true) }
+            return
+        }
+        let time = CMTime(seconds: max(0, target), preferredTimescale: 600)
+        player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+            guard finished, let self else { return }
+            DispatchQueue.main.async {
+                guard self.userWantsPlayback || self.resumeAfterScrub else {
+                    self.onPlayingChanged?(false)
+                    return
+                }
+                self.userWantsPlayback = true
+                self.activePageEpoch = MediaPlaybackCoordinator.shared.sparkPageEpoch
+                // Claim solo again — page-change silence may have cleared it mid-scrub.
+                _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
+                    keeping: player,
+                    pageEpoch: self.activePageEpoch
+                )
+                self.applyUserAudioOutput(on: player)
+                player.play()
+                player.safePlayImmediately(atRate: 1.0)
+                self.onPlayingChanged?(true)
+            }
         }
     }
 
@@ -1215,43 +1510,233 @@ final class ArchiveVideoPlayerController: UIViewController {
         loadTask?.cancel()
         loadTask = nil
         removeObservers()
-        if let postID {
-            SparkWarmPool.shared.release(postID: postID)
-        }
         if let player {
             player.pause()
-            player.replaceCurrentItem(with: nil)
-            MediaPlaybackCoordinator.shared.unregister(player)
+            player.isMuted = true
+            player.volume = 0
+            if let postID, player.currentItem != nil, player.status != .failed {
+                // Park buffered item for instant scroll-back (feed Sparks + hubs shares).
+                SparkWarmPool.shared.park(postID: postID, player: player)
+            } else {
+                if let postID {
+                    SparkWarmPool.shared.release(postID: postID)
+                }
+                player.replaceCurrentItem(with: nil)
+                MediaPlaybackCoordinator.shared.unregister(player)
+            }
+        } else if let postID {
+            SparkWarmPool.shared.release(postID: postID)
         }
         playerLayer?.removeFromSuperlayer()
         playerLayer = nil
         player = nil
-        // Release audio so Sparks/DB clips cannot keep playing outside the viewer.
-        try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+        // Don't deactivate the whole audio session here — other feed cards may still be live.
     }
 
-    private func startPlayback(url: URL, muted: Bool, startTime: Double) {
+    private func startPlayback(url: URL, muted: Bool, startTime: Double, autoplay: Bool = true) {
         loadTask?.cancel()
-        spinner.startAnimating()
         errorLabel.isHidden = true
+        userWantsPlayback = autoplay
+        activePageEpoch = MediaPlaybackCoordinator.shared.sparkPageEpoch
 
         // Instagram-speed: claim a pre-buffered player before any CDN resolve.
+        // Install + play synchronously so the first painted frame is video, not black/poster.
         if let postID, let claimed = SparkWarmPool.shared.claim(postID: postID) {
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                await self.installClaimedPlayer(claimed, original: url, muted: muted, startTime: startTime)
-            }
+            installClaimedPlayerSync(claimed, original: url, muted: muted, startTime: startTime, autoplay: autoplay)
             return
         }
         if let postID {
             SparkWarmPool.shared.markInUse(postID: postID)
         }
 
+        // Never spin on Sparks swipe — poster stays until first frame.
+        spinner.stopAnimating()
         loadTask = Task { [weak self] in
             guard let self else { return }
             let playURL = await ArchiveVideoPlayback.resolvedPlaybackURL(for: url)
             guard !Task.isCancelled else { return }
             await self.installPlayer(url: playURL, original: url, muted: muted, startTime: startTime)
+            if !autoplay {
+                self.userWantsPlayback = false
+                self.player?.pause()
+                self.player?.isMuted = true
+                self.player?.volume = 0
+                // Park head at 0 for instant next focus.
+                if self.restartsFromBeginningOnFocus {
+                    self.softSeekToBeginning(playAfter: false)
+                }
+            }
+        }
+    }
+
+    /// Sync warm-pool claim: attach layer + play now. Seek only if not already near 0.
+    private func installClaimedPlayerSync(
+        _ claimed: AVPlayer,
+        original: URL,
+        muted: Bool,
+        startTime: Double,
+        autoplay: Bool = true
+    ) {
+        removeObservers()
+        if let existing = player, existing !== claimed {
+            existing.pause()
+            MediaPlaybackCoordinator.shared.unregister(existing)
+        }
+        playerLayer?.removeFromSuperlayer()
+        didKickPlayback = false
+        userWantsPlayback = autoplay
+
+        claimed.automaticallyWaitsToMinimizeStalling = false
+        claimed.actionAtItemEnd = loops ? .none : .pause
+        mutedFlag = muted
+
+        let layer = AVPlayerLayer(player: claimed)
+        // Gravity + frame match the host view only — NEVER UIScreen.main.bounds
+        // (that painted full-screen zoomed video, then snapped to the page = creep).
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.videoGravity = preferredVideoGravity
+        layer.frame = view.bounds
+        view.layer.insertSublayer(layer, above: posterView.layer)
+        CATransaction.commit()
+        playerLayer = layer
+        player = claimed
+        resolvedPlayURL = original
+        MediaPlaybackCoordinator.shared.register(claimed)
+        if autoplay {
+            configureAudioSession()
+        }
+        spinner.stopAnimating()
+        // Keep poster until we have a ready item — then hide (no black gap).
+        posterView.isHidden = claimed.currentItem?.status == .readyToPlay
+        errorLabel.isHidden = true
+        // Do not layoutIfNeeded with zero bounds — wait for viewDidLayoutSubviews.
+
+        let forcedStart = restartsFromBeginningOnFocus ? 0 : startTime
+        let t = claimed.currentTime().seconds
+        // Wide near-zero: warm park is rarely exact 0 — skip seek to kill swipe flash.
+        let nearZero = t.isFinite && t >= 0 && t < 1.0
+        let needsSeek = (restartsFromBeginningOnFocus || forcedStart < 0.5) && !nearZero
+
+        if autoplay, userWantsPlayback {
+            _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
+                keeping: claimed,
+                pageEpoch: activePageEpoch
+            )
+            claimed.isMuted = muted
+            claimed.volume = muted ? 0 : 1
+        } else {
+            claimed.pause()
+            claimed.isMuted = true
+            claimed.volume = 0
+        }
+
+        if needsSeek {
+            // Keyframe seek without covering with poster — keep layer visible.
+            claimed.seek(
+                to: .zero,
+                toleranceBefore: .positiveInfinity,
+                toleranceAfter: .positiveInfinity
+            ) { [weak self] finished in
+                guard finished, let self else { return }
+                DispatchQueue.main.async {
+                    self.lastKnownSeconds = 0
+                    self.posterView.isHidden = true
+                    guard self.userWantsPlayback else { return }
+                    // Already playing after a prior kick — don't re-play (visible restart).
+                    if self.didKickPlayback, claimed.rate > 0.01 { return }
+                    _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
+                        keeping: claimed,
+                        pageEpoch: self.activePageEpoch
+                    )
+                    claimed.isMuted = self.mutedFlag
+                    claimed.volume = self.mutedFlag ? 0 : 1
+                    claimed.safePlayImmediately(atRate: 1.0)
+                    self.didKickPlayback = true
+                    self.onPlayingChanged?(true)
+                    self.onReady?()
+                }
+            }
+        } else if userWantsPlayback {
+            lastKnownSeconds = nearZero ? 0 : lastKnownSeconds
+            posterView.isHidden = true
+            claimed.safePlayImmediately(atRate: 1.0)
+            didKickPlayback = true
+            onPlayingChanged?(true)
+            onReady?()
+        } else {
+            // Silent pre-buffer (off-screen page).
+            claimed.pause()
+            claimed.isMuted = true
+            claimed.volume = 0
+            if restartsFromBeginningOnFocus, !nearZero {
+                claimed.seek(
+                    to: .zero,
+                    toleranceBefore: .positiveInfinity,
+                    toleranceAfter: .positiveInfinity
+                )
+            }
+            lastKnownSeconds = 0
+        }
+
+        if let item = claimed.currentItem {
+            statusObserver = item.observe(\.status, options: [.new, .initial]) { [weak self] item, _ in
+                Task { @MainActor in
+                    guard let self else { return }
+                    switch item.status {
+                    case .readyToPlay:
+                        self.posterView.isHidden = true
+                        if !self.didKickPlayback, self.userWantsPlayback {
+                            self.didKickPlayback = true
+                            _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
+                                keeping: claimed,
+                                pageEpoch: self.activePageEpoch
+                            )
+                            claimed.isMuted = self.mutedFlag
+                            claimed.volume = self.mutedFlag ? 0 : 1
+                            claimed.safePlayImmediately(atRate: 1.0)
+                            self.onPlayingChanged?(true)
+                            self.onReady?()
+                        }
+                    case .failed:
+                        self.teardown()
+                        self.startPlayback(url: original, muted: muted, startTime: startTime, autoplay: autoplay)
+                    default:
+                        break
+                    }
+                }
+            }
+            attachLoopObserver(for: item, player: claimed)
+            attachTimeObserver(for: item, player: claimed)
+        }
+    }
+
+    private func attachTimeObserver(for item: AVPlayerItem, player observed: AVPlayer) {
+        // Always detach from the player that owns the token (may not be `observed` yet).
+        if let timeObserver, let owner = player {
+            owner.removeTimeObserver(timeObserver)
+            self.timeObserver = nil
+        } else if let timeObserver {
+            observed.removeTimeObserver(timeObserver)
+            self.timeObserver = nil
+        }
+        let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
+        timeObserver = observed.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
+            guard let self else { return }
+            let current = max(0, time.seconds)
+            let duration = item.duration.seconds
+            let dur = duration.isFinite && duration > 0 ? duration : 0
+            let playing = observed.rate > 0.01
+            let scrubbing = self.isScrubbing
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                // While scrubbing, UI owns the playhead — don't fight the thumb or publish pause.
+                if !scrubbing {
+                    self.lastKnownSeconds = current
+                    self.onProgress?(current, dur)
+                    self.onPlayingChanged?(playing)
+                }
+            }
         }
     }
 
@@ -1281,8 +1766,24 @@ final class ArchiveVideoPlayerController: UIViewController {
         player = claimed
         resolvedPlayURL = original
         MediaPlaybackCoordinator.shared.register(claimed)
-        MediaPlaybackCoordinator.shared.soloSparkAudio(keeping: claimed)
+        // Sparks / warm-pool: soft-seek to 0 only when not already there (avoids black flash).
+        let forcedStart = restartsFromBeginningOnFocus ? 0 : startTime
+        if restartsFromBeginningOnFocus || forcedStart < 0.5 {
+            let t = claimed.currentTime().seconds
+            if !(t.isFinite && t >= 0 && t < 0.35) {
+                await claimed.seek(
+                    to: .zero,
+                    toleranceBefore: .positiveInfinity,
+                    toleranceAfter: .positiveInfinity
+                )
+            }
+            lastKnownSeconds = 0
+        }
         if userWantsPlayback {
+            _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
+                keeping: claimed,
+                pageEpoch: activePageEpoch
+            )
             claimed.isMuted = muted
             claimed.volume = muted ? 0 : 1
         } else {
@@ -1303,11 +1804,24 @@ final class ArchiveVideoPlayerController: UIViewController {
                     case .readyToPlay:
                         if !self.didKickPlayback {
                             self.didKickPlayback = true
-                            if startTime > 0.5 {
-                                await claimed.seek(to: CMTime(seconds: startTime, preferredTimescale: 600))
+                            if self.restartsFromBeginningOnFocus {
+                                let t = claimed.currentTime().seconds
+                                if !(t.isFinite && t >= 0 && t < 0.35) {
+                                    await claimed.seek(
+                                        to: .zero,
+                                        toleranceBefore: .positiveInfinity,
+                                        toleranceAfter: .positiveInfinity
+                                    )
+                                }
+                                self.lastKnownSeconds = 0
+                            } else if forcedStart > 0.5 {
+                                await claimed.seek(to: CMTime(seconds: forcedStart, preferredTimescale: 600))
                             }
-                            if self.userWantsPlayback {
-                                MediaPlaybackCoordinator.shared.soloSparkAudio(keeping: claimed)
+                            if self.userWantsPlayback,
+                               MediaPlaybackCoordinator.shared.soloSparkAudio(
+                                   keeping: claimed,
+                                   pageEpoch: self.activePageEpoch
+                               ) {
                                 claimed.isMuted = self.mutedFlag
                                 claimed.volume = self.mutedFlag ? 0 : 1
                                 claimed.safePlayImmediately(atRate: 1.0)
@@ -1330,6 +1844,8 @@ final class ArchiveVideoPlayerController: UIViewController {
                     }
                 }
             }
+            // Warm-pool claims used to skip this — feed Sparks never looped.
+            attachLoopObserver(for: item, player: claimed)
         }
 
         if userWantsPlayback {
@@ -1338,6 +1854,50 @@ final class ArchiveVideoPlayerController: UIViewController {
             DispatchQueue.main.async { [weak self] in
                 self?.onPlayingChanged?(true)
                 self?.onReady?()
+            }
+        }
+    }
+
+    /// Seek-to-zero + play when the item ends (Sparks / feed Spark cards).
+    private func attachLoopObserver(for item: AVPlayerItem, player: AVPlayer) {
+        if let endObserver {
+            NotificationCenter.default.removeObserver(endObserver)
+            self.endObserver = nil
+        }
+        guard loops else { return }
+        endObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self, self.loops, self.userWantsPlayback else { return }
+                self.restartFromBeginning(player: player)
+            }
+        }
+    }
+
+    private func restartFromBeginning(player: AVPlayer) {
+        // Refresh epoch so a prior Sparks page-change doesn't block feed loop restarts.
+        activePageEpoch = MediaPlaybackCoordinator.shared.sparkPageEpoch
+        _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
+            keeping: player,
+            pageEpoch: activePageEpoch
+        )
+        player.isMuted = mutedFlag
+        player.volume = mutedFlag ? 0 : 1
+        player.seek(
+            to: .zero,
+            toleranceBefore: .positiveInfinity,
+            toleranceAfter: .positiveInfinity
+        ) { [weak self] finished in
+            guard finished else { return }
+            DispatchQueue.main.async {
+                guard let self, self.userWantsPlayback else { return }
+                player.play()
+                player.safePlayImmediately(atRate: 1.0)
+                self.lastKnownSeconds = 0
+                self.onPlayingChanged?(true)
             }
         }
     }
@@ -1377,18 +1937,27 @@ final class ArchiveVideoPlayerController: UIViewController {
         newPlayer.actionAtItemEnd = loops ? .none : .pause
 
         let layer = AVPlayerLayer(player: newPlayer)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         layer.videoGravity = preferredVideoGravity
+        // Host view bounds only — never full-screen interim frame (zoom pop).
         layer.frame = view.bounds
         view.layer.insertSublayer(layer, above: posterView.layer)
+        CATransaction.commit()
         playerLayer = layer
         player = newPlayer
         resolvedPlayURL = url
         mutedFlag = muted
         MediaPlaybackCoordinator.shared.register(newPlayer)
-        configureAudioSession()
-        // Optimistic start — Sparks feel instant; readyToPlay will re-kick if needed.
         if userWantsPlayback {
-            MediaPlaybackCoordinator.shared.soloSparkAudio(keeping: newPlayer)
+            configureAudioSession()
+        }
+        // Optimistic start — Sparks feel instant; readyToPlay will re-kick if needed.
+        if userWantsPlayback,
+           MediaPlaybackCoordinator.shared.soloSparkAudio(
+               keeping: newPlayer,
+               pageEpoch: activePageEpoch
+           ) {
             newPlayer.isMuted = muted
             newPlayer.volume = muted ? 0 : 1
             newPlayer.safePlayImmediately(atRate: 1.0)
@@ -1412,8 +1981,11 @@ final class ArchiveVideoPlayerController: UIViewController {
                         if startTime > 0.5 {
                             await newPlayer.seek(to: CMTime(seconds: startTime, preferredTimescale: 600))
                         }
-                        if self.userWantsPlayback {
-                            MediaPlaybackCoordinator.shared.soloSparkAudio(keeping: newPlayer)
+                        if self.userWantsPlayback,
+                           MediaPlaybackCoordinator.shared.soloSparkAudio(
+                               keeping: newPlayer,
+                               pageEpoch: self.activePageEpoch
+                           ) {
                             newPlayer.isMuted = self.mutedFlag
                             newPlayer.volume = self.mutedFlag ? 0 : 1
                             newPlayer.safePlayImmediately(atRate: 1.0)
@@ -1455,30 +2027,18 @@ final class ArchiveVideoPlayerController: UIViewController {
             let duration = item.duration.seconds
             let dur = duration.isFinite && duration > 0 ? duration : 0
             let playing = newPlayer.rate > 0.01
+            let scrubbing = self.isScrubbing
             DispatchQueue.main.async { [weak self] in
-                self?.lastKnownSeconds = current
-                self?.onProgress?(current, dur)
-                self?.onPlayingChanged?(playing)
-            }
-        }
-
-        endObserver = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime,
-            object: item,
-            queue: .main
-        ) { [weak self] _ in
-            DispatchQueue.main.async {
                 guard let self else { return }
-                if self.loops, self.userWantsPlayback {
-                    newPlayer.seek(to: .zero)
-                    self.lastKnownSeconds = 0
-                    newPlayer.safePlayImmediately(atRate: 1.0)
-                    self.onPlayingChanged?(true)
-                } else {
-                    self.onPlayingChanged?(false)
+                if !scrubbing {
+                    self.lastKnownSeconds = current
+                    self.onProgress?(current, dur)
+                    self.onPlayingChanged?(playing)
                 }
             }
         }
+
+        attachLoopObserver(for: item, player: newPlayer)
     }
 
     private func handleFailure(

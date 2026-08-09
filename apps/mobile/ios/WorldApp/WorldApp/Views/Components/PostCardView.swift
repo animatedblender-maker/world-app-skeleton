@@ -147,7 +147,10 @@ struct PostCardView: View {
 
             Button {
                 Task {
-                    if let error = await appState.toggleSavePost(post) {
+                    if let error = await appState.toggleSavePost(
+                        post,
+                        reelPresentation: AppState.belongsInSavedSparks(post)
+                    ) {
                         commentError = error
                     }
                 }

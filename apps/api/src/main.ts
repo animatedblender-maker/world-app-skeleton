@@ -55,6 +55,14 @@ import {
   resendConfirmation,
   signupWithMatteryaEmail,
 } from './auth/signup-confirm.service.js';
+import { getPipelineStatus, requestPipelineRun, runPipelineNow } from './content-pipeline/jobs.js';
+import {
+  handlePipelineGet,
+  handlePipelineLogin,
+  handlePipelineLogout,
+  handlePipelineRun,
+} from './content-pipeline/pipeline-page.js';
+import { kafkaEnabled } from './kafka/config.js';
 
 type AuthedUser = {
   id: string;
@@ -230,6 +238,21 @@ app.get('/reports/logout', handleReportsLogout);
 // Friendly alias
 app.get('/report', (_req, res) => res.redirect(302, '/reports'));
 
+// ── Content pipeline ops page (R2 → owned posts + feed shares) ─────────
+// https://api.matterya.com/pipeline  ·  same password as reports by default
+app.get('/pipeline', (req, res) => {
+  void handlePipelineGet(req, res);
+});
+app.post('/pipeline/login', handlePipelineLogin);
+app.get('/pipeline/logout', handlePipelineLogout);
+app.post('/pipeline/run', (req, res) => {
+  void handlePipelineRun(req, res);
+});
+app.get('/pipeline/status', (req, res) => {
+  // Public enough for health widgets; no secrets.
+  res.json({ ok: true, ...getPipelineStatus() });
+});
+
 // ✅ health endpoint (typed _req to avoid implicit any)
 app.get('/health', (_req: Request, res: Response) =>
   res.json({
@@ -238,9 +261,12 @@ app.get('/health', (_req: Request, res: Response) =>
       iosPushRoutes: true,
       iosPushStatus: true,
       matteryaEmailConfirm: true,
+      contentPipeline: true,
+      contentPipelinePage: true,
     },
     apnsConfigured: apns.isConfigured(),
     authMail: authMailStatus(),
+    contentPipeline: getPipelineStatus(),
   })
 );
 
@@ -632,6 +658,64 @@ app.post('/insights/run-daily', async (req: Request, res: Response) => {
     return res.json({ ok: true, ...result });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message ?? 'failed' });
+  }
+});
+
+/**
+ * Automated R2 catalog → owned posts + feed spark shares + presign refresh.
+ * Prefer Kafka enqueue when KAFKA_ENABLED (consumer runs work).
+ * Auth: CONTENT_CRON_SECRET or INSIGHTS_CRON_SECRET.
+ *
+ * Ops UI: https://api.matterya.com/pipeline
+ * Cron:  POST https://api.matterya.com/cron/content-pipeline
+ *        Header: x-cron-secret: <you choose this secret>
+ */
+app.post('/cron/content-pipeline', async (req: Request, res: Response) => {
+  const secret = req.headers['x-cron-secret'] || req.query.secret;
+  const expected =
+    process.env.CONTENT_CRON_SECRET?.trim() ||
+    process.env.INSIGHTS_CRON_SECRET?.trim() ||
+    INSIGHTS_CRON_SECRET;
+  if (!expected || String(secret ?? '') !== expected) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  try {
+    const dryRun =
+      String(req.query.dryRun ?? req.body?.dryRun ?? '') === '1' ||
+      String(req.query.dryRun ?? req.body?.dryRun ?? '') === 'true';
+    const resignOnly =
+      String(req.query.resignOnly ?? req.body?.resignOnly ?? '') === '1' ||
+      String(req.query.resignOnly ?? req.body?.resignOnly ?? '') === 'true';
+    const forceInline =
+      String(req.query.inline ?? req.body?.inline ?? '') === '1' ||
+      String(req.query.inline ?? req.body?.inline ?? '') === 'true';
+    const opts = {
+      dryRun,
+      resignOnly,
+      maxOriginals: Number(req.query.maxOriginals ?? req.body?.maxOriginals) || 40,
+      maxShares: Number(req.query.maxShares ?? req.body?.maxShares) || 80,
+      maxResign: Number(req.query.maxResign ?? req.body?.maxResign) || 200,
+      maxMs: Number(req.query.maxMs ?? req.body?.maxMs) || 90_000,
+      requestedBy: 'cron',
+      forceInline,
+      source: 'cron',
+    };
+    // Default: Kafka queue when available; ?inline=1 forces in-process run.
+    if (!forceInline && kafkaEnabled()) {
+      const result = await requestPipelineRun(opts);
+      if (result.mode === 'kafka') {
+        return res.status(202).json({
+          ok: true,
+          mode: 'kafka',
+          eventId: result.eventId,
+          message: 'R2IngestRequested enqueued — consumer will run the pipeline',
+        });
+      }
+    }
+    const stats = await runPipelineNow(opts);
+    return res.status(stats.ok ? 200 : 500).json({ mode: 'inline', ...stats });
+  } catch (err: any) {
+    return res.status(500).json({ ok: false, error: err?.message ?? 'failed' });
   }
 });
 

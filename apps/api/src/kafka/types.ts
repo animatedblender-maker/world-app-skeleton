@@ -17,8 +17,32 @@ export const KafkaTopics = {
   FOLLOWS: 'matterya.follows',
   CALLS: 'matterya.calls',
   NOTIFICATIONS: 'matterya.notifications',
+  /** R2 catalog ingest jobs (discover → create owned posts + shares). */
+  R2_INGEST: 'matterya.r2.ingest',
   DLQ: 'matterya.dlq',
 } as const;
+
+/** Jobs on matterya.r2.ingest */
+export const R2IngestEventTypes = {
+  /** Cron / ops page requested a full pipeline tick. */
+  Requested: 'R2IngestRequested',
+  /** One pack discovered (optional fine-grained path). */
+  PackDiscovered: 'R2PackDiscovered',
+  /** Pipeline tick finished (stats for ops / metrics). */
+  Completed: 'R2IngestCompleted',
+} as const;
+
+export type R2IngestRequestedPayload = {
+  dryRun?: boolean;
+  resignOnly?: boolean;
+  ingestOnly?: boolean;
+  maxOriginals?: number;
+  maxShares?: number;
+  maxResign?: number;
+  maxMs?: number;
+  requestedBy?: string;
+  requestedAt: string;
+};
 
 export type KafkaTopic = (typeof KafkaTopics)[keyof typeof KafkaTopics];
 

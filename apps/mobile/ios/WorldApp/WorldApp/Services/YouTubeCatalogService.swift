@@ -287,28 +287,15 @@ final class YouTubeCatalogService {
         followingIDs: Set<String>,
         viewerCountry: String?
     ) -> [CountryPost] {
-        // For you / category shelves: long-form catalog rows.
-        // Archive seeds (ia_* / hub_archive) always pass — do not depend solely on belongsInHubsCatalog.
-        let base = videos.filter { post in
-            guard !post.isReel, !post.isStory else { return false }
-            guard post.hasVideo || post.playableVideoURL != nil else { return false }
-            let id = post.id.lowercased()
-            if post.isHubSeedVideo
-                || HubVideoSeedService.isArchiveChannelAuthor(post.authorID)
-                || id.hasPrefix("ia_") {
-                return true
-            }
-            return PlayPlatformBridge.belongsInHubsCatalog(post)
-        }
+        _ = viewerCountry
+        _ = followingIDs
+        // For you / category shelves: **long-form only** — never Sparks (Sparks strip is separate).
+        // Was accidentally using ReelsRankingEngine.rank which only keeps spark-eligible rows.
+        let base = videos.filter { PlayPlatformBridge.isHubsForYouLongForm($0) }
         switch homeFilter {
         case .all:
-            // Full Archive library is thousands of rows — never O(n²) rank the whole set.
-            // Stable order here; callers shuffle ONCE into @State so scroll doesn't re-shuffle
-            // (re-shuffling every body pass was janking Hubs For you + blanking thumbs).
-            if base.count > 40 {
-                return base.sorted { $0.id < $1.id }
-            }
-            return ReelsRankingEngine.rank(base, viewerCountry: viewerCountry, followingIDs: followingIDs)
+            // Stable order; callers shuffle ONCE into @State so scroll doesn't re-shuffle.
+            return base.sorted { $0.id < $1.id }
         case .trending:
             return base.sorted {
                 if $0.viewCount == $1.viewCount { return $0.createdAt > $1.createdAt }

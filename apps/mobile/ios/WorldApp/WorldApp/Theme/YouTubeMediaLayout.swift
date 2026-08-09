@@ -261,12 +261,17 @@ struct YouTubeVideoMetadataRow: View {
     let post: CountryPost
     var showsMenu = false
 
+    /// Channel for Hubs / re-shares — never the person who saved or shared the clip.
+    private var creator: (name: String, avatarURL: String?, seed: String, authorID: String, username: String?) {
+        PlayPlatformBridge.displayCreator(for: post)
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Button {
                 openAuthorProfile()
             } label: {
-                AvatarView(url: post.author?.avatarURL, seed: post.authorID, size: 40)
+                AvatarView(url: creator.avatarURL, seed: creator.seed, size: 40)
             }
             .buttonStyle(.plain)
 
@@ -328,7 +333,7 @@ struct YouTubeVideoMetadataRow: View {
     }
 
     private var metadataLine: String {
-        var parts: [String] = [post.authorDisplayName]
+        var parts: [String] = [creator.name]
         if post.viewCount > 0 {
             parts.append("\(post.viewCount.formatted()) views")
         }
@@ -337,7 +342,12 @@ struct YouTubeVideoMetadataRow: View {
     }
 
     private func openAuthorProfile() {
-        appState.openPublicProfile(username: post.author?.username, userID: post.authorID)
+        let c = creator
+        if c.authorID.hasPrefix("hub_") || HubVideoSeedService.isArchiveChannelAuthor(c.authorID) {
+            appState.openPlayChannel(authorID: c.authorID, username: c.username)
+            return
+        }
+        appState.openPublicProfile(username: c.username, userID: c.authorID)
     }
 }
 
@@ -374,12 +384,13 @@ struct PlayFeedLinkCard: View {
         autoplaySurface.isLive(appState: appState)
     }
 
-    /// Winner of FeedVideoFocus + allowed surface (no hubs/reels takeover).
+    /// Winner of FeedVideoFocus + allowed surface.
+    /// Mini or expanded Hubs continuous player → no feed autoplay.
     private var shouldPlay: Bool {
         isFocusWinner
             && surfaceLive
-            && appState.hubPlaybackPost == nil
             && appState.reelsViewerContext == nil
+            && appState.hubPlaybackPost == nil
     }
 
     private var feedPlayerActive: Bool { playGate }
@@ -441,8 +452,12 @@ struct PlayFeedLinkCard: View {
             isFocusWinner = false
             playGate = false
         }
-        .onChange(of: appState.hubPlaybackPost?.id) { _, id in
-            syncPlayGate(immediate: id != nil)
+        .onChange(of: appState.hubPlaybackPost?.id) { _, postID in
+            // Miniplayer on → hard-stop feed cards immediately.
+            syncPlayGate(immediate: postID != nil)
+        }
+        .onChange(of: appState.hubPlaybackExpanded) { _, _ in
+            syncPlayGate(immediate: appState.hubPlaybackPost != nil)
         }
         .onChange(of: appState.selectedTab) { _, _ in
             lastReportedRatio = -1
@@ -496,9 +511,16 @@ struct PlayFeedLinkCard: View {
                     startTime: YouTubeCatalogService.shared.playbackPosition(for: post.id),
                     persistsPositionOnTeardown: true,
                     sharesFeedMute: true,
+                    fillsFrame: true,
+                    preloadsWhenInactive: true,
                     onViewed: { Task { await PostsService.shared.recordView(post) } }
                 )
                 .id("hub-feed-\(post.id)")
+                .onAppear {
+                    if let url = post.playableVideoURL {
+                        SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
+                    }
+                }
             }
         } else {
             YouTubeVideoThumbnail(
@@ -563,6 +585,7 @@ struct PlayFeedLinkCard: View {
         if win != isFocusWinner {
             isFocusWinner = win
         }
+        // Win → play now. Lose → soft pause (debounced).
         syncPlayGate(immediate: win)
     }
 
@@ -577,16 +600,18 @@ struct PlayFeedLinkCard: View {
             !surfaceLive
             || appState.reelsViewerContext != nil
             || appState.hubPlaybackPost != nil
-        if immediate || leaveSurface {
+        if leaveSurface {
             deactivateTask?.cancel()
             deactivateTask = nil
             playGate = false
             return
         }
+        // Focus lost — debounce so layout glitches never pause a fully visible card.
         guard playGate else { return }
+        _ = immediate
         deactivateTask?.cancel()
         deactivateTask = Task {
-            try? await Task.sleep(nanoseconds: 120_000_000)
+            try? await Task.sleep(nanoseconds: 280_000_000)
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 if !shouldPlay { playGate = false }

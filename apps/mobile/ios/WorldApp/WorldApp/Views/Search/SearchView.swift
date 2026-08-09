@@ -4,21 +4,14 @@ struct SearchView: View {
     @Environment(AppState.self) private var appState
 
     @State private var query = ""
-    @State private var countries: [Country] = []
     @State private var profiles: [Profile] = []
     @State private var content: [CountryPost] = []
     @State private var isSearching = false
-    @State private var countriesError: String?
     @State private var searchError: String?
     @State private var searchGeneration = 0
 
     private var normalizedQuery: String {
         query.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var matchedCountries: [Country] {
-        guard !normalizedQuery.isEmpty else { return countries }
-        return MatteryaSearchEngine.searchCountries(countries, query: normalizedQuery)
     }
 
     var body: some View {
@@ -29,7 +22,7 @@ struct SearchView: View {
                 ProgressView().tint(Theme.accentBright).padding()
                 Spacer()
             } else if normalizedQuery.isEmpty {
-                exploreCountriesList
+                emptyPrompt
             } else {
                 resultsList
             }
@@ -43,7 +36,6 @@ struct SearchView: View {
             }
         }
         .task {
-            await loadCountries()
             appState.searchPrefersCountries = false
         }
     }
@@ -52,7 +44,7 @@ struct SearchView: View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(Theme.inkMuted)
-            TextField("Search countries, people, content…", text: $query)
+            TextField("Search people and content…", text: $query)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .foregroundStyle(Theme.ink)
@@ -92,51 +84,27 @@ struct SearchView: View {
         }
     }
 
-    private var exploreCountriesList: some View {
-        Group {
-            if let countriesError, countries.isEmpty {
-                ContentUnavailableView(
-                    "Countries unavailable",
-                    systemImage: "globe",
-                    description: Text(countriesError)
-                )
-            } else if countries.isEmpty {
-                ProgressView("Loading countries…")
-            } else {
-                List {
-                    Section("Explore countries") {
-                        ForEach(countries) { country in
-                            countryRow(country)
-                        }
-                    }
-                }
-                .listStyle(.insetGrouped)
-                .scrollContentBackground(.hidden)
-                .background(Theme.canvas)
-            }
-        }
+    private var emptyPrompt: some View {
+        ContentUnavailableView(
+            "Search Matterya",
+            systemImage: "magnifyingglass",
+            description: Text("Find people and posts, Sparks, and videos.")
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var resultsList: some View {
         Group {
-            if let searchError, profiles.isEmpty && content.isEmpty && matchedCountries.isEmpty {
+            if let searchError, profiles.isEmpty && content.isEmpty {
                 ContentUnavailableView("Search failed", systemImage: "magnifyingglass", description: Text(searchError))
-            } else if profiles.isEmpty && content.isEmpty && matchedCountries.isEmpty {
+            } else if profiles.isEmpty && content.isEmpty {
                 ContentUnavailableView(
                     "No results",
                     systemImage: "text.magnifyingglass",
-                    description: Text("Try another country, person, or keyword.")
+                    description: Text("Try another person or keyword.")
                 )
             } else {
                 List {
-                    if !matchedCountries.isEmpty {
-                        Section("Countries") {
-                            ForEach(matchedCountries) { country in
-                                countryRow(country)
-                            }
-                        }
-                    }
-
                     if !profiles.isEmpty {
                         Section("People") {
                             ForEach(profiles) { profile in
@@ -164,30 +132,6 @@ struct SearchView: View {
                 .background(Theme.canvas)
             }
         }
-    }
-
-    private func countryRow(_ country: Country) -> some View {
-        Button {
-            openCountry(country)
-        } label: {
-            HStack(spacing: 12) {
-                Text(countryFlag(country.iso))
-                    .font(.title2)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(country.name)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Theme.ink)
-                    Text(country.iso)
-                        .font(.caption)
-                        .foregroundStyle(Theme.inkMuted)
-                }
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Theme.inkMuted)
-            }
-        }
-        .buttonStyle(.plain)
     }
 
     private func contentRow(_ post: CountryPost) -> some View {
@@ -320,31 +264,6 @@ struct SearchView: View {
         }
     }
 
-    private func countryFlag(_ iso: String) -> String {
-        let code = iso.uppercased()
-        guard code.count == 2 else { return "🌍" }
-        let base: UInt32 = 127397
-        let scalars = code.unicodeScalars.compactMap { UnicodeScalar(base + $0.value) }
-        return String(String.UnicodeScalarView(scalars))
-    }
-
-    private func openCountry(_ country: Country) {
-        // Country feeds disabled — content lives on the main feed only.
-        appState.selectCountry(country)
-        appState.selectedTab = .feed
-        appState.navigationPath.removeAll()
-    }
-
-    private func loadCountries() async {
-        countriesError = nil
-        do {
-            countries = try await ProfileService.shared.countries()
-        } catch {
-            countries = []
-            countriesError = error.localizedDescription
-        }
-    }
-
     private func runSearch() async {
         let trimmed = normalizedQuery
         guard !trimmed.isEmpty else { return }
@@ -406,7 +325,7 @@ struct SearchView: View {
             errors.append(error.localizedDescription)
         }
 
-        if profiles.isEmpty && content.isEmpty && matchedCountries.isEmpty, !errors.isEmpty {
+        if profiles.isEmpty && content.isEmpty, !errors.isEmpty {
             searchError = errors.first
         }
     }

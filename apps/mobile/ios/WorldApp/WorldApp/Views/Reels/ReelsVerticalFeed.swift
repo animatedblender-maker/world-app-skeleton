@@ -8,7 +8,9 @@ private enum ReelsHaptics {
     }
 }
 
+/// Vertical Sparks feed — **UIKit paging** (TikTok / IG style), not SwiftUI ScrollView.
 struct ReelsVerticalFeed: View {
+    @Environment(AppState.self) private var appState
     @Binding var posts: [CountryPost]
     @Binding var activeIndex: Int
 
@@ -21,184 +23,62 @@ struct ReelsVerticalFeed: View {
     var onNearStart: (() -> Void)? = nil
     var onOpenComments: ((String) -> Void)? = nil
 
-    @State private var scrollPosition: Int?
-    @State private var isNormalizingLoop = false
-
-    private var usesInfiniteLoop: Bool { posts.count > 1 }
-
-    private var loopedPosts: [CountryPost] {
-        guard usesInfiniteLoop else { return posts }
-        return posts + posts + posts
-    }
-
-    private func realIndex(from loopIndex: Int) -> Int {
-        guard usesInfiniteLoop else { return loopIndex }
-        let count = posts.count
-        return ((loopIndex % count) + count) % count
-    }
-
-    private func loopIndex(for realIndex: Int) -> Int {
-        guard usesInfiniteLoop else { return realIndex }
-        return posts.count + realIndex
-    }
-
     var body: some View {
-        GeometryReader { geometry in
-            ZStack(alignment: .top) {
-                ScrollView(.vertical, showsIndicators: false) {
-                    LazyVStack(spacing: 0) {
-                        ForEach(Array(loopedPosts.enumerated()), id: \.offset) { index, post in
-                            // CRITICAL: only the *visible loop page* is active.
-                            // Do NOT use realIndex — the infinite triple-copy would mark
-                            // three cards active at once and stack audio.
-                            ReelsPagerCard(
-                                post: post,
-                                isActive: (scrollPosition ?? loopIndex(for: activeIndex)) == index,
-                                bottomInset: bottomInset,
-                                showsOpenPostAction: showsOpenPostAction,
-                                viewerCountryCode: viewerCountryCode,
-                                onLikeToggle: { Task { await toggleLike(post) } },
-                                onOpenPost: { openPost(post) },
-                                onOpenComments: { onOpenComments?(post.id) }
-                            )
-                            .frame(width: geometry.size.width, height: geometry.size.height)
-                            .id(index)
-                        }
-                    }
-                    .scrollTargetLayout()
-                }
-                .scrollTargetBehavior(.paging)
-                .scrollBounceBehavior(.basedOnSize)
-                .scrollDisabled(!isScrollEnabled)
-                .scrollPosition(id: $scrollPosition)
-                // Instant page identity — no springy settle animation between Sparks.
-                .animation(nil, value: scrollPosition)
-                .onChange(of: scrollPosition) { _, newValue in
-                    guard let newValue, !isNormalizingLoop else { return }
-                    let resolved = realIndex(from: newValue)
-                    guard resolved != activeIndex else {
-                        // Loop wrap only — don't silence the same clip that's still active.
-                        normalizeLoopPosition(newValue)
-                        return
-                    }
-                    // Hard-silence every player (prev page + warm pool) before the next card solos.
-                    MediaPlaybackCoordinator.shared.silenceForSparkPageChange()
-                    activeIndex = resolved
-                    // Simple vertical paging — no world-hop / passport chrome.
-                    recordView(at: resolved)
-                    prefetchIfNeeded(at: resolved)
-                    warmNeighbors(at: resolved)
-                    normalizeLoopPosition(newValue)
-                }
-                .onChange(of: activeIndex) { _, newValue in
-                    let target = loopIndex(for: newValue)
-                    if scrollPosition != target {
-                        var t = Transaction()
-                        t.disablesAnimations = true
-                        withTransaction(t) { scrollPosition = target }
-                    }
-                    prefetchIfNeeded(at: newValue)
-                    warmNeighbors(at: newValue)
-                }
-                .onChange(of: posts.count) { _, _ in
-                    syncLoopScrollPosition()
-                    warmNeighbors(at: activeIndex)
-                }
-                .onAppear {
-                    if scrollPosition == nil {
-                        scrollPosition = loopIndex(for: activeIndex)
-                    }
-                    // Kill feed / hubs audio only — keep warm pool so the first swipe is ready.
-                    MediaPlaybackCoordinator.shared.pauseAll()
-                    recordView(at: activeIndex)
-                    prefetchIfNeeded(at: activeIndex)
-                    warmNeighbors(at: activeIndex)
-                }
-                .onDisappear {
-                    MediaPlaybackCoordinator.shared.stopAllPlayback()
-                    SparkWarmPool.shared.drain()
-                }
+        ZStack(alignment: .top) {
+            SparksUIKitPager(
+                posts: $posts,
+                activeIndex: $activeIndex,
+                bottomInset: bottomInset,
+                showsOpenPostAction: showsOpenPostAction,
+                viewerCountryCode: viewerCountryCode,
+                isScrollEnabled: isScrollEnabled,
+                onNearEnd: onNearEnd,
+                onNearStart: onNearStart,
+                onOpenComments: onOpenComments,
+                onLikeToggle: { post in Task { await toggleLike(post) } },
+                onOpenPost: { post in openPost(post) }
+            )
+            .ignoresSafeArea(.all)
 
-                if showsProgressRail, posts.count > 1 {
-                    ReelsProgressRail(
-                        posts: posts,
-                        activeIndex: activeIndex,
-                        viewerCountryCode: viewerCountryCode
-                    )
-                    .safeAreaPadding(.top, 6)
-                    .padding(.horizontal, 16)
-                }
+            if showsProgressRail, posts.count > 1 {
+                ReelsProgressRail(
+                    posts: posts,
+                    activeIndex: activeIndex,
+                    viewerCountryCode: viewerCountryCode
+                )
+                .padding(.top, 54)
+                .padding(.horizontal, 16)
             }
         }
-        .ignoresSafeArea()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black)
+        .ignoresSafeArea(.all)
+        .onAppear {
+            MediaPlaybackCoordinator.shared.silenceForSparkPageChange()
+            if posts.indices.contains(activeIndex) {
+                recordView(at: activeIndex)
+                SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 6, behind: 2)
+            }
+        }
+        .onDisappear {
+            MediaPlaybackCoordinator.shared.stopAllPlayback()
+            SparkWarmPool.shared.drain()
+        }
+        .onChange(of: activeIndex) { _, idx in
+            recordView(at: idx)
+            SparkWarmPool.shared.prepare(posts: posts, around: idx, ahead: 6, behind: 2)
+        }
     }
-
-    @Environment(AppState.self) private var appState
 
     private func openPost(_ post: CountryPost) {
         appState.reelsViewerContext = nil
         appState.openPostInFeed(postID: post.id)
     }
 
-    private func normalizeLoopPosition(_ position: Int) {
-        guard usesInfiniteLoop else { return }
-        let span = posts.count
-        let adjusted: Int?
-        if position < span {
-            adjusted = position + span
-        } else if position >= span * 2 {
-            adjusted = position - span
-        } else {
-            adjusted = nil
-        }
-        guard let adjusted, scrollPosition != adjusted else { return }
-        isNormalizingLoop = true
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            scrollPosition = adjusted
-        }
-        Task { @MainActor in
-            isNormalizingLoop = false
-        }
-    }
-
-    private func syncLoopScrollPosition() {
-        guard usesInfiniteLoop else {
-            scrollPosition = activeIndex
-            return
-        }
-        let target = loopIndex(for: activeIndex)
-        guard scrollPosition != target else { return }
-        isNormalizingLoop = true
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            scrollPosition = target
-        }
-        Task { @MainActor in
-            isNormalizingLoop = false
-        }
-    }
-
-    private func prefetchIfNeeded(at index: Int) {
-        if index >= max(0, posts.count - 5) {
-            onNearEnd?()
-        }
-        if index <= 2 {
-            onNearStart?()
-        }
-    }
-
-    /// Buffer next/prev Sparks before the finger lifts (Instagram-depth warm window).
-    private func warmNeighbors(at index: Int) {
-        SparkWarmPool.shared.prepare(posts: posts, around: index, ahead: 4, behind: 1)
-    }
-
     private func recordView(at index: Int) {
         guard posts.indices.contains(index) else { return }
         let post = posts[index]
-        ReelsRankingEngine.markWatched(post.id)
+        SparkDiscoveryEngine.markWatched(post.id)
         Task { await PostsService.shared.recordView(post) }
     }
 
@@ -247,7 +127,7 @@ private struct ReelsProgressRail: View {
     }
 }
 
-/// Matterya Sparks progress — warm ink trail inside the paper dock (not a Shorts bar).
+/// Slim amber trail on glass dock — readable without a heavy bar.
 private struct SparksTimelineBar: View {
     let currentSeconds: Double
     let durationSeconds: Double
@@ -269,61 +149,66 @@ private struct SparksTimelineBar: View {
     }
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: 4) {
+        VStack(alignment: .trailing, spacing: 3) {
             if isScrubbing, durationSeconds > 0.35 {
                 Text(timeLabel)
                     .font(.caption2.weight(.semibold).monospacedDigit())
-                    .foregroundStyle(Theme.ink.opacity(0.75))
+                    .foregroundStyle(Theme.paper.opacity(0.85))
                     .frame(maxWidth: .infinity, alignment: .trailing)
                     .transition(.opacity)
             }
 
             GeometryReader { geo in
-                let trackH: CGFloat = isScrubbing ? 4 : 2
+                let trackH: CGFloat = isScrubbing ? 3.5 : 1.5
                 ZStack(alignment: .leading) {
                     Capsule()
-                        .fill(Theme.ink.opacity(0.10))
+                        .fill(Theme.paper.opacity(0.18))
                         .frame(height: trackH)
                     Capsule()
-                        .fill(Theme.accentBright)
+                        .fill(Theme.accentBright.opacity(0.95))
                         .frame(width: max(trackH, geo.size.width * fraction), height: trackH)
                     if isScrubbing {
                         Circle()
                             .fill(Theme.paper)
-                            .overlay(Circle().stroke(Theme.accentBright, lineWidth: 1.5))
-                            .frame(width: 14, height: 14)
-                            .shadow(color: Theme.ink.opacity(0.18), radius: 3, y: 1)
-                            .offset(x: max(0, geo.size.width * fraction - 7))
+                            .overlay(Circle().stroke(Theme.accentBright, lineWidth: 1.2))
+                            .frame(width: 11, height: 11)
+                            .offset(x: max(0, geo.size.width * fraction - 5.5))
                     }
                 }
                 .frame(maxHeight: .infinity, alignment: .center)
                 .contentShape(Rectangle())
-                .highPriorityGesture(
-                    DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                // simultaneous so vertical page swipes always win over scrub.
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 14, coordinateSpace: .local)
                         .onChanged { value in
                             let w = max(geo.size.width, 1)
+                            let dx = abs(value.translation.width)
+                            let dy = abs(value.translation.height)
                             if !isScrubbing {
-                                let dx = abs(value.translation.width)
-                                let dy = abs(value.translation.height)
-                                if dy > 12, dy > dx * 1.15 { return }
+                                // Strictly horizontal only — never compete with Sparks paging.
+                                if dy > 8, dy >= dx { return }
+                                if dx < 12 { return }
                             }
                             isScrubbing = true
                             dragFraction = min(1, max(0, value.location.x / w))
                         }
                         .onEnded { value in
+                            defer {
+                                withAnimation(.easeOut(duration: 0.15)) {
+                                    isScrubbing = false
+                                }
+                            }
+                            guard isScrubbing else { return }
                             let w = max(geo.size.width, 1)
                             let f = min(1, max(0, value.location.x / w))
                             dragFraction = f
                             if durationSeconds > 0.35 {
                                 onSeek(f * durationSeconds)
                             }
-                            withAnimation(.easeOut(duration: 0.15)) {
-                                isScrubbing = false
-                            }
                         }
                 )
             }
-            .frame(height: 22)
+            .frame(height: 18)
         }
         .animation(.easeOut(duration: 0.12), value: isScrubbing)
         .accessibilityLabel("Spark timeline")
@@ -340,9 +225,13 @@ private struct SparksTimelineBar: View {
 
 struct ReelsPagerCard: View {
     @Environment(AppState.self) private var appState
+    /// TikTok/IG default: edge-to-edge fill. Set via SparksUIKitPager environment.
+    @Environment(\.sparksPlayerFillsFrame) private var fillsFrame
 
     let post: CountryPost
     let isActive: Bool
+    /// Parent focus generation while active (0 when inactive). Drives a single t=0 restart.
+    var focusGeneration: UInt = 0
     var bottomInset: CGFloat = Theme.tabBarHeight + 12
     var showsOpenPostAction = true
     var viewerCountryCode: String? = nil
@@ -356,9 +245,11 @@ struct ReelsPagerCard: View {
 
     @State private var saveFeedback: String?
     @State private var isPaused = false
+    /// Center play glyph — fades in on pause, then fades out and disappears (video stays frozen).
+    @State private var showPauseGlyph = false
+    @State private var pauseGlyphTask: Task<Void, Never>?
     @State private var showLikeBurst = false
     @State private var likeButtonScale: CGFloat = 1
-    @State private var lastTapTime: Date = .distantPast
     @State private var pendingSingleTap: DispatchWorkItem?
     /// Sparks timeline (YouTube Shorts–style bottom scrubber).
     @State private var progressSeconds: Double = 0
@@ -366,10 +257,98 @@ struct ReelsPagerCard: View {
     @State private var seekToSeconds: Double? = nil
     @State private var isScrubbingTimeline = false
 
+    /// Single restart token — active + parent generation in the same render (no double play).
+    private var restartFromBeginningToken: UInt {
+        isActive ? max(1, focusGeneration) : 0
+    }
+
     var body: some View {
         ZStack {
-            // Film stage
-            Theme.ink.ignoresSafeArea()
+            // Film fills the **entire page** (page = physical screen). Chrome floats on top.
+            filmStage
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) {
+                    pendingSingleTap?.cancel()
+                    keepPlayingThroughUIAction()
+                    triggerLike(fromButton: false)
+                }
+                .onTapGesture(count: 1) {
+                    handleSingleTapPause()
+                }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+        // Dock overlay only — never changes the film stage size.
+        .overlay(alignment: .bottom) {
+            sparkDock
+                .padding(.horizontal, 12)
+                .padding(.bottom, max(10, bottomInset - 4))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .animation(.spring(response: 0.34, dampingFraction: 0.62), value: showLikeBurst)
+        .onChange(of: isActive) { _, active in
+            if !active {
+                isPaused = false
+                hidePauseGlyph(animated: false)
+                pendingSingleTap?.cancel()
+                seekToSeconds = nil
+                isScrubbingTimeline = false
+            } else {
+                // Focus start is owned by focusGeneration — only reset local UI state here.
+                isPaused = false
+                hidePauseGlyph(animated: false)
+                progressSeconds = 0
+                seekToSeconds = nil
+                isScrubbingTimeline = false
+                if let url = post.playableVideoURL {
+                    SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
+                }
+            }
+        }
+        .onAppear {
+            if let url = post.playableVideoURL {
+                SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
+            }
+        }
+        .onChange(of: post.id) { _, _ in
+            progressSeconds = 0
+            durationSeconds = 0
+            seekToSeconds = nil
+            isScrubbingTimeline = false
+            isPaused = false
+            hidePauseGlyph(animated: false)
+        }
+        .onDisappear {
+            pendingSingleTap?.cancel()
+            isPaused = false
+            hidePauseGlyph(animated: false)
+        }
+        // Share / comments overlay may briefly interrupt AVPlayer — re-solo when they open.
+        .onReceive(NotificationCenter.default.publisher(for: .matteryaResumePlaybackAfterInterrupt)) { _ in
+            guard isActive else { return }
+            isPaused = false
+        }
+    }
+
+    /// Full-stage video + chrome that is not the action dock.
+    private var filmStage: some View {
+        ZStack {
+            // Same ink as poster placeholder — never pure black flash between pages.
+            Theme.ink
+
+            // Poster matches video gravity (fill) so there is no poster→video zoom jump.
+            if let poster = post.posterImageURL {
+                CachedAsyncImage(
+                    url: poster,
+                    maxPixelSize: 900,
+                    contentMode: fillsFrame ? .fill : .fit,
+                    placeholder: AnyView(Theme.ink)
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+                .allowsHitTesting(false)
+            }
 
             if let url = post.playableVideoURL {
                 Group {
@@ -377,12 +356,14 @@ struct ReelsPagerCard: View {
                         ArchiveVideoPlayerView(
                             url: url,
                             posterURL: post.posterImageURL,
-                            isActive: isActive && !isPaused,
+                            isActive: isActive,
                             muted: false,
                             startTime: 0,
                             loops: true,
-                            fillsFrame: true,
+                            // Platform default: aspectFill edge-to-edge (TikTok / IG / Shorts).
+                            fillsFrame: fillsFrame,
                             postID: post.id,
+                            interactive: false,
                             onReady: { Task { await PostsService.shared.recordView(post) } },
                             onProgress: { current, duration in
                                 guard isActive, !isScrubbingTimeline else { return }
@@ -390,7 +371,9 @@ struct ReelsPagerCard: View {
                                 if duration > 0.25 { durationSeconds = duration }
                             },
                             seekToSeconds: seekToSeconds,
-                            onSeekConsumed: { seekToSeconds = nil }
+                            onSeekConsumed: { seekToSeconds = nil },
+                            restartFromBeginningToken: restartFromBeginningToken,
+                            isPausedByUser: isPaused
                         )
                     } else {
                         VideoPlayerView(
@@ -400,11 +383,12 @@ struct ReelsPagerCard: View {
                             countryCode: post.countryCode,
                             contentCountryCode: post.countryCode,
                             postID: post.id,
-                            isActive: isActive && !isPaused,
+                            isActive: isActive,
                             loops: true,
                             muted: false,
                             showsControls: false,
-                            fillsFrame: true,
+                            fillsFrame: fillsFrame,
+                            preloadsWhenInactive: true,
                             onViewed: { Task { await PostsService.shared.recordView(post) } },
                             onProgress: { current, duration in
                                 guard isActive, !isScrubbingTimeline else { return }
@@ -412,11 +396,16 @@ struct ReelsPagerCard: View {
                                 if duration > 0.25 { durationSeconds = duration }
                             },
                             seekToSeconds: seekToSeconds,
-                            onSeekConsumed: { seekToSeconds = nil }
+                            onSeekConsumed: { seekToSeconds = nil },
+                            restartFromBeginningToken: restartFromBeginningToken,
+                            isPausedByUser: isPaused
                         )
                     }
                 }
-                .ignoresSafeArea()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+                // Video never steals vertical paging — UICollectionView owns pans.
+                .allowsHitTesting(false)
             } else {
                 VStack(spacing: 10) {
                     Image(systemName: "sparkles")
@@ -426,82 +415,50 @@ struct ReelsPagerCard: View {
                         .font(.system(.subheadline, design: .serif))
                         .foregroundStyle(Theme.paper.opacity(0.55))
                 }
+                .allowsHitTesting(false)
             }
 
-            // Soft vignette — journal light, not IG black fade.
+            // Light vignette only — video stays immersive; dock floats over film.
             VStack(spacing: 0) {
                 LinearGradient(
-                    colors: [Theme.ink.opacity(0.35), .clear],
+                    colors: [Theme.ink.opacity(0.22), .clear],
                     startPoint: .top,
                     endPoint: .bottom
                 )
-                .frame(height: 88)
+                .frame(height: 64)
                 Spacer(minLength: 0)
                 LinearGradient(
-                    colors: [.clear, Theme.ink.opacity(0.55), Theme.ink.opacity(0.82)],
+                    colors: [.clear, Theme.ink.opacity(0.18), Theme.ink.opacity(0.42)],
                     startPoint: .top,
                     endPoint: .bottom
                 )
-                .frame(height: 280)
+                .frame(height: 160)
             }
             .ignoresSafeArea()
             .allowsHitTesting(false)
 
-            Color.clear
-                .contentShape(Rectangle())
-                .onTapGesture { handleTap() }
-
-            // Center pause — paper seal (not a big white play glyph).
-            if isPaused {
-                ZStack {
-                    Circle()
-                        .fill(Theme.paper.opacity(0.94))
-                        .frame(width: 72, height: 72)
-                        .shadow(color: Theme.ink.opacity(0.28), radius: 16, y: 6)
-                    Image(systemName: "play.fill")
-                        .font(.system(size: 26, weight: .bold))
-                        .foregroundStyle(Theme.accentBright)
-                        .offset(x: 2)
-                }
+            // Soft off-white gold play — fades in, holds briefly, fades out & disappears.
+            // No glow. Video stays frozen underneath while paused.
+            Image(systemName: "play.fill")
+                .font(.system(size: 64, weight: .semibold))
+                .foregroundStyle(
+                    Color(red: 0.96, green: 0.93, blue: 0.86).opacity(0.72)
+                )
+                .offset(x: 3) // optical center for play triangle
+                .opacity(showPauseGlyph ? 1 : 0)
+                .scaleEffect(showPauseGlyph ? 1 : 0.92)
                 .allowsHitTesting(false)
-                .transition(.scale(scale: 0.85).combined(with: .opacity))
-            }
+                .animation(.easeInOut(duration: 0.22), value: showPauseGlyph)
 
             if showLikeBurst {
                 Image(systemName: "heart.fill")
-                    .font(.system(size: 96, weight: .bold))
+                    .font(.system(size: 88, weight: .bold))
                     .foregroundStyle(Theme.like)
                     .shadow(color: Theme.ink.opacity(0.25), radius: 12)
                     .scaleEffect(showLikeBurst ? 1 : 0.55)
                     .opacity(showLikeBurst ? 0.95 : 0)
                     .allowsHitTesting(false)
             }
-
-            // ── Matterya Spark dock (unique layout: paper card + horizontal actions) ──
-            VStack(spacing: 0) {
-                // Top mark — brand whisper, not a TikTok header.
-                HStack {
-                    Spacer(minLength: 0)
-                    Text(MatteryaCopy.sparks.uppercased())
-                        .font(.system(size: 10, weight: .bold, design: .rounded))
-                        .tracking(2.4)
-                        .foregroundStyle(Theme.paper.opacity(0.72))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Theme.ink.opacity(0.28), in: Capsule())
-                        .overlay(Capsule().stroke(Theme.paper.opacity(0.12), lineWidth: 0.5))
-                    Spacer(minLength: 0)
-                }
-                .padding(.top, 10)
-                .allowsHitTesting(false)
-
-                Spacer(minLength: 0)
-
-                sparkDock
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, max(12, bottomInset))
-            }
-            .zIndex(10)
 
             if let message = saveFeedback {
                 Text(message)
@@ -517,87 +474,66 @@ struct ReelsPagerCard: View {
                     .allowsHitTesting(false)
             }
         }
-        .animation(.easeOut(duration: 0.16), value: isPaused)
-        .animation(.spring(response: 0.34, dampingFraction: 0.62), value: showLikeBurst)
-        .onChange(of: isActive) { _, active in
-            if !active {
-                isPaused = false
-                pendingSingleTap?.cancel()
-                progressSeconds = 0
-                durationSeconds = 0
-                seekToSeconds = nil
-                isScrubbingTimeline = false
-            }
-        }
-        .onChange(of: post.id) { _, _ in
-            progressSeconds = 0
-            durationSeconds = 0
-            seekToSeconds = nil
-            isScrubbingTimeline = false
-        }
-        .onDisappear {
-            pendingSingleTap?.cancel()
-            isPaused = false
-        }
     }
 
-    /// Bottom paper “journal card” — creator, caption, ribbon actions, ink progress.
+    /// Frosted paper dock — same Matterya card, translucent so film stays immersive.
     private var sparkDock: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             authorRow
 
             if let text = post.sparkDisplayCaption, !text.isEmpty {
                 Text(text)
                     .font(.system(.subheadline, design: .serif))
-                    .foregroundStyle(Theme.ink.opacity(0.92))
-                    .lineLimit(3)
+                    .foregroundStyle(Theme.paper.opacity(0.94))
+                    .shadow(color: Theme.ink.opacity(0.45), radius: 6, y: 1)
+                    .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            HStack(spacing: 8) {
-                if post.countryCode != nil || post.countryName != nil {
-                    ReelsCountryChip(post: post, isHomeCountry: isHomeCountry) {
-                        if let country = MatteryaCountryBridge.country(from: post) {
-                            appState.openCountryReels(country)
-                        }
-                    }
-                }
-                Spacer(minLength: 0)
-            }
-
-            // Horizontal action ribbon — not a vertical Shorts rail.
-            HStack(spacing: 6) {
+            // Horizontal action ribbon — compact glass chips.
+            // Never pause the Spark for Like / Chat / Keep / Send.
+            HStack(spacing: 5) {
                 sparkAction(
                     icon: post.likedByMe ? "heart.fill" : "heart",
                     label: post.likeCount > 0 ? "\(post.likeCount)" : "Like",
-                    accent: post.likedByMe ? Theme.like : Theme.ink,
+                    accent: post.likedByMe ? Theme.like : Theme.paper,
                     scale: likeButtonScale
                 ) {
+                    keepPlayingThroughUIAction()
                     triggerLike(fromButton: true)
                 }
                 sparkAction(
                     icon: "bubble.right",
                     label: post.commentCount > 0 ? "\(post.commentCount)" : "Chat",
-                    accent: Theme.ink
+                    accent: Theme.paper
                 ) {
+                    keepPlayingThroughUIAction()
                     onOpenComments()
+                    reassertPlayback()
                 }
                 sparkAction(
                     icon: appState.isPostSaved(post.id) ? "bookmark.fill" : "bookmark",
                     label: "Keep",
-                    accent: appState.isPostSaved(post.id) ? Theme.accentBright : Theme.ink
+                    accent: appState.isPostSaved(post.id) ? Theme.accentBright : Theme.paper
                 ) {
+                    keepPlayingThroughUIAction()
                     Task { await toggleSave() }
                 }
                 sparkAction(
                     icon: "arrowshape.turn.up.right",
                     label: "Send",
-                    accent: Theme.ink
+                    accent: Theme.paper
                 ) {
+                    // Overlay share — do not pause or dismiss the Spark.
+                    keepPlayingThroughUIAction()
                     appState.presentShareSheet(for: post)
+                    reassertPlayback()
                 }
                 if showsOpenPostAction {
-                    sparkAction(icon: "arrow.up.right", label: "Open", accent: Theme.ink, action: onOpenPost)
+                    sparkAction(icon: "arrow.up.right", label: "Open", accent: Theme.paper) {
+                        keepPlayingThroughUIAction()
+                        onOpenPost()
+                    }
                 }
             }
 
@@ -613,18 +549,24 @@ struct ReelsPagerCard: View {
                 )
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 14)
-        .padding(.bottom, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(Theme.paper.opacity(0.94))
-                .shadow(color: Theme.ink.opacity(0.22), radius: 20, y: 8)
-        )
+        .padding(.horizontal, 12)
+        .padding(.top, 10)
+        .padding(.bottom, 10)
+        .background {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .environment(\.colorScheme, .dark)
+        }
+        .background {
+            // Warm paper wash — Matterya, not pure iOS glass.
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Theme.paper.opacity(0.14))
+        }
         .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(Theme.border.opacity(0.65), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Theme.paper.opacity(0.22), lineWidth: 0.5)
         )
+        .shadow(color: Theme.ink.opacity(0.18), radius: 14, y: 6)
     }
 
     private func sparkAction(
@@ -635,48 +577,97 @@ struct ReelsPagerCard: View {
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            HStack(spacing: 5) {
+            HStack(spacing: 4) {
                 Image(systemName: icon)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 12, weight: .semibold))
                     .scaleEffect(scale)
                 Text(label)
                     .font(.caption2.weight(.bold))
                     .lineLimit(1)
+                    .minimumScaleFactor(0.85)
             }
             .foregroundStyle(accent)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
             .frame(maxWidth: .infinity)
-            .background(Theme.canvasMuted.opacity(0.9), in: Capsule())
+            .background(Theme.paper.opacity(0.12), in: Capsule())
+            .overlay(Capsule().stroke(Theme.paper.opacity(0.14), lineWidth: 0.5))
         }
         .buttonStyle(.plain)
     }
 
-    private func handleTap() {
-        let now = Date()
-        if now.timeIntervalSince(lastTapTime) < 0.3 {
-            pendingSingleTap?.cancel()
-            lastTapTime = .distantPast
-            triggerLike(fromButton: false)
-            return
-        }
-
-        lastTapTime = now
+    /// Single-tap pause with a short delay so double-tap like can cancel it.
+    /// Only invoked from film-stage taps — never from dock buttons.
+    private func handleSingleTapPause() {
         pendingSingleTap?.cancel()
         let work = DispatchWorkItem {
             togglePause()
         }
         pendingSingleTap = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.28, execute: work)
     }
 
     private func togglePause() {
-        withAnimation(.easeOut(duration: 0.12)) {
-            isPaused.toggle()
+        isPaused.toggle()
+        if isPaused {
+            flashPauseGlyph()
+        } else {
+            hidePauseGlyph(animated: true)
+        }
+    }
+
+    /// Fade play glyph in, hold a beat, then fade out and disappear (pause state remains).
+    private func flashPauseGlyph() {
+        pauseGlyphTask?.cancel()
+        withAnimation(.easeInOut(duration: 0.2)) {
+            showPauseGlyph = true
+        }
+        pauseGlyphTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: 0.35)) {
+                showPauseGlyph = false
+            }
+        }
+    }
+
+    private func hidePauseGlyph(animated: Bool) {
+        pauseGlyphTask?.cancel()
+        pauseGlyphTask = nil
+        if animated {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showPauseGlyph = false
+            }
+        } else {
+            showPauseGlyph = false
+        }
+    }
+
+    /// Cancel any pending film single-tap pause and force the Spark to keep playing.
+    private func keepPlayingThroughUIAction() {
+        pendingSingleTap?.cancel()
+        pendingSingleTap = nil
+        isPaused = false
+        hidePauseGlyph(animated: true)
+    }
+
+    /// Kick solo audio again after overlays / sheets that may have interrupted AVPlayer.
+    private func reassertPlayback() {
+        guard isActive else { return }
+        isPaused = false
+        hidePauseGlyph(animated: false)
+        // Slight delay so sheet/overlay presentation settles first.
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
         }
     }
 
     private func triggerLike(fromButton: Bool) {
+        // Always keep audio rolling through like (button or double-tap).
+        keepPlayingThroughUIAction()
         if fromButton || !post.likedByMe {
             onLikeToggle()
         }
@@ -691,41 +682,55 @@ struct ReelsPagerCard: View {
                 likeButtonScale = 1
             }
         }
+        reassertPlayback()
     }
 
     private var authorRow: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Button {
                 appState.openPublicProfile(username: post.author?.username, userID: post.authorID)
             } label: {
-                HStack(spacing: 10) {
-                    AvatarView(url: post.author?.avatarURL, seed: post.authorID, size: 40)
-                        .overlay(Circle().stroke(Theme.border, lineWidth: 0.5))
+                HStack(spacing: 8) {
+                    AvatarView(url: post.author?.avatarURL, seed: post.authorID, size: 34)
+                        .overlay(Circle().stroke(Theme.paper.opacity(0.35), lineWidth: 0.5))
                     VStack(alignment: .leading, spacing: 1) {
                         Text(post.author?.displayName ?? "Member")
                             .font(.system(.subheadline, design: .serif).weight(.semibold))
-                            .foregroundStyle(Theme.ink)
+                            .foregroundStyle(Theme.paper)
+                            .shadow(color: Theme.ink.opacity(0.4), radius: 4, y: 1)
                             .lineLimit(1)
-                        if let handle = post.author?.username, !handle.isEmpty {
-                            Text("@\(handle)")
-                                .font(.caption2.weight(.medium))
-                                .foregroundStyle(Theme.inkMuted)
-                                .lineLimit(1)
+                        HStack(spacing: 6) {
+                            if let handle = post.author?.username, !handle.isEmpty {
+                                Text("@\(handle)")
+                                    .font(.caption2.weight(.medium))
+                                    .foregroundStyle(Theme.paper.opacity(0.7))
+                                    .lineLimit(1)
+                            }
+                            if post.countryCode != nil || post.countryName != nil {
+                                Text("·")
+                                    .font(.caption2)
+                                    .foregroundStyle(Theme.paper.opacity(0.4))
+                                Text(post.countryName ?? post.countryCode?.uppercased() ?? "")
+                                    .font(.caption2.weight(.medium))
+                                    .foregroundStyle(Theme.paper.opacity(0.65))
+                                    .lineLimit(1)
+                            }
                         }
                     }
                 }
             }
             .buttonStyle(.plain)
 
-            Spacer(minLength: 6)
+            Spacer(minLength: 4)
 
             if post.authorID != appState.currentProfile?.userID, !post.authorID.isEmpty {
-                FollowButton(userID: post.authorID, compact: true, onDark: false)
+                FollowButton(userID: post.authorID, compact: true, onDark: true)
             }
         }
     }
 
     private func toggleSave() async {
+        let willSave = !appState.isPostSaved(post.id)
         if let error = await appState.toggleSavePost(post, reelPresentation: true) {
             withAnimation(.easeInOut(duration: 0.2)) {
                 saveFeedback = error
@@ -736,12 +741,251 @@ struct ReelsPagerCard: View {
                     saveFeedback = nil
                 }
             }
+            return
+        }
+        // Confirm Keep landed in Saved Sparks (profile → Saved Sparks).
+        let message = willSave ? "Saved to \(MatteryaCopy.savedSparks)" : "Removed from saved"
+        withAnimation(.easeInOut(duration: 0.2)) {
+            saveFeedback = message
+        }
+        try? await Task.sleep(for: .seconds(1.6))
+        if saveFeedback == message {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                saveFeedback = nil
+            }
         }
     }
 }
 
 private struct ReelsCommentTarget: Identifiable {
     let id: String
+}
+
+/// Bottom share card over the live Sparks player — video keeps playing underneath.
+private struct SparksShareOverlay: View {
+    @Environment(AppState.self) private var appState
+    let post: CountryPost
+    let onClose: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            Color.black.opacity(0.28)
+                .ignoresSafeArea()
+                .onTapGesture(perform: onClose)
+                .allowsHitTesting(true)
+
+            SharePostSheet(
+                post: post,
+                onClose: onClose,
+                keepsSparksPlaying: true
+            )
+            .withAppState(appState)
+            .clipShape(
+                UnevenRoundedRectangle(
+                    topLeadingRadius: 18,
+                    bottomLeadingRadius: 0,
+                    bottomTrailingRadius: 0,
+                    topTrailingRadius: 18,
+                    style: .continuous
+                )
+            )
+            .background(
+                UnevenRoundedRectangle(
+                    topLeadingRadius: 18,
+                    bottomLeadingRadius: 0,
+                    bottomTrailingRadius: 0,
+                    topTrailingRadius: 18,
+                    style: .continuous
+                )
+                .fill(Theme.surface)
+                .shadow(color: .black.opacity(0.35), radius: 20, y: -4)
+            )
+            .frame(maxHeight: UIScreen.main.bounds.height * 0.52)
+            .padding(.bottom, 0)
+        }
+        .ignoresSafeArea(edges: .bottom)
+        .onAppear {
+            // Only the current solo Spark may keep audio under the share sheet.
+            MediaPlaybackCoordinator.shared.enforceSoloAudioOnly()
+            NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
+        }
+    }
+}
+
+/// Bottom comments card over the live Sparks player — video keeps playing (no .sheet).
+/// Dismiss: Close, tap outside (dimmer), or drag the grabber down.
+private struct SparksCommentsOverlay: View {
+    @Environment(AppState.self) private var appState
+    let postID: String
+    let onClose: () -> Void
+
+    @State private var dragOffset: CGFloat = 0
+    @State private var isDismissing = false
+
+    private var sheetShape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(
+            topLeadingRadius: 18,
+            bottomLeadingRadius: 0,
+            bottomTrailingRadius: 0,
+            topTrailingRadius: 18,
+            style: .continuous
+        )
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let maxSheetH = max(geo.size.height * 0.62, 280)
+
+            VStack(spacing: 0) {
+                // Flexible dimmer above the sheet — reliable hit target for “tap outside”.
+                Color.black.opacity(0.01)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .onTapGesture { dismiss() }
+                    .background(
+                        Color.black.opacity(0.32)
+                            .ignoresSafeArea()
+                            .allowsHitTesting(false)
+                    )
+                    .accessibilityLabel("Dismiss comments")
+                    .accessibilityAddTraits(.isButton)
+
+                VStack(spacing: 0) {
+                    // Grab handle — drag down to close without fighting the comments list.
+                    VStack(spacing: 0) {
+                        Capsule()
+                            .fill(Theme.inkMuted.opacity(0.45))
+                            .frame(width: 44, height: 5)
+                            .padding(.top, 10)
+                            .padding(.bottom, 10)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
+                    .gesture(dismissDragGesture)
+                    .accessibilityLabel("Drag down to close comments")
+
+                    NavigationStack {
+                        // Don't Environment.dismiss the Sparks full-screen cover when opening a profile.
+                        PostCommentsPageView(postID: postID, dismissesOnProfileOpen: false)
+                            .toolbar {
+                                ToolbarItem(placement: .cancellationAction) {
+                                    Button("Close") { dismiss() }
+                                }
+                            }
+                    }
+                    .withAppState(appState)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: maxSheetH, alignment: .top)
+                .background(Theme.surface)
+                .clipShape(sheetShape)
+                .shadow(color: .black.opacity(0.35), radius: 20, y: -4)
+                .offset(y: max(0, dragOffset))
+                // Sheet stays above dimmer for hits; list scroll is free inside NavigationStack.
+            }
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .bottom)
+        }
+        .ignoresSafeArea()
+        .onAppear {
+            // Kill ghost audio from off-screen Sparks (UICollectionView cells can stay “active”).
+            MediaPlaybackCoordinator.shared.enforceSoloAudioOnly()
+            // Resume only the solo player (handlers ignore non-solo).
+            NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                MediaPlaybackCoordinator.shared.enforceSoloAudioOnly()
+                NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
+            }
+        }
+    }
+
+    private var dismissDragGesture: some Gesture {
+        DragGesture(minimumDistance: 6, coordinateSpace: .global)
+            .onChanged { value in
+                guard !isDismissing else { return }
+                dragOffset = max(0, value.translation.height)
+            }
+            .onEnded { value in
+                guard !isDismissing else { return }
+                let dy = value.translation.height
+                let predicted = value.predictedEndTranslation.height
+                if dy > 90 || predicted > 180 {
+                    dismiss()
+                } else {
+                    withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                        dragOffset = 0
+                    }
+                }
+            }
+    }
+
+    private func dismiss() {
+        guard !isDismissing else { return }
+        isDismissing = true
+        withAnimation(.easeOut(duration: 0.18)) {
+            dragOffset = max(dragOffset, 240)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            onClose()
+        }
+    }
+}
+
+/// Top chrome: close (X) top-leading + “SPARKS” centered — same row, just under the notch.
+/// Sized to chrome only (not full-screen) so vertical paging is free on the rest of the stage.
+private struct SparksTopChrome: View {
+    let onClose: () -> Void
+    private let word = MatteryaCopy.sparks.uppercased()
+
+    var body: some View {
+        ZStack {
+            Text(word)
+                .font(.system(size: 13, weight: .heavy, design: .rounded))
+                .tracking(4.5)
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [
+                            Theme.paper.opacity(0.95),
+                            Theme.accentBright.opacity(0.88),
+                            Theme.paper.opacity(0.95),
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .shadow(color: .black.opacity(0.55), radius: 6, y: 1)
+                .allowsHitTesting(false)
+                .accessibilityLabel(MatteryaCopy.sparks)
+
+            HStack {
+                ReelsChromeButton(
+                    systemName: "xmark",
+                    accessibilityLabel: "Close \(MatteryaCopy.sparks.lowercased())",
+                    action: onClose
+                )
+                .offset(y: -2)
+                Spacer(minLength: 0)
+                    .allowsHitTesting(false)
+            }
+        }
+        .frame(height: 44)
+        .padding(.horizontal, Theme.pagePadding - 4)
+        .padding(.top, Self.notchInset + 2)
+        .frame(maxWidth: .infinity)
+        // Height = notch + bar only — never expand to full screen (that blocked first swipe).
+        .allowsHitTesting(true)
+        .ignoresSafeArea(edges: .top)
+    }
+
+    private static var notchInset: CGFloat {
+        if let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first(where: { $0.activationState == .foregroundActive || $0.activationState == .foregroundInactive }),
+           let top = scene.windows.first(where: \.isKeyWindow)?.safeAreaInsets.top,
+           top > 20 {
+            return top
+        }
+        return UIScreen.main.bounds.height >= 900 ? 54 : 50
+    }
 }
 
 struct ReelsScrollViewer: View {
@@ -773,20 +1017,12 @@ struct ReelsScrollViewer: View {
 
     var body: some View {
         reelsContent
-            .sheet(item: Binding(
-                get: { commentsPostID.map(ReelsCommentTarget.init(id:)) },
-                set: { commentsPostID = $0?.id }
-            )) { target in
-                NavigationStack {
-                    PostCommentsPageView(postID: target.id)
-                }
-                .withAppState(appState)
-            }
     }
 
     private var reelsContent: some View {
-        ZStack(alignment: .topLeading) {
-            Color.black.ignoresSafeArea()
+        let screen = UIScreen.main.bounds.size
+        return ZStack(alignment: .topLeading) {
+            Color.black
 
             if posts.isEmpty {
                 ContentUnavailableView(
@@ -795,7 +1031,7 @@ struct ReelsScrollViewer: View {
                     description: Text("This \(MatteryaCopy.spark.lowercased()) is no longer available.")
                 )
             } else {
-                // Simple vertical page scroll — no world-hop / passport / globe chrome.
+                // Full physical screen from frame 0 — never reflows under safe area.
                 ReelsVerticalFeed(
                     posts: $posts,
                     activeIndex: $activeIndex,
@@ -803,36 +1039,80 @@ struct ReelsScrollViewer: View {
                     showsOpenPostAction: false,
                     showsProgressRail: false,
                     viewerCountryCode: appState.currentProfile?.countryCode,
-                    isScrollEnabled: true,
+                    isScrollEnabled: commentsPostID == nil && appState.sharePostSheet == nil,
                     onNearEnd: { Task { await loadMoreReels() } },
                     onNearStart: { Task { await loadEarlierReels() } },
                     onOpenComments: { commentsPostID = $0 }
                 )
             }
 
-            // Close only — vertical swipe changes Sparks.
-            ReelsChromeButton(systemName: "xmark", accessibilityLabel: "Close \(MatteryaCopy.sparks.lowercased())") {
-                dismiss()
+            SparksTopChrome(onClose: { dismiss() })
+                .zIndex(40)
+
+            if let commentsID = commentsPostID {
+                SparksCommentsOverlay(postID: commentsID) {
+                    commentsPostID = nil
+                    MediaPlaybackCoordinator.shared.enforceSoloAudioOnly()
+                    NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
+                }
+                .zIndex(75)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            .safeAreaPadding(.top, 6)
-            .padding(.leading, Theme.pagePadding)
+
+            if let sharePost = appState.sharePostSheet {
+                SparksShareOverlay(post: sharePost) {
+                    appState.sharePostSheet = nil
+                    MediaPlaybackCoordinator.shared.enforceSoloAudioOnly()
+                    NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
+                }
+                .zIndex(80)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
+        .frame(width: screen.width, height: screen.height)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black)
+        .ignoresSafeArea(.all)
+        .animation(.spring(response: 0.32, dampingFraction: 0.9), value: appState.sharePostSheet?.id)
+        .animation(.spring(response: 0.32, dampingFraction: 0.9), value: commentsPostID)
         .toolbar(.hidden, for: .navigationBar)
+        // Status bar hidden from first paint so safe-area never “eats” the top after video mounts.
         .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)
-        .sheet(item: Binding(
-            get: { appState.sharePostSheet },
-            set: { appState.sharePostSheet = $0 }
-        )) { post in
-            SharePostSheet(post: post)
-                .withAppState(appState)
-        }
         .task {
-            ReelsRankingEngine.resetSession()
-            SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 4, behind: 0)
+            SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 6, behind: 1)
+            seedFromWarmCatalogIfNeeded()
             await expandFeed()
-            SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 4, behind: 1)
+            SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 8, behind: 2)
         }
+    }
+
+    /// Instant neighbors from memory — **eligible originals only** (never feed share shells).
+    private func seedFromWarmCatalogIfNeeded() {
+        guard posts.count < 8 else { return }
+        let preserveID = posts.indices.contains(activeIndex)
+            ? posts[activeIndex].id
+            : context.startingPostID
+        let preferStart = ReelsRankingEngine.resolvePlayerStart(
+            posts.first(where: { $0.id == preserveID }) ?? context.startingPost
+        )
+        var feed: [CountryPost] = []
+        var seen = Set<String>()
+        if preferStart.playableVideoURL != nil {
+            feed.append(preferStart)
+            seen.insert(preferStart.id)
+        }
+        let warm = PostsService.shared.sparksCatalogSnapshot()
+            .filter { ReelsRankingEngine.isSparkEligible($0) }
+            .shuffled()
+        for post in warm {
+            guard seen.insert(post.id).inserted else { continue }
+            feed.append(post)
+            if feed.count >= 48 { break }
+        }
+        replacePlayerQueue(feed, preserveID: preferStart.id)
+        hasMorePages = true
+        SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 6, behind: 1)
     }
 
     private func expandFeed() async {
@@ -844,88 +1124,69 @@ struct ReelsScrollViewer: View {
         hasMorePages = true
         recyclePass = 0
 
-        // Keep the already-visible starting clip first so open stays snappy.
-        var feed: [CountryPost] = posts
-        var excluding = Set(feed.map(\.id))
-        if !feed.contains(where: { $0.id == context.startingPostID }) {
-            feed.insert(context.startingPost, at: 0)
-            excluding.insert(context.startingPostID)
+        // Clip currently under the finger (user may have swiped during network).
+        let preserveID = posts.indices.contains(activeIndex)
+            ? posts[activeIndex].id
+            : context.startingPostID
+        let preferStart = ReelsRankingEngine.resolvePlayerStart(
+            posts.first(where: { $0.id == preserveID }) ?? context.startingPost
+        )
+
+        // Unified entry (feed / chat / Hubs / strip / menu): full library + pure random order.
+        let fresh = await PostsService.shared.beginFreshSparksSession(preferStart: preferStart)
+
+        var feed: [CountryPost] = []
+        var excluding = Set<String>()
+        if preferStart.playableVideoURL != nil {
+            feed.append(preferStart)
+            excluding.insert(preferStart.id)
+        }
+        for post in fresh where excluding.insert(post.id).inserted {
+            guard ReelsRankingEngine.isSparkEligible(post) || post.id == preferStart.id else { continue }
+            feed.append(post)
         }
 
-        // Seed neighbors from open context (already ranked R2-first when possible).
-        let seedReels = context.seedPosts.filter(ReelsRankingEngine.isSparkEligible)
-        for reel in seedReels where excluding.insert(reel.id).inserted {
-            feed.append(reel)
-        }
+        // **Replace** the queue — never append home-feed junk that made the same ~20 clips loop.
+        replacePlayerQueue(feed, preserveID: preferStart.id)
+        hasMorePages = feed.count > 12
+        SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 8, behind: 2)
+        #if DEBUG
+        print("[Sparks] player queue size=\(posts.count) preserve=\(preferStart.id.prefix(8))")
+        #endif
+    }
 
-        // 1) Network / R2 Sparks — light first page so open stays snappy; more loads on swipe.
-        var cursor: String? = nil
-        var attempts = 0
-        while feed.count < 28, attempts < 3 {
-            attempts += 1
-            let page = await PostsService.shared.loadReelsFeedPage(
-                excludingIDs: excluding,
-                cursor: cursor,
-                batchSize: 16,
-                fetchLimit: 48,
-                viewerCountry: appState.currentProfile?.countryCode,
-                followingIDs: appState.followingIDs,
-                tail: feed,
-                allowRecycle: false
-            )
-            var added = 0
-            for post in page.posts where excluding.insert(post.id).inserted {
-                feed.append(post)
-                added += 1
-            }
-            cursor = page.nextCursor
-            feedCursor = page.nextCursor
-            hasMorePages = page.hasMore
-            if page.posts.isEmpty || added == 0 { break }
-        }
-
-        // 2) Archive last — only when AppConfig.archiveContentEnabled (else seed returns []).
-        let r2Count = feed.filter(\.isR2HostedMedia).count
-        if AppConfig.archiveContentEnabled, feed.count < 24 || r2Count < 12 {
-            let shuffleSeed = UInt64.random(in: 1...UInt64.max)
-                ^ UInt64(Date().timeIntervalSince1970 * 1_000)
-            let archiveSparks = await HubVideoSeedService.shared.sparkSeedVideos(
-                limit: 40,
-                shuffleSeed: shuffleSeed
-            )
-            for post in archiveSparks where excluding.insert(post.id).inserted {
-                guard ReelsRankingEngine.isSparkEligible(post) else { continue }
-                feed.append(post)
-                if feed.count >= 80 { break }
+    /// Replace the swipe queue without animation (keeps current page under the finger).
+    private func replacePlayerQueue(_ feed: [CountryPost], preserveID: String) {
+        guard !feed.isEmpty else { return }
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            posts = feed
+            if let idx = posts.firstIndex(where: { $0.id == preserveID }) {
+                activeIndex = idx
+            } else {
+                activeIndex = 0
             }
         }
+    }
 
-        if feed.count < 10 {
-            let topUp = await PostsService.shared.loadReelsFeedPage(
-                excludingIDs: Set(feed.map(\.id)),
-                cursor: feedCursor,
-                batchSize: 16,
-                fetchLimit: 80,
-                viewerCountry: appState.currentProfile?.countryCode,
-                followingIDs: appState.followingIDs,
-                tail: feed,
-                allowRecycle: true
-            )
-            for post in topUp.posts where !feed.contains(where: { $0.id == post.id }) {
-                feed.append(post)
-            }
-            feedCursor = topUp.nextCursor ?? feedCursor
-            hasMorePages = topUp.hasMore
+    /// Append only (load-more path) — never used for the initial catalog expand.
+    private func applyExpandedFeed(_ feed: [CountryPost], preserveID: String) {
+        var seen = Set(posts.map(\.id))
+        var appended: [CountryPost] = []
+        for p in feed where seen.insert(p.id).inserted {
+            guard ReelsRankingEngine.isSparkEligible(p) || p.id == preserveID else { continue }
+            appended.append(p)
         }
-
-        // Always reshuffle after start clip — no recommender yet, order must feel new every open.
-        let previousID = posts.indices.contains(activeIndex) ? posts[activeIndex].id : context.startingPostID
-        let start = feed.first(where: { $0.id == previousID }) ?? feed.first
-        let rest = feed.filter { $0.id != start?.id }
-        let ordered = (start.map { [$0] } ?? []) + ReelsRankingEngine.sessionFreshOrder(rest)
-        posts = ordered
-        activeIndex = posts.firstIndex(where: { $0.id == previousID }) ?? 0
-        SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 4, behind: 1)
+        guard !appended.isEmpty else { return }
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            posts.append(contentsOf: appended)
+            if let idx = posts.firstIndex(where: { $0.id == preserveID }) {
+                activeIndex = idx
+            }
+        }
     }
 
     private func loadMoreReels() async {
@@ -936,11 +1197,40 @@ struct ReelsScrollViewer: View {
         let existingIDs = Set(posts.map(\.id))
         let tail = Array(posts.suffix(6))
 
+        // Prefer a re-ranked slice of the deep discovery catalog first (breadth).
+        let catalog = await PostsService.shared.loadSparksDiscoveryCatalog(forceRefresh: false, deep: true)
+        // Pure unseen shuffle from remaining catalog — avoid recycling the same dozen.
+        let remaining = catalog
+            .filter { !existingIDs.contains($0.id) && ReelsRankingEngine.isSparkEligible($0) }
+            .shuffled()
+        if !remaining.isEmpty {
+            let batch = Array(remaining.prefix(48))
+            applyExpandedFeed(batch, preserveID: posts.indices.contains(activeIndex) ? posts[activeIndex].id : "")
+            hasMorePages = remaining.count > batch.count
+            SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 6, behind: 1)
+            return
+        }
+
+        let fromCatalog = ReelsRankingEngine.nextBatch(
+            from: catalog,
+            excluding: existingIDs,
+            limit: 48,
+            viewerCountry: appState.currentProfile?.countryCode,
+            followingIDs: appState.followingIDs,
+            tail: tail,
+            allowRecycle: recyclePass > 0
+        )
+        if !fromCatalog.isEmpty {
+            posts.append(contentsOf: ReelsRankingEngine.sessionFreshOrder(fromCatalog))
+            hasMorePages = true
+            return
+        }
+
         let page = await PostsService.shared.loadReelsFeedPage(
             excludingIDs: existingIDs,
             cursor: feedCursor,
-            batchSize: 14,
-            fetchLimit: 56,
+            batchSize: 28,
+            fetchLimit: 100,
             viewerCountry: appState.currentProfile?.countryCode,
             followingIDs: appState.followingIDs,
             tail: tail,
@@ -962,8 +1252,8 @@ struct ReelsScrollViewer: View {
             let retry = await PostsService.shared.loadReelsFeedPage(
                 excludingIDs: Set(posts.map(\.id)),
                 cursor: page.nextCursor ?? feedCursor,
-                batchSize: 14,
-                fetchLimit: 56,
+                batchSize: 28,
+                fetchLimit: 100,
                 viewerCountry: appState.currentProfile?.countryCode,
                 followingIDs: appState.followingIDs,
                 tail: tail,
@@ -977,22 +1267,23 @@ struct ReelsScrollViewer: View {
             if !retry.posts.isEmpty { return }
         }
 
-        guard recyclePass < 4 else { return }
+        guard recyclePass < 6 else { return }
         recyclePass += 1
-        let recycled = await PostsService.shared.loadReelsFeedPage(
-            excludingIDs: Set(posts.map(\.id)),
-            cursor: nil,
-            batchSize: 16,
-            fetchLimit: 80,
+        // Last resort: reshuffle discovery + allow recycle of watched (not current list).
+        PostsService.shared.invalidateSparksDiscoveryCatalog()
+        let reshuffled = await PostsService.shared.loadSparksDiscoveryCatalog(forceRefresh: true, deep: true)
+        let recycled = ReelsRankingEngine.nextBatch(
+            from: reshuffled,
+            excluding: Set(posts.map(\.id)),
+            limit: 40,
             viewerCountry: appState.currentProfile?.countryCode,
             followingIDs: appState.followingIDs,
             tail: tail,
             allowRecycle: true
         )
-        for post in recycled.posts where !posts.contains(where: { $0.id == post.id }) {
+        for post in recycled where !posts.contains(where: { $0.id == post.id }) {
             posts.append(post)
         }
-        feedCursor = recycled.nextCursor
         hasMorePages = true
     }
 

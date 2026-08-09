@@ -13,6 +13,14 @@ final class AppState {
     var needsProfileSetup = false
     var currentProfile: Profile?
     var selectedTab: AppTab = .feed
+    /// Bumped when feed should reshuffle strips (app open / 3+ min away).
+    var feedFreshSessionToken: Int = 0
+    /// Bumped when Hubs For you should reshuffle (app open / open Hubs tab).
+    var hubsFreshSessionToken: Int = 0
+    /// When user left the feed tab (nil = currently on feed or never left).
+    private var feedLeftAt: Date?
+    /// Away from feed longer than this → reload a new mix on return.
+    private let feedStaleAwayInterval: TimeInterval = 3 * 60
     var selectedCountry: Country?
     var countryTab: CountryTab = .posts
     var globePanel: GlobePanel?
@@ -141,6 +149,15 @@ final class AppState {
             return
         }
         await prepareSession()
+        // Returning from background after 3+ min off feed → new mix.
+        if selectedTab != .feed, let left = feedLeftAt,
+           Date().timeIntervalSince(left) >= feedStaleAwayInterval {
+            // Still away; keep timer. When they return to feed, noteSelectedTabChanged reloads.
+        } else if selectedTab == .feed, let left = feedLeftAt,
+                  Date().timeIntervalSince(left) >= feedStaleAwayInterval {
+            requestFreshFeedSession(reason: "foreground_after_away")
+            feedLeftAt = nil
+        }
     }
 
     private func restoreCachedProfile() {
@@ -171,6 +188,10 @@ final class AppState {
             ImageCache.shared.prefetchFeedMedia(Array(cached.prefix(12)), maxPixelSize: 360)
         }
 
+        // Every app open: FeedView reloads a new mix via contentLoadGeneration;
+        // Hubs For you reshuffles via hubsFreshSessionToken.
+        hubsFreshSessionToken += 1
+
         // Feed can paint now — secondary work is non-blocking.
         contentLoadGeneration += 1
 
@@ -179,6 +200,40 @@ final class AppState {
             await refreshProfile()
             await refreshAllInBackground()
         }
+    }
+
+    /// Call from MainTabView when the selected tab changes.
+    /// Leave feed / return after 3+ minutes → new feed session.
+    func noteSelectedTabChanged(from old: AppTab, to new: AppTab) {
+        if old == .feed, new != .feed {
+            feedLeftAt = Date()
+            return
+        }
+        if new == .feed, old != .feed {
+            if let left = feedLeftAt, Date().timeIntervalSince(left) >= feedStaleAwayInterval {
+                #if DEBUG
+                print("[Feed] away \(Int(Date().timeIntervalSince(left)))s ≥ 3m → fresh session")
+                #endif
+                requestFreshFeedSession(reason: "away_3m")
+            }
+            feedLeftAt = nil
+        }
+        if new == .hubs, old != .hubs {
+            // Fresh For you shuffle every time user opens Hubs.
+            hubsFreshSessionToken += 1
+        }
+    }
+
+    /// Reshuffle feed posts + strips (3+ min off feed). App open uses contentLoadGeneration.
+    func requestFreshFeedSession(reason: String) {
+        feedLeftAt = nil
+        feedFreshSessionToken += 1
+        // Force Sparks rail / player to re-pull + re-rank — not the same 8 IDs.
+        SparkDiscoveryEngine.resetSession()
+        PostsService.shared.invalidateSparksDiscoveryCatalog()
+        #if DEBUG
+        print("[Feed] requestFreshFeedSession reason=\(reason) token=\(feedFreshSessionToken)")
+        #endif
     }
 
     private func prepareSession() async {
@@ -291,51 +346,209 @@ final class AppState {
     }
 
     func refreshSavedPosts() async {
-        if savedPostIDs.isEmpty {
-            savedPostIDs = Set(UserDefaults.standard.stringArray(forKey: localSavedPostIDsKey) ?? [])
+        // Always restore ID sets first — never let a thin server list erase local Sparks.
+        let diskIDs = Set(UserDefaults.standard.stringArray(forKey: localSavedPostIDsKey) ?? [])
+        savedPostIDs.formUnion(diskIDs)
+        let diskReelIDs = loadReelPresentationSavedIDs()
+        reelPresentationSavedIDs.formUnion(diskReelIDs)
+
+        let previousLocal = savedPosts
+        let cachedLocal = ContentCache.shared.posts(for: .savedPosts) ?? []
+        if savedPosts.isEmpty, !cachedLocal.isEmpty {
+            savedPosts = cachedLocal
+            savedPostIDs.formUnion(cachedLocal.map(\.id))
         }
-        if savedPosts.isEmpty, let cached = ContentCache.shared.posts(for: .savedPosts) {
-            savedPosts = cached
-            savedPostIDs = Set(cached.map(\.id))
+
+        let knownIDs = savedPostIDs
+        let loaded = await PostsService.shared.loadBookmarkedPosts(localIDs: knownIDs, limit: 100)
+
+        // Preserve every previously known save — server lists omit seed/catalog Sparks.
+        let keepRows = previousLocal + cachedLocal + savedPosts
+        var merged = Self.mergeSavedLists(
+            serverOrResolved: loaded,
+            localKeep: keepRows,
+            savedIDs: knownIDs.union(Set(loaded.map(\.id))).union(Set(keepRows.map(\.id)))
+        )
+
+        // Rows we still "own" by ID but failed to re-hydrate — keep last known copy.
+        let mergedIDs = Set(merged.map(\.id))
+        for post in keepRows where knownIDs.contains(post.id) && !mergedIDs.contains(post.id) {
+            merged.append(post.withSavedByMe(true))
         }
-        let loaded = await PostsService.shared.loadBookmarkedPosts(localIDs: savedPostIDs, limit: 100)
-        if !loaded.isEmpty || PostsService.usesLocalBookmarksOnly {
-            savedPosts = loaded
-            savedPostIDs = Set(loaded.map(\.id))
+
+        var fixed: [CountryPost] = []
+        for post in merged {
+            let asSpark = reelPresentationSavedIDs.contains(post.id) || Self.belongsInSavedSparks(post)
+            if asSpark {
+                fixed.append(post.withSavedByMe(true))
+                reelPresentationSavedIDs.insert(post.id)
+            } else {
+                fixed.append(await Self.preparePostForSave(post, asSpark: false).withSavedByMe(true))
+            }
+        }
+        savedPosts = fixed.sorted { $0.createdAt > $1.createdAt }
+
+        // Re-tag Spark-shaped rows so they never land in Saved Videos.
+        for post in savedPosts where Self.belongsInSavedSparks(post) {
+            reelPresentationSavedIDs.insert(post.id)
+        }
+
+        // Never shrink the ID set on refresh — only unsave removes IDs.
+        savedPostIDs.formUnion(Set(savedPosts.map(\.id)))
+        savedPostIDs.formUnion(knownIDs)
+        if !savedPosts.isEmpty {
             ContentCache.shared.setPosts(savedPosts, for: .savedPosts)
-            persistLocalSavedPostIDs()
-        } else if savedPosts.isEmpty {
-            await loadLocalSavedPosts(resolvePosts: true)
         }
+        persistLocalSavedPostIDs()
+        persistReelPresentationSavedIDs()
     }
 
     func isPostSaved(_ postID: String) -> Bool {
         savedPostIDs.contains(postID)
     }
 
+    /// Sparks (original, feed share, or opened from Sparks player) — never Saved Videos.
+    static func belongsInSavedSparks(_ post: CountryPost) -> Bool {
+        if post.isStory { return false }
+        if post.isReel || post.isSpark { return true }
+        if post.isSparkFeedShare { return true }
+        if PlayPlatformBridge.isSparkFeedCard(post) { return true }
+        // Do NOT use ReelsRankingEngine here — it gates Archive off and was hiding valid saves.
+        if post.isHubSeedVideo, post.hasVideo {
+            let type = (post.mediaType ?? "").lowercased()
+            if type == "reel" || type == "spark" { return true }
+            // Short catalog clips often store as video but are Sparks in the player.
+            if type == "video" || type.isEmpty {
+                let media = (post.mediaURL ?? "").lowercased()
+                if media.contains("spark") || media.contains("/reel") { return true }
+            }
+        }
+        // R2 short-form pack paths even if media_type was stored as plain "video".
+        if post.isR2HostedMedia, post.hasVideo, !PlayPlatformBridge.isHubCatalogContent(post) {
+            let media = (post.mediaURL ?? "").lowercased()
+            if media.contains("spark") || media.contains("/reels") || media.contains("\"reel\"") {
+                return true
+            }
+        }
+        if post.isArchiveSparkSource { return true }
+        return false
+    }
+
     @discardableResult
     func toggleSavePost(_ post: CountryPost, reelPresentation: Bool = false) async -> String? {
         let wasSaved = savedPostIDs.contains(post.id)
         let targetSaved = !wasSaved
-        applySavedState(for: post, saved: targetSaved, reelPresentation: reelPresentation)
+        // Sparks player Keep always goes to Saved Sparks (never Saved Videos).
+        let asSpark = reelPresentation || Self.belongsInSavedSparks(post)
+        // Store channel identity for Hubs videos — never the re-sharer's face/name.
+        // Stamp reel media_type when Keep is from Sparks player so profile filters keep it.
+        var prepared = await Self.preparePostForSave(post, asSpark: asSpark)
+            .withSavedByMe(targetSaved)
+        if asSpark, prepared.mediaType?.lowercased() != "reel", prepared.mediaType?.lowercased() != "spark" {
+            prepared = prepared.withMediaTypeForSave("reel")
+        }
+        // Optimistic UI — always keep the rich local post (server rows often strip spark markers).
+        applySavedState(for: prepared, saved: targetSaved, asSpark: asSpark)
+        persistLocalSavedPostIDs()
+        persistReelPresentationSavedIDs()
+        if !savedPosts.isEmpty {
+            ContentCache.shared.setPosts(savedPosts, for: .savedPosts)
+        } else if !targetSaved {
+            ContentCache.shared.invalidate(.savedPosts)
+        }
         do {
             let updated = try await PostsService.shared.toggleBookmark(for: post, saved: targetSaved)
-            applySavedState(for: updated, saved: targetSaved, reelPresentation: reelPresentation)
+            // Always prefer rich local Spark (media + reel typing) over server shell.
+            let stored = Self.preferredSavedPost(local: prepared, server: updated, asSpark: asSpark)
+            let fixed = await Self.preparePostForSave(stored, asSpark: asSpark)
+                .withSavedByMe(targetSaved)
+            applySavedState(for: fixed, saved: targetSaved, asSpark: asSpark)
             persistLocalSavedPostIDs()
-            ContentCache.shared.setPosts(savedPosts, for: .savedPosts)
+            if !savedPosts.isEmpty {
+                ContentCache.shared.setPosts(savedPosts, for: .savedPosts)
+            }
             return nil
         } catch {
-            applySavedState(for: post, saved: wasSaved, reelPresentation: reelPresentation)
+            // Sparks (player or catalog) always succeed on-device — never roll back Keep.
+            if asSpark || PostsService.mustBookmarkLocally(post) {
+                applySavedState(for: prepared, saved: targetSaved, asSpark: asSpark)
+                persistLocalSavedPostIDs()
+                if !savedPosts.isEmpty {
+                    ContentCache.shared.setPosts(savedPosts, for: .savedPosts)
+                }
+                return nil
+            }
+            applySavedState(for: post, saved: wasSaved, asSpark: asSpark)
+            persistLocalSavedPostIDs()
             return error.localizedDescription
         }
     }
 
-    private func applySavedState(for post: CountryPost, saved: Bool, reelPresentation: Bool) {
+    /// For long-form Hubs saves: rewrite author to the **channel**, keep bookmark id.
+    private static func preparePostForSave(_ post: CountryPost, asSpark: Bool) async -> CountryPost {
+        if asSpark { return post }
+        let needsChannel = PlayPlatformBridge.isHubOriginShare(post)
+            || PlayPlatformBridge.isHubCatalogContent(post)
+            || PlayPlatformBridge.isArchiveCatalogMedia(post)
+            || HubOriginShareMarker.isMarked(post.body)
+            || PlayPlatformBridge.isFeedOnlyShare(post)
+        guard needsChannel else { return post }
+        let channel = await PlayPlatformBridge.resolveHubWatchPresentation(for: post)
+        // If resolve only returned the same share row with the sharer as author, still apply origin stamp.
+        if let origin = HubOriginShareMarker.originPresentation(from: post) {
+            return PlayPlatformBridge.withChannelIdentity(post, from: origin)
+        }
+        if channel.authorID != post.authorID || channel.authorID.hasPrefix("hub_") {
+            return PlayPlatformBridge.withChannelIdentity(post, from: channel)
+        }
+        if PlayPlatformBridge.isArchiveCatalogMedia(post) {
+            let archive = CountryPost(
+                id: post.id,
+                title: post.title,
+                body: post.body,
+                mediaType: post.mediaType,
+                mediaURL: post.mediaURL,
+                thumbURL: post.thumbURL,
+                mediaCaption: post.mediaCaption,
+                sharedPostID: post.sharedPostID,
+                sharedPost: post.sharedPost,
+                visibility: post.visibility,
+                likeCount: post.likeCount,
+                commentCount: post.commentCount,
+                viewCount: post.viewCount,
+                likedByMe: post.likedByMe,
+                savedByMe: post.savedByMe,
+                createdAt: post.createdAt,
+                updatedAt: post.updatedAt,
+                authorID: HubVideoSeedService.archiveChannelAuthorID,
+                countryName: post.countryName,
+                countryCode: post.countryCode,
+                cityName: post.cityName,
+                author: PostAuthor(
+                    userID: HubVideoSeedService.archiveChannelAuthorID,
+                    displayName: HubVideoSeedService.archiveChannelDisplayName,
+                    username: HubVideoSeedService.archiveChannelUsername,
+                    avatarURL: nil,
+                    countryName: nil,
+                    countryCode: nil,
+                    lastReadAt: nil
+                ),
+                linkURL: post.linkURL,
+                linkTitle: post.linkTitle,
+                externalRefType: post.externalRefType,
+                externalRefID: post.externalRefID
+            )
+            return archive
+        }
+        return post
+    }
+
+    private func applySavedState(for post: CountryPost, saved: Bool, asSpark: Bool) {
         if saved {
             savedPostIDs.insert(post.id)
             savedPosts.removeAll { $0.id == post.id }
             savedPosts.insert(post, at: 0)
-            if reelPresentation || post.isReel {
+            if asSpark || Self.belongsInSavedSparks(post) {
                 reelPresentationSavedIDs.insert(post.id)
                 persistReelPresentationSavedIDs()
             }
@@ -345,6 +558,45 @@ final class AppState {
             reelPresentationSavedIDs.remove(post.id)
             persistReelPresentationSavedIDs()
         }
+    }
+
+    /// Prefer the on-device Spark metadata when the server bookmark row is thin / mis-typed.
+    private static func preferredSavedPost(local: CountryPost, server: CountryPost, asSpark: Bool) -> CountryPost {
+        let serverHasPlayable = server.playableVideoURL != nil
+            || !(server.mediaURL ?? "").isEmpty
+        let localHasPlayable = local.playableVideoURL != nil
+            || !(local.mediaURL ?? "").isEmpty
+
+        // Server row missing media — keep the rich local Spark.
+        if !serverHasPlayable, localHasPlayable {
+            return local
+        }
+        // Local is a Spark, server lost reel/spark typing → keep local (Saved Sparks bucket).
+        if (asSpark || belongsInSavedSparks(local)), !belongsInSavedSparks(server) {
+            return local
+        }
+        return server
+    }
+
+    /// Server list + local-only bookmarks (seed Sparks, offline keeps).
+    private static func mergeSavedLists(
+        serverOrResolved: [CountryPost],
+        localKeep: [CountryPost],
+        savedIDs: Set<String>
+    ) -> [CountryPost] {
+        var byID: [String: CountryPost] = [:]
+        for post in serverOrResolved {
+            byID[post.id] = post.withSavedByMe(true)
+        }
+        for post in localKeep where savedIDs.contains(post.id) {
+            if let existing = byID[post.id] {
+                byID[post.id] = preferredSavedPost(local: post, server: existing, asSpark: belongsInSavedSparks(post))
+                    .withSavedByMe(true)
+            } else {
+                byID[post.id] = post.withSavedByMe(true)
+            }
+        }
+        return byID.values.sorted { $0.createdAt > $1.createdAt }
     }
 
     private func loadLocalSavedPosts(resolvePosts: Bool = false) async {
@@ -369,15 +621,27 @@ final class AppState {
         savedPosts.filter { !$0.hasVideo }
     }
 
+    /// Long-form / feed videos only — **never** Sparks.
     var savedVideoPosts: [CountryPost] {
-        savedPosts.filter {
-            $0.hasVideo && !$0.isReel && !reelPresentationSavedIDs.contains($0.id)
+        savedPosts.filter { post in
+            guard post.hasVideo else { return false }
+            if reelPresentationSavedIDs.contains(post.id) { return false }
+            if Self.belongsInSavedSparks(post) { return false }
+            return true
         }
     }
 
+    /// Saved Sparks only (player + feed spark cards).
     var savedReelPosts: [CountryPost] {
-        savedPosts.filter {
-            $0.hasVideo && ($0.isReel || reelPresentationSavedIDs.contains($0.id))
+        savedPosts.filter { post in
+            // Explicit Keep from Sparks player always belongs here.
+            if reelPresentationSavedIDs.contains(post.id) {
+                return post.playableVideoURL != nil
+                    || !(post.mediaURL ?? "").isEmpty
+                    || post.hasVideo
+            }
+            guard post.hasVideo || post.playableVideoURL != nil else { return false }
+            return Self.belongsInSavedSparks(post)
         }
     }
 
@@ -837,8 +1101,8 @@ final class AppState {
     }
 
     func openPublicProfile(username: String?, userID: String) {
-        // Close Sparks / Moments immediately so the profile is visible now —
-        // not after the user dismisses the full-screen player.
+        // Close Sparks / Moments / expanded Hubs so the profile is visible now —
+        // not stuck behind a full-screen player or comments sheet.
         if reelsViewerContext != nil {
             MediaPlaybackCoordinator.shared.stopAllPlayback()
             reelsViewerContext = nil
@@ -846,8 +1110,12 @@ final class AppState {
         if storyViewerContext != nil {
             storyViewerContext = nil
         }
+        if hubPlaybackExpanded {
+            minimizeHubPlayback(returnToChat: false)
+        }
         globePanel = nil
         showAppMenu = false
+        sharePostSheet = nil
         selectedTab = .feed
         navigationPath.removeAll()
         let trimmedUsername = username?
@@ -875,13 +1143,20 @@ final class AppState {
         clearPendingPlayRouting()
     }
 
-    /// Start / switch the single global hubs player. Stops feed audio first so nothing doubles.
+    /// Start / switch the single global hubs player.
     /// - Parameter expanded: full Hubs watch (player + comments). Elsewhere use mini.
     func startHubPlayback(_ post: CountryPost, expanded: Bool = true) {
-        // Always resolve catalog channel (async) so feed shares never show the sharer.
+        // Instant: paint + play with the post we already have (no await before first frame).
+        let quick = PlayPlatformBridge.hubWatchPresentation(for: post)
+        applyHubPlayback(quick, expanded: expanded)
+        // Background: upgrade to full catalog identity if needed (sharer → channel).
         Task { @MainActor in
-            let watchPost = await PlayPlatformBridge.resolveHubWatchPresentation(for: post)
-            applyHubPlayback(watchPost, expanded: expanded)
+            let resolved = await PlayPlatformBridge.resolveHubWatchPresentation(for: post)
+            guard hubPlaybackPost?.id == quick.id || hubPlaybackPost?.id == post.id else { return }
+            if resolved.authorID != hubPlaybackPost?.authorID
+                || resolved.playableVideoURL != nil && hubPlaybackPost?.playableVideoURL == nil {
+                applyHubPlayback(resolved, expanded: hubPlaybackExpanded)
+            }
         }
     }
 
@@ -893,36 +1168,46 @@ final class AppState {
         isPlayPresented = false
         clearPendingLivingVideo()
 
+        // Intent first — GlobalHubPlaybackLayer mounts with isActive true (no silent first frame).
+        hubPlaybackPlaying = true
+        hubPlaybackMuted = false
+
         if expanded {
             rememberHubPlaybackChatReturnIfNeeded()
             navigationPath.removeAll()
-            selectedTab = .hubs
-        }
-
-        let switchingVideo = hubPlaybackPost?.id != watchPost.id
-        if switchingVideo {
-            MediaPlaybackCoordinator.shared.stopAllPlayback()
-            hubPlaybackPost = watchPost
-            hubPlaybackMuted = false
-        } else if hubPlaybackPost?.playableVideoURL == nil, watchPost.playableVideoURL != nil {
-            hubPlaybackPost = watchPost
-        } else if hubPlaybackPost?.authorID != watchPost.authorID {
-            // Upgrade sharer identity → catalog channel without remounting player.
-            hubPlaybackPost = watchPost
-        }
-
-        hubPlaybackPlaying = true
-        if expanded {
             selectedTab = .hubs
             hubPlaybackExpanded = true
         } else {
             hubPlaybackExpanded = false
         }
+
+        let switchingVideo = hubPlaybackPost?.id != watchPost.id
+        if switchingVideo {
+            // Soft-pause others only — never stopAll/tear-down (that delayed first frame).
+            MediaPlaybackCoordinator.shared.pauseAll()
+            hubPlaybackPost = watchPost
+        } else if hubPlaybackPost?.playableVideoURL == nil, watchPost.playableVideoURL != nil {
+            hubPlaybackPost = watchPost
+        } else if hubPlaybackPost?.authorID != watchPost.authorID {
+            // Upgrade sharer identity → catalog channel without remounting player.
+            hubPlaybackPost = watchPost
+        } else if hubPlaybackPost == nil {
+            hubPlaybackPost = watchPost
+        }
+
+        // Continuous Hubs player (mini or full) owns audio — kill feed/profile autoplay.
+        FeedVideoFocus.shared.resetAll()
         YouTubeCatalogService.shared.recordWatch(watchPost.id)
-        if let url = watchPost.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) {
-            ArchiveVideoPlayback.warmResolve(url)
+        if let url = watchPost.playableVideoURL {
+            if ArchiveVideoPlayback.isArchiveURL(url) {
+                ArchiveVideoPlayback.warmResolve(url)
+            }
+            // Pre-warm AV buffer immediately (same runloop as open).
+            SparkWarmPool.shared.warmSingle(postID: watchPost.id, url: url)
         }
         ImageCache.shared.prefetchPostThumbnails([watchPost], maxPixelSize: 720)
+        // Kick continuous surface if it was paused.
+        NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
     }
 
     /// Collapse to mini — **playback keeps running** (same continuous AVPlayer, only layout changes).
@@ -930,11 +1215,13 @@ final class AppState {
     /// Chat messages stay warm in `MessagesService` cache so re-open is instant.
     func minimizeHubPlayback(returnToChat: Bool = true) {
         guard hubPlaybackPost != nil else { return }
-        // Never stop/pause for minimize — GlobalHubPlaybackLayer only resizes the stage.
+        // Never stop/pause mini — GlobalHubPlaybackLayer only resizes the stage.
+        // Feed/profile autoplay must yield while mini is on.
         hubPlaybackPlaying = true
         withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.88)) {
             hubPlaybackExpanded = false
         }
+        FeedVideoFocus.shared.resetAll()
 
         // Drop return target if user already left that chat while minimized.
         syncHubPlaybackChatReturnWithPath()
@@ -972,6 +1259,8 @@ final class AppState {
         hubPlaybackPlaying = false
         hubPlaybackReturnConversationID = nil
         MediaPlaybackCoordinator.shared.stopAllPlayback()
+        // Mini closed — feed/profile may elect autoplay again.
+        FeedVideoFocus.shared.resetAll()
     }
 
     /// Conversation id currently on the nav stack (if any).
@@ -1009,7 +1298,14 @@ final class AppState {
         isPlayPresented = false
         if let tab { pendingPlayTab = tab }
 
-        if let post, post.id == postID, post.hasVideo {
+        // Instant path: share/list already has media — start playing this frame.
+        if let post, (post.id == postID || postID.isEmpty),
+           post.hasVideo || post.playableVideoURL != nil {
+            startHubPlayback(post, expanded: true)
+            return
+        }
+        // Also accept id mismatch when post carries the real playable URL (chat share stamps).
+        if let post, post.playableVideoURL != nil || post.hasVideo {
             startHubPlayback(post, expanded: true)
             return
         }
@@ -1018,8 +1314,9 @@ final class AppState {
         pendingLivingVideo = (post?.id == postID) ? post : nil
         selectedTab = .hubs
         hubPlaybackExpanded = true
-        // Stop feed audio even while Hubs resolves the id.
-        MediaPlaybackCoordinator.shared.stopAllPlayback()
+        hubPlaybackPlaying = true
+        // Silence others only — never stopAll (that delayed first Hubs frame after chat).
+        MediaPlaybackCoordinator.shared.pauseAll()
     }
 
     func clearPendingLivingVideo() {
@@ -1117,26 +1414,21 @@ final class AppState {
         )
     }
 
-    /// Open endless Sparks from a feed card / share.
-    /// **Snappy:** presents the player immediately with the tapped clip, then expands an
-    /// R2-first Matterya pool (Archive only as last-resort fill).
+    /// Open endless Sparks from a feed card / share / chat / Hubs / strip.
+    /// **One unified player** — same queue builder for every entry path.
     func openGlobalSparksViewer(startingPost: CountryPost) {
-        // Prefer shared original when present; keep playable share media as fallback.
-        let start: CountryPost = {
-            if let embed = startingPost.sharedPost?.asCountryPost,
-               embed.playableVideoURL != nil {
-                return embed
-            }
-            return startingPost
-        }()
+        // Always open the playable original (feed/chat shares resolve here).
+        let start = ReelsRankingEngine.resolvePlayerStart(startingPost)
         guard start.playableVideoURL != nil else {
             Task { @MainActor in
                 var resolved = start
-                // Prefer live R2 original via shared_post / GraphQL id — Archive only if nothing else.
                 if let sid = SparkShareMarker.originID(from: startingPost.body)
                     ?? startingPost.sharedPostID,
                    let remote = try? await PostsService.shared.getPostByID(sid),
                    remote.playableVideoURL != nil {
+                    resolved = remote
+                } else if let remote = try? await PostsService.shared.getPostByID(start.id),
+                          remote.playableVideoURL != nil {
                     resolved = remote
                 } else if let sid = SparkShareMarker.originID(from: startingPost.body),
                           let hub = await HubVideoSeedService.shared.post(id: sid),
@@ -1151,88 +1443,61 @@ final class AppState {
                     showToast("\(MatteryaCopy.noSparksYet) — publish one to get started.", style: .info)
                     return
                 }
-                openReelsViewer(startingPost: resolved, seedPosts: [resolved])
-                if let url = resolved.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) {
-                    ArchiveVideoPlayback.warmResolve(url)
-                }
-                SparkWarmPool.shared.prepare(posts: [resolved], around: 0, ahead: 4, behind: 0)
-                await prefetchGlobalSparksNeighbors(around: resolved)
+                presentGlobalSparks(starting: resolved)
             }
             return
         }
 
-        openReelsViewer(startingPost: start, seedPosts: [start])
+        presentGlobalSparks(starting: start)
+    }
+
+    /// Shared open path for feed + chat: multi-seed queue + warm pool + deep expand later.
+    private func presentGlobalSparks(starting start: CountryPost) {
+        let seeds = Self.instantSparksSeedQueue(starting: start)
+        openReelsViewer(startingPost: start, seedPosts: seeds)
         if let url = start.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) {
             ArchiveVideoPlayback.warmResolve(url)
         }
-        SparkWarmPool.shared.prepare(posts: [start], around: 0, ahead: 4, behind: 0)
-
-        // Background: warm next R2 Sparks (not Archive) so swipe 2–4 is already buffered.
-        Task { @MainActor in
-            await prefetchGlobalSparksNeighbors(around: start)
+        SparkWarmPool.shared.prepare(posts: seeds, around: 0, ahead: min(8, max(0, seeds.count - 1)), behind: 0)
+        // If memory is thin, kick a light catalog pull so expandFeed / swipe has more fuel.
+        if seeds.count < 12 {
+            Task { @MainActor in
+                _ = await PostsService.shared.loadSparksDiscoveryCatalog(forceRefresh: false, deep: false)
+            }
         }
     }
 
-    /// Prefetch **R2 / network** spark neighbors after the player is on screen. Archive last.
-    @MainActor
-    private func prefetchGlobalSparksNeighbors(around start: CountryPost) async {
-        var pool: [CountryPost] = [start]
-        var seen: Set<String> = [start.id]
+    /// Instant swipe seed — **eligible originals only** (never recycle feed share shells).
+    private static func instantSparksSeedQueue(starting start: CountryPost, limit: Int = 48) -> [CountryPost] {
+        let head = ReelsRankingEngine.resolvePlayerStart(start)
+        var out: [CountryPost] = [head]
+        var seen: Set<String> = [head.id]
 
-        // Network first — includes R2 focus seeds on Supabase.
-        let network = await PostsService.shared.loadReelsFeed(
-            globalLimit: 80,
-            viewerCountry: currentProfile?.countryCode,
-            followingIDs: followingIDs
-        )
-        let ranked = ReelsRankingEngine.sessionFreshOrder(network)
-        for post in ranked {
-            guard seen.insert(post.id).inserted else { continue }
-            pool.append(post)
-            if pool.count >= 36 { break }
-        }
-
-        // Archive only if we still need buffer depth.
-        if pool.count < 16 {
-            let seed = UInt64.random(in: 1...UInt64.max) ^ UInt64(Date().timeIntervalSince1970 * 1_000)
-            let archive = await HubVideoSeedService.shared.sparkSeedVideos(limit: 24, shuffleSeed: seed)
-            for post in ReelsRankingEngine.sessionFreshOrder(archive) {
+        func absorb(_ posts: [CountryPost]) {
+            for post in posts {
                 guard seen.insert(post.id).inserted else { continue }
-                pool.append(post)
-                if pool.count >= 28 { break }
+                guard ReelsRankingEngine.isSparkEligible(post) else { continue }
+                out.append(post)
+                if out.count >= limit { return }
             }
         }
 
-        SparkWarmPool.shared.prepare(posts: pool, around: 0, ahead: 4, behind: 0)
+        absorb(PostsService.shared.sparksCatalogSnapshot().shuffled())
+        if out.count < limit {
+            absorb(PostsService.shared.hubsSessionCatalog.shuffled())
+        }
+        return out
     }
 
     func openReelsFromMenu() async {
-        // Always-new order (R2 first, Archive last) — stand-in until recommender.
-        let network = await PostsService.shared.loadReelsFeed(
-            globalLimit: 80,
-            viewerCountry: currentProfile?.countryCode,
-            followingIDs: followingIDs
-        )
-        var seen = Set<String>()
-        var reels: [CountryPost] = []
-        for post in ReelsRankingEngine.sessionFreshOrder(network) {
-            guard seen.insert(post.id).inserted else { continue }
-            reels.append(post)
-        }
-        if reels.count < 16 {
-            let seed = UInt64.random(in: 1...UInt64.max) ^ UInt64(Date().timeIntervalSince1970 * 1_000)
-            let archive = await HubVideoSeedService.shared.sparkSeedVideos(limit: 40, shuffleSeed: seed)
-            for post in ReelsRankingEngine.sessionFreshOrder(archive) {
-                guard seen.insert(post.id).inserted else { continue }
-                reels.append(post)
-            }
-        }
+        // Full library shuffle every menu open — never a sticky strip.
+        let reels = await PostsService.shared.beginFreshSparksSession(preferStart: nil)
         guard let first = reels.first else {
             showToast("\(MatteryaCopy.noSparksYet) — publish one to get started.", style: .info)
             openPlay()
             return
         }
-        SparkWarmPool.shared.prepare(posts: reels, around: 0, ahead: 4, behind: 0)
+        SparkWarmPool.shared.prepare(posts: Array(reels.prefix(12)), around: 0, ahead: 6, behind: 1)
         openReelsViewer(startingPost: first, seedPosts: reels)
     }
 
@@ -1383,13 +1648,14 @@ final class AppState {
         let isHubCatalogShare = PlayPlatformBridge.isHubCatalogContent(post) || post.isHubSeedVideo
         let isSparkShare = (post.isReel || PlayPlatformBridge.isReelVideo(post))
             && !(isHubCatalogShare && !post.isReel)
-        // Always land on the main feed after sharing a Spark — the share is a feed post card,
-        // never a new item in Sparks-for-you.
-        let stayInSparks = false
+        // Sharing from full Sparks or expanded Hubs watch: keep watching in place.
+        let stayInSparks = reelsViewerContext != nil
+        let stayInHubsWatch = hubPlaybackPost != nil && hubPlaybackExpanded
+        let stayInPlace = stayInSparks || stayInHubsWatch
 
-        // Long-form video shares: shadow card on feed. Spark shares: light shadow then feed card.
+        // Long-form video shares: shadow card on feed. Skip navigation when staying in place.
         var placeholderID: String?
-        if post.hasVideo, !stayInSparks {
+        if post.hasVideo, !stayInPlace {
             placeholderID = beginFeedVideoUpload(
                 caption: caption?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
                     ? caption!
@@ -1424,7 +1690,14 @@ final class AppState {
             // Only insert onto the home feed. Never into Hubs catalog / For you.
             HomeFeedStore.shared.insertNewPost(created)
 
-            if let placeholderID {
+            if stayInPlace {
+                // Silent share — toast only; Sparks / Hubs keep playing expanded.
+                sharePostSheet = nil
+                if stayInHubsWatch {
+                    hubPlaybackPlaying = true
+                    NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
+                }
+            } else if let placeholderID {
                 finishFeedVideoUpload(placeholderID: placeholderID, post: created)
             } else {
                 goToFeedTop(scroll: true)

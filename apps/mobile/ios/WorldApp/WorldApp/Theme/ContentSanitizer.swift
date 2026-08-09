@@ -42,9 +42,26 @@ enum ContentSanitizer {
 
     static func clean(_ value: String?) -> String? {
         guard let value else { return nil }
-        let trimmed = stripInternalMarkers(value).trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = rebrandCompetitorNames(stripInternalMarkers(value))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !looksLikeId(trimmed) else { return nil }
         return trimmed
+    }
+
+    /// User-facing copy never says "TikTok" — hashtags, captions, comments, bios, etc.
+    /// `#tiktok` / `TikTok` / `TIKTOK` → `matterya` / `#matterya`.
+    static func rebrandCompetitorNames(_ value: String) -> String {
+        guard value.range(of: "tiktok", options: .caseInsensitive) != nil else { return value }
+        guard let regex = try? NSRegularExpression(pattern: "tiktok", options: .caseInsensitive) else {
+            return value
+        }
+        let range = NSRange(value.startIndex..<value.endIndex, in: value)
+        return regex.stringByReplacingMatches(
+            in: value,
+            options: [],
+            range: range,
+            withTemplate: "matterya"
+        )
     }
 
     /// Removes client-only body markers (story / hub channel / spark) so cards never show raw tokens.

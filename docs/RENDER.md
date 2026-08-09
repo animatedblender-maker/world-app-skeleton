@@ -11,6 +11,20 @@ After any change under `apps/api/` (or anything the API must serve):
 
 Do **not** leave API work only local — the live iOS client hits `api.matterya.com` on this deploy.
 
+## Content pipeline (R2 → owned posts + Kafka)
+
+See **[CONTENT_PIPELINE.md](./CONTENT_PIPELINE.md)**.
+
+| | |
+|--|--|
+| **Ops UI** | https://api.matterya.com/pipeline (reports password by default) |
+| **Cron** | `POST /cron/content-pipeline` + `x-cron-secret: CONTENT_CRON_SECRET` |
+| **Kafka** | Topic `matterya.r2.ingest` when `KAFKA_ENABLED=true` |
+| **Env** | `CONTENT_CRON_SECRET`, `R2_*` on **matterya-api** web service |
+
+`CONTENT_CRON_SECRET` = any secret you generate (`openssl rand -hex 32`).  
+R2 keys = Cloudflare R2 API token (same names as local `.env.r2`).
+
 ## Platform reports (password page)
 
 | | |

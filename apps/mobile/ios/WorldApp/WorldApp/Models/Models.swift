@@ -246,10 +246,18 @@ enum SparkShareMarker {
         return body.contains(token)
     }
 
+    /// Stamp original Spark id + **channel** so feed cards can show
+    /// “you shared · from Channel” without pretending the channel posted.
     static func markBody(caption: String, origin: CountryPost) -> String {
         let sid = (origin.sharedPostID ?? origin.id)
             .replacingOccurrences(of: "|", with: "")
-        let header = "\(token)sid=\(sid)"
+        let aid = origin.authorID.replacingOccurrences(of: "|", with: "")
+        let an = (origin.author?.displayName ?? origin.authorDisplayName)
+            .replacingOccurrences(of: "|", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        var header = "\(token)sid=\(sid)"
+        if !aid.isEmpty { header += "|aid=\(aid)" }
+        if !an.isEmpty { header += "|an=\(an)" }
         let cap = caption.trimmingCharacters(in: .whitespacesAndNewlines)
         if cap.isEmpty { return header }
         return "\(header)\n\(cap)"
@@ -266,17 +274,31 @@ enum SparkShareMarker {
 
     /// Original spark id when this post is a feed re-share of a Spark.
     static func originID(from body: String?) -> String? {
+        parseFields(from: body)?["sid"]
+    }
+
+    /// Channel / creator name the Spark came from (for feed attribution).
+    static func originChannelName(from body: String?) -> String? {
+        guard let an = parseFields(from: body)?["an"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !an.isEmpty else { return nil }
+        return an
+    }
+
+    private static func parseFields(from body: String?) -> [String: String]? {
         guard let body else { return nil }
         for line in body.components(separatedBy: .newlines) {
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             guard trimmed.hasPrefix(token) else { continue }
             let rest = String(trimmed.dropFirst(token.count))
+            var out: [String: String] = [:]
             for part in rest.split(separator: "|") {
-                if part.hasPrefix("sid=") {
-                    let id = String(part.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines)
-                    return id.isEmpty ? nil : id
-                }
+                let s = String(part)
+                guard let eq = s.firstIndex(of: "=") else { continue }
+                let key = String(s[..<eq])
+                let val = String(s[s.index(after: eq)...])
+                if !key.isEmpty { out[key] = val }
             }
+            return out.isEmpty ? nil : out
         }
         return nil
     }
@@ -330,13 +352,33 @@ enum HubOriginShareMarker {
         let name = fields["an"]?.trimmingCharacters(in: .whitespacesAndNewlines)
         let username = fields["au"]?.trimmingCharacters(in: .whitespacesAndNewlines)
         let sourceID = fields["sid"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Channel name only — never fall back to the sharer's name/avatar (that caused
+        // "channel name + my profile picture" on Saved Videos).
+        let channelName: String = {
+            if let name, !name.isEmpty { return name }
+            if HubVideoSeedService.isArchiveChannelAuthor(originAuthorID) {
+                return HubVideoSeedService.archiveChannelDisplayName
+            }
+            if let embed = share.sharedPost?.asCountryPost,
+               embed.authorID == originAuthorID {
+                return embed.authorDisplayName
+            }
+            return HubVideoSeedService.archiveChannelDisplayName
+        }()
+        let channelAvatar: String? = {
+            if let embed = share.sharedPost?.asCountryPost,
+               embed.authorID == originAuthorID {
+                return embed.author?.avatarURL
+            }
+            return nil
+        }()
         let author = PostAuthor(
             userID: originAuthorID,
-            displayName: (name?.isEmpty == false) ? name : share.author?.displayName,
+            displayName: channelName,
             username: (username?.isEmpty == false) ? username : nil,
-            avatarURL: nil,
-            countryName: share.author?.countryName,
-            countryCode: share.author?.countryCode,
+            avatarURL: channelAvatar,
+            countryName: nil,
+            countryCode: nil,
             lastReadAt: nil
         )
         // Keep share media (self-contained stamp) but show original channel identity.
@@ -562,6 +604,38 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
         case .private: "Only me"
         case .country: "Country"
         }
+    }
+
+    /// Stamp media_type when Keep from Sparks player so profile Saved Sparks keeps the row.
+    func withMediaTypeForSave(_ type: String) -> CountryPost {
+        CountryPost(
+            id: id,
+            title: title,
+            body: body,
+            mediaType: type,
+            mediaURL: mediaURL,
+            thumbURL: thumbURL,
+            mediaCaption: mediaCaption,
+            sharedPostID: sharedPostID,
+            sharedPost: sharedPost,
+            visibility: visibility,
+            likeCount: likeCount,
+            commentCount: commentCount,
+            viewCount: viewCount,
+            likedByMe: likedByMe,
+            savedByMe: savedByMe,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            authorID: authorID,
+            countryName: countryName,
+            countryCode: countryCode,
+            cityName: cityName,
+            author: author,
+            linkURL: linkURL,
+            linkTitle: linkTitle,
+            externalRefType: externalRefType,
+            externalRefID: externalRefID
+        )
     }
 
     func withSavedByMe(_ saved: Bool) -> CountryPost {
@@ -1235,17 +1309,28 @@ struct Message: Identifiable, Hashable, Sendable {
         }
 
         var posterImageURL: URL? {
-            if let resolved = MediaURLResolver.posterURL(for: mediaProbePost) { return resolved }
-            return MediaURLResolver.resolve(posterURL)
+            // Never treat an mp4 / m3u8 as a poster — CachedAsyncImage fails and chat shows blank.
+            if let resolved = MediaURLResolver.posterURL(for: mediaProbePost),
+               !MediaURLResolver.isVideoURL(resolved) {
+                return resolved
+            }
+            if let raw = posterURL, !raw.isEmpty, !Message.looksLikeVideoURL(raw),
+               let resolved = MediaURLResolver.resolve(raw),
+               !MediaURLResolver.isVideoURL(resolved) {
+                return resolved
+            }
+            return nil
         }
 
         /// Lightweight post used only for MediaURLResolver (does not call `isVideo`).
         private var mediaProbePost: CountryPost {
-            CountryPost(
+            let type = mediaType
+                ?? (kind == .reel ? "reel" : (kind == .hub ? "video" : "video"))
+            return CountryPost(
                 id: postID,
                 title: title,
                 body: bodyText ?? "",
-                mediaType: mediaType ?? "video",
+                mediaType: type,
                 mediaURL: mediaURL,
                 thumbURL: posterURL,
                 createdAt: "",
@@ -1353,9 +1438,22 @@ struct Message: Identifiable, Hashable, Sendable {
         let media = post.playableVideoURL?.absoluteString
             ?? MediaURLResolver.resolve(post.mediaURL)?.absoluteString
             ?? post.mediaURL
-        let poster = post.posterImageURL?.absoluteString
-            ?? post.feedImageURL?.absoluteString
-            ?? post.thumbURL
+        // Prefer real image poster; never encode the mp4 as "poster" (chat showed blank thumbs).
+        let poster: String? = {
+            if let p = post.posterImageURL?.absoluteString, !p.isEmpty, !Self.looksLikeVideoURL(p) {
+                return p
+            }
+            if let p = post.feedImageURL?.absoluteString, !p.isEmpty, !Self.looksLikeVideoURL(p) {
+                return p
+            }
+            if let p = post.thumbURL, !p.isEmpty, !Self.looksLikeVideoURL(p) {
+                return p
+            }
+            if let p = MediaURLResolver.posterURL(for: post)?.absoluteString, !Self.looksLikeVideoURL(p) {
+                return p
+            }
+            return nil
+        }()
 
         var parts: [String] = [
             "v=1",
@@ -1382,6 +1480,19 @@ struct Message: Identifiable, Hashable, Sendable {
             return "\(sharePrefix)\(meta)||"
         }
         return "\(sharePrefix)\(meta)||\(trimmedNote)"
+    }
+
+    /// True when a string looks like a playable video URL (not a JPG/PNG poster).
+    static func looksLikeVideoURL(_ raw: String) -> Bool {
+        let lower = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !lower.isEmpty else { return false }
+        if lower.hasPrefix("{") { return false } // media JSON blob — not a direct video path
+        if lower.range(of: #"\.(mp4|webm|mov|m4v|m3u8|avi|mkv)(\?|#|$)"#, options: .regularExpression) != nil {
+            return true
+        }
+        if lower.contains("/video/") || lower.contains("/video.") { return true }
+        if let url = URL(string: raw), MediaURLResolver.isVideoURL(url) { return true }
+        return false
     }
 
     static func parseShare(_ body: String) -> ShareInfo? {

@@ -99,6 +99,8 @@ struct PostCommentsView: View {
     var totalCommentCount: Int? = nil
     var onViewAllComments: (() -> Void)? = nil
     var onError: ((String) -> Void)?
+    /// Optional hook before navigating to a comment author (e.g. dismiss Sparks comments sheet).
+    var onWillOpenProfile: (() -> Void)? = nil
 
     @State private var commentDraft = ""
     @State private var replyTarget: ReplyTarget?
@@ -132,7 +134,8 @@ struct PostCommentsView: View {
                         depth: item.depth,
                         isLiking: likingCommentIDs.contains(item.comment.id),
                         onReply: { startReply(to: item.comment, depth: item.depth) },
-                        onToggleLike: { Task { await toggleLike(item.comment) } }
+                        onToggleLike: { Task { await toggleLike(item.comment) } },
+                        onOpenProfile: { openCommentAuthor(item.comment) }
                     )
                 }
 
@@ -248,6 +251,14 @@ struct PostCommentsView: View {
             ?? "Member"
     }
 
+    private func openCommentAuthor(_ comment: PostComment) {
+        let userID = comment.authorID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let username = comment.author?.username
+        guard !userID.isEmpty || !(username ?? "").isEmpty else { return }
+        onWillOpenProfile?()
+        appState.openPublicProfile(username: username, userID: userID)
+    }
+
     private func startReply(to comment: PostComment, depth: Int) {
         replyTarget = ReplyTarget(
             threadRootID: CommentThreadBuilder.threadRootID(for: comment, in: comments),
@@ -263,11 +274,11 @@ struct PostCommentsView: View {
         defer { isLoading = false }
 
         do {
-            let loaded = try await PostsService.shared.listComments(postID, limit: 200)
+            let loaded = try await PostsService.shared.listComments(postID, limit: 2000)
             comments = loaded
         } catch {
             // Seed / offline fallback — never surface GraphQL "Unexpected error".
-            comments = HubEngagementStore.shared.listComments(postID, limit: 200)
+            comments = HubEngagementStore.shared.listComments(postID, limit: 2000)
         }
     }
 
@@ -283,7 +294,7 @@ struct PostCommentsView: View {
                 body: body,
                 parentID: parentID
             )
-            var refreshed = (try? await PostsService.shared.listComments(postID, limit: 200)) ?? []
+            var refreshed = (try? await PostsService.shared.listComments(postID, limit: 2000)) ?? []
             if !refreshed.contains(where: { $0.id == created.id }) {
                 refreshed.append(created)
             }
@@ -368,6 +379,7 @@ struct FacebookCommentRow: View {
     let isLiking: Bool
     let onReply: () -> Void
     let onToggleLike: () -> Void
+    var onOpenProfile: (() -> Void)? = nil
 
     private var isReply: Bool { depth > 0 }
     private var avatarSize: CGFloat { isReply ? 26 : 32 }
@@ -387,57 +399,65 @@ struct FacebookCommentRow: View {
             }
 
             HStack(alignment: .top, spacing: 8) {
-            AvatarView(
-                url: comment.author?.avatarURL,
-                seed: comment.authorID,
-                size: avatarSize
-            )
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(authorName)
-                    .font(isReply ? .caption.weight(.semibold) : .subheadline.weight(.semibold))
-                    .foregroundStyle(Theme.ink)
-
-                if let body = cleanedBody {
-                    Text(body)
-                        .font(.subheadline)
-                        .foregroundStyle(Theme.ink)
-                        .fixedSize(horizontal: false, vertical: true)
+                Button(action: { onOpenProfile?() }) {
+                    AvatarView(
+                        url: comment.author?.avatarURL,
+                        seed: comment.authorID,
+                        size: avatarSize
+                    )
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open \(authorName)'s profile")
 
-                HStack(spacing: 12) {
-                    Button(action: onToggleLike) {
-                        Text(comment.likedByMe ? "Liked" : "Like")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(comment.likedByMe ? Theme.ink : Theme.inkMuted)
+                VStack(alignment: .leading, spacing: 4) {
+                    Button(action: { onOpenProfile?() }) {
+                        Text(authorName)
+                            .font(isReply ? .caption.weight(.semibold) : .subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.ink)
                     }
                     .buttonStyle(.plain)
-                    .disabled(isLiking)
+                    .accessibilityLabel("Open \(authorName)'s profile")
 
-                    Button(action: onReply) {
-                        Text("Reply")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(Theme.inkMuted)
+                    if let body = cleanedBody {
+                        Text(body)
+                            .font(.subheadline)
+                            .foregroundStyle(Theme.ink)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    .buttonStyle(.plain)
 
-                    Text(RelativeTime.format(comment.createdAt))
-                        .font(.caption)
-                        .foregroundStyle(Theme.inkMuted)
-
-                    if comment.likeCount > 0 {
-                        HStack(spacing: 4) {
-                            Image(systemName: "hand.thumbsup.fill")
-                                .font(.system(size: 9))
-                                .foregroundStyle(Theme.ink)
-                            Text("\(comment.likeCount)")
+                    HStack(spacing: 12) {
+                        Button(action: onToggleLike) {
+                            Text(comment.likedByMe ? "Liked" : "Like")
                                 .font(.caption.weight(.semibold))
-                                .foregroundStyle(Theme.inkSecondary)
+                                .foregroundStyle(comment.likedByMe ? Theme.ink : Theme.inkMuted)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isLiking)
+
+                        Button(action: onReply) {
+                            Text("Reply")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Theme.inkMuted)
+                        }
+                        .buttonStyle(.plain)
+
+                        Text(RelativeTime.format(comment.createdAt))
+                            .font(.caption)
+                            .foregroundStyle(Theme.inkMuted)
+
+                        if comment.likeCount > 0 {
+                            HStack(spacing: 4) {
+                                Image(systemName: "hand.thumbsup.fill")
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(Theme.ink)
+                                Text("\(comment.likeCount)")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(Theme.inkSecondary)
+                            }
                         }
                     }
                 }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
@@ -627,7 +647,11 @@ private struct NewsCommentRow: View {
 }
 
 struct PostCommentsPageView: View {
+    @Environment(\.dismiss) private var dismiss
+
     let postID: String
+    /// When true (Sparks sheet), dismiss comments before opening a profile.
+    var dismissesOnProfileOpen: Bool = true
 
     @State private var comments: [PostComment] = []
     @State private var errorMessage: String?
@@ -638,7 +662,8 @@ struct PostCommentsPageView: View {
                 PostCommentsView(
                     postID: postID,
                     comments: $comments,
-                    onError: { errorMessage = $0 }
+                    onError: { errorMessage = $0 },
+                    onWillOpenProfile: dismissesOnProfileOpen ? { dismiss() } : nil
                 )
 
                 if let errorMessage {
@@ -673,7 +698,8 @@ struct ReelsCommentsSheet: View {
                         postID: postID,
                         comments: $comments,
                         showsComposer: true,
-                        onError: { errorMessage = $0 }
+                        onError: { errorMessage = $0 },
+                        onWillOpenProfile: { dismiss() }
                     )
 
                     if let errorMessage {
@@ -715,7 +741,8 @@ struct SparksCommentsSheet: View {
                     PostCommentsView(
                         postID: postID,
                         comments: $comments,
-                        onError: { errorMessage = $0 }
+                        onError: { errorMessage = $0 },
+                        onWillOpenProfile: { dismiss() }
                     )
 
                     if let errorMessage {

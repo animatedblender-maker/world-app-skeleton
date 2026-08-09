@@ -116,11 +116,23 @@ struct ConversationView: View {
                         }
                         .padding(Theme.pagePadding)
                     }
+                    // iOS 17+: open at the end of the thread (WhatsApp / iMessage style).
+                    .defaultScrollAnchor(.bottom)
                     .onAppear {
-                        scrollToBottom(proxy: proxy)
+                        // Immediate + delayed so LazyVStack / async images still land at bottom.
+                        scrollToBottom(proxy: proxy, animated: false)
                     }
                     .onChange(of: scrollToBottomToken) { _, _ in
-                        scrollToBottom(proxy: proxy)
+                        scrollToBottom(proxy: proxy, animated: true)
+                    }
+                    .onChange(of: visibleMessages.last?.id) { _, _ in
+                        // New message arrived (send or load) → stay pinned to latest.
+                        scrollToBottom(proxy: proxy, animated: true)
+                    }
+                    .onChange(of: isLoading) { _, loading in
+                        if !loading {
+                            scrollToBottom(proxy: proxy, animated: false)
+                        }
                     }
                 }
 
@@ -299,16 +311,38 @@ struct ConversationView: View {
         }
     }
 
-    private func scrollToBottom(proxy: ScrollViewProxy) {
+    /// Always pin the thread to the newest message (open + after load + after send).
+    private func scrollToBottom(proxy: ScrollViewProxy, animated: Bool = true) {
+        let lastID = visibleMessages.last?.id
         func perform() {
+            // Prefer last message id (more reliable with LazyVStack than a trailing spacer alone).
+            if let lastID {
+                proxy.scrollTo(lastID, anchor: .bottom)
+            }
             proxy.scrollTo("chat-bottom", anchor: .bottom)
         }
-        perform()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-            perform()
+        if animated {
+            withAnimation(.easeOut(duration: 0.15)) { perform() }
+        } else {
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { perform() }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            perform()
+        // Layout passes after images / network replace — re-pin without animation.
+        DispatchQueue.main.async {
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { perform() }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { perform() }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { perform() }
         }
     }
 
@@ -435,15 +469,15 @@ struct ConversationView: View {
                     peerReadAt: peerRead,
                     for: conversation.id
                 )
-                // Don't yank scroll if we already had content on screen.
-                if !hadLocalMessages {
-                    requestScrollToBottom()
-                }
+                // Always land on the latest message when opening / refreshing this chat.
+                requestScrollToBottom()
             }
-            if !hadLocalMessages {
-                try? await Task.sleep(nanoseconds: 120_000_000)
-                await MainActor.run { requestScrollToBottom() }
-            }
+            // Second pass after LazyVStack lays out the full network list.
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            await MainActor.run { requestScrollToBottom() }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            await MainActor.run { requestScrollToBottom() }
+            _ = hadLocalMessages
             // listMessages updates last_read_at server-side — drop banners + tab badge for this chat.
             await PushNotificationService.shared.clearDeliveredNotifications(forConversation: conversation.id)
         } catch {

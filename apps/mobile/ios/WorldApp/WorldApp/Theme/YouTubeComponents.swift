@@ -464,44 +464,85 @@ struct YouTubeMiniPlayerBar: View {
     @Binding var isPlaying: Bool
     @Binding var isMuted: Bool
 
-    /// Default video size (16:9). Prefer `videoSize(forBarWidth:)` so title + X never clip.
-    static let videoWidth: CGFloat = 168
-    static let videoHeight: CGFloat = 94
-    /// Minimum width reserved for title + play/mute + close on the right.
-    static let metaMinWidth: CGFloat = 148
-    /// Vertical padding inside the mini bar chrome (top + bottom).
-    static let barVerticalPadding: CGFloat = 18
-    /// Intrinsic height of the floating mini bar only (not including tab bar).
-    static var barHeight: CGFloat { videoHeight + barVerticalPadding }
+    /// Screen height for sizing (key window when available).
+    private static var screenHeight: CGFloat {
+        if let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first(where: { $0.activationState == .foregroundActive }) {
+            let height = scene.screen.bounds.height
+            if height > 1 { return height }
+        }
+        return UIScreen.main.bounds.height
+    }
+
+    /// Mini bar height ≈ **¼ of the screen** (clamped so it never eats the whole phone).
+    /// Layout structure stays the same; only scale grows.
+    static var barHeight: CGFloat {
+        let quarter = screenHeight * 0.25
+        // Keep above tab bar usable; never tiny, never more than ~28% on short phones.
+        return min(max(quarter, 160), min(screenHeight * 0.28, 230))
+    }
+
+    /// Scale vs a 100pt reference design (padding, buttons, fonts grow together).
+    static var layoutScale: CGFloat {
+        min(2.1, max(1.35, barHeight / 100))
+    }
+
+    /// Video fills the bar height (edge-to-edge vertically — no white bands).
+    static var videoHeight: CGFloat {
+        max(72, barHeight - videoEdgeInset * 2)
+    }
+    /// Ideal 16:9 width for that full-height slot.
+    static var videoWidth: CGFloat {
+        videoHeight * 16 / 9
+    }
+    /// Hard reserve for title + play/mute + close — scales with bar, never below ~120pt.
+    static var metaMinWidth: CGFloat {
+        max(120, min(160, 100 * layoutScale))
+    }
     /// Space content lists should leave so the bar doesn’t cover the last row.
-    /// Flush on the tab bar — no extra gap.
     static var contentBottomInset: CGFloat {
         barHeight + Theme.tabBarHeight
     }
-    /// Horizontal inset of the bar content (used to align continuous player over the slot).
-    /// Matches the mini bar’s inner horizontal padding (full-bleed bar, no outer page inset).
-    static let barContentLeading: CGFloat = 12
-    static let barContentTrailing: CGFloat = 16
-    /// Bottom inset for the video hole inside the mini bar chrome (inner padding only).
-    static let videoBottomInset: CGFloat = 8
+    /// Tiny horizontal inset only — vertical is full bleed inside the bar.
+    static var barContentLeading: CGFloat { 8 * min(layoutScale, 1.4) }
+    static var barContentTrailing: CGFloat { 10 * min(layoutScale, 1.5) }
+    /// Hairline inset so the video still clips cleanly inside rounded corners.
+    static var videoEdgeInset: CGFloat { 4 }
+    static let videoBottomInset: CGFloat = 0
 
-    /// Fit video so the meta column (title + X) always has room — never overflow the screen.
+    static var controlButtonSize: CGFloat {
+        min(40, max(30, 22 * layoutScale))
+    }
+
+    /// Video slot fills bar **height** proportionally; width is 16:9 of that height
+    /// (capped so title/controls still fit). Continuous player uses aspectFill inside.
     static func videoSize(forBarWidth totalWidth: CGFloat) -> (width: CGFloat, height: CGFloat) {
         let hPad = barContentLeading + barContentTrailing
-        let gap: CGFloat = 12
-        let available = max(120, totalWidth - hPad - gap - metaMinWidth)
-        // Cap video so it stays a mini preview, not a second stage.
-        let w = min(videoWidth, max(120, available))
-        let h = w * 9 / 16
+        let gap: CGFloat = 8 * min(layoutScale, 1.4)
+        let availableW = max(96, totalWidth - hPad - gap - metaMinWidth)
+        // Full bar height minus hairline — kills the white bands above/below.
+        let h = max(64, barHeight - videoEdgeInset * 2)
+        var w = h * 16 / 9
+        if w > availableW {
+            w = availableW
+            // Keep full height even when width is capped — player fills with aspectFill.
+        }
         return (w, h)
     }
 
     var body: some View {
         GeometryReader { geo in
             let size = Self.videoSize(forBarWidth: geo.size.width)
-            HStack(alignment: .center, spacing: 12) {
-                // Video slot — tap expands (continuous player drawn on top when embedsVideo is false).
+            let scale = Self.layoutScale
+            let btn = Self.controlButtonSize
+            let hPad = Self.barContentLeading
+            let edge = Self.videoEdgeInset
+            HStack(alignment: .center, spacing: 8 * min(scale, 1.4)) {
+                // Video slot — fills bar height; continuous player paints into this hole.
                 ZStack {
+                    Theme.ink
+
                     if embedsVideo {
                         if let url = post.playableVideoURL {
                             VideoPlayerView(
@@ -515,14 +556,15 @@ struct YouTubeMiniPlayerBar: View {
                                 muted: isMuted,
                                 showsControls: false,
                                 startTime: YouTubeCatalogService.shared.playbackPosition(for: post.id),
-                                persistsPositionOnTeardown: true
+                                persistsPositionOnTeardown: true,
+                                fillsFrame: true
                             )
                         } else {
                             YouTubeVideoThumbnail(post: post, maxPixelSize: 420, showsPlayIcon: false, frameStyle: .card)
                         }
                     } else {
-                        // Hole for GlobalHubPlaybackLayer continuous player (drawn above this chrome).
-                        Theme.ink
+                        // Hole for GlobalHubPlaybackLayer — size must match reported preference exactly.
+                        Color.clear
                             .overlay(
                                 GeometryReader { g in
                                     Color.clear.preference(
@@ -534,64 +576,64 @@ struct YouTubeMiniPlayerBar: View {
                     }
 
                     VStack {
-                        Spacer()
+                        Spacer(minLength: 0)
                         HStack {
-                            Spacer()
+                            Spacer(minLength: 0)
                             Image(systemName: "arrow.up.left.and.arrow.down.right")
-                                .font(.system(size: 10, weight: .bold))
+                                .font(.system(size: 9 * min(scale, 1.4), weight: .bold))
                                 .foregroundStyle(.white.opacity(0.9))
-                                .padding(5)
+                                .padding(4 * min(scale, 1.3))
                                 .background(.black.opacity(0.42), in: Circle())
-                                .padding(6)
+                                .padding(5)
                         }
                     }
                     .allowsHitTesting(false)
 
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(Theme.border, lineWidth: 0.5)
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Theme.border.opacity(0.55), lineWidth: 0.5)
                         .allowsHitTesting(false)
                 }
                 .frame(width: size.width, height: size.height)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .background(Theme.ink)
-                .shadow(color: Theme.ink.opacity(embedsVideo ? 0.16 : 0), radius: 8, y: 3)
+                .frame(maxHeight: .infinity)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .contentShape(Rectangle())
                 .onTapGesture(perform: onExpand)
                 .accessibilityLabel("Expand video")
                 .accessibilityAddTraits(.isButton)
                 .layoutPriority(0)
 
-                // Title + controls — must not be crushed by a wide video.
-                VStack(alignment: .leading, spacing: 8) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        if let headline = post.displayHeadline {
-                            Text(headline)
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(Theme.ink)
-                                .lineLimit(2)
-                                .multilineTextAlignment(.leading)
-                                .fixedSize(horizontal: false, vertical: true)
+                // Title + controls — same card structure, scaled with bar height.
+                VStack(alignment: .leading, spacing: 6 * min(scale, 1.4)) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(post.displayHeadline ?? post.authorDisplayName)
+                            .font(.system(size: min(17, 13 * scale), weight: .semibold))
+                            .foregroundStyle(Theme.ink)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                            .minimumScaleFactor(0.85)
+                        if post.displayHeadline != nil {
+                            Text(post.authorDisplayName)
+                                .font(.system(size: min(13, 11 * scale)))
+                                .foregroundStyle(Theme.inkMuted)
+                                .lineLimit(1)
                         }
-                        Text(post.authorDisplayName)
-                            .font(.caption)
-                            .foregroundStyle(Theme.inkMuted)
-                            .lineLimit(1)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
                     .onTapGesture(perform: onExpand)
 
-                    HStack(spacing: 8) {
+                    Spacer(minLength: 4)
+
+                    HStack(spacing: 6 * min(scale, 1.3)) {
                         Button {
                             isPlaying.toggle()
                         } label: {
                             ZStack {
                                 Circle()
                                     .fill(Theme.accentBright)
-                                    .frame(width: 34, height: 34)
-                                    .shadow(color: Theme.ink.opacity(0.18), radius: 4, y: 2)
+                                    .frame(width: btn, height: btn)
                                 Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                                    .font(.system(size: 12, weight: .bold))
+                                    .font(.system(size: btn * 0.34, weight: .bold))
                                     .foregroundStyle(Theme.paper)
                             }
                         }
@@ -602,37 +644,36 @@ struct YouTubeMiniPlayerBar: View {
                             isMuted.toggle()
                         } label: {
                             Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                                .font(.system(size: 13, weight: .semibold))
+                                .font(.system(size: btn * 0.38, weight: .semibold))
                                 .foregroundStyle(Theme.ink)
-                                .frame(width: 34, height: 34)
+                                .frame(width: btn, height: btn)
                                 .background(Theme.canvasMuted, in: Circle())
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel(isMuted ? "Unmute" : "Mute")
 
-                        Spacer(minLength: 2)
+                        Spacer(minLength: 4)
 
-                        // Close — always fully on-screen (extra trailing inset).
                         Button(action: onClose) {
                             Image(systemName: "xmark")
-                                .font(.system(size: 12, weight: .bold))
+                                .font(.system(size: btn * 0.34, weight: .bold))
                                 .foregroundStyle(Theme.ink)
-                                .frame(width: 34, height: 34)
+                                .frame(width: btn, height: btn)
                                 .background(Theme.canvasMuted, in: Circle())
-                                .frame(width: 44, height: 44)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Close mini player")
                     }
                 }
-                .frame(minWidth: Self.metaMinWidth, maxWidth: .infinity, alignment: .leading)
-                .layoutPriority(1)
+                .frame(minWidth: Self.metaMinWidth, maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                .padding(.vertical, 8 * min(scale, 1.3))
+                .layoutPriority(2)
             }
-            .padding(.leading, Self.barContentLeading)
+            .padding(.leading, hPad)
             .padding(.trailing, Self.barContentTrailing)
-            .padding(.top, 10)
-            .padding(.bottom, 8)
+            // No large vertical padding — video fills bar height; only hairline edge.
+            .padding(.vertical, edge)
             .frame(width: geo.size.width, height: geo.size.height, alignment: .center)
         }
         .frame(maxWidth: .infinity)

@@ -71,19 +71,27 @@ struct GlobalHubPlaybackLayer: View {
                 .ignoresSafeArea(edges: .top)
             }
         }
-        .animation(.interactiveSpring(response: 0.34, dampingFraction: 0.88), value: expanded)
-        .animation(.interactiveSpring(response: 0.34, dampingFraction: 0.88), value: hasDockSlot)
-        .animation(.easeInOut(duration: 0.2), value: appState.hubPlaybackPost?.id)
-        .animation(.easeInOut(duration: 0.2), value: appState.navigationPath.isEmpty)
+        // Snappy expand/mini — long springs left a black full-stage ghost at the top.
+        .animation(.easeInOut(duration: 0.18), value: expanded)
+        .animation(.easeInOut(duration: 0.18), value: hasDockSlot)
+        .animation(.easeInOut(duration: 0.15), value: appState.hubPlaybackPost?.id)
+        .animation(.easeInOut(duration: 0.15), value: appState.navigationPath.isEmpty)
         .onChange(of: expanded) { _, isExpanded in
-            if isExpanded {
+            dragOffset = 0
+            isPullingMinimize = false
+            if !isExpanded {
+                // Force mini layout next frame so we never linger full-stage black.
                 dragOffset = 0
-                isPullingMinimize = false
             }
         }
         .onChange(of: appState.hubPlaybackPost?.id) { _, _ in
             dragOffset = 0
             isPullingMinimize = false
+        }
+        .onChange(of: appState.hubPlaybackPlaying) { _, playing in
+            // Chat → Hubs / mini play: re-assert AVPlayer the moment AppState wants sound.
+            guard playing, appState.hubPlaybackPost != nil else { return }
+            NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
         }
     }
 
@@ -101,13 +109,14 @@ struct GlobalHubPlaybackLayer: View {
 
             // Continuous video surface — stable id across expand/mini/dock.
             // Mini chrome is owned by MainTabView’s bottom stack (flush on the tab bar).
-            // This layer only draws the video hole over that chrome’s reported slot.
+            // This layer only draws into the video hole — never a full-width black bar.
             playerSurface(for: post, showControls: expanded)
                 .frame(width: layout.width, height: layout.height)
-                .background(Theme.ink)
+                // Mini: no ink fill outside the video hole (was a black bar on top while collapsing).
+                .background(expanded ? Theme.ink : Color.clear)
                 .clipShape(
                     RoundedRectangle(
-                        cornerRadius: expanded ? 0 : 12,
+                        cornerRadius: expanded ? 0 : 10,
                         style: .continuous
                     )
                 )
@@ -116,6 +125,11 @@ struct GlobalHubPlaybackLayer: View {
                     radius: expanded ? 0 : 8,
                     y: expanded ? 0 : 3
                 )
+                // Disable implicit frame animation on collapse so video snaps into the hole
+                // instead of leaving a stretched black rect across the top.
+                .transaction { tx in
+                    if !expanded { tx.animation = nil }
+                }
                 .offset(x: layout.x, y: layout.y + (expanded ? dragOffset : 0))
                 .overlay {
                     if expanded, isPullingMinimize, dragOffset > 24 {
@@ -172,9 +186,6 @@ struct GlobalHubPlaybackLayer: View {
     }
 
     private func playerLayout(in geo: GeometryProxy) -> PlayerLayout {
-        let miniW = YouTubeMiniPlayerBar.videoWidth
-        let miniH = YouTubeMiniPlayerBar.videoHeight
-
         if expanded {
             // Start directly under the notch (status bar), not overlapping it.
             let safeTop = geo.safeAreaInsets.top > 1
@@ -184,29 +195,36 @@ struct GlobalHubPlaybackLayer: View {
             return PlayerLayout(x: 0, y: safeTop, width: geo.size.width, height: stageHeight)
         }
 
-        // Mini / chat dock: always prefer the reported video-hole frame (global → local).
+        // Mini / chat dock: use the **exact** video-hole frame only.
         if let global = dockSlotGlobal,
            global.width > 8, global.height > 8 {
             let containerGlobal = geo.frame(in: .global)
-            // Guard against bad transforms that park the surface off-screen (white hole).
             let x = global.minX - containerGlobal.minX
             let y = global.minY - containerGlobal.minY
-            if y > -20, y < geo.size.height + 20,
+            // Accept lower-half slots (bar can be ~¼ screen tall).
+            let looksLikeMiniSlot = y > geo.size.height * 0.28
+                && global.height < geo.size.height * 0.40
+                && global.width < geo.size.width * 0.85
+            if looksLikeMiniSlot,
+               y > -20, y < geo.size.height + 20,
                x > -20, x < geo.size.width + 20 {
                 return PlayerLayout(
                     x: x,
                     y: y,
-                    width: max(global.width, miniW),
-                    height: max(global.height, miniH)
+                    width: global.width,
+                    height: global.height
                 )
             }
         }
 
-        // Fallback before preference publishes — sit in the mini strip above the tab bar.
+        // Fallback before preference publishes — full bar height video (no white bands).
+        let barW = geo.size.width
+        let size = YouTubeMiniPlayerBar.videoSize(forBarWidth: barW)
         let x = YouTubeMiniPlayerBar.barContentLeading
         let barTop = geo.size.height - floatingBottomClearance - miniStripHeight
-        let y = barTop + max(0, (miniStripHeight - miniH) / 2)
-        return PlayerLayout(x: x, y: y, width: miniW, height: miniH)
+        // Align to top of video slot (hairline inset), not vertically centered in bar.
+        let y = barTop + YouTubeMiniPlayerBar.videoEdgeInset
+        return PlayerLayout(x: x, y: y, width: size.width, height: size.height)
     }
 
     // MARK: - Player
@@ -227,8 +245,10 @@ struct GlobalHubPlaybackLayer: View {
 
     @ViewBuilder
     private func playerSurface(for post: CountryPost, showControls: Bool) -> some View {
-        // Always resume from catalog position if the surface is recreated (should be rare).
-        let resumeAt = YouTubeCatalogService.shared.playbackPosition(for: post.id)
+        // Resume mid-clip only when already deep into the video — never block first frame
+        // with a hard seek on open (that made Hubs feel laggy).
+        let stored = YouTubeCatalogService.shared.playbackPosition(for: post.id)
+        let resumeAt = stored > 3 ? stored : 0
         if let url = post.playableVideoURL {
             // One Hubs chrome for every long-form surface (R2 + Archive):
             // center play · −10s · +10s · bottom scrubber (MatteryaHubPlayerView).
@@ -246,11 +266,19 @@ struct GlobalHubPlaybackLayer: View {
                 allowsFullscreen: showControls,
                 onReady: {
                     Task { await PostsService.shared.recordView(post) }
+                    // Re-assert play if something paused us during mount.
+                    if appState.hubPlaybackPlaying {
+                        NotificationCenter.default.post(
+                            name: .matteryaResumePlaybackAfterInterrupt,
+                            object: nil
+                        )
+                    }
                 },
                 onPlayingChange: { playing in
                     appState.hubPlaybackPlaying = playing
                 }
             )
+            .id("hub-continuous-\(post.id)")
         } else {
             YouTubeVideoThumbnail(
                 post: post,

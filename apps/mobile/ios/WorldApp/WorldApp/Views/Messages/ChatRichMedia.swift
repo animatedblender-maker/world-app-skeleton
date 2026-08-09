@@ -1,330 +1,192 @@
 import AVFoundation
 import SwiftUI
 
-// MARK: - Shared post / hub / spark card in chat (no play chrome)
+// MARK: - Shared content card in chat (minimal)
 
-/// Tappable share card — **no in-card playback**. Entire card opens the destination:
-/// Sparks → full-screen Sparks player · Hubs video → Hubs watch · post → post detail.
-/// Sparks use a portrait Shorts-style card; hubs/posts stay landscape.
+/// Quiet link card: thumbnail → title → author. Whole card opens the content.
+/// No logos, brand chips, CTAs, or decorative rails.
 struct ChatShareCard: View {
     @Environment(AppState.self) private var appState
 
     let share: Message.ShareInfo
     var isMine: Bool = false
-    /// Opens destination (required for reliable navigation from chat).
     var onOpen: (() -> Void)? = nil
 
     @State private var resolved: Message.ShareInfo?
 
-    private let cardWidth: CGFloat = 248
-    private let thumbW: CGFloat = YouTubeMiniPlayerBar.videoWidth
-    private let thumbH: CGFloat = YouTubeMiniPlayerBar.videoHeight
+    private let cardWidth: CGFloat = 228
 
     private var effective: Message.ShareInfo { resolved ?? share }
 
-    private var isSparkShare: Bool {
-        ChatShareRouting.isSpark(effective)
+    private var isSpark: Bool { ChatShareRouting.isSpark(effective) }
+
+    /// Sparks: slightly taller. Everything else: 16:9.
+    private var mediaHeight: CGFloat {
+        isSpark ? cardWidth * 1.15 : cardWidth * 9 / 16
+    }
+
+    private var headline: String? {
+        if let t = effective.title?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty {
+            return ContentSanitizer.clean(t)
+        }
+        if let b = effective.bodyText?.trimmingCharacters(in: .whitespacesAndNewlines), !b.isEmpty {
+            let cleaned = b
+                .replacingOccurrences(of: "__spark__|", with: "")
+                .replacingOccurrences(of: "__reel__|", with: "")
+                .replacingOccurrences(of: "__spark_share__|", with: "")
+                .replacingOccurrences(of: "__hub_origin__|", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if cleaned.isEmpty { return nil }
+            return ContentSanitizer.clean(String(cleaned.prefix(100)))
+        }
+        return nil
+    }
+
+    private var authorLine: String? {
+        let name = effective.authorName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return name.isEmpty ? nil : name
+    }
+
+    private var accessibilityTitle: String {
+        headline ?? authorLine ?? (effective.isVideo ? "Video" : "Shared post")
     }
 
     var body: some View {
-        Group {
-            if isSparkShare {
-                sparkCard
-            } else {
-                standardCard
+        Button(action: handleOpen) {
+            VStack(alignment: isMine ? .trailing : .leading, spacing: 6) {
+                if !effective.note.isEmpty {
+                    noteBubble
+                }
+                linkCard
             }
         }
+        .buttonStyle(.plain)
+        .contentShape(Rectangle())
         .frame(maxWidth: .infinity, alignment: isMine ? .trailing : .leading)
+        .accessibilityLabel(accessibilityTitle)
+        .accessibilityHint("Opens shared content")
         .task(id: share.postID) {
             await hydrateIfNeeded()
         }
     }
 
-    // MARK: Spark — portrait Shorts-style chat share
+    // MARK: Note (optional text above the card)
 
-    /// Distinct from Hubs: 9:16 frame, Sparks badge, “Watch Spark” CTA. Tap → Sparks player.
-    private var sparkCard: some View {
-        let portraitW: CGFloat = 168
-        let portraitH: CGFloat = 280
-
-        return Button(action: handleOpen) {
-            VStack(alignment: isMine ? .trailing : .leading, spacing: 8) {
-                if !effective.note.isEmpty {
-                    Text(effective.note)
-                        .font(.subheadline)
-                        .foregroundStyle(isMine ? .white : Theme.ink)
-                        .multilineTextAlignment(isMine ? .trailing : .leading)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(isMine ? Theme.accentBright : Theme.surface)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .stroke(isMine ? Color.clear : Theme.border.opacity(0.6), lineWidth: 0.5)
-                        )
-                }
-
-                ZStack(alignment: .bottom) {
-                    // Full-bleed poster (vertical Spark frame).
-                    Group {
-                        if let poster = effective.posterImageURL {
-                            CachedAsyncImage(
-                                url: poster,
-                                maxPixelSize: 560,
-                                contentMode: .fill,
-                                placeholder: AnyView(sparkPlaceholder)
-                            )
-                        } else {
-                            sparkPlaceholder
-                        }
-                    }
-                    .frame(width: portraitW, height: portraitH)
-                    .clipped()
-
-                    // Soft top vignette so badge stays readable.
-                    LinearGradient(
-                        colors: [Color.black.opacity(0.45), Color.clear],
-                        startPoint: .top,
-                        endPoint: .center
-                    )
-                    .frame(height: 72)
-                    .frame(maxHeight: .infinity, alignment: .top)
-                    .allowsHitTesting(false)
-
-                    // Bottom meta scrim.
-                    LinearGradient(
-                        colors: [Color.clear, Color.black.opacity(0.78)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .frame(height: 120)
-                    .frame(maxHeight: .infinity, alignment: .bottom)
-                    .allowsHitTesting(false)
-
-                    // Sparks brand chip.
-                    VStack {
-                        HStack {
-                            SparksOriginBadge(compact: true)
-                            Spacer(minLength: 0)
-                        }
-                        .padding(10)
-                        Spacer(minLength: 0)
-                    }
-                    .allowsHitTesting(false)
-
-                    // Caption + author + open affordance.
-                    VStack(alignment: .leading, spacing: 6) {
-                        if let caption = sparkCaption {
-                            Text(caption)
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .lineLimit(2)
-                                .multilineTextAlignment(.leading)
-                                .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
-                        }
-
-                        HStack(spacing: 6) {
-                            if let author = effective.authorName, !author.isEmpty {
-                                Text(author)
-                                    .font(.caption2.weight(.medium))
-                                    .foregroundStyle(.white.opacity(0.88))
-                                    .lineLimit(1)
-                            }
-                            Spacer(minLength: 4)
-                            HStack(spacing: 4) {
-                                Image(systemName: "play.fill")
-                                    .font(.system(size: 9, weight: .bold))
-                                Text("Watch")
-                                    .font(.system(size: 11, weight: .bold))
-                            }
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(
-                                Capsule()
-                                    .fill(
-                                        LinearGradient(
-                                            colors: [
-                                                Theme.reelsAccent,
-                                                Theme.accentBright.opacity(0.95),
-                                            ],
-                                            startPoint: .leading,
-                                            endPoint: .trailing
-                                        )
-                                    )
-                            )
-                        }
-                    }
-                    .padding(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(width: portraitW, height: portraitH)
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(
-                            LinearGradient(
-                                colors: [
-                                    Color(red: 0.985, green: 0.753, blue: 0.176).opacity(0.85),
-                                    Theme.reelsAccent.opacity(0.9),
-                                    Color(red: 0.525, green: 0.224, blue: 0.796).opacity(0.7),
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: 1.5
-                        )
-                )
-                .shadow(color: Theme.ink.opacity(0.14), radius: 12, y: 4)
-            }
-        }
-        .buttonStyle(.plain)
-        .contentShape(Rectangle())
-        .accessibilityLabel("Open \(MatteryaCopy.spark)")
-        .accessibilityHint("Opens full-screen \(MatteryaCopy.sparks) player")
-    }
-
-    private var sparkCaption: String? {
-        if let title = effective.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
-            return title
-        }
-        if let body = effective.bodyText?.trimmingCharacters(in: .whitespacesAndNewlines), !body.isEmpty {
-            // Strip control markers if they leaked into body text.
-            let cleaned = body
-                .replacingOccurrences(of: "__spark__|", with: "")
-                .replacingOccurrences(of: "__reel__|", with: "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            return cleaned.isEmpty ? nil : cleaned
-        }
-        return nil
-    }
-
-    private var sparkPlaceholder: some View {
-        ZStack {
-            LinearGradient(
-                colors: [
-                    Color(red: 0.18, green: 0.14, blue: 0.12),
-                    Color(red: 0.32, green: 0.24, blue: 0.18),
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
+    private var noteBubble: some View {
+        Text(effective.note)
+            .font(.subheadline)
+            .foregroundStyle(isMine ? Theme.paper : Theme.ink)
+            .multilineTextAlignment(isMine ? .trailing : .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(isMine ? Theme.accentBright : Theme.surface)
             )
-            Image(systemName: "sparkles")
-                .font(.system(size: 36, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.55))
-        }
+            .frame(maxWidth: cardWidth + 12, alignment: isMine ? .trailing : .leading)
     }
 
-    // MARK: Hub / post — landscape card
+    // MARK: Card — media + text only
 
-    private var standardCard: some View {
-        Button(action: handleOpen) {
-            VStack(alignment: .leading, spacing: 8) {
-                headerRow
+    private var linkCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            mediaStage
 
-                if !effective.note.isEmpty {
-                    Text(effective.note)
-                        .font(.subheadline)
-                        .foregroundStyle(Theme.ink)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                if let title = effective.title, !title.isEmpty {
-                    Text(title)
+            VStack(alignment: .leading, spacing: 3) {
+                if let headline {
+                    Text(headline)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Theme.ink)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
-                } else if let body = effective.bodyText, !body.isEmpty, effective.note.isEmpty {
-                    Text(body)
-                        .font(.subheadline)
-                        .foregroundStyle(Theme.inkSecondary)
-                        .lineLimit(3)
-                        .multilineTextAlignment(.leading)
                 }
 
-                if effective.isVideo || effective.posterImageURL != nil {
-                    shareThumb
-                }
-
-                if let author = effective.authorName, !author.isEmpty {
-                    Text(author)
+                if let authorLine {
+                    Text(authorLine)
                         .font(.caption)
                         .foregroundStyle(Theme.inkMuted)
                         .lineLimit(1)
                 }
             }
-            .padding(10)
-            .frame(width: cardWidth, alignment: .leading)
-            .background(Theme.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(Theme.border.opacity(0.7), lineWidth: 0.5)
+            .padding(.horizontal, 10)
+            .padding(.top, 8)
+            .padding(.bottom, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(width: cardWidth, alignment: .leading)
+        .background(Theme.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Theme.border.opacity(0.45), lineWidth: 0.5)
+        )
+    }
+
+    // MARK: Media
+
+    private var mediaStage: some View {
+        ZStack {
+            Group {
+                if isSpark {
+                    // Sparks: always use VideoThumbnailView — real poster when present,
+                    // otherwise extract a frame from the mp4 (most R2 sparks have no thumb).
+                    VideoThumbnailView(
+                        post: effective.asCountryPost,
+                        maxPixelSize: 420,
+                        contentMode: .fill,
+                        showsPlayIcon: false,
+                        extractFrameIfNeeded: true,
+                        placeholder: AnyView(mediaPlaceholder)
+                    )
+                } else if let poster = effective.posterImageURL {
+                    CachedAsyncImage(
+                        url: poster,
+                        maxPixelSize: 420,
+                        contentMode: .fill,
+                        placeholder: AnyView(mediaPlaceholder)
+                    )
+                } else if effective.playableVideoURL != nil {
+                    VideoThumbnailView(
+                        post: effective.asCountryPost,
+                        maxPixelSize: 420,
+                        contentMode: .fill,
+                        showsPlayIcon: false,
+                        extractFrameIfNeeded: true,
+                        placeholder: AnyView(mediaPlaceholder)
+                    )
+                } else {
+                    mediaPlaceholder
+                }
+            }
+            .frame(width: cardWidth, height: mediaHeight)
+            .clipped()
+
+            // Play mark only for Hubs long-form shares — never on Sparks (thumbnail is enough).
+            if !isSpark, effective.isHubContent || effective.kind == .hub, effective.isVideo {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.95))
+                    .padding(9)
+                    .background(Circle().fill(Color.black.opacity(0.42)))
+                    .offset(x: 1)
+                    .allowsHitTesting(false)
+            }
+        }
+        .frame(width: cardWidth, height: mediaHeight)
+        .clipShape(
+            UnevenRoundedRectangle(
+                topLeadingRadius: 12,
+                bottomLeadingRadius: 0,
+                bottomTrailingRadius: 0,
+                topTrailingRadius: 12,
+                style: .continuous
             )
-            .shadow(color: Theme.ink.opacity(0.06), radius: 8, y: 2)
-        }
-        .buttonStyle(.plain)
-        .contentShape(Rectangle())
-        .accessibilityLabel("Open \(kindLabel)")
+        )
     }
 
-    private var headerRow: some View {
-        HStack(spacing: 6) {
-            Image(systemName: kindIcon)
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(Theme.accentBright)
-            Text(kindLabel)
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(Theme.accentBright)
-                .textCase(.uppercase)
-            Spacer(minLength: 0)
-            Image(systemName: "arrow.up.right")
-                .font(.caption2.weight(.bold))
-                .foregroundStyle(Theme.inkMuted)
-        }
-    }
-
-    private var kindIcon: String {
-        if effective.isHubContent { return "play.rectangle.fill" }
-        return "doc.text.fill"
-    }
-
-    private var kindLabel: String {
-        if effective.isHubContent { return MatteryaCopy.matteryaHubs }
-        return "Post"
-    }
-
-    /// Poster only — no play circle (playback is not on the card).
-    private var shareThumb: some View {
-        Group {
-            if let poster = effective.posterImageURL {
-                CachedAsyncImage(
-                    url: poster,
-                    maxPixelSize: 420,
-                    contentMode: .fill,
-                    placeholder: AnyView(thumbPlaceholder)
-                )
-            } else {
-                thumbPlaceholder
-            }
-        }
-        .frame(width: thumbW, height: thumbH)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .frame(maxWidth: .infinity, alignment: isMine ? .trailing : .leading)
-    }
-
-    private var thumbPlaceholder: some View {
+    private var mediaPlaceholder: some View {
         Rectangle()
-            .fill(Theme.canvasDeep)
-            .overlay {
-                Image(systemName: effective.isVideo ? "film" : "doc.richtext")
-                    .font(.title3)
-                    .foregroundStyle(Theme.inkMuted)
-            }
+            .fill(Theme.canvasMuted)
     }
 
     private func handleOpen() {
@@ -332,19 +194,32 @@ struct ChatShareCard: View {
             onOpen()
             return
         }
-        // Fallback if parent forgot the callback.
         ChatShareRouting.open(effective, appState: appState)
     }
 
     private func hydrateIfNeeded() async {
-        if effective.playableVideoURL != nil || effective.posterImageURL != nil { return }
-        guard !share.postID.isEmpty else { return }
-        if let post = try? await PostsService.shared.getPostByID(share.postID) {
-            applyResolved(from: post)
-            return
-        }
-        if let seed = await HubVideoSeedService.shared.post(id: share.postID) {
-            applyResolved(from: seed)
+        // Need a real image poster and/or a playable media URL for frame extract.
+        let hasImagePoster = effective.posterImageURL != nil
+        let hasVideo = effective.playableVideoURL != nil
+        if hasImagePoster, hasVideo || !isSpark { return }
+        guard !share.postID.isEmpty || hasVideo else { return }
+
+        if !share.postID.isEmpty {
+            if let post = try? await PostsService.shared.getPostByID(share.postID) {
+                applyResolved(from: post)
+                if effective.posterImageURL != nil, effective.playableVideoURL != nil { return }
+            }
+            if let seed = await HubVideoSeedService.shared.post(id: share.postID) {
+                applyResolved(from: seed)
+                if effective.posterImageURL != nil, effective.playableVideoURL != nil { return }
+            }
+            // Origin id on spark-share stamps (feed re-share → original Spark).
+            let bodyBlob = share.bodyText ?? effective.bodyText
+            if let sid = SparkShareMarker.originID(from: bodyBlob),
+               sid != share.postID,
+               let origin = try? await PostsService.shared.getPostByID(sid) {
+                applyResolved(from: origin)
+            }
         }
     }
 
@@ -352,13 +227,32 @@ struct ChatShareCard: View {
         let media = post.playableVideoURL?.absoluteString
             ?? MediaURLResolver.resolve(post.mediaURL)?.absoluteString
             ?? share.mediaURL
-        let poster = post.posterImageURL?.absoluteString
-            ?? post.feedImageURL?.absoluteString
-            ?? post.thumbURL
-            ?? share.posterURL
+            ?? effective.mediaURL
+
+        // Prefer a real image poster; never store mp4 as poster.
+        let posterCandidates: [String?] = [
+            post.posterImageURL?.absoluteString,
+            post.feedImageURL?.absoluteString,
+            post.thumbURL,
+            MediaURLResolver.posterURL(for: post)?.absoluteString,
+            share.posterURL,
+            effective.posterURL,
+        ]
+        let poster = posterCandidates
+            .compactMap { $0 }
+            .first { raw in
+                let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !t.isEmpty, !t.hasPrefix("{") else { return false }
+                return !Message.looksLikeVideoURL(t)
+            }
+
         let kind: Message.ShareInfo.Kind = {
-            if share.kind == .reel || post.isReel { return .reel }
-            if share.kind == .hub || PlayPlatformBridge.isHubCatalogContent(post) { return .hub }
+            if share.kind == .reel || post.isReel || PlayPlatformBridge.isSparkFeedCard(post) {
+                return .reel
+            }
+            if share.kind == .hub || PlayPlatformBridge.isHubCatalogContent(post) {
+                return .hub
+            }
             return share.kind
         }()
         let mediaType: String? = {
@@ -367,7 +261,7 @@ struct ChatShareCard: View {
         }()
         resolved = Message.ShareInfo(
             kind: kind,
-            postID: post.id,
+            postID: post.id.isEmpty ? share.postID : post.id,
             title: share.title ?? post.displayHeadline ?? post.displayTitle,
             bodyText: share.bodyText ?? (post.displayBody.isEmpty ? post.displayCaption : post.displayBody),
             authorName: share.authorName ?? post.authorDisplayName,
@@ -388,40 +282,148 @@ enum ChatShareRouting {
         let type = (share.mediaType ?? "").lowercased()
         if type == "reel" || type == "spark" { return true }
         if share.asCountryPost.isReel { return true }
+        // Feed spark re-share stamps sometimes land in chat without kind=reel.
+        if SparkShareMarker.isMarked(share.bodyText) { return true }
+        let body = (share.bodyText ?? "").lowercased()
+        if body.contains("__spark__|") || body.contains("__reel__|") { return true }
         return false
     }
 
     @MainActor
     static func open(_ share: Message.ShareInfo, appState: AppState) {
-        // Stop any chat mini audio before leaving.
+        // Stop chat mini audio only — never tear down before Hubs mounts.
         MediaPlaybackCoordinator.shared.pauseAll()
 
         if isSpark(share) {
-            let post = share.asCountryPost
-            // Endless Sparks from this clip — same as feed Spark cards.
+            // Same path as feed Spark cards: endless vertical Sparks, immediate swipe seed.
+            var post = share.asCountryPost
+            // Force reel typing so ranking / player treat this as a first-class Spark.
+            if !post.isReel {
+                post = CountryPost(
+                    id: post.id,
+                    title: post.title,
+                    body: post.body.hasPrefix("__spark__|") || post.body.hasPrefix("__reel__|")
+                        ? post.body
+                        : "__spark__|\(post.body.isEmpty ? "Spark" : post.body)",
+                    mediaType: "reel",
+                    mediaURL: post.mediaURL ?? share.mediaURL,
+                    thumbURL: post.thumbURL ?? share.posterURL,
+                    mediaCaption: post.mediaCaption,
+                    sharedPostID: post.sharedPostID,
+                    sharedPost: post.sharedPost,
+                    visibility: post.visibility,
+                    likeCount: post.likeCount,
+                    commentCount: post.commentCount,
+                    viewCount: post.viewCount,
+                    likedByMe: post.likedByMe,
+                    savedByMe: post.savedByMe,
+                    createdAt: post.createdAt,
+                    updatedAt: post.updatedAt,
+                    authorID: post.authorID,
+                    countryName: post.countryName,
+                    countryCode: post.countryCode,
+                    cityName: post.cityName,
+                    author: post.author,
+                    externalRefType: post.externalRefType,
+                    externalRefID: post.externalRefID
+                )
+            }
             appState.openGlobalSparksViewer(startingPost: post)
             return
         }
 
-        // Resolve full post on a background path so Hubs/post open has real media.
+        // Hubs / video shares: open **immediately** from the chat payload (has media URL).
+        // Waiting on getPostByID made Hubs feel dead after tap.
+        if share.isHubContent || share.kind == .hub
+            || (share.isVideo && share.kind != .post) {
+            let instant = hubPost(from: share)
+            appState.openLivingVideo(postID: instant.id, tab: .home, post: instant)
+            // Enrich identity / media in background without blocking first frame.
+            Task { @MainActor in
+                let full = await resolvePost(for: share)
+                guard full.playableVideoURL != nil || full.hasVideo else { return }
+                // Same watch session — upgrade channel / URL if better, keep expanded.
+                if appState.hubPlaybackPost?.id == share.postID
+                    || appState.hubPlaybackPost?.id == full.id
+                    || appState.hubPlaybackPost == nil {
+                    appState.startHubPlayback(full, expanded: true)
+                }
+            }
+            return
+        }
+
+        // Text / photo posts: resolve then open detail.
         Task { @MainActor in
             let post = await resolvePost(for: share)
-            if share.isHubContent || PlayPlatformBridge.isHubCatalogContent(post) || share.kind == .hub {
-                // Prefer hubs continuous watch when we have a playable video.
-                if post.hasVideo || post.playableVideoURL != nil {
-                    appState.openLivingVideo(postID: post.id, tab: .home, post: post)
-                } else {
-                    appState.openLivingVideo(postID: share.postID, tab: .home, post: nil)
-                }
-                return
-            }
-            // Normal post / feed video.
             if post.hasVideo || !post.displayBody.isEmpty || post.hasMedia {
                 appState.openPost(post)
             } else {
                 await appState.openPost(id: share.postID)
             }
         }
+    }
+
+    /// Instant CountryPost from chat share metadata (no network).
+    @MainActor
+    private static func hubPost(from share: Message.ShareInfo) -> CountryPost {
+        var post = share.asCountryPost
+        // Ensure Hubs routing + video type when payload is thin.
+        if post.mediaType == nil || post.mediaType?.isEmpty == true {
+            post = CountryPost(
+                id: post.id,
+                title: post.title,
+                body: post.body.isEmpty ? "__hub_channel__|" : post.body,
+                mediaType: "video",
+                mediaURL: post.mediaURL ?? share.mediaURL,
+                thumbURL: post.thumbURL ?? share.posterURL,
+                mediaCaption: post.mediaCaption,
+                sharedPostID: post.sharedPostID,
+                sharedPost: post.sharedPost,
+                visibility: post.visibility,
+                likeCount: post.likeCount,
+                commentCount: post.commentCount,
+                viewCount: post.viewCount,
+                likedByMe: post.likedByMe,
+                savedByMe: post.savedByMe,
+                createdAt: post.createdAt,
+                updatedAt: post.updatedAt,
+                authorID: post.authorID,
+                countryName: post.countryName,
+                countryCode: post.countryCode,
+                cityName: post.cityName,
+                author: post.author,
+                externalRefType: "hub",
+                externalRefID: post.externalRefID ?? post.id
+            )
+        } else if post.externalRefType == nil {
+            post = CountryPost(
+                id: post.id,
+                title: post.title,
+                body: post.body,
+                mediaType: post.mediaType ?? "video",
+                mediaURL: post.mediaURL ?? share.mediaURL,
+                thumbURL: post.thumbURL ?? share.posterURL,
+                mediaCaption: post.mediaCaption,
+                sharedPostID: post.sharedPostID,
+                sharedPost: post.sharedPost,
+                visibility: post.visibility,
+                likeCount: post.likeCount,
+                commentCount: post.commentCount,
+                viewCount: post.viewCount,
+                likedByMe: post.likedByMe,
+                savedByMe: post.savedByMe,
+                createdAt: post.createdAt,
+                updatedAt: post.updatedAt,
+                authorID: post.authorID,
+                countryName: post.countryName,
+                countryCode: post.countryCode,
+                cityName: post.cityName,
+                author: post.author,
+                externalRefType: "hub",
+                externalRefID: post.externalRefID ?? post.id
+            )
+        }
+        return post
     }
 
     @MainActor

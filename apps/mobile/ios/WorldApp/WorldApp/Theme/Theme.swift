@@ -156,6 +156,7 @@ enum MatteryaCopy {
     static let publishSparkHint = "Vertical video works best"
     static let publishVideoHint = "Shows in feed and \(hubsBrand)"
     static let matteryaHubs = hubsBrand
+    static let continueWatching = "Continue watching"
     static let newOnHubs = "New on \(hubsBrand)"
     static let watchOnHubs = "Watch on \(hubsBrand)"
     static let publishedOnHubs = "Published on \(hubsBrand)"

@@ -86,3 +86,37 @@ services:
         sync: false
       - key: KAFKAJS_NO_PARTITIONER_WARNING
         value: "1"
+
+      # --- Content pipeline (R2 → owned posts + feed shares + re-sign) ---
+      # Cron hits POST /cron/content-pipeline with x-cron-secret
+      - key: CONTENT_CRON_SECRET
+        sync: false
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        value: matterya-sparks
+      - key: R2_ENDPOINT
+        sync: false
+
+  # Every 6h: discover new R2 packs, create owned Sparks + feed shares, re-sign URLs.
+  - type: cron
+    name: matterya-content-pipeline
+    runtime: node
+    branch: ios-native
+    rootDir: apps/api
+    schedule: "0 */6 * * *"
+    buildCommand: "true"
+    startCommand: node scripts/run-content-pipeline-cron.mjs
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: CONTENT_CRON_SECRET
+        sync: false
+      - key: INSIGHTS_CRON_SECRET
+        sync: false
+      - key: CONTENT_PIPELINE_URL
+        value: https://api.matterya.com/cron/content-pipeline

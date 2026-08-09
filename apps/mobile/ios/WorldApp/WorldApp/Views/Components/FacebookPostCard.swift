@@ -52,78 +52,118 @@ struct FacebookPostCard: View {
         PlayPlatformBridge.isSparkFeedCard(post)
     }
 
-    /// Hub origin share (or archive media share) — show original channel, not the sharer as “owner”.
+    /// Feed re-share of a Hubs video or Spark (you shared it — not the channel posting as itself).
+    private var isFeedReshareCard: Bool {
+        // Explicit stamps.
+        if PlayPlatformBridge.isHubOriginShare(post) { return true }
+        if post.isSparkFeedShare || SparkShareMarker.isMarked(post.body) { return true }
+        // Live user author + hub/spark media that isn't their channel publish.
+        if PlayPlatformBridge.isFeedOnlyShare(post),
+           PlayPlatformBridge.isLikelyLiveUserAuthor(post.authorID) {
+            return true
+        }
+        return false
+    }
+
+    /// True when this card is a hub-origin long-form feed share (not a Spark).
     private var isHubOriginShareCard: Bool {
         if opensAsSpark { return false }
         if PlayPlatformBridge.isHubOriginShare(post) { return true }
         if PlayPlatformBridge.isFeedOnlyShare(post),
-           PlayPlatformBridge.isArchiveCatalogMedia(post) {
+           PlayPlatformBridge.isArchiveCatalogMedia(post),
+           !opensAsSpark {
             return true
         }
         return showsPlayLinkInFeed
             && !PlayPlatformBridge.isHubChannelUpload(post)
             && !HubVideoSeedService.isArchiveChannelAuthor(post.authorID)
+            && PlayPlatformBridge.isLikelyLiveUserAuthor(post.authorID)
     }
 
-    /// Name on the card: original channel for hub shares; sharer is never the “creator”.
+    /// Name on the card: **you (sharer)** for feed re-shares; channel only for native channel posts.
     private var cardPrimaryName: String {
-        if let origin = HubOriginShareMarker.originPresentation(from: post) {
-            let name = origin.authorDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !name.isEmpty { return name }
+        if isFeedReshareCard {
+            return post.authorDisplayName
         }
-        if isHubOriginShareCard {
-            return HubVideoSeedService.archiveChannelDisplayName
-        }
-        if opensAsSpark, PlayPlatformBridge.isArchiveCatalogMedia(post) {
-            return HubVideoSeedService.archiveChannelDisplayName
-        }
-        return post.authorDisplayName
+        return PlayPlatformBridge.displayCreator(for: post).name
     }
 
     private var cardPrimaryAvatarURL: String? {
-        if let origin = HubOriginShareMarker.originPresentation(from: post) {
-            return origin.author?.avatarURL
+        if isFeedReshareCard {
+            return post.author?.avatarURL
         }
-        if isHubOriginShareCard { return nil }
-        return post.author?.avatarURL
+        return PlayPlatformBridge.displayCreator(for: post).avatarURL
     }
 
     private var cardPrimaryAvatarSeed: String {
-        if let origin = HubOriginShareMarker.originPresentation(from: post) {
-            return origin.authorID
+        if isFeedReshareCard {
+            return post.authorID
         }
-        if isHubOriginShareCard || (opensAsSpark && PlayPlatformBridge.isArchiveCatalogMedia(post)) {
-            return HubVideoSeedService.archiveChannelAuthorID
-        }
-        return post.authorID
+        return PlayPlatformBridge.displayCreator(for: post).seed
     }
 
-    /// Author / channel to follow — matches the name shown on the card.
+    /// Follow target: the person shown on the name card (sharer for re-shares).
     private var cardPrimaryFollowID: String {
-        if let origin = HubOriginShareMarker.originPresentation(from: post) {
-            return origin.authorID
+        if isFeedReshareCard {
+            return post.authorID
         }
-        if isHubOriginShareCard || (opensAsSpark && PlayPlatformBridge.isArchiveCatalogMedia(post)) {
-            return HubVideoSeedService.archiveChannelAuthorID
-        }
-        return post.authorID
+        return PlayPlatformBridge.displayCreator(for: post).authorID
     }
 
     private var showsFollowNextToName: Bool {
         let id = cardPrimaryFollowID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !id.isEmpty else { return false }
         if id == appState.currentProfile?.userID { return false }
-        // Own post (and not a hub-origin presentation of someone else).
-        if isOwnPost,
-           HubOriginShareMarker.originPresentation(from: post) == nil,
-           !isHubOriginShareCard {
-            return false
-        }
+        // Own post — no follow self.
+        if isOwnPost { return false }
         return true
     }
 
-    /// Sharer is irrelevant on Hubs/Spark share cards — never show “Shared by …”.
-    private var sharedByLine: String? { nil }
+    /// Source channel under the sharer's name: “Shared from The Archive”.
+    private var sharedByLine: String? {
+        guard isFeedReshareCard, let channel = originChannelDisplayName else { return nil }
+        return "Shared from \(channel)"
+    }
+
+    /// Channel / creator the Hubs video or Spark originally came from.
+    private var originChannelDisplayName: String? {
+        if let origin = HubOriginShareMarker.originPresentation(from: post) {
+            let n = origin.authorDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !n.isEmpty { return n }
+        }
+        if let an = SparkShareMarker.originChannelName(from: post.body) {
+            return an
+        }
+        if let embed = post.sharedPost?.asCountryPost {
+            let n = embed.authorDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !n.isEmpty, embed.authorID != post.authorID {
+                return n
+            }
+        }
+        // Archive / seed media without stamp fields.
+        if PlayPlatformBridge.isArchiveCatalogMedia(post)
+            || post.isHubSeedVideo
+            || HubVideoSeedService.isArchiveChannelAuthor(
+                HubOriginShareMarker.originPresentation(from: post)?.authorID
+                    ?? post.sharedPost?.asCountryPost.authorID
+                    ?? ""
+            ) {
+            return HubVideoSeedService.archiveChannelDisplayName
+        }
+        // Hubs long-form feed share — prefer channel identity over generic brand.
+        if isHubOriginShareCard {
+            let creator = PlayPlatformBridge.displayCreator(for: post).name
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !creator.isEmpty, creator != post.authorDisplayName {
+                return creator
+            }
+            return MatteryaCopy.matteryaHubs
+        }
+        if opensAsSpark {
+            return MatteryaCopy.sparks
+        }
+        return nil
+    }
 
     /// Subtle location under the author name (country name only — no flag).
     @ViewBuilder
@@ -492,9 +532,14 @@ struct FacebookPostCard: View {
         .onTapGesture { openPrimaryDestination() }
     }
 
-    /// For hub shares the card author is the **sharer**; channel lives in mediaCaption / hubSlug.
+    /// Extra channel line under journal titles only when the name row does **not** already
+    /// show `sharedByLine` (avoids “Shared from …” twice on feed + profile share cards).
     /// Native hub_* posts already show the channel as the author — no extra line.
     private var hubChannelAttributionLine: String? {
+        // Re-shares: only under the name once — never again under the title.
+        if isFeedReshareCard { return nil }
+        // Name row already has sharedByLine when present.
+        if sharedByLine != nil { return nil }
         guard showsPlayLinkInFeed else { return nil }
         // Channel is already the name card for The Archive / hub seed posts.
         if HubVideoSeedService.isArchiveChannelAuthor(post.authorID) {
@@ -674,6 +719,10 @@ struct FacebookPostCard: View {
             autoplaySurface: autoplaySurface,
             onViewed: { Task { await PostsService.shared.recordView(post) } }
         )
+        .onAppear {
+            // Shared hubs + long-form feed: buffer before ≥28% focus wins.
+            SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
+        }
     }
 
     private var actions: some View {
@@ -710,7 +759,10 @@ struct FacebookPostCard: View {
 
             Button {
                 Task {
-                    if let error = await appState.toggleSavePost(post) {
+                    if let error = await appState.toggleSavePost(
+                        post,
+                        reelPresentation: AppState.belongsInSavedSparks(post)
+                    ) {
                         actionMessage = error
                     }
                 }
@@ -832,20 +884,24 @@ struct FacebookPostCard: View {
     }
 
     private func openAuthorProfile() {
-        // Hub origin shares → original channel (e.g. The Archive), not the sharer.
-        if let origin = HubOriginShareMarker.originPresentation(from: post) {
-            if HubVideoSeedService.isArchiveChannelAuthor(origin.authorID) {
-                appState.openPlayChannel(authorID: HubVideoSeedService.archiveChannelAuthorID)
-                return
-            }
-            appState.openPlayChannel(authorID: origin.authorID)
+        // Feed re-share: name/avatar are the **sharer** — open their profile.
+        if isFeedReshareCard {
+            appState.openPublicProfile(
+                username: post.author?.username,
+                userID: post.authorID
+            )
             return
         }
-        if isHubOriginShareCard {
-            appState.openPlayChannel(authorID: HubVideoSeedService.archiveChannelAuthorID)
+        // Native Hubs / channel posts: open the channel shown on the card.
+        let creator = PlayPlatformBridge.displayCreator(for: post)
+        if creator.authorID.hasPrefix("hub_")
+            || HubVideoSeedService.isArchiveChannelAuthor(creator.authorID)
+            || PlayPlatformBridge.isHubCatalogContent(post)
+            || PlayPlatformBridge.isHubChannelUpload(post) {
+            appState.openPlayChannel(authorID: creator.authorID, username: creator.username)
             return
         }
-        appState.openPublicProfile(username: post.author?.username, userID: post.authorID)
+        appState.openPublicProfile(username: creator.username, userID: creator.authorID)
     }
 
     private func deletePost() async {

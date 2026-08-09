@@ -246,13 +246,13 @@ struct ReelsChromeButton: View {
 
     var body: some View {
         Button(action: action) {
+            // Simple off-white mark — no circle chrome (Sparks close).
             Image(systemName: systemName)
-                .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(Theme.ink)
-                .frame(width: 38, height: 38)
-                .background(Theme.paper.opacity(0.94), in: Circle())
-                .overlay(Circle().stroke(Theme.border.opacity(0.7), lineWidth: 0.5))
-                .shadow(color: Theme.ink.opacity(0.16), radius: 8, y: 3)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.92))
+                .shadow(color: .black.opacity(0.45), radius: 4, y: 1)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(accessibilityLabel)

@@ -72,9 +72,11 @@ struct YouTubeWatchView: View {
 
             VStack(spacing: 0) {
                 // Sticky player — stays put while everything below scrolls (YouTube-style).
+                // When embedsPlayer is false, keep the stage transparent so minimize
+                // never leaves a black rectangle at the top of Hubs.
                 playerSection
                     .frame(width: geo.size.width, height: reservedPlayerHeight)
-                    .background(Theme.ink)
+                    .background(embedsPlayer ? Theme.ink : Color.clear)
                     .zIndex(2)
 
                 // Title, channel, actions, comments, related — all scroll under the player
@@ -124,7 +126,22 @@ struct YouTubeWatchView: View {
         }
         .background(Theme.canvas)
         .animation(isPullingToMinimize ? nil : .spring(response: 0.34, dampingFraction: 0.82), value: chromeOpacity)
+        // Feed / non-expanded share still uses the sheet. Expanded Hubs uses an overlay so
+        // GlobalHubPlaybackLayer never pauses or collapses to mini.
         .sharePostSheet(appState: appState)
+        .overlay {
+            if appState.hubPlaybackExpanded,
+               let sharePost = appState.sharePostSheet {
+                HubsShareOverlay(post: sharePost) {
+                    appState.sharePostSheet = nil
+                    appState.hubPlaybackPlaying = true
+                    NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .zIndex(80)
+            }
+        }
+        .animation(.spring(response: 0.32, dampingFraction: 0.9), value: appState.sharePostSheet?.id)
         .task(id: currentPost.id) {
             await hydrateEngagement()
             YouTubeCatalogService.shared.recordWatch(currentPost.id)
@@ -297,9 +314,10 @@ struct YouTubeWatchView: View {
                     )
                 }
             } else {
-                // Parent continuous player draws the video; keep a black stage for layout + gestures.
+                // Continuous GlobalHubPlaybackLayer draws the video into this hole.
+                // Never solid black — that stayed on screen as a “black slab” after minimize.
                 YouTubeVideoFrame(style: .watch) {
-                    Color.black
+                    Color.clear
                 }
             }
         }
@@ -362,9 +380,10 @@ struct YouTubeWatchView: View {
             .buttonStyle(.plain)
 
             Button {
-                // Leaving the watch surface for a sheet — collapse to mini (stay put).
-                appState.minimizeHubPlayback(returnToChat: false)
+                // Share in place — never mini-player, never pause continuous playback.
+                appState.hubPlaybackPlaying = true
                 appState.presentShareSheet(for: currentPost)
+                NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
             } label: {
                 Image(systemName: "arrowshape.turn.up.right")
                     .font(.system(size: 20))

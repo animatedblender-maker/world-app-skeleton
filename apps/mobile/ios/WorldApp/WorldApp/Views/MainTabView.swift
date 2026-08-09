@@ -42,6 +42,7 @@ struct MainTabView: View {
                     // Tab bar is drawn in the OUTER ZStack (below) so the mini player
                     // can sit above it without covering the menu icons.
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .sharePostSheet(appState: appState)
                 .overlay {
                     ZStack {
@@ -62,43 +63,53 @@ struct MainTabView: View {
                         .safeAreaPadding(.bottom, miniPlayerContentInset)
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            // Mini chrome only (flush above tab bar). Video surface sits above this chrome
-            // so the continuous player paints into the video hole (not a white box).
-            VStack(spacing: 0) {
-                if showsFloatingMiniBar, let post = appState.hubPlaybackPost {
-                    YouTubeMiniPlayerBar(
-                        post: post,
-                        onExpand: { appState.expandHubPlayback() },
-                        onClose: { appState.stopHubPlayback() },
-                        embedsVideo: false,
-                        isPlaying: Binding(
-                            get: { appState.hubPlaybackPlaying },
-                            set: { appState.hubPlaybackPlaying = $0 }
-                        ),
-                        isMuted: Binding(
-                            get: { appState.hubPlaybackMuted },
-                            set: { appState.hubPlaybackMuted = $0 }
+            // Mini chrome only (flush above tab bar). Intrinsic height — never a full-screen
+            // hit target (that floated the bar and ate feed taps).
+            if showsFloatingMiniBar || appState.navigationPath.isEmpty {
+                VStack(spacing: 0) {
+                    if showsFloatingMiniBar, let post = appState.hubPlaybackPost {
+                        YouTubeMiniPlayerBar(
+                            post: post,
+                            onExpand: { appState.expandHubPlayback() },
+                            onClose: { appState.stopHubPlayback() },
+                            embedsVideo: false,
+                            isPlaying: Binding(
+                                get: { appState.hubPlaybackPlaying },
+                                set: { appState.hubPlaybackPlaying = $0 }
+                            ),
+                            isMuted: Binding(
+                                get: { appState.hubPlaybackMuted },
+                                set: { appState.hubPlaybackMuted = $0 }
+                            )
                         )
-                    )
+                        .frame(height: YouTubeMiniPlayerBar.barHeight)
+                        .frame(maxWidth: .infinity)
+                    }
+                    // Spacer matching tab bar height so mini stays flush above it when tab is shown.
+                    if appState.navigationPath.isEmpty {
+                        Color.clear
+                            .frame(height: Theme.tabBarHeight)
+                            .allowsHitTesting(false)
+                    }
                 }
-                // Spacer matching tab bar height so mini stays flush above it when tab is shown.
-                if appState.navigationPath.isEmpty {
-                    Color.clear.frame(height: Theme.tabBarHeight)
-                }
+                .frame(maxWidth: .infinity)
+                .zIndex(50)
             }
-            .zIndex(50)
 
             // Continuous AVPlayer — above mini chrome, below tab bar.
             GlobalHubPlaybackLayer(dockSlotGlobal: hubContinuousDockSlotGlobal)
                 .zIndex(55)
 
-            // Tab bar on top for hit-testing; same vertical stack position as the clear spacer.
+            // Tab bar pinned to the physical bottom of the ZStack.
             if appState.navigationPath.isEmpty {
                 BottomTabBar()
+                    .frame(maxWidth: .infinity)
                     .zIndex(70)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onPreferenceChange(HubContinuousVideoSlotKey.self) { frame in
             hubContinuousDockSlotGlobal = frame
         }
@@ -112,7 +123,7 @@ struct MainTabView: View {
                 EngagementTracker.shared.hubsOpened()
             }
         }
-        .onChange(of: appState.selectedTab) { _, tab in
+        .onChange(of: appState.selectedTab) { oldTab, tab in
             // Off Hubs → mini player; do not force-return to a chat (only pull-down / minimize does).
             if tab != .hubs {
                 appState.minimizeHubPlayback(returnToChat: false)
@@ -123,6 +134,8 @@ struct MainTabView: View {
             EngagementTracker.shared.screenOpened(tab.rawValue)
             // Feed stays mounted under Profile — clear focus so profile can elect its own winner.
             FeedVideoFocus.shared.resetAll()
+            // 3+ min off feed → new feed mix; Hubs open → new For you order.
+            appState.noteSelectedTabChanged(from: oldTab, to: tab)
         }
         .onChange(of: appState.navigationPath.count) { _, count in
             // Opening chat (or any push) while expanded → collapse to mini, keep playing.
@@ -220,6 +233,12 @@ struct MainTabView: View {
         )) { context in
             ReelsScrollViewer(context: context)
                 .withAppState(appState)
+                // Edge-to-edge from first paint — no safe-area reflow after video mounts.
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea(.all)
+                .statusBarHidden(true)
+                .persistentSystemOverlays(.hidden)
+                .presentationBackground(.black)
         }
         // Hubs is a real tab — never present it as a fullScreenCover (that hid the tab bar).
         .onChange(of: appState.isPlayPresented) { _, presented in

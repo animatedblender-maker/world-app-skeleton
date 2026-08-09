@@ -105,7 +105,8 @@ private struct ReelCard: View {
                         posterURL: post.posterImageURL,
                         isActive: isActive,
                         muted: false,
-                        startTime: 0
+                        startTime: 0,
+                        fillsFrame: false
                     )
                     .ignoresSafeArea()
                     .background(Color.black)
@@ -120,7 +121,8 @@ private struct ReelCard: View {
                         adsEnabled: false,
                         isActive: isActive,
                         loops: true,
-                        muted: false
+                        muted: false,
+                        fillsFrame: false
                     )
                     .ignoresSafeArea()
                 }

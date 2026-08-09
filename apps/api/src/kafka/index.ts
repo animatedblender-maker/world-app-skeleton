@@ -2,6 +2,7 @@ import { disconnectKafka, ensureTopics, getProducer } from './client.js';
 import { kafkaEnabled } from './config.js';
 import { startEngagementConsumer } from './consumers/engagement.consumer.js';
 import { startMessagesConsumer } from './consumers/messages.consumer.js';
+import { startR2IngestConsumer } from './consumers/r2-ingest.consumer.js';
 import { startOutboxPublisher, stopOutboxPublisher } from './publisher.js';
 
 let started = false;
@@ -25,6 +26,7 @@ export async function startKafkaPipeline(): Promise<void> {
     if (process.env.DATABASE_URL?.trim()) {
       await startMessagesConsumer();
       await startEngagementConsumer();
+      await startR2IngestConsumer();
     } else {
       console.warn(
         '⚠️ Kafka consumers not started: DATABASE_URL is not set. ' +
@@ -32,7 +34,8 @@ export async function startKafkaPipeline(): Promise<void> {
       );
     }
     console.log('✅ Kafka broker connected (outbox/consumer need DATABASE_URL for full pipeline)');
-    console.log('   Live engagement: topic matterya.engagement (Console UI or API [kafka-live] logs)');
+    console.log('   Live engagement: topic matterya.engagement');
+    console.log('   R2 ingest jobs: topic matterya.r2.ingest');
   } catch (err) {
     started = false;
     console.error('❌ Kafka pipeline failed to start — API continues without it', err);
@@ -55,6 +58,7 @@ export {
   MessageEventTypes,
   EngagementEventTypes,
   ContentEventTypes,
+  R2IngestEventTypes,
 } from './types.js';
 export type {
   MessageSentPayload,
@@ -62,4 +66,5 @@ export type {
   MessageDeletedPayload,
   EngagementPayload,
   ContentPostedPayload,
+  R2IngestRequestedPayload,
 } from './types.js';
