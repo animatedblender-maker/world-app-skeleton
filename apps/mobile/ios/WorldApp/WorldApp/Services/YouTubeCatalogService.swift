@@ -294,8 +294,8 @@ final class YouTubeCatalogService {
         let base = videos.filter { PlayPlatformBridge.isHubsForYouLongForm($0) }
         switch homeFilter {
         case .all:
-            // Stable order; callers shuffle ONCE into @State so scroll doesn't re-shuffle.
-            return base.sorted { $0.id < $1.id }
+            // Unsorted pool — callers pure-shuffle on every Hubs visit (until ranking algorithm).
+            return base
         case .trending:
             return base.sorted {
                 if $0.viewCount == $1.viewCount { return $0.createdAt > $1.createdAt }
@@ -462,17 +462,12 @@ final class YouTubeCatalogService {
     }
 
     func relatedVideos(to post: CountryPost, from catalog: [CountryPost], limit: Int = 12) -> [CountryPost] {
-        catalog
-            .filter { livingEligible($0) && $0.id != post.id && !$0.isReel }
-            .sorted { lhs, rhs in
-                let lhsSameAuthor = lhs.authorID == post.authorID
-                let rhsSameAuthor = rhs.authorID == post.authorID
-                if lhsSameAuthor != rhsSameAuthor { return lhsSameAuthor }
-                if lhs.viewCount == rhs.viewCount { return lhs.createdAt > rhs.createdAt }
-                return lhs.viewCount > rhs.viewCount
-            }
-            .prefix(limit)
-            .map { $0 }
+        // Temporary: pure shuffle until product ranking algorithm lands.
+        // Prefer same-author first (still shuffled within), then the rest shuffled.
+        let pool = catalog.filter { livingEligible($0) && $0.id != post.id && !$0.isReel }
+        let sameAuthor = pool.filter { $0.authorID == post.authorID }.shuffled()
+        let others = pool.filter { $0.authorID != post.authorID }.shuffled()
+        return Array((sameAuthor + others).prefix(limit))
     }
 
     private func keywordFilter(_ videos: [CountryPost], words: [String]) -> [CountryPost] {
