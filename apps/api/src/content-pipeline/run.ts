@@ -7,10 +7,12 @@ import {
   encodeMediaUrl,
   extractR2KeyFromMediaPath,
   extractR2KeyFromMediaUrl,
+  getBucket,
   getObjectJson,
   presignGet,
   r2Configured,
 } from './r2.js';
+import { clearPipelineLog, pipelineLog } from './log.js';
 import { defaultCategoryId, loadOwnersByCountry, pickOwner, pickSharer } from './owners.js';
 import { extractCommentTexts, markShareBody, pickBody, pickTitle } from './text.js';
 import type { PipelineOptions, PipelineStats, ProfileOwner, R2Pack } from './types.js';
@@ -51,8 +53,10 @@ function emptyStats(dryRun: boolean): PipelineStats {
 /**
  * Full tick: re-sign expiring R2 URLs → discover new packs → insert owned originals + shares.
  * Real user posts (non-r2 media_path) are never modified.
+ * Emits live logs via pipelineLog (ops page SSE).
  */
 export async function runContentPipeline(opts: PipelineOptions = {}): Promise<PipelineStats> {
+  clearPipelineLog();
   const started = Date.now();
   const dryRun = !!opts.dryRun;
   const maxOriginals = opts.maxOriginals ?? 40;
@@ -63,49 +67,102 @@ export async function runContentPipeline(opts: PipelineOptions = {}): Promise<Pi
 
   const timedOut = () => Date.now() - started > maxMs;
 
+  pipelineLog('══════════════════════════════════════', 'step');
+  pipelineLog(
+    `Pipeline start · dryRun=${dryRun} resignOnly=${!!opts.resignOnly} ingestOnly=${!!opts.ingestOnly}`,
+    'step'
+  );
+  pipelineLog(
+    `Limits: maxOriginals=${maxOriginals} maxShares=${maxShares} maxResign=${maxResign} maxMs=${maxMs}`,
+    'info'
+  );
+
   try {
     if (!r2Configured()) {
+      const err =
+        'R2 not configured — set R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ACCOUNT_ID|R2_ENDPOINT';
+      pipelineLog(err, 'error');
       stats.ok = false;
-      stats.errors.push('R2 not configured — set R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ACCOUNT_ID|R2_ENDPOINT');
+      stats.errors.push(err);
       stats.ms = Date.now() - started;
       return stats;
     }
 
+    pipelineLog(`R2 bucket: ${getBucket()}`, 'ok');
+    pipelineLog('Connecting to R2…', 'step');
     const client = createR2Client();
+    pipelineLog('R2 client ready', 'ok');
+
+    pipelineLog('Loading real profiles by country (owners)…', 'step');
     const ownersByCc = await loadOwnersByCountry();
+    for (const [cc, list] of ownersByCc) {
+      pipelineLog(`  ${cc}: ${list.length} profile(s)`, list.length ? 'info' : 'warn');
+    }
     const categoryId = await defaultCategoryId();
+    pipelineLog(`Default category_id: ${categoryId ?? '(none)'}`, 'info');
 
     if (!opts.ingestOnly) {
+      pipelineLog(`Re-signing up to ${maxResign} R2 media URLs…`, 'step');
       await resignExpiring(client, { dryRun, maxResign, stats, timedOut });
+      pipelineLog(`Re-sign done: ${stats.resigned} updated`, stats.resigned ? 'ok' : 'info');
     }
 
     if (opts.resignOnly || timedOut()) {
+      if (timedOut()) pipelineLog('Stopped early (time budget / resignOnly)', 'warn');
       stats.ms = Date.now() - started;
+      pipelineLog(`Finished in ${stats.ms}ms (resign phase only)`, 'step');
       return stats;
     }
 
+    pipelineLog('Discovering complete packs in R2 (Sparks + LongForm)…', 'step');
     const packs = await discoverPacks(client);
     stats.discovered = packs.length;
+    pipelineLog(`Discovered ${packs.length} pack(s) with video.mp4`, 'ok');
 
+    pipelineLog('Loading existing r2: media_path rows from Supabase…', 'step');
     const existing = await loadExistingMediaPaths();
+    pipelineLog(`Already in DB: ${existing.size} R2 media_path row(s)`, 'info');
+
     const missing = packs.filter((p) => !existing.has(p.mediaPath));
     stats.skippedExisting = packs.length - missing.length;
+    pipelineLog(
+      `New packs to ingest: ${missing.length} (skipped existing: ${stats.skippedExisting})`,
+      'step'
+    );
 
-    // Prefer sparks first so feed/player fill faster.
     missing.sort((a, b) => {
       if (a.kind === b.kind) return 0;
       return a.kind === 'spark' ? -1 : 1;
     });
 
+    let n = 0;
     for (const pack of missing) {
-      if (timedOut() || stats.insertedOriginals >= maxOriginals) break;
+      if (timedOut() || stats.insertedOriginals >= maxOriginals) {
+        pipelineLog(
+          timedOut()
+            ? 'Time budget hit — stopping new originals'
+            : `Hit maxOriginals=${maxOriginals}`,
+          'warn'
+        );
+        break;
+      }
 
+      n += 1;
       const poolOwners = ownersByCc.get(pack.countryCode) ?? [];
       const author = pickOwner(poolOwners, pack.mediaPath);
       if (!author) {
         stats.skippedNoOwner += 1;
+        pipelineLog(
+          `[${n}/${missing.length}] SKIP no owner · ${pack.countryCode} · ${pack.kind} · ${pack.videoId}`,
+          'warn'
+        );
         continue;
       }
+
+      pipelineLog(
+        `[${n}/${missing.length}] ${dryRun ? 'DRY ' : ''}INGEST ${pack.kind} · ${pack.countryCode} · ${pack.videoId} · author=${author.userId.slice(0, 8)}…`,
+        'info'
+      );
 
       try {
         const result = await ingestOriginal(client, {
@@ -118,18 +175,35 @@ export async function runContentPipeline(opts: PipelineOptions = {}): Promise<Pi
         if (result === 'ok' || result === 'ok_shared') {
           stats.insertedOriginals += 1;
           existing.add(pack.mediaPath);
-          if (result === 'ok_shared') stats.insertedShares += 1;
+          if (result === 'ok_shared') {
+            stats.insertedShares += 1;
+            pipelineLog(`  → original + feed share created`, 'ok');
+          } else {
+            pipelineLog(`  → original created`, 'ok');
+          }
         } else if (result === 'incomplete') {
           stats.skippedIncomplete += 1;
+          pipelineLog(`  → incomplete pack`, 'warn');
+        } else {
+          pipelineLog(`  → skip (${result})`, 'info');
         }
       } catch (err: any) {
-        stats.errors.push(`ingest ${pack.mediaPath}: ${err?.message ?? err}`);
-        if (stats.errors.length > 20) break;
+        const msg = `ingest ${pack.mediaPath}: ${err?.message ?? err}`;
+        stats.errors.push(msg);
+        pipelineLog(`  → ERROR ${err?.message ?? err}`, 'error');
+        if (stats.errors.length > 20) {
+          pipelineLog('Too many errors — aborting ingest loop', 'error');
+          break;
+        }
       }
     }
 
-    // Ensure spark originals have at least one feed share (owned by a real user).
     if (!timedOut() && stats.insertedShares < maxShares) {
+      pipelineLog(
+        `Backfilling feed spark shares (up to ${maxShares - stats.insertedShares})…`,
+        'step'
+      );
+      const before = stats.insertedShares;
       await ensureSparkShares({
         dryRun,
         maxShares: maxShares - stats.insertedShares,
@@ -138,15 +212,28 @@ export async function runContentPipeline(opts: PipelineOptions = {}): Promise<Pi
         stats,
         timedOut,
       });
+      pipelineLog(
+        `Share backfill: +${stats.insertedShares - before} (total shares this run: ${stats.insertedShares})`,
+        'ok'
+      );
     }
   } catch (err: any) {
     stats.ok = false;
     stats.errors.push(err?.message ?? String(err));
+    pipelineLog(`FATAL: ${err?.message ?? err}`, 'error');
   }
 
   stats.ms = Date.now() - started;
   if (stats.errors.length > 0 && stats.insertedOriginals === 0 && stats.resigned === 0) {
     stats.ok = false;
+  }
+  pipelineLog('──────────────────────────────────────', 'step');
+  pipelineLog(
+    `DONE ok=${stats.ok} · discovered=${stats.discovered} · originals=+${stats.insertedOriginals} · shares=+${stats.insertedShares} · resigned=${stats.resigned} · noOwner=${stats.skippedNoOwner} · existing=${stats.skippedExisting} · ${stats.ms}ms`,
+    stats.ok ? 'ok' : 'error'
+  );
+  if (stats.errors.length) {
+    pipelineLog(`Errors (${stats.errors.length}): ${stats.errors.slice(0, 5).join(' | ')}`, 'error');
   }
   return stats;
 }
@@ -167,6 +254,7 @@ async function loadExistingMediaPaths(): Promise<Set<string>> {
   for (const r of rows) {
     if (r.media_path) set.add(r.media_path);
   }
+  pipelineLog(`DB query: ${rows.length} R2-related post row(s)`, 'info');
   return set;
 }
 
@@ -488,8 +576,11 @@ async function resignExpiring(
     [opts.maxResign]
   );
 
+  pipelineLog(`Re-sign candidates: ${rows.length}`, 'info');
+  let i = 0;
   for (const row of rows) {
     if (opts.timedOut()) break;
+    i += 1;
     const key =
       extractR2KeyFromMediaUrl(row.media_url) ||
       extractR2KeyFromMediaPath(row.media_path || '');
@@ -531,16 +622,19 @@ async function resignExpiring(
 
       if (opts.dryRun) {
         opts.stats.resigned += 1;
-        continue;
+      } else {
+        await pool.query(
+          `update public.posts set media_url = $2, updated_at = now() where id = $1::uuid`,
+          [row.id, next]
+        );
+        opts.stats.resigned += 1;
       }
-
-      await pool.query(
-        `update public.posts set media_url = $2, updated_at = now() where id = $1::uuid`,
-        [row.id, next]
-      );
-      opts.stats.resigned += 1;
+      if (i === 1 || i % 25 === 0 || i === rows.length) {
+        pipelineLog(`  re-sign progress ${i}/${rows.length} (ok=${opts.stats.resigned})`, 'info');
+      }
     } catch (err: any) {
       opts.stats.errors.push(`resign ${row.id}: ${err?.message ?? err}`);
+      pipelineLog(`  re-sign fail ${row.id.slice(0, 8)}…: ${err?.message ?? err}`, 'error');
     }
   }
 }

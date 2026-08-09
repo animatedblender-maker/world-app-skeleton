@@ -1,6 +1,12 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { getPipelineStatus, requestPipelineRun, runPipelineNow } from './jobs.js';
+import {
+  clearPipelineLog,
+  getPipelineLogBuffer,
+  subscribePipelineLog,
+  type PipelineLogLine,
+} from './log.js';
 import { r2Configured } from './r2.js';
 import { kafkaEnabled } from '../kafka/config.js';
 
@@ -174,6 +180,10 @@ function dashboardHtml(flash?: { ok?: boolean; text?: string }): string {
     : '';
   const r2 = st.r2Configured ? 'ready' : 'missing env';
   const kafka = st.kafkaEnabled ? 'on (jobs → matterya.r2.ingest)' : 'off (runs inline)';
+  const buffered = getPipelineLogBuffer();
+  const seedLog = buffered
+    .map((l) => formatLogLineHtml(l))
+    .join('');
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -189,7 +199,7 @@ function dashboardHtml(flash?: { ok?: boolean; text?: string }): string {
       display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; }
     .mark { font-size:11px; font-weight:700; letter-spacing:0.2em; text-transform:uppercase; color:var(--accent); }
     h1 { margin:4px 0 0; font-size:1.35rem; font-weight:500; font-family: ui-serif, Georgia, serif; }
-    main { max-width:720px; margin:0 auto; padding:24px 16px 48px; }
+    main { max-width:900px; margin:0 auto; padding:24px 16px 48px; }
     .card { background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:20px; margin-bottom:16px; }
     .row { display:flex; flex-wrap:wrap; gap:10px; margin-top:12px; }
     button, .btn {
@@ -202,13 +212,26 @@ function dashboardHtml(flash?: { ok?: boolean; text?: string }): string {
       background:#e8e2d8; color:var(--ink); margin-right:6px; }
     .pill.ok { background:#dcfce7; color:#166534; }
     .pill.bad { background:#fee2e2; color:#991b1b; }
+    .pill.run { background:#fef3c7; color:#92400e; }
     .muted { color:var(--muted); font-size:14px; line-height:1.5; }
     pre.stats { background:#1c1917; color:#f5f5f4; padding:14px; border-radius:12px; overflow:auto; font-size:12px; }
+    #log {
+      background:#0c0a09; color:#e7e5e4; padding:14px 16px; border-radius:12px;
+      min-height:280px; max-height:55vh; overflow:auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size:12px; line-height:1.55; white-space:pre-wrap; word-break:break-word;
+    }
+    #log .t { color:#78716c; margin-right:8px; }
+    #log .step { color:#fbbf24; font-weight:600; }
+    #log .ok { color:#4ade80; }
+    #log .warn { color:#fbbf24; }
+    #log .error { color:#f87171; }
+    #log .info { color:#d6d3d1; }
     .flash { padding:12px 14px; border-radius:12px; margin-bottom:16px; font-size:14px; }
     .flash.ok { background:#dcfce7; color:#166534; }
     .flash.bad { background:#fee2e2; color:#991b1b; }
     ul { margin:8px 0 0; padding-left:18px; color:var(--muted); font-size:14px; line-height:1.55; }
     a.out { color:var(--accent); font-size:13px; }
+    #statusLine { font-weight:650; margin-top:10px; min-height:1.2em; }
   </style>
 </head>
 <body>
@@ -226,65 +249,149 @@ function dashboardHtml(flash?: { ok?: boolean; text?: string }): string {
   <main>
     ${flashHtml}
     <div class="card">
-      <span class="pill ${st.r2Configured ? 'ok' : 'bad'}">R2 ${r2}</span>
-      <span class="pill ${st.kafkaEnabled ? 'ok' : ''}">Kafka ${kafka}</span>
-      <span class="pill ${st.running ? 'bad' : 'ok'}">${st.running ? 'running…' : 'idle'}</span>
+      <span id="pillR2" class="pill ${st.r2Configured ? 'ok' : 'bad'}">R2 ${r2}</span>
+      <span id="pillKafka" class="pill ${st.kafkaEnabled ? 'ok' : ''}">Kafka ${kafka}</span>
+      <span id="pillRun" class="pill ${st.running ? 'run' : 'ok'}">${st.running ? 'running…' : 'idle'}</span>
       <p class="muted" style="margin-top:14px">
-        Discovers new packs in the R2 bucket, creates <strong>owned</strong> Sparks (real profiles),
-        creates home-feed <strong>spark shares</strong>, re-signs media URLs, and emits
-        <code>ContentPosted</code> through the Kafka outbox when Kafka is on.
+        Use <strong>Run now</strong> for a full sync. The live log below shows every step.
       </p>
-      <ul>
-        <li>Originals → Sparks player</li>
-        <li>Shares → home feed (newest first after pull-to-refresh)</li>
-        <li>Never invents users — skips countries with no profiles</li>
-      </ul>
     </div>
 
     <div class="card">
       <strong>Run</strong>
-      <p class="muted">“Run now” executes in this API process. “Queue via Kafka” enqueues <code>R2IngestRequested</code> (needs Kafka consumer).</p>
-      <form class="row" method="post" action="/pipeline/run">
-        <input type="hidden" name="mode" value="inline"/>
-        <button type="submit" ${st.running ? 'disabled' : ''}>Run now</button>
-      </form>
-      <form class="row" method="post" action="/pipeline/run" style="margin-top:8px">
-        <input type="hidden" name="mode" value="inline"/>
-        <input type="hidden" name="dryRun" value="1"/>
-        <button class="secondary" type="submit" ${st.running ? 'disabled' : ''}>Dry run</button>
-      </form>
-      <form class="row" method="post" action="/pipeline/run" style="margin-top:8px">
-        <input type="hidden" name="mode" value="inline"/>
-        <input type="hidden" name="resignOnly" value="1"/>
-        <button class="secondary" type="submit" ${st.running ? 'disabled' : ''}>Re-sign URLs only</button>
-      </form>
-      <form class="row" method="post" action="/pipeline/run" style="margin-top:8px">
-        <input type="hidden" name="mode" value="kafka"/>
-        <button class="secondary" type="submit" ${st.running || !st.kafkaEnabled ? 'disabled' : ''}>
+      <p class="muted">Click a button — progress streams live (no blank “waiting” page).</p>
+      <div class="row">
+        <button type="button" id="btnRun" data-mode="run">Run now</button>
+        <button type="button" class="secondary" id="btnDry" data-mode="dry">Dry run</button>
+        <button type="button" class="secondary" id="btnResign" data-mode="resign">Re-sign URLs only</button>
+        <button type="button" class="secondary" id="btnKafka" data-mode="kafka" ${!st.kafkaEnabled ? 'disabled' : ''}>
           Queue via Kafka
         </button>
-      </form>
+        <button type="button" class="secondary" id="btnClear">Clear log</button>
+      </div>
+      <p id="statusLine" class="muted"></p>
     </div>
 
     <div class="card">
-      <strong>Last run</strong>
-      ${last}
+      <strong>Live log</strong>
+      <div id="log">${seedLog || '<span class="muted">Waiting — click Run now…</span>'}</div>
     </div>
 
     <div class="card">
-      <strong>Render env checklist</strong>
-      <ul>
-        <li><code>R2_ACCESS_KEY_ID</code> · <code>R2_SECRET_ACCESS_KEY</code> · <code>R2_ACCOUNT_ID</code> (or <code>R2_ENDPOINT</code>) · <code>R2_BUCKET</code></li>
-        <li><code>CONTENT_CRON_SECRET</code> (any long random string you choose — for curl cron)</li>
-        <li><code>CONTENT_PIPELINE_PASSWORD</code> optional (defaults to reports password)</li>
-        <li>Kafka optional: <code>KAFKA_ENABLED=true</code> + brokers — then cron can enqueue instead of blocking HTTP</li>
-      </ul>
-      <p class="muted">Cron example:<br/>
-      <code>curl -X POST https://api.matterya.com/cron/content-pipeline -H "x-cron-secret: YOUR_SECRET"</code></p>
+      <strong>Last run summary</strong>
+      <div id="lastRun">${last}</div>
     </div>
   </main>
+  <script>
+    const logEl = document.getElementById('log');
+    const statusLine = document.getElementById('statusLine');
+    const pillRun = document.getElementById('pillRun');
+    const buttons = ['btnRun','btnDry','btnResign','btnKafka'].map(id => document.getElementById(id));
+
+    function setRunning(on) {
+      buttons.forEach(b => { if (b) b.disabled = on || (b.id === 'btnKafka' && ${!st.kafkaEnabled}); });
+      if (pillRun) {
+        pillRun.textContent = on ? 'running…' : 'idle';
+        pillRun.className = 'pill ' + (on ? 'run' : 'ok');
+      }
+    }
+
+    function appendLine(line) {
+      if (!logEl) return;
+      if (logEl.querySelector('.muted') && logEl.textContent.includes('Waiting')) logEl.innerHTML = '';
+      const div = document.createElement('div');
+      const level = line.level || 'info';
+      const t = (line.t || '').slice(11, 19);
+      div.innerHTML = '<span class="t">' + t + '</span><span class="' + level + '">' +
+        escapeHtml(line.msg || '') + '</span>';
+      logEl.appendChild(div);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    async function runStream(mode) {
+      setRunning(true);
+      statusLine.textContent = 'Starting…';
+      statusLine.style.color = '';
+      try {
+        const body = new URLSearchParams();
+        body.set('mode', mode === 'kafka' ? 'kafka' : 'inline');
+        if (mode === 'dry') body.set('dryRun', '1');
+        if (mode === 'resign') body.set('resignOnly', '1');
+
+        const res = await fetch('/pipeline/run-stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'text/event-stream' },
+          body: body.toString(),
+          credentials: 'same-origin',
+        });
+        if (!res.ok || !res.body) {
+          const t = await res.text();
+          appendLine({ t: new Date().toISOString(), level: 'error', msg: 'HTTP ' + res.status + ' ' + t.slice(0, 200) });
+          statusLine.textContent = 'Failed to start';
+          statusLine.style.color = '#b91c1c';
+          setRunning(false);
+          return;
+        }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const parts = buf.split('\\n\\n');
+          buf = parts.pop() || '';
+          for (const chunk of parts) {
+            const lines = chunk.split('\\n');
+            for (const ln of lines) {
+              if (!ln.startsWith('data: ')) continue;
+              try {
+                const data = JSON.parse(ln.slice(6));
+                if (data.msg) appendLine(data);
+                if (data.done) {
+                  statusLine.textContent = data.ok
+                    ? 'Done — pull-to-refresh the app feed'
+                    : 'Finished with errors (see log)';
+                  statusLine.style.color = data.ok ? '#166534' : '#b91c1c';
+                  if (data.stats) {
+                    document.getElementById('lastRun').innerHTML =
+                      '<pre class="stats">' + escapeHtml(JSON.stringify({ at: new Date().toISOString(), stats: data.stats }, null, 2)) + '</pre>';
+                  }
+                }
+              } catch (e) { /* ignore parse */ }
+            }
+          }
+        }
+      } catch (e) {
+        appendLine({ t: new Date().toISOString(), level: 'error', msg: String(e && e.message || e) });
+        statusLine.textContent = 'Connection error';
+        statusLine.style.color = '#b91c1c';
+      }
+      setRunning(false);
+    }
+
+    document.getElementById('btnRun')?.addEventListener('click', () => runStream('run'));
+    document.getElementById('btnDry')?.addEventListener('click', () => runStream('dry'));
+    document.getElementById('btnResign')?.addEventListener('click', () => runStream('resign'));
+    document.getElementById('btnKafka')?.addEventListener('click', () => runStream('kafka'));
+    document.getElementById('btnClear')?.addEventListener('click', () => {
+      if (logEl) logEl.innerHTML = '<span class="muted">Log cleared.</span>';
+      fetch('/pipeline/clear-log', { method: 'POST', credentials: 'same-origin' });
+    });
+  </script>
 </body>
 </html>`;
+}
+
+function formatLogLineHtml(l: PipelineLogLine): string {
+  const t = (l.t || '').slice(11, 19);
+  const level = l.level || 'info';
+  return `<div><span class="t">${escapeHtml(t)}</span><span class="${escapeHtml(level)}">${escapeHtml(l.msg)}</span></div>`;
 }
 
 export async function handlePipelineGet(req: Request, res: Response): Promise<void> {
@@ -310,29 +417,77 @@ export function handlePipelineLogout(_req: Request, res: Response): void {
 }
 
 export async function handlePipelineRun(req: Request, res: Response): Promise<void> {
+  // Legacy form POST — redirect to page; use /pipeline/run-stream for live logs.
   if (!hasPipelineAccess(req)) {
     res.redirect(302, '/pipeline');
     return;
   }
-  if (!r2Configured()) {
-    res
-      .status(200)
-      .type('html')
-      .send(
-        dashboardHtml({
-          ok: false,
-          text: 'R2 not configured on this server. Set R2_* env vars on Render and redeploy.',
-        })
-      );
+  res.redirect(302, '/pipeline');
+}
+
+export function handlePipelineClearLog(req: Request, res: Response): void {
+  if (!hasPipelineAccess(req)) {
+    res.status(401).json({ ok: false });
+    return;
+  }
+  clearPipelineLog();
+  res.json({ ok: true });
+}
+
+/**
+ * Live log stream (SSE). Body: mode=inline|kafka, dryRun=1, resignOnly=1
+ */
+export async function handlePipelineRunStream(req: Request, res: Response): Promise<void> {
+  if (!hasPipelineAccess(req)) {
+    res.status(401).type('text').send('unauthorized');
     return;
   }
 
-  const mode = String(req.body?.mode ?? 'inline');
-  const dryRun = String(req.body?.dryRun ?? '') === '1';
-  const resignOnly = String(req.body?.resignOnly ?? '') === '1';
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  if (typeof (res as any).flushHeaders === 'function') {
+    (res as any).flushHeaders();
+  }
+
+  const write = (obj: Record<string, unknown>) => {
+    res.write(`data: ${JSON.stringify(obj)}\n\n`);
+  };
+
+  const unsub = subscribePipelineLog((line) => {
+    write({ t: line.t, level: line.level, msg: line.msg });
+  });
+
+  const mode = String(req.body?.mode ?? req.query.mode ?? 'inline');
+  const dryRun =
+    String(req.body?.dryRun ?? req.query.dryRun ?? '') === '1' ||
+    String(req.body?.dryRun ?? '') === 'true';
+  const resignOnly =
+    String(req.body?.resignOnly ?? req.query.resignOnly ?? '') === '1' ||
+    String(req.body?.resignOnly ?? '') === 'true';
+
+  write({ t: new Date().toISOString(), level: 'step', msg: 'Stream connected — starting pipeline…' });
 
   try {
+    if (!r2Configured()) {
+      write({
+        t: new Date().toISOString(),
+        level: 'error',
+        msg: 'R2 not configured. Set R2_* env vars on Render and redeploy.',
+      });
+      write({ done: true, ok: false });
+      unsub();
+      res.end();
+      return;
+    }
+
     if (mode === 'kafka' && kafkaEnabled()) {
+      write({
+        t: new Date().toISOString(),
+        level: 'step',
+        msg: 'Enqueueing R2IngestRequested on Kafka…',
+      });
       const result = await requestPipelineRun({
         dryRun,
         resignOnly,
@@ -341,14 +496,21 @@ export async function handlePipelineRun(req: Request, res: Response): Promise<vo
         source: 'ops-page-kafka',
       });
       if (result.mode === 'kafka') {
-        res.status(200).type('html').send(
-          dashboardHtml({
-            ok: true,
-            text: `Queued on Kafka (event ${result.eventId ?? '?'}). Consumer will run the pipeline shortly.`,
-          })
-        );
+        write({
+          t: new Date().toISOString(),
+          level: 'ok',
+          msg: `Queued event ${result.eventId ?? '?'} — consumer will process it`,
+        });
+        write({ done: true, ok: true });
+        unsub();
+        res.end();
         return;
       }
+      write({
+        t: new Date().toISOString(),
+        level: 'warn',
+        msg: 'Kafka enqueue failed — falling back to inline run',
+      });
     }
 
     const stats = await runPipelineNow({
@@ -357,20 +519,23 @@ export async function handlePipelineRun(req: Request, res: Response): Promise<vo
       maxOriginals: 40,
       maxShares: 80,
       maxResign: 200,
-      maxMs: 90_000,
-      source: 'ops-page',
+      maxMs: 120_000,
+      source: 'ops-page-stream',
     });
-    res.status(200).type('html').send(
-      dashboardHtml({
-        ok: stats.ok,
-        text: stats.ok
-          ? `Done: +${stats.insertedOriginals} originals, +${stats.insertedShares} shares, ${stats.resigned} resigned (${stats.ms}ms)`
-          : `Finished with errors: ${(stats.errors || []).join('; ') || 'unknown'}`,
-      })
-    );
+    write({
+      done: true,
+      ok: stats.ok,
+      stats,
+    });
   } catch (err: any) {
-    res.status(200).type('html').send(
-      dashboardHtml({ ok: false, text: err?.message ?? 'Pipeline failed' })
-    );
+    write({
+      t: new Date().toISOString(),
+      level: 'error',
+      msg: err?.message ?? String(err),
+    });
+    write({ done: true, ok: false });
+  } finally {
+    unsub();
+    res.end();
   }
 }

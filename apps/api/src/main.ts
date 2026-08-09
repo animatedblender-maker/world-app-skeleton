@@ -57,10 +57,12 @@ import {
 } from './auth/signup-confirm.service.js';
 import { getPipelineStatus, requestPipelineRun, runPipelineNow } from './content-pipeline/jobs.js';
 import {
+  handlePipelineClearLog,
   handlePipelineGet,
   handlePipelineLogin,
   handlePipelineLogout,
   handlePipelineRun,
+  handlePipelineRunStream,
 } from './content-pipeline/pipeline-page.js';
 import { kafkaEnabled } from './kafka/config.js';
 
@@ -248,6 +250,11 @@ app.get('/pipeline/logout', handlePipelineLogout);
 app.post('/pipeline/run', (req, res) => {
   void handlePipelineRun(req, res);
 });
+/** Live SSE log stream for the ops page */
+app.post('/pipeline/run-stream', (req, res) => {
+  void handlePipelineRunStream(req, res);
+});
+app.post('/pipeline/clear-log', handlePipelineClearLog);
 app.get('/pipeline/status', (req, res) => {
   // Public enough for health widgets; no secrets.
   res.json({ ok: true, ...getPipelineStatus() });
