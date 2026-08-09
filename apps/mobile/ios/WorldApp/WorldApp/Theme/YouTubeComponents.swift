@@ -508,19 +508,14 @@ struct YouTubeMiniPlayerBar: View {
         min(52, max(40, 28 * layoutScale))
     }
 
-    /// Video fills the **whole** mini card (width × barHeight).
+    /// Video fills the **whole** mini card (width × barHeight). Full-width is intentional.
     static func videoSize(forBarWidth totalWidth: CGFloat) -> (width: CGFloat, height: CGFloat) {
         (max(1, totalWidth), barHeight)
     }
 
     var body: some View {
         GeometryReader { geo in
-            let playSize = Self.playButtonSize
-            let btn = Self.controlButtonSize
-            let pad: CGFloat = 10
-
             ZStack {
-                // Full-bleed video under chrome.
                 Theme.ink
 
                 if embedsVideo {
@@ -537,7 +532,6 @@ struct YouTubeMiniPlayerBar: View {
                             showsControls: false,
                             startTime: YouTubeCatalogService.shared.playbackPosition(for: post.id),
                             persistsPositionOnTeardown: true,
-                            // Fill the mini card completely (crop if needed).
                             fillsFrame: true
                         )
                     } else {
@@ -548,8 +542,15 @@ struct YouTubeMiniPlayerBar: View {
                             frameStyle: .card
                         )
                     }
+                    // Local video path: chrome lives on this bar.
+                    HubMiniPlayerChrome(
+                        isPlaying: $isPlaying,
+                        isMuted: $isMuted,
+                        onClose: onClose
+                    )
                 } else {
-                    // Hole for GlobalHubPlaybackLayer — entire card is the video surface.
+                    // Continuous player paints video above this hole; chrome is drawn
+                    // on GlobalHubPlaybackLayer so buttons stay visible (higher z-order).
                     Color.clear
                         .overlay(
                             GeometryReader { g in
@@ -559,79 +560,6 @@ struct YouTubeMiniPlayerBar: View {
                                 )
                             }
                         )
-                }
-
-                // Soft scrims so controls stay readable on bright frames.
-                VStack(spacing: 0) {
-                    LinearGradient(
-                        colors: [.black.opacity(0.45), .clear],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .frame(height: 48)
-                    Spacer(minLength: 0)
-                    LinearGradient(
-                        colors: [.clear, .black.opacity(0.5)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .frame(height: 56)
-                }
-                .allowsHitTesting(false)
-
-                // Chrome over video — X top-right (never bottom), play + mute bottom-right.
-                VStack(spacing: 0) {
-                    HStack(alignment: .top) {
-                        Spacer(minLength: 0)
-                        Button(action: onClose) {
-                            Image(systemName: "xmark")
-                                .font(.system(size: btn * 0.36, weight: .bold))
-                                .foregroundStyle(.white)
-                                .frame(width: btn, height: btn)
-                                .background(.black.opacity(0.45), in: Circle())
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Close mini player")
-                    }
-                    .padding(.top, pad)
-                    .padding(.trailing, pad)
-
-                    Spacer(minLength: 0)
-
-                    HStack(spacing: 10) {
-                        Spacer(minLength: 0)
-
-                        Button {
-                            isMuted.toggle()
-                        } label: {
-                            Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                                .font(.system(size: btn * 0.38, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: btn, height: btn)
-                                .background(.black.opacity(0.45), in: Circle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(isMuted ? "Unmute" : "Mute")
-
-                        Button {
-                            isPlaying.toggle()
-                        } label: {
-                            ZStack {
-                                Circle()
-                                    .fill(Theme.accentBright)
-                                    .frame(width: playSize, height: playSize)
-                                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                                    .font(.system(size: playSize * 0.34, weight: .bold))
-                                    .foregroundStyle(Theme.paper)
-                                    .offset(x: isPlaying ? 0 : 1)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(isPlaying ? "Pause" : "Play")
-                    }
-                    .padding(.trailing, pad)
-                    .padding(.bottom, pad)
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
@@ -650,6 +578,92 @@ struct YouTubeMiniPlayerBar: View {
                 .frame(height: 0.5)
         }
         .clipped()
+    }
+}
+
+/// Mini chrome drawn **on top of** the continuous video (X top-right, mute+play bottom-right).
+struct HubMiniPlayerChrome: View {
+    @Binding var isPlaying: Bool
+    @Binding var isMuted: Bool
+    let onClose: () -> Void
+
+    private var btn: CGFloat { YouTubeMiniPlayerBar.controlButtonSize }
+    private var playSize: CGFloat { YouTubeMiniPlayerBar.playButtonSize }
+    private let pad: CGFloat = 10
+
+    var body: some View {
+        ZStack {
+            VStack(spacing: 0) {
+                LinearGradient(
+                    colors: [.black.opacity(0.5), .clear],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 52)
+                Spacer(minLength: 0)
+                LinearGradient(
+                    colors: [.clear, .black.opacity(0.55)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 64)
+            }
+            .allowsHitTesting(false)
+
+            VStack(spacing: 0) {
+                HStack {
+                    Spacer(minLength: 0)
+                    Button(action: onClose) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: btn * 0.38, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: btn, height: btn)
+                            .background(.black.opacity(0.55), in: Circle())
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Close mini player")
+                }
+                .padding(.top, pad)
+                .padding(.trailing, pad)
+
+                Spacer(minLength: 0)
+
+                HStack(spacing: 12) {
+                    Spacer(minLength: 0)
+                    Button {
+                        isMuted.toggle()
+                    } label: {
+                        Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                            .font(.system(size: btn * 0.4, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: btn, height: btn)
+                            .background(.black.opacity(0.55), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(isMuted ? "Unmute" : "Mute")
+
+                    Button {
+                        isPlaying.toggle()
+                    } label: {
+                        ZStack {
+                            Circle()
+                                .fill(Theme.accentBright)
+                                .frame(width: playSize, height: playSize)
+                            Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                                .font(.system(size: playSize * 0.34, weight: .bold))
+                                .foregroundStyle(Theme.paper)
+                                .offset(x: isPlaying ? 0 : 1)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(isPlaying ? "Pause" : "Play")
+                }
+                .padding(.trailing, pad)
+                .padding(.bottom, pad)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

@@ -1219,7 +1219,8 @@ final class AppState {
         // Never stop/pause mini — GlobalHubPlaybackLayer only resizes the stage.
         hubPlaybackPlaying = true
         if animated {
-            withAnimation(.spring(response: 0.30, dampingFraction: 0.92, blendDuration: 0.12)) {
+            // Match GlobalHubPlaybackLayer morph — easeOut, no mid-path spring stall.
+            withAnimation(.easeOut(duration: 0.24)) {
                 hubPlaybackExpanded = false
             }
         } else {
@@ -1260,7 +1261,7 @@ final class AppState {
         navigationPath.removeAll()
         selectedTab = .hubs
         hubPlaybackPlaying = true
-        withAnimation(.spring(response: 0.30, dampingFraction: 0.92, blendDuration: 0.12)) {
+        withAnimation(.easeOut(duration: 0.24)) {
             hubPlaybackExpanded = true
         }
     }
