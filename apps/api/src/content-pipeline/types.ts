@@ -33,6 +33,8 @@ export type PipelineOptions = {
   maxResign?: number;
   /** Max share/origin caption repairs this tick (replace seeder fluff with R2 meta text) */
   maxCaptionRepairs?: number;
+  /** Max posts to expand from the old 25-comment seed cap this tick */
+  maxCommentRepairs?: number;
   /** Soft deadline ms from start */
   maxMs?: number;
   /** Only resign (skip discover/ingest) */
@@ -49,6 +51,8 @@ export type PipelineStats = {
   insertedShares: number;
   /** Share bodies rewritten to real R2 meta captions */
   repairedCaptions: number;
+  /** Posts whose comment threads were expanded from full R2 comments.json */
+  repairedComments: number;
   skippedNoOwner: number;
   skippedExisting: number;
   skippedIncomplete: number;

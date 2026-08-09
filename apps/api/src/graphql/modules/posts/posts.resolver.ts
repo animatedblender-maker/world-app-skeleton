@@ -32,7 +32,8 @@ export const postsResolvers = {
       return await svc().postById(args.post_id, ctx.user?.id ?? null);
     },
     commentsByPost: async (_: any, args: any, ctx: any) => {
-      const limit = typeof args.limit === 'number' ? args.limit : 20;
+      // Default high enough for full R2 threads (often 50–300+). Client can still pass a limit.
+      const limit = typeof args.limit === 'number' ? args.limit : 2000;
       const before = args?.before ?? null;
       return await svc().commentsByPost(args.post_id ?? '', limit, before, ctx.user?.id ?? null);
     },

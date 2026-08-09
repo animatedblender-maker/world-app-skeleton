@@ -92,6 +92,7 @@ export async function runPipelineNow(
       insertedOriginals: 0,
       insertedShares: 0,
       repairedCaptions: 0,
+      repairedComments: 0,
       skippedNoOwner: 0,
       skippedExisting: 0,
       skippedIncomplete: 0,

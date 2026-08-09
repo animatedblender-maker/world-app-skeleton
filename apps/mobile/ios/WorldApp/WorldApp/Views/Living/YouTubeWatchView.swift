@@ -175,7 +175,8 @@ struct YouTubeWatchView: View {
         }
 
         // PostsService loads demo Reddit threads + merges local replies (hub / post_* / GraphQL).
-        let loaded = (try? await PostsService.shared.listComments(currentPost.id, limit: 50)) ?? []
+        // Full R2 threads often exceed 50 — match Sparks sheet (2000).
+        let loaded = (try? await PostsService.shared.listComments(currentPost.id, limit: 2000)) ?? []
         inlineComments = loaded
         if isHubContent || loaded.count > currentPost.commentCount {
             currentPost = currentPost.withEngagement(

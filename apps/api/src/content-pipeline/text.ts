@@ -139,24 +139,46 @@ export function markShareBody(originId: string, caption: string): string {
   return `${header}\n${cap}`;
 }
 
+/**
+ * Full comments.json from R2 — **no artificial cap**.
+ * Some packs have 50–300+ comments; they all belong in post_comments.
+ */
 export function extractCommentTexts(raw: unknown): string[] {
   let items: unknown[] = [];
   if (Array.isArray(raw)) items = raw;
   else if (raw && typeof raw === 'object') {
     const o = raw as Record<string, unknown>;
-    for (const k of ['comments', 'data', 'items', 'results']) {
+    for (const k of ['comments', 'data', 'items', 'results', 'comment_list']) {
       if (Array.isArray(o[k])) {
         items = o[k] as unknown[];
         break;
       }
     }
   }
-  const out: string[] = [];
+  // Prefer higher-engagement comments first when order is messy.
+  const scored: Array<{ text: string; likes: number }> = [];
   for (const item of items) {
+    if (typeof item === 'string') {
+      const text = cleanText(item, 5000);
+      if (text) scored.push({ text, likes: 0 });
+      continue;
+    }
     if (!item || typeof item !== 'object') continue;
     const c = item as Record<string, unknown>;
     const text = cleanText(c.text ?? c.body ?? c.content ?? c.comment, 5000);
-    if (text) out.push(text);
+    if (!text) continue;
+    const likes = Number(c.digg_count ?? c.like_count ?? c.likes ?? 0) || 0;
+    scored.push({ text, likes });
   }
-  return out.slice(0, 80);
+  scored.sort((a, b) => b.likes - a.likes);
+  // De-dupe identical text while keeping order.
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const row of scored) {
+    const key = row.text.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row.text);
+  }
+  return out;
 }

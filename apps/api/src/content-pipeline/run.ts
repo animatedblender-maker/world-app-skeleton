@@ -32,6 +32,7 @@ function emptyStats(dryRun: boolean): PipelineStats {
     insertedOriginals: 0,
     insertedShares: 0,
     repairedCaptions: 0,
+    repairedComments: 0,
     skippedNoOwner: 0,
     skippedExisting: 0,
     skippedIncomplete: 0,
@@ -220,6 +221,23 @@ export async function runContentPipeline(opts: PipelineOptions = {}): Promise<Pi
       });
       pipelineLog(`Caption repairs: ${stats.repairedCaptions}`, stats.repairedCaptions ? 'ok' : 'info');
     }
+
+    // Expand posts that were seeded with the old 25-comment cap using full R2 comments.json.
+    if (!timedOut() && !opts.resignOnly) {
+      pipelineLog('Repairing truncated R2 comment threads (old 25-cap)…', 'step');
+      await repairR2Comments({
+        client,
+        dryRun,
+        maxPosts: opts.maxCommentRepairs ?? 80,
+        ownersByCc,
+        stats,
+        timedOut,
+      });
+      pipelineLog(
+        `Comment repairs: ${stats.repairedComments}`,
+        stats.repairedComments ? 'ok' : 'info'
+      );
+    }
   } catch (err: any) {
     stats.ok = false;
     stats.errors.push(err?.message ?? String(err));
@@ -232,7 +250,7 @@ export async function runContentPipeline(opts: PipelineOptions = {}): Promise<Pi
   }
   pipelineLog('──────────────────────────────────────', 'step');
   pipelineLog(
-    `DONE ok=${stats.ok} · discovered=${stats.discovered} · originals=+${stats.insertedOriginals} · shares=+${stats.insertedShares} · captionsFixed=${stats.repairedCaptions} · resigned=${stats.resigned} · noOwner=${stats.skippedNoOwner} · existing=${stats.skippedExisting} · ${stats.ms}ms`,
+    `DONE ok=${stats.ok} · discovered=${stats.discovered} · originals=+${stats.insertedOriginals} · shares=+${stats.insertedShares} · captionsFixed=${stats.repairedCaptions} · commentsFixed=${stats.repairedComments} · resigned=${stats.resigned} · noOwner=${stats.skippedNoOwner} · existing=${stats.skippedExisting} · ${stats.ms}ms`,
     stats.ok ? 'ok' : 'error'
   );
   if (stats.errors.length) {
@@ -357,29 +375,23 @@ async function ingestOriginal(
     /* table may not exist */
   }
 
-  // Seed a few comments from R2 json (other real users as authors).
+  // Seed **all** comments from R2 comments.json (no 25-cap — packs often have 50–300+).
   try {
     const commentsRaw = await getObjectJson(client, pack.commentsKey);
     const texts = extractCommentTexts(commentsRaw);
-    const commentAuthors = owners.filter((o) => o.userId !== author.userId);
-    const cPool = commentAuthors.length ? commentAuthors : owners;
-    let i = 0;
-    for (const text of texts.slice(0, 25)) {
-      const cAuthor = cPool[i % cPool.length]!;
-      i += 1;
-      await pool.query(
-        `
-        insert into public.post_comments (post_id, author_id, body, created_at, updated_at)
-        values ($1::uuid, $2::uuid, $3, now() - ($4 || ' minutes')::interval, now())
-        `,
-        [postId, cAuthor.userId, text, String(2 + (i % 200))]
-      );
+    const n = await seedCommentsForPost({
+      postId,
+      texts,
+      owners,
+      authorUserId: author.userId,
+    });
+    if (n > 0) {
+      pipelineLog(`  comments seeded: ${n} (from R2 comments.json, full set)`, 'ok');
+    } else if (texts.length === 0) {
+      pipelineLog(`  comments: none in R2 pack`, 'info');
     }
-    if (texts.length) {
-      pipelineLog(`  comments seeded: ${Math.min(25, texts.length)}`, 'info');
-    }
-  } catch {
-    /* comments optional */
+  } catch (err: any) {
+    pipelineLog(`  comments seed failed: ${err?.message ?? err}`, 'warn');
   }
 
   void emitContentPosted({
@@ -608,6 +620,223 @@ async function ensureSparkShares(opts: {
     } catch (err: any) {
       opts.stats.errors.push(`share ${row.id}: ${err?.message ?? err}`);
     }
+  }
+}
+
+/**
+ * Insert every comment text from R2 and set posts.comment_count to the real count.
+ * Uses batch inserts for packs with 100+ comments.
+ */
+async function seedCommentsForPost(opts: {
+  postId: string;
+  texts: string[];
+  owners: ProfileOwner[];
+  authorUserId: string;
+}): Promise<number> {
+  const texts = opts.texts.filter((t) => t && t.trim());
+  if (!texts.length) {
+    await pool.query(
+      `update public.posts set comment_count = 0, updated_at = now() where id = $1::uuid`,
+      [opts.postId]
+    );
+    return 0;
+  }
+
+  const commentAuthors = opts.owners.filter((o) => o.userId !== opts.authorUserId);
+  const cPool = commentAuthors.length ? commentAuthors : opts.owners;
+  if (!cPool.length) return 0;
+
+  const chunkSize = 40;
+  let inserted = 0;
+  for (let start = 0; start < texts.length; start += chunkSize) {
+    const chunk = texts.slice(start, start + chunkSize);
+    const values: string[] = [];
+    const params: unknown[] = [];
+    chunk.forEach((text, j) => {
+      const i = start + j;
+      const author = cPool[i % cPool.length]!;
+      const base = params.length;
+      // $1 post, $2 author, $3 body, $4 minutes ago
+      values.push(
+        `($${base + 1}::uuid, $${base + 2}::uuid, $${base + 3}, now() - ($${base + 4} || ' minutes')::interval, now())`
+      );
+      params.push(opts.postId, author.userId, text, String(2 + (i % 5000)));
+    });
+    const { rowCount } = await pool.query(
+      `
+      insert into public.post_comments (post_id, author_id, body, created_at, updated_at)
+      values ${values.join(',')}
+      `,
+      params
+    );
+    inserted += rowCount ?? chunk.length;
+  }
+
+  await pool.query(
+    `
+    update public.posts
+    set comment_count = (
+      select count(*)::int from public.post_comments where post_id = $1::uuid
+    ),
+    updated_at = now()
+    where id = $1::uuid
+    `,
+    [opts.postId]
+  );
+  return inserted;
+}
+
+/**
+ * For existing R2 originals that were capped at 25 comments, re-read comments.json
+ * and append any missing texts (does not delete user-written comments).
+ */
+async function repairR2Comments(opts: {
+  client: S3Client;
+  dryRun: boolean;
+  maxPosts: number;
+  ownersByCc: Map<string, ProfileOwner[]>;
+  stats: PipelineStats;
+  timedOut: () => boolean;
+}): Promise<void> {
+  const { rows } = await pool.query<{
+    id: string;
+    media_path: string | null;
+    country_code: string | null;
+    author_id: string;
+    comment_count: number;
+  }>(
+    `
+    select p.id, p.media_path, p.country_code, p.author_id,
+           coalesce(
+             (select count(*)::int from public.post_comments c where c.post_id = p.id),
+             0
+           ) as comment_count
+    from public.posts p
+    where p.media_path like 'r2:%'
+      and p.media_path not like 'r2-share:%'
+      and p.media_path not like 'r2-hubshare:%'
+      and (
+        coalesce(
+          (select count(*)::int from public.post_comments c where c.post_id = p.id),
+          0
+        ) < 40
+      )
+    order by p.created_at desc
+    limit $1
+    `,
+    [opts.maxPosts]
+  );
+
+  pipelineLog(`  comment-repair candidates: ${rows.length}`, 'info');
+  let fixed = 0;
+
+  for (const row of rows) {
+    if (opts.timedOut()) break;
+    const key = extractR2KeyFromMediaPath(row.media_path || '');
+    if (!key || !key.endsWith('/video.mp4')) continue;
+    const commentsKey = key.replace(/\/video\.mp4$/i, '/comments.json');
+
+    try {
+      const raw = await getObjectJson(opts.client, commentsKey);
+      const texts = extractCommentTexts(raw);
+      if (texts.length <= row.comment_count) {
+        // Already full (or R2 has fewer). Still sync count.
+        if (!opts.dryRun && row.comment_count !== texts.length) {
+          await pool.query(
+            `
+            update public.posts
+            set comment_count = (
+              select count(*)::int from public.post_comments where post_id = $1::uuid
+            )
+            where id = $1::uuid
+            `,
+            [row.id]
+          );
+        }
+        continue;
+      }
+
+      // Load existing bodies to append only missing texts.
+      const { rows: existing } = await pool.query<{ body: string }>(
+        `select body from public.post_comments where post_id = $1::uuid`,
+        [row.id]
+      );
+      const have = new Set(existing.map((e) => e.body.trim().toLowerCase()));
+      const missing = texts.filter((t) => !have.has(t.trim().toLowerCase()));
+      if (!missing.length) continue;
+
+      if (opts.dryRun) {
+        fixed += 1;
+        continue;
+      }
+
+      const cc = (row.country_code || '').toUpperCase();
+      const owners = opts.ownersByCc.get(cc) ?? [];
+      const n = await seedCommentsForPost({
+        postId: row.id,
+        texts: missing,
+        owners: owners.length ? owners : [{ userId: row.author_id, countryCode: cc, countryName: null, cityName: null }],
+        authorUserId: row.author_id,
+      });
+      // seedCommentsForPost sets count from total rows — good.
+      if (n > 0) {
+        fixed += 1;
+        // Mirror onto spark shares of this origin (feed cards).
+        await mirrorCommentsToShares(row.id, missing, owners, row.author_id);
+        if (fixed === 1 || fixed % 20 === 0) {
+          pipelineLog(
+            `  comments repaired on ${fixed} posts · last +${n} (had ${row.comment_count}, r2 has ${texts.length})`,
+            'info'
+          );
+        }
+      }
+    } catch (err: any) {
+      opts.stats.errors.push(`comments ${row.id}: ${err?.message ?? err}`);
+    }
+  }
+
+  opts.stats.repairedComments = (opts.stats.repairedComments ?? 0) + fixed;
+  pipelineLog(`  comment repair done: ${fixed} post(s) expanded`, fixed ? 'ok' : 'info');
+}
+
+/** Copy newly seeded origin comments onto r2-share posts that point at this origin. */
+async function mirrorCommentsToShares(
+  originId: string,
+  texts: string[],
+  owners: ProfileOwner[],
+  originAuthorId: string
+): Promise<void> {
+  if (!texts.length) return;
+  const { rows: shares } = await pool.query<{ id: string; author_id: string; comment_count: number }>(
+    `
+    select id, author_id,
+           coalesce((select count(*)::int from public.post_comments c where c.post_id = p.id), 0) as comment_count
+    from public.posts p
+    where (
+      shared_post_id = $1::uuid
+      or body like $2
+    )
+    and media_path like 'r2-share:%'
+    limit 20
+    `,
+    [originId, `%__spark_share__|sid=${originId}%`]
+  );
+
+  for (const share of shares) {
+    if (share.comment_count >= texts.length) continue;
+    const { rows: existing } = await pool.query<{ body: string }>(
+      `select body from public.post_comments where post_id = $1::uuid`,
+      [share.id]
+    );
+    const have = new Set(existing.map((e) => e.body.trim().toLowerCase()));
+    const missing = texts.filter((t) => !have.has(t.trim().toLowerCase()));
+    if (!missing.length) continue;
+    await seedCommentsForPost({
+      postId: share.id,
+      texts: missing,
+      owners,
+      authorUserId: share.author_id || originAuthorId,
+    });
   }
 }
 

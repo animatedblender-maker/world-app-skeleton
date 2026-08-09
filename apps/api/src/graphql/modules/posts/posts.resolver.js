@@ -37,7 +37,7 @@ export const postsResolvers = {
       return await svc().postById(args.post_id, ctx.user?.id ?? null);
     },
     commentsByPost: async (_, args, ctx) => {
-      const limit = typeof args.limit === 'number' ? args.limit : 20;
+      const limit = typeof args.limit === 'number' ? args.limit : 2000;
       const before = args?.before ?? null;
       return await svc().commentsByPost(args.post_id ?? '', limit, before, ctx.user?.id ?? null);
     },
