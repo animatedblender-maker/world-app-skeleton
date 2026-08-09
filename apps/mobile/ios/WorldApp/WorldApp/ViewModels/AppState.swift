@@ -1218,7 +1218,7 @@ final class AppState {
         // Never stop/pause mini — GlobalHubPlaybackLayer only resizes the stage.
         // Feed/profile autoplay must yield while mini is on.
         hubPlaybackPlaying = true
-        withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.88)) {
+        withAnimation(.interactiveSpring(response: 0.42, dampingFraction: 0.86)) {
             hubPlaybackExpanded = false
         }
         FeedVideoFocus.shared.resetAll()
@@ -1248,7 +1248,7 @@ final class AppState {
         navigationPath.removeAll()
         selectedTab = .hubs
         hubPlaybackPlaying = true
-        withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.88)) {
+        withAnimation(.interactiveSpring(response: 0.42, dampingFraction: 0.86)) {
             hubPlaybackExpanded = true
         }
     }

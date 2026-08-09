@@ -71,17 +71,21 @@ struct GlobalHubPlaybackLayer: View {
                 .ignoresSafeArea(edges: .top)
             }
         }
-        // Snappy expand/mini — long springs left a black full-stage ghost at the top.
-        .animation(.easeInOut(duration: 0.18), value: expanded)
-        .animation(.easeInOut(duration: 0.18), value: hasDockSlot)
-        .animation(.easeInOut(duration: 0.15), value: appState.hubPlaybackPost?.id)
-        .animation(.easeInOut(duration: 0.15), value: appState.navigationPath.isEmpty)
+        // Smooth morph expand ↔ mini (interactive spring matches pull-down release).
+        .animation(.interactiveSpring(response: 0.42, dampingFraction: 0.86), value: expanded)
+        .animation(.interactiveSpring(response: 0.38, dampingFraction: 0.88), value: hasDockSlot)
+        .animation(.easeOut(duration: 0.2), value: appState.hubPlaybackPost?.id)
+        .animation(.easeOut(duration: 0.2), value: appState.navigationPath.isEmpty)
         .onChange(of: expanded) { _, isExpanded in
-            dragOffset = 0
-            isPullingMinimize = false
             if !isExpanded {
-                // Force mini layout next frame so we never linger full-stage black.
+                // Clear pull offset after layout settles into mini.
+                withAnimation(.interactiveSpring(response: 0.32, dampingFraction: 0.9)) {
+                    dragOffset = 0
+                    isPullingMinimize = false
+                }
+            } else {
                 dragOffset = 0
+                isPullingMinimize = false
             }
         }
         .onChange(of: appState.hubPlaybackPost?.id) { _, _ in
@@ -110,33 +114,36 @@ struct GlobalHubPlaybackLayer: View {
             // Continuous video surface — stable id across expand/mini/dock.
             // Mini chrome is owned by MainTabView’s bottom stack (flush on the tab bar).
             // This layer only draws into the video hole — never a full-width black bar.
-            playerSurface(for: post, showControls: expanded)
+            playerSurface(for: post, showControls: expanded && !isPullingMinimize)
                 .frame(width: layout.width, height: layout.height)
-                // Mini: no ink fill outside the video hole (was a black bar on top while collapsing).
+                // Ink only under expanded stage (16:9 letterbox); mini hole stays transparent.
                 .background(expanded ? Theme.ink : Color.clear)
                 .clipShape(
                     RoundedRectangle(
-                        cornerRadius: expanded ? 0 : 10,
+                        cornerRadius: expanded ? (isPullingMinimize ? 12 : 0) : 8,
                         style: .continuous
                     )
                 )
                 .shadow(
-                    color: expanded ? .clear : Theme.ink.opacity(0.18),
-                    radius: expanded ? 0 : 8,
-                    y: expanded ? 0 : 3
+                    color: expanded
+                        ? Theme.ink.opacity(isPullingMinimize ? 0.22 : 0)
+                        : Theme.ink.opacity(0.18),
+                    radius: expanded ? (isPullingMinimize ? 16 : 0) : 8,
+                    y: expanded ? (isPullingMinimize ? 8 : 0) : 3
                 )
-                // Disable implicit frame animation on collapse so video snaps into the hole
-                // instead of leaving a stretched black rect across the top.
-                .transaction { tx in
-                    if !expanded { tx.animation = nil }
-                }
-                .offset(x: layout.x, y: layout.y + (expanded ? dragOffset : 0))
+                // Live pull: shrink + slide toward mini as the finger moves.
+                .scaleEffect(
+                    expanded ? pullScale : 1,
+                    anchor: .top
+                )
+                .offset(x: layout.x, y: layout.y + (expanded ? dragOffset * 0.92 : 0))
+                .opacity(expanded && isPullingMinimize ? Double(1 - min(dragProgress * 0.12, 0.12)) : 1)
                 .overlay {
-                    if expanded, isPullingMinimize, dragOffset > 24 {
+                    if expanded, isPullingMinimize, dragOffset > 28 {
                         VStack {
                             Spacer()
                             Label(
-                                "Release for mini player",
+                                dragProgress > 0.55 ? "Release for mini player" : "Pull down for mini",
                                 systemImage: "rectangle.bottomhalf.inset.filled"
                             )
                             .font(.caption.weight(.semibold))
@@ -145,6 +152,7 @@ struct GlobalHubPlaybackLayer: View {
                             .padding(.vertical, 8)
                             .background(Theme.ink.opacity(0.55), in: Capsule())
                             .padding(.bottom, 16)
+                            .transition(.opacity.combined(with: .move(edge: .bottom)))
                         }
                         .allowsHitTesting(false)
                     }
@@ -260,8 +268,8 @@ struct GlobalHubPlaybackLayer: View {
                 postID: post.id,
                 showsControls: showControls,
                 loops: false,
-                // Full-bleed — never black bars on sides or top.
-                fillsFrame: true,
+                // Aspect-fit on a true 16:9 stage — never crop hub long-form.
+                fillsFrame: false,
                 isMuted: mutedBinding,
                 allowsFullscreen: showControls,
                 onReady: {
@@ -302,13 +310,25 @@ struct GlobalHubPlaybackLayer: View {
         appState.stopHubPlayback()
     }
 
+    /// 0…1 progress while pulling expanded stage toward mini.
+    private var dragProgress: CGFloat {
+        min(max(dragOffset / 220, 0), 1)
+    }
+
+    /// Subtle shrink while dragging — eases into the mini morph.
+    private var pullScale: CGFloat {
+        guard expanded, isPullingMinimize else { return 1 }
+        return 1 - dragProgress * 0.12
+    }
+
     private var minimizeGesture: some Gesture {
-        DragGesture(minimumDistance: 14, coordinateSpace: .local)
+        DragGesture(minimumDistance: 10, coordinateSpace: .local)
             .onChanged { value in
                 guard expanded else { return }
                 var offset = dragOffset
                 var dragging = isPullingMinimize
                 MatteryaPullDownDismiss.applyChanged(value, offset: &offset, isDragging: &dragging)
+                // Follow the finger immediately (no laggy spring on change).
                 dragOffset = offset
                 isPullingMinimize = dragging
             }
@@ -318,26 +338,22 @@ struct GlobalHubPlaybackLayer: View {
                     isPullingMinimize = false
                     return
                 }
-                var offset = dragOffset
-                var dragging = isPullingMinimize
-                MatteryaPullDownDismiss.applyEnded(
-                    value,
-                    offset: &offset,
-                    isDragging: &dragging,
-                    dismiss: {
-                        dragOffset = 0
+                let shouldMini = MatteryaPullDownDismiss.shouldDismiss(value)
+                    || dragOffset > 110
+                if shouldMini {
+                    // Keep current offset so the spring morph continues from the finger,
+                    // then collapse into the mini slot.
+                    withAnimation(.interactiveSpring(response: 0.42, dampingFraction: 0.86)) {
                         isPullingMinimize = false
                         appState.minimizeHubPlayback()
                     }
-                )
-                if dragging == false, offset != 0 {
-                    withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
-                        dragOffset = 0
-                    }
+                    // Offset clears in onChange(of: expanded).
                 } else {
-                    dragOffset = offset
+                    withAnimation(.interactiveSpring(response: 0.38, dampingFraction: 0.84)) {
+                        dragOffset = 0
+                        isPullingMinimize = false
+                    }
                 }
-                isPullingMinimize = dragging
             }
     }
 }

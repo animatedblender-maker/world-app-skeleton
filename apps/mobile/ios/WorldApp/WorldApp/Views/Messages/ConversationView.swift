@@ -176,12 +176,6 @@ struct ConversationView: View {
                 )
                 // Video hole reports HubContinuousVideoSlotKey from YouTubeMiniPlayerBar (embedsVideo: false).
                 .padding(.bottom, 0)
-                .background(Theme.surface)
-                .overlay(alignment: .top) {
-                    Rectangle()
-                        .fill(Theme.border)
-                        .frame(height: 0.5)
-                }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 

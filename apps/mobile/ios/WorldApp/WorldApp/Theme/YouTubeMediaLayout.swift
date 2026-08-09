@@ -54,28 +54,24 @@ enum YouTubeMediaLayout {
     /// Prefetch + display MUST match or ImageCache keys miss and every row re-downloads.
     static let hubsListThumbMaxPixel: CGFloat = 320
 
-    /// Hubs watch stage height — large (≈ half the area above the tab bar), never smaller than 16:9.
-    /// Video uses `.resizeAspectFill` so the stage is always edge-to-edge (no black bars).
+    /// Hubs watch stage = exact **16:9** of the container width.
+    /// Pair with `fillsFrame: false` (aspectFit) so long-form never crops — letterbox only if source ≠ 16:9.
     static func hubsContinuousStageHeight(containerWidth: CGFloat) -> CGFloat {
         let w = max(1, containerWidth)
-        let contentH = hubsContentColumnHeight
         let classic16x9 = w / aspect
-        // Tall watch stage (user-preferred) — about half the content column above the tab bar.
-        let halfAboveTab = contentH * 0.48
-        let preferred = max(classic16x9, halfAboveTab)
-        let maxH = max(classic16x9, contentH - hubsWatchMetaReserve)
-        return min(preferred, maxH)
+        let contentH = hubsContentColumnHeight
+        // Never taller than 16:9 (that was cropping landscape clips). Cap if screen is tiny.
+        let maxH = max(180, contentH - hubsWatchMetaReserve)
+        return min(classic16x9, maxH)
     }
 
-    /// Embedded watch player — same tall stage as continuous hubs playback.
+    /// Embedded watch player — same true 16:9 stage as continuous hubs playback.
     static func watchPlayerHeight(containerWidth: CGFloat, containerHeight: CGFloat) -> CGFloat {
         let w = max(1, containerWidth)
         let classic16x9 = w / aspect
         if containerHeight > 200 {
-            let half = containerHeight * 0.48
-            let preferred = max(classic16x9, half)
-            let maxH = max(classic16x9, containerHeight - hubsWatchMetaReserve)
-            return min(preferred, maxH)
+            let maxH = max(180, containerHeight - hubsWatchMetaReserve)
+            return min(classic16x9, maxH)
         }
         return hubsContinuousStageHeight(containerWidth: w)
     }
@@ -487,6 +483,7 @@ struct PlayFeedLinkCard: View {
                     postID: post.id,
                     showsControls: true,
                     loops: false,
+                    fillsFrame: false,
                     isMuted: feedMutedBinding,
                     allowsFullscreen: false,
                     onReady: {
@@ -511,7 +508,7 @@ struct PlayFeedLinkCard: View {
                     startTime: YouTubeCatalogService.shared.playbackPosition(for: post.id),
                     persistsPositionOnTeardown: true,
                     sharesFeedMute: true,
-                    fillsFrame: true,
+                    fillsFrame: false,
                     preloadsWhenInactive: true,
                     onViewed: { Task { await PostsService.shared.recordView(post) } }
                 )

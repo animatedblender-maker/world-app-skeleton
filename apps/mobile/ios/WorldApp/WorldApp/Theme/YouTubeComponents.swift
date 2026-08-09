@@ -464,69 +464,41 @@ struct YouTubeMiniPlayerBar: View {
     @Binding var isPlaying: Bool
     @Binding var isMuted: Bool
 
-    /// Screen height for sizing (key window when available).
-    private static var screenHeight: CGFloat {
-        if let scene = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene })
-            .first(where: { $0.activationState == .foregroundActive }) {
-            let height = scene.screen.bounds.height
-            if height > 1 { return height }
-        }
-        return UIScreen.main.bounds.height
-    }
+    /// Compact strip: **video + transport only** (no title, no white meta column).
+    static var barHeight: CGFloat { 64 }
 
-    /// Mini bar height ≈ **¼ of the screen** (clamped so it never eats the whole phone).
-    /// Layout structure stays the same; only scale grows.
-    static var barHeight: CGFloat {
-        let quarter = screenHeight * 0.25
-        // Keep above tab bar usable; never tiny, never more than ~28% on short phones.
-        return min(max(quarter, 160), min(screenHeight * 0.28, 230))
-    }
+    static var layoutScale: CGFloat { 1 }
 
-    /// Scale vs a 100pt reference design (padding, buttons, fonts grow together).
-    static var layoutScale: CGFloat {
-        min(2.1, max(1.35, barHeight / 100))
-    }
-
-    /// Video fills the bar height (edge-to-edge vertically — no white bands).
+    /// 16:9 video height fills the strip minus hairline padding.
     static var videoHeight: CGFloat {
-        max(72, barHeight - videoEdgeInset * 2)
+        max(52, barHeight - videoEdgeInset * 2)
     }
-    /// Ideal 16:9 width for that full-height slot.
     static var videoWidth: CGFloat {
         videoHeight * 16 / 9
     }
-    /// Hard reserve for title + play/mute + close — scales with bar, never below ~120pt.
-    static var metaMinWidth: CGFloat {
-        max(120, min(160, 100 * layoutScale))
+    /// Buttons only — play · mute · close.
+    static var controlsWidth: CGFloat {
+        controlButtonSize * 3 + 8 * 2 + 10
     }
-    /// Space content lists should leave so the bar doesn’t cover the last row.
     static var contentBottomInset: CGFloat {
         barHeight + Theme.tabBarHeight
     }
-    /// Tiny horizontal inset only — vertical is full bleed inside the bar.
-    static var barContentLeading: CGFloat { 8 * min(layoutScale, 1.4) }
-    static var barContentTrailing: CGFloat { 10 * min(layoutScale, 1.5) }
-    /// Hairline inset so the video still clips cleanly inside rounded corners.
-    static var videoEdgeInset: CGFloat { 4 }
+    static var barContentLeading: CGFloat { 8 }
+    static var barContentTrailing: CGFloat { 8 }
+    static var videoEdgeInset: CGFloat { 5 }
     static let videoBottomInset: CGFloat = 0
 
-    static var controlButtonSize: CGFloat {
-        min(40, max(30, 22 * layoutScale))
-    }
+    static var controlButtonSize: CGFloat { 32 }
 
-    /// Video slot fills bar **height** proportionally; width is 16:9 of that height
-    /// (capped so title/controls still fit). Continuous player uses aspectFill inside.
+    /// Video is 16:9 of full bar height; remaining width is for the three control buttons.
     static func videoSize(forBarWidth totalWidth: CGFloat) -> (width: CGFloat, height: CGFloat) {
         let hPad = barContentLeading + barContentTrailing
-        let gap: CGFloat = 8 * min(layoutScale, 1.4)
-        let availableW = max(96, totalWidth - hPad - gap - metaMinWidth)
-        // Full bar height minus hairline — kills the white bands above/below.
-        let h = max(64, barHeight - videoEdgeInset * 2)
+        let gap: CGFloat = 10
+        let availableW = max(96, totalWidth - hPad - gap - controlsWidth)
+        let h = max(48, barHeight - videoEdgeInset * 2)
         var w = h * 16 / 9
         if w > availableW {
             w = availableW
-            // Keep full height even when width is capped — player fills with aspectFill.
         }
         return (w, h)
     }
@@ -534,12 +506,9 @@ struct YouTubeMiniPlayerBar: View {
     var body: some View {
         GeometryReader { geo in
             let size = Self.videoSize(forBarWidth: geo.size.width)
-            let scale = Self.layoutScale
             let btn = Self.controlButtonSize
-            let hPad = Self.barContentLeading
-            let edge = Self.videoEdgeInset
-            HStack(alignment: .center, spacing: 8 * min(scale, 1.4)) {
-                // Video slot — fills bar height; continuous player paints into this hole.
+            HStack(alignment: .center, spacing: 10) {
+                // Video hole only — continuous layer paints into this rect.
                 ZStack {
                     Theme.ink
 
@@ -557,13 +526,12 @@ struct YouTubeMiniPlayerBar: View {
                                 showsControls: false,
                                 startTime: YouTubeCatalogService.shared.playbackPosition(for: post.id),
                                 persistsPositionOnTeardown: true,
-                                fillsFrame: true
+                                fillsFrame: false
                             )
                         } else {
                             YouTubeVideoThumbnail(post: post, maxPixelSize: 420, showsPlayIcon: false, frameStyle: .card)
                         }
                     } else {
-                        // Hole for GlobalHubPlaybackLayer — size must match reported preference exactly.
                         Color.clear
                             .overlay(
                                 GeometryReader { g in
@@ -574,137 +542,81 @@ struct YouTubeMiniPlayerBar: View {
                                 }
                             )
                     }
-
-                    VStack {
-                        Spacer(minLength: 0)
-                        HStack {
-                            Spacer(minLength: 0)
-                            Image(systemName: "arrow.up.left.and.arrow.down.right")
-                                .font(.system(size: 9 * min(scale, 1.4), weight: .bold))
-                                .foregroundStyle(.white.opacity(0.9))
-                                .padding(4 * min(scale, 1.3))
-                                .background(.black.opacity(0.42), in: Circle())
-                                .padding(5)
-                        }
-                    }
-                    .allowsHitTesting(false)
-
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(Theme.border.opacity(0.55), lineWidth: 0.5)
-                        .allowsHitTesting(false)
                 }
                 .frame(width: size.width, height: size.height)
-                .frame(maxHeight: .infinity)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.white.opacity(0.12), lineWidth: 0.5)
+                )
                 .contentShape(Rectangle())
                 .onTapGesture(perform: onExpand)
                 .accessibilityLabel("Expand video")
                 .accessibilityAddTraits(.isButton)
-                .layoutPriority(0)
 
-                // Title + controls — same card structure, scaled with bar height.
-                VStack(alignment: .leading, spacing: 6 * min(scale, 1.4)) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(post.displayHeadline ?? post.authorDisplayName)
-                            .font(.system(size: min(17, 13 * scale), weight: .semibold))
-                            .foregroundStyle(Theme.ink)
-                            .lineLimit(2)
-                            .multilineTextAlignment(.leading)
-                            .minimumScaleFactor(0.85)
-                        if post.displayHeadline != nil {
-                            Text(post.authorDisplayName)
-                                .font(.system(size: min(13, 11 * scale)))
-                                .foregroundStyle(Theme.inkMuted)
-                                .lineLimit(1)
+                Spacer(minLength: 0)
+
+                // Transport only — no title / no empty white column.
+                HStack(spacing: 8) {
+                    Button {
+                        isPlaying.toggle()
+                    } label: {
+                        ZStack {
+                            Circle()
+                                .fill(Theme.accentBright)
+                                .frame(width: btn, height: btn)
+                            Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                                .font(.system(size: btn * 0.36, weight: .bold))
+                                .foregroundStyle(Theme.paper)
                         }
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                    .onTapGesture(perform: onExpand)
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(isPlaying ? "Pause" : "Play")
 
-                    Spacer(minLength: 4)
-
-                    HStack(spacing: 6 * min(scale, 1.3)) {
-                        Button {
-                            isPlaying.toggle()
-                        } label: {
-                            ZStack {
-                                Circle()
-                                    .fill(Theme.accentBright)
-                                    .frame(width: btn, height: btn)
-                                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                                    .font(.system(size: btn * 0.34, weight: .bold))
-                                    .foregroundStyle(Theme.paper)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(isPlaying ? "Pause" : "Play")
-
-                        Button {
-                            isMuted.toggle()
-                        } label: {
-                            Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                                .font(.system(size: btn * 0.38, weight: .semibold))
-                                .foregroundStyle(Theme.ink)
-                                .frame(width: btn, height: btn)
-                                .background(Theme.canvasMuted, in: Circle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(isMuted ? "Unmute" : "Mute")
-
-                        Spacer(minLength: 4)
-
-                        Button(action: onClose) {
-                            Image(systemName: "xmark")
-                                .font(.system(size: btn * 0.34, weight: .bold))
-                                .foregroundStyle(Theme.ink)
-                                .frame(width: btn, height: btn)
-                                .background(Theme.canvasMuted, in: Circle())
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Close mini player")
+                    Button {
+                        isMuted.toggle()
+                    } label: {
+                        Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                            .font(.system(size: btn * 0.38, weight: .semibold))
+                            .foregroundStyle(Theme.paper.opacity(0.92))
+                            .frame(width: btn, height: btn)
+                            .background(Color.white.opacity(0.12), in: Circle())
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(isMuted ? "Unmute" : "Mute")
+
+                    Button(action: onClose) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: btn * 0.34, weight: .bold))
+                            .foregroundStyle(Theme.paper.opacity(0.92))
+                            .frame(width: btn, height: btn)
+                            .background(Color.white.opacity(0.12), in: Circle())
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Close mini player")
                 }
-                .frame(minWidth: Self.metaMinWidth, maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                .padding(.vertical, 8 * min(scale, 1.3))
-                .layoutPriority(2)
             }
-            .padding(.leading, hPad)
+            .padding(.leading, Self.barContentLeading)
             .padding(.trailing, Self.barContentTrailing)
-            // No large vertical padding — video fills bar height; only hairline edge.
-            .padding(.vertical, edge)
+            .padding(.vertical, Self.videoEdgeInset)
             .frame(width: geo.size.width, height: geo.size.height, alignment: .center)
         }
         .frame(maxWidth: .infinity)
         .frame(height: Self.barHeight)
+        // Dark strip flush with video — no light “paper” white space.
         .background {
-            UnevenRoundedRectangle(
-                topLeadingRadius: 14,
-                bottomLeadingRadius: 0,
-                bottomTrailingRadius: 0,
-                topTrailingRadius: 14,
-                style: .continuous
-            )
-            .fill(Theme.surface)
-            .shadow(color: Theme.ink.opacity(0.10), radius: 8, y: -3)
-            .contentShape(Rectangle())
-            .onTapGesture(perform: onExpand)
+            Rectangle()
+                .fill(Theme.ink)
+                .shadow(color: Theme.ink.opacity(0.28), radius: 10, y: -2)
+                .contentShape(Rectangle())
+                .onTapGesture(perform: onExpand)
         }
-        .overlay(alignment: .bottom) {
-            Theme.divider.frame(height: 0.5)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(Color.white.opacity(0.08))
+                .frame(height: 0.5)
         }
-        .overlay(
-            UnevenRoundedRectangle(
-                topLeadingRadius: 14,
-                bottomLeadingRadius: 0,
-                bottomTrailingRadius: 0,
-                topTrailingRadius: 14,
-                style: .continuous
-            )
-            .stroke(Theme.border.opacity(0.6), lineWidth: 0.5)
-            .allowsHitTesting(false)
-        )
         .clipped()
     }
 }

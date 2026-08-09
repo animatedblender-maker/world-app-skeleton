@@ -212,8 +212,8 @@ struct MatteryaHubPlayerView: View {
     /// When false (mini player), hide chrome but keep the same AVPlayer alive.
     var showsControls: Bool = true
     var loops: Bool = false
-    /// Always fill the stage (`.resizeAspectFill`) — never black bars on sides or top.
-    var fillsFrame: Bool = true
+    /// When true, crop to fill (Sparks). Hubs long-form should pass **false** (aspectFit, no crop).
+    var fillsFrame: Bool = false
     @Binding var isMuted: Bool
     var onReady: (() -> Void)? = nil
     /// Keeps AppState.hubPlaybackPlaying in sync when chrome play/pause is used.
@@ -235,7 +235,7 @@ struct MatteryaHubPlayerView: View {
         postID: String? = nil,
         showsControls: Bool = true,
         loops: Bool = false,
-        fillsFrame: Bool = true,
+        fillsFrame: Bool = false,
         isMuted: Binding<Bool> = .constant(false),
         allowsFullscreen: Bool = true,
         onReady: (() -> Void)? = nil,

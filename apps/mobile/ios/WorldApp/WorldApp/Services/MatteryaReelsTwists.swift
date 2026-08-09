@@ -51,8 +51,9 @@ enum ReelsTwistHaptics {
 }
 
 enum MatteryaPullDownDismiss {
-    static let dismissDistance: CGFloat = 160
-    static let predictedDismissDistance: CGFloat = 300
+    /// Slightly shorter so pull-to-mini feels responsive without accidental dismiss.
+    static let dismissDistance: CGFloat = 120
+    static let predictedDismissDistance: CGFloat = 240
 
     static func shouldDismiss(_ value: DragGesture.Value) -> Bool {
         value.translation.height > dismissDistance
@@ -66,7 +67,8 @@ enum MatteryaPullDownDismiss {
     ) {
         let vertical = value.translation.height
         let horizontal = abs(value.translation.width)
-        guard vertical > 28, vertical > horizontal * 0.85 else {
+        // Engage sooner (16pt) so the mini morph tracks the finger quickly.
+        guard vertical > 16, vertical > horizontal * 0.75 else {
             if isDragging, vertical <= 4 {
                 isDragging = false
                 offset = 0
@@ -74,7 +76,13 @@ enum MatteryaPullDownDismiss {
             return
         }
         isDragging = true
-        offset = vertical
+        // Light rubber-band past ~280pt so long pulls stay smooth.
+        if vertical > 280 {
+            let extra = vertical - 280
+            offset = 280 + extra * 0.35
+        } else {
+            offset = vertical
+        }
     }
 
     static func applyEnded(
