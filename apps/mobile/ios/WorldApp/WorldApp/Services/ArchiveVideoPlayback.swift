@@ -218,6 +218,11 @@ struct MatteryaHubPlayerView: View {
     var onReady: (() -> Void)? = nil
     /// Keeps AppState.hubPlaybackPlaying in sync when chrome play/pause is used.
     var onPlayingChange: ((Bool) -> Void)? = nil
+    /// Mini player / external chrome: (currentSeconds, durationSeconds).
+    var onProgress: ((Double, Double) -> Void)? = nil
+    /// When set, seek once then clear via `onSeekConsumed`.
+    var seekToSeconds: Double? = nil
+    var onSeekConsumed: (() -> Void)? = nil
 
     var allowsFullscreen: Bool = true
 
@@ -239,7 +244,10 @@ struct MatteryaHubPlayerView: View {
         isMuted: Binding<Bool> = .constant(false),
         allowsFullscreen: Bool = true,
         onReady: (() -> Void)? = nil,
-        onPlayingChange: ((Bool) -> Void)? = nil
+        onPlayingChange: ((Bool) -> Void)? = nil,
+        onProgress: ((Double, Double) -> Void)? = nil,
+        seekToSeconds: Double? = nil,
+        onSeekConsumed: (() -> Void)? = nil
     ) {
         self.url = url
         self.posterURL = posterURL
@@ -253,6 +261,9 @@ struct MatteryaHubPlayerView: View {
         self.allowsFullscreen = allowsFullscreen
         self.onReady = onReady
         self.onPlayingChange = onPlayingChange
+        self.onProgress = onProgress
+        self.seekToSeconds = seekToSeconds
+        self.onSeekConsumed = onSeekConsumed
     }
 
     var body: some View {
@@ -281,6 +292,7 @@ struct MatteryaHubPlayerView: View {
                     guard !isScrubbing else { return }
                     let playing = bridge.controller?.isPlaying
                     bridge.publishProgress(current: current, duration: duration, playing: playing)
+                    onProgress?(current, duration)
                     if let postID, current >= 0.5 {
                         YouTubeCatalogService.shared.notePlaybackPosition(
                             current,
@@ -288,7 +300,9 @@ struct MatteryaHubPlayerView: View {
                             duration: duration > 0 ? duration : nil
                         )
                     }
-                }
+                },
+                seekToSeconds: seekToSeconds,
+                onSeekConsumed: onSeekConsumed
             )
 
             if showsControls {

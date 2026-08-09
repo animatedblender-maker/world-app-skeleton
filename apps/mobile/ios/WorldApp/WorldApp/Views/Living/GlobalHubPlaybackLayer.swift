@@ -27,6 +27,10 @@ struct GlobalHubPlaybackLayer: View {
     @State private var isPullingMinimize = false
     /// Aspect-fill only when fully mini — applied after morph settles.
     @State private var preferMiniFill = false
+    /// Mini timeline scrubber state (fed by MatteryaHubPlayerView progress).
+    @State private var miniCurrentSeconds: Double = 0
+    @State private var miniDurationSeconds: Double = 0
+    @State private var miniSeekToSeconds: Double? = nil
 
     private var expanded: Bool { appState.hubPlaybackExpanded }
     private var docked: Bool { appState.hubPlaybackDockInChat }
@@ -104,6 +108,9 @@ struct GlobalHubPlaybackLayer: View {
             dragOffset = 0
             isPullingMinimize = false
             preferMiniFill = !appState.hubPlaybackExpanded
+            miniCurrentSeconds = 0
+            miniDurationSeconds = 0
+            miniSeekToSeconds = nil
         }
         .onChange(of: appState.hubPlaybackPlaying) { _, playing in
             guard playing, appState.hubPlaybackPost != nil else { return }
@@ -137,7 +144,13 @@ struct GlobalHubPlaybackLayer: View {
                     HubMiniPlayerChrome(
                         isPlaying: playingBinding,
                         isMuted: mutedBinding,
-                        onClose: { appState.stopHubPlayback() }
+                        onClose: { appState.stopHubPlayback() },
+                        currentSeconds: miniCurrentSeconds,
+                        durationSeconds: miniDurationSeconds,
+                        onSeek: { seconds in
+                            miniCurrentSeconds = seconds
+                            miniSeekToSeconds = seconds
+                        }
                     )
                     .frame(width: layout.width, height: layout.height)
                     .allowsHitTesting(true)
@@ -243,7 +256,13 @@ struct GlobalHubPlaybackLayer: View {
                 },
                 onPlayingChange: { playing in
                     appState.hubPlaybackPlaying = playing
-                }
+                },
+                onProgress: { current, duration in
+                    miniCurrentSeconds = current
+                    if duration > 0.25 { miniDurationSeconds = duration }
+                },
+                seekToSeconds: miniSeekToSeconds,
+                onSeekConsumed: { miniSeekToSeconds = nil }
             )
             .id("hub-continuous-\(post.id)")
         } else {
