@@ -44,17 +44,10 @@ struct GlobalHubPlaybackLayer: View {
         YouTubeMiniPlayerBar.barHeight
     }
 
-    private var floatingAboveTabBar: Bool {
-        !expanded && !hasDockSlot && appState.navigationPath.isEmpty
-    }
-
-    private var floatingBottomClearance: CGFloat {
-        if hasDockSlot { return 0 }
-        if floatingAboveTabBar {
-            return Theme.tabBarHeight
-        }
-        return 0
-    }
+    /// Extra space above the bottom of *this* layer’s GeometryReader.
+    /// Tab bar clearance is applied by MainTabView (`.padding(.bottom, tabBarHeight)`)
+    /// so the UIKit host never covers the menu — do **not** subtract tab height here.
+    private var floatingBottomClearance: CGFloat { 0 }
 
     private var showTransportChrome: Bool {
         // Hide transport when collapsed by comment-scroll (too short for scrubber).
@@ -222,9 +215,11 @@ struct GlobalHubPlaybackLayer: View {
             }
         }
 
+        // Sit flush on the bottom of this layer. MainTabView already inset the layer
+        // above the tab bar, so mini never overlays the bottom menu.
         let barW = geo.size.width
         let size = YouTubeMiniPlayerBar.videoSize(forBarWidth: barW)
-        let barTop = geo.size.height - floatingBottomClearance - miniStripHeight
+        let barTop = max(0, geo.size.height - floatingBottomClearance - miniStripHeight)
         return PlayerLayout(x: 0, y: barTop, width: size.width, height: size.height)
     }
 

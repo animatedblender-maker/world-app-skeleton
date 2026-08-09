@@ -98,11 +98,15 @@ struct MainTabView: View {
                 .zIndex(50)
             }
 
-            // Continuous AVPlayer — above mini chrome, below tab bar.
+            // Continuous AVPlayer — above mini chrome.
+            // Critical: inset by tab-bar height so the UIKit pass-through host never
+            // covers BottomTabBar (UIViewRepresentable often paints above pure SwiftUI
+            // siblings even with a lower zIndex — that made mini video sit on the menu).
             GlobalHubPlaybackLayer(dockSlotGlobal: hubContinuousDockSlotGlobal)
+                .padding(.bottom, appState.navigationPath.isEmpty ? Theme.tabBarHeight : 0)
                 .zIndex(55)
 
-            // Tab bar pinned to the physical bottom of the ZStack.
+            // Tab bar pinned to the physical bottom of the ZStack — always above mini.
             if appState.navigationPath.isEmpty {
                 BottomTabBar()
                     .frame(maxWidth: .infinity)
