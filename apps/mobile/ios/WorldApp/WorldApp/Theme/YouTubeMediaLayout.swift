@@ -43,7 +43,7 @@ enum YouTubeMediaLayout {
     }
 
     /// Space reserved under the continuous player for title + channel (always visible).
-    static let hubsWatchMetaReserve: CGFloat = 120
+    static let hubsWatchMetaReserve: CGFloat = 100
 
     /// Content column height **above** the custom bottom tab bar (tab bar not included).
     static var hubsContentColumnHeight: CGFloat {
@@ -54,24 +54,27 @@ enum YouTubeMediaLayout {
     /// Prefetch + display MUST match or ImageCache keys miss and every row re-downloads.
     static let hubsListThumbMaxPixel: CGFloat = 320
 
-    /// Hubs watch stage = exact **16:9** of the container width.
-    /// Pair with `fillsFrame: false` (aspectFit) so long-form never crops — letterbox only if source ≠ 16:9.
+    /// Hubs watch stage — **tall** (~half the area above the tab bar), never shorter than 16:9.
+    /// Video uses aspectFit (`fillsFrame: false`) so landscape never crops; taller stage just gives
+    /// more presence (letterbox only if source is wider than the stage).
     static func hubsContinuousStageHeight(containerWidth: CGFloat) -> CGFloat {
         let w = max(1, containerWidth)
         let classic16x9 = w / aspect
         let contentH = hubsContentColumnHeight
-        // Never taller than 16:9 (that was cropping landscape clips). Cap if screen is tiny.
-        let maxH = max(180, contentH - hubsWatchMetaReserve)
-        return min(classic16x9, maxH)
+        // ~55% of content column — bigger player, still room for title / channel / actions.
+        let preferred = max(classic16x9, contentH * 0.55)
+        let maxH = max(classic16x9, contentH - hubsWatchMetaReserve)
+        return min(preferred, maxH)
     }
 
-    /// Embedded watch player — same true 16:9 stage as continuous hubs playback.
+    /// Embedded watch player — same tall stage as continuous hubs playback.
     static func watchPlayerHeight(containerWidth: CGFloat, containerHeight: CGFloat) -> CGFloat {
         let w = max(1, containerWidth)
         let classic16x9 = w / aspect
         if containerHeight > 200 {
-            let maxH = max(180, containerHeight - hubsWatchMetaReserve)
-            return min(classic16x9, maxH)
+            let preferred = max(classic16x9, containerHeight * 0.55)
+            let maxH = max(classic16x9, containerHeight - hubsWatchMetaReserve)
+            return min(preferred, maxH)
         }
         return hubsContinuousStageHeight(containerWidth: w)
     }
