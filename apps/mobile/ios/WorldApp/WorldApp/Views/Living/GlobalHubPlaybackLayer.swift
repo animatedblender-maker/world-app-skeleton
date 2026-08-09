@@ -225,14 +225,11 @@ struct GlobalHubPlaybackLayer: View {
             }
         }
 
-        // Fallback before preference publishes — full bar height video (no white bands).
+        // Fallback before preference publishes — full mini card (edge-to-edge video).
         let barW = geo.size.width
         let size = YouTubeMiniPlayerBar.videoSize(forBarWidth: barW)
-        let x = YouTubeMiniPlayerBar.barContentLeading
         let barTop = geo.size.height - floatingBottomClearance - miniStripHeight
-        // Align to top of video slot (hairline inset), not vertically centered in bar.
-        let y = barTop + YouTubeMiniPlayerBar.videoEdgeInset
-        return PlayerLayout(x: x, y: y, width: size.width, height: size.height)
+        return PlayerLayout(x: 0, y: barTop, width: size.width, height: size.height)
     }
 
     // MARK: - Player
@@ -268,8 +265,8 @@ struct GlobalHubPlaybackLayer: View {
                 postID: post.id,
                 showsControls: showControls,
                 loops: false,
-                // Aspect-fit on a true 16:9 stage — never crop hub long-form.
-                fillsFrame: false,
+                // Expanded: aspect-fit 16:9 (no crop). Mini: fill the whole card under chrome.
+                fillsFrame: !showControls,
                 isMuted: mutedBinding,
                 allowsFullscreen: showControls,
                 onReady: {
