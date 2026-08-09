@@ -464,38 +464,60 @@ struct YouTubeMiniPlayerBar: View {
     @Binding var isPlaying: Bool
     @Binding var isMuted: Bool
 
-    /// Compact strip: **video + transport only** (no title, no white meta column).
-    static var barHeight: CGFloat { 64 }
+    /// Screen height for sizing (key window when available).
+    private static var screenHeight: CGFloat {
+        if let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first(where: { $0.activationState == .foregroundActive }) {
+            let height = scene.screen.bounds.height
+            if height > 1 { return height }
+        }
+        return UIScreen.main.bounds.height
+    }
 
-    static var layoutScale: CGFloat { 1 }
+    /// Mini bar = **¼ of the screen** (clamped for short / tall phones).
+    /// Layout stays video + transport only (no title / white meta column).
+    static var barHeight: CGFloat {
+        let quarter = screenHeight * 0.25
+        // Floor so controls stay usable; cap so it never eats more than ~28% on short phones.
+        return min(max(quarter, 160), min(screenHeight * 0.28, 230))
+    }
+
+    /// Scale controls with bar height (vs a 100pt reference).
+    static var layoutScale: CGFloat {
+        min(2.0, max(1.35, barHeight / 100))
+    }
 
     /// 16:9 video height fills the strip minus hairline padding.
     static var videoHeight: CGFloat {
-        max(52, barHeight - videoEdgeInset * 2)
+        max(72, barHeight - videoEdgeInset * 2)
     }
     static var videoWidth: CGFloat {
         videoHeight * 16 / 9
     }
-    /// Buttons only — play · mute · close.
+    /// Buttons only — play · mute · close (scaled with bar).
     static var controlsWidth: CGFloat {
-        controlButtonSize * 3 + 8 * 2 + 10
+        controlButtonSize * 3 + 10 * 2 + 12
     }
     static var contentBottomInset: CGFloat {
         barHeight + Theme.tabBarHeight
     }
-    static var barContentLeading: CGFloat { 8 }
-    static var barContentTrailing: CGFloat { 8 }
-    static var videoEdgeInset: CGFloat { 5 }
+    static var barContentLeading: CGFloat { 10 }
+    static var barContentTrailing: CGFloat { 12 }
+    static var videoEdgeInset: CGFloat { 8 }
     static let videoBottomInset: CGFloat = 0
 
-    static var controlButtonSize: CGFloat { 32 }
+    static var controlButtonSize: CGFloat {
+        min(48, max(34, 24 * layoutScale))
+    }
 
     /// Video is 16:9 of full bar height; remaining width is for the three control buttons.
     static func videoSize(forBarWidth totalWidth: CGFloat) -> (width: CGFloat, height: CGFloat) {
         let hPad = barContentLeading + barContentTrailing
-        let gap: CGFloat = 10
-        let availableW = max(96, totalWidth - hPad - gap - controlsWidth)
-        let h = max(48, barHeight - videoEdgeInset * 2)
+        let gap: CGFloat = 12
+        let availableW = max(120, totalWidth - hPad - gap - controlsWidth)
+        // Full bar height minus hairline — no empty bands above/below the video.
+        let h = max(72, barHeight - videoEdgeInset * 2)
         var w = h * 16 / 9
         if w > availableW {
             w = availableW
@@ -507,8 +529,9 @@ struct YouTubeMiniPlayerBar: View {
         GeometryReader { geo in
             let size = Self.videoSize(forBarWidth: geo.size.width)
             let btn = Self.controlButtonSize
-            HStack(alignment: .center, spacing: 10) {
-                // Video hole only — continuous layer paints into this rect.
+            let gap: CGFloat = 12
+            HStack(alignment: .center, spacing: gap) {
+                // Video hole only — continuous layer paints into this rect (full bar height).
                 ZStack {
                     Theme.ink
 
@@ -544,9 +567,10 @@ struct YouTubeMiniPlayerBar: View {
                     }
                 }
                 .frame(width: size.width, height: size.height)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .frame(maxHeight: .infinity)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .stroke(Color.white.opacity(0.12), lineWidth: 0.5)
                 )
                 .contentShape(Rectangle())
@@ -557,7 +581,7 @@ struct YouTubeMiniPlayerBar: View {
                 Spacer(minLength: 0)
 
                 // Transport only — no title / no empty white column.
-                HStack(spacing: 8) {
+                VStack(spacing: 12 * min(Self.layoutScale, 1.5)) {
                     Button {
                         isPlaying.toggle()
                     } label: {
@@ -596,6 +620,7 @@ struct YouTubeMiniPlayerBar: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("Close mini player")
                 }
+                .frame(width: Self.controlsWidth - 12)
             }
             .padding(.leading, Self.barContentLeading)
             .padding(.trailing, Self.barContentTrailing)
@@ -608,7 +633,7 @@ struct YouTubeMiniPlayerBar: View {
         .background {
             Rectangle()
                 .fill(Theme.ink)
-                .shadow(color: Theme.ink.opacity(0.28), radius: 10, y: -2)
+                .shadow(color: Theme.ink.opacity(0.32), radius: 12, y: -3)
                 .contentShape(Rectangle())
                 .onTapGesture(perform: onExpand)
         }
