@@ -590,23 +590,27 @@ struct HubMiniPlayerChrome: View {
     private var btn: CGFloat { YouTubeMiniPlayerBar.controlButtonSize }
     private var playSize: CGFloat { YouTubeMiniPlayerBar.playButtonSize }
     private let pad: CGFloat = 10
+    /// Glass-style chips — light so video stays visible underneath.
+    private let chipFill = Color.white.opacity(0.18)
+    private let chipStroke = Color.white.opacity(0.28)
 
     var body: some View {
         ZStack {
+            // Very light scrims only — keep video readable.
             VStack(spacing: 0) {
                 LinearGradient(
-                    colors: [.black.opacity(0.5), .clear],
+                    colors: [.black.opacity(0.22), .clear],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 44)
+                Spacer(minLength: 0)
+                LinearGradient(
+                    colors: [.clear, .black.opacity(0.28)],
                     startPoint: .top,
                     endPoint: .bottom
                 )
                 .frame(height: 52)
-                Spacer(minLength: 0)
-                LinearGradient(
-                    colors: [.clear, .black.opacity(0.55)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 64)
             }
             .allowsHitTesting(false)
 
@@ -616,9 +620,10 @@ struct HubMiniPlayerChrome: View {
                     Button(action: onClose) {
                         Image(systemName: "xmark")
                             .font(.system(size: btn * 0.38, weight: .bold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.white.opacity(0.95))
                             .frame(width: btn, height: btn)
-                            .background(.black.opacity(0.55), in: Circle())
+                            .background(chipFill, in: Circle())
+                            .overlay(Circle().stroke(chipStroke, lineWidth: 0.5))
                             .contentShape(Circle())
                     }
                     .buttonStyle(.plain)
@@ -636,9 +641,10 @@ struct HubMiniPlayerChrome: View {
                     } label: {
                         Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                             .font(.system(size: btn * 0.4, weight: .semibold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.white.opacity(0.95))
                             .frame(width: btn, height: btn)
-                            .background(.black.opacity(0.55), in: Circle())
+                            .background(chipFill, in: Circle())
+                            .overlay(Circle().stroke(chipStroke, lineWidth: 0.5))
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(isMuted ? "Unmute" : "Mute")
@@ -648,11 +654,12 @@ struct HubMiniPlayerChrome: View {
                     } label: {
                         ZStack {
                             Circle()
-                                .fill(Theme.accentBright)
+                                .fill(Theme.accentBright.opacity(0.72))
                                 .frame(width: playSize, height: playSize)
+                                .overlay(Circle().stroke(Color.white.opacity(0.35), lineWidth: 0.5))
                             Image(systemName: isPlaying ? "pause.fill" : "play.fill")
                                 .font(.system(size: playSize * 0.34, weight: .bold))
-                                .foregroundStyle(Theme.paper)
+                                .foregroundStyle(Theme.paper.opacity(0.95))
                                 .offset(x: isPlaying ? 0 : 1)
                         }
                     }
