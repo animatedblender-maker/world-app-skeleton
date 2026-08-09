@@ -174,11 +174,11 @@ struct PostCardView: View {
                     .foregroundStyle(Theme.ink)
             }
 
-            if post.commentCount > 0 {
+            if post.displayCommentCount > 0, !commentsExpanded {
                 Button {
                     commentsExpanded.toggle()
                 } label: {
-                    Text("\(post.commentCount) \(post.commentCount == 1 ? "comment" : "comments")")
+                    Text("View \(post.displayCommentCount) \(post.displayCommentCount == 1 ? "comment" : "comments")")
                         .font(.subheadline)
                         .foregroundStyle(Theme.inkMuted)
                 }

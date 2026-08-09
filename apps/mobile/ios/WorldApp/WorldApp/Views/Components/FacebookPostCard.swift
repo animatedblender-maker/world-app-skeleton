@@ -24,9 +24,16 @@ struct FacebookPostCard: View {
 
     @State private var commentsExpanded = false
     /// How many comments to show before “Load more” (stays on the card).
-    @State private var visibleCommentLimit = 8
+    @State private var visibleCommentLimit = 3
     @State private var inlineComments: [PostComment] = []
+    /// Hydrated after load so “View N comments” survives remounts even if post.commentCount was 0.
+    @State private var loadedCommentCount: Int = 0
     @State private var commentError: String?
+
+    /// Prefer live loaded count, then origin/share max from the model.
+    private var effectiveCommentCount: Int {
+        max(post.displayCommentCount, loadedCommentCount, inlineComments.count)
+    }
     @State private var showEditSheet = false
     @State private var showDeleteConfirm = false
     @State private var showReportConfirm = false
@@ -297,13 +304,13 @@ struct FacebookPostCard: View {
                     comments: $inlineComments,
                     showsComposer: true,
                     maxVisibleComments: visibleCommentLimit,
-                    totalCommentCount: max(post.commentCount, inlineComments.count),
+                    totalCommentCount: effectiveCommentCount,
                     onViewAllComments: {
                         // Load more in place — never open post detail. Grow until full thread.
                         withAnimation(.easeInOut(duration: 0.18)) {
                             visibleCommentLimit = min(
                                 visibleCommentLimit + 25,
-                                max(inlineComments.count, post.commentCount, visibleCommentLimit + 25)
+                                max(inlineComments.count, effectiveCommentCount, visibleCommentLimit + 25)
                             )
                         }
                     },
@@ -312,6 +319,11 @@ struct FacebookPostCard: View {
                 .padding(.horizontal, horizontalGutter)
                 .padding(.top, 10)
                 .padding(.bottom, 12)
+                .onChange(of: inlineComments.count) { _, count in
+                    if count > loadedCommentCount {
+                        loadedCommentCount = count
+                    }
+                }
 
                 if let commentError {
                     Text(commentError)
@@ -338,9 +350,25 @@ struct FacebookPostCard: View {
         .padding(.bottom, edgeToEdge ? 10 : 0)
 
         .onAppear {
+            // Seed from model (incl. origin count on shares) so the link never vanishes after tab hops.
+            loadedCommentCount = max(loadedCommentCount, post.displayCommentCount)
             if commentsInitiallyExpanded {
                 commentsExpanded = true
             }
+            // Soft-hydrate count for shares that still report 0 (origin has the R2 thread).
+            if post.displayCommentCount == 0, post.isSparkFeedShare || post.sharedPostID != nil {
+                Task { await hydrateCommentCountIfNeeded() }
+            }
+        }
+        .onChange(of: post.id) { _, _ in
+            commentsExpanded = commentsInitiallyExpanded
+            visibleCommentLimit = 3
+            inlineComments = []
+            loadedCommentCount = post.displayCommentCount
+            commentError = nil
+        }
+        .onChange(of: post.commentCount) { _, newValue in
+            loadedCommentCount = max(loadedCommentCount, newValue, post.displayCommentCount)
         }
         .sheet(isPresented: $showEditSheet) {
             PostEditSheet(post: post) { updated in
@@ -788,14 +816,16 @@ struct FacebookPostCard: View {
                     .foregroundStyle(Theme.ink)
             }
 
-            if post.commentCount > 0, !commentsExpanded {
+            // Always show the expand row when there is a thread (local or origin).
+            // Survives Hubs ↔ Feed tab hops because count comes from model + hydrate, not expand state alone.
+            if effectiveCommentCount > 0, !commentsExpanded {
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         visibleCommentLimit = 3
                         commentsExpanded = true
                     }
                 } label: {
-                    Text("View \(post.commentCount) \(post.commentCount == 1 ? "comment" : "comments")")
+                    Text("View \(effectiveCommentCount) \(effectiveCommentCount == 1 ? "comment" : "comments")")
                         .font(.subheadline)
                         .foregroundStyle(Theme.inkMuted)
                 }
@@ -902,6 +932,20 @@ struct FacebookPostCard: View {
             return
         }
         appState.openPublicProfile(username: creator.username, userID: creator.authorID)
+    }
+
+    /// Pull thread size without expanding — keeps “View N comments” on share cards after tab switches.
+    private func hydrateCommentCountIfNeeded() async {
+        guard loadedCommentCount == 0, effectiveCommentCount == 0 else { return }
+        let loaded = (try? await PostsService.shared.listComments(post.id, limit: 2000)) ?? []
+        guard !loaded.isEmpty else { return }
+        await MainActor.run {
+            loadedCommentCount = max(loadedCommentCount, loaded.count)
+            // Cache lightly so expanding is instant if they tap next.
+            if inlineComments.isEmpty {
+                inlineComments = loaded
+            }
+        }
     }
 
     private func deletePost() async {

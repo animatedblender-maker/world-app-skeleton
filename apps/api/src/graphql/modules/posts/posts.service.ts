@@ -106,12 +106,21 @@ function stripMomentMarkers(body: string | null | undefined): string {
 function presentPostRow<T extends Record<string, any>>(row: T): T {
   if (!row) return row;
   const next: any = { ...row, body: stripMomentMarkers(row.body) };
+  let ownComments = Number(row.comment_count) || 0;
   if (row.shared_post && typeof row.shared_post === 'object') {
-    next.shared_post = {
+    const sp: any = {
       ...row.shared_post,
       body: stripMomentMarkers((row.shared_post as any).body),
     };
+    const originComments = Number(sp.comment_count) || 0;
+    // Spark/hub *shares* often have empty local threads while the origin holds R2 comments.
+    // Surface the fuller count so feed cards keep “View N comments”.
+    if (originComments > ownComments) {
+      ownComments = originComments;
+    }
+    next.shared_post = sp;
   }
+  next.comment_count = ownComments;
   return next as T;
 }
 

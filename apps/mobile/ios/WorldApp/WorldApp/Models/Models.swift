@@ -478,6 +478,9 @@ struct SharedPostPreview: Identifiable, Hashable, Sendable, Codable {
     let thumbURL: String?
     let authorID: String
     let author: PostAuthor?
+    /// Origin thread size — share rows often have 0 local comments while origin has the full R2 set.
+    var commentCount: Int = 0
+    var likeCount: Int = 0
     /// Preserved so hub-seed shares still resolve as Hubs content in the feed.
     var externalRefType: String? = nil
     var externalRefID: String? = nil
@@ -490,6 +493,8 @@ struct SharedPostPreview: Identifiable, Hashable, Sendable, Codable {
             mediaType: mediaType,
             mediaURL: mediaURL,
             thumbURL: thumbURL,
+            likeCount: likeCount,
+            commentCount: commentCount,
             createdAt: "",
             updatedAt: "",
             authorID: authorID,
@@ -604,6 +609,12 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
         case .private: "Only me"
         case .country: "Country"
         }
+    }
+
+    /// Feed/share cards: use the fuller of local + origin thread sizes.
+    /// Spark/hub *shares* often store 0 comments on the share row while R2 comments live on the origin.
+    var displayCommentCount: Int {
+        max(commentCount, sharedPost?.commentCount ?? 0, sharedPost?.asCountryPost.commentCount ?? 0)
     }
 
     /// Stamp media_type when Keep from Sparks player so profile Saved Sparks keeps the row.

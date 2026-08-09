@@ -15,6 +15,7 @@ final class PostsService {
     id title body media_type media_url thumb_url shared_post_id
     shared_post {
       id title body media_type media_url thumb_url author_id
+      like_count comment_count
       author { user_id display_name username avatar_url country_name country_code }
     }
     visibility like_count comment_count liked_by_me
@@ -26,6 +27,7 @@ final class PostsService {
     id title body media_type media_url thumb_url shared_post_id
     shared_post {
       id title body media_type media_url thumb_url author_id
+      like_count comment_count
       author { user_id display_name username avatar_url country_name country_code }
     }
     visibility like_count comment_count liked_by_me saved_by_me

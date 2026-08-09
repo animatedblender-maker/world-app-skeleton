@@ -70,13 +70,16 @@ struct GraphQLPost: Decodable {
     }
 
     var toModel: CountryPost {
-        CountryPost(
+        let preview = sharedPost?.toPreview
+        // Prefer fuller origin thread count for spark/hub shares (local share often has 0 rows).
+        let effectiveComments = max(commentCount, preview?.commentCount ?? 0)
+        return CountryPost(
             id: id, title: title, body: body,
             mediaType: mediaType, mediaURL: mediaURL, thumbURL: thumbURL,
             sharedPostID: sharedPostID,
-            sharedPost: sharedPost?.toPreview,
+            sharedPost: preview,
             visibility: PostVisibility(rawValue: visibility) ?? .public,
-            likeCount: likeCount, commentCount: commentCount, viewCount: 0,
+            likeCount: likeCount, commentCount: effectiveComments, viewCount: 0,
             likedByMe: likedByMe, savedByMe: savedByMe ?? false,
             createdAt: createdAt, updatedAt: updatedAt,
             authorID: authorID, countryName: countryName, countryCode: countryCode,
@@ -93,6 +96,8 @@ struct GraphQLSharedPost: Decodable {
     let mediaURL: String?
     let thumbURL: String?
     let authorID: String
+    let likeCount: Int
+    let commentCount: Int
     let author: GraphQLAuthor?
 
     enum CodingKeys: String, CodingKey {
@@ -101,6 +106,8 @@ struct GraphQLSharedPost: Decodable {
         case mediaURL = "media_url"
         case thumbURL = "thumb_url"
         case authorID = "author_id"
+        case likeCount = "like_count"
+        case commentCount = "comment_count"
     }
 
     init(from decoder: Decoder) throws {
@@ -114,6 +121,8 @@ struct GraphQLSharedPost: Decodable {
         mediaURL = try container.decodeIfPresent(String.self, forKey: .mediaURL)
         thumbURL = try container.decodeIfPresent(String.self, forKey: .thumbURL)
         authorID = try container.decodeIfPresent(String.self, forKey: .authorID) ?? ""
+        likeCount = try container.decodeLossyInt(forKey: .likeCount)
+        commentCount = try container.decodeLossyInt(forKey: .commentCount)
         author = try container.decodeIfPresent(GraphQLAuthor.self, forKey: .author)
     }
 
@@ -126,7 +135,9 @@ struct GraphQLSharedPost: Decodable {
             mediaURL: mediaURL,
             thumbURL: thumbURL,
             authorID: authorID,
-            author: author?.toModel
+            author: author?.toModel,
+            commentCount: commentCount,
+            likeCount: likeCount
         )
     }
 }
