@@ -15,7 +15,8 @@
     "mobile:android:run": "npm --workspace apps/mobile run android:run"
   },
   "workspaces": [
-    "apps/*",
+    "apps/mobile",
+    "apps/web",
     "packages/*"
   ],
   "dependencies": {
