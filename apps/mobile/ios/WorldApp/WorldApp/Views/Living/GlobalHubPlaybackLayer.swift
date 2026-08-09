@@ -171,8 +171,8 @@ struct GlobalHubPlaybackLayer: View {
             .animation(isPullingMinimize ? nil : Self.morphAnim, value: layout.height)
             .animation(isPullingMinimize ? nil : Self.morphAnim, value: layout.x)
             .animation(isPullingMinimize ? nil : Self.morphAnim, value: layout.y)
-            // Full video surface: pull-to-mini (user wants this on the player itself).
-            .simultaneousGesture(expanded ? minimizeGesture : nil)
+            // Full video surface: pull-to-mini when expanded (guarded inside gesture).
+            .simultaneousGesture(minimizeGesture)
             .onTapGesture {
                 guard !expanded else { return }
                 expand()
