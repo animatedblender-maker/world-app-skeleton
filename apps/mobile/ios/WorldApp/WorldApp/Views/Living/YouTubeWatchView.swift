@@ -224,20 +224,20 @@ struct YouTubeWatchView: View {
             .allowsHitTesting(false)
             .opacity(embedsPlayer ? chromeOpacity : 1)
 
+            // Minimize / close — over player, YouTube mini-player entry.
             Button(action: { onBack() }) {
                 Image(systemName: "chevron.down")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(Theme.ink)
+                    .font(.body.weight(.bold))
+                    .foregroundStyle(.white)
                     .frame(width: 36, height: 36)
-                    .background(Theme.surface.opacity(0.94), in: Circle())
-                    .overlay(Circle().stroke(Theme.border, lineWidth: 0.5))
-                    .shadow(color: Theme.ink.opacity(0.08), radius: 6, y: 2)
+                    .background(Color.black.opacity(0.45), in: Circle())
             }
             .buttonStyle(.plain)
-            .safeAreaPadding(.top, 6)
-            .padding(.horizontal, Theme.pagePadding + 4)
+            .safeAreaPadding(.top, 8)
+            .padding(.horizontal, 12)
             .opacity(embedsPlayer ? chromeOpacity : 1)
             .allowsHitTesting(embedsPlayer ? (chromeOpacity > 0.2 && !isPullingToMinimize) : true)
+            .zIndex(20)
 
             // Pull-down only when this view embeds its own player (not GlobalHub).
             if embedsPlayer {
@@ -326,12 +326,35 @@ struct YouTubeWatchView: View {
 
     @ViewBuilder
     private var titleSection: some View {
-        if let headline = currentPost.displayHeadline {
-            Text(headline)
-                .postHeadlineStyle(lineLimit: 4)
-                .padding(.horizontal, Theme.pagePadding)
-                .padding(.top, 4)
+        VStack(alignment: .leading, spacing: 6) {
+            if let headline = currentPost.displayHeadline {
+                Text(headline)
+                    .font(.system(.title3, design: .default).weight(.semibold))
+                    .foregroundStyle(Theme.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            // Meta line — views · time (YouTube-style under title).
+            HStack(spacing: 6) {
+                if currentPost.viewCount > 0 {
+                    Text("\(currentPost.viewCount.formatted()) views")
+                        .font(.caption)
+                        .foregroundStyle(Theme.inkMuted)
+                }
+                if currentPost.viewCount > 0, !currentPost.createdAt.isEmpty {
+                    Text("·")
+                        .font(.caption)
+                        .foregroundStyle(Theme.inkMuted)
+                }
+                if !currentPost.createdAt.isEmpty {
+                    Text(RelativeTime.format(currentPost.createdAt))
+                        .font(.caption)
+                        .foregroundStyle(Theme.inkMuted)
+                }
+            }
         }
+        .padding(.horizontal, Theme.pagePadding)
+        .padding(.top, 6)
     }
 
     @ViewBuilder
@@ -349,52 +372,64 @@ struct YouTubeWatchView: View {
         }
     }
 
+    /// YouTube-style action chips under the player (Like · Share · Save).
     private var actionSection: some View {
-        HStack(spacing: 20) {
-            Button {
-                toggleLike()
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: currentPost.likedByMe ? "heart.fill" : "heart")
-                        .font(.system(size: 22))
-                        .foregroundStyle(currentPost.likedByMe ? Theme.like : Theme.ink)
-                    if currentPost.likeCount > 0 {
-                        Text("\(currentPost.likeCount)")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(Theme.ink)
-                    }
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                watchActionChip(
+                    icon: currentPost.likedByMe ? "hand.thumbsup.fill" : "hand.thumbsup",
+                    label: currentPost.likeCount > 0 ? "\(currentPost.likeCount)" : "Like",
+                    accent: currentPost.likedByMe
+                ) {
+                    toggleLike()
+                }
+                .disabled(isLiking)
+
+                watchActionChip(icon: "arrowshape.turn.up.right", label: "Share") {
+                    appState.hubPlaybackPlaying = true
+                    appState.presentShareSheet(for: currentPost)
+                    NotificationCenter.default.post(
+                        name: .matteryaResumePlaybackAfterInterrupt,
+                        object: nil
+                    )
+                }
+
+                watchActionChip(
+                    icon: appState.isPostSaved(currentPost.id) ? "bookmark.fill" : "bookmark",
+                    label: appState.isPostSaved(currentPost.id) ? "Saved" : "Save",
+                    accent: appState.isPostSaved(currentPost.id)
+                ) {
+                    Task { _ = await appState.toggleSavePost(currentPost) }
                 }
             }
-            .buttonStyle(.plain)
-            .disabled(isLiking)
-
-            Button {
-                Task {
-                    // Bookmark is local for hub videos; never toast GraphQL failures.
-                    _ = await appState.toggleSavePost(currentPost)
-                }
-            } label: {
-                Image(systemName: appState.isPostSaved(currentPost.id) ? "bookmark.fill" : "bookmark")
-                    .font(.system(size: 20))
-                    .foregroundStyle(Theme.ink)
-            }
-            .buttonStyle(.plain)
-
-            Button {
-                // Share in place — never mini-player, never pause continuous playback.
-                appState.hubPlaybackPlaying = true
-                appState.presentShareSheet(for: currentPost)
-                NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
-            } label: {
-                Image(systemName: "arrowshape.turn.up.right")
-                    .font(.system(size: 20))
-                    .foregroundStyle(Theme.ink)
-            }
-            .buttonStyle(.plain)
-
-            Spacer()
+            .padding(.horizontal, Theme.pagePadding)
         }
-        .padding(.horizontal, Theme.pagePadding)
+    }
+
+    private func watchActionChip(
+        icon: String,
+        label: String,
+        accent: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 14, weight: .semibold))
+                Text(label)
+                    .font(.caption.weight(.semibold))
+            }
+            .foregroundStyle(accent ? Theme.paper : Theme.ink)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .background(
+                Capsule().fill(accent ? Theme.ink : Theme.canvasMuted)
+            )
+            .overlay(
+                Capsule().stroke(Theme.border.opacity(accent ? 0 : 0.7), lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     private var commentsSection: some View {

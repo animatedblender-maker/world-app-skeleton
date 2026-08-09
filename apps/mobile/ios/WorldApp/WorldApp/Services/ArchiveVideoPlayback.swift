@@ -231,6 +231,9 @@ struct MatteryaHubPlayerView: View {
     @State private var chromeHideTask: Task<Void, Never>?
     @State private var isScrubbing = false
     @State private var showFullscreen = false
+    /// YouTube-style double-tap skip flash (negative = back, positive = forward).
+    @State private var skipFlash: Int = 0
+    @State private var skipFlashTask: Task<Void, Never>?
 
     init(
         url: URL,
@@ -306,49 +309,41 @@ struct MatteryaHubPlayerView: View {
             )
 
             if showsControls {
-                // Chrome / tap-to-reveal first (under transport).
-                if showChrome || !bridge.isReady {
-                    hubChrome
-                        .transition(.opacity)
-                        .zIndex(1)
-                } else {
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            withAnimation(.easeInOut(duration: 0.18)) {
-                                showChrome = true
-                            }
-                            scheduleChromeHide()
-                        }
-                        .zIndex(1)
+                // Loading / buffering spinner (YouTube center ring).
+                if !bridge.isReady {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .tint(.white)
+                        .scaleEffect(1.15)
+                        .zIndex(2)
                 }
 
-                // Mute + fullscreen ALWAYS on top of chrome/tap layers so hits never get stolen.
-                VStack {
-                    HStack(spacing: 10) {
-                        Spacer(minLength: 0)
-                        chromeIconButton(
-                            systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill"
-                        ) {
-                            isMuted.toggle()
-                            bridge.controller?.setMuted(isMuted)
-                            bridge.publishMuted(isMuted)
-                            // Feed binding already updates appState.feedVideosMuted when shared.
-                            scheduleChromeHide()
-                        }
-                        if allowsFullscreen {
-                            chromeIconButton(systemName: "arrow.up.left.and.arrow.down.right") {
-                                showFullscreen = true
-                                chromeHideTask?.cancel()
-                            }
+                if showChrome || !bridge.isPlaying {
+                    hubChrome
+                        .transition(.opacity)
+                        .zIndex(3)
+                } else {
+                    // Chrome hidden while playing — still capture taps + double-tap skip.
+                    youtubeHiddenChromeHitLayer
+                        .zIndex(3)
+                }
+
+                // Double-tap skip flash (YouTube left/right arcs).
+                if skipFlash != 0 {
+                    HStack {
+                        if skipFlash < 0 {
+                            skipFlashBadge(seconds: 10, systemName: "gobackward.10")
+                            Spacer(minLength: 0)
+                        } else {
+                            Spacer(minLength: 0)
+                            skipFlashBadge(seconds: 10, systemName: "goforward.10")
                         }
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.top, 10)
-                    Spacer(minLength: 0)
+                    .padding(.horizontal, 28)
+                    .allowsHitTesting(false)
+                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                    .zIndex(40)
                 }
-                .zIndex(50)
-                .allowsHitTesting(true)
             }
         }
         .fullScreenCover(isPresented: $showFullscreen) {
@@ -437,68 +432,84 @@ struct MatteryaHubPlayerView: View {
         }
     }
 
-    /// Center transport (like the provided Hubs chrome): −10s · play/pause · +10s, scrubber bottom.
+    /// YouTube-style watch chrome: top tools, center play, bottom red scrubber + times.
     private var hubChrome: some View {
         ZStack {
-            // Tap empty area to hide chrome (transport + scrubber sit above this layer).
-            Color.clear
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    withAnimation(.easeInOut(duration: 0.18)) {
-                        showChrome = false
-                    }
-                    chromeHideTask?.cancel()
-                }
-
-            // TRUE center: skip back · large play · skip forward
-            HStack(spacing: 40) {
-                chromeIconButton(systemName: "gobackward.10", size: 46) {
-                    bridge.skip(by: -10)
-                    scheduleChromeHide()
-                }
-                .accessibilityLabel("Back 10 seconds")
-
-                Button {
-                    bridge.togglePlayPause()
-                    scheduleChromeHide()
-                } label: {
-                    Image(systemName: bridge.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 28, weight: .bold))
-                        .foregroundStyle(Theme.paper)
-                        .frame(width: 68, height: 68)
-                        .background(Theme.accentBright, in: Circle())
-                        .shadow(color: Theme.ink.opacity(0.34), radius: 12, y: 4)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(bridge.isPlaying ? "Pause" : "Play")
-
-                chromeIconButton(systemName: "goforward.10", size: 46) {
-                    bridge.skip(by: 10)
-                    scheduleChromeHide()
-                }
-                .accessibilityLabel("Forward 10 seconds")
+            // Dim only while paused so the frame stays visible (YT-style).
+            if !bridge.isPlaying {
+                Color.black.opacity(0.28)
+                    .allowsHitTesting(false)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-            .zIndex(2)
 
-            // Timeline only — pinned to bottom of the stage.
+            // Single tap empty area → hide chrome when playing; double-tap L/R → ±10s.
+            youtubeGestureLayer
+                .zIndex(0)
+
+            // Top tools (mute · fullscreen) — always tappable above gesture layer.
+            VStack {
+                HStack(spacing: 10) {
+                    Spacer(minLength: 0)
+                    youtubeTopIcon(
+                        systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill",
+                        label: isMuted ? "Unmute" : "Mute"
+                    ) {
+                        isMuted.toggle()
+                        bridge.controller?.setMuted(isMuted)
+                        bridge.publishMuted(isMuted)
+                        scheduleChromeHide()
+                    }
+                    if allowsFullscreen {
+                        youtubeTopIcon(
+                            systemName: "arrow.up.left.and.arrow.down.right",
+                            label: "Fullscreen"
+                        ) {
+                            showFullscreen = true
+                            chromeHideTask?.cancel()
+                        }
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 10)
+                Spacer(minLength: 0)
+            }
+            .zIndex(5)
+
+            // Center play / pause — large, YT-like (always when paused; when chrome shown while playing).
+            Button {
+                bridge.togglePlayPause()
+                if bridge.isPlaying {
+                    scheduleChromeHide()
+                } else {
+                    chromeHideTask?.cancel()
+                    showChrome = true
+                }
+            } label: {
+                Image(systemName: bridge.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: bridge.isPlaying ? 26 : 30, weight: .bold))
+                    .foregroundStyle(.white)
+                    .offset(x: bridge.isPlaying ? 0 : 2)
+                    .frame(width: 72, height: 72)
+                    .background(Color.black.opacity(0.45), in: Circle())
+                    .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 0.5))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(bridge.isPlaying ? "Pause" : "Play")
+            .zIndex(4)
+
+            // Bottom bar: current · scrubber · remaining/total · (optional) fullscreen
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
-                HStack(spacing: 10) {
-                    Text(formatTime(bridge.currentSeconds))
-                        .font(.caption.monospacedDigit().weight(.medium))
-                        .foregroundStyle(Theme.paper.opacity(0.92))
-                        .frame(width: 42, alignment: .leading)
-
+                VStack(spacing: 6) {
                     HubTimelineScrubber(
                         value: scrubberValue,
+                        accent: Color(red: 1.0, green: 0.0, blue: 0.0),
                         onEditingChanged: { editing in
                             isScrubbing = editing
                             if editing {
                                 chromeHideTask?.cancel()
+                                showChrome = true
                                 bridge.beginScrub()
                             } else if bridge.durationSeconds > 0 {
-                                // Land on scrub time and keep playing (never pause at seek).
                                 let target = bridge.currentSeconds
                                 bridge.endScrub(at: target)
                                 onPlayingChange?(true)
@@ -510,27 +521,178 @@ struct MatteryaHubPlayerView: View {
                             bridge.currentSeconds = fraction * bridge.durationSeconds
                         }
                     )
+                    .padding(.horizontal, 12)
 
-                    Text(formatTime(bridge.durationSeconds))
-                        .font(.caption.monospacedDigit().weight(.medium))
-                        .foregroundStyle(Theme.paper.opacity(0.75))
-                        .frame(width: 42, alignment: .trailing)
+                    HStack(spacing: 8) {
+                        Text(formatTime(bridge.currentSeconds))
+                            .font(.caption2.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.95))
+
+                        Text("/")
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.45))
+
+                        Text(formatTime(bridge.durationSeconds))
+                            .font(.caption2.monospacedDigit().weight(.medium))
+                            .foregroundStyle(.white.opacity(0.75))
+
+                        Spacer(minLength: 0)
+
+                        if allowsFullscreen {
+                            Button {
+                                showFullscreen = true
+                                chromeHideTask?.cancel()
+                            } label: {
+                                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(.white.opacity(0.95))
+                                    .frame(width: 32, height: 28)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Fullscreen")
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 10)
                 }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 14)
-                .padding(.top, 18)
+                .padding(.top, 20)
                 .background(
                     LinearGradient(
-                        colors: [.clear, Theme.ink.opacity(0.55), Theme.ink.opacity(0.82)],
+                        colors: [
+                            .clear,
+                            Color.black.opacity(0.45),
+                            Color.black.opacity(0.78),
+                        ],
                         startPoint: .top,
                         endPoint: .bottom
                     )
                 )
             }
-            .zIndex(1)
+            .zIndex(4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .allowsHitTesting(true)
+    }
+
+    /// When chrome is auto-hidden: single-tap shows chrome, double-tap L/R skips.
+    private var youtubeHiddenChromeHitLayer: some View {
+        GeometryReader { geo in
+            HStack(spacing: 0) {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) { performSkip(by: -10) }
+                    .onTapGesture(count: 1) { revealChrome() }
+                    .frame(width: geo.size.width * 0.42)
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 1) {
+                        // Center band: tap toggles play (YT) and shows chrome.
+                        bridge.togglePlayPause()
+                        revealChrome()
+                    }
+                    .frame(maxWidth: .infinity)
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) { performSkip(by: 10) }
+                    .onTapGesture(count: 1) { revealChrome() }
+                    .frame(width: geo.size.width * 0.42)
+            }
+        }
+    }
+
+    private var youtubeGestureLayer: some View {
+        GeometryReader { geo in
+            HStack(spacing: 0) {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) { performSkip(by: -10) }
+                    .onTapGesture(count: 1) {
+                        if bridge.isPlaying {
+                            withAnimation(.easeInOut(duration: 0.15)) { showChrome = false }
+                            chromeHideTask?.cancel()
+                        } else {
+                            bridge.togglePlayPause()
+                            scheduleChromeHide()
+                        }
+                    }
+                    .frame(width: geo.size.width * 0.42)
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 1) {
+                        if bridge.isPlaying {
+                            withAnimation(.easeInOut(duration: 0.15)) { showChrome = false }
+                            chromeHideTask?.cancel()
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) { performSkip(by: 10) }
+                    .onTapGesture(count: 1) {
+                        if bridge.isPlaying {
+                            withAnimation(.easeInOut(duration: 0.15)) { showChrome = false }
+                            chromeHideTask?.cancel()
+                        } else {
+                            bridge.togglePlayPause()
+                            scheduleChromeHide()
+                        }
+                    }
+                    .frame(width: geo.size.width * 0.42)
+            }
+        }
+    }
+
+    private func youtubeTopIcon(
+        systemName: String,
+        label: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 36, height: 36)
+                .background(Color.black.opacity(0.4), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
+    private func skipFlashBadge(seconds: Int, systemName: String) -> some View {
+        VStack(spacing: 4) {
+            Image(systemName: systemName)
+                .font(.system(size: 22, weight: .semibold))
+            Text("\(seconds)")
+                .font(.caption.weight(.bold).monospacedDigit())
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color.black.opacity(0.42), in: Capsule())
+    }
+
+    private func revealChrome() {
+        withAnimation(.easeInOut(duration: 0.15)) {
+            showChrome = true
+        }
+        scheduleChromeHide()
+    }
+
+    private func performSkip(by delta: Double) {
+        bridge.skip(by: delta)
+        onPlayingChange?(true)
+        skipFlashTask?.cancel()
+        withAnimation(.easeOut(duration: 0.12)) {
+            skipFlash = delta < 0 ? -1 : 1
+        }
+        skipFlashTask = Task {
+            try? await Task.sleep(nanoseconds: 550_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                withAnimation(.easeOut(duration: 0.2)) { skipFlash = 0 }
+            }
+        }
+        revealChrome()
     }
 
     private var scrubberValue: Double {
@@ -538,32 +700,16 @@ struct MatteryaHubPlayerView: View {
         return min(1, max(0, bridge.currentSeconds / bridge.durationSeconds))
     }
 
-    private func chromeIconButton(
-        systemName: String,
-        size: CGFloat = 36,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: size > 36 ? 18 : 14, weight: .semibold))
-                .foregroundStyle(Theme.paper)
-                .frame(width: size, height: size)
-                .background(Theme.ink.opacity(0.48), in: Circle())
-                .overlay(Circle().stroke(Theme.paper.opacity(0.12), lineWidth: 0.5))
-        }
-        .buttonStyle(.plain)
-    }
-
     private func scheduleChromeHide() {
         chromeHideTask?.cancel()
-        // Stay up while paused so center play / ±10s never vanish mid-pause.
+        // Stay up while paused so center play never vanishes mid-pause.
         guard bridge.isPlaying else { return }
         chromeHideTask = Task {
-            try? await Task.sleep(nanoseconds: 3_200_000_000)
+            try? await Task.sleep(nanoseconds: 2_800_000_000)
             guard !Task.isCancelled, !isScrubbing else { return }
             await MainActor.run {
                 guard bridge.isPlaying else { return }
-                withAnimation(.easeInOut(duration: 0.22)) {
+                withAnimation(.easeInOut(duration: 0.2)) {
                     showChrome = false
                 }
             }
@@ -576,7 +722,6 @@ struct MatteryaHubPlayerView: View {
         let h = total / 3600
         let m = (total % 3600) / 60
         let s = total % 60
-        // Long Hubs videos: 1:01:00 not 61:00
         if h > 0 {
             return String(format: "%d:%02d:%02d", h, m, s)
         }
@@ -634,7 +779,7 @@ struct MatteryaLandscapeFullscreenPlayer: View {
                 if showChrome { scheduleChromeHide() }
             }
 
-            if showChrome {
+            if showChrome || !bridge.isPlaying {
                 fullscreenChrome
                     .transition(.opacity)
             }
@@ -701,6 +846,7 @@ struct MatteryaLandscapeFullscreenPlayer: View {
 
                     HubTimelineScrubber(
                         value: scrubberValue,
+                        accent: Color(red: 1.0, green: 0.0, blue: 0.0),
                         onEditingChanged: { editing in
                             isScrubbing = editing
                             if editing {
@@ -823,8 +969,10 @@ struct MatteryaLandscapeFullscreenPlayer: View {
     }
 }
 
+/// YouTube-style progress rail — thin bar, red fill, knobby only while scrubbing.
 private struct HubTimelineScrubber: View {
     let value: Double
+    var accent: Color = Theme.accentBright
     let onEditingChanged: (Bool) -> Void
     let onValueChanged: (Double) -> Void
 
@@ -834,24 +982,29 @@ private struct HubTimelineScrubber: View {
     var body: some View {
         GeometryReader { proxy in
             let width = max(proxy.size.width, 1)
-            let fill = (isDragging ? dragValue : value) * width
+            let fraction = isDragging ? dragValue : value
+            let fill = max(0, min(1, fraction)) * width
+            let trackH: CGFloat = isDragging ? 5 : 3
+            let knob: CGFloat = isDragging ? 14 : 0
 
             ZStack(alignment: .leading) {
                 Capsule()
-                    .fill(Theme.paper.opacity(0.22))
-                    .frame(height: 4)
+                    .fill(Color.white.opacity(0.28))
+                    .frame(height: trackH)
 
                 Capsule()
-                    .fill(Theme.accentBright)
-                    .frame(width: max(fill, 0), height: 4)
+                    .fill(accent)
+                    .frame(width: max(fill, trackH), height: trackH)
 
-                Circle()
-                    .fill(Theme.paper)
-                    .frame(width: 15, height: 15)
-                    .shadow(color: Theme.ink.opacity(0.3), radius: 3, y: 1)
-                    .offset(x: max(0, fill - 7.5))
+                if isDragging {
+                    Circle()
+                        .fill(accent)
+                        .frame(width: knob, height: knob)
+                        .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
+                        .offset(x: max(0, fill - knob / 2))
+                }
             }
-            .frame(height: 22)
+            .frame(maxHeight: .infinity, alignment: .center)
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
@@ -871,6 +1024,7 @@ private struct HubTimelineScrubber: View {
             )
         }
         .frame(height: 22)
+        .animation(.easeOut(duration: 0.12), value: isDragging)
         .onChange(of: value) { _, newValue in
             if !isDragging { dragValue = newValue }
         }
