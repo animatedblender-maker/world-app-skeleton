@@ -6,9 +6,12 @@
     "dev": "tsx watch src/main.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
-    "render-build": "npm install --no-workspaces --include=dev && npm run build",
+    "render-build": "npm ci --no-workspaces --include=dev && npm run build",
     "content-pipeline": "tsx src/content-pipeline/cli.ts",
     "content-pipeline:dry": "tsx src/content-pipeline/cli.ts --dry-run"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1106.0",

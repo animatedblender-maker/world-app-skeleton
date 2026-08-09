@@ -6,7 +6,8 @@ services:
     runtime: node
     branch: ios-native
     rootDir: apps/api
-    # If Dashboard still runs "npm ci", override Build Command to: npm run render-build
+    # CRITICAL: Dashboard often still has "npm ci && npm run build" which breaks
+    # monorepo installs. Set Build Command to EXACTLY: npm run render-build
     # (see docs/RENDER.md). Blueprint alone often does not update existing services.
     buildCommand: npm run render-build
     startCommand: npm start

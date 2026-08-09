@@ -49,7 +49,8 @@ If logs show:
 Running build command 'npm ci && npm run build'
 ```
 
-…the **Dashboard** still has the old command. Update it manually.
+…the **Dashboard** still has the old command. That fails in this monorepo
+(`@aws-sdk/*` is only in `apps/api/package-lock.json`). **Update Build Command manually.**
 
 ## Required service settings
 
@@ -66,8 +67,10 @@ Running build command 'npm ci && npm run build'
 `render-build` runs:
 
 ```bash
-npm install --no-workspaces --include=dev && npm run build
+npm ci --no-workspaces --include=dev && npm run build
 ```
+
+Clear **Build Cache** once (Clear build cache & deploy) after changing the lockfile or build command.
 
 ### Why not `npm ci` at monorepo root?
 
