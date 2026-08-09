@@ -77,6 +77,9 @@ final class AppState {
     /// 0…1 while user is pulling the continuous player down to mini.
     /// Watch page chrome (title, comments, related) hides instantly when > 0.
     var hubPlaybackPullProgress: CGFloat = 0
+    /// 0…1 YouTube-style collapse while scrolling meta/comments under the video.
+    /// 0 = full 16:9 stage; 1 = sticky compact height at the top.
+    var hubWatchScrollCollapse: CGFloat = 0
     /// Shared mute for **all** in-feed videos (hub cards, spark cards, autoplay).
     /// Muting one video mutes every feed video; unmuting one unmutes all.
     var feedVideosMuted = false
@@ -1189,6 +1192,7 @@ final class AppState {
             // Soft-pause others only — never stopAll/tear-down (that delayed first frame).
             MediaPlaybackCoordinator.shared.pauseAll()
             hubPlaybackPost = watchPost
+            hubWatchScrollCollapse = 0
         } else if hubPlaybackPost?.playableVideoURL == nil, watchPost.playableVideoURL != nil {
             hubPlaybackPost = watchPost
         } else if hubPlaybackPost?.authorID != watchPost.authorID {
@@ -1196,6 +1200,7 @@ final class AppState {
             hubPlaybackPost = watchPost
         } else if hubPlaybackPost == nil {
             hubPlaybackPost = watchPost
+            hubWatchScrollCollapse = 0
         }
 
         // Continuous Hubs player (mini or full) owns audio — kill feed/profile autoplay.
@@ -1221,6 +1226,7 @@ final class AppState {
         guard hubPlaybackPost != nil else { return }
         // Never stop/pause mini — GlobalHubPlaybackLayer only resizes the stage.
         hubPlaybackPlaying = true
+        hubWatchScrollCollapse = 0
         if animated {
             // Match GlobalHubPlaybackLayer morph — easeOut, no mid-path spring stall.
             withAnimation(.easeOut(duration: 0.24)) {
@@ -1264,6 +1270,7 @@ final class AppState {
         navigationPath.removeAll()
         selectedTab = .hubs
         hubPlaybackPlaying = true
+        hubWatchScrollCollapse = 0
         withAnimation(.easeOut(duration: 0.24)) {
             hubPlaybackExpanded = true
         }
@@ -1274,6 +1281,7 @@ final class AppState {
         hubPlaybackExpanded = false
         hubPlaybackPlaying = false
         hubPlaybackPullProgress = 0
+        hubWatchScrollCollapse = 0
         hubPlaybackReturnConversationID = nil
         MediaPlaybackCoordinator.shared.stopAllPlayback()
         // Mini closed — feed/profile may elect autoplay again.

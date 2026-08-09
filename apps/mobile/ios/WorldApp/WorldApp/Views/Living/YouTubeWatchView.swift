@@ -73,32 +73,38 @@ struct YouTubeWatchView: View {
 
     var body: some View {
         GeometryReader { geo in
-            // Match continuous player: compact 16:9 from physical top (y=0), no extra pad.
-            let bodyH = embedsPlayer
+            // Full 16:9 stage (spacer stays this tall so scroll-collapse doesn't fight layout).
+            let fullStageH = embedsPlayer
                 ? YouTubeMediaLayout.watchPlayerHeight(
                     containerWidth: geo.size.width,
                     containerHeight: geo.size.height
                 )
                 : YouTubeMediaLayout.hubsContinuousStageHeight(containerWidth: geo.size.width)
-            let reservedPlayerHeight = max(120, bodyH)
+            let minStageH = YouTubeMediaLayout.hubsCollapsedStageHeight(containerWidth: geo.size.width)
+            let liveStageH = YouTubeMediaLayout.hubsStageHeight(
+                containerWidth: geo.size.width,
+                collapse: appState.hubWatchScrollCollapse
+            )
 
-            VStack(spacing: 0) {
-                // Sticky player — edge-to-edge under Dynamic Island / notch.
-                // When embedsPlayer is false, keep the stage transparent so minimize
-                // never leaves a black rectangle at the top of Hubs.
-                playerSection
-                    .frame(width: geo.size.width, height: reservedPlayerHeight)
-                    // Clear under filled video — ink beds read as black top/bottom margins.
-                    .background(Color.clear)
-                    .zIndex(2)
-
-                // Title, channel, actions, comments, related — all scroll under the player
-                // so the related shelf gets the full remaining height.
+            // YouTube sticky player: scroll content under a fixed full-height spacer;
+            // sticky player height shrinks with scroll offset (not a layout feedback loop).
+            ZStack(alignment: .top) {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
+                        // Fixed full stage hole — scrolls away; sticky player covers the top.
+                        // Track this spacer’s minY so collapse matches finger 1:1 (YouTube).
                         Color.clear
-                            .frame(height: 8)
+                            .frame(width: geo.size.width, height: max(120, fullStageH))
                             .frame(maxWidth: .infinity)
+                            .background {
+                                GeometryReader { proxy in
+                                    let minY = proxy.frame(in: .named("hubWatchScroll")).minY
+                                    Color.clear.preference(
+                                        key: HubWatchScrollOffsetKey.self,
+                                        value: -minY
+                                    )
+                                }
+                            }
 
                         titleSection
                         channelSection
@@ -129,17 +135,44 @@ struct YouTubeWatchView: View {
                     }
                     .padding(.bottom, 28)
                 }
+                .coordinateSpace(name: "hubWatchScroll")
                 .scrollDismissesKeyboard(.interactively)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(isMinimizingGrab ? Color.clear : Theme.canvas)
                 .opacity(chromeOpacity)
                 .allowsHitTesting(!isMinimizingGrab && chromeOpacity > 0.2)
+                .onPreferenceChange(HubWatchScrollOffsetKey.self) { raw in
+                    guard !isMinimizingGrab else { return }
+                    let offset = max(0, raw)
+                    let range = max(1, fullStageH - minStageH)
+                    // Slightly faster than 1:1 so it feels like YouTube grab-under-video.
+                    let progress = min(1, max(0, (offset / range) * 1.05))
+                    if abs(progress - appState.hubWatchScrollCollapse) > 0.004 {
+                        var t = Transaction()
+                        t.disablesAnimations = true
+                        withTransaction(t) {
+                            appState.hubWatchScrollCollapse = progress
+                        }
+                    }
+                }
+
+                // Sticky player (or clear hole for continuous GlobalHubPlaybackLayer).
+                // Continuous layer paints the video above; this view owns close chrome only.
+                playerSection
+                    .frame(width: geo.size.width, height: liveStageH)
+                    .background(Color.clear)
+                    .clipped()
+                    .zIndex(2)
             }
             .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
+            .onChange(of: currentPost.id) { _, _ in
+                appState.hubWatchScrollCollapse = 0
+            }
         }
         // During grab: pure video over clear/ink — no paper canvas behind.
         .background(isMinimizingGrab ? Theme.ink : Theme.canvas)
         .animation(nil, value: isMinimizingGrab)
+        .animation(nil, value: appState.hubWatchScrollCollapse)
         // Player bleeds under Dynamic Island / notch (same as continuous layer).
         .ignoresSafeArea(edges: .top)
         // Feed / non-expanded share still uses the sheet. Expanded Hubs uses an overlay so
@@ -227,30 +260,36 @@ struct YouTubeWatchView: View {
     }
 
     private var playerSection: some View {
-        ZStack(alignment: .topLeading) {
+        let collapse = appState.hubWatchScrollCollapse
+        // Shrink top chrome padding as the stage collapses under the island.
+        let topChromePad = max(6, (8 + YouTubeMediaLayout.keyWindowSafeTop) * (1 - collapse * 0.72))
+
+        return ZStack(alignment: .topLeading) {
             // When embedsPlayer is false, GlobalHubPlaybackLayer owns the real video + pull-down.
-            // Keep this stage as a static black spacer (no second drag fighting the continuous player).
+            // Clear hole so continuous fill shows through (no black slab).
             playerSurface
 
-            LinearGradient(
-                colors: [Theme.ink.opacity(0.4), .clear],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .frame(height: 72)
-            .allowsHitTesting(false)
-            .opacity(embedsPlayer ? chromeOpacity : 1)
+            if embedsPlayer || collapse < 0.85 {
+                LinearGradient(
+                    colors: [Theme.ink.opacity(0.4 * (1 - collapse)), .clear],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: max(36, 72 * (1 - collapse * 0.5)))
+                .allowsHitTesting(false)
+                .opacity(embedsPlayer ? chromeOpacity : max(0, 1 - collapse * 1.2))
+            }
 
             // Minimize / close — over player, clear of Dynamic Island.
             Button(action: { onBack() }) {
                 Image(systemName: "chevron.down")
                     .font(.body.weight(.bold))
                     .foregroundStyle(.white)
-                    .frame(width: 36, height: 36)
+                    .frame(width: collapse > 0.55 ? 30 : 36, height: collapse > 0.55 ? 30 : 36)
                     .background(Color.black.opacity(0.45), in: Circle())
             }
             .buttonStyle(.plain)
-            .padding(.top, 8 + YouTubeMediaLayout.keyWindowSafeTop)
+            .padding(.top, topChromePad)
             .padding(.horizontal, 12)
             .opacity(embedsPlayer ? chromeOpacity : 1)
             .allowsHitTesting(embedsPlayer ? (chromeOpacity > 0.2 && !isPullingToMinimize) : true)
@@ -268,10 +307,11 @@ struct YouTubeWatchView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Theme.ink)
+        .background(embedsPlayer ? Theme.ink : Color.clear)
         .onDisappear {
             dismissDragOffset = 0
             isPullingToMinimize = false
+            appState.hubWatchScrollCollapse = 0
         }
     }
 

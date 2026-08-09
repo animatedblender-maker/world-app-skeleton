@@ -57,7 +57,11 @@ struct GlobalHubPlaybackLayer: View {
     }
 
     private var showTransportChrome: Bool {
-        expanded && !isPullingMinimize && dragOffset < 2
+        // Hide transport when collapsed by comment-scroll (too short for scrubber).
+        expanded
+            && !isPullingMinimize
+            && dragOffset < 2
+            && appState.hubWatchScrollCollapse < 0.22
     }
 
     private var playingBinding: Binding<Bool> {
@@ -169,6 +173,8 @@ struct GlobalHubPlaybackLayer: View {
             .offset(x: layout.x, y: liveY)
             .animation(isPullingMinimize ? nil : Self.morphAnim, value: expanded)
             .animation(isPullingMinimize ? nil : Self.morphAnim, value: layout.width)
+            // Scroll collapse must track the finger — no laggy spring on height.
+            .animation(nil, value: appState.hubWatchScrollCollapse)
             .animation(isPullingMinimize ? nil : Self.morphAnim, value: layout.height)
             .animation(isPullingMinimize ? nil : Self.morphAnim, value: layout.x)
             .animation(isPullingMinimize ? nil : Self.morphAnim, value: layout.y)
@@ -193,8 +199,11 @@ struct GlobalHubPlaybackLayer: View {
 
     private func playerLayout(in geo: GeometryProxy) -> PlayerLayout {
         if expanded {
-            // Flush under Dynamic Island; height = compact 16:9 (no extra safe-top pad → no letterbox slab).
-            let stageHeight = YouTubeMediaLayout.hubsContinuousStageHeight(containerWidth: geo.size.width)
+            // Flush under Dynamic Island. Height shrinks as comments scroll (YouTube sticky).
+            let stageHeight = YouTubeMediaLayout.hubsStageHeight(
+                containerWidth: geo.size.width,
+                collapse: appState.hubWatchScrollCollapse
+            )
             return PlayerLayout(x: 0, y: 0, width: geo.size.width, height: stageHeight)
         }
 

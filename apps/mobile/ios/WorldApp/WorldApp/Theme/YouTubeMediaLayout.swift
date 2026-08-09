@@ -65,6 +65,21 @@ enum YouTubeMediaLayout {
         return max(160, min(classic16x9, maxH))
     }
 
+    /// Sticky mini height after scrolling comments under the video (YouTube-style).
+    static func hubsCollapsedStageHeight(containerWidth: CGFloat) -> CGFloat {
+        let full = hubsContinuousStageHeight(containerWidth: containerWidth)
+        // ~38% of full 16:9 — still readable, leaves room for comments.
+        return max(88, min(full * 0.38, full - 48))
+    }
+
+    /// Live stage height for a 0…1 scroll-collapse progress.
+    static func hubsStageHeight(containerWidth: CGFloat, collapse: CGFloat) -> CGFloat {
+        let full = hubsContinuousStageHeight(containerWidth: containerWidth)
+        let mini = hubsCollapsedStageHeight(containerWidth: containerWidth)
+        let t = min(1, max(0, collapse))
+        return full + (mini - full) * t
+    }
+
     /// Embedded watch player — same compact 16:9 stage as continuous hubs playback.
     static func watchPlayerHeight(containerWidth: CGFloat, containerHeight: CGFloat) -> CGFloat {
         let w = max(1, containerWidth)
@@ -74,6 +89,14 @@ enum YouTubeMediaLayout {
             return max(160, min(classic16x9, maxH))
         }
         return hubsContinuousStageHeight(containerWidth: w)
+    }
+}
+
+/// Scroll offset of Hubs watch meta/comments (drives sticky player collapse).
+enum HubWatchScrollOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 
