@@ -110,7 +110,7 @@ export function pickCaption(meta: Record<string, unknown>, kind: string, videoId
   }
 
   // Last resort — short id, not a fake social caption
-  if (kind === 'spark') return `Spark ${String(videoId).slice(-8)}`;
+  if (kind === 'spark' || kind === 'shortform') return `Spark ${String(videoId).slice(-8)}`;
   return `Video ${String(videoId).slice(-8)}`;
 }
 
@@ -121,8 +121,8 @@ export function pickTitle(meta: Record<string, unknown>, kind: string, videoId: 
 
 export function pickBody(kind: string, caption: string, meta: Record<string, unknown>): string {
   const t = cleanText(caption, 3980) || 'Clip';
-  if (kind === 'spark') {
-    // Sparks player + cards strip `__spark__|` and show the rest as the real caption.
+  // TikTok Sparks + YouTube ShortForm both use the Sparks player (`__spark__|` marker).
+  if (kind === 'spark' || kind === 'shortform') {
     return `__spark__|${t}`;
   }
   const channel = cleanText(meta.channel ?? meta.author_name, 80);

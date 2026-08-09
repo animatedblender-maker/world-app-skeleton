@@ -81,9 +81,12 @@ export async function getObjectJson(client: S3Client, key: string): Promise<unkn
 
 /**
  * List complete packs (video.mp4 present). meta.json optional but preferred.
- * Layout:
- *   Sparks:   <Country>/<id>/video.mp4
- *   LongForm: LongForm/<Country>/<id>/video.mp4
+ * Layout (bucket matterya-sparks):
+ *   Sparks:     <Country>/<tiktok_id>/video.mp4
+ *   ShortForm:  ShortForm/<Country>/<youtube_id>/video.mp4   (YouTube Shorts ≤60s)
+ *   LongForm:   LongForm/<Country>/<youtube_id>/video.mp4
+ *
+ * @see AGENT_HANDOFF_YOUTUBE_SHORTFORM.md
  */
 export async function discoverPacks(
   client: S3Client,
@@ -94,9 +97,14 @@ export async function discoverPacks(
   const seen = new Set<string>();
 
   for (const c of FOCUS_COUNTRIES) {
-    // Sparks under country root
-    const sparkIds = await listVideoPackIds(client, `${c.folder}/`, maxKeys);
+    // Sparks (TikTok) under country root — skip nested LongForm/ShortForm keys
+    // by matching only one segment after country: Country/<id>/video.mp4
+    const sparkIds = await listVideoPackIds(client, `${c.folder}/`, maxKeys, {
+      depth: 1,
+    });
     for (const videoId of sparkIds) {
+      // Guard: never treat LongForm/ShortForm folder names as video ids
+      if (videoId === 'LongForm' || videoId === 'ShortForm') continue;
       const videoKey = `${c.folder}/${videoId}/video.mp4`;
       const mediaPath = `r2:${getBucket()}/${videoKey}`;
       if (seen.has(mediaPath)) continue;
@@ -114,7 +122,27 @@ export async function discoverPacks(
       });
     }
 
-    // LongForm
+    // YouTube Shorts (ShortForm) — same pack shape, Sparks surface in app
+    const sfIds = await listVideoPackIds(client, `ShortForm/${c.folder}/`, maxKeys);
+    for (const videoId of sfIds) {
+      const videoKey = `ShortForm/${c.folder}/${videoId}/video.mp4`;
+      const mediaPath = `r2:${getBucket()}/${videoKey}`;
+      if (seen.has(mediaPath)) continue;
+      seen.add(mediaPath);
+      packs.push({
+        kind: 'shortform',
+        countryFolder: c.folder,
+        countryCode: c.code,
+        countryName: c.name,
+        videoId,
+        videoKey,
+        metaKey: `ShortForm/${c.folder}/${videoId}/meta.json`,
+        commentsKey: `ShortForm/${c.folder}/${videoId}/comments.json`,
+        mediaPath,
+      });
+    }
+
+    // LongForm (YouTube long) — Hubs surface
     const lfIds = await listVideoPackIds(client, `LongForm/${c.folder}/`, maxKeys);
     for (const videoId of lfIds) {
       const videoKey = `LongForm/${c.folder}/${videoId}/video.mp4`;
@@ -138,14 +166,24 @@ export async function discoverPacks(
   return packs;
 }
 
+/** Infer pack kind from an R2 object key. */
+export function packKindFromR2Key(key: string): PackKind {
+  if (key.includes('LongForm/') || key.startsWith('LongForm/')) return 'longform';
+  if (key.includes('ShortForm/') || key.startsWith('ShortForm/')) return 'shortform';
+  return 'spark';
+}
+
 async function listVideoPackIds(
   client: S3Client,
   prefix: string,
-  maxKeys: number
+  maxKeys: number,
+  opts: { depth?: number } = {}
 ): Promise<string[]> {
   const ids = new Set<string>();
   let token: string | undefined;
   let listed = 0;
+  // depth=1: only keys like `prefix/<id>/video.mp4` (not nested ShortForm under a country root)
+  const depth = opts.depth;
   do {
     const page = await client.send(
       new ListObjectsV2Command({
@@ -160,7 +198,15 @@ async function listVideoPackIds(
       listed += 1;
       // …/<id>/video.mp4
       const m = key.match(/\/([^/]+)\/video\.mp4$/i);
-      if (m?.[1]) ids.add(m[1]);
+      if (!m?.[1]) continue;
+      if (typeof depth === 'number') {
+        // Relative path under prefix: `<id>/video.mp4` → depth 1
+        const rel = key.startsWith(prefix) ? key.slice(prefix.length) : key;
+        const parts = rel.split('/').filter(Boolean);
+        // parts = [id, video.mp4] for depth 1
+        if (parts.length !== depth + 1) continue;
+      }
+      ids.add(m[1]);
     }
     token = page.IsTruncated ? page.NextContinuationToken : undefined;
     if (listed >= maxKeys) break;

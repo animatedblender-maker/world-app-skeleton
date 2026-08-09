@@ -1,6 +1,16 @@
 /** Content pipeline types — R2 catalog → owned posts (never orphan). */
 
-export type PackKind = 'spark' | 'longform';
+/**
+ * - spark: TikTok short packs under `<Country>/<id>/`
+ * - shortform: YouTube Shorts under `ShortForm/<Country>/<id>/` (Sparks surface)
+ * - longform: YouTube long under `LongForm/<Country>/<id>/` (Hubs surface)
+ */
+export type PackKind = 'spark' | 'shortform' | 'longform';
+
+/** Short vertical catalog that enters Sparks + feed spark shares. */
+export function isSparkSurface(kind: PackKind): boolean {
+  return kind === 'spark' || kind === 'shortform';
+}
 
 export type ProfileOwner = {
   userId: string;

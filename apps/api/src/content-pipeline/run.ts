@@ -9,6 +9,7 @@ import {
   extractR2KeyFromMediaUrl,
   getBucket,
   getObjectJson,
+  packKindFromR2Key,
   presignGet,
   r2Configured,
 } from './r2.js';
@@ -22,7 +23,13 @@ import {
   pickCaption,
   stripBodyMarkers,
 } from './text.js';
-import type { PipelineOptions, PipelineStats, ProfileOwner, R2Pack } from './types.js';
+import {
+  isSparkSurface,
+  type PipelineOptions,
+  type PipelineStats,
+  type ProfileOwner,
+  type R2Pack,
+} from './types.js';
 
 function emptyStats(dryRun: boolean): PipelineStats {
   return {
@@ -106,10 +113,18 @@ export async function runContentPipeline(opts: PipelineOptions = {}): Promise<Pi
       return stats;
     }
 
-    pipelineLog('Discovering complete packs in R2 (Sparks + LongForm)…', 'step');
+    pipelineLog('Discovering complete packs in R2 (Sparks + ShortForm + LongForm)…', 'step');
     const packs = await discoverPacks(client);
     stats.discovered = packs.length;
-    pipelineLog(`Discovered ${packs.length} pack(s) with video.mp4`, 'ok');
+    const byKind = {
+      spark: packs.filter((p) => p.kind === 'spark').length,
+      shortform: packs.filter((p) => p.kind === 'shortform').length,
+      longform: packs.filter((p) => p.kind === 'longform').length,
+    };
+    pipelineLog(
+      `Discovered ${packs.length} pack(s) · sparks=${byKind.spark} shortform=${byKind.shortform} longform=${byKind.longform}`,
+      'ok'
+    );
 
     pipelineLog('Loading existing r2: media_path rows from Supabase…', 'step');
     const existing = await loadExistingMediaPaths();
@@ -122,10 +137,9 @@ export async function runContentPipeline(opts: PipelineOptions = {}): Promise<Pi
       'step'
     );
 
-    missing.sort((a, b) => {
-      if (a.kind === b.kind) return 0;
-      return a.kind === 'spark' ? -1 : 1;
-    });
+    // Prefer short vertical (TikTok + YouTube Shorts) before Hubs longform.
+    const kindRank = (k: string) => (k === 'spark' ? 0 : k === 'shortform' ? 1 : 2);
+    missing.sort((a, b) => kindRank(a.kind) - kindRank(b.kind));
 
     let n = 0;
     for (const pack of missing) {
@@ -308,7 +322,8 @@ async function ingestOriginal(
   const signed = await presignGet(client, pack.videoKey);
   const mediaUrl = encodeMediaUrl({
     signedUrl: signed,
-    reel: pack.kind === 'spark',
+    // TikTok Sparks + YouTube ShortForm both play as Sparks (reel).
+    reel: isSparkSurface(pack.kind),
     r2Key: pack.videoKey,
     sourceId: `${pack.countryFolder}/${pack.videoId}`,
     kind: pack.kind,
@@ -348,7 +363,20 @@ async function ingestOriginal(
         mediaType,
         mediaUrl,
         pack.mediaPath,
-        Math.min(5000, Math.max(0, Number(meta.digg_count ?? meta.like_count ?? meta.play_count ?? 0) || 0)),
+        Math.min(
+          5000,
+          Math.max(
+            0,
+            Number(
+              meta.digg_count ??
+                meta.like_count ??
+                meta.play_count ??
+                meta.view_count ??
+                meta.views ??
+                0
+            ) || 0
+          )
+        ),
         createdAt,
       ]
     );
@@ -394,6 +422,7 @@ async function ingestOriginal(
     pipelineLog(`  comments seed failed: ${err?.message ?? err}`, 'warn');
   }
 
+  const sparkSurface = isSparkSurface(pack.kind);
   void emitContentPosted({
     entityId: author.userId,
     contentId: postId,
@@ -402,20 +431,23 @@ async function ingestOriginal(
     countryCode: pack.countryCode,
     countryName: author.countryName || pack.countryName,
     cityName: author.cityName,
-    isSpark: pack.kind === 'spark',
+    isSpark: sparkSurface,
     isHubLongForm: pack.kind === 'longform',
     title: caption,
     summary:
       pack.kind === 'spark'
         ? `Catalog Spark published for ${pack.countryName}`
-        : `Catalog Hubs video published for ${pack.countryName}`,
-    destination: pack.kind === 'spark' ? 'sparks' : 'hubs',
-    surface: pack.kind === 'spark' ? 'sparks' : 'hubs',
+        : pack.kind === 'shortform'
+          ? `Catalog YouTube Short published for ${pack.countryName}`
+          : `Catalog Hubs video published for ${pack.countryName}`,
+    destination: sparkSurface ? 'sparks' : 'hubs',
+    surface: sparkSurface ? 'sparks' : 'hubs',
     mediaUrl,
   });
 
   // Immediate spark share for feed density — uses **same original caption**.
-  if (pack.kind === 'spark') {
+  // TikTok Sparks + YouTube ShortForm both get a feed share stamp.
+  if (sparkSurface) {
     const shared = await createSparkShare({
       originId: postId,
       originMediaUrl: mediaUrl,
@@ -1029,21 +1061,23 @@ async function resignExpiring(
           obj.signed_at = new Date().toISOString();
           next = JSON.stringify(obj);
         } catch {
+          const kind = packKindFromR2Key(key);
           next = encodeMediaUrl({
             signedUrl: signed,
-            reel: true,
+            reel: isSparkSurface(kind),
             r2Key: key,
             sourceId: key,
-            kind: key.includes('LongForm') ? 'longform' : 'spark',
+            kind,
           });
         }
       } else {
+        const kind = packKindFromR2Key(key);
         next = encodeMediaUrl({
           signedUrl: signed,
-          reel: !key.includes('LongForm'),
+          reel: isSparkSurface(kind),
           r2Key: key,
           sourceId: key,
-          kind: key.includes('LongForm') ? 'longform' : 'spark',
+          kind,
         });
       }
 
