@@ -432,12 +432,12 @@ struct MatteryaHubPlayerView: View {
         }
     }
 
-    /// YouTube-style watch chrome: top tools, center play, bottom red scrubber + times.
+    /// Matterya-styled chrome, YouTube behaviors (tap hide, double-tap ±10s, auto-hide, scrub).
     private var hubChrome: some View {
         ZStack {
-            // Dim only while paused so the frame stays visible (YT-style).
+            // Soft Matterya ink dim when paused — not pure black YouTube veil.
             if !bridge.isPlaying {
-                Color.black.opacity(0.28)
+                Theme.ink.opacity(0.32)
                     .allowsHitTesting(false)
             }
 
@@ -445,7 +445,7 @@ struct MatteryaHubPlayerView: View {
             youtubeGestureLayer
                 .zIndex(0)
 
-            // Top tools (mute · fullscreen) — always tappable above gesture layer.
+            // Top tools (mute · fullscreen)
             VStack {
                 HStack(spacing: 10) {
                     Spacer(minLength: 0)
@@ -474,7 +474,7 @@ struct MatteryaHubPlayerView: View {
             }
             .zIndex(5)
 
-            // Center play / pause — large, YT-like (always when paused; when chrome shown while playing).
+            // Center play — Matterya accent disc
             Button {
                 bridge.togglePlayPause()
                 if bridge.isPlaying {
@@ -486,23 +486,23 @@ struct MatteryaHubPlayerView: View {
             } label: {
                 Image(systemName: bridge.isPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: bridge.isPlaying ? 26 : 30, weight: .bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Theme.paper)
                     .offset(x: bridge.isPlaying ? 0 : 2)
                     .frame(width: 72, height: 72)
-                    .background(Color.black.opacity(0.45), in: Circle())
-                    .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 0.5))
+                    .background(Theme.accentBright, in: Circle())
+                    .shadow(color: Theme.ink.opacity(0.35), radius: 14, y: 5)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(bridge.isPlaying ? "Pause" : "Play")
             .zIndex(4)
 
-            // Bottom bar: current · scrubber · remaining/total · (optional) fullscreen
+            // Bottom bar: scrubber + times (Matterya accent rail)
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
                 VStack(spacing: 6) {
                     HubTimelineScrubber(
                         value: scrubberValue,
-                        accent: Color(red: 1.0, green: 0.0, blue: 0.0),
+                        accent: Theme.accentBright,
                         onEditingChanged: { editing in
                             isScrubbing = editing
                             if editing {
@@ -526,15 +526,15 @@ struct MatteryaHubPlayerView: View {
                     HStack(spacing: 8) {
                         Text(formatTime(bridge.currentSeconds))
                             .font(.caption2.monospacedDigit().weight(.semibold))
-                            .foregroundStyle(.white.opacity(0.95))
+                            .foregroundStyle(Theme.paper.opacity(0.95))
 
-                        Text("/")
+                        Text("·")
                             .font(.caption2)
-                            .foregroundStyle(.white.opacity(0.45))
+                            .foregroundStyle(Theme.paper.opacity(0.4))
 
                         Text(formatTime(bridge.durationSeconds))
                             .font(.caption2.monospacedDigit().weight(.medium))
-                            .foregroundStyle(.white.opacity(0.75))
+                            .foregroundStyle(Theme.paper.opacity(0.72))
 
                         Spacer(minLength: 0)
 
@@ -545,7 +545,7 @@ struct MatteryaHubPlayerView: View {
                             } label: {
                                 Image(systemName: "arrow.up.left.and.arrow.down.right")
                                     .font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(.white.opacity(0.95))
+                                    .foregroundStyle(Theme.paper.opacity(0.95))
                                     .frame(width: 32, height: 28)
                             }
                             .buttonStyle(.plain)
@@ -560,8 +560,8 @@ struct MatteryaHubPlayerView: View {
                     LinearGradient(
                         colors: [
                             .clear,
-                            Color.black.opacity(0.45),
-                            Color.black.opacity(0.78),
+                            Theme.ink.opacity(0.5),
+                            Theme.ink.opacity(0.88),
                         ],
                         startPoint: .top,
                         endPoint: .bottom
@@ -650,9 +650,10 @@ struct MatteryaHubPlayerView: View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(Theme.paper)
                 .frame(width: 36, height: 36)
-                .background(Color.black.opacity(0.4), in: Circle())
+                .background(Theme.ink.opacity(0.52), in: Circle())
+                .overlay(Circle().stroke(Theme.paper.opacity(0.14), lineWidth: 0.5))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
@@ -665,10 +666,11 @@ struct MatteryaHubPlayerView: View {
             Text("\(seconds)")
                 .font(.caption.weight(.bold).monospacedDigit())
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(Theme.paper)
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(Color.black.opacity(0.42), in: Capsule())
+        .background(Theme.ink.opacity(0.55), in: Capsule())
+        .overlay(Capsule().stroke(Theme.accentBright.opacity(0.45), lineWidth: 1))
     }
 
     private func revealChrome() {
@@ -846,7 +848,7 @@ struct MatteryaLandscapeFullscreenPlayer: View {
 
                     HubTimelineScrubber(
                         value: scrubberValue,
-                        accent: Color(red: 1.0, green: 0.0, blue: 0.0),
+                        accent: Theme.accentBright,
                         onEditingChanged: { editing in
                             isScrubbing = editing
                             if editing {
@@ -865,7 +867,7 @@ struct MatteryaLandscapeFullscreenPlayer: View {
 
                     Text(formatTime(bridge.durationSeconds))
                         .font(.caption.monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.75))
+                        .foregroundStyle(Theme.paper.opacity(0.75))
                         .frame(width: 42, alignment: .trailing)
                 }
                 .padding(.horizontal, 16)

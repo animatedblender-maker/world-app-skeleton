@@ -94,6 +94,7 @@ struct GlobalHubPlaybackLayer: View {
                 dragOffset = 0
                 isPullingMinimize = false
                 preferMiniFill = false
+                appState.hubPlaybackPullProgress = 0
             } else {
                 dragOffset = 0
                 isPullingMinimize = false
@@ -101,6 +102,7 @@ struct GlobalHubPlaybackLayer: View {
                     try? await Task.sleep(nanoseconds: 260_000_000)
                     guard !appState.hubPlaybackExpanded else { return }
                     preferMiniFill = true
+                    appState.hubPlaybackPullProgress = 0
                 }
             }
         }
@@ -108,6 +110,7 @@ struct GlobalHubPlaybackLayer: View {
             dragOffset = 0
             isPullingMinimize = false
             preferMiniFill = !appState.hubPlaybackExpanded
+            appState.hubPlaybackPullProgress = 0
             miniCurrentSeconds = 0
             miniDurationSeconds = 0
             miniSeekToSeconds = nil
@@ -295,12 +298,17 @@ struct GlobalHubPlaybackLayer: View {
                 withTransaction(t) {
                     dragOffset = offset
                     isPullingMinimize = dragging
+                    // Instant: watch page chrome disappears the moment the grab engages.
+                    appState.hubPlaybackPullProgress = dragging
+                        ? min(1, max(0.08, offset / 100))
+                        : 0
                 }
             }
             .onEnded { value in
                 guard expanded else {
                     dragOffset = 0
                     isPullingMinimize = false
+                    appState.hubPlaybackPullProgress = 0
                     return
                 }
                 let shouldMini = MatteryaPullDownDismiss.shouldDismiss(value)
@@ -308,7 +316,8 @@ struct GlobalHubPlaybackLayer: View {
                     || value.predictedEndTranslation.height > 160
                 if shouldMini {
                     ReelsTwistHaptics.pullDismiss()
-                    // Snap drag to 0 with no animation, then ease frame to mini (one path only).
+                    // Keep chrome hidden through the morph into mini.
+                    appState.hubPlaybackPullProgress = 1
                     var snap = Transaction()
                     snap.disablesAnimations = true
                     withTransaction(snap) {
@@ -318,10 +327,18 @@ struct GlobalHubPlaybackLayer: View {
                     withAnimation(Self.morphAnim) {
                         appState.minimizeHubPlayback(returnToChat: true, animated: false)
                     }
+                    // Clear after mini settles (watch route may still be visible briefly).
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 280_000_000)
+                        if !appState.hubPlaybackExpanded {
+                            appState.hubPlaybackPullProgress = 0
+                        }
+                    }
                 } else {
                     withAnimation(Self.morphAnim) {
                         dragOffset = 0
                         isPullingMinimize = false
+                        appState.hubPlaybackPullProgress = 0
                     }
                 }
             }

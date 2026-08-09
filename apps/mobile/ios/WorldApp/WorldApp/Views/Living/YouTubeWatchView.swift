@@ -48,9 +48,22 @@ struct YouTubeWatchView: View {
     }
 
     /// 1 = full chrome visible; 0 = only video (while pulling down to mini player).
+    /// The moment a minimize grab starts (local or continuous layer), everything else vanishes.
     private var chromeOpacity: Double {
-        let progress = min(max(dismissDragOffset, 0) / MatteryaPullDownDismiss.dismissDistance, 1)
-        return Double(1 - progress)
+        if isPullingToMinimize || dismissDragOffset > 4 {
+            return 0
+        }
+        // Continuous player pull (GlobalHubPlaybackLayer → AppState).
+        if appState.hubPlaybackPullProgress > 0.01 {
+            return 0
+        }
+        return 1
+    }
+
+    private var isMinimizingGrab: Bool {
+        isPullingToMinimize
+            || dismissDragOffset > 4
+            || appState.hubPlaybackPullProgress > 0.01
     }
 
     private var isHubContent: Bool {
@@ -118,19 +131,21 @@ struct YouTubeWatchView: View {
                 }
                 .scrollDismissesKeyboard(.interactively)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Theme.canvas)
+                .background(isMinimizingGrab ? Color.clear : Theme.canvas)
                 .opacity(chromeOpacity)
-                .allowsHitTesting(chromeOpacity > 0.2 && !isPullingToMinimize)
+                .allowsHitTesting(!isMinimizingGrab && chromeOpacity > 0.2)
             }
             .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
         }
-        .background(Theme.canvas)
-        .animation(isPullingToMinimize ? nil : .spring(response: 0.34, dampingFraction: 0.82), value: chromeOpacity)
+        // During grab: pure video over clear/ink — no paper canvas behind.
+        .background(isMinimizingGrab ? Theme.ink : Theme.canvas)
+        .animation(nil, value: isMinimizingGrab)
         // Feed / non-expanded share still uses the sheet. Expanded Hubs uses an overlay so
         // GlobalHubPlaybackLayer never pauses or collapses to mini.
         .sharePostSheet(appState: appState)
         .overlay {
             if appState.hubPlaybackExpanded,
+               !isMinimizingGrab,
                let sharePost = appState.sharePostSheet {
                 HubsShareOverlay(post: sharePost) {
                     appState.sharePostSheet = nil
@@ -372,14 +387,15 @@ struct YouTubeWatchView: View {
         }
     }
 
-    /// YouTube-style action chips under the player (Like · Share · Save).
+    /// Matterya action chips (Like · Share · Save) — pill chips, warm paper chrome.
     private var actionSection: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 10) {
                 watchActionChip(
-                    icon: currentPost.likedByMe ? "hand.thumbsup.fill" : "hand.thumbsup",
+                    icon: currentPost.likedByMe ? "heart.fill" : "heart",
                     label: currentPost.likeCount > 0 ? "\(currentPost.likeCount)" : "Like",
-                    accent: currentPost.likedByMe
+                    accent: currentPost.likedByMe,
+                    accentColor: Theme.like
                 ) {
                     toggleLike()
                 }
@@ -410,6 +426,7 @@ struct YouTubeWatchView: View {
         icon: String,
         label: String,
         accent: Bool = false,
+        accentColor: Color? = nil,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -419,14 +436,27 @@ struct YouTubeWatchView: View {
                 Text(label)
                     .font(.caption.weight(.semibold))
             }
-            .foregroundStyle(accent ? Theme.paper : Theme.ink)
+            .foregroundStyle(
+                accent
+                    ? (accentColor != nil ? accentColor! : Theme.paper)
+                    : Theme.ink
+            )
             .padding(.horizontal, 14)
             .padding(.vertical, 9)
             .background(
-                Capsule().fill(accent ? Theme.ink : Theme.canvasMuted)
+                Capsule().fill(
+                    accent
+                        ? (accentColor != nil ? accentColor!.opacity(0.14) : Theme.ink)
+                        : Theme.surface
+                )
             )
             .overlay(
-                Capsule().stroke(Theme.border.opacity(accent ? 0 : 0.7), lineWidth: 0.5)
+                Capsule().stroke(
+                    accent
+                        ? (accentColor ?? Theme.border).opacity(0.35)
+                        : Theme.border.opacity(0.8),
+                    lineWidth: 0.5
+                )
             )
         }
         .buttonStyle(.plain)

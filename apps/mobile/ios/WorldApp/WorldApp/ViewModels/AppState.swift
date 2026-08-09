@@ -74,6 +74,9 @@ final class AppState {
     var hubPlaybackExpanded = false
     var hubPlaybackPlaying = true
     var hubPlaybackMuted = false
+    /// 0…1 while user is pulling the continuous player down to mini.
+    /// Watch page chrome (title, comments, related) hides instantly when > 0.
+    var hubPlaybackPullProgress: CGFloat = 0
     /// Shared mute for **all** in-feed videos (hub cards, spark cards, autoplay).
     /// Muting one video mutes every feed video; unmuting one unmutes all.
     var feedVideosMuted = false
@@ -1270,6 +1273,7 @@ final class AppState {
         hubPlaybackPost = nil
         hubPlaybackExpanded = false
         hubPlaybackPlaying = false
+        hubPlaybackPullProgress = 0
         hubPlaybackReturnConversationID = nil
         MediaPlaybackCoordinator.shared.stopAllPlayback()
         // Mini closed — feed/profile may elect autoplay again.
