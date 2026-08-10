@@ -296,9 +296,6 @@ struct MatteryaHubPlayerView: View {
                         }
                     }
                 },
-                onVideoSize: { size in
-                    onVideoSize?(size)
-                },
                 onProgress: { current, duration in
                     guard !isScrubbing else { return }
                     let playing = bridge.controller?.isPlaying
@@ -311,6 +308,9 @@ struct MatteryaHubPlayerView: View {
                             duration: duration > 0 ? duration : nil
                         )
                     }
+                },
+                onVideoSize: { size in
+                    onVideoSize?(size)
                 },
                 seekToSeconds: seekToSeconds,
                 onSeekConsumed: onSeekConsumed
