@@ -436,9 +436,9 @@ struct MatteryaHubPlayerView: View {
     /// Matterya-styled chrome, YouTube behaviors (tap hide, double-tap ±10s, auto-hide, scrub).
     private var hubChrome: some View {
         ZStack {
-            // Soft Matterya ink dim when paused — not pure black YouTube veil.
+            // Soft dim when paused — keep transparent enough to avoid “black bar” slabs.
             if !bridge.isPlaying {
-                Theme.ink.opacity(0.32)
+                Color.black.opacity(0.18)
                     .allowsHitTesting(false)
             }
 
@@ -461,8 +461,8 @@ struct MatteryaHubPlayerView: View {
                     }
                 }
                 .padding(.horizontal, 12)
-                // Clear of Dynamic Island / notch when stage is edge-to-edge.
-                .padding(.top, 10 + YouTubeMediaLayout.keyWindowSafeTop)
+                // Stage already sits below the island — no extra safe-top pad.
+                .padding(.top, 10)
                 Spacer(minLength: 0)
             }
             .zIndex(5)
@@ -1325,9 +1325,9 @@ final class ArchiveVideoPlayerController: UIViewController {
         }
         CATransaction.commit()
         posterView.contentMode = gravity == .resizeAspectFill ? .scaleAspectFill : .scaleAspectFit
-        // Match fill: no ink/black slab peeking around poster or first frame.
-        posterView.backgroundColor = gravity == .resizeAspectFill ? .clear : .black
-        view.backgroundColor = gravity == .resizeAspectFill ? .clear : .black
+        // Never paint a black bed — letterbox slabs read as “gaps” around the clip.
+        posterView.backgroundColor = .clear
+        view.backgroundColor = .clear
     }
 
     func configure(url: URL, posterURL: URL?, muted: Bool, startTime: Double, active: Bool) {

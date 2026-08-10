@@ -86,13 +86,18 @@ struct YouTubeWatchView: View {
                 collapse: appState.hubWatchScrollCollapse
             )
 
-            // VStack (not ZStack overlay): title always lays out *below* the stage.
-            // Continuous video docks into the stage hole — it cannot paint over the title.
+            // VStack: pure 16:9 stage, then a clear gap, then title — never under the video.
             VStack(spacing: 0) {
                 playerSection
                     .frame(width: geo.size.width, height: max(100, liveStageH))
                     .background(Color.clear)
                     .clipped()
+
+                // Explicit gap between video bottom and title (YouTube-style breathing room).
+                Color.clear
+                    .frame(height: YouTubeMediaLayout.hubsTitleGapBelowVideo)
+                    .frame(maxWidth: .infinity)
+                    .background(isMinimizingGrab ? Color.clear : Theme.canvas)
 
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
@@ -136,7 +141,7 @@ struct YouTubeWatchView: View {
                             }
                         }
                     }
-                    .padding(.top, 10)
+                    .padding(.top, 4)
                     .padding(.bottom, 28)
                 }
                 .coordinateSpace(name: "hubWatchScroll")
@@ -168,8 +173,7 @@ struct YouTubeWatchView: View {
         .background(isMinimizingGrab ? Theme.ink : Theme.canvas)
         .animation(nil, value: isMinimizingGrab)
         .animation(nil, value: appState.hubWatchScrollCollapse)
-        // Stage bleeds under Dynamic Island / notch (matches continuous y=0).
-        .ignoresSafeArea(edges: .top)
+        // Stay below Dynamic Island (safe area) so the stage is not mid-island.
         // Feed / non-expanded share still uses the sheet. Expanded Hubs uses an overlay so
         // GlobalHubPlaybackLayer never pauses or collapses to mini.
         .sharePostSheet(appState: appState)
@@ -256,26 +260,23 @@ struct YouTubeWatchView: View {
 
     private var playerSection: some View {
         let collapse = appState.hubWatchScrollCollapse
-        // Shrink top chrome padding as the stage collapses under the island.
-        let topChromePad = max(6, (8 + YouTubeMediaLayout.keyWindowSafeTop) * (1 - collapse * 0.72))
 
         return ZStack(alignment: .topLeading) {
-            // When embedsPlayer is false, GlobalHubPlaybackLayer owns the real video + pull-down.
-            // Clear hole so continuous fill shows through (no black slab).
+            // Continuous layer paints the video into this clear hole.
             playerSurface
 
             if embedsPlayer || collapse < 0.85 {
                 LinearGradient(
-                    colors: [Theme.ink.opacity(0.4 * (1 - collapse)), .clear],
+                    colors: [Theme.ink.opacity(0.35 * (1 - collapse)), .clear],
                     startPoint: .top,
                     endPoint: .bottom
                 )
-                .frame(height: max(36, 72 * (1 - collapse * 0.5)))
+                .frame(height: max(32, 56 * (1 - collapse * 0.5)))
                 .allowsHitTesting(false)
                 .opacity(embedsPlayer ? chromeOpacity : max(0, 1 - collapse * 1.2))
             }
 
-            // Minimize / close — over player, clear of Dynamic Island.
+            // Minimize / close — stage is already below the island (safe area).
             Button(action: { onBack() }) {
                 Image(systemName: "chevron.down")
                     .font(.body.weight(.bold))
@@ -284,13 +285,12 @@ struct YouTubeWatchView: View {
                     .background(Color.black.opacity(0.45), in: Circle())
             }
             .buttonStyle(.plain)
-            .padding(.top, topChromePad)
+            .padding(.top, 10)
             .padding(.horizontal, 12)
             .opacity(embedsPlayer ? chromeOpacity : 1)
             .allowsHitTesting(embedsPlayer ? (chromeOpacity > 0.2 && !isPullingToMinimize) : true)
             .zIndex(20)
 
-            // Pull-down only when this view embeds its own player (not GlobalHub continuous).
             if embedsPlayer {
                 Color.clear
                     .frame(height: 72)
@@ -302,7 +302,8 @@ struct YouTubeWatchView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(embedsPlayer ? Theme.ink : Color.clear)
+        // Clear — black ink beds read as letterbox gaps with aspectFit.
+        .background(Color.clear)
         .onDisappear {
             dismissDragOffset = 0
             isPullingToMinimize = false
@@ -355,7 +356,7 @@ struct YouTubeWatchView: View {
                         showsControls: true,
                         allowsFullscreen: false,
                         startTime: YouTubeCatalogService.shared.playbackPosition(for: currentPost.id),
-                        fillsFrame: true,
+                        fillsFrame: false,
                         onViewed: { Task { await PostsService.shared.recordView(currentPost) } }
                     )
                 }

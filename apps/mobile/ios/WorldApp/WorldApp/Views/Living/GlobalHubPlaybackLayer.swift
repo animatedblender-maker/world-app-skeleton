@@ -96,8 +96,8 @@ struct GlobalHubPlaybackLayer: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                // Expanded: under Dynamic Island. Mini: stay in safe layout (dock frame).
-                .ignoresSafeArea(edges: expanded ? .top : [])
+                // Stay in the safe area so the stage starts *below* the Dynamic Island
+                // (not mid-island). Mini docks via preference frame.
             }
         }
         .onChange(of: expanded) { _, isExpanded in
@@ -198,13 +198,16 @@ struct GlobalHubPlaybackLayer: View {
 
     private func playerLayout(in geo: GeometryProxy) -> PlayerLayout {
         if expanded {
-            // y=0 under notch; height = safeTop + 16:9 (matches watch VStack hole).
-            // Title lives below that hole — never under this rect.
+            // Pure 16:9 below the safe top (Dynamic Island). No mid-island start.
+            // Title is in the watch VStack under this hole — never covered.
+            let safeTop = geo.safeAreaInsets.top > 1
+                ? geo.safeAreaInsets.top
+                : YouTubeMediaLayout.keyWindowSafeTop
             let stageHeight = YouTubeMediaLayout.hubsStageHeight(
                 containerWidth: geo.size.width,
                 collapse: appState.hubWatchScrollCollapse
             )
-            return PlayerLayout(x: 0, y: 0, width: geo.size.width, height: stageHeight)
+            return PlayerLayout(x: 0, y: safeTop, width: geo.size.width, height: stageHeight)
         }
 
         // Lock to the mini bar’s real frame (floating or chat).
@@ -245,8 +248,8 @@ struct GlobalHubPlaybackLayer: View {
                 postID: post.id,
                 showsControls: showControls,
                 loops: false,
-                // Always fill the stage — no black bars top/bottom (mini + expanded).
-                fillsFrame: true,
+                // aspectFit: full frame, no crop. Stage is pure 16:9 so no letterbox bars.
+                fillsFrame: false,
                 isMuted: mutedBinding,
                 allowsFullscreen: false,
                 onReady: {

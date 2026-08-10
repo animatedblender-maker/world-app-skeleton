@@ -580,56 +580,38 @@ struct YouTubeMiniPlayerBar: View {
     }
 }
 
-/// Mini chrome drawn **on top of** the continuous video (X top-right, mute+play bottom-right, timeline).
+/// Mini chrome: close · mute · play only — **no timeline**.
 struct HubMiniPlayerChrome: View {
     @Binding var isPlaying: Bool
     @Binding var isMuted: Bool
     let onClose: () -> Void
-    /// Current playhead / duration for the timeline scrubber.
+    /// Kept for call-site compatibility (timeline removed).
     var currentSeconds: Double = 0
     var durationSeconds: Double = 0
     var onSeek: ((Double) -> Void)? = nil
 
-    @State private var isScrubbing = false
-    @State private var scrubFraction: Double = 0
-
     private var btn: CGFloat { YouTubeMiniPlayerBar.controlButtonSize }
     private var playSize: CGFloat { YouTubeMiniPlayerBar.playButtonSize }
     private let pad: CGFloat = 10
-    /// Glass-style chips — light so video stays visible underneath.
     private let chipFill = Color.white.opacity(0.18)
     private let chipStroke = Color.white.opacity(0.28)
 
-    private var progressFraction: Double {
-        guard durationSeconds.isFinite, durationSeconds > 0.35 else { return 0 }
-        if isScrubbing { return min(1, max(0, scrubFraction)) }
-        guard currentSeconds.isFinite else { return 0 }
-        return min(1, max(0, currentSeconds / durationSeconds))
-    }
-
-    private var timeLabel: String {
-        guard durationSeconds > 0.35 else { return "" }
-        let t = isScrubbing ? scrubFraction * durationSeconds : currentSeconds
-        return "\(formatClock(t)) · \(formatClock(durationSeconds))"
-    }
-
     var body: some View {
         ZStack {
-            // Very light scrims only — keep video readable.
             VStack(spacing: 0) {
                 LinearGradient(
                     colors: [.black.opacity(0.22), .clear],
                     startPoint: .top,
                     endPoint: .bottom
                 )
-                .frame(height: 44)
+                .frame(height: 40)
                 Spacer(minLength: 0)
                 LinearGradient(
-                    colors: [.clear, .black.opacity(0.38)],
+                    colors: [.clear, .black.opacity(0.32)],
                     startPoint: .top,
                     endPoint: .bottom
                 )
-                .frame(height: 72)
+                .frame(height: 56)
             }
             .allowsHitTesting(false)
 
@@ -653,116 +635,43 @@ struct HubMiniPlayerChrome: View {
 
                 Spacer(minLength: 0)
 
-                // Timeline + transport along the bottom edge of the mini card.
-                VStack(alignment: .trailing, spacing: 6) {
-                    if isScrubbing, durationSeconds > 0.35 {
-                        Text(timeLabel)
-                            .font(.caption2.weight(.semibold).monospacedDigit())
-                            .foregroundStyle(.white.opacity(0.9))
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-                            .padding(.trailing, 4)
+                HStack(spacing: 12) {
+                    Spacer(minLength: 0)
+                    Button {
+                        isMuted.toggle()
+                    } label: {
+                        Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                            .font(.system(size: btn * 0.4, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.95))
+                            .frame(width: btn, height: btn)
+                            .background(chipFill, in: Circle())
+                            .overlay(Circle().stroke(chipStroke, lineWidth: 0.5))
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(isMuted ? "Unmute" : "Mute")
 
-                    miniTimelineRail
-
-                    HStack(spacing: 12) {
-                        Spacer(minLength: 0)
-                        Button {
-                            isMuted.toggle()
-                        } label: {
-                            Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                                .font(.system(size: btn * 0.4, weight: .semibold))
-                                .foregroundStyle(.white.opacity(0.95))
-                                .frame(width: btn, height: btn)
-                                .background(chipFill, in: Circle())
-                                .overlay(Circle().stroke(chipStroke, lineWidth: 0.5))
+                    Button {
+                        isPlaying.toggle()
+                    } label: {
+                        ZStack {
+                            Circle()
+                                .fill(Theme.accentBright.opacity(0.72))
+                                .frame(width: playSize, height: playSize)
+                                .overlay(Circle().stroke(Color.white.opacity(0.35), lineWidth: 0.5))
+                            Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                                .font(.system(size: playSize * 0.34, weight: .bold))
+                                .foregroundStyle(Theme.paper.opacity(0.95))
+                                .offset(x: isPlaying ? 0 : 1)
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(isMuted ? "Unmute" : "Mute")
-
-                        Button {
-                            isPlaying.toggle()
-                        } label: {
-                            ZStack {
-                                Circle()
-                                    .fill(Theme.accentBright.opacity(0.72))
-                                    .frame(width: playSize, height: playSize)
-                                    .overlay(Circle().stroke(Color.white.opacity(0.35), lineWidth: 0.5))
-                                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                                    .font(.system(size: playSize * 0.34, weight: .bold))
-                                    .foregroundStyle(Theme.paper.opacity(0.95))
-                                    .offset(x: isPlaying ? 0 : 1)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(isPlaying ? "Pause" : "Play")
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(isPlaying ? "Pause" : "Play")
                 }
                 .padding(.horizontal, pad)
                 .padding(.bottom, pad)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var miniTimelineRail: some View {
-        GeometryReader { geo in
-            let trackH: CGFloat = isScrubbing ? 4 : 2.5
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(Color.white.opacity(0.22))
-                    .frame(height: trackH)
-                Capsule()
-                    .fill(Theme.accentBright.opacity(0.95))
-                    .frame(width: max(trackH, geo.size.width * progressFraction), height: trackH)
-                    .animation(isScrubbing ? nil : .linear(duration: 0.12), value: progressFraction)
-                if isScrubbing {
-                    Circle()
-                        .fill(Color.white)
-                        .frame(width: 12, height: 12)
-                        .offset(x: max(0, geo.size.width * progressFraction - 6))
-                }
-            }
-            .frame(maxHeight: .infinity, alignment: .center)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 4, coordinateSpace: .local)
-                    .onChanged { value in
-                        let w = max(geo.size.width, 1)
-                        isScrubbing = true
-                        scrubFraction = min(1, max(0, value.location.x / w))
-                    }
-                    .onEnded { value in
-                        let w = max(geo.size.width, 1)
-                        let f = min(1, max(0, value.location.x / w))
-                        scrubFraction = f
-                        if durationSeconds > 0.35 {
-                            onSeek?(f * durationSeconds)
-                        }
-                        withAnimation(.easeOut(duration: 0.12)) {
-                            isScrubbing = false
-                        }
-                    }
-            )
-            // Also allow a simple tap to seek.
-            .onTapGesture { location in
-                let w = max(geo.size.width, 1)
-                let f = min(1, max(0, location.x / w))
-                if durationSeconds > 0.35 {
-                    onSeek?(f * durationSeconds)
-                }
-            }
-        }
-        .frame(height: 18)
-        .accessibilityLabel("Mini player timeline")
-        .accessibilityValue(timeLabel)
-    }
-
-    private func formatClock(_ seconds: Double) -> String {
-        let s = max(0, Int(seconds.rounded(.down)))
-        let m = s / 60
-        let r = s % 60
-        return String(format: "%d:%02d", m, r)
     }
 }
 
