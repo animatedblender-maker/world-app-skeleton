@@ -353,7 +353,7 @@ struct YouTubeWatchView: View {
                         showsControls: true,
                         allowsFullscreen: false,
                         startTime: YouTubeCatalogService.shared.playbackPosition(for: currentPost.id),
-                        fillsFrame: true,
+                        fillsFrame: false,
                         onViewed: { Task { await PostsService.shared.recordView(currentPost) } }
                     )
                 }

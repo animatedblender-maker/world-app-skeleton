@@ -1312,8 +1312,8 @@ final class ArchiveVideoPlayerController: UIViewController {
         CATransaction.commit()
     }
 
-    /// Prefer fill so a late gravity call never flashes letterbox bars on Hubs.
-    private var preferredVideoGravity: AVLayerVideoGravity = .resizeAspectFill
+    /// Updated every layout via `applyVideoGravity` — default fit (no crop) until told otherwise.
+    private var preferredVideoGravity: AVLayerVideoGravity = .resizeAspect
 
     func applyVideoGravity(_ gravity: AVLayerVideoGravity) {
         preferredVideoGravity = gravity
@@ -1326,9 +1326,10 @@ final class ArchiveVideoPlayerController: UIViewController {
         }
         CATransaction.commit()
         posterView.contentMode = gravity == .resizeAspectFill ? .scaleAspectFill : .scaleAspectFit
-        // Never paint a black bed — letterbox slabs read as “gaps” around the clip.
+        // Clear bed — no black letterbox slabs around aspectFit.
         posterView.backgroundColor = .clear
         view.backgroundColor = .clear
+        playerLayer?.backgroundColor = UIColor.clear.cgColor
     }
 
     func configure(url: URL, posterURL: URL?, muted: Bool, startTime: Double, active: Bool) {

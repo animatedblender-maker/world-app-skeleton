@@ -229,8 +229,8 @@ struct GlobalHubPlaybackLayer: View {
                 postID: post.id,
                 showsControls: showControls,
                 loops: false,
-                // Cover the stage edge-to-edge (no letterbox gaps in the container).
-                fillsFrame: true,
+                // aspectFit inside exact 16:9 stage — full picture, no crop, no letterbox.
+                fillsFrame: false,
                 isMuted: mutedBinding,
                 allowsFullscreen: false,
                 onReady: {

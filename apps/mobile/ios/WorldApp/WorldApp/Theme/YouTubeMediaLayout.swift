@@ -54,16 +54,15 @@ enum YouTubeMediaLayout {
     /// Prefetch + display MUST match or ImageCache keys miss and every row re-downloads.
     static let hubsListThumbMaxPixel: CGFloat = 320
 
-    /// Watch stage height — a bit taller than classic 16:9 so the player sits closer
-    /// to the title (aspectFill covers the extra height, no letterbox bars).
+    /// Watch stage = **exact 16:9** of width.
+    /// Pair with aspectFit (`fillsFrame: false`) so the clip is never cropped and
+    /// never letterboxed (stage AR matches landscape long-form).
     static func hubsBodyStageHeight(containerWidth: CGFloat) -> CGFloat {
         let w = max(1, containerWidth)
         let classic16x9 = w / aspect
-        // ~22% taller than 16:9 — more presence under the island, title still close.
-        let preferred = classic16x9 * 1.22
         let contentH = hubsContentColumnHeight
-        let maxH = max(180, contentH - hubsWatchMetaReserve)
-        return max(180, min(preferred, maxH))
+        let maxH = max(160, contentH - hubsWatchMetaReserve)
+        return max(160, min(classic16x9, maxH))
     }
 
     /// Full watch stage height (matches continuous player).
@@ -91,7 +90,7 @@ enum YouTubeMediaLayout {
         let w = max(1, containerWidth)
         let body = hubsBodyStageHeight(containerWidth: w)
         if containerHeight > 200 {
-            let maxBody = max(180, containerHeight - hubsWatchMetaReserve)
+            let maxBody = max(160, containerHeight - hubsWatchMetaReserve)
             return min(body, maxBody)
         }
         return hubsContinuousStageHeight(containerWidth: w)
