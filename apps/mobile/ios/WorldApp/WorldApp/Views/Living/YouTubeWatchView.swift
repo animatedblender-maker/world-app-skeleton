@@ -116,8 +116,9 @@ struct YouTubeWatchView: View {
                                 }
                             }
 
-                        channelSection
+                        // Like · Send · Keep sit under the title (not under the channel card).
                         actionSection
+                        channelSection
 
                         descriptionSection
                             .padding(.horizontal, Theme.pagePadding)
