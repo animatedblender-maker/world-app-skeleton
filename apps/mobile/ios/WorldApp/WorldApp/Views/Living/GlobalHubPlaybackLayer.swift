@@ -229,8 +229,8 @@ struct GlobalHubPlaybackLayer: View {
                 postID: post.id,
                 showsControls: showControls,
                 loops: false,
-                // aspectFit inside exact 16:9 stage — full picture, no crop, no letterbox.
-                fillsFrame: false,
+                // Expanded: aspectFit (no crop). Mini strip: aspectFill (full-bleed crop).
+                fillsFrame: !expanded,
                 isMuted: mutedBinding,
                 allowsFullscreen: false,
                 onReady: {
