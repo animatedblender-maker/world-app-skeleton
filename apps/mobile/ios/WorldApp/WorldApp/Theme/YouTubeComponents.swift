@@ -516,8 +516,15 @@ struct YouTubeMiniPlayerBar: View {
     var body: some View {
         GeometryReader { geo in
             ZStack {
+                // Expand hit target behind controls (never wraps the buttons).
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: onExpand)
+                    .accessibilityLabel("Expand video")
+                    .accessibilityAddTraits(.isButton)
+
                 if embedsVideo {
-                    Theme.ink
+                    Theme.ink.allowsHitTesting(false)
                     if let url = post.playableVideoURL {
                         VideoPlayerView(
                             url: url,
@@ -533,6 +540,7 @@ struct YouTubeMiniPlayerBar: View {
                             persistsPositionOnTeardown: true,
                             fillsFrame: true
                         )
+                        .allowsHitTesting(false)
                     } else {
                         YouTubeVideoThumbnail(
                             post: post,
@@ -540,17 +548,12 @@ struct YouTubeMiniPlayerBar: View {
                             showsPlayIcon: false,
                             frameStyle: .card
                         )
+                        .allowsHitTesting(false)
                     }
-                    // Local video path: chrome lives on this bar.
-                    HubMiniPlayerChrome(
-                        isPlaying: $isPlaying,
-                        isMuted: $isMuted,
-                        onClose: onClose
-                    )
                 } else {
-                    // True hole — continuous player sits under this stack and shows through.
-                    // Do NOT paint Theme.ink here or it masks the video.
+                    // Clear hole + dock preference — continuous video paints under this stack.
                     Color.clear
+                        .allowsHitTesting(false)
                         .overlay(
                             GeometryReader { g in
                                 Color.clear.preference(
@@ -560,12 +563,15 @@ struct YouTubeMiniPlayerBar: View {
                             }
                         )
                 }
+
+                // Always on top so play / mute / close receive taps.
+                HubMiniPlayerChrome(
+                    isPlaying: $isPlaying,
+                    isMuted: $isMuted,
+                    onClose: onClose
+                )
             }
             .frame(width: geo.size.width, height: geo.size.height)
-            .contentShape(Rectangle())
-            .onTapGesture(perform: onExpand)
-            .accessibilityLabel("Expand video")
-            .accessibilityAddTraits(.isButton)
         }
         .frame(maxWidth: .infinity)
         .frame(height: Self.barHeight)

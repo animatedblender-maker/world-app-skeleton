@@ -147,20 +147,7 @@ struct GlobalHubPlaybackLayer: View {
                     .background(Color.clear)
                     .clipped()
 
-                if !expanded, !isPullingMinimize {
-                    HubMiniPlayerChrome(
-                        isPlaying: playingBinding,
-                        isMuted: mutedBinding,
-                        onClose: { appState.stopHubPlayback() },
-                        currentSeconds: miniCurrentSeconds,
-                        durationSeconds: miniDurationSeconds,
-                        onSeek: { seconds in
-                            miniCurrentSeconds = seconds
-                            miniSeekToSeconds = seconds
-                        }
-                    )
-                    .frame(width: layout.width, height: layout.height)
-                }
+                // Mini chrome lives on YouTubeMiniPlayerBar (above this layer) so buttons work.
             }
             .frame(width: layout.width, height: layout.height)
             .clipShape(
@@ -177,12 +164,8 @@ struct GlobalHubPlaybackLayer: View {
             .animation(isPullingMinimize ? nil : Self.morphAnim, value: layout.height)
             .animation(isPullingMinimize ? nil : Self.morphAnim, value: layout.x)
             .animation(isPullingMinimize ? nil : Self.morphAnim, value: layout.y)
-            // Full video surface: pull-to-mini when expanded (guarded inside gesture).
-            .simultaneousGesture(minimizeGesture)
-            .onTapGesture {
-                guard !expanded else { return }
-                expand()
-            }
+            // Pull-to-mini only while expanded (mini chrome owns taps when minimized).
+            .simultaneousGesture(expanded ? minimizeGesture : nil)
             .id("global-hub-continuous-\(post.id)")
         }
     }
@@ -198,16 +181,14 @@ struct GlobalHubPlaybackLayer: View {
 
     private func playerLayout(in geo: GeometryProxy) -> PlayerLayout {
         if expanded {
-            // Pure 16:9 below the safe top (Dynamic Island). No mid-island start.
-            // Title is in the watch VStack under this hole — never covered.
-            let safeTop = geo.safeAreaInsets.top > 1
-                ? geo.safeAreaInsets.top
-                : YouTubeMediaLayout.keyWindowSafeTop
+            // Pure 16:9 at y=0 of the *safe* coordinate system.
+            // Do NOT add keyWindowSafeTop — GeometryReader is already below the island,
+            // and that double-offset left an empty gap at the top of the stage.
             let stageHeight = YouTubeMediaLayout.hubsStageHeight(
                 containerWidth: geo.size.width,
                 collapse: appState.hubWatchScrollCollapse
             )
-            return PlayerLayout(x: 0, y: safeTop, width: geo.size.width, height: stageHeight)
+            return PlayerLayout(x: 0, y: 0, width: geo.size.width, height: stageHeight)
         }
 
         // Lock to the mini bar’s real frame (floating or chat).
@@ -248,8 +229,8 @@ struct GlobalHubPlaybackLayer: View {
                 postID: post.id,
                 showsControls: showControls,
                 loops: false,
-                // aspectFit: full frame, no crop. Stage is pure 16:9 so no letterbox bars.
-                fillsFrame: false,
+                // Cover the stage edge-to-edge (no letterbox gaps in the container).
+                fillsFrame: true,
                 isMuted: mutedBinding,
                 allowsFullscreen: false,
                 onReady: {

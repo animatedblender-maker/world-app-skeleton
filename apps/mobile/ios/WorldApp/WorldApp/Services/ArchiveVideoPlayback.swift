@@ -1248,14 +1248,15 @@ final class ArchiveVideoPlayerController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .black
+        // Clear bed — black backgrounds show as gaps around aspectFit frames.
+        view.backgroundColor = .clear
         view.clipsToBounds = true
 
         // Match video gravity (updated in applyVideoGravity) — avoid poster/video framing jump.
         // Default fill so Sparks never flash fit→fill on first layout.
         posterView.contentMode = .scaleAspectFill
         posterView.clipsToBounds = true
-        posterView.backgroundColor = .black
+        posterView.backgroundColor = .clear
         posterView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(posterView)
 
