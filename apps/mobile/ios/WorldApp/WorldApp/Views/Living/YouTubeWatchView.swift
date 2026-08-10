@@ -86,7 +86,7 @@ struct YouTubeWatchView: View {
                 collapse: appState.hubWatchScrollCollapse
             )
 
-            // VStack: pure 16:9 stage, then a clear gap, then title — never under the video.
+            // VStack: stage then title — title must sit flush under the video.
             VStack(spacing: 0) {
                 playerSection
                     .frame(width: geo.size.width, height: max(100, liveStageH))
@@ -95,9 +95,8 @@ struct YouTubeWatchView: View {
 
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
-                        // Scroll probe — drives YouTube-style stage collapse.
-                        Color.clear
-                            .frame(height: 1)
+                        // Scroll probe on the title row itself (no spacer above title).
+                        titleSection
                             .background {
                                 GeometryReader { proxy in
                                     let minY = proxy.frame(in: .named("hubWatchScroll")).minY
@@ -108,7 +107,6 @@ struct YouTubeWatchView: View {
                                 }
                             }
 
-                        titleSection
                         channelSection
                         actionSection
 
@@ -139,6 +137,11 @@ struct YouTubeWatchView: View {
                     .padding(.bottom, 28)
                 }
                 .coordinateSpace(name: "hubWatchScroll")
+                // Kill automatic top safe-area / content margin — that was a ~50pt
+                // blank band between the video and the title.
+                .contentMargins(.top, 0, for: .scrollContent)
+                .contentMargins(.top, 0, for: .scrollIndicators)
+                .safeAreaPadding(.top, 0)
                 .scrollDismissesKeyboard(.interactively)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(isMinimizingGrab ? Color.clear : Theme.canvas)
@@ -403,7 +406,7 @@ struct YouTubeWatchView: View {
             }
         }
         .padding(.horizontal, Theme.pagePadding)
-        .padding(.top, 8)
+        .padding(.top, 4)
     }
 
     @ViewBuilder
