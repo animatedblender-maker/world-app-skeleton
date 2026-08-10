@@ -29,12 +29,13 @@ struct GlobalHubPlaybackLayer: View {
     @State private var miniSeekToSeconds: Double? = nil
 
     private var expanded: Bool { appState.hubPlaybackExpanded }
-    private var docked: Bool { appState.hubPlaybackDockInChat }
 
     private static let morphAnim = Animation.easeOut(duration: 0.24)
 
+    /// Prefer docking into the reported mini-bar / chat hole whenever minimized.
+    /// (Floating mini reports the same preference key as the chat dock.)
     private var hasDockSlot: Bool {
-        docked
+        !expanded
             && dockSlotGlobal != nil
             && (dockSlotGlobal?.width ?? 0) > 8
             && (dockSlotGlobal?.height ?? 0) > 8
@@ -44,10 +45,14 @@ struct GlobalHubPlaybackLayer: View {
         YouTubeMiniPlayerBar.barHeight
     }
 
-    /// Extra space above the bottom of *this* layer’s GeometryReader.
-    /// Tab bar clearance is applied by MainTabView (`.padding(.bottom, tabBarHeight)`)
-    /// so the UIKit host never covers the menu — do **not** subtract tab height here.
-    private var floatingBottomClearance: CGFloat { 0 }
+    /// When preference dock isn’t ready yet, sit the strip above the tab bar.
+    private var floatingBottomClearance: CGFloat {
+        if hasDockSlot { return 0 }
+        if !expanded && appState.navigationPath.isEmpty {
+            return Theme.tabBarHeight
+        }
+        return 0
+    }
 
     private var showTransportChrome: Bool {
         // Hide transport when collapsed by comment-scroll (too short for scrubber).
@@ -200,23 +205,25 @@ struct GlobalHubPlaybackLayer: View {
             return PlayerLayout(x: 0, y: 0, width: geo.size.width, height: stageHeight)
         }
 
+        // Lock to the mini bar’s real frame (floating or chat) so we never drift
+        // over the tab menu or leave a gap under the strip.
         if hasDockSlot, let global = dockSlotGlobal {
             let containerGlobal = geo.frame(in: .global)
             let x = global.minX - containerGlobal.minX
             let y = global.minY - containerGlobal.minY
-            let looksLikeMiniSlot = y > geo.size.height * 0.25
-                && global.height > 48
-                && global.height < geo.size.height * 0.45
+            let looksLikeMiniSlot = global.height > 48
+                && global.height < geo.size.height * 0.5
                 && global.width > 40
+                // Stay in the lower half (mini / chat dock), never the watch stage.
+                && y > geo.size.height * 0.2
             if looksLikeMiniSlot,
-               y > -20, y < geo.size.height + 20,
+               y > -20, y + global.height <= geo.size.height + 24,
                x > -40, x < geo.size.width + 40 {
                 return PlayerLayout(x: x, y: y, width: global.width, height: global.height)
             }
         }
 
-        // Sit flush on the bottom of this layer. MainTabView already inset the layer
-        // above the tab bar, so mini never overlays the bottom menu.
+        // Fallback before the mini bar publishes its slot: above tab bar, full width.
         let barW = geo.size.width
         let size = YouTubeMiniPlayerBar.videoSize(forBarWidth: barW)
         let barTop = max(0, geo.size.height - floatingBottomClearance - miniStripHeight)
