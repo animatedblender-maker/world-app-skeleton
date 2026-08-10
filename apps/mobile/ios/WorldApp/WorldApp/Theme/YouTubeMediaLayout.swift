@@ -54,17 +54,19 @@ enum YouTubeMediaLayout {
     /// Prefetch + display MUST match or ImageCache keys miss and every row re-downloads.
     static let hubsListThumbMaxPixel: CGFloat = 320
 
-    /// Pure **16:9** stage height of width. Never half-screen, never “+ safeTop”
-    /// (that taller box caused black letterbox gaps with aspectFit).
+    /// Watch stage height — a bit taller than classic 16:9 so the player sits closer
+    /// to the title (aspectFill covers the extra height, no letterbox bars).
     static func hubsBodyStageHeight(containerWidth: CGFloat) -> CGFloat {
         let w = max(1, containerWidth)
         let classic16x9 = w / aspect
+        // ~14% taller than 16:9 — closes the visual gap under the clip without half-screen.
+        let preferred = classic16x9 * 1.14
         let contentH = hubsContentColumnHeight
-        let maxH = max(160, min(classic16x9, contentH - hubsWatchMetaReserve))
-        return max(160, min(classic16x9, maxH))
+        let maxH = max(180, contentH - hubsWatchMetaReserve)
+        return max(180, min(preferred, maxH))
     }
 
-    /// Full watch stage height (same as body — pure 16:9).
+    /// Full watch stage height (matches continuous player).
     /// Player sits **below** the Dynamic Island (safe area), not mid-island.
     static func hubsContinuousStageHeight(containerWidth: CGFloat) -> CGFloat {
         hubsBodyStageHeight(containerWidth: containerWidth)
@@ -84,19 +86,19 @@ enum YouTubeMediaLayout {
         return full + (mini - full) * t
     }
 
-    /// Embedded watch player — same pure 16:9 stage as continuous hubs playback.
+    /// Embedded watch player — same stage as continuous hubs playback.
     static func watchPlayerHeight(containerWidth: CGFloat, containerHeight: CGFloat) -> CGFloat {
         let w = max(1, containerWidth)
         let body = hubsBodyStageHeight(containerWidth: w)
         if containerHeight > 200 {
-            let maxBody = max(160, containerHeight - hubsWatchMetaReserve)
+            let maxBody = max(180, containerHeight - hubsWatchMetaReserve)
             return min(body, maxBody)
         }
         return hubsContinuousStageHeight(containerWidth: w)
     }
 
-    /// Gap between the video stage bottom edge and the title row.
-    static let hubsTitleGapBelowVideo: CGFloat = 16
+    /// Tight gap between video bottom and title (title should sit close under the player).
+    static let hubsTitleGapBelowVideo: CGFloat = 6
 }
 
 /// Scroll offset of Hubs watch meta/comments (drives sticky player collapse).

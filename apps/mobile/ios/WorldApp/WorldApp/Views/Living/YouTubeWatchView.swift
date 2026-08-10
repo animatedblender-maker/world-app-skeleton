@@ -141,7 +141,7 @@ struct YouTubeWatchView: View {
                             }
                         }
                     }
-                    .padding(.top, 4)
+                    .padding(.top, 0)
                     .padding(.bottom, 28)
                 }
                 .coordinateSpace(name: "hubWatchScroll")
