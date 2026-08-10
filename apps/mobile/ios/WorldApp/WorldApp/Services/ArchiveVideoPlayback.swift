@@ -220,6 +220,8 @@ struct MatteryaHubPlayerView: View {
     var onPlayingChange: ((Bool) -> Void)? = nil
     /// Mini player / external chrome: (currentSeconds, durationSeconds).
     var onProgress: ((Double, Double) -> Void)? = nil
+    /// Natural video size once known (for uncropped stage height).
+    var onVideoSize: ((CGSize) -> Void)? = nil
     /// When set, seek once then clear via `onSeekConsumed`.
     var seekToSeconds: Double? = nil
     var onSeekConsumed: (() -> Void)? = nil
@@ -250,6 +252,7 @@ struct MatteryaHubPlayerView: View {
         onReady: (() -> Void)? = nil,
         onPlayingChange: ((Bool) -> Void)? = nil,
         onProgress: ((Double, Double) -> Void)? = nil,
+        onVideoSize: ((CGSize) -> Void)? = nil,
         seekToSeconds: Double? = nil,
         onSeekConsumed: (() -> Void)? = nil
     ) {
@@ -266,6 +269,7 @@ struct MatteryaHubPlayerView: View {
         self.onReady = onReady
         self.onPlayingChange = onPlayingChange
         self.onProgress = onProgress
+        self.onVideoSize = onVideoSize
         self.seekToSeconds = seekToSeconds
         self.onSeekConsumed = onSeekConsumed
     }
@@ -291,6 +295,9 @@ struct MatteryaHubPlayerView: View {
                             scheduleChromeHide()
                         }
                     }
+                },
+                onVideoSize: { size in
+                    onVideoSize?(size)
                 },
                 onProgress: { current, duration in
                     guard !isScrubbing else { return }
@@ -1034,6 +1041,7 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
     var onReady: (() -> Void)? = nil
     var onFailed: ((String) -> Void)? = nil
     var onProgress: ((Double, Double) -> Void)? = nil
+    var onVideoSize: ((CGSize) -> Void)? = nil
     /// When set, seek once then clear via `onSeekConsumed`.
     var seekToSeconds: Double? = nil
     var onSeekConsumed: (() -> Void)? = nil
@@ -1065,6 +1073,7 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
         vc.onReady = onReady
         vc.onFailed = onFailed
         vc.onProgress = onProgress
+        vc.onVideoSize = onVideoSize
         vc.onPlayingChanged = { [weak bridge] playing in
             bridge?.publishPlaying(playing)
         }
@@ -1094,6 +1103,7 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
         vc.onReady = onReady
         vc.onFailed = onFailed
         vc.onProgress = onProgress
+        vc.onVideoSize = onVideoSize
         vc.view.isUserInteractionEnabled = interactive
         vc.view.isMultipleTouchEnabled = false
         vc.onPlayingChanged = { [weak bridge] playing in
@@ -1212,6 +1222,9 @@ final class ArchiveVideoPlayerController: UIViewController {
     var onFailed: ((String) -> Void)?
     var onProgress: ((Double, Double) -> Void)?
     var onPlayingChanged: ((Bool) -> Void)?
+    var onVideoSize: ((CGSize) -> Void)?
+    private var presentationSizeObs: NSKeyValueObservation?
+    private var didReportVideoSize = false
     /// Sparks loop by default so clips don't freeze on the last frame.
     var loops = true
     /// Used to claim a pre-buffered player from SparkWarmPool.
@@ -1348,6 +1361,9 @@ final class ArchiveVideoPlayerController: UIViewController {
         sourceURL = url
         didRetry = false
         didKickPlayback = false
+        didReportVideoSize = false
+        presentationSizeObs?.invalidate()
+        presentationSizeObs = nil
         resolvedPlayURL = nil
         errorLabel.isHidden = true
         loadPoster(posterURL)
@@ -1357,6 +1373,31 @@ final class ArchiveVideoPlayerController: UIViewController {
         } else {
             // Always pre-buffer off-screen Sparks (silent) so swipe-in is pure play — no black flash.
             startPlayback(url: url, muted: true, startTime: restartsFromBeginningOnFocus ? 0 : startTime, autoplay: false)
+        }
+    }
+
+    /// Publish natural size so Hubs can size the stage without cropping.
+    func reportVideoSizeIfNeeded(from item: AVPlayerItem? = nil) {
+        let target = item ?? player?.currentItem
+        guard let target else { return }
+        let size = target.presentationSize
+        guard size.width > 2, size.height > 2 else { return }
+        if !didReportVideoSize {
+            didReportVideoSize = true
+            onVideoSize?(size)
+        } else {
+            onVideoSize?(size)
+        }
+        // Keep observing in case the first non-zero size arrives late.
+        if presentationSizeObs == nil {
+            presentationSizeObs = target.observe(\.presentationSize, options: [.new]) { [weak self] item, _ in
+                let s = item.presentationSize
+                guard s.width > 2, s.height > 2 else { return }
+                DispatchQueue.main.async {
+                    self?.didReportVideoSize = true
+                    self?.onVideoSize?(s)
+                }
+            }
         }
     }
 
@@ -1807,6 +1848,7 @@ final class ArchiveVideoPlayerController: UIViewController {
                     claimed.safePlayImmediately(atRate: 1.0)
                     self.didKickPlayback = true
                     self.onPlayingChanged?(true)
+                    self.reportVideoSizeIfNeeded(from: claimed.currentItem)
                     self.onReady?()
                 }
             }
@@ -1816,6 +1858,7 @@ final class ArchiveVideoPlayerController: UIViewController {
             claimed.safePlayImmediately(atRate: 1.0)
             didKickPlayback = true
             onPlayingChanged?(true)
+            reportVideoSizeIfNeeded(from: claimed.currentItem)
             onReady?()
         } else {
             // Silent pre-buffer (off-screen page).

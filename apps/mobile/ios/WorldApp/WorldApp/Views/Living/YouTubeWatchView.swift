@@ -73,17 +73,26 @@ struct YouTubeWatchView: View {
 
     var body: some View {
         GeometryReader { geo in
-            // Match continuous layer exactly: under-notch + 16:9 body (never cover the title).
+            // Match continuous layer — stage follows real video AR (no crop).
+            let videoAR = appState.hubPlaybackVideoAspect
             let fullStageH = embedsPlayer
                 ? YouTubeMediaLayout.watchPlayerHeight(
                     containerWidth: geo.size.width,
-                    containerHeight: geo.size.height
+                    containerHeight: geo.size.height,
+                    videoAspect: videoAR
                 )
-                : YouTubeMediaLayout.hubsContinuousStageHeight(containerWidth: geo.size.width)
-            let minStageH = YouTubeMediaLayout.hubsCollapsedStageHeight(containerWidth: geo.size.width)
+                : YouTubeMediaLayout.hubsContinuousStageHeight(
+                    containerWidth: geo.size.width,
+                    videoAspect: videoAR
+                )
+            let minStageH = YouTubeMediaLayout.hubsCollapsedStageHeight(
+                containerWidth: geo.size.width,
+                videoAspect: videoAR
+            )
             let liveStageH = YouTubeMediaLayout.hubsStageHeight(
                 containerWidth: geo.size.width,
-                collapse: appState.hubWatchScrollCollapse
+                collapse: appState.hubWatchScrollCollapse,
+                videoAspect: videoAR
             )
 
             // VStack: stage then title — title must sit flush under the video.

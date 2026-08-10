@@ -186,7 +186,8 @@ struct GlobalHubPlaybackLayer: View {
             // and that double-offset left an empty gap at the top of the stage.
             let stageHeight = YouTubeMediaLayout.hubsStageHeight(
                 containerWidth: geo.size.width,
-                collapse: appState.hubWatchScrollCollapse
+                collapse: appState.hubWatchScrollCollapse,
+                videoAspect: appState.hubPlaybackVideoAspect
             )
             return PlayerLayout(x: 0, y: 0, width: geo.size.width, height: stageHeight)
         }
@@ -248,6 +249,9 @@ struct GlobalHubPlaybackLayer: View {
                 onProgress: { current, duration in
                     miniCurrentSeconds = current
                     if duration > 0.25 { miniDurationSeconds = duration }
+                },
+                onVideoSize: { size in
+                    appState.noteHubPlaybackVideoSize(size)
                 },
                 seekToSeconds: miniSeekToSeconds,
                 onSeekConsumed: { miniSeekToSeconds = nil }

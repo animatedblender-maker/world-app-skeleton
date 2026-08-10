@@ -54,46 +54,65 @@ enum YouTubeMediaLayout {
     /// Prefetch + display MUST match or ImageCache keys miss and every row re-downloads.
     static let hubsListThumbMaxPixel: CGFloat = 320
 
-    /// Watch stage = **exact 16:9** of width.
-    /// Pair with aspectFit (`fillsFrame: false`) so the clip is never cropped and
-    /// never letterboxed (stage AR matches landscape long-form).
-    static func hubsBodyStageHeight(containerWidth: CGFloat) -> CGFloat {
+    /// Watch stage height for a clip of aspect **width/height**.
+    /// Full-width + aspectFit: height = width / aspect → **no crop**.
+    /// Taller-than-16:9 sources (e.g. 4:3) get a taller stage; 16:9 is already
+    /// the max uncropped height for full-width landscape.
+    static func hubsBodyStageHeight(
+        containerWidth: CGFloat,
+        videoAspect: CGFloat = 16.0 / 9.0
+    ) -> CGFloat {
         let w = max(1, containerWidth)
-        let classic16x9 = w / aspect
+        let ar = min(max(videoAspect.isFinite ? videoAspect : aspect, 0.55), 2.8)
+        let ideal = w / ar
         let contentH = hubsContentColumnHeight
-        let maxH = max(160, contentH - hubsWatchMetaReserve)
-        return max(160, min(classic16x9, maxH))
+        // Leave room for title + comments; allow up to ~52% for tall sources.
+        let maxH = max(180, contentH * 0.52)
+        let minH = max(140, w / 2.4) // don't collapse ultra-wide to a sliver
+        return min(max(ideal, minH), maxH)
     }
 
     /// Full watch stage height (matches continuous player).
-    /// Player sits **below** the Dynamic Island (safe area), not mid-island.
-    static func hubsContinuousStageHeight(containerWidth: CGFloat) -> CGFloat {
-        hubsBodyStageHeight(containerWidth: containerWidth)
+    static func hubsContinuousStageHeight(
+        containerWidth: CGFloat,
+        videoAspect: CGFloat = 16.0 / 9.0
+    ) -> CGFloat {
+        hubsBodyStageHeight(containerWidth: containerWidth, videoAspect: videoAspect)
     }
 
     /// Sticky height after scrolling comments (YouTube-style).
-    static func hubsCollapsedStageHeight(containerWidth: CGFloat) -> CGFloat {
-        let body = hubsBodyStageHeight(containerWidth: containerWidth)
+    static func hubsCollapsedStageHeight(
+        containerWidth: CGFloat,
+        videoAspect: CGFloat = 16.0 / 9.0
+    ) -> CGFloat {
+        let body = hubsBodyStageHeight(containerWidth: containerWidth, videoAspect: videoAspect)
         return max(72, min(body * 0.38, body - 48))
     }
 
     /// Live stage height for a 0…1 scroll-collapse progress.
-    static func hubsStageHeight(containerWidth: CGFloat, collapse: CGFloat) -> CGFloat {
-        let full = hubsContinuousStageHeight(containerWidth: containerWidth)
-        let mini = hubsCollapsedStageHeight(containerWidth: containerWidth)
+    static func hubsStageHeight(
+        containerWidth: CGFloat,
+        collapse: CGFloat,
+        videoAspect: CGFloat = 16.0 / 9.0
+    ) -> CGFloat {
+        let full = hubsContinuousStageHeight(containerWidth: containerWidth, videoAspect: videoAspect)
+        let mini = hubsCollapsedStageHeight(containerWidth: containerWidth, videoAspect: videoAspect)
         let t = min(1, max(0, collapse))
         return full + (mini - full) * t
     }
 
     /// Embedded watch player — same stage as continuous hubs playback.
-    static func watchPlayerHeight(containerWidth: CGFloat, containerHeight: CGFloat) -> CGFloat {
-        let w = max(1, containerWidth)
-        let body = hubsBodyStageHeight(containerWidth: w)
+    static func watchPlayerHeight(
+        containerWidth: CGFloat,
+        containerHeight: CGFloat,
+        videoAspect: CGFloat = 16.0 / 9.0
+    ) -> CGFloat {
+        let body = hubsBodyStageHeight(containerWidth: containerWidth, videoAspect: videoAspect)
         if containerHeight > 200 {
-            let maxBody = max(160, containerHeight - hubsWatchMetaReserve)
+            let maxBody = max(160, containerHeight * 0.52)
             return min(body, maxBody)
         }
-        return hubsContinuousStageHeight(containerWidth: w)
+        return body
     }
 
 }

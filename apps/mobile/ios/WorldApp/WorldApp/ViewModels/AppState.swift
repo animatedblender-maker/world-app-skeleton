@@ -78,8 +78,11 @@ final class AppState {
     /// Watch page chrome (title, comments, related) hides instantly when > 0.
     var hubPlaybackPullProgress: CGFloat = 0
     /// 0…1 YouTube-style collapse while scrolling meta/comments under the video.
-    /// 0 = full 16:9 stage; 1 = sticky compact height at the top.
+    /// 0 = full stage; 1 = sticky compact height at the top.
     var hubWatchScrollCollapse: CGFloat = 0
+    /// Active hubs clip aspect as **width / height** (default 16:9).
+    /// Stage height = width / aspect so the picture is never cropped (aspectFit).
+    var hubPlaybackVideoAspect: CGFloat = 16.0 / 9.0
     /// Shared mute for **all** in-feed videos (hub cards, spark cards, autoplay).
     /// Muting one video mutes every feed video; unmuting one unmutes all.
     var feedVideosMuted = false
@@ -1193,6 +1196,7 @@ final class AppState {
             MediaPlaybackCoordinator.shared.pauseAll()
             hubPlaybackPost = watchPost
             hubWatchScrollCollapse = 0
+            hubPlaybackVideoAspect = 16.0 / 9.0
         } else if hubPlaybackPost?.playableVideoURL == nil, watchPost.playableVideoURL != nil {
             hubPlaybackPost = watchPost
         } else if hubPlaybackPost?.authorID != watchPost.authorID {
@@ -1201,6 +1205,7 @@ final class AppState {
         } else if hubPlaybackPost == nil {
             hubPlaybackPost = watchPost
             hubWatchScrollCollapse = 0
+            hubPlaybackVideoAspect = 16.0 / 9.0
         }
 
         // Continuous Hubs player (mini or full) owns audio — kill feed/profile autoplay.
@@ -1282,10 +1287,22 @@ final class AppState {
         hubPlaybackPlaying = false
         hubPlaybackPullProgress = 0
         hubWatchScrollCollapse = 0
+        hubPlaybackVideoAspect = 16.0 / 9.0
         hubPlaybackReturnConversationID = nil
         MediaPlaybackCoordinator.shared.stopAllPlayback()
         // Mini closed — feed/profile may elect autoplay again.
         FeedVideoFocus.shared.resetAll()
+    }
+
+    /// Update stage aspect from the player’s natural size (width/height).
+    func noteHubPlaybackVideoSize(_ size: CGSize) {
+        guard size.width > 2, size.height > 2 else { return }
+        let next = size.width / size.height
+        guard next.isFinite, next > 0.3, next < 3.5 else { return }
+        // Ignore tiny AR noise so layout doesn’t thrash.
+        if abs(next - hubPlaybackVideoAspect) > 0.02 {
+            hubPlaybackVideoAspect = next
+        }
     }
 
     /// Conversation id currently on the nav stack (if any).
