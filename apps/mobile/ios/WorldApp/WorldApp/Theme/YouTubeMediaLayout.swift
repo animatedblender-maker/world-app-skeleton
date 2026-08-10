@@ -59,8 +59,8 @@ enum YouTubeMediaLayout {
     static func hubsBodyStageHeight(containerWidth: CGFloat) -> CGFloat {
         let w = max(1, containerWidth)
         let classic16x9 = w / aspect
-        // ~14% taller than 16:9 — closes the visual gap under the clip without half-screen.
-        let preferred = classic16x9 * 1.14
+        // ~22% taller than 16:9 — more presence under the island, title still close.
+        let preferred = classic16x9 * 1.22
         let contentH = hubsContentColumnHeight
         let maxH = max(180, contentH - hubsWatchMetaReserve)
         return max(180, min(preferred, maxH))
