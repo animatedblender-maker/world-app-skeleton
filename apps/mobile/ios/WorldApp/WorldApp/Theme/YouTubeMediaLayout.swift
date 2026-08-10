@@ -97,8 +97,6 @@ enum YouTubeMediaLayout {
         return hubsContinuousStageHeight(containerWidth: w)
     }
 
-    /// Tight gap between video bottom and title (title should sit close under the player).
-    static let hubsTitleGapBelowVideo: CGFloat = 6
 }
 
 /// Scroll offset of Hubs watch meta/comments (drives sticky player collapse).

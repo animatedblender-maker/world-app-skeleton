@@ -93,12 +93,6 @@ struct YouTubeWatchView: View {
                     .background(Color.clear)
                     .clipped()
 
-                // Explicit gap between video bottom and title (YouTube-style breathing room).
-                Color.clear
-                    .frame(height: YouTubeMediaLayout.hubsTitleGapBelowVideo)
-                    .frame(maxWidth: .infinity)
-                    .background(isMinimizingGrab ? Color.clear : Theme.canvas)
-
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
                         // Scroll probe — drives YouTube-style stage collapse.
@@ -409,7 +403,7 @@ struct YouTubeWatchView: View {
             }
         }
         .padding(.horizontal, Theme.pagePadding)
-        .padding(.top, 6)
+        .padding(.top, 8)
     }
 
     @ViewBuilder
