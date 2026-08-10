@@ -95,8 +95,9 @@ struct GlobalHubPlaybackLayer: View {
                             .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                .ignoresSafeArea(edges: .top)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                // Expanded: under Dynamic Island. Mini: stay in safe layout (dock frame).
+                .ignoresSafeArea(edges: expanded ? .top : [])
             }
         }
         .onChange(of: expanded) { _, isExpanded in
@@ -197,7 +198,8 @@ struct GlobalHubPlaybackLayer: View {
 
     private func playerLayout(in geo: GeometryProxy) -> PlayerLayout {
         if expanded {
-            // Flush under Dynamic Island. Height shrinks as comments scroll (YouTube sticky).
+            // y=0 under notch; height = safeTop + 16:9 (matches watch VStack hole).
+            // Title lives below that hole — never under this rect.
             let stageHeight = YouTubeMediaLayout.hubsStageHeight(
                 containerWidth: geo.size.width,
                 collapse: appState.hubWatchScrollCollapse
@@ -205,17 +207,15 @@ struct GlobalHubPlaybackLayer: View {
             return PlayerLayout(x: 0, y: 0, width: geo.size.width, height: stageHeight)
         }
 
-        // Lock to the mini bar’s real frame (floating or chat) so we never drift
-        // over the tab menu or leave a gap under the strip.
+        // Lock to the mini bar’s real frame (floating or chat).
         if hasDockSlot, let global = dockSlotGlobal {
             let containerGlobal = geo.frame(in: .global)
             let x = global.minX - containerGlobal.minX
             let y = global.minY - containerGlobal.minY
             let looksLikeMiniSlot = global.height > 48
-                && global.height < geo.size.height * 0.5
+                && global.height < max(120, geo.size.height * 0.45)
                 && global.width > 40
-                // Stay in the lower half (mini / chat dock), never the watch stage.
-                && y > geo.size.height * 0.2
+                && y > geo.size.height * 0.15
             if looksLikeMiniSlot,
                y > -20, y + global.height <= geo.size.height + 24,
                x > -40, x < geo.size.width + 40 {
@@ -223,7 +223,7 @@ struct GlobalHubPlaybackLayer: View {
             }
         }
 
-        // Fallback before the mini bar publishes its slot: above tab bar, full width.
+        // Fallback: full-width strip flush above the tab bar.
         let barW = geo.size.width
         let size = YouTubeMiniPlayerBar.videoSize(forBarWidth: barW)
         let barTop = max(0, geo.size.height - floatingBottomClearance - miniStripHeight)

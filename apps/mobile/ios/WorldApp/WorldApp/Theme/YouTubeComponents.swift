@@ -516,9 +516,8 @@ struct YouTubeMiniPlayerBar: View {
     var body: some View {
         GeometryReader { geo in
             ZStack {
-                Theme.ink
-
                 if embedsVideo {
+                    Theme.ink
                     if let url = post.playableVideoURL {
                         VideoPlayerView(
                             url: url,
@@ -549,8 +548,8 @@ struct YouTubeMiniPlayerBar: View {
                         onClose: onClose
                     )
                 } else {
-                    // Continuous player paints video above this hole; chrome is drawn
-                    // on GlobalHubPlaybackLayer so buttons stay visible (higher z-order).
+                    // True hole — continuous player sits under this stack and shows through.
+                    // Do NOT paint Theme.ink here or it masks the video.
                     Color.clear
                         .overlay(
                             GeometryReader { g in
@@ -570,8 +569,8 @@ struct YouTubeMiniPlayerBar: View {
         }
         .frame(maxWidth: .infinity)
         .frame(height: Self.barHeight)
-        .background(Theme.ink)
-        .shadow(color: Theme.ink.opacity(0.32), radius: 12, y: -3)
+        .background(embedsVideo ? Theme.ink : Color.clear)
+        .shadow(color: Theme.ink.opacity(embedsVideo ? 0.32 : 0.18), radius: 12, y: -3)
         .overlay(alignment: .top) {
             Rectangle()
                 .fill(Color.white.opacity(0.08))

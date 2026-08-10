@@ -73,7 +73,7 @@ struct YouTubeWatchView: View {
 
     var body: some View {
         GeometryReader { geo in
-            // Full 16:9 stage (spacer stays this tall so scroll-collapse doesn't fight layout).
+            // Match continuous layer exactly: under-notch + 16:9 body (never cover the title).
             let fullStageH = embedsPlayer
                 ? YouTubeMediaLayout.watchPlayerHeight(
                     containerWidth: geo.size.width,
@@ -86,16 +86,19 @@ struct YouTubeWatchView: View {
                 collapse: appState.hubWatchScrollCollapse
             )
 
-            // YouTube sticky player: scroll content under a fixed full-height spacer;
-            // sticky player height shrinks with scroll offset (not a layout feedback loop).
-            ZStack(alignment: .top) {
+            // VStack (not ZStack overlay): title always lays out *below* the stage.
+            // Continuous video docks into the stage hole — it cannot paint over the title.
+            VStack(spacing: 0) {
+                playerSection
+                    .frame(width: geo.size.width, height: max(100, liveStageH))
+                    .background(Color.clear)
+                    .clipped()
+
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
-                        // Fixed full stage hole — scrolls away; sticky player covers the top.
-                        // Track this spacer’s minY so collapse matches finger 1:1 (YouTube).
+                        // Scroll probe — drives YouTube-style stage collapse.
                         Color.clear
-                            .frame(width: geo.size.width, height: max(120, fullStageH))
-                            .frame(maxWidth: .infinity)
+                            .frame(height: 1)
                             .background {
                                 GeometryReader { proxy in
                                     let minY = proxy.frame(in: .named("hubWatchScroll")).minY
@@ -133,6 +136,7 @@ struct YouTubeWatchView: View {
                             }
                         }
                     }
+                    .padding(.top, 10)
                     .padding(.bottom, 28)
                 }
                 .coordinateSpace(name: "hubWatchScroll")
@@ -145,7 +149,6 @@ struct YouTubeWatchView: View {
                     guard !isMinimizingGrab else { return }
                     let offset = max(0, raw)
                     let range = max(1, fullStageH - minStageH)
-                    // Slightly faster than 1:1 so it feels like YouTube grab-under-video.
                     let progress = min(1, max(0, (offset / range) * 1.05))
                     if abs(progress - appState.hubWatchScrollCollapse) > 0.004 {
                         var t = Transaction()
@@ -155,14 +158,6 @@ struct YouTubeWatchView: View {
                         }
                     }
                 }
-
-                // Sticky player (or clear hole for continuous GlobalHubPlaybackLayer).
-                // Continuous layer paints the video above; this view owns close chrome only.
-                playerSection
-                    .frame(width: geo.size.width, height: liveStageH)
-                    .background(Color.clear)
-                    .clipped()
-                    .zIndex(2)
             }
             .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
             .onChange(of: currentPost.id) { _, _ in
@@ -173,7 +168,7 @@ struct YouTubeWatchView: View {
         .background(isMinimizingGrab ? Theme.ink : Theme.canvas)
         .animation(nil, value: isMinimizingGrab)
         .animation(nil, value: appState.hubWatchScrollCollapse)
-        // Player bleeds under Dynamic Island / notch (same as continuous layer).
+        // Stage bleeds under Dynamic Island / notch (matches continuous y=0).
         .ignoresSafeArea(edges: .top)
         // Feed / non-expanded share still uses the sheet. Expanded Hubs uses an overlay so
         // GlobalHubPlaybackLayer never pauses or collapses to mini.

@@ -65,8 +65,14 @@ struct MainTabView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            // Mini chrome only (flush above tab bar). Intrinsic height — never a full-screen
-            // hit target (that floated the bar and ate feed taps).
+            // Continuous AVPlayer.
+            // Expanded: above page content so the watch stage is visible.
+            // Mini: *below* the bottom chrome stack so the clear mini hole reveals video
+            // and the real tab bar always paints on top (never under/over the strip wrong).
+            GlobalHubPlaybackLayer(dockSlotGlobal: hubContinuousDockSlotGlobal)
+                .zIndex(appState.hubPlaybackExpanded ? 55 : 40)
+
+            // One bottom stack: mini strip (if any) then tab bar — YouTube order, no overlap.
             if showsFloatingMiniBar || appState.navigationPath.isEmpty {
                 VStack(spacing: 0) {
                     if showsFloatingMiniBar, let post = appState.hubPlaybackPost {
@@ -87,27 +93,13 @@ struct MainTabView: View {
                         .frame(height: YouTubeMiniPlayerBar.barHeight)
                         .frame(maxWidth: .infinity)
                     }
-                    // Spacer matching tab bar height so mini stays flush above it when tab is shown.
                     if appState.navigationPath.isEmpty {
-                        Color.clear
-                            .frame(height: Theme.tabBarHeight)
-                            .allowsHitTesting(false)
+                        BottomTabBar()
+                            .frame(maxWidth: .infinity)
                     }
                 }
                 .frame(maxWidth: .infinity)
-                .zIndex(50)
-            }
-
-            // Continuous AVPlayer — docks into the mini bar hole (preference frame).
-            // zIndex above mini chrome (clear hole), below tab bar so the menu is never covered.
-            GlobalHubPlaybackLayer(dockSlotGlobal: hubContinuousDockSlotGlobal)
-                .zIndex(55)
-
-            // Tab bar pinned to the physical bottom — always fully visible under the mini strip.
-            if appState.navigationPath.isEmpty {
-                BottomTabBar()
-                    .frame(maxWidth: .infinity)
-                    .zIndex(70)
+                .zIndex(70)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

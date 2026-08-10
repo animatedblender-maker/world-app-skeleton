@@ -54,22 +54,27 @@ enum YouTubeMediaLayout {
     /// Prefetch + display MUST match or ImageCache keys miss and every row re-downloads.
     static let hubsListThumbMaxPixel: CGFloat = 320
 
-    /// Hubs watch stage = compact **16:9** of width (never half-screen / never taller than classic).
-    /// Pair with `fillsFrame: true` so the clip fills edge-to-edge with no black letterbox bars.
-    static func hubsContinuousStageHeight(containerWidth: CGFloat) -> CGFloat {
+    /// Pure 16:9 body height (below the notch bleed). Never half-screen.
+    static func hubsBodyStageHeight(containerWidth: CGFloat) -> CGFloat {
         let w = max(1, containerWidth)
-        // Strict 16:9 — do not grow above classic (that created black top/bottom slabs).
         let classic16x9 = w / aspect
         let contentH = hubsContentColumnHeight
-        let maxH = max(160, min(classic16x9, contentH - hubsWatchMetaReserve))
+        let maxH = max(160, min(classic16x9, contentH - hubsWatchMetaReserve - keyWindowSafeTop))
         return max(160, min(classic16x9, maxH))
     }
 
-    /// Sticky mini height after scrolling comments under the video (YouTube-style).
+    /// Full watch stage = **under-notch bleed + 16:9 body**.
+    /// Continuous player and watch spacer MUST use this so the title never sits under video.
+    static func hubsContinuousStageHeight(containerWidth: CGFloat) -> CGFloat {
+        hubsBodyStageHeight(containerWidth: containerWidth) + keyWindowSafeTop
+    }
+
+    /// Sticky height after scrolling comments (YouTube-style). Still starts under the notch.
     static func hubsCollapsedStageHeight(containerWidth: CGFloat) -> CGFloat {
-        let full = hubsContinuousStageHeight(containerWidth: containerWidth)
-        // ~38% of full 16:9 — still readable, leaves room for comments.
-        return max(88, min(full * 0.38, full - 48))
+        let body = hubsBodyStageHeight(containerWidth: containerWidth)
+        let collapsedBody = max(72, min(body * 0.38, body - 48))
+        // Keep a reduced island pad so chrome isn’t clipped by the notch.
+        return collapsedBody + keyWindowSafeTop * 0.45
     }
 
     /// Live stage height for a 0…1 scroll-collapse progress.
@@ -80,13 +85,13 @@ enum YouTubeMediaLayout {
         return full + (mini - full) * t
     }
 
-    /// Embedded watch player — same compact 16:9 stage as continuous hubs playback.
+    /// Embedded watch player — same under-notch + 16:9 stage as continuous hubs playback.
     static func watchPlayerHeight(containerWidth: CGFloat, containerHeight: CGFloat) -> CGFloat {
         let w = max(1, containerWidth)
-        let classic16x9 = w / aspect
+        let body = hubsBodyStageHeight(containerWidth: w)
         if containerHeight > 200 {
-            let maxH = max(160, min(classic16x9, containerHeight - hubsWatchMetaReserve))
-            return max(160, min(classic16x9, maxH))
+            let maxBody = max(160, containerHeight - hubsWatchMetaReserve - keyWindowSafeTop)
+            return min(body, maxBody) + keyWindowSafeTop
         }
         return hubsContinuousStageHeight(containerWidth: w)
     }
