@@ -1,8 +1,10 @@
 /**
  * Local / ops CLI:
- *   npx tsx src/content-pipeline/cli.ts
+ *   npx tsx src/content-pipeline/cli.ts              # flood ALL new R2 packs
  *   npx tsx src/content-pipeline/cli.ts --dry-run
  *   npx tsx src/content-pipeline/cli.ts --resign-only
+ *   npx tsx src/content-pipeline/cli.ts --cap-40     # optional throttle
+ *   npx tsx src/content-pipeline/cli.ts --timed      # 50s soft deadline
  */
 import dotenv from 'dotenv';
 import path from 'node:path';
@@ -17,14 +19,18 @@ const dryRun = args.has('--dry-run');
 const resignOnly = args.has('--resign-only');
 const ingestOnly = args.has('--ingest-only');
 
+// Default: flood every new R2 pack. Optional throttles only when flags are set.
+const cap = args.has('--cap-40') ? 40 : args.has('--cap-200') ? 200 : undefined;
+
 const stats = await runContentPipeline({
   dryRun,
   resignOnly,
   ingestOnly,
-  maxOriginals: args.has('--full') ? 200 : 40,
-  maxShares: args.has('--full') ? 400 : 80,
-  maxResign: args.has('--full') ? 1000 : 200,
-  maxMs: args.has('--full') ? 240_000 : 50_000,
+  // undefined = ALL new packs (flood Matterya)
+  maxOriginals: cap,
+  maxShares: cap != null ? cap * 2 : undefined,
+  maxResign: 2000,
+  maxMs: args.has('--timed') ? 50_000 : 0,
 });
 
 console.log(JSON.stringify(stats, null, 2));

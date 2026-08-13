@@ -32,9 +32,16 @@ export type R2Pack = {
 
 export type PipelineOptions = {
   dryRun?: boolean;
-  /** Max new original posts this tick */
+  /**
+   * Max new original posts this tick.
+   * Default: unlimited (ingest every new R2 pack).
+   * Pass a finite number to cap (legacy throttle).
+   */
   maxOriginals?: number;
-  /** Max new feed spark shares this tick */
+  /**
+   * Max new feed spark shares this tick.
+   * Default: unlimited.
+   */
   maxShares?: number;
   /** Max media_url re-signs this tick */
   maxResign?: number;
@@ -42,7 +49,11 @@ export type PipelineOptions = {
   maxCaptionRepairs?: number;
   /** Max posts to expand from the old 25-comment seed cap this tick */
   maxCommentRepairs?: number;
-  /** Soft deadline ms from start */
+  /**
+   * Soft deadline ms from start.
+   * Default: 0 = no time budget (run until all new packs are ingested).
+   * Pass a positive ms value to stop early (ops safety valve).
+   */
   maxMs?: number;
   /** Only resign (skip discover/ingest) */
   resignOnly?: boolean;

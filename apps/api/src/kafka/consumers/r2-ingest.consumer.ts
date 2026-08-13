@@ -53,10 +53,11 @@ export async function startR2IngestConsumer(): Promise<void> {
           dryRun: !!p.dryRun,
           resignOnly: !!p.resignOnly,
           ingestOnly: !!p.ingestOnly,
+          // Flood by default when payload omits caps.
           maxOriginals: p.maxOriginals,
           maxShares: p.maxShares,
           maxResign: p.maxResign,
-          maxMs: p.maxMs ?? 90_000,
+          maxMs: p.maxMs ?? 0,
           source: `kafka:${p.requestedBy ?? 'cron'}`,
         });
         console.log(

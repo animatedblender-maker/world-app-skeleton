@@ -696,13 +696,20 @@ app.post('/cron/content-pipeline', async (req: Request, res: Response) => {
     const forceInline =
       String(req.query.inline ?? req.body?.inline ?? '') === '1' ||
       String(req.query.inline ?? req.body?.inline ?? '') === 'true';
+    const rawOriginals = Number(req.query.maxOriginals ?? req.body?.maxOriginals);
+    const rawShares = Number(req.query.maxShares ?? req.body?.maxShares);
+    const rawResign = Number(req.query.maxResign ?? req.body?.maxResign);
+    const rawMs = Number(req.query.maxMs ?? req.body?.maxMs);
     const opts = {
       dryRun,
       resignOnly,
-      maxOriginals: Number(req.query.maxOriginals ?? req.body?.maxOriginals) || 40,
-      maxShares: Number(req.query.maxShares ?? req.body?.maxShares) || 80,
-      maxResign: Number(req.query.maxResign ?? req.body?.maxResign) || 200,
-      maxMs: Number(req.query.maxMs ?? req.body?.maxMs) || 90_000,
+      // Flood by default: omit caps so every new R2 video is ingested this run.
+      // Optional ?maxOriginals=N & ?maxMs=ms still throttle when explicitly set.
+      maxOriginals:
+        Number.isFinite(rawOriginals) && rawOriginals > 0 ? rawOriginals : undefined,
+      maxShares: Number.isFinite(rawShares) && rawShares > 0 ? rawShares : undefined,
+      maxResign: Number.isFinite(rawResign) && rawResign > 0 ? rawResign : 2000,
+      maxMs: Number.isFinite(rawMs) && rawMs > 0 ? rawMs : 0,
       requestedBy: 'cron',
       forceInline,
       source: 'cron',

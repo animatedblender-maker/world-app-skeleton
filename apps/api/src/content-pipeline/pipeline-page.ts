@@ -516,10 +516,9 @@ export async function handlePipelineRunStream(req: Request, res: Response): Prom
     const stats = await runPipelineNow({
       dryRun,
       resignOnly,
-      maxOriginals: 40,
-      maxShares: 80,
-      maxResign: 200,
-      maxMs: 120_000,
+      // Flood: every new R2 pack in this run (no original/share/time cap).
+      maxResign: 2000,
+      maxMs: 0,
       source: 'ops-page-stream',
     });
     write({

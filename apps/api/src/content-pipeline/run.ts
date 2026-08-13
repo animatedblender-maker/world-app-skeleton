@@ -47,18 +47,30 @@ function emptyStats(dryRun: boolean): PipelineStats {
  * Full tick: re-sign expiring R2 URLs → discover new packs → insert owned originals + shares.
  * Real user posts (non-r2 media_path) are never modified.
  * Emits live logs via pipelineLog (ops page SSE).
+ *
+ * Default: **flood mode** — every new complete R2 pack is ingested in this run
+ * (no maxOriginals / maxShares / maxMs cap unless explicitly set).
  */
 export async function runContentPipeline(opts: PipelineOptions = {}): Promise<PipelineStats> {
   clearPipelineLog();
   const started = Date.now();
   const dryRun = !!opts.dryRun;
-  const maxOriginals = opts.maxOriginals ?? 40;
-  const maxShares = opts.maxShares ?? 80;
-  const maxResign = opts.maxResign ?? 200;
-  const maxMs = opts.maxMs ?? 50_000;
+  // Unlimited by default — flood Matterya with every new R2 video at once.
+  const maxOriginals =
+    opts.maxOriginals != null && Number.isFinite(opts.maxOriginals) && opts.maxOriginals > 0
+      ? opts.maxOriginals
+      : Number.POSITIVE_INFINITY;
+  const maxShares =
+    opts.maxShares != null && Number.isFinite(opts.maxShares) && opts.maxShares > 0
+      ? opts.maxShares
+      : Number.POSITIVE_INFINITY;
+  const maxResign = opts.maxResign ?? 500;
+  // 0 / unset = no time budget (keep going until all new packs are in).
+  const maxMs =
+    opts.maxMs != null && Number.isFinite(opts.maxMs) && opts.maxMs > 0 ? opts.maxMs : 0;
   const stats = emptyStats(dryRun);
 
-  const timedOut = () => Date.now() - started > maxMs;
+  const timedOut = () => maxMs > 0 && Date.now() - started > maxMs;
 
   pipelineLog('══════════════════════════════════════', 'step');
   pipelineLog(
@@ -66,7 +78,7 @@ export async function runContentPipeline(opts: PipelineOptions = {}): Promise<Pi
     'step'
   );
   pipelineLog(
-    `Limits: maxOriginals=${maxOriginals} maxShares=${maxShares} maxResign=${maxResign} maxMs=${maxMs}`,
+    `Limits: maxOriginals=${Number.isFinite(maxOriginals) ? maxOriginals : 'ALL'} maxShares=${Number.isFinite(maxShares) ? maxShares : 'ALL'} maxResign=${maxResign} maxMs=${maxMs || 'none'}`,
     'info'
   );
 
@@ -139,6 +151,11 @@ export async function runContentPipeline(opts: PipelineOptions = {}): Promise<Pi
       return a.kind === 'spark' ? -1 : 1;
     });
 
+    pipelineLog(
+      `Ingesting ALL ${missing.length} new pack(s) this run (flood mode${Number.isFinite(maxOriginals) ? `, cap=${maxOriginals}` : ''})…`,
+      'step'
+    );
+
     let n = 0;
     for (const pack of missing) {
       if (timedOut() || stats.insertedOriginals >= maxOriginals) {
@@ -203,14 +220,17 @@ export async function runContentPipeline(opts: PipelineOptions = {}): Promise<Pi
     }
 
     if (!timedOut() && stats.insertedShares < maxShares) {
+      const remainingShares = Number.isFinite(maxShares)
+        ? maxShares - stats.insertedShares
+        : Number.POSITIVE_INFINITY;
       pipelineLog(
-        `Backfilling feed spark shares (up to ${maxShares - stats.insertedShares})…`,
+        `Backfilling feed spark shares (${Number.isFinite(remainingShares) ? `up to ${remainingShares}` : 'ALL missing'})…`,
         'step'
       );
       const before = stats.insertedShares;
       await ensureSparkShares({
         dryRun,
-        maxShares: maxShares - stats.insertedShares,
+        maxShares: remainingShares,
         ownersByCc,
         categoryId,
         stats,
@@ -619,7 +639,11 @@ async function ensureSparkShares(opts: {
     order by p.created_at desc
     limit $1
     `,
-    [opts.maxShares * 2]
+    [
+      Number.isFinite(opts.maxShares)
+        ? Math.max(1, Math.floor(opts.maxShares * 2))
+        : 100_000,
+    ]
   );
 
   for (const row of rows) {
