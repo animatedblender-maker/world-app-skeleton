@@ -5,6 +5,8 @@ struct MainTabView: View {
     @State private var postToOpenAfterCreate: CountryPost?
     /// Chat mini video hole (global) — continuous hubs player docks here without remounting.
     @State private var hubContinuousDockSlotGlobal: CGRect?
+    /// Expanded watch stage hole — continuous player locks to this so it never covers the title.
+    @State private var hubWatchStageGlobal: CGRect?
 
     var body: some View {
         // Mini player lives OUTSIDE NavigationStack so chat / search / profile pushes
@@ -69,8 +71,11 @@ struct MainTabView: View {
             // Expanded: above page content so the watch stage is visible.
             // Mini: *below* the bottom chrome stack so the clear mini hole reveals video
             // and the real tab bar always paints on top (never under/over the strip wrong).
-            GlobalHubPlaybackLayer(dockSlotGlobal: hubContinuousDockSlotGlobal)
-                .zIndex(appState.hubPlaybackExpanded ? 55 : 40)
+            GlobalHubPlaybackLayer(
+                dockSlotGlobal: hubContinuousDockSlotGlobal,
+                watchStageGlobal: hubWatchStageGlobal
+            )
+            .zIndex(appState.hubPlaybackExpanded ? 55 : 40)
 
             // One bottom stack: mini strip (if any) then tab bar — YouTube order, no overlap.
             if showsFloatingMiniBar || appState.navigationPath.isEmpty {
@@ -105,6 +110,9 @@ struct MainTabView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onPreferenceChange(HubContinuousVideoSlotKey.self) { frame in
             hubContinuousDockSlotGlobal = frame
+        }
+        .onPreferenceChange(HubWatchStageFrameKey.self) { frame in
+            hubWatchStageGlobal = frame
         }
         // Keyboard dismiss is window-level (cancelsTouchesInView = false).
         // Root dismissKeyboardOnTap() blocked Settings List taps.

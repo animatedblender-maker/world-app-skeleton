@@ -11,6 +11,18 @@ enum HubContinuousVideoSlotKey: PreferenceKey {
     }
 }
 
+/// Expanded watch stage hole (global) — continuous player must match this rect exactly
+/// so the video never paints over the title.
+enum HubWatchStageFrameKey: PreferenceKey {
+    static var defaultValue: CGRect? = nil
+
+    static func reduce(value: inout CGRect?, nextValue: () -> CGRect?) {
+        if let next = nextValue() {
+            value = next
+        }
+    }
+}
+
 /// Single continuous hubs AVPlayer for the whole app.
 ///
 /// Hit-testing: only the **video rect** receives touches (UIKit pass-through host).
@@ -20,6 +32,8 @@ struct GlobalHubPlaybackLayer: View {
     @Environment(AppState.self) private var appState
 
     var dockSlotGlobal: CGRect? = nil
+    /// Live frame of the watch-page stage hole (expanded only).
+    var watchStageGlobal: CGRect? = nil
 
     @State private var dragOffset: CGFloat = 0
     @State private var isPullingMinimize = false
@@ -178,10 +192,25 @@ struct GlobalHubPlaybackLayer: View {
 
     private func playerLayout(in geo: GeometryProxy) -> PlayerLayout {
         if expanded {
-            // Classic Hubs: flush under Dynamic Island; tall ~55% stage.
-            let safeTop = geo.safeAreaInsets.top > 1
-                ? geo.safeAreaInsets.top
-                : YouTubeMediaLayout.keyWindowSafeTop
+            // Prefer the watch page’s real stage hole so we never cover the title.
+            if let global = watchStageGlobal,
+               global.width > 40,
+               global.height > 80 {
+                let containerGlobal = geo.frame(in: .global)
+                let x = global.minX - containerGlobal.minX
+                let y = global.minY - containerGlobal.minY
+                // Expanded stage lives in the top half of the screen.
+                if y > -40, y < geo.size.height * 0.55 {
+                    return PlayerLayout(
+                        x: x,
+                        y: y,
+                        width: global.width,
+                        height: global.height
+                    )
+                }
+            }
+            // Fallback: under Dynamic Island from physical top (y=0), body + safe-top bleed.
+            let safeTop = YouTubeMediaLayout.keyWindowSafeTop
             let bodyH = YouTubeMediaLayout.hubsContinuousStageHeight(containerWidth: geo.size.width)
             let stageHeight = bodyH + max(0, safeTop)
             return PlayerLayout(x: 0, y: 0, width: geo.size.width, height: stageHeight)
