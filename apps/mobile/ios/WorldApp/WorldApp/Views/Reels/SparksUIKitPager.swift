@@ -230,6 +230,7 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
                   posts.indices.contains(ip.item) else { continue }
             let post = posts[ip.item]
             let active = ip.item == activeIndex
+            let item = ip.item
             page.configure(
                 post: post,
                 isActive: active,
@@ -238,14 +239,18 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
                 showsOpenPostAction: showsOpenPostAction,
                 viewerCountryCode: viewerCountryCode,
                 appState: appState,
+                // Resolve post at tap time from live array (never capture stale likedByMe).
                 onLikeToggle: { [weak self] in
-                    self?.coordinator?.likeToggle(post)
+                    guard let self, self.posts.indices.contains(item) else { return }
+                    self.coordinator?.likeToggle(self.posts[item])
                 },
                 onOpenPost: { [weak self] in
-                    self?.coordinator?.openPost(post)
+                    guard let self, self.posts.indices.contains(item) else { return }
+                    self.coordinator?.openPost(self.posts[item])
                 },
                 onOpenComments: { [weak self] in
-                    self?.coordinator?.openComments(post.id)
+                    guard let self, self.posts.indices.contains(item) else { return }
+                    self.coordinator?.openComments(self.posts[item].id)
                 }
             )
         }
@@ -268,6 +273,7 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         guard posts.indices.contains(indexPath.item) else { return cell }
         let post = posts[indexPath.item]
         let active = indexPath.item == activeIndex
+        let item = indexPath.item
         cell.configure(
             post: post,
             isActive: active,
@@ -277,13 +283,16 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
             viewerCountryCode: viewerCountryCode,
             appState: appState,
             onLikeToggle: { [weak self] in
-                self?.coordinator?.likeToggle(post)
+                guard let self, self.posts.indices.contains(item) else { return }
+                self.coordinator?.likeToggle(self.posts[item])
             },
             onOpenPost: { [weak self] in
-                self?.coordinator?.openPost(post)
+                guard let self, self.posts.indices.contains(item) else { return }
+                self.coordinator?.openPost(self.posts[item])
             },
             onOpenComments: { [weak self] in
-                self?.coordinator?.openComments(post.id)
+                guard let self, self.posts.indices.contains(item) else { return }
+                self.coordinator?.openComments(self.posts[item].id)
             }
         )
         return cell

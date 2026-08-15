@@ -198,19 +198,15 @@ struct GlobalHubPlaybackLayer: View {
 
     private func playerLayout(in geo: GeometryProxy) -> PlayerLayout {
         if expanded {
-            // Video must sit entirely *below* the Dynamic Island (never behind it).
-            //
-            // If this GeometryReader is already in the safe area, insets.top ≈ 0 and y=0
-            // is correct. If it is full-bleed, insets.top > 0 and we offset by that amount.
-            // Never fall back to keyWindowSafeTop when insets are 0 — that double-offsets
-            // and looks like the video starts mid-island or too low.
-            let topPad = geo.safeAreaInsets.top
+            // This layer is laid out in the safe area (no ignoresSafeArea).
+            // y = 0 is already the first point *below* the Dynamic Island — do not add
+            // safeAreaInsets.top again (that left a large empty gap under the island).
             let stageHeight = YouTubeMediaLayout.hubsExpandedStageHeight(
                 containerWidth: geo.size.width
             )
             return PlayerLayout(
                 x: 0,
-                y: max(0, topPad),
+                y: 0,
                 width: geo.size.width,
                 height: max(120, stageHeight)
             )

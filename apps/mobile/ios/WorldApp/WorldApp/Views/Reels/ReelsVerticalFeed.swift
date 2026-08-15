@@ -84,16 +84,36 @@ struct ReelsVerticalFeed: View {
 
     private func toggleLike(_ post: CountryPost) async {
         guard let index = posts.firstIndex(where: { $0.id == post.id }) else { return }
+        // Always use the *current* array state — UIKit cells capture a stale `post`
+        // at configure time, so `post.likedByMe` can never flip to unlike.
+        let current = posts[index]
+        let wasLiked = current.likedByMe
+        let nextLiked = !wasLiked
+        let nextCount = nextLiked
+            ? current.likeCount + 1
+            : max(0, current.likeCount - 1)
+
+        // Optimistic UI so the heart flips immediately (including unlike).
+        posts[index] = copyPost(current, likedByMe: nextLiked, likeCount: nextCount)
+
         do {
-            if post.likedByMe {
-                try await PostsService.shared.unlikePost(post.id)
-                posts[index] = copyPost(post, likedByMe: false, likeCount: max(0, post.likeCount - 1))
+            if wasLiked {
+                try await PostsService.shared.unlikePost(
+                    current.id,
+                    baseLikeCount: current.likeCount
+                )
             } else {
-                try await PostsService.shared.likePost(post.id)
-                posts[index] = copyPost(post, likedByMe: true, likeCount: post.likeCount + 1)
+                try await PostsService.shared.likePost(
+                    current.id,
+                    baseLikeCount: current.likeCount
+                )
             }
+            EngagementTracker.shared.enqueueLike(post: current, liked: nextLiked)
         } catch {
-            // Keep the scroll loop smooth.
+            // Roll back on hard failure so the button stays truthful.
+            if posts.indices.contains(index), posts[index].id == current.id {
+                posts[index] = current
+            }
         }
     }
 }
@@ -682,18 +702,26 @@ struct ReelsPagerCard: View {
     private func triggerLike(fromButton: Bool) {
         // Always keep audio rolling through like (button or double-tap).
         keepPlayingThroughUIAction()
-        if fromButton || !post.likedByMe {
+        // Heart button always toggles (like *and* unlike). Double-tap only likes
+        // (Instagram-style) so a second double-tap does not strip the like.
+        if fromButton {
+            onLikeToggle()
+        } else if !post.likedByMe {
             onLikeToggle()
         }
         ReelsHaptics.like()
-        withAnimation(.spring(response: 0.28, dampingFraction: 0.55)) {
-            showLikeBurst = true
-            likeButtonScale = 1.22
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
-            withAnimation(.easeOut(duration: 0.2)) {
-                showLikeBurst = false
-                likeButtonScale = 1
+        // Burst only when liking, not when unliking.
+        let willLike = fromButton ? !post.likedByMe : !post.likedByMe
+        if willLike || !fromButton {
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.55)) {
+                showLikeBurst = true
+                likeButtonScale = 1.22
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    showLikeBurst = false
+                    likeButtonScale = 1
+                }
             }
         }
         reassertPlayback()
