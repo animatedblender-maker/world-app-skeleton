@@ -54,75 +54,30 @@ enum YouTubeMediaLayout {
     /// Prefetch + display MUST match or ImageCache keys miss and every row re-downloads.
     static let hubsListThumbMaxPixel: CGFloat = 320
 
-    /// Watch stage height for a clip of aspect **width/height**.
-    /// Full-width + aspectFit: height = width / aspect → **no crop**.
-    /// Taller-than-16:9 sources (e.g. 4:3) get a taller stage; 16:9 is already
-    /// the max uncropped height for full-width landscape.
-    static func hubsBodyStageHeight(
-        containerWidth: CGFloat,
-        videoAspect: CGFloat = 16.0 / 9.0
-    ) -> CGFloat {
+    /// Classic Hubs watch stage — **tall** (~55% of content above the tab bar).
+    /// Never shorter than 16:9. Pair with `fillsFrame: false` (aspectFit) on expanded
+    /// watch so landscape clips are not cropped.
+    static func hubsContinuousStageHeight(containerWidth: CGFloat) -> CGFloat {
         let w = max(1, containerWidth)
-        let ar = min(max(videoAspect.isFinite ? videoAspect : aspect, 0.55), 2.8)
-        let ideal = w / ar
+        let classic16x9 = w / aspect
         let contentH = hubsContentColumnHeight
-        // Leave room for title + comments; allow up to ~52% for tall sources.
-        let maxH = max(180, contentH * 0.52)
-        let minH = max(140, w / 2.4) // don't collapse ultra-wide to a sliver
-        return min(max(ideal, minH), maxH)
+        let preferred = max(classic16x9, contentH * 0.55)
+        let maxH = max(classic16x9, contentH - hubsWatchMetaReserve)
+        return min(preferred, maxH)
     }
 
-    /// Full watch stage height (matches continuous player).
-    static func hubsContinuousStageHeight(
-        containerWidth: CGFloat,
-        videoAspect: CGFloat = 16.0 / 9.0
-    ) -> CGFloat {
-        hubsBodyStageHeight(containerWidth: containerWidth, videoAspect: videoAspect)
-    }
-
-    /// Sticky height after scrolling comments (YouTube-style).
-    static func hubsCollapsedStageHeight(
-        containerWidth: CGFloat,
-        videoAspect: CGFloat = 16.0 / 9.0
-    ) -> CGFloat {
-        let body = hubsBodyStageHeight(containerWidth: containerWidth, videoAspect: videoAspect)
-        return max(72, min(body * 0.38, body - 48))
-    }
-
-    /// Live stage height for a 0…1 scroll-collapse progress.
-    static func hubsStageHeight(
-        containerWidth: CGFloat,
-        collapse: CGFloat,
-        videoAspect: CGFloat = 16.0 / 9.0
-    ) -> CGFloat {
-        let full = hubsContinuousStageHeight(containerWidth: containerWidth, videoAspect: videoAspect)
-        let mini = hubsCollapsedStageHeight(containerWidth: containerWidth, videoAspect: videoAspect)
-        let t = min(1, max(0, collapse))
-        return full + (mini - full) * t
-    }
-
-    /// Embedded watch player — same stage as continuous hubs playback.
-    static func watchPlayerHeight(
-        containerWidth: CGFloat,
-        containerHeight: CGFloat,
-        videoAspect: CGFloat = 16.0 / 9.0
-    ) -> CGFloat {
-        let body = hubsBodyStageHeight(containerWidth: containerWidth, videoAspect: videoAspect)
+    /// Embedded watch player — same tall stage as continuous hubs playback.
+    static func watchPlayerHeight(containerWidth: CGFloat, containerHeight: CGFloat) -> CGFloat {
+        let w = max(1, containerWidth)
+        let classic16x9 = w / aspect
         if containerHeight > 200 {
-            let maxBody = max(160, containerHeight * 0.52)
-            return min(body, maxBody)
+            let preferred = max(classic16x9, containerHeight * 0.55)
+            let maxH = max(classic16x9, containerHeight - hubsWatchMetaReserve)
+            return min(preferred, maxH)
         }
-        return body
+        return hubsContinuousStageHeight(containerWidth: w)
     }
 
-}
-
-/// Scroll offset of Hubs watch meta/comments (drives sticky player collapse).
-enum HubWatchScrollOffsetKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
 }
 
 enum MatteryaPlayerFrameStyle {

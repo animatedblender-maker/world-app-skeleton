@@ -55,11 +55,7 @@ struct GlobalHubPlaybackLayer: View {
     }
 
     private var showTransportChrome: Bool {
-        // Hide transport when collapsed by comment-scroll (too short for scrubber).
-        expanded
-            && !isPullingMinimize
-            && dragOffset < 2
-            && appState.hubWatchScrollCollapse < 0.22
+        expanded && !isPullingMinimize && dragOffset < 2
     }
 
     private var playingBinding: Binding<Bool> {
@@ -96,8 +92,8 @@ struct GlobalHubPlaybackLayer: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                // Stay in the safe area so the stage starts *below* the Dynamic Island
-                // (not mid-island). Mini docks via preference frame.
+                // Expanded: bleed under Dynamic Island. Mini: dock frame / tab clearance.
+                .ignoresSafeArea(edges: expanded ? .top : [])
             }
         }
         .onChange(of: expanded) { _, isExpanded in
@@ -159,8 +155,6 @@ struct GlobalHubPlaybackLayer: View {
             .offset(x: layout.x, y: liveY)
             .animation(isPullingMinimize ? nil : Self.morphAnim, value: expanded)
             .animation(isPullingMinimize ? nil : Self.morphAnim, value: layout.width)
-            // Scroll collapse must track the finger — no laggy spring on height.
-            .animation(nil, value: appState.hubWatchScrollCollapse)
             .animation(isPullingMinimize ? nil : Self.morphAnim, value: layout.height)
             .animation(isPullingMinimize ? nil : Self.morphAnim, value: layout.x)
             .animation(isPullingMinimize ? nil : Self.morphAnim, value: layout.y)
@@ -181,14 +175,12 @@ struct GlobalHubPlaybackLayer: View {
 
     private func playerLayout(in geo: GeometryProxy) -> PlayerLayout {
         if expanded {
-            // Pure 16:9 at y=0 of the *safe* coordinate system.
-            // Do NOT add keyWindowSafeTop — GeometryReader is already below the island,
-            // and that double-offset left an empty gap at the top of the stage.
-            let stageHeight = YouTubeMediaLayout.hubsStageHeight(
-                containerWidth: geo.size.width,
-                collapse: appState.hubWatchScrollCollapse,
-                videoAspect: appState.hubPlaybackVideoAspect
-            )
+            // Classic Hubs: flush under Dynamic Island; tall ~55% stage.
+            let safeTop = geo.safeAreaInsets.top > 1
+                ? geo.safeAreaInsets.top
+                : YouTubeMediaLayout.keyWindowSafeTop
+            let bodyH = YouTubeMediaLayout.hubsContinuousStageHeight(containerWidth: geo.size.width)
+            let stageHeight = bodyH + max(0, safeTop)
             return PlayerLayout(x: 0, y: 0, width: geo.size.width, height: stageHeight)
         }
 
@@ -230,8 +222,8 @@ struct GlobalHubPlaybackLayer: View {
                 postID: post.id,
                 showsControls: showControls,
                 loops: false,
-                // Expanded: aspectFit (no crop). Mini strip: aspectFill (full-bleed crop).
-                fillsFrame: !expanded,
+                // Classic: aspectFit on expanded (no crop); aspectFill only when mini.
+                fillsFrame: preferMiniFill && !expanded,
                 isMuted: mutedBinding,
                 allowsFullscreen: false,
                 onReady: {
@@ -249,9 +241,6 @@ struct GlobalHubPlaybackLayer: View {
                 onProgress: { current, duration in
                     miniCurrentSeconds = current
                     if duration > 0.25 { miniDurationSeconds = duration }
-                },
-                onVideoSize: { size in
-                    appState.noteHubPlaybackVideoSize(size)
                 },
                 seekToSeconds: miniSeekToSeconds,
                 onSeekConsumed: { miniSeekToSeconds = nil }
