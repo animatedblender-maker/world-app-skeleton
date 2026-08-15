@@ -79,7 +79,7 @@ enum YouTubeMediaLayout {
     }
 
     /// Gap between video bottom and title.
-    static let hubsTitleGapBelowVideo: CGFloat = 14
+    static let hubsTitleGapBelowVideo: CGFloat = 16
 }
 
 enum MatteryaPlayerFrameStyle {

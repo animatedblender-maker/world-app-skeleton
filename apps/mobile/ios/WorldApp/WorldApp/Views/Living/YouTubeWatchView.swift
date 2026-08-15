@@ -47,23 +47,21 @@ struct YouTubeWatchView: View {
         ))
     }
 
-    /// 1 = full chrome visible; 0 = only video (while pulling down to mini player).
-    /// The moment a minimize grab starts (local or continuous layer), everything else vanishes.
+    /// 1 = full chrome visible; 0 = only video.
+    /// Fades out as the user pulls the video down; fades back in when they move up.
     private var chromeOpacity: Double {
-        if isPullingToMinimize || dismissDragOffset > 4 {
-            return 0
-        }
-        // Continuous player pull (GlobalHubPlaybackLayer → AppState).
-        if appState.hubPlaybackPullProgress > 0.01 {
-            return 0
-        }
-        return 1
+        let localPull = dismissDragOffset > 0
+            ? min(1, max(0, dismissDragOffset / 72))
+            : 0
+        let continuousPull = max(0, min(1, appState.hubPlaybackPullProgress))
+        let pull = max(localPull, continuousPull)
+        return Double(1 - pull)
     }
 
     private var isMinimizingGrab: Bool {
         isPullingToMinimize
             || dismissDragOffset > 4
-            || appState.hubPlaybackPullProgress > 0.01
+            || appState.hubPlaybackPullProgress > 0.02
     }
 
     private var isHubContent: Bool {
@@ -91,11 +89,11 @@ struct YouTubeWatchView: View {
                     .background(embedsPlayer ? Theme.ink : Color.clear)
                     .zIndex(2)
 
-                // Explicit gap between video and title.
+                // Gap between video and title (fades with meta chrome on pull-down).
                 Color.clear
                     .frame(height: YouTubeMediaLayout.hubsTitleGapBelowVideo)
                     .frame(maxWidth: .infinity)
-                    .background(isMinimizingGrab ? Color.clear : Theme.canvas)
+                    .background(Theme.canvas.opacity(chromeOpacity))
 
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
@@ -132,15 +130,15 @@ struct YouTubeWatchView: View {
                 .contentMargins(.top, 0, for: .scrollContent)
                 .scrollDismissesKeyboard(.interactively)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(isMinimizingGrab ? Color.clear : Theme.canvas)
+                .background(Theme.canvas.opacity(chromeOpacity))
                 .opacity(chromeOpacity)
-                .allowsHitTesting(!isMinimizingGrab && chromeOpacity > 0.2)
+                .allowsHitTesting(chromeOpacity > 0.25)
             }
             .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
         }
-        // During grab: pure video over clear/ink — no paper canvas behind.
-        .background(isMinimizingGrab ? Theme.ink : Theme.canvas)
-        .animation(nil, value: isMinimizingGrab)
+        // During grab: video over clear/ink so only the player remains visible.
+        .background(chromeOpacity < 0.5 ? Theme.ink : Theme.canvas)
+        .animation(.easeOut(duration: 0.12), value: chromeOpacity)
         // Player bleeds under Dynamic Island / notch (same as continuous layer).
         .ignoresSafeArea(edges: .top)
         // Feed / non-expanded share still uses the sheet. Expanded Hubs uses an overlay so
@@ -232,38 +230,12 @@ struct YouTubeWatchView: View {
             // Continuous layer paints into this hole when embedsPlayer is false.
             playerSurface
 
-            LinearGradient(
-                colors: [Theme.ink.opacity(0.4), .clear],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .frame(height: 72)
-            .allowsHitTesting(false)
-            .opacity(embedsPlayer ? chromeOpacity : 1)
-
-            // Minimize / close — clear of Dynamic Island.
-            Button(action: { onBack() }) {
-                Image(systemName: "chevron.down")
-                    .font(.body.weight(.bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 36, height: 36)
-                    .background(Color.black.opacity(0.45), in: Circle())
-            }
-            .buttonStyle(.plain)
-            .padding(.top, 8 + YouTubeMediaLayout.keyWindowSafeTop)
-            .padding(.horizontal, 12)
-            .opacity(embedsPlayer ? chromeOpacity : 1)
-            .allowsHitTesting(embedsPlayer ? (chromeOpacity > 0.2 && !isPullingToMinimize) : true)
-            .zIndex(20)
-
+            // No chevron — pull-down on the video minimizes (continuous layer owns the gesture).
             if embedsPlayer {
                 Color.clear
-                    .frame(height: 72)
-                    .frame(maxWidth: .infinity, alignment: .top)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .contentShape(Rectangle())
                     .gesture(minimizeDragGesture)
-                    .opacity(chromeOpacity)
-                    .allowsHitTesting(chromeOpacity > 0.2 && !isPullingToMinimize)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -275,25 +247,27 @@ struct YouTubeWatchView: View {
     }
 
     private var minimizeDragGesture: some Gesture {
-        DragGesture(minimumDistance: 2, coordinateSpace: .local)
+        DragGesture(minimumDistance: 10, coordinateSpace: .local)
             .onChanged { value in
-                let vertical = value.translation.height
-                let horizontal = abs(value.translation.width)
-                guard vertical > 6, vertical > horizontal * 0.65 else { return }
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) {
-                    dismissDragOffset = max(0, vertical)
-                    isPullingToMinimize = true
+                var offset = dismissDragOffset
+                var dragging = isPullingToMinimize
+                MatteryaPullDownDismiss.applyChanged(value, offset: &offset, isDragging: &dragging)
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) {
+                    dismissDragOffset = offset
+                    isPullingToMinimize = dragging
                 }
             }
             .onEnded { value in
-                if value.translation.height > 90 || value.predictedEndTranslation.height > 180 {
+                if MatteryaPullDownDismiss.shouldDismiss(value)
+                    || dismissDragOffset > 90
+                    || value.predictedEndTranslation.height > 160 {
                     dismissDragOffset = 0
                     isPullingToMinimize = false
                     onBack()
                 } else {
-                    withAnimation(.easeOut(duration: 0.16)) {
+                    withAnimation(.easeOut(duration: 0.18)) {
                         dismissDragOffset = 0
                         isPullingToMinimize = false
                     }
@@ -319,7 +293,7 @@ struct YouTubeWatchView: View {
                         showsControls: true,
                         allowsFullscreen: false,
                         startTime: YouTubeCatalogService.shared.playbackPosition(for: currentPost.id),
-                        fillsFrame: false, // classic expanded: aspectFit, no crop
+                        fillsFrame: true, // fill the stage edge-to-edge
                         onViewed: { Task { await PostsService.shared.recordView(currentPost) } }
                     )
                 }

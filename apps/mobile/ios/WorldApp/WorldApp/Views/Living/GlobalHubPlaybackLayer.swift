@@ -55,7 +55,10 @@ struct GlobalHubPlaybackLayer: View {
     }
 
     private var showTransportChrome: Bool {
-        expanded && !isPullingMinimize && dragOffset < 2
+        // Hide player controls while pulling down; reappear when pull eases back up.
+        expanded
+            && appState.hubPlaybackPullProgress < 0.1
+            && dragOffset < 10
     }
 
     private var playingBinding: Binding<Bool> {
@@ -222,8 +225,8 @@ struct GlobalHubPlaybackLayer: View {
                 postID: post.id,
                 showsControls: showControls,
                 loops: false,
-                // Classic: aspectFit on expanded (no crop); aspectFill only when mini.
-                fillsFrame: preferMiniFill && !expanded,
+                // Always fill the stage (expanded + mini) — no letterbox gaps in the container.
+                fillsFrame: true,
                 isMuted: mutedBinding,
                 allowsFullscreen: false,
                 onReady: {
@@ -276,8 +279,9 @@ struct GlobalHubPlaybackLayer: View {
                 withTransaction(t) {
                     dragOffset = offset
                     isPullingMinimize = dragging
+                    // Smooth 0…1 pull: chrome fades out going down, back in going up.
                     appState.hubPlaybackPullProgress = dragging
-                        ? min(1, max(0.08, offset / 100))
+                        ? min(1, max(0, offset / 72))
                         : 0
                 }
             }

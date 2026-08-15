@@ -67,14 +67,26 @@ enum MatteryaPullDownDismiss {
     ) {
         let vertical = value.translation.height
         let horizontal = abs(value.translation.width)
-        // Engage on clear downward drag (horizontal pans still ignored).
-        guard vertical > 16, vertical > horizontal * 0.85 else {
-            if isDragging, vertical <= 4 {
+
+        // Once engaged, keep tracking — moving up reduces offset so chrome can fade back in.
+        if isDragging {
+            if vertical <= 2 || (vertical > 0 && vertical <= horizontal * 0.45) {
                 isDragging = false
                 offset = 0
+                return
+            }
+            let y = max(0, vertical)
+            if y > 280 {
+                let extra = y - 280
+                offset = 280 + extra * 0.35
+            } else {
+                offset = y
             }
             return
         }
+
+        // Engage on clear downward drag (horizontal pans still ignored).
+        guard vertical > 16, vertical > horizontal * 0.85 else { return }
         isDragging = true
         // Light rubber-band past ~280pt so long pulls stay smooth.
         if vertical > 280 {
