@@ -48,20 +48,21 @@ struct YouTubeWatchView: View {
     }
 
     /// 1 = full chrome visible; 0 = only video.
-    /// Fades out as the user pulls the video down; fades back in when they move up.
+    /// Tracks pull like a slider: finger down → fade out, finger up → fade in (1:1).
     private var chromeOpacity: Double {
-        let localPull = dismissDragOffset > 0
-            ? min(1, max(0, dismissDragOffset / 72))
-            : 0
+        let localPull = MatteryaPullDownDismiss.pullProgress(forOffset: dismissDragOffset)
         let continuousPull = max(0, min(1, appState.hubPlaybackPullProgress))
         let pull = max(localPull, continuousPull)
-        return Double(1 - pull)
+        // Soft ease near the ends so the last/first 10% feels less abrupt.
+        let t = Double(pull)
+        let eased = t * t * (3 - 2 * t)
+        return 1 - eased
     }
 
     private var isMinimizingGrab: Bool {
         isPullingToMinimize
-            || dismissDragOffset > 4
-            || appState.hubPlaybackPullProgress > 0.02
+            || dismissDragOffset > 2
+            || appState.hubPlaybackPullProgress > 0.01
     }
 
     private var isHubContent: Bool {
@@ -145,8 +146,13 @@ struct YouTubeWatchView: View {
             .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
         }
         // During grab: video over clear/ink so only the player remains visible.
-        .background(chromeOpacity < 0.5 ? Theme.ink : Theme.canvas)
-        .animation(.easeOut(duration: 0.12), value: chromeOpacity)
+        .background(chromeOpacity < 0.45 ? Theme.ink : Theme.canvas)
+        // No animation while the finger is down — opacity is a live slider.
+        // Soft settle only when releasing (progress snaps via GlobalHub / local gesture).
+        .animation(
+            isMinimizingGrab ? nil : .easeOut(duration: 0.2),
+            value: chromeOpacity
+        )
         // Stage starts under Dynamic Island / notch (continuous player docks to this hole).
         .ignoresSafeArea(edges: .top)
         // Feed / non-expanded share still uses the sheet. Expanded Hubs uses an overlay so
@@ -255,27 +261,29 @@ struct YouTubeWatchView: View {
     }
 
     private var minimizeDragGesture: some Gesture {
-        DragGesture(minimumDistance: 10, coordinateSpace: .local)
+        DragGesture(minimumDistance: 8, coordinateSpace: .local)
             .onChanged { value in
                 var offset = dismissDragOffset
                 var dragging = isPullingToMinimize
                 MatteryaPullDownDismiss.applyChanged(value, offset: &offset, isDragging: &dragging)
+                // Use raw translation for 1:1 slider fade (offset may rubber-band).
+                let liveOffset = dragging ? max(0, value.translation.height) : 0
                 var t = Transaction()
                 t.disablesAnimations = true
                 withTransaction(t) {
-                    dismissDragOffset = offset
+                    dismissDragOffset = liveOffset
                     isPullingToMinimize = dragging
                 }
             }
             .onEnded { value in
                 if MatteryaPullDownDismiss.shouldDismiss(value)
-                    || dismissDragOffset > 90
+                    || dismissDragOffset > MatteryaPullDownDismiss.dismissDistance * 0.75
                     || value.predictedEndTranslation.height > 160 {
                     dismissDragOffset = 0
                     isPullingToMinimize = false
                     onBack()
                 } else {
-                    withAnimation(.easeOut(duration: 0.18)) {
+                    withAnimation(.easeOut(duration: 0.22)) {
                         dismissDragOffset = 0
                         isPullingToMinimize = false
                     }

@@ -69,10 +69,13 @@ struct GlobalHubPlaybackLayer: View {
     }
 
     private var showTransportChrome: Bool {
-        // Hide player controls while pulling down; reappear when pull eases back up.
+        // Keep controls mounted while expanded so opacity can fade with the pull slider.
         expanded
-            && appState.hubPlaybackPullProgress < 0.1
-            && dragOffset < 10
+    }
+
+    /// 1 = full player chrome; 0 = fully faded (mirrors meta chrome under the video).
+    private var transportChromeOpacity: Double {
+        Double(1 - min(1, max(0, appState.hubPlaybackPullProgress)))
     }
 
     private var playingBinding: Binding<Bool> {
@@ -154,7 +157,11 @@ struct GlobalHubPlaybackLayer: View {
     private func videoStack(post: CountryPost, layout: PlayerLayout, liveY: CGFloat) -> some View {
         ZStack(alignment: .topLeading) {
             ZStack {
-                playerSurface(for: post, showControls: showTransportChrome)
+                playerSurface(
+                    for: post,
+                    showControls: showTransportChrome,
+                    chromeOpacity: transportChromeOpacity
+                )
                     .frame(width: layout.width, height: layout.height)
                     // No ink bed under filled video — ink read as black top/bottom margins.
                     .background(Color.clear)
@@ -242,7 +249,11 @@ struct GlobalHubPlaybackLayer: View {
     // MARK: - Player
 
     @ViewBuilder
-    private func playerSurface(for post: CountryPost, showControls: Bool) -> some View {
+    private func playerSurface(
+        for post: CountryPost,
+        showControls: Bool,
+        chromeOpacity: Double = 1
+    ) -> some View {
         let stored = YouTubeCatalogService.shared.playbackPosition(for: post.id)
         let resumeAt = stored > 3 ? stored : 0
         if let url = post.playableVideoURL {
@@ -256,6 +267,7 @@ struct GlobalHubPlaybackLayer: View {
                 loops: false,
                 // Always fill the stage (expanded + mini) — no letterbox gaps in the container.
                 fillsFrame: true,
+                chromeOpacity: chromeOpacity,
                 isMuted: mutedBinding,
                 allowsFullscreen: false,
                 onReady: {
@@ -297,21 +309,22 @@ struct GlobalHubPlaybackLayer: View {
     }
 
     private var minimizeGesture: some Gesture {
-        DragGesture(minimumDistance: 10, coordinateSpace: .local)
+        DragGesture(minimumDistance: 8, coordinateSpace: .local)
             .onChanged { value in
                 guard expanded else { return }
                 var offset = dragOffset
                 var dragging = isPullingMinimize
                 MatteryaPullDownDismiss.applyChanged(value, offset: &offset, isDragging: &dragging)
+                // Progress from *raw* finger Y so fade is a true 1:1 slider (not rubber-band).
+                let progress = dragging
+                    ? MatteryaPullDownDismiss.pullProgress(forVertical: value.translation.height)
+                    : 0
                 var t = Transaction()
                 t.disablesAnimations = true
                 withTransaction(t) {
                     dragOffset = offset
                     isPullingMinimize = dragging
-                    // Smooth 0…1 pull: chrome fades out going down, back in going up.
-                    appState.hubPlaybackPullProgress = dragging
-                        ? min(1, max(0, offset / 72))
-                        : 0
+                    appState.hubPlaybackPullProgress = progress
                 }
             }
             .onEnded { value in
@@ -322,11 +335,13 @@ struct GlobalHubPlaybackLayer: View {
                     return
                 }
                 let shouldMini = MatteryaPullDownDismiss.shouldDismiss(value)
-                    || dragOffset > 90
+                    || dragOffset > MatteryaPullDownDismiss.dismissDistance * 0.75
                     || value.predictedEndTranslation.height > 160
                 if shouldMini {
                     ReelsTwistHaptics.pullDismiss()
-                    appState.hubPlaybackPullProgress = 1
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        appState.hubPlaybackPullProgress = 1
+                    }
                     var snap = Transaction()
                     snap.disablesAnimations = true
                     withTransaction(snap) {
@@ -343,7 +358,8 @@ struct GlobalHubPlaybackLayer: View {
                         }
                     }
                 } else {
-                    withAnimation(Self.morphAnim) {
+                    // Release without mini — slide chrome back in smoothly.
+                    withAnimation(.easeOut(duration: 0.22)) {
                         dragOffset = 0
                         isPullingMinimize = false
                         appState.hubPlaybackPullProgress = 0

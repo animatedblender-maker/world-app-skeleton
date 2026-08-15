@@ -214,6 +214,8 @@ struct MatteryaHubPlayerView: View {
     var loops: Bool = false
     /// When true, crop to fill the stage (no black letterbox bars). Hubs always fills.
     var fillsFrame: Bool = true
+    /// 0…1 external fade (pull-to-mini slider). 1 = full chrome, 0 = hidden.
+    var chromeOpacity: Double = 1
     @Binding var isMuted: Bool
     var onReady: (() -> Void)? = nil
     /// Keeps AppState.hubPlaybackPlaying in sync when chrome play/pause is used.
@@ -247,6 +249,7 @@ struct MatteryaHubPlayerView: View {
         showsControls: Bool = true,
         loops: Bool = false,
         fillsFrame: Bool = true,
+        chromeOpacity: Double = 1,
         isMuted: Binding<Bool> = .constant(false),
         allowsFullscreen: Bool = false,
         onReady: (() -> Void)? = nil,
@@ -264,6 +267,7 @@ struct MatteryaHubPlayerView: View {
         self.showsControls = showsControls
         self.loops = loops
         self.fillsFrame = fillsFrame
+        self.chromeOpacity = chromeOpacity
         self._isMuted = isMuted
         self.allowsFullscreen = allowsFullscreen
         self.onReady = onReady
@@ -323,16 +327,21 @@ struct MatteryaHubPlayerView: View {
                         .progressViewStyle(.circular)
                         .tint(.white)
                         .scaleEffect(1.15)
+                        .opacity(chromeOpacity)
                         .zIndex(2)
                 }
 
                 if showChrome || !bridge.isPlaying {
                     hubChrome
+                        .opacity(chromeOpacity)
+                        .allowsHitTesting(chromeOpacity > 0.2)
                         .transition(.opacity)
                         .zIndex(3)
                 } else {
                     // Chrome hidden while playing — still capture taps + double-tap skip.
                     youtubeHiddenChromeHitLayer
+                        .opacity(chromeOpacity)
+                        .allowsHitTesting(chromeOpacity > 0.2)
                         .zIndex(3)
                 }
 
@@ -349,6 +358,7 @@ struct MatteryaHubPlayerView: View {
                     }
                     .padding(.horizontal, 28)
                     .allowsHitTesting(false)
+                    .opacity(chromeOpacity)
                     .transition(.opacity.combined(with: .scale(scale: 0.9)))
                     .zIndex(40)
                 }

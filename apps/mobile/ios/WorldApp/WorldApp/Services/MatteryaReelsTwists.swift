@@ -51,13 +51,26 @@ enum ReelsTwistHaptics {
 }
 
 enum MatteryaPullDownDismiss {
-    /// Slightly shorter so pull-to-mini feels responsive without accidental dismiss.
-    static let dismissDistance: CGFloat = 120
+    /// Distance that fully minimizes / fully hides chrome (slider “1.0”).
+    static let dismissDistance: CGFloat = 140
     static let predictedDismissDistance: CGFloat = 240
+    /// Pull distance that fully fades meta chrome (same as dismiss for 1:1 slider feel).
+    static let chromeFadeDistance: CGFloat = 140
 
     static func shouldDismiss(_ value: DragGesture.Value) -> Bool {
         value.translation.height > dismissDistance
             || value.predictedEndTranslation.height > predictedDismissDistance
+    }
+
+    /// 0…1 slider from raw downward translation (moving up lowers the value).
+    static func pullProgress(forVertical translationY: CGFloat) -> CGFloat {
+        let y = max(0, translationY)
+        return min(1, y / chromeFadeDistance)
+    }
+
+    /// 0…1 from rubber-banded visual offset (fallback).
+    static func pullProgress(forOffset offset: CGFloat) -> CGFloat {
+        pullProgress(forVertical: offset)
     }
 
     static func applyChanged(
@@ -68,14 +81,22 @@ enum MatteryaPullDownDismiss {
         let vertical = value.translation.height
         let horizontal = abs(value.translation.width)
 
-        // Once engaged, keep tracking — moving up reduces offset so chrome can fade back in.
+        // Once engaged, keep tracking 1:1 with the finger (slider).
+        // Moving up reduces offset so chrome reappears in lockstep.
         if isDragging {
-            if vertical <= 2 || (vertical > 0 && vertical <= horizontal * 0.45) {
+            if vertical <= 0 {
+                isDragging = false
+                offset = 0
+                return
+            }
+            // Stay engaged while mostly vertical; cancel only on clear horizontal pan.
+            if horizontal > vertical * 1.35, vertical < 24 {
                 isDragging = false
                 offset = 0
                 return
             }
             let y = max(0, vertical)
+            // Mild rubber-band only far past dismiss — fade uses raw Y via pullProgress.
             if y > 280 {
                 let extra = y - 280
                 offset = 280 + extra * 0.35
@@ -86,15 +107,9 @@ enum MatteryaPullDownDismiss {
         }
 
         // Engage on clear downward drag (horizontal pans still ignored).
-        guard vertical > 16, vertical > horizontal * 0.85 else { return }
+        guard vertical > 12, vertical > horizontal * 0.75 else { return }
         isDragging = true
-        // Light rubber-band past ~280pt so long pulls stay smooth.
-        if vertical > 280 {
-            let extra = vertical - 280
-            offset = 280 + extra * 0.35
-        } else {
-            offset = vertical
-        }
+        offset = vertical
     }
 
     static func applyEnded(
