@@ -53,19 +53,10 @@ final class HubPassThroughViewController<Content: View>: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        // Critical: UIHostingController defaults to respecting the safe area, which
-        // pushed the continuous Hubs video down into the Dynamic Island (mid-island).
-        // Disable all safe-area regions so SwiftUI y=0 is the physical top of `view`.
-        edgesForExtendedLayout = .all
-        additionalSafeAreaInsets = .zero
-        if #available(iOS 16.4, *) {
-            host.safeAreaRegions = []
-        }
+        // Host fills the pass-through view; SwiftUI layout uses safe-area y for expanded
+        // Hubs video (below Dynamic Island). Do not cancel top safe area here.
         host.view.backgroundColor = .clear
         host.view.isOpaque = false
-        host.view.insetsLayoutMarginsFromSafeArea = false
-        host.view.preservesSuperviewLayoutMargins = false
-        host.view.directionalLayoutMargins = .zero
         addChild(host)
         view.addSubview(host.view)
         host.view.translatesAutoresizingMaskIntoConstraints = false
@@ -76,25 +67,6 @@ final class HubPassThroughViewController<Content: View>: UIViewController {
             host.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
         host.didMove(toParent: self)
-    }
-
-    override func viewSafeAreaInsetsDidChange() {
-        super.viewSafeAreaInsetsDidChange()
-        // Kill any system-injected top inset so the video stays flush under the island.
-        additionalSafeAreaInsets = UIEdgeInsets(
-            top: -view.safeAreaInsets.top,
-            left: 0,
-            bottom: 0,
-            right: 0
-        )
-        if #available(iOS 16.4, *) {
-            host.safeAreaRegions = []
-        }
-    }
-
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        host.view.frame = view.bounds
     }
 }
 

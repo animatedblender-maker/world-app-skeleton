@@ -54,24 +54,23 @@ enum YouTubeMediaLayout {
     /// Prefetch + display MUST match or ImageCache keys miss and every row re-downloads.
     static let hubsListThumbMaxPixel: CGFloat = 320
 
-    /// Visible 16:9 body of the Hubs watch stage (below the island bleed).
+    /// Hubs watch stage height — pure 16:9 of width (below the Dynamic Island, not under it).
     static func hubsContinuousStageHeight(containerWidth: CGFloat) -> CGFloat {
         let w = max(1, containerWidth)
         let classic16x9 = w / aspect
         let contentH = hubsContentColumnHeight
-        // Compact: pure 16:9 (or slightly larger on short phones only via min floor).
         let preferred = max(classic16x9, contentH * 0.34)
         let maxH = max(classic16x9, contentH - hubsWatchMetaReserve)
         return min(preferred, maxH)
     }
 
-    /// Full expanded stage height from the **physical top of the screen**:
-    /// island/notch bleed + 16:9 body. Continuous player and watch spacer MUST match.
+    /// Expanded stage height = 16:9 body only (no safe-top bleed).
+    /// Video starts **below** the Dynamic Island; island is never inside the frame.
     static func hubsExpandedStageHeight(containerWidth: CGFloat) -> CGFloat {
-        hubsContinuousStageHeight(containerWidth: containerWidth) + keyWindowSafeTop
+        hubsContinuousStageHeight(containerWidth: containerWidth)
     }
 
-    /// Embedded watch player — same compact stage as continuous hubs playback.
+    /// Embedded watch player — same stage as continuous hubs playback.
     static func watchPlayerHeight(containerWidth: CGFloat, containerHeight: CGFloat) -> CGFloat {
         let w = max(1, containerWidth)
         let classic16x9 = w / aspect
@@ -83,7 +82,7 @@ enum YouTubeMediaLayout {
         return hubsContinuousStageHeight(containerWidth: w)
     }
 
-    /// Gap between video bottom and title (below the stage hole).
+    /// Gap between video bottom and title.
     static let hubsTitleGapBelowVideo: CGFloat = 18
 }
 

@@ -478,8 +478,8 @@ struct MatteryaHubPlayerView: View {
                     }
                 }
                 .padding(.horizontal, 12)
-                // Stage bleeds under the island — keep mute clear of the Dynamic Island.
-                .padding(.top, 10 + YouTubeMediaLayout.keyWindowSafeTop)
+                // Stage is already below the island — modest top pad only.
+                .padding(.top, 10)
                 Spacer(minLength: 0)
             }
             .zIndex(5)

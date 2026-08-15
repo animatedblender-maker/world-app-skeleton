@@ -72,7 +72,8 @@ struct YouTubeWatchView: View {
 
     var body: some View {
         GeometryReader { geo in
-            // MUST match GlobalHubPlaybackLayer expanded height exactly (physical top).
+            // Pure 16:9 below the safe area — matches continuous player (y = safeTop).
+            // Dynamic Island stays above the video, never inside it.
             let reservedPlayerHeight = YouTubeMediaLayout.hubsExpandedStageHeight(
                 containerWidth: geo.size.width
             )
@@ -92,7 +93,7 @@ struct YouTubeWatchView: View {
                     .clipped()
                     .zIndex(2)
 
-                // Gap between video and title (below the stage — never under video pixels).
+                // Gap between video and title.
                 Color.clear
                     .frame(height: YouTubeMediaLayout.hubsTitleGapBelowVideo)
                     .frame(maxWidth: .infinity)
@@ -141,14 +142,11 @@ struct YouTubeWatchView: View {
         }
         // During grab: video over clear/ink so only the player remains visible.
         .background(chromeOpacity < 0.45 ? Theme.ink : Theme.canvas)
-        // No animation while the finger is down — opacity is a live slider.
-        // Soft settle only when releasing (progress snaps via GlobalHub / local gesture).
         .animation(
             isMinimizingGrab ? nil : .easeOut(duration: 0.2),
             value: chromeOpacity
         )
-        // Bleed under Dynamic Island / notch so the stage starts at the physical top.
-        .ignoresSafeArea(edges: .top)
+        // Stay in the safe area — video begins *below* the Dynamic Island.
         // Feed / non-expanded share still uses the sheet. Expanded Hubs uses an overlay so
         // GlobalHubPlaybackLayer never pauses or collapses to mini.
         .sharePostSheet(appState: appState)
