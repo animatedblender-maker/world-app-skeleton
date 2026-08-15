@@ -112,8 +112,8 @@ struct GlobalHubPlaybackLayer: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                // Expanded: bleed under Dynamic Island. Mini: dock frame / tab clearance.
-                .ignoresSafeArea(edges: expanded ? .top : [])
+                // Expanded: always from physical top (under Dynamic Island). Mini: safe layout.
+                .ignoresSafeArea(edges: expanded ? [.top] : [])
             }
         }
         .onChange(of: expanded) { _, isExpanded in
@@ -199,28 +199,26 @@ struct GlobalHubPlaybackLayer: View {
 
     private func playerLayout(in geo: GeometryProxy) -> PlayerLayout {
         if expanded {
-            // Prefer the watch page’s real stage hole so we never cover the title.
-            if let global = watchStageGlobal,
-               global.width > 40,
-               global.height > 80 {
-                let containerGlobal = geo.frame(in: .global)
-                let x = global.minX - containerGlobal.minX
-                let y = global.minY - containerGlobal.minY
-                // Expanded stage lives in the top half of the screen.
-                if y > -40, y < geo.size.height * 0.55 {
-                    return PlayerLayout(
-                        x: x,
-                        y: y,
-                        width: global.width,
-                        height: global.height
-                    )
-                }
-            }
-            // Fallback: under Dynamic Island from physical top (y=0), body + safe-top bleed.
+            // Always physical top (y=0) with ignoresSafeArea(.top) — never mid-island.
+            // Height = 16:9-ish body + safe-top bleed so the clip runs under the island.
+            // Prefer measured stage *height* only (ignore its global Y — that was mid-island).
             let safeTop = YouTubeMediaLayout.keyWindowSafeTop
             let bodyH = YouTubeMediaLayout.hubsContinuousStageHeight(containerWidth: geo.size.width)
-            let stageHeight = bodyH + max(0, safeTop)
-            return PlayerLayout(x: 0, y: 0, width: geo.size.width, height: stageHeight)
+            let expectedH = bodyH + max(0, safeTop)
+            let measuredH = watchStageGlobal?.height ?? 0
+            // Use measured height when it matches expected (title-safe); else fixed math.
+            let stageHeight: CGFloat = {
+                if measuredH > 80, abs(measuredH - expectedH) < 48 {
+                    return measuredH
+                }
+                return expectedH
+            }()
+            return PlayerLayout(
+                x: 0,
+                y: 0,
+                width: geo.size.width,
+                height: max(120, stageHeight)
+            )
         }
 
         // Lock to the mini bar’s real frame (floating or chat).

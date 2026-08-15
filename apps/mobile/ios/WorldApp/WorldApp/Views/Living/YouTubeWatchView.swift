@@ -72,7 +72,7 @@ struct YouTubeWatchView: View {
 
     var body: some View {
         GeometryReader { geo in
-            // Stage under Dynamic Island: body + safe-top bleed (same math as continuous fallback).
+            // Physical top under Dynamic Island — same height math as continuous (y=0).
             let safeTop = YouTubeMediaLayout.keyWindowSafeTop
             let bodyH = embedsPlayer
                 ? YouTubeMediaLayout.watchPlayerHeight(
@@ -80,7 +80,7 @@ struct YouTubeWatchView: View {
                     containerHeight: max(200, geo.size.height + safeTop)
                 )
                 : YouTubeMediaLayout.hubsContinuousStageHeight(containerWidth: geo.size.width)
-            // Continuous player docks to this exact hole — never taller, never over title.
+            // body + island bleed; continuous player uses the same total height at y=0.
             let reservedPlayerHeight = max(120, bodyH + max(0, safeTop))
 
             VStack(spacing: 0) {
@@ -89,6 +89,7 @@ struct YouTubeWatchView: View {
                     .background(embedsPlayer ? Theme.ink : Color.clear)
                     .background {
                         GeometryReader { stageGeo in
+                            // Height-only signal for continuous (Y is forced to 0 under island).
                             Color.clear.preference(
                                 key: HubWatchStageFrameKey.self,
                                 value: stageGeo.frame(in: .global)
@@ -98,7 +99,7 @@ struct YouTubeWatchView: View {
                     .clipped()
                     .zIndex(2)
 
-                // Gap between video and title (below the stage hole — never under video).
+                // Gap between video and title (below the stage — never under video pixels).
                 Color.clear
                     .frame(height: YouTubeMediaLayout.hubsTitleGapBelowVideo)
                     .frame(maxWidth: .infinity)
@@ -153,7 +154,7 @@ struct YouTubeWatchView: View {
             isMinimizingGrab ? nil : .easeOut(duration: 0.2),
             value: chromeOpacity
         )
-        // Stage starts under Dynamic Island / notch (continuous player docks to this hole).
+        // Bleed under Dynamic Island / notch so the stage starts at the physical top.
         .ignoresSafeArea(edges: .top)
         // Feed / non-expanded share still uses the sheet. Expanded Hubs uses an overlay so
         // GlobalHubPlaybackLayer never pauses or collapses to mini.
