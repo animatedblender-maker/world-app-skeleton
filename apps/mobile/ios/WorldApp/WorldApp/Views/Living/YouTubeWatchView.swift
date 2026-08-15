@@ -72,24 +72,17 @@ struct YouTubeWatchView: View {
 
     var body: some View {
         GeometryReader { geo in
-            // Physical top under Dynamic Island — same height math as continuous (y=0).
-            let safeTop = YouTubeMediaLayout.keyWindowSafeTop
-            let bodyH = embedsPlayer
-                ? YouTubeMediaLayout.watchPlayerHeight(
-                    containerWidth: geo.size.width,
-                    containerHeight: max(200, geo.size.height + safeTop)
-                )
-                : YouTubeMediaLayout.hubsContinuousStageHeight(containerWidth: geo.size.width)
-            // body + island bleed; continuous player uses the same total height at y=0.
-            let reservedPlayerHeight = max(120, bodyH + max(0, safeTop))
+            // MUST match GlobalHubPlaybackLayer expanded height exactly (physical top).
+            let reservedPlayerHeight = YouTubeMediaLayout.hubsExpandedStageHeight(
+                containerWidth: geo.size.width
+            )
 
             VStack(spacing: 0) {
                 playerSection
-                    .frame(width: geo.size.width, height: reservedPlayerHeight)
+                    .frame(width: geo.size.width, height: max(120, reservedPlayerHeight))
                     .background(embedsPlayer ? Theme.ink : Color.clear)
                     .background {
                         GeometryReader { stageGeo in
-                            // Height-only signal for continuous (Y is forced to 0 under island).
                             Color.clear.preference(
                                 key: HubWatchStageFrameKey.self,
                                 value: stageGeo.frame(in: .global)

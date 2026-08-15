@@ -112,8 +112,8 @@ struct GlobalHubPlaybackLayer: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                // Expanded: always from physical top (under Dynamic Island). Mini: safe layout.
-                .ignoresSafeArea(edges: expanded ? [.top] : [])
+                // Expanded: extend under status bar / Dynamic Island so y=0 is physical top.
+                .ignoresSafeArea(.container, edges: expanded ? .top : [])
             }
         }
         .onChange(of: expanded) { _, isExpanded in
@@ -199,20 +199,12 @@ struct GlobalHubPlaybackLayer: View {
 
     private func playerLayout(in geo: GeometryProxy) -> PlayerLayout {
         if expanded {
-            // Always physical top (y=0) with ignoresSafeArea(.top) — never mid-island.
-            // Height = 16:9-ish body + safe-top bleed so the clip runs under the island.
-            // Prefer measured stage *height* only (ignore its global Y — that was mid-island).
-            let safeTop = YouTubeMediaLayout.keyWindowSafeTop
-            let bodyH = YouTubeMediaLayout.hubsContinuousStageHeight(containerWidth: geo.size.width)
-            let expectedH = bodyH + max(0, safeTop)
-            let measuredH = watchStageGlobal?.height ?? 0
-            // Use measured height when it matches expected (title-safe); else fixed math.
-            let stageHeight: CGFloat = {
-                if measuredH > 80, abs(measuredH - expectedH) < 48 {
-                    return measuredH
-                }
-                return expectedH
-            }()
+            // Single source of truth: physical top + fixed expanded height.
+            // Do NOT use watchStageGlobal Y (it sat mid-island). Hosting controller
+            // safe-area is disabled so y=0 is truly the top of the screen.
+            let stageHeight = YouTubeMediaLayout.hubsExpandedStageHeight(
+                containerWidth: geo.size.width
+            )
             return PlayerLayout(
                 x: 0,
                 y: 0,
