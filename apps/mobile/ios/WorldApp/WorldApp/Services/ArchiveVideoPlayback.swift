@@ -474,26 +474,56 @@ struct MatteryaHubPlayerView: View {
             }
             .zIndex(5)
 
-            // Center play — Matterya accent disc
-            Button {
-                bridge.togglePlayPause()
-                if bridge.isPlaying {
+            // Center transport: −10s · play/pause · +10s
+            HStack(spacing: 36) {
+                Button {
+                    performSkip(by: -10)
                     scheduleChromeHide()
-                } else {
-                    chromeHideTask?.cancel()
-                    showChrome = true
+                } label: {
+                    Image(systemName: "gobackward.10")
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(Theme.paper)
+                        .frame(width: 48, height: 48)
+                        .background(Theme.ink.opacity(0.48), in: Circle())
+                        .overlay(Circle().stroke(Theme.paper.opacity(0.14), lineWidth: 0.5))
                 }
-            } label: {
-                Image(systemName: bridge.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: bridge.isPlaying ? 26 : 30, weight: .bold))
-                    .foregroundStyle(Theme.paper)
-                    .offset(x: bridge.isPlaying ? 0 : 2)
-                    .frame(width: 72, height: 72)
-                    .background(Theme.accentBright, in: Circle())
-                    .shadow(color: Theme.ink.opacity(0.35), radius: 14, y: 5)
+                .buttonStyle(.plain)
+                .accessibilityLabel("Back 10 seconds")
+
+                Button {
+                    bridge.togglePlayPause()
+                    if bridge.isPlaying {
+                        scheduleChromeHide()
+                    } else {
+                        chromeHideTask?.cancel()
+                        showChrome = true
+                    }
+                } label: {
+                    Image(systemName: bridge.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: bridge.isPlaying ? 26 : 30, weight: .bold))
+                        .foregroundStyle(Theme.paper)
+                        .offset(x: bridge.isPlaying ? 0 : 2)
+                        .frame(width: 72, height: 72)
+                        .background(Theme.accentBright, in: Circle())
+                        .shadow(color: Theme.ink.opacity(0.35), radius: 14, y: 5)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(bridge.isPlaying ? "Pause" : "Play")
+
+                Button {
+                    performSkip(by: 10)
+                    scheduleChromeHide()
+                } label: {
+                    Image(systemName: "goforward.10")
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(Theme.paper)
+                        .frame(width: 48, height: 48)
+                        .background(Theme.ink.opacity(0.48), in: Circle())
+                        .overlay(Circle().stroke(Theme.paper.opacity(0.14), lineWidth: 0.5))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Forward 10 seconds")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(bridge.isPlaying ? "Pause" : "Play")
             .zIndex(4)
 
             // Bottom bar: scrubber + times (Matterya accent rail)

@@ -91,12 +91,14 @@ struct YouTubeWatchView: View {
                     .background(embedsPlayer ? Theme.ink : Color.clear)
                     .zIndex(2)
 
+                // Explicit gap between video and title.
+                Color.clear
+                    .frame(height: YouTubeMediaLayout.hubsTitleGapBelowVideo)
+                    .frame(maxWidth: .infinity)
+                    .background(isMinimizingGrab ? Color.clear : Theme.canvas)
+
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
-                        Color.clear
-                            .frame(height: 8)
-                            .frame(maxWidth: .infinity)
-
                         titleSection
                         // Like · Send · Keep under the title (not under the channel card).
                         actionSection
@@ -370,7 +372,7 @@ struct YouTubeWatchView: View {
             }
         }
         .padding(.horizontal, Theme.pagePadding)
-        .padding(.top, 4)
+        .padding(.top, 2)
     }
 
     @ViewBuilder
