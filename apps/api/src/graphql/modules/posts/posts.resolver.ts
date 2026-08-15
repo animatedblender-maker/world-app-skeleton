@@ -25,15 +25,32 @@ export const postsResolvers = {
     recentPosts: async (_: any, args: any, ctx: any) => {
       const limit = typeof args.limit === 'number' ? args.limit : 25;
       const before = args?.before ?? null;
-      return await svc().recentPosts(limit, ctx.user?.id ?? null, before);
+      try {
+        return await svc().recentPosts(limit, ctx.user?.id ?? null, before);
+      } catch (err: any) {
+        console.warn('[recentPosts]', err?.message ?? err);
+        // Bad cursor / transient PG — empty page beats GraphQL 500 + pool thrash.
+        return [];
+      }
     },
     postById: async (_: any, args: any, ctx: any) => {
-      if (!args?.post_id) throw new Error('post_id is required.');
-      return await svc().postById(args.post_id, ctx.user?.id ?? null);
+      if (!args?.post_id) return null;
+      try {
+        return await svc().postById(args.post_id, ctx.user?.id ?? null);
+      } catch (err: any) {
+        // Never 500 the client on seed ids / bad UUID — return null.
+        console.warn('[postById]', err?.message ?? err);
+        return null;
+      }
     },
     playbackMedia: async (_: any, args: any, ctx: any) => {
-      if (!args?.post_id) throw new Error('post_id is required.');
-      return await svc().playbackMedia(args.post_id, ctx.user?.id ?? null);
+      if (!args?.post_id) return null;
+      try {
+        return await svc().playbackMedia(args.post_id, ctx.user?.id ?? null);
+      } catch (err: any) {
+        console.warn('[playbackMedia]', err?.message ?? err);
+        return null;
+      }
     },
     commentsByPost: async (_: any, args: any, ctx: any) => {
       // Default high enough for full R2 threads (often 50–300+). Client can still pass a limit.

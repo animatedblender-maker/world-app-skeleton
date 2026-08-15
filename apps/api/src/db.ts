@@ -37,9 +37,11 @@ export const pool = new Pool({
     process.env.PGSSLMODE === 'require' || DATABASE_URL.includes('supabase')
       ? { rejectUnauthorized: false }
       : undefined,
-  max: Number(process.env.DB_POOL_MAX ?? 4),
-  idleTimeoutMillis: Number(process.env.DB_IDLE_TIMEOUT_MS ?? 10000),
-  connectionTimeoutMillis: Number(process.env.DB_CONNECT_TIMEOUT_MS ?? 5000),
+  // Supabase pooler: keep modest. Too low (4) + concurrent GraphQL → "timeout exceeded when trying to connect".
+  max: Number(process.env.DB_POOL_MAX ?? 10),
+  idleTimeoutMillis: Number(process.env.DB_IDLE_TIMEOUT_MS ?? 15000),
+  connectionTimeoutMillis: Number(process.env.DB_CONNECT_TIMEOUT_MS ?? 12000),
+  allowExitOnIdle: false,
 });
 
 pool.on('error', (err) => {

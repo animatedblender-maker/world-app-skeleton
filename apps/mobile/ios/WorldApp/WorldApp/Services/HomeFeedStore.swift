@@ -542,10 +542,21 @@ final class HomeFeedStore {
     }
 
     /// Opaque cursor for GraphQL `before` (created_at timestamptz).
+    /// Always ISO-8601 — never epoch ms (PG rejects `1786664811920` as timestamptz).
     static func cursor(from post: CountryPost?) -> String? {
         guard let post else { return nil }
-        // Prefer raw ISO from server; fall back to parsed date.
-        if !post.createdAt.isEmpty { return post.createdAt }
-        return nil
+        if let date = post.createdDate {
+            return ISO8601DateFormatter().string(from: date)
+        }
+        let raw = post.createdAt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return nil }
+        // Already ISO-ish
+        if raw.contains("-") || raw.contains("T") { return raw }
+        // Epoch ms / s → ISO
+        if let n = Double(raw) {
+            let seconds = n > 1_000_000_000_000 ? n / 1000.0 : n
+            return ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: seconds))
+        }
+        return raw
     }
 }

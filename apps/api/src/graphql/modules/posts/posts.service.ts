@@ -108,6 +108,42 @@ function stripMomentMarkers(body: string | null | undefined): string {
     .trim();
 }
 
+/** Postgres `id uuid` — Archive/hub seed ids (`ia_*`, `hub_*`) must never hit `$1::uuid`. */
+function isUuid(value: string | null | undefined): boolean {
+  if (!value) return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    String(value).trim()
+  );
+}
+
+/**
+ * Normalize recentPosts(before:) cursor.
+ * Clients sometimes send epoch ms (`1786664811920`) instead of ISO timestamptz → PG error.
+ */
+function normalizeTimestamptzCursor(raw: string | null | undefined): string | null {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+
+  // Pure digits: epoch seconds or milliseconds
+  if (/^\d{10,16}$/.test(s)) {
+    const n = Number(s);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    // 13+ digits → ms; 10–12 → seconds
+    const ms = s.length >= 13 ? n : n * 1000;
+    // Reject absurd ranges (before 2000 / after ~2100)
+    if (ms < 946_684_800_000 || ms > 4_102_444_800_000) return null;
+    return new Date(ms).toISOString();
+  }
+
+  // Already ISO / PG-friendly
+  const d = new Date(s);
+  if (!Number.isNaN(d.getTime())) {
+    return d.toISOString();
+  }
+  return null;
+}
+
 function presentPostRow<T extends Record<string, any>>(row: T): T {
   if (!row) return row;
   const next: any = { ...row, body: stripMomentMarkers(row.body) };
@@ -614,8 +650,10 @@ export class PostsService {
     const savedByMe = await this.savedByMeExpr('$2::uuid');
     const savedByMeShared = await this.savedByMeSharedExpr('$2::uuid');
     const params: Array<string | number | null> = [safeLimit, viewerId];
-    const beforeClause = before ? `and p.created_at < $3::timestamptz` : '';
-    if (before) params.push(before);
+    // Never pass raw epoch-ms / garbage into ::timestamptz (Render ERR spam + pool stress).
+    const beforeTs = normalizeTimestamptzCursor(before);
+    const beforeClause = beforeTs ? `and p.created_at < $3::timestamptz` : '';
+    if (beforeTs) params.push(beforeTs);
     const { rows } = await pool.query(
       `
       select
@@ -838,6 +876,8 @@ export class PostsService {
 
   async postById(postId: string, viewerId: string | null): Promise<PostRow | null> {
     if (!postId) return null;
+    // Seed / offline ids (ia_*, hub_*, demo_*) are not UUIDs — do not query Postgres.
+    if (!isUuid(postId)) return null;
     const post = await this.postByIdForViewer(postId, viewerId);
     return post ? await presentPostRowAsync(post) : null;
   }
@@ -851,6 +891,7 @@ export class PostsService {
     viewerId: string | null
   ): Promise<{ post_id: string; url: string; media_url: string; r2_key: string | null } | null> {
     if (!postId) return null;
+    if (!isUuid(postId)) return null;
     const post = await this.postByIdForViewer(postId, viewerId);
     if (!post) return null;
     const resolved = await resolvePlaybackForPostRow(post as any);
@@ -1702,6 +1743,9 @@ export class PostsService {
   }
 
   private async postByIdForViewer(id: string, viewerId: string | null): Promise<PostRow | null> {
+    // Guard every entry point — callers sometimes pass Archive seed ids.
+    if (!isUuid(id)) return null;
+    const viewer = viewerId && isUuid(viewerId) ? viewerId : null;
     const savedByMe = await this.savedByMeExpr('$2::uuid');
     const savedByMeShared = await this.savedByMeSharedExpr('$2::uuid');
     const { rows } = await pool.query(
@@ -1796,7 +1840,7 @@ export class PostsService {
         ${await this.privateAuthorVisibleSql('$2::uuid')}
       limit 1
       `,
-      [id, viewerId]
+      [id, viewer]
     );
     return (rows[0] as PostRow) ?? null;
   }
