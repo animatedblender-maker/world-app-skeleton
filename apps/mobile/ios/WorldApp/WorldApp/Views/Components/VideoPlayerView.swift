@@ -397,10 +397,13 @@ struct VideoPlayerView: View {
     /// Solo + play only when this card is the live focused Spark / feed winner.
     @MainActor
     private func kickAudiblePlayback(on player: AVPlayer) {
-        guard liveGate.isActive, !liveGate.userWantsPause else {
+        // Both View isActive and liveGate must agree — async resolve used to unmute
+        // after the user had already scrolled away (random ghost audio).
+        guard isActive, liveGate.isActive, !liveGate.userWantsPause else {
             player.pause()
             player.isMuted = true
             player.volume = 0
+            player.rate = 0
             isPlaying = false
             return
         }
@@ -639,12 +642,16 @@ struct VideoPlayerView: View {
             }
             if !installedClaim {
                 if let postID { SparkWarmPool.shared.markInUse(postID: postID) }
-                // Always go through playbackConfiguration — R2 is re-resolved via API
-                // (object is permanent; only old signed links die).
+                // Play direct when URL is still valid. API re-sign only if near/past expiry.
                 let configuration = await MediaURLResolver.playbackConfiguration(
                     for: url,
                     postID: postID
                 )
+                // After await: user may have swiped away — never install audible on a dead page.
+                guard liveGate.isActive || preloadsWhenInactive || postID != nil else {
+                    if let postID { SparkWarmPool.shared.release(postID: postID) }
+                    return
+                }
                 if configuration.url != url {
                     configuredURL = configuration.url
                 }
@@ -652,23 +659,25 @@ struct VideoPlayerView: View {
             }
         }
 
-        // Preload only: stay silent and paused while bytes buffer for instant focus win.
-        if !isActive {
+        // Preload / inactive: hard silence (also after slow resolve returns).
+        if !isActive || !liveGate.isActive {
             player?.pause()
             player?.isMuted = true
             player?.volume = 0
+            player?.rate = 0
             isPlaying = false
             return
         }
 
         // Solo this player — kill every other Spark / feed / warm-pool voice.
         if let player {
-            if liveGate.isActive, !liveGate.userWantsPause {
+            if liveGate.isActive, !liveGate.userWantsPause, isActive {
                 kickAudiblePlayback(on: player)
             } else {
                 player.pause()
                 player.isMuted = true
                 player.volume = 0
+                player.rate = 0
                 isPlaying = false
             }
         }

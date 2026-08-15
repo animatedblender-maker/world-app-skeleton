@@ -136,15 +136,69 @@ export function extractR2Key(
   return null;
 }
 
+/** True if media_url already has a usable signed/public link with enough lifetime left. */
+function existingPlayUrlStillFresh(mediaUrl: string | null | undefined): string | null {
+  if (!mediaUrl) return null;
+  const raw = String(mediaUrl).trim();
+  let candidate: string | null = null;
+  if (raw.startsWith('http')) candidate = raw;
+  else if (raw.startsWith('{')) {
+    try {
+      const obj = JSON.parse(raw) as { urls?: string[] };
+      const u = obj.urls?.[0];
+      if (u && String(u).startsWith('http')) candidate = String(u);
+    } catch {
+      return null;
+    }
+  }
+  if (!candidate) return null;
+  try {
+    const u = new URL(candidate);
+    // Public CDN / non-signed — always fine.
+    if (!u.searchParams.has('X-Amz-Signature') && !u.searchParams.has('X-Amz-Algorithm')) {
+      if (
+        u.hostname.includes('r2.dev') ||
+        u.hostname.includes('supabase') ||
+        !u.hostname.includes('r2.cloudflarestorage.com')
+      ) {
+        return candidate;
+      }
+    }
+    const exp = u.searchParams.get('X-Amz-Expires');
+    const date = u.searchParams.get('X-Amz-Date');
+    if (!exp || !date) return null;
+    const expSecs = Number(exp);
+    if (!Number.isFinite(expSecs) || expSecs <= 0) return null;
+    // yyyyMMdd'T'HHmmss'Z'
+    const m = date.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/);
+    if (!m) return null;
+    const start = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+    const deadline = start + expSecs * 1000;
+    // Keep if more than 6h remain — skip expensive re-presign on every feed page.
+    if (deadline - Date.now() > 6 * 3600 * 1000) return candidate;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Rewrite posts.media_url so `urls[0]` is a currently playable link.
  * Preserves r2_key / reel / kind metadata.
+ * Fast path: skip re-presign when the existing signed URL still has hours left
+ * (was re-signing every post on every feed request → multi-second lag).
  */
 export async function freshenMediaUrlString(
   mediaUrl: string | null | undefined,
   mediaPath?: string | null
 ): Promise<string | null> {
   if (!mediaUrl && !mediaPath) return mediaUrl ?? null;
+
+  // Hot path: existing link still good → return as-is (no R2/S3 call).
+  if (existingPlayUrlStillFresh(mediaUrl) && mediaUrl) {
+    return mediaUrl;
+  }
+
   const key = extractR2Key(mediaUrl, mediaPath);
   if (!key) return mediaUrl ?? null;
 
@@ -185,8 +239,14 @@ export async function freshenPostsMedia<T extends Record<string, any>>(rows: T[]
   // Only work when we can resolve (public base OR credentials).
   if (!r2PublicBaseUrl() && !r2Configured()) return rows;
 
-  const out = await Promise.all(
-    rows.map(async (row) => {
+  // Bounded concurrency — unbounded Promise.all over 40–100 posts hammered R2 + froze feed.
+  const concurrency = 6;
+  const out: T[] = new Array(rows.length);
+  let idx = 0;
+  async function worker() {
+    while (idx < rows.length) {
+      const i = idx++;
+      const row = rows[i];
       const next: any = { ...row };
       const mediaPath = next.media_path ?? null;
       if (next.media_url || mediaPath) {
@@ -201,9 +261,10 @@ export async function freshenPostsMedia<T extends Record<string, any>>(rows: T[]
         }
         next.shared_post = sp;
       }
-      return next as T;
-    })
-  );
+      out[i] = next as T;
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, rows.length) }, () => worker()));
   return out;
 }
 

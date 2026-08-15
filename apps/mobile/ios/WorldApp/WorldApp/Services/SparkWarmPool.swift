@@ -224,11 +224,12 @@ final class SparkWarmPool {
         warming.insert(postID)
         defer { warming.remove(postID) }
 
-        // Always resolve via playbackConfiguration(postID:) so R2 gets a live URL
-        // from the API (object is permanent; cached signed query strings are not).
+        // Warm with the URL we already have — do NOT await GraphQL per neighbor
+        // (that froze feed/Sparks loading and caused ghost audio from stalled players).
+        // Expiry re-resolve only if the presign is actually dead/near-dead.
         let configuration = await MediaURLResolver.playbackConfiguration(
             for: sourceURL,
-            postID: postID
+            postID: MediaURLResolver.isPresignExpiredOrNearExpiry(sourceURL) ? postID : nil
         )
         let playURL = configuration.url
         if slots[postID] != nil || inUse.contains(postID) { return }

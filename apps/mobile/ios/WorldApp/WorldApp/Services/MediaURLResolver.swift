@@ -239,18 +239,20 @@ enum MediaURLResolver {
         await playbackConfiguration(for: url).url
     }
 
-    /// Resolve a **live** play configuration.
-    /// - For R2 / signed links: prefer API `playbackMedia` when `postID` is known (never expire).
-    /// - For Archive / Supabase: existing CDN/auth paths.
+    /// Resolve a play configuration.
+    /// - R2 **signed** URLs: play immediately if still valid; only hit API when near/past expiry.
+    /// - (Previously every play awaited GraphQL → stuck loading + feed lag + ghost audio.)
+    /// - Archive / Supabase: existing CDN/auth paths.
     static func playbackConfiguration(for url: URL, postID: String? = nil) async -> MediaPlaybackConfiguration {
         // Never run video CDN resolution on image posters (thumbs / services/img).
         if isImageURL(url) {
             return MediaPlaybackConfiguration(url: url, headers: nil)
         }
 
-        // R2 presigned GET: never trust a cached X-Amz link — mint live via API.
-        // (Public CDN URLs from R2_PUBLIC_BASE_URL have no signature and play as-is.)
-        if let postID, !postID.isEmpty, looksLikeExpiredOrSignedR2URL(url) {
+        // R2 presign: use the URL as-is when still fresh. Re-resolve only when dying/dead.
+        if isPresignedObjectURL(url),
+           let postID, !postID.isEmpty,
+           isPresignExpiredOrNearExpiry(url, slackSeconds: 3600) {
             if let live = await R2PlaybackResolver.shared.playURL(postID: postID, fallback: url) {
                 return MediaPlaybackConfiguration(url: live, headers: nil)
             }
@@ -265,6 +267,7 @@ enum MediaURLResolver {
         }
 
         guard SupabaseStorageAccess.isPostsBucketURL(url) else {
+            // R2 / public HTTPS / still-valid presign — play direct (no network hop).
             return MediaPlaybackConfiguration(url: url, headers: nil)
         }
 
@@ -294,20 +297,62 @@ enum MediaURLResolver {
         return MediaPlaybackConfiguration(url: publicURL, headers: nil)
     }
 
-    /// R2/S3 presigned GETs die after X-Amz-Expires — treat as soft-expired so we re-fetch the post.
+    /// Legacy name — true when URL is a signed object URL (may still be valid).
     static func looksLikeExpiredOrSignedR2URL(_ url: URL) -> Bool {
-        let s = url.absoluteString
-        let lower = s.lowercased()
-        let isR2 = lower.contains("r2.cloudflarestorage.com")
-            || lower.contains("matterya-sparks")
-            || lower.contains("x-amz-signature")
-            || lower.contains("x-amz-credential")
-        guard isR2 else { return false }
-        // Any Amz signed query is a candidate for refresh (cheap post re-fetch).
+        isPresignedObjectURL(url)
+    }
+
+    /// AWS/R2 style query-string signature present.
+    static func isPresignedObjectURL(_ url: URL) -> Bool {
+        let lower = url.absoluteString.lowercased()
         if lower.contains("x-amz-signature") || lower.contains("x-amz-algorithm") {
             return true
         }
+        // Some clients use X-Amz-Credential without Algorithm in rare cases.
+        if lower.contains("x-amz-credential"), lower.contains("x-amz-expires") {
+            return true
+        }
         return false
+    }
+
+    /// Parse X-Amz-Date + X-Amz-Expires; true if already dead or within `slackSeconds` of death.
+    static func isPresignExpiredOrNearExpiry(_ url: URL, slackSeconds: TimeInterval = 3600) -> Bool {
+        guard isPresignedObjectURL(url) else { return false }
+        guard let comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return true // can't parse → treat as risky, re-resolve
+        }
+        var expires: String?
+        var dateStr: String?
+        for item in comps.queryItems ?? [] {
+            let name = item.name.lowercased()
+            if name == "x-amz-expires" { expires = item.value }
+            if name == "x-amz-date" { dateStr = item.value }
+        }
+        guard let expRaw = expires, let expSecs = TimeInterval(expRaw), expSecs > 0 else {
+            // Signed but no expiry field — re-resolve to be safe only if host is R2.
+            return looksLikeR2HostedURL(url)
+        }
+        // X-Amz-Date is usually yyyyMMdd'T'HHmmss'Z'
+        let start: Date
+        if let dateStr,
+           let parsed = parseAmzDate(dateStr) {
+            start = parsed
+        } else {
+            // Missing date → assume issued "now" is wrong; force refresh.
+            return true
+        }
+        let deadline = start.addingTimeInterval(expSecs)
+        return Date().addingTimeInterval(slackSeconds) >= deadline
+    }
+
+    private static func parseAmzDate(_ raw: String) -> Date? {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(secondsFromGMT: 0)
+        f.dateFormat = "yyyyMMdd'T'HHmmss'Z'"
+        if let d = f.date(from: raw) { return d }
+        // ISO fallback
+        return ISO8601DateFormatter().date(from: raw)
     }
 }
 
