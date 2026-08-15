@@ -484,21 +484,12 @@ struct MatteryaHubPlayerView: View {
             }
             .zIndex(5)
 
-            // Center transport: −10s · play/pause · +10s
-            HStack(spacing: 36) {
-                Button {
+            // Center transport: −10s · play/pause · +10s (Matterya warm accent family)
+            HStack(spacing: 32) {
+                hubSkipButton(systemName: "gobackward.10", label: "Back 10 seconds") {
                     performSkip(by: -10)
                     scheduleChromeHide()
-                } label: {
-                    Image(systemName: "gobackward.10")
-                        .font(.system(size: 22, weight: .semibold))
-                        .foregroundStyle(Theme.paper)
-                        .frame(width: 48, height: 48)
-                        .background(Theme.ink.opacity(0.48), in: Circle())
-                        .overlay(Circle().stroke(Theme.paper.opacity(0.14), lineWidth: 0.5))
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Back 10 seconds")
 
                 Button {
                     bridge.togglePlayPause()
@@ -520,19 +511,10 @@ struct MatteryaHubPlayerView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(bridge.isPlaying ? "Pause" : "Play")
 
-                Button {
+                hubSkipButton(systemName: "goforward.10", label: "Forward 10 seconds") {
                     performSkip(by: 10)
                     scheduleChromeHide()
-                } label: {
-                    Image(systemName: "goforward.10")
-                        .font(.system(size: 22, weight: .semibold))
-                        .foregroundStyle(Theme.paper)
-                        .frame(width: 48, height: 48)
-                        .background(Theme.ink.opacity(0.48), in: Circle())
-                        .overlay(Circle().stroke(Theme.paper.opacity(0.14), lineWidth: 0.5))
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Forward 10 seconds")
             }
             .zIndex(4)
 
@@ -680,6 +662,31 @@ struct MatteryaHubPlayerView: View {
                 .frame(width: 36, height: 36)
                 .background(Theme.ink.opacity(0.52), in: Circle())
                 .overlay(Circle().stroke(Theme.paper.opacity(0.14), lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
+    /// ±10s control — Matterya secondary disc (warm paper + accent ring, pairs with play).
+    private func hubSkipButton(
+        systemName: String,
+        label: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 20, weight: .bold))
+                .foregroundStyle(Theme.paper)
+                .frame(width: 52, height: 52)
+                .background(
+                    Circle()
+                        .fill(Theme.accentBright.opacity(0.92))
+                )
+                .overlay(
+                    Circle()
+                        .stroke(Theme.paper.opacity(0.22), lineWidth: 1)
+                )
+                .shadow(color: Theme.ink.opacity(0.28), radius: 10, y: 4)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
