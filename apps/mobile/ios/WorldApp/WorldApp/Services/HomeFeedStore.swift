@@ -56,12 +56,14 @@ final class HomeFeedStore {
     /// Bumps cancel obsolete network merges / load-more.
     private var generation = 0
     private var pendingLoadMoreTask: Task<Void, Never>?
+    /// Soft recycle pass when unique network + catalog slices run dry — feed never ends.
+    private var recyclePass = 0
 
-    private let pageSize = 12
-    private let windowPageSize = 8
-    private let firstWindow = 8
-    /// Prefetch next page when user reaches ~65% of the currently loaded pool.
-    private let prefetchRatio = 0.65
+    private let pageSize = 24
+    private let windowPageSize = 12
+    private let firstWindow = 10
+    /// Prefetch next page when user reaches ~55% of the currently loaded pool.
+    private let prefetchRatio = 0.55
 
     private init() {}
 
@@ -93,11 +95,11 @@ final class HomeFeedStore {
             pool = Self.liveOnlyPosts(cached)
         }
         pool = Self.liveOnlyPosts(
-            BlockService.shared.filterPosts(pool.excludingMoments().excludingSparks())
+            BlockService.shared.filterPosts(pool.excludingMoments().forHomeFeed())
         )
         if !pool.isEmpty {
-            let fresh = PostsService.shared.chronologicalNewestFirst(pool)
-            applyPosts(Array(fresh.prefix(48)), replace: true, sessionId: feedSessionId)
+            let fresh = PostsService.shared.chronologicalNewestFirst(pool.dedupeHomeFeedContent())
+            applyPosts(Array(fresh.prefix(80)), replace: true, sessionId: feedSessionId)
             isBootstrapping = false
             didPaint = true
             warmHead()
@@ -105,26 +107,29 @@ final class HomeFeedStore {
             isBootstrapping = true
         }
 
-        // 2) Network page — last uploaded always at top.
-        let live = Self.liveOnlyPosts(await PostsService.shared.fetchFirstPaintHomePosts(limit: 48))
+        // 2) Network page — last uploaded always at top (includes R2 Sparks).
+        let live = Self.liveOnlyPosts(await PostsService.shared.fetchFirstPaintHomePosts(limit: 64))
         guard gen == generation else { return }
 
-        let realBatch = Self.liveOnlyPosts(live + posts)
+        let realBatch = Self.liveOnlyPosts(live + posts).dedupeHomeFeedContent()
         let merged = PostsService.shared.chronologicalNewestFirst(realBatch)
-        let capped = Array(merged.prefix(min(merged.count, 48)))
+        // First paint head only — load-more pulls the rest of the 28k+ library.
+        let capped = Array(merged.prefix(min(merged.count, 80)))
 
         if !capped.isEmpty {
             applyPosts(capped, replace: true, sessionId: feedSessionId)
             ContentCache.shared.setPosts(posts, for: .homeFeed)
             didPaint = true
             warmHead()
-            hasMore = true
+            hasMore = true // endless — R2 + network continue on scroll
+            recyclePass = 0
             #if DEBUG
             print("[HomeFeed] freshSession total=\(capped.count) network=\(live.count) newest=\(capped.first?.id.prefix(8) ?? "-")")
             #endif
         } else if posts.isEmpty {
             applyPosts([], replace: true, sessionId: feedSessionId)
             ContentCache.shared.invalidate(.homeFeed)
+            hasMore = true
         }
 
         isBootstrapping = false
@@ -153,7 +158,9 @@ final class HomeFeedStore {
             } else {
                 applyPosts(
                     PostsService.shared.chronologicalNewestFirst(
-                        BlockService.shared.filterPosts(clean.excludingMoments().excludingSparks())
+                        BlockService.shared.filterPosts(
+                            clean.excludingMoments().forHomeFeed().dedupeHomeFeedContent()
+                        )
                     ),
                     replace: true,
                     sessionId: feedSessionId
@@ -166,13 +173,13 @@ final class HomeFeedStore {
 
         // 2) Light network first paint ONLY — never await full Sparks catalog here
         // (that blocked @MainActor for minutes and froze the feed).
-        let live = Self.liveOnlyPosts(await PostsService.shared.fetchFirstPaintHomePosts(limit: 40))
+        let live = Self.liveOnlyPosts(await PostsService.shared.fetchFirstPaintHomePosts(limit: 64))
         guard gen == generation else { return }
 
         let existingLive = posts.filter { !$0.isStory }
-        let realBatch = Self.liveOnlyPosts(live + existingLive)
+        let realBatch = Self.liveOnlyPosts(live + existingLive).dedupeHomeFeedContent()
         let merged = PostsService.shared.chronologicalNewestFirst(realBatch)
-        let capped = Array(merged.prefix(min(merged.count, 48)))
+        let capped = Array(merged.prefix(min(merged.count, 80)))
 
         if !capped.isEmpty {
             applyPosts(capped, replace: true, sessionId: feedSessionId)
@@ -180,39 +187,30 @@ final class HomeFeedStore {
             didPaint = true
             warmHead()
             hasMore = true
+            recyclePass = 0
             #if DEBUG
             print("[HomeFeed] firstPaint total=\(capped.count) network=\(live.count)")
             #endif
         } else if posts.isEmpty {
             applyPosts([], replace: true, sessionId: feedSessionId)
             ContentCache.shared.invalidate(.homeFeed)
+            hasMore = true
         }
 
         isBootstrapping = false
 
-        // 3) Do NOT warm the deep Sparks catalog here.
-        // PostsService is @MainActor — a 4-country / hundreds-of-rows pull freezes the feed
-        // mid-scroll. Sparks player loads a light catalog when opened; deep expands later.
+        // 3) Warm a light Sparks catalog off the critical path so scroll has R2 fuel.
+        // Deep (thousands) expands on demand in load-more — never block first paint.
+        Task(priority: .utility) {
+            _ = await PostsService.shared.loadSparksDiscoveryCatalog(forceRefresh: false, deep: false)
+        }
     }
 
     /// Drop offline Reddit / catalog fakes; keep real UUID-backed posts only
     /// (includes DE Million Post Corpus seeds + their comments).
+    /// **Keeps R2 Sparks** — they render as SparkFeedCard on the main feed.
     private static func liveOnlyPosts(_ posts: [CountryPost]) -> [CountryPost] {
-        posts.filter { post in
-            if post.authorID.hasPrefix("user_") { return false }
-            if post.id.hasPrefix("post_") || post.id.hasPrefix("demo_") { return false }
-            if post.id.hasPrefix("ia_") || post.id.hasPrefix("hub_") { return false }
-            if post.isStory { return false }
-            // Shared / live Sparks with video are OK on main feed (SparkFeedCard).
-            // Offline hub catalog fakes only — never drop real UUID backend rows.
-            if post.isHubSeedVideo { return false }
-            // Archive seed / archive.org media — gated off (see AppConfig.archiveContentEnabled).
-            if !AppConfig.archiveContentEnabled {
-                if post.isArchiveSparkSource { return false }
-                if PlayPlatformBridge.isArchiveCatalogMedia(post) { return false }
-            }
-            return true
-        }
+        posts.forHomeFeed()
     }
 
     // MARK: - Scroll / prefetch
@@ -234,7 +232,8 @@ final class HomeFeedStore {
             withTransaction(t) {
                 windowLimit = min(posts.count, windowLimit + growBy)
             }
-            hasMore = windowLimit < posts.count
+            // Local pool may still grow via network / R2 — never mark exhausted here.
+            hasMore = true
         }
 
         // Media: fling = small ahead buffer; settled = normal prefetch.
@@ -274,10 +273,16 @@ final class HomeFeedStore {
             withTransaction(t) {
                 windowLimit = min(posts.count, windowLimit + windowPageSize)
             }
-            hasMore = windowLimit < posts.count
-            return
+            hasMore = true
+            // If window is catching the pool tail, also kick network/R2 in parallel.
+            if windowLimit >= posts.count - windowPageSize {
+                // fall through to network
+            } else {
+                return
+            }
         }
-        guard hasMore, !isLoadingMore, !isBootstrapping else { return }
+        guard !isLoadingMore, !isBootstrapping else { return }
+        hasMore = true
         let gen = generation
         pendingLoadMoreTask?.cancel()
         pendingLoadMoreTask = Task(priority: .utility) { [weak self] in
@@ -366,16 +371,18 @@ final class HomeFeedStore {
         feedSessionId = UUID().uuidString
         nextCursor = nil
         hasMore = true
+        recyclePass = 0
 
-        // Pull-to-refresh may go a bit deeper than first paint, still capped.
-        let live = Self.liveOnlyPosts(await PostsService.shared.fetchNetworkHomePosts(limit: 60))
+        // Pull-to-refresh may go a bit deeper than first paint, still capped for smoothness.
+        let live = Self.liveOnlyPosts(await PostsService.shared.fetchNetworkHomePosts(limit: 100))
         guard gen == generation else { return }
 
         // Newest upload first — pull-to-refresh must surface brand-new R2/backend posts.
         let filtered = PostsService.shared.chronologicalNewestFirst(live)
         applyPosts(filtered, replace: true, sessionId: feedSessionId)
         nextCursor = Self.cursor(from: filtered.last)
-        hasMore = filtered.count >= pageSize || windowLimit < posts.count
+        // Always more — R2 library + network continue after this head.
+        hasMore = true
         didPaint = !posts.isEmpty
         warmHead()
         if !filtered.isEmpty {
@@ -389,57 +396,125 @@ final class HomeFeedStore {
     }
 
     private func loadMore(generation gen: Int) async {
-        // Prefer expanding the local window through the already-loaded demo pool.
+        // Prefer expanding the local window through the already-loaded pool.
         if windowLimit < posts.count {
             var t = Transaction()
             t.disablesAnimations = true
             withTransaction(t) {
                 windowLimit = min(posts.count, windowLimit + windowPageSize)
             }
-            hasMore = windowLimit < posts.count
+            // Still more once the local window catches up to the pool.
+            hasMore = true
             return
         }
 
-        guard hasMore else { return }
+        // Never permanently stop — R2 Sparks keep the tail alive.
         isLoadingMore = true
         defer { isLoadingMore = false }
 
         let cursor = nextCursor
+        let seenIDs = Set(posts.map(\.id))
+        let seenContent = Set(posts.map(\.homeFeedContentKey))
         let page = await PostsService.shared.loadHomeFeedPage(
             after: cursor,
             limit: pageSize,
             feedSessionId: feedSessionId,
-            preferCache: false
+            preferCache: false,
+            excludingIDs: seenIDs
         )
         guard gen == generation, !Task.isCancelled else { return }
 
-        if page.items.isEmpty {
-            hasMore = windowLimit < posts.count
+        var appended: [CountryPost] = []
+        var seen = seenIDs
+        var contentKeys = seenContent
+        for post in page.items.dedupeHomeFeedContent() {
+            guard seen.insert(post.id).inserted else { continue }
+            guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
+            appended.append(post)
+        }
+
+        // Empty / all-dupes: unique R2 top-up only (never re-insert the whole head).
+        if appended.isEmpty {
+            recyclePass += 1
+            let forceDeep = recyclePass == 1 || recyclePass % 4 == 0
+            if forceDeep {
+                _ = await PostsService.shared.loadSparksDiscoveryCatalog(
+                    forceRefresh: recyclePass == 1,
+                    deep: recyclePass >= 1
+                )
+            }
+            let topUp = await PostsService.shared.homeFeedSparkTopUp(
+                excluding: seen,
+                limit: pageSize,
+                forceRefresh: recyclePass > 2
+            )
+            for post in topUp {
+                guard seen.insert(post.id).inserted else { continue }
+                guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
+                appended.append(post)
+            }
+            // Soft recycle ONLY after a deep session — never on first empty page
+            // (that was doubling every post: network dups → re-inject same sparks).
+            if appended.isEmpty, posts.count >= 60, recyclePass >= 3 {
+                let tailIDs = Set(posts.suffix(24).map(\.id))
+                let tailKeys = Set(posts.suffix(24).map(\.homeFeedContentKey))
+                let recycled = await PostsService.shared.homeFeedSparkTopUp(
+                    excluding: tailIDs,
+                    limit: pageSize,
+                    forceRefresh: true
+                )
+                for post in recycled {
+                    if tailIDs.contains(post.id) { continue }
+                    if tailKeys.contains(post.homeFeedContentKey) { continue }
+                    guard seen.insert(post.id).inserted else { continue }
+                    appended.append(post)
+                }
+            }
+        }
+
+        if appended.isEmpty {
+            // Keep trying on next scroll — never set hasMore false permanently.
+            hasMore = true
+            // Advance cursor from network even when items filtered as dups.
+            if let next = page.nextCursor, next != cursor {
+                nextCursor = next
+            }
             return
         }
 
-        var seen = Set(posts.map(\.id))
-        var appended: [CountryPost] = []
-        for post in page.items where seen.insert(post.id).inserted {
-            appended.append(post)
+        // Append unique content only.
+        posts.append(contentsOf: appended)
+        // Grow window so new rows appear without waiting for another appear cycle.
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            windowLimit = min(posts.count, max(windowLimit + appended.count, windowLimit + windowPageSize))
         }
-        if appended.isEmpty {
-            nextCursor = page.nextCursor
-            hasMore = page.hasMore && page.nextCursor != cursor
-            return
+        // Prefer network cursor (not spark top-up dates) so we don't re-walk the head.
+        nextCursor = page.nextCursor ?? Self.cursor(from: posts.last)
+        hasMore = true
+        ContentCache.shared.setPosts(Array(posts.prefix(ContentCache.maxCachedPosts)), for: .homeFeed)
+        ImageCache.shared.prefetchFeedMedia(Array(appended.prefix(8)), maxPixelSize: 360)
+        let sparkPosts = appended.filter {
+            $0.isSparkFeedShare || $0.isReel || PlayPlatformBridge.isSparkFeedCard($0)
         }
-        // Append older page in recency order (cursor already walks older).
-        posts.append(contentsOf: PostsService.shared.chronologicalNewestFirst(appended))
-        nextCursor = page.nextCursor
-        hasMore = page.hasMore || windowLimit < posts.count
-        ContentCache.shared.setPosts(posts, for: .homeFeed)
-        ImageCache.shared.prefetchFeedMedia(Array(appended.prefix(6)), maxPixelSize: 360)
+        if !sparkPosts.isEmpty {
+            SparkWarmPool.shared.prepare(
+                posts: sparkPosts,
+                around: 0,
+                ahead: max(0, sparkPosts.count - 1),
+                behind: 0
+            )
+        }
+        #if DEBUG
+        print("[HomeFeed] loadMore +\(appended.count) pool=\(posts.count) window=\(windowLimit) recycle=\(recyclePass)")
+        #endif
     }
 
     private func applyPosts(_ next: [CountryPost], replace: Bool, sessionId: String) {
         feedSessionId = sessionId
-        // Callers pass newest-first; keep order as-is.
-        let ordered = next
+        // Always collapse original+share pairs and id dups.
+        let ordered = next.dedupeHomeFeedContent()
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) {
@@ -450,9 +525,8 @@ final class HomeFeedStore {
         }
         if !ordered.isEmpty {
             nextCursor = Self.cursor(from: ordered.last)
-            // Endless while local pool still has rows to reveal.
-            hasMore = windowLimit < posts.count || ordered.count >= pageSize
         }
+        hasMore = true
     }
 
     private func warmHead() {

@@ -46,16 +46,29 @@ enum MediaURLResolver {
         if let payload = post.mediaPayload {
             let pairs = zip(payload.urls, payload.types)
             for (url, type) in pairs where type.lowercased() == "video" {
-                if let resolved = resolve(url) { return resolved }
+                // Prefer typed video rows — don't over-filter with isVideoURL (signed R2 paths vary).
+                if let resolved = resolve(url), !isImageURL(resolved) { return resolved }
             }
-            if post.hasVideo, let first = payload.urls.first {
-                return resolve(first)
+            // Payload without type tags but clearly a spark/reel/video post.
+            if post.hasVideo || post.isReel || post.isSpark {
+                for url in payload.urls {
+                    if let resolved = resolve(url), !isImageURL(resolved) { return resolved }
+                }
             }
         }
 
-        if post.hasVideo {
-            return resolve(post.mediaURL) ?? resolve(post.thumbURL)
+        // Plain mediaURL (most R2 / Supabase sparks land here).
+        if post.hasVideo || post.isReel || post.isSpark {
+            if let media = resolve(post.mediaURL), !isImageURL(media) { return media }
+            // Some rows only stamp the playable file on primaryMediaURL / thumb.
+            if let primary = resolve(post.primaryMediaURL), !isImageURL(primary) {
+                if isVideoURL(primary) || post.hasVideo || post.isReel { return primary }
+            }
+            if let thumb = resolve(post.thumbURL), isVideoURL(thumb) { return thumb }
         }
+
+        // Last resort: any mediaURL that looks like video even if media_type was wrong.
+        if let media = resolve(post.mediaURL), isVideoURL(media) { return media }
         return nil
     }
 
@@ -226,11 +239,23 @@ enum MediaURLResolver {
         await playbackConfiguration(for: url).url
     }
 
-    static func playbackConfiguration(for url: URL) async -> MediaPlaybackConfiguration {
+    /// Resolve a **live** play configuration.
+    /// - For R2 / signed links: prefer API `playbackMedia` when `postID` is known (never expire).
+    /// - For Archive / Supabase: existing CDN/auth paths.
+    static func playbackConfiguration(for url: URL, postID: String? = nil) async -> MediaPlaybackConfiguration {
         // Never run video CDN resolution on image posters (thumbs / services/img).
         if isImageURL(url) {
             return MediaPlaybackConfiguration(url: url, headers: nil)
         }
+
+        // R2 presigned GET: never trust a cached X-Amz link — mint live via API.
+        // (Public CDN URLs from R2_PUBLIC_BASE_URL have no signature and play as-is.)
+        if let postID, !postID.isEmpty, looksLikeExpiredOrSignedR2URL(url) {
+            if let live = await R2PlaybackResolver.shared.playURL(postID: postID, fallback: url) {
+                return MediaPlaybackConfiguration(url: live, headers: nil)
+            }
+        }
+
         // Internet Archive `/download/` URLs 302 to CDN hosts. AVPlayer often never leaves
         // the poster if handed the redirect URL — same path used by hub long-form player.
         if ArchiveVideoPlayback.isArchiveURL(url) {
@@ -252,12 +277,37 @@ enum MediaURLResolver {
         return MediaPlaybackConfiguration(url: publicURL, headers: nil)
     }
 
+    /// True for any R2-hosted path (signed or public custom domain).
+    static func looksLikeR2HostedURL(_ url: URL) -> Bool {
+        let lower = url.absoluteString.lowercased()
+        return lower.contains("r2.cloudflarestorage.com")
+            || lower.contains("matterya-sparks")
+            || lower.contains("r2.dev")
+            || lower.contains("\"r2_key\"")
+    }
+
     static func playbackFallbackConfiguration(for url: URL) -> MediaPlaybackConfiguration? {
         guard SupabaseStorageAccess.isPostsBucketURL(url),
               let publicURL = SupabaseStorageAccess.publicURL(from: url),
               publicURL != url
         else { return nil }
         return MediaPlaybackConfiguration(url: publicURL, headers: nil)
+    }
+
+    /// R2/S3 presigned GETs die after X-Amz-Expires — treat as soft-expired so we re-fetch the post.
+    static func looksLikeExpiredOrSignedR2URL(_ url: URL) -> Bool {
+        let s = url.absoluteString
+        let lower = s.lowercased()
+        let isR2 = lower.contains("r2.cloudflarestorage.com")
+            || lower.contains("matterya-sparks")
+            || lower.contains("x-amz-signature")
+            || lower.contains("x-amz-credential")
+        guard isR2 else { return false }
+        // Any Amz signed query is a candidate for refresh (cheap post re-fetch).
+        if lower.contains("x-amz-signature") || lower.contains("x-amz-algorithm") {
+            return true
+        }
+        return false
     }
 }
 

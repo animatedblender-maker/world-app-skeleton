@@ -31,6 +31,10 @@ export const postsResolvers = {
       if (!args?.post_id) throw new Error('post_id is required.');
       return await svc().postById(args.post_id, ctx.user?.id ?? null);
     },
+    playbackMedia: async (_: any, args: any, ctx: any) => {
+      if (!args?.post_id) throw new Error('post_id is required.');
+      return await svc().playbackMedia(args.post_id, ctx.user?.id ?? null);
+    },
     commentsByPost: async (_: any, args: any, ctx: any) => {
       // Default high enough for full R2 threads (often 50–300+). Client can still pass a limit.
       const limit = typeof args.limit === 'number' ? args.limit : 2000;

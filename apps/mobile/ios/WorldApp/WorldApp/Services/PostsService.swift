@@ -130,9 +130,9 @@ final class PostsService {
         }
         var merged = mergePosts(real: live, demo: demo, limit: max(maxPosts, live.count + min(demo.count, 40)))
             .excludingMoments()
-            .excludingSparks()
+            .forHomeFeed()
         if merged.isEmpty {
-            merged = await fallbackFeedPosts(limit: maxPosts).excludingSparks()
+            merged = await fallbackFeedPosts(limit: maxPosts).forHomeFeed()
         }
         if !merged.isEmpty {
             ContentCache.shared.setPosts(merged, for: .homeFeed)
@@ -146,31 +146,30 @@ final class PostsService {
     private static let focusMarketCodes = ["US", "DE", "EG", "AL"]
 
     /// **Smooth first paint** after sign-in / cold open.
-    /// Newest upload first so backend / R2 pipeline posts surface immediately at the top.
+    /// Newest upload first so backend / R2 pipeline posts (incl. Sparks) surface at the top.
     func fetchFirstPaintHomePosts(limit: Int = 40) async -> [CountryPost] {
         await prepareFeedContext()
-        let pageLimit = min(max(limit, 24), 48)
-        // Dense spark-share walk, then sort by created_at (newest first).
+        let pageLimit = min(max(limit, 24), 64)
+        // Include Sparks + text + long-form — do NOT strip the R2 library.
         async let recentTask = fetchRecentFeedPosts(limit: pageLimit, preferSparkShares: true)
         async let ownTask = fetchOwnPosts(limit: 8)
+        async let sparkTasteTask = fetchFocusMarketHubSparks(limitPerAuthor: 40)
         let recent = await recentTask
         let own = await ownTask
+        // Small spark taste so first screens aren't empty when recent is text-heavy.
+        let sparkTaste = Array((await sparkTasteTask).shuffled().prefix(16))
 
-        var combined = own + recent
-        combined = combined
-            .excludingMoments()
-            .excludingSparks()
-            .excludingArchiveContent()
-            .filter { post in
-                if post.authorID.hasPrefix("user_") || post.id.hasPrefix("post_") { return false }
-                if post.id.hasPrefix("demo_") { return false }
-                if post.isHubSeedVideo { return false }
-                return true
-            }
-        // Last uploaded always on top — no shuffle.
+        var combined = own + recent + sparkTaste
+        // Collapse original Spark + feed share of the same clip (pipeline seeds both).
+        combined = combined.forHomeFeed().excludingArchiveContent().dedupeHomeFeedContent()
+        // Last uploaded always on top — sparks without newer dates sit after recents.
         var merged = chronologicalNewestFirst(combined)
         if merged.count > pageLimit {
             merged = Array(merged.prefix(pageLimit))
+        }
+        // Background-warm a light Sparks catalog so scroll load-more has fuel immediately.
+        Task(priority: .utility) { [weak self] in
+            _ = await self?.loadSparksDiscoveryCatalog(forceRefresh: false, deep: false)
         }
         return merged
     }
@@ -178,38 +177,34 @@ final class PostsService {
     /// Live network posts for pull-to-refresh / deeper revalidate (still bounded for smoothness).
     func fetchNetworkHomePosts(limit: Int = 80) async -> [CountryPost] {
         await prepareFeedContext()
-        let cap = min(max(limit, 40), 100)
+        let cap = min(max(limit, 40), 120)
         async let ownTask = fetchOwnPosts(limit: 12)
-        async let recentTask = fetchRecentPosts(limit: min(cap, 60))
+        async let recentTask = fetchRecentPosts(limit: min(cap, 80))
         async let focusTask = fetchFocusMarketPosts(limit: min(48, cap))
+        async let sparksTask = fetchFocusMarketHubSparks(limitPerAuthor: 80)
 
         let own = await ownTask
         let recent = await recentTask
         let focus = await focusTask
+        let sparks = await sparksTask
 
         var combined: [CountryPost] = []
         combined.append(contentsOf: own)
         combined.append(contentsOf: focus)
         combined.append(contentsOf: recent)
+        combined.append(contentsOf: sparks)
 
         var merged = chronologicalNewestFirst(combined)
-            .excludingMoments()
-            .excludingSparks() // originals stay in Sparks player; spark *shares* pass through
+            .forHomeFeed()
             .excludingArchiveContent()
-            .filter { post in
-                if post.authorID.hasPrefix("user_") || post.id.hasPrefix("post_") { return false }
-                if post.id.hasPrefix("demo_") { return false }
-                if post.isHubSeedVideo { return false }
-                return true
-            }
+            .dedupeHomeFeedContent()
         // Pure recency — last uploaded always at top (no density reshuffle).
         if merged.count > cap {
             merged = Array(merged.prefix(cap))
         }
         if merged.isEmpty {
             merged = chronologicalNewestFirst(
-                await fallbackFeedPosts(limit: cap).excludingSparks()
-                    .filter { !$0.authorID.hasPrefix("user_") && !$0.id.hasPrefix("post_") }
+                await fallbackFeedPosts(limit: cap).forHomeFeed().dedupeHomeFeedContent()
             )
         }
         return merged
@@ -533,30 +528,26 @@ final class PostsService {
         }
     }
 
-    /// Walk `recentPosts` pages until we have enough feed items (spark shares + text + long video).
+    /// Walk `recentPosts` pages until we have enough feed items (Sparks + text + long video).
     /// Always returns **newest upload first** so R2/backend posts land at the top of the feed.
     private func fetchRecentFeedPosts(limit: Int, preferSparkShares: Bool) async -> [CountryPost] {
         _ = preferSparkShares // density is product preference; recency is the hard rule
         var collected: [CountryPost] = []
         var seen = Set<String>()
         var before: String? = nil
-        // Max 2 pages — smoothness first; scroll load-more covers the long tail.
-        let maxPages = 2
-        let stopAt = max(limit, 80)
+        // Walk deeper — R2 Sparks are mixed into recentPosts; stripping them starved the feed.
+        let maxPages = 6
+        let stopAt = max(limit, 100)
         for _ in 0..<maxPages {
-            let batch = await fetchRecentPosts(limit: min(60, stopAt), before: before)
-                .filter { post in
-                    !post.isSpark && !post.isStory
-                        && !post.authorID.hasPrefix("user_")
-                        && !post.id.hasPrefix("post_")
-                }
+            let batch = await fetchRecentPosts(limit: min(80, stopAt), before: before)
+                .forHomeFeed()
             if batch.isEmpty { break }
             for post in batch {
                 guard seen.insert(post.id).inserted else { continue }
                 collected.append(post)
             }
             before = batch.last?.createdAt
-            if batch.count < 30 { break }
+            if batch.count < 20 { break }
             if collected.count >= stopAt { break }
         }
         var merged = chronologicalNewestFirst(collected)
@@ -569,12 +560,58 @@ final class PostsService {
         await fetchRecentFeedPosts(limit: limit, preferSparkShares: false)
     }
 
+    /// Cursor into the in-memory Sparks pool for endless home-feed top-ups.
+    private var homeFeedSparkOffset: Int = 0
+    private var homeFeedSparkOrder: [CountryPost] = []
+
+    /// Draw the next slice of R2 Sparks for the main feed (SparkFeedCard).
+    /// When the pool is exhausted, reshuffle and keep going — feed must never dead-end.
+    func homeFeedSparkTopUp(excluding: Set<String>, limit: Int, forceRefresh: Bool = false) async -> [CountryPost] {
+        guard limit > 0 else { return [] }
+        // Ensure we have a real library — light first, deepen if thin.
+        if forceRefresh || sparksSessionCatalog.count < 80 {
+            _ = await loadSparksDiscoveryCatalog(forceRefresh: forceRefresh, deep: sparksSessionCatalog.count < 40)
+        }
+        if homeFeedSparkOrder.isEmpty || forceRefresh {
+            homeFeedSparkOrder = sparksSessionCatalog.shuffled()
+            homeFeedSparkOffset = 0
+        }
+        if homeFeedSparkOrder.isEmpty {
+            // Last resort: channel sparks only.
+            let hub = await fetchFocusMarketHubSparks(limitPerAuthor: 200)
+            homeFeedSparkOrder = hub.shuffled()
+            homeFeedSparkOffset = 0
+        }
+        guard !homeFeedSparkOrder.isEmpty else { return [] }
+
+        var out: [CountryPost] = []
+        var attempts = 0
+        let maxAttempts = homeFeedSparkOrder.count * 2 + limit
+        while out.count < limit, attempts < maxAttempts {
+            attempts += 1
+            if homeFeedSparkOffset >= homeFeedSparkOrder.count {
+                // Exhausted this shuffle — reshuffle for endless scroll.
+                homeFeedSparkOrder.shuffle()
+                homeFeedSparkOffset = 0
+            }
+            let post = homeFeedSparkOrder[homeFeedSparkOffset]
+            homeFeedSparkOffset += 1
+            if excluding.contains(post.id) { continue }
+            if out.contains(where: { $0.id == post.id }) { continue }
+            guard post.playableVideoURL != nil || post.hasVideo || !(post.mediaURL ?? "").isEmpty else { continue }
+            out.append(post)
+        }
+        return out
+    }
+
     /// Paginated home page for infinite scroll (cursor = createdAt of last item).
+    /// Walks multiple GraphQL pages **and** tops up from the R2 Sparks library so the feed never ends.
     func loadHomeFeedPage(
         after cursor: String?,
         limit: Int,
         feedSessionId: String,
-        preferCache: Bool
+        preferCache: Bool,
+        excludingIDs: Set<String> = []
     ) async -> HomeFeedPage {
         _ = feedSessionId
         if preferCache,
@@ -585,21 +622,71 @@ final class PostsService {
             return HomeFeedPage(
                 items: slice,
                 nextCursor: HomeFeedStore.cursor(from: slice.last),
-                hasMore: cached.count > limit,
+                hasMore: true, // local cache is only the head — network + R2 continue
                 feedSessionId: feedSessionId
             )
         }
 
-        let network = await fetchRecentPosts(limit: max(limit, 20), before: cursor)
-            .excludingMoments()
-            .excludingSparks()
-        // Newest first (cursor pages are already recent → older).
-        let items = Array(chronologicalNewestFirst(network).prefix(limit))
-        let next = HomeFeedStore.cursor(from: items.last)
+        await prepareFeedContext()
+        var collected: [CountryPost] = []
+        var seen = excludingIDs
+        var seenContent = Set<String>()
+        var before = cursor
+        var lastNetworkCursor = cursor
+        var networkStillHasPages = true
+
+        // Multi-page walk — single 12-item page was starving a 28k+ library.
+        let pageWalks = 8
+        let fetchSize = max(limit * 2, 40)
+        for _ in 0..<pageWalks {
+            let batch = await fetchRecentPosts(limit: fetchSize, before: before)
+            if batch.isEmpty {
+                networkStillHasPages = false
+                break
+            }
+            for post in batch.forHomeFeed() {
+                guard seen.insert(post.id).inserted else { continue }
+                // Drop original when we already have its feed share (and vice versa).
+                guard seenContent.insert(post.homeFeedContentKey).inserted else { continue }
+                collected.append(post)
+                if collected.count >= limit { break }
+            }
+            lastNetworkCursor = batch.last?.createdAt ?? lastNetworkCursor
+            before = batch.last?.createdAt
+            if batch.count < max(12, fetchSize / 3) {
+                networkStillHasPages = false
+                break
+            }
+            if collected.count >= limit { break }
+        }
+
+        // R2 Sparks top-up whenever the network page is thin (or empty).
+        if collected.count < limit {
+            let need = limit - collected.count
+            let topUp = await homeFeedSparkTopUp(excluding: seen, limit: max(need, limit))
+            for post in topUp {
+                guard seen.insert(post.id).inserted else { continue }
+                guard seenContent.insert(post.homeFeedContentKey).inserted else { continue }
+                collected.append(post)
+                if collected.count >= limit { break }
+            }
+        }
+
+        // Never soft-recycle the full catalog here — that re-injected already-shown clips.
+        let items = Array(collected.dedupeHomeFeedContent().prefix(limit))
+        // Cursor must follow **network** recency, not spark top-up dates.
+        let next = lastNetworkCursor
+        let hasMore = networkStillHasPages
+            || sparksSessionCatalog.count > 0
+            || !homeFeedSparkOrder.isEmpty
+            || !items.isEmpty
+        #if DEBUG
+        print("[HomeFeed] page items=\(items.count) cursor=\(cursor?.prefix(16) ?? "nil") next=\(next?.prefix(16) ?? "nil") netMore=\(networkStillHasPages) catalog=\(sparksSessionCatalog.count)")
+        #endif
         return HomeFeedPage(
             items: items,
-            nextCursor: next,
-            hasMore: items.count >= limit && next != nil && next != cursor,
+            nextCursor: next ?? cursor,
+            hasMore: hasMore,
             feedSessionId: feedSessionId
         )
     }
@@ -2322,7 +2409,7 @@ enum SparkDiscoveryEngine {
         limit: Int? = nil
     ) -> [CountryPost] {
         var seen = Set<String>()
-        var pool = candidates.filter { post in
+        let pool = candidates.filter { post in
             guard seen.insert(post.id).inserted else { return false }
             guard !excluding.contains(post.id) else { return false }
             return true
@@ -2386,18 +2473,23 @@ enum SparkDiscoveryEngine {
         let sessionSnap = sessionServed
         lock.unlock()
 
-        var pool = candidates.filter {
+        let eligible = candidates.filter {
             !existingIDs.contains($0.id) && ReelsRankingEngine.isSparkEligible($0)
         }
-        if pool.isEmpty, allowRecycle {
-            pool = candidates.filter {
+        let pool: [CountryPost]
+        if !eligible.isEmpty {
+            pool = eligible
+        } else if allowRecycle {
+            let recycled = candidates.filter {
                 !existingIDs.contains($0.id)
                     && ReelsRankingEngine.isSparkEligible($0)
                     && !sessionSnap.contains($0.id)
             }
-        }
-        if pool.isEmpty, allowRecycle {
-            pool = candidates.filter { ReelsRankingEngine.isSparkEligible($0) }
+            pool = recycled.isEmpty
+                ? candidates.filter { ReelsRankingEngine.isSparkEligible($0) }
+                : recycled
+        } else {
+            pool = []
         }
         guard !pool.isEmpty else { return [] }
 

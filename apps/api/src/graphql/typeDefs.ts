@@ -530,6 +530,15 @@ export const typeDefs = `#graphql
     is_sharing: Boolean
   }
 
+  """Live playable media for a post — always freshly resolved (R2 public or re-presigned)."""
+  type PlaybackMedia {
+    post_id: ID!
+    url: String!
+    """Full media_url payload JSON with a current urls[0] (clients may replace cached media_url)."""
+    media_url: String!
+    r2_key: String
+  }
+
   type Query {
     # Countries
     countries: CountriesResult!
@@ -564,6 +573,8 @@ export const typeDefs = `#graphql
     savedPosts(limit: Int): [Post!]!
     searchPosts(query: String!, limit: Int): [Post!]!
     postById(post_id: ID!): Post
+    """On-demand live playback URL for R2 (and other) video posts — never use a stale signed link."""
+    playbackMedia(post_id: ID!): PlaybackMedia
     commentsByPost(post_id: ID!, limit: Int, before: String): [PostComment!]!
     postLikes(post_id: ID!, limit: Int): [PostLike!]!
 

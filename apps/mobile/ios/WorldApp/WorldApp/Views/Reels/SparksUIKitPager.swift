@@ -151,10 +151,17 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
             layout.itemSize = size
             layout.invalidateLayout()
         }
-        // Keep active page aligned after any parent size settle (without animating).
-        guard !posts.isEmpty, posts.indices.contains(activeIndex) else { return }
+        // Do not fight the user mid-swipe (was resetting offset → "can't scroll").
+        guard !isApplyingScroll,
+              !collectionView.isDragging,
+              !collectionView.isDecelerating,
+              !collectionView.isTracking,
+              !posts.isEmpty,
+              posts.indices.contains(activeIndex)
+        else { return }
         let ip = IndexPath(item: activeIndex, section: 0)
-        if collectionView.indexPathsForVisibleItems.first?.item != activeIndex {
+        let visible = Set(collectionView.indexPathsForVisibleItems.map(\.item))
+        if !visible.contains(activeIndex) {
             isApplyingScroll = true
             collectionView.scrollToItem(at: ip, at: .centeredVertically, animated: false)
             isApplyingScroll = false
@@ -198,19 +205,76 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         let dataChanged = ids != lastPostedIDs
         let indexChanged = activeIndex != self.activeIndex
 
+        // Keep posts array fresh for like counts even without full reload.
+        var didPurePrepend = false
+        var didPureAppend = false
         if dataChanged {
+            let oldIDs = lastPostedIDs
             self.posts = posts
             lastPostedIDs = ids
-            collectionView.reloadData()
+            // Pure append (catalog expand) — insert rows without remounting the head.
+            // Full reload of the first pages was the “first few sparks glitch”.
+            if !oldIDs.isEmpty,
+               ids.count > oldIDs.count,
+               Array(ids.prefix(oldIDs.count)) == oldIDs {
+                let paths = (oldIDs.count..<ids.count).map { IndexPath(item: $0, section: 0) }
+                collectionView.performBatchUpdates {
+                    collectionView.insertItems(at: paths)
+                }
+                didPureAppend = true
+            } else if !oldIDs.isEmpty,
+                      ids.count > oldIDs.count,
+                      Array(ids.suffix(oldIDs.count)) == oldIDs {
+                // Pure prepend (load earlier) — insert at front + pin content offset so
+                // the focused spark never jumps (reloadData used to snap to entry/page 0).
+                let insertCount = ids.count - oldIDs.count
+                let paths = (0..<insertCount).map { IndexPath(item: $0, section: 0) }
+                let pageH = max(pageSize.height, 1)
+                let oldOffset = collectionView.contentOffset
+                isApplyingScroll = true
+                collectionView.performBatchUpdates {
+                    collectionView.insertItems(at: paths)
+                } completion: { [weak self] _ in
+                    guard let self else { return }
+                    self.collectionView.setContentOffset(
+                        CGPoint(x: oldOffset.x, y: oldOffset.y + CGFloat(insertCount) * pageH),
+                        animated: false
+                    )
+                    self.isApplyingScroll = false
+                    self.refreshVisibleCells()
+                }
+                didPurePrepend = true
+            } else {
+                collectionView.reloadData()
+            }
+        } else if !posts.isEmpty {
+            self.posts = posts
         }
 
         if indexChanged || dataChanged {
             let clamped = min(max(0, activeIndex), max(0, posts.count - 1))
+            // Pure append never needs a scroll (focus index unchanged).
+            // Pure prepend already adjusted contentOffset — do not scrollToItem (that
+            // fought the offset pin and snapped back to the entry spark).
+            let needScroll: Bool
+            if didPureAppend || didPurePrepend {
+                needScroll = false
+            } else {
+                needScroll = indexChanged || (dataChanged && lastPostedIDs.count <= 1)
+            }
             self.activeIndex = clamped
             guard !posts.isEmpty else { return }
+            // Only rebind visible cells when focus changes — not on every append.
+            if indexChanged || didPurePrepend {
+                refreshVisibleCells()
+            }
+            guard needScroll else { return }
             let ip = IndexPath(item: clamped, section: 0)
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
+                if self.collectionView.isDragging || self.collectionView.isDecelerating {
+                    return
+                }
                 self.isApplyingScroll = true
                 if self.collectionView.numberOfItems(inSection: 0) > clamped {
                     self.collectionView.scrollToItem(at: ip, at: .centeredVertically, animated: false)
@@ -218,8 +282,6 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
                 }
                 self.isApplyingScroll = false
             }
-        } else {
-            refreshVisibleCells()
         }
     }
 
@@ -424,6 +486,7 @@ private final class SparksPageCell: UICollectionViewCell {
         onOpenPost: @escaping () -> Void,
         onOpenComments: @escaping () -> Void
     ) {
+        let sig = "\(post.id)|\(isActive ? 1 : 0)|\(focusGeneration)|\(Int(bottomInset))|\(showsOpenPostAction ? 1 : 0)|\(post.likedByMe ? 1 : 0)|\(post.likeCount)|\(post.commentCount)"
         lastPost = post
         lastBottomInset = bottomInset
         lastShowsOpen = showsOpenPostAction
@@ -432,6 +495,11 @@ private final class SparksPageCell: UICollectionViewCell {
         lastLike = onLikeToggle
         lastOpen = onOpenPost
         lastComments = onOpenComments
+        // Skip identical root rebuilds (SwiftUI thrash = blink + lost swipes).
+        if sig == lastConfigureSignature, host != nil {
+            return
+        }
+        lastConfigureSignature = sig
 
         var root: AnyView = AnyView(
             ReelsPagerCard(
@@ -445,8 +513,10 @@ private final class SparksPageCell: UICollectionViewCell {
                 onOpenPost: onOpenPost,
                 onOpenComments: onOpenComments
             )
+            // Optimistic fill (vertical Sparks); card may switch to fit for wide clips only.
             .environment(\.sparksPlayerFillsFrame, true)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .ignoresSafeArea(.all)
         )
         if let appState {
             root = AnyView(root.environment(appState))
@@ -455,11 +525,15 @@ private final class SparksPageCell: UICollectionViewCell {
         if let host {
             host.rootView = root
             host.view.backgroundColor = .black
+            host.additionalSafeAreaInsets = .zero
+            host.view.insetsLayoutMarginsFromSafeArea = false
         } else {
             let hc = UIHostingController(rootView: root)
             hc.view.backgroundColor = .black
             hc.view.insetsLayoutMarginsFromSafeArea = false
+            hc.additionalSafeAreaInsets = .zero
             if #available(iOS 16.4, *) {
+                // Draw under notch / home indicator — video fills the island area.
                 hc.safeAreaRegions = []
             }
             contentView.addSubview(hc.view)
@@ -477,17 +551,24 @@ private final class SparksPageCell: UICollectionViewCell {
     override func layoutSubviews() {
         super.layoutSubviews()
         host?.view.frame = contentView.bounds
+        host?.additionalSafeAreaInsets = .zero
     }
 
-    /// Mute/pause this page’s tree without tearing down the host (keeps first frame).
+    /// Force isActive=false so off-screen pages cannot keep ghost audio.
     func deactivateAudio() {
-        // Reconfigure as inactive if we still know the post via last root — simplest:
-        // walk AVPlayers under this cell’s hosting view is hard; push inactive card.
-        // Parent always re-configures on willDisplay; here force a silent inactive shell.
-        guard let host else { return }
-        // Best-effort: any AVPlayerLayer in the hierarchy is paused by coordinator on page change;
-        // also mark inactive via empty-ish update if lastPost is known.
-        _ = host
+        guard let post = lastPost else { return }
+        configure(
+            post: post,
+            isActive: false,
+            focusGeneration: 0,
+            bottomInset: lastBottomInset,
+            showsOpenPostAction: lastShowsOpen,
+            viewerCountryCode: lastViewer,
+            appState: lastAppState,
+            onLikeToggle: lastLike ?? {},
+            onOpenPost: lastOpen ?? {},
+            onOpenComments: lastComments ?? {}
+        )
     }
 
     private var lastPost: CountryPost?
@@ -498,9 +579,11 @@ private final class SparksPageCell: UICollectionViewCell {
     private var lastLike: (() -> Void)?
     private var lastOpen: (() -> Void)?
     private var lastComments: (() -> Void)?
+    private var lastConfigureSignature: String?
 
     override func prepareForReuse() {
         super.prepareForReuse()
+        lastConfigureSignature = nil
         // Drop active flag so recycled cells never keep ghost audio.
         if let post = lastPost {
             configure(
@@ -519,7 +602,7 @@ private final class SparksPageCell: UICollectionViewCell {
     }
 }
 
-// MARK: - Environment: Sparks film uses fill (platform default)
+// MARK: - Environment: Sparks film — fill by default (portrait); card may fit landscape.
 
 struct SparksPlayerFillsFrameKey: EnvironmentKey {
     static let defaultValue = true

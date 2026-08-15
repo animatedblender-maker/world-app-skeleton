@@ -4,6 +4,11 @@ import {
   emitServerEngagement,
 } from '../../../engagement/engagement.service.js';
 import { EngagementEventTypes } from '../../../kafka/types.js';
+import {
+  freshenOnePostMedia,
+  freshenPostsMedia,
+  resolvePlaybackForPostRow,
+} from '../../../media/r2-playback.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 
 type PostAuthorRow = {
@@ -124,14 +129,20 @@ function presentPostRow<T extends Record<string, any>>(row: T): T {
   return next as T;
 }
 
-function presentPostRows<T extends Record<string, any>>(rows: T[]): T[] {
-  return (rows ?? []).map((r) => presentPostRow(r));
+/** Present + re-sign R2 media_url so clients never receive expired X-Amz links. */
+async function presentPostRows<T extends Record<string, any>>(rows: T[]): Promise<T[]> {
+  const base = (rows ?? []).map((r) => presentPostRow(r));
+  return freshenPostsMedia(base);
 }
 
-function withoutMoments<T extends { body?: string | null; media_type?: string | null }>(
+async function presentPostRowAsync<T extends Record<string, any>>(row: T): Promise<T> {
+  return freshenOnePostMedia(presentPostRow(row));
+}
+
+async function withoutMoments<T extends { body?: string | null; media_type?: string | null }>(
   rows: T[]
-): T[] {
-  return presentPostRows((rows ?? []).filter((r) => !isMomentRow(r)));
+): Promise<T[]> {
+  return await presentPostRows((rows ?? []).filter((r) => !isMomentRow(r)));
 }
 
 // Exclude moments from country/recent/search feeds (moments live on author feeds only).
@@ -388,7 +399,7 @@ export class PostsService {
       [iso, safeLimit, viewerId]
     );
 
-    return withoutMoments(rows as PostRow[]);
+    return await withoutMoments(rows as PostRow[]);
   }
 
   async postsByAuthor(authorId: string, limit: number, viewerId: string | null): Promise<PostRow[]> {
@@ -493,7 +504,7 @@ export class PostsService {
       );
 
       // Author feed keeps moments (for the strip) but never leaks raw markers.
-      return presentPostRows(rows as PostRow[]);
+      return await presentPostRows(rows as PostRow[]);
     }
 
     const { rows } = await pool.query(
@@ -590,7 +601,7 @@ export class PostsService {
       [authorId, viewerId, Math.max(1, limit)]
     );
 
-    return presentPostRows(rows as PostRow[]);
+    return await presentPostRows(rows as PostRow[]);
   }
 
   async recentPosts(
@@ -702,7 +713,7 @@ export class PostsService {
       params
     );
 
-    return withoutMoments(rows as PostRow[]);
+    return await withoutMoments(rows as PostRow[]);
   }
 
   async searchPosts(query: string, limit: number, viewerId: string | null): Promise<PostRow[]> {
@@ -822,13 +833,34 @@ export class PostsService {
       [term, like, max, viewerId]
     );
 
-    return withoutMoments(rows as PostRow[]);
+    return await withoutMoments(rows as PostRow[]);
   }
 
   async postById(postId: string, viewerId: string | null): Promise<PostRow | null> {
     if (!postId) return null;
     const post = await this.postByIdForViewer(postId, viewerId);
-    return post ? presentPostRow(post) : null;
+    return post ? await presentPostRowAsync(post) : null;
+  }
+
+  /**
+   * On-demand playback resolution — always a *live* URL for R2 objects.
+   * Clients should call this before play when they only have a cached post.
+   */
+  async playbackMedia(
+    postId: string,
+    viewerId: string | null
+  ): Promise<{ post_id: string; url: string; media_url: string; r2_key: string | null } | null> {
+    if (!postId) return null;
+    const post = await this.postByIdForViewer(postId, viewerId);
+    if (!post) return null;
+    const resolved = await resolvePlaybackForPostRow(post as any);
+    if (!resolved) return null;
+    return {
+      post_id: postId,
+      url: resolved.url,
+      media_url: resolved.media_url,
+      r2_key: resolved.key || null,
+    };
   }
 
   async createPost(actorId: string, input: CreatePostInput): Promise<PostRow> {
@@ -987,7 +1019,7 @@ export class PostsService {
       isMoment,
     });
 
-    return presentPostRow(post);
+    return await presentPostRowAsync(post);
   }
 
   /** Plain-language upload line + Kafka ContentPosted (stats / report tab). */
@@ -1337,7 +1369,7 @@ export class PostsService {
       const post = await this.postByIdForViewer(String(row.post_id), userId);
       if (post) posts.push(post);
     }
-    return posts;
+    return await presentPostRows(posts);
   }
 
   async likesByPost(postId: string, limit: number, viewerId: string | null): Promise<PostLikeRow[]> {

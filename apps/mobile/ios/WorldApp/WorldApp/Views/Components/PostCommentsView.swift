@@ -166,6 +166,10 @@ struct PostCommentsView: View {
         }
         .dismissKeyboardOnTap()
         .task(id: postID) {
+            // Paint warm cache immediately so Chat / feed expand never flash empty.
+            if comments.isEmpty, let warm = CommentsWarmCache.shared.cached(postID) {
+                comments = warm
+            }
             await loadComments()
         }
     }
@@ -269,16 +273,41 @@ struct PostCommentsView: View {
     private func loadComments() async {
         // Always go through PostsService — it merges demo Reddit threads (comments.jsonl)
         // with any on-device replies. The old HubEngagementStore-only path left fake posts empty.
+        // Prefer warm cache first so the sheet opens already filled (no post-tap spinner).
+        if comments.isEmpty, let warm = CommentsWarmCache.shared.cached(postID) {
+            comments = warm
+        }
         let showSpinner = comments.isEmpty
         if showSpinner { isLoading = true }
         defer { isLoading = false }
 
         do {
-            let loaded = try await PostsService.shared.listComments(postID, limit: 2000)
-            comments = loaded
+            // Join any in-flight warm so we don't double-fetch on Chat open.
+            let loaded = await CommentsWarmCache.shared.load(postID)
+            if !loaded.isEmpty || comments.isEmpty {
+                comments = loaded
+            }
+            // Refresh from network if warm was empty or stale (still instant paint above).
+            if loaded.isEmpty {
+                let fresh = try await PostsService.shared.listComments(postID, limit: 2000)
+                comments = fresh
+                CommentsWarmCache.shared.store(postID, comments: fresh)
+            } else {
+                // Background refresh without spinner.
+                Task {
+                    if let fresh = try? await PostsService.shared.listComments(postID, limit: 2000) {
+                        await MainActor.run {
+                            comments = fresh
+                            CommentsWarmCache.shared.store(postID, comments: fresh)
+                        }
+                    }
+                }
+            }
         } catch {
             // Seed / offline fallback — never surface GraphQL "Unexpected error".
-            comments = HubEngagementStore.shared.listComments(postID, limit: 2000)
+            if comments.isEmpty {
+                comments = HubEngagementStore.shared.listComments(postID, limit: 2000)
+            }
         }
     }
 
@@ -305,6 +334,7 @@ struct PostCommentsView: View {
                 }
             }
             comments = refreshed
+            CommentsWarmCache.shared.store(postID, comments: refreshed)
             commentDraft = ""
             replyTarget = nil
             composerFocused = false
@@ -330,6 +360,7 @@ struct PostCommentsView: View {
                 author: author
             )
             comments.append(created)
+            CommentsWarmCache.shared.store(postID, comments: comments)
             commentDraft = ""
             replyTarget = nil
             composerFocused = false
@@ -653,8 +684,15 @@ struct PostCommentsPageView: View {
     /// When true (Sparks sheet), dismiss comments before opening a profile.
     var dismissesOnProfileOpen: Bool = true
 
-    @State private var comments: [PostComment] = []
+    @State private var comments: [PostComment]
     @State private var errorMessage: String?
+
+    init(postID: String, dismissesOnProfileOpen: Bool = true) {
+        self.postID = postID
+        self.dismissesOnProfileOpen = dismissesOnProfileOpen
+        // Seed from warm cache so first paint already has the thread.
+        _comments = State(initialValue: CommentsWarmCache.shared.cached(postID) ?? [])
+    }
 
     var body: some View {
         ScrollView {
@@ -679,6 +717,7 @@ struct PostCommentsPageView: View {
         .navigationTitle("Comments")
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(Theme.canvas, for: .navigationBar)
+        .onAppear { CommentsWarmCache.shared.warm(postID) }
     }
 }
 
@@ -727,6 +766,7 @@ struct ReelsCommentsSheet: View {
 }
 
 /// Compact comments panel for Sparks — keeps the video partially visible behind a detented sheet.
+/// No Close button — drag indicator / swipe-down dismisses.
 struct SparksCommentsSheet: View {
     let postID: String
     @Environment(\.dismiss) private var dismiss
@@ -760,11 +800,13 @@ struct SparksCommentsSheet: View {
             .background(Theme.canvas)
             .navigationTitle("Comments")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { dismiss() }
-                }
+            .toolbar(.hidden, for: .navigationBar)
+        }
+        .onAppear {
+            if comments.isEmpty, let warm = CommentsWarmCache.shared.cached(postID) {
+                comments = warm
             }
+            CommentsWarmCache.shared.warm(postID)
         }
     }
 }

@@ -763,6 +763,14 @@ struct FacebookPostCard: View {
             .buttonStyle(.plain)
 
             Button {
+                // Prefetch before expand so comments don't load *after* the user taps.
+                if !commentsExpanded {
+                    CommentsWarmCache.shared.warm(post.id)
+                    if inlineComments.isEmpty,
+                       let warm = CommentsWarmCache.shared.cached(post.id) {
+                        inlineComments = warm
+                    }
+                }
                 withAnimation(.easeInOut(duration: 0.2)) {
                     if !commentsExpanded {
                         visibleCommentLimit = 3
@@ -820,6 +828,11 @@ struct FacebookPostCard: View {
             // Survives Hubs ↔ Feed tab hops because count comes from model + hydrate, not expand state alone.
             if effectiveCommentCount > 0, !commentsExpanded {
                 Button {
+                    CommentsWarmCache.shared.warm(post.id)
+                    if inlineComments.isEmpty,
+                       let warm = CommentsWarmCache.shared.cached(post.id) {
+                        inlineComments = warm
+                    }
                     withAnimation(.easeInOut(duration: 0.2)) {
                         visibleCommentLimit = 3
                         commentsExpanded = true
@@ -936,8 +949,16 @@ struct FacebookPostCard: View {
 
     /// Pull thread size without expanding — keeps “View N comments” on share cards after tab switches.
     private func hydrateCommentCountIfNeeded() async {
+        // Always idle-warm so the first Chat tap is filled.
+        CommentsWarmCache.shared.warm(post.id)
+        if let warm = CommentsWarmCache.shared.cached(post.id), !warm.isEmpty {
+            await MainActor.run {
+                loadedCommentCount = max(loadedCommentCount, warm.count)
+                if inlineComments.isEmpty { inlineComments = warm }
+            }
+        }
         guard loadedCommentCount == 0, effectiveCommentCount == 0 else { return }
-        let loaded = (try? await PostsService.shared.listComments(post.id, limit: 2000)) ?? []
+        let loaded = await CommentsWarmCache.shared.load(post.id)
         guard !loaded.isEmpty else { return }
         await MainActor.run {
             loadedCommentCount = max(loadedCommentCount, loaded.count)
@@ -1251,7 +1272,7 @@ private struct PostEditSheet: View {
     }
 }
 
-/// Videos use a tall dominant height so two rarely fit on one screen; photos keep aspect ratio.
+/// Videos: full post-card width + classic tall feed height. Photos keep aspect ratio.
 private struct FeedMediaSizeModifier: ViewModifier {
     let isVideo: Bool
     let photoAspect: CGFloat
@@ -1265,6 +1286,7 @@ private struct FeedMediaSizeModifier: ViewModifier {
                 .frame(height: FacebookMediaLayout.dominantFeedVideoHeight())
         } else {
             content
+                .frame(maxWidth: .infinity)
                 .aspectRatio(photoAspect, contentMode: .fit)
                 .frame(maxHeight: usesYouTubeFrame ? nil : FacebookMediaLayout.maxFeedMediaHeight)
         }

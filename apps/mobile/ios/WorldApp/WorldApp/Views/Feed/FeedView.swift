@@ -147,6 +147,14 @@ struct FeedView: View {
                         ProgressView()
                             .padding(.vertical, 16)
                             .frame(maxWidth: .infinity)
+                    } else {
+                        // Endless feed sentinel — always request more as the user nears the tail.
+                        // R2 Sparks (28k+) keep filling; this must never be a dead end.
+                        Color.clear
+                            .frame(height: 1)
+                            .onAppear {
+                                store.requestLoadMore()
+                            }
                     }
                 }
                 .padding(.top, 8)

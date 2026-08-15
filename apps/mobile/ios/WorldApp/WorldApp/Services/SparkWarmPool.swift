@@ -19,14 +19,15 @@ final class SparkWarmPool {
     private var warming = Set<String>()
     /// Visible owners currently holding a claimed player — never re-warm these.
     private var inUse = Set<String>()
-    /// Deep window: feed scroll + Sparks pager both need instant neighbors.
-    private let maxSlots = 14
-    private let forwardBufferSeconds: Double = 8
+    /// Deep window: Sparks pager needs several neighbors fully buffered before swipe.
+    private let maxSlots = 20
+    private let forwardBufferSeconds: Double = 12
 
     private init() {}
 
     /// Warm CDN resolves for the whole list (cheap) and full-buffer players for a window.
-    func prepare(posts: [CountryPost], around index: Int, ahead: Int = 5, behind: Int = 2) {
+    /// Call early (open + every page) so the next Spark is already at first-frame ready.
+    func prepare(posts: [CountryPost], around index: Int, ahead: Int = 8, behind: Int = 2) {
         guard !posts.isEmpty else { return }
 
         let resolveLo = max(0, index - behind)
@@ -66,21 +67,45 @@ final class SparkWarmPool {
             return ia > ib
         }
         for post in ordered {
-            guard let url = post.playableVideoURL else { continue }
+            // Soft resolve: playableVideoURL first, then any non-image media path.
+            // Over-strict playable-only filtering left previously-working sparks cold → unavailable.
+            let url = post.playableVideoURL
+                ?? MediaURLResolver.videoURL(for: post)
+                ?? {
+                    guard let raw = post.mediaURL, let u = MediaURLResolver.resolve(raw),
+                          !MediaURLResolver.isImageURL(u) else { return nil }
+                    return u
+                }()
+            guard let url else { continue }
             if inUse.contains(post.id) { continue }
             Task { await warm(postID: post.id, sourceURL: url) }
         }
     }
 
     /// Hand a fully buffered player to the visible card (removes it from the pool).
+    /// Caller must treat the player as **paused at t≈0** (pool enforces that before parking).
+    /// Returns nil if the parked item is missing or already failed (forces a clean cold start).
+    ///
+    /// Important: only mark `inUse` on a **successful** claim. Marking it when the slot
+    /// is missing blocked re-warm forever → “Video unavailable” for clips that worked before.
     func claim(postID: String) -> AVPlayer? {
-        inUse.insert(postID)
         guard let slot = slots.removeValue(forKey: postID) else { return nil }
         let player = slot.player
+        // Never hand out a dead item — that became “Video unavailable” for good Sparks.
+        if player.currentItem == nil
+            || player.status == .failed
+            || player.currentItem?.status == .failed {
+            player.pause()
+            player.replaceCurrentItem(with: nil)
+            MediaPlaybackCoordinator.shared.unregister(player)
+            return nil
+        }
+        inUse.insert(postID)
         // Stop any silent pool buffering; card takes exclusive control.
         player.pause()
         player.isMuted = true
         player.volume = 0
+        player.rate = 0
         return player
     }
 
@@ -94,23 +119,18 @@ final class SparkWarmPool {
     }
 
     /// Return a still-buffered player so scrolling back is instant (keeps `currentItem`).
+    /// Always rewound to **exact t=0** before the next claim (no mid-clip first frame).
     func park(postID: String, player: AVPlayer) {
         inUse.remove(postID)
         player.pause()
         player.isMuted = true
         player.volume = 0
-        // Park at t≈0 so the next claim can play without a mid-clip seek (black flash).
-        // Match VideoPlayer / Archive near-zero window (0.35s) so swipe never re-seeks.
-        let t = player.currentTime().seconds
-        if !(t.isFinite && t >= 0 && t < 0.35) {
-            player.seek(
-                to: .zero,
-                toleranceBefore: .positiveInfinity,
-                toleranceAfter: .positiveInfinity
-            )
-        }
+        player.rate = 0
 
-        guard player.currentItem != nil, player.status != .failed else {
+        guard player.currentItem != nil,
+              player.status != .failed,
+              player.currentItem?.status != .failed
+        else {
             player.replaceCurrentItem(with: nil)
             MediaPlaybackCoordinator.shared.unregister(player)
             return
@@ -138,7 +158,7 @@ final class SparkWarmPool {
 
         MediaPlaybackCoordinator.shared.register(player)
         slots[postID] = Slot(postID: postID, player: player, parkedAt: Date())
-        // Quietly top up the buffer while parked.
+        // Snap to exact 0 + decode first frame while parked (never free-play into the clip).
         Task { await silentBufferFill(postID: postID, player: player) }
     }
 
@@ -170,6 +190,32 @@ final class SparkWarmPool {
         Task { await warm(postID: postID, sourceURL: url) }
     }
 
+    /// True when a parked (or in-use) player is ready at t≈0 for seamless first paint.
+    func isReadyAtStart(postID: String) -> Bool {
+        if inUse.contains(postID) { return true }
+        guard let slot = slots[postID] else { return false }
+        if slot.player.status == .failed || slot.player.currentItem?.status == .failed {
+            return false
+        }
+        let itemOK = slot.player.currentItem?.status == .readyToPlay
+            || slot.player.status == .readyToPlay
+        return itemOK && Self.isAtStart(slot.player)
+    }
+
+    /// Block until the first few Sparks are warm at t=0 (or timeout).
+    /// Cuts the cold-start blink on the first swipes after open.
+    func awaitReady(postIDs: [String], timeout: TimeInterval = 1.8) async {
+        guard !postIDs.isEmpty else { return }
+        let deadline = Date().addingTimeInterval(timeout)
+        for id in postIDs {
+            while Date() < deadline {
+                if isReadyAtStart(postID: id) { break }
+                if inUse.contains(id) { break }
+                try? await Task.sleep(nanoseconds: 40_000_000)
+            }
+        }
+    }
+
     // MARK: - Private
 
     private func warm(postID: String, sourceURL: URL) async {
@@ -178,27 +224,39 @@ final class SparkWarmPool {
         warming.insert(postID)
         defer { warming.remove(postID) }
 
-        let playURL: URL
-        if ArchiveVideoPlayback.isArchiveURL(sourceURL) {
-            playURL = await ArchiveVideoPlayback.resolvedPlaybackURL(for: sourceURL)
-        } else {
-            playURL = sourceURL
-        }
-        if slots[postID] != nil || inUse.contains(postID) { return }
-
-        let asset = AVURLAsset(
-            url: playURL,
-            options: [
-                AVURLAssetAllowsCellularAccessKey: true,
-                AVURLAssetAllowsExpensiveNetworkAccessKey: true,
-                AVURLAssetAllowsConstrainedNetworkAccessKey: true,
-            ]
+        // Always resolve via playbackConfiguration(postID:) so R2 gets a live URL
+        // from the API (object is permanent; cached signed query strings are not).
+        let configuration = await MediaURLResolver.playbackConfiguration(
+            for: sourceURL,
+            postID: postID
         )
-        asset.loadValuesAsynchronously(forKeys: ["playable", "duration"]) {}
-
+        let playURL = configuration.url
         if slots[postID] != nil || inUse.contains(postID) { return }
 
-        let item = AVPlayerItem(asset: asset)
+        // AVPlayerItem loads playable/duration itself — avoid deprecated loadValuesAsynchronously.
+        let item: AVPlayerItem
+        if let headers = configuration.headers, !headers.isEmpty,
+           !ArchiveVideoPlayback.isArchiveURL(playURL) {
+            let asset = AVURLAsset(
+                url: playURL,
+                options: ["AVURLAssetHTTPHeaderFieldsKey": headers]
+            )
+            item = AVPlayerItem(asset: asset)
+        } else {
+            let asset = AVURLAsset(
+                url: playURL,
+                options: [
+                    AVURLAssetAllowsCellularAccessKey: true,
+                    AVURLAssetAllowsExpensiveNetworkAccessKey: true,
+                    AVURLAssetAllowsConstrainedNetworkAccessKey: true,
+                ]
+            )
+            item = AVPlayerItem(asset: asset)
+        }
+
+        if slots[postID] != nil || inUse.contains(postID) {
+            return
+        }
         // Deep buffer so first frame + audio are ready before the user lands on the card.
         item.preferredForwardBufferDuration = forwardBufferSeconds
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
@@ -234,27 +292,66 @@ final class SparkWarmPool {
         Task { await silentBufferFill(postID: postID, player: player) }
     }
 
-    /// Muted play for a short window so AVPlayer actually fills the forward buffer while parked.
-    /// Aborts if the player was claimed mid-fill (must not pause a live Spark).
+    /// Decode first frame + fill forward buffer **without advancing playhead**.
+    /// Previous path free-played ~0.7s then seeked back → every swipe showed mid-clip then jumped to 0.
     private func silentBufferFill(postID: String, player: AVPlayer) async {
-        for _ in 0..<50 {
+        for _ in 0..<80 {
             guard isParked(postID: postID, player: player) else { return }
-            if player.currentItem == nil { return }
-            if player.status == .readyToPlay {
-                player.isMuted = true
-                player.volume = 0
-                player.play()
-                try? await Task.sleep(nanoseconds: 450_000_000)
-                // Only pause if still parked — claim may have taken ownership.
-                guard isParked(postID: postID, player: player) else { return }
-                player.pause()
-                player.isMuted = true
-                player.volume = 0
+            if player.currentItem == nil {
+                evict(postID)
                 return
             }
-            if player.status == .failed { return }
+            if player.status == .failed || player.currentItem?.status == .failed {
+                // Drop dead warm slots so claim never surfaces “Video unavailable”.
+                evict(postID)
+                return
+            }
+            if player.status == .readyToPlay || player.currentItem?.status == .readyToPlay {
+                player.isMuted = true
+                player.volume = 0
+                player.rate = 0
+                // Exact start — infinite tolerance was landing on distant keyframes.
+                _ = await player.seek(
+                    to: .zero,
+                    toleranceBefore: .zero,
+                    toleranceAfter: .zero
+                )
+                guard isParked(postID: postID, player: player) else { return }
+
+                // Preroll buffers from t=0 without leaving the start (unlike play()+sleep).
+                await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                    player.preroll(atRate: 1.0) { _ in
+                        cont.resume()
+                    }
+                }
+                guard isParked(postID: postID, player: player) else { return }
+                if player.status == .failed || player.currentItem?.status == .failed {
+                    evict(postID)
+                    return
+                }
+
+                player.pause()
+                player.rate = 0
+                player.isMuted = true
+                player.volume = 0
+                // Hard lock head at exact 0 after preroll (preroll can nudge slightly).
+                _ = await player.seek(
+                    to: .zero,
+                    toleranceBefore: .zero,
+                    toleranceAfter: .zero
+                )
+                player.pause()
+                player.rate = 0
+                return
+            }
             try? await Task.sleep(nanoseconds: 40_000_000)
         }
+    }
+
+    /// True when playhead is already at the start (no seek needed on claim).
+    static func isAtStart(_ player: AVPlayer, epsilon: Double = 0.05) -> Bool {
+        let t = player.currentTime().seconds
+        return t.isFinite && t >= 0 && t < epsilon
     }
 
     private func evict(_ postID: String) {

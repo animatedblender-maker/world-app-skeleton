@@ -52,6 +52,11 @@ export function createR2Client(): S3Client {
 }
 
 export async function presignGet(client: S3Client, key: string): Promise<string> {
+  // Prefer permanent public CDN/custom domain when configured — never expires.
+  const publicBase = process.env.R2_PUBLIC_BASE_URL?.trim().replace(/\/+$/, '');
+  if (publicBase) {
+    return `${publicBase}/${key.replace(/^\/+/, '')}`;
+  }
   const cmd = new GetObjectCommand({ Bucket: getBucket(), Key: key });
   return getSignedUrl(client, cmd, { expiresIn: PRESIGN_SECONDS });
 }

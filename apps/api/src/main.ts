@@ -270,12 +270,31 @@ app.get('/health', (_req: Request, res: Response) =>
       matteryaEmailConfirm: true,
       contentPipeline: true,
       contentPipelinePage: true,
+      r2PlaybackResolve: true,
     },
     apnsConfigured: apns.isConfigured(),
     authMail: authMailStatus(),
     contentPipeline: getPipelineStatus(),
   })
 );
+
+// ─── Live R2 playback (never serve a dead signed URL) ─────────────────────────
+// GET /v1/playback/:postId → { url, media_url, r2_key }
+// Prefer GraphQL playbackMedia; this REST path is for simple clients / debugging.
+app.get('/v1/playback/:postId', async (req: Request, res: Response) => {
+  try {
+    const postId = String(req.params.postId || '').trim();
+    if (!postId) return res.status(400).json({ error: 'post_id_required' });
+    const user = await getUserFromRequest(req);
+    const { PostsService } = await import('./graphql/modules/posts/posts.service.js');
+    const media = await new PostsService().playbackMedia(postId, user?.id ?? null);
+    if (!media) return res.status(404).json({ error: 'not_found' });
+    return res.json({ ok: true, ...media });
+  } catch (err: any) {
+    console.error('[playback]', err?.message ?? err);
+    return res.status(500).json({ error: 'playback_failed', message: err?.message ?? 'error' });
+  }
+});
 
 // ─── Matterya signup + branded email confirmation ───────────────────────────
 // Clients must use these instead of Supabase Auth signup so confirmation goes

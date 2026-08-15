@@ -57,7 +57,7 @@ struct ReelsVerticalFeed: View {
             MediaPlaybackCoordinator.shared.silenceForSparkPageChange()
             if posts.indices.contains(activeIndex) {
                 recordView(at: activeIndex)
-                SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 6, behind: 2)
+                SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 8, behind: 2)
             }
         }
         .onDisappear {
@@ -66,7 +66,7 @@ struct ReelsVerticalFeed: View {
         }
         .onChange(of: activeIndex) { _, idx in
             recordView(at: idx)
-            SparkWarmPool.shared.prepare(posts: posts, around: idx, ahead: 6, behind: 2)
+            SparkWarmPool.shared.prepare(posts: posts, around: idx, ahead: 8, behind: 2)
         }
     }
 
@@ -248,8 +248,6 @@ private struct SparksTimelineBar: View {
 
 struct ReelsPagerCard: View {
     @Environment(AppState.self) private var appState
-    /// TikTok/IG default: edge-to-edge fill. Set via SparksUIKitPager environment.
-    @Environment(\.sparksPlayerFillsFrame) private var fillsFrame
 
     let post: CountryPost
     let isActive: Bool
@@ -279,15 +277,50 @@ struct ReelsPagerCard: View {
     @State private var durationSeconds: Double = 0
     @State private var seekToSeconds: Double? = nil
     @State private var isScrubbingTimeline = false
+    /// Natural size → portrait fills; landscape only fills when crop is small.
+    @State private var videoNaturalSize: CGSize = .zero
+    /// Locked after first real size so gravity does not thrash mid-play.
+    @State private var gravityLocked = false
+    /// Start as fill (most Sparks are vertical + covers notch); may drop to fit for wide clips.
+    @State private var useFill = true
 
     /// Single restart token — active + parent generation in the same render (no double play).
     private var restartFromBeginningToken: UInt {
         isActive ? max(1, focusGeneration) : 0
     }
 
+    /// Best-effort play URL — primary resolver plus raw media/thumb fallbacks.
+    private var sparkPlayURL: URL? {
+        if let url = post.playableVideoURL { return url }
+        if let raw = post.mediaURL, let url = MediaURLResolver.resolve(raw),
+           !MediaURLResolver.isImageURL(url) {
+            return url
+        }
+        if let raw = post.primaryMediaURL, let url = MediaURLResolver.resolve(raw),
+           !MediaURLResolver.isImageURL(url) {
+            return url
+        }
+        if let raw = post.thumbURL, let url = MediaURLResolver.resolve(raw),
+           MediaURLResolver.isVideoURL(url) {
+            return url
+        }
+        return nil
+    }
+
+    private func noteVideoSize(_ size: CGSize) {
+        guard size.width > 2, size.height > 2 else { return }
+        if gravityLocked { return }
+        videoNaturalSize = size
+        useFill = SparksStageLayout.shouldFillWithoutCrop(
+            videoSize: size,
+            stageSize: SparksStageLayout.physicalScreenSize
+        )
+        gravityLocked = true
+    }
+
     var body: some View {
         ZStack {
-            // Film fills the **entire page** (page = physical screen). Chrome floats on top.
+            // Film fills the page; chrome floats on top (YouTube Shorts / TikTok).
             filmStage
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
@@ -302,7 +335,8 @@ struct ReelsPagerCard: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
-        // Dock overlay only — never changes the film stage size.
+        // Film + chrome draw under the Dynamic Island; top chrome is overlaid separately.
+        .ignoresSafeArea(.all)
         .overlay(alignment: .bottom) {
             sparkDock
                 .padding(.horizontal, 12)
@@ -324,13 +358,13 @@ struct ReelsPagerCard: View {
                 progressSeconds = 0
                 seekToSeconds = nil
                 isScrubbingTimeline = false
-                if let url = post.playableVideoURL {
+                if let url = sparkPlayURL {
                     SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
                 }
             }
         }
         .onAppear {
-            if let url = post.playableVideoURL {
+            if let url = sparkPlayURL {
                 SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
             }
         }
@@ -341,6 +375,12 @@ struct ReelsPagerCard: View {
             isScrubbingTimeline = false
             isPaused = false
             hidePauseGlyph(animated: false)
+            videoNaturalSize = .zero
+            gravityLocked = false
+            useFill = true
+            if let url = sparkPlayURL {
+                SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
+            }
         }
         .onDisappear {
             pendingSingleTap?.cancel()
@@ -354,26 +394,24 @@ struct ReelsPagerCard: View {
         }
     }
 
-    /// Full-stage video + chrome that is not the action dock.
+    /// Full-stage under the notch. Portrait fills; wide clips fit when fill would crop hard.
     private var filmStage: some View {
         ZStack {
-            // Same ink as poster placeholder — never pure black flash between pages.
-            Theme.ink
+            Color.black
 
-            // Poster matches video gravity (fill) so there is no poster→video zoom jump.
             if let poster = post.posterImageURL {
                 CachedAsyncImage(
                     url: poster,
                     maxPixelSize: 900,
-                    contentMode: fillsFrame ? .fill : .fit,
-                    placeholder: AnyView(Theme.ink)
+                    contentMode: useFill ? .fill : .fit,
+                    placeholder: AnyView(Color.black)
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
                 .allowsHitTesting(false)
             }
 
-            if let url = post.playableVideoURL {
+            if let url = sparkPlayURL {
                 Group {
                     if ArchiveVideoPlayback.isArchiveURL(url) || post.isHubSeedVideo {
                         ArchiveVideoPlayerView(
@@ -383,17 +421,14 @@ struct ReelsPagerCard: View {
                             muted: false,
                             startTime: 0,
                             loops: true,
-                            // Platform default: aspectFill edge-to-edge (TikTok / IG / Shorts).
-                            fillsFrame: fillsFrame,
+                            fillsFrame: useFill,
                             postID: post.id,
                             interactive: false,
                             onReady: { Task { await PostsService.shared.recordView(post) } },
                             onProgress: { current, duration in
-                                // Do NOT gate on `isActive` here — the player may attach its
-                                // time observer while preloading (isActive=false). That closure
-                                // would capture a stale false and freeze the timeline forever.
                                 applyTimelineProgress(current: current, duration: duration)
                             },
+                            onVideoSize: { noteVideoSize($0) },
                             seekToSeconds: seekToSeconds,
                             onSeekConsumed: { seekToSeconds = nil },
                             restartFromBeginningToken: restartFromBeginningToken,
@@ -411,13 +446,13 @@ struct ReelsPagerCard: View {
                             loops: true,
                             muted: false,
                             showsControls: false,
-                            fillsFrame: fillsFrame,
+                            fillsFrame: useFill,
                             preloadsWhenInactive: true,
                             onViewed: { Task { await PostsService.shared.recordView(post) } },
                             onProgress: { current, duration in
-                                // Same as Archive path — never capture stale isActive=false.
                                 applyTimelineProgress(current: current, duration: duration)
                             },
+                            onVideoSize: { noteVideoSize($0) },
                             seekToSeconds: seekToSeconds,
                             onSeekConsumed: { seekToSeconds = nil },
                             restartFromBeginningToken: restartFromBeginningToken,
@@ -427,7 +462,7 @@ struct ReelsPagerCard: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
-                // Video never steals vertical paging — UICollectionView owns pans.
+                .animation(nil, value: useFill)
                 .allowsHitTesting(false)
             } else {
                 VStack(spacing: 10) {
@@ -437,6 +472,9 @@ struct ReelsPagerCard: View {
                     Text("Spark unavailable")
                         .font(.system(.subheadline, design: .serif))
                         .foregroundStyle(Theme.paper.opacity(0.55))
+                    Text("Swipe for the next one")
+                        .font(.caption)
+                        .foregroundStyle(Theme.paper.opacity(0.4))
                 }
                 .allowsHitTesting(false)
             }
@@ -513,6 +551,19 @@ struct ReelsPagerCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            // Timeline sits *above* Like / Chat / Keep / Send (not under the actions).
+            if isActive {
+                SparksTimelineBar(
+                    currentSeconds: progressSeconds,
+                    durationSeconds: durationSeconds,
+                    isScrubbing: $isScrubbingTimeline,
+                    onSeek: { seconds in
+                        progressSeconds = seconds
+                        seekToSeconds = seconds
+                    }
+                )
+            }
+
             // Horizontal action ribbon — compact glass chips.
             // Never pause the Spark for Like / Chat / Keep / Send.
             HStack(spacing: 5) {
@@ -531,6 +582,8 @@ struct ReelsPagerCard: View {
                     accent: Theme.paper
                 ) {
                     keepPlayingThroughUIAction()
+                    // Warm thread *before* the sheet paints so comments are already there.
+                    CommentsWarmCache.shared.warm(post.id)
                     onOpenComments()
                     reassertPlayback()
                 }
@@ -558,18 +611,6 @@ struct ReelsPagerCard: View {
                         onOpenPost()
                     }
                 }
-            }
-
-            if isActive {
-                SparksTimelineBar(
-                    currentSeconds: progressSeconds,
-                    durationSeconds: durationSeconds,
-                    isScrubbing: $isScrubbingTimeline,
-                    onSeek: { seconds in
-                        progressSeconds = seconds
-                        seekToSeconds = seconds
-                    }
-                )
             }
         }
         .padding(.horizontal, 12)
@@ -855,7 +896,7 @@ private struct SparksShareOverlay: View {
 }
 
 /// Bottom comments card over the live Sparks player — video keeps playing (no .sheet).
-/// Dismiss: Close, tap outside (dimmer), or drag the grabber down.
+/// Dismiss: tap outside (dimmer) or drag the grabber down — **no Close button**.
 private struct SparksCommentsOverlay: View {
     @Environment(AppState.self) private var appState
     let postID: String
@@ -908,12 +949,9 @@ private struct SparksCommentsOverlay: View {
 
                     NavigationStack {
                         // Don't Environment.dismiss the Sparks full-screen cover when opening a profile.
+                        // No Close/Done toolbar — dimmer + grabber only (Instagram-style).
                         PostCommentsPageView(postID: postID, dismissesOnProfileOpen: false)
-                            .toolbar {
-                                ToolbarItem(placement: .cancellationAction) {
-                                    Button("Close") { dismiss() }
-                                }
-                            }
+                            .toolbar(.hidden, for: .navigationBar)
                     }
                     .withAppState(appState)
                 }
@@ -929,6 +967,8 @@ private struct SparksCommentsOverlay: View {
         }
         .ignoresSafeArea()
         .onAppear {
+            // Prefetch already running from Chat tap; keep warm in case of cold path.
+            CommentsWarmCache.shared.warm(postID)
             // Kill ghost audio from off-screen Sparks (UICollectionView cells can stay “active”).
             MediaPlaybackCoordinator.shared.enforceSoloAudioOnly()
             // Resume only the solo player (handlers ignore non-solo).
@@ -1062,8 +1102,7 @@ struct ReelsScrollViewer: View {
     }
 
     private var reelsContent: some View {
-        let screen = UIScreen.main.bounds.size
-        return ZStack(alignment: .topLeading) {
+        ZStack(alignment: .topLeading) {
             Color.black
 
             if posts.isEmpty {
@@ -1084,7 +1123,10 @@ struct ReelsScrollViewer: View {
                     isScrollEnabled: commentsPostID == nil && appState.sharePostSheet == nil,
                     onNearEnd: { Task { await loadMoreReels() } },
                     onNearStart: { Task { await loadEarlierReels() } },
-                    onOpenComments: { commentsPostID = $0 }
+                    onOpenComments: { id in
+                        CommentsWarmCache.shared.warm(id)
+                        commentsPostID = id
+                    }
                 )
             }
 
@@ -1099,6 +1141,7 @@ struct ReelsScrollViewer: View {
                 }
                 .zIndex(75)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
+                .onAppear { CommentsWarmCache.shared.warm(commentsID) }
             }
 
             if let sharePost = appState.sharePostSheet {
@@ -1111,50 +1154,69 @@ struct ReelsScrollViewer: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .frame(width: screen.width, height: screen.height)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.black)
+        .background(Color.black.ignoresSafeArea(.all))
         .ignoresSafeArea(.all)
         .animation(.spring(response: 0.32, dampingFraction: 0.9), value: appState.sharePostSheet?.id)
         .animation(.spring(response: 0.32, dampingFraction: 0.9), value: commentsPostID)
         .toolbar(.hidden, for: .navigationBar)
-        // Status bar hidden from first paint so safe-area never “eats” the top after video mounts.
+        // Status bar hidden so film can paint under the Dynamic Island.
         .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)
+        .onChange(of: activeIndex) { _, idx in
+            // Idle-warm comments for the focused Spark so Chat is instant.
+            guard posts.indices.contains(idx) else { return }
+            CommentsWarmCache.shared.warm(posts[idx].id)
+        }
         .task {
+            // 1) Warm the head *before* catalog churn so the first swipes aren't cold.
             SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 6, behind: 1)
+            if posts.indices.contains(activeIndex) {
+                CommentsWarmCache.shared.warm(posts[activeIndex].id)
+            }
+            let headIDs = posts.prefix(5).map(\.id)
+            await SparkWarmPool.shared.awaitReady(postIDs: Array(headIDs), timeout: 1.5)
+
+            // 2) Grow the queue without remounting the live head (append-only).
             seedFromWarmCatalogIfNeeded()
+            SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 8, behind: 1)
+            await SparkWarmPool.shared.awaitReady(
+                postIDs: Array(posts.prefix(5).map(\.id)),
+                timeout: 1.2
+            )
+
+            // 3) Deep catalog — append unseen only (full replace remounted first pages → glitch).
             await expandFeed()
             SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 8, behind: 2)
         }
     }
 
-    /// Instant neighbors from memory — **eligible originals only** (never feed share shells).
+    /// Instant neighbors from memory — **append only** (never replace the live head).
     private func seedFromWarmCatalogIfNeeded() {
-        guard posts.count < 8 else { return }
-        let preserveID = posts.indices.contains(activeIndex)
-            ? posts[activeIndex].id
-            : context.startingPostID
-        let preferStart = ReelsRankingEngine.resolvePlayerStart(
-            posts.first(where: { $0.id == preserveID }) ?? context.startingPost
-        )
-        var feed: [CountryPost] = []
-        var seen = Set<String>()
-        if preferStart.playableVideoURL != nil {
-            feed.append(preferStart)
-            seen.insert(preferStart.id)
-        }
+        guard posts.count < 12 else { return }
+        var seen = Set(posts.map(\.id))
+        var toAppend: [CountryPost] = []
         let warm = PostsService.shared.sparksCatalogSnapshot()
             .filter { ReelsRankingEngine.isSparkEligible($0) }
             .shuffled()
         for post in warm {
             guard seen.insert(post.id).inserted else { continue }
-            feed.append(post)
-            if feed.count >= 48 { break }
+            let hasPath = MediaURLResolver.videoURL(for: post) != nil
+                || !(post.mediaURL ?? "").isEmpty
+                || post.hasVideo
+            guard hasPath else { continue }
+            toAppend.append(post)
+            if posts.count + toAppend.count >= 48 { break }
         }
-        replacePlayerQueue(feed, preserveID: preferStart.id)
+        guard !toAppend.isEmpty else { return }
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            posts.append(contentsOf: toAppend)
+            // Append only — leave activeIndex alone.
+        }
         hasMorePages = true
-        SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 6, behind: 1)
+        SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 8, behind: 1)
     }
 
     private func expandFeed() async {
@@ -1166,58 +1228,94 @@ struct ReelsScrollViewer: View {
         hasMorePages = true
         recyclePass = 0
 
-        // Clip currently under the finger (user may have swiped during network).
-        let preserveID = posts.indices.contains(activeIndex)
+        // Snapshot for catalog ranking only — never snap the pager back to this later.
+        // User may swipe freely while the network runs; we must honor whatever is
+        // under their finger *at apply time*, not the entry spark.
+        let rankingAnchorID = posts.indices.contains(activeIndex)
             ? posts[activeIndex].id
             : context.startingPostID
-        let preferStart = ReelsRankingEngine.resolvePlayerStart(
-            posts.first(where: { $0.id == preserveID }) ?? context.startingPost
+        let rankingAnchor = ReelsRankingEngine.resolvePlayerStart(
+            posts.first(where: { $0.id == rankingAnchorID }) ?? context.startingPost
         )
 
         // Unified entry (feed / chat / Hubs / strip / menu): full library + pure random order.
-        let fresh = await PostsService.shared.beginFreshSparksSession(preferStart: preferStart)
+        let fresh = await PostsService.shared.beginFreshSparksSession(preferStart: rankingAnchor)
 
-        var feed: [CountryPost] = []
-        var excluding = Set<String>()
-        if preferStart.playableVideoURL != nil {
-            feed.append(preferStart)
-            excluding.insert(preferStart.id)
-        }
+        // Live clip under the finger right now (may differ from rankingAnchor after swipes).
+        let liveID = posts.indices.contains(activeIndex)
+            ? posts[activeIndex].id
+            : rankingAnchorID
+
+        // Append unseen only — replacing the queue remounted the first pages mid-watch
+        // and caused the “first few Sparks glitch then smooth” bug.
+        var excluding = Set(posts.map(\.id))
+        var toAppend: [CountryPost] = []
         for post in fresh where excluding.insert(post.id).inserted {
-            guard ReelsRankingEngine.isSparkEligible(post) || post.id == preferStart.id else { continue }
-            feed.append(post)
+            guard ReelsRankingEngine.isSparkEligible(post) || post.id == liveID else { continue }
+            // Soft URL gate: keep clips with any media path (resolve can succeed later).
+            let hasPath = MediaURLResolver.videoURL(for: post) != nil
+                || !(post.mediaURL ?? "").isEmpty
+                || post.hasVideo
+            guard hasPath else { continue }
+            toAppend.append(post)
         }
-
-        // **Replace** the queue — never append home-feed junk that made the same ~20 clips loop.
-        replacePlayerQueue(feed, preserveID: preferStart.id)
-        hasMorePages = feed.count > 12
+        if !toAppend.isEmpty {
+            // Append only — never rewrite activeIndex (that snapped back to entry spark).
+            applyExpandedFeed(toAppend)
+        } else if posts.count < 4 {
+            // Tiny queue fallback only — re-read live ID so we never jump to entry.
+            let keepID = posts.indices.contains(activeIndex)
+                ? posts[activeIndex].id
+                : liveID
+            var tiny: [CountryPost] = []
+            if let live = posts.first(where: { $0.id == keepID }) {
+                tiny.append(live)
+            } else if rankingAnchor.playableVideoURL != nil || rankingAnchor.hasVideo {
+                tiny.append(rankingAnchor)
+            }
+            for p in fresh where p.id != keepID {
+                tiny.append(p)
+                if tiny.count >= 40 { break }
+            }
+            if !tiny.isEmpty {
+                replacePlayerQueue(tiny, preserveID: keepID)
+            }
+        }
+        hasMorePages = posts.count > 12 || !toAppend.isEmpty
         SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 8, behind: 2)
         #if DEBUG
-        print("[Sparks] player queue size=\(posts.count) preserve=\(preferStart.id.prefix(8))")
+        print("[Sparks] player queue size=\(posts.count) live=\(liveID.prefix(8))")
         #endif
     }
 
     /// Replace the swipe queue without animation (keeps current page under the finger).
+    /// Never falls back to index 0 when preserve is missing — that was the “jump to entry” bug.
     private func replacePlayerQueue(_ feed: [CountryPost], preserveID: String) {
         guard !feed.isEmpty else { return }
+        // Prefer the clip the user is watching *now* over a stale preserveID.
+        let liveID = posts.indices.contains(activeIndex) ? posts[activeIndex].id : preserveID
+        let targetID = feed.contains(where: { $0.id == liveID }) ? liveID
+            : (feed.contains(where: { $0.id == preserveID }) ? preserveID : feed[0].id)
+        let newIndex = feed.firstIndex(where: { $0.id == targetID }) ?? 0
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) {
             posts = feed
-            if let idx = posts.firstIndex(where: { $0.id == preserveID }) {
-                activeIndex = idx
-            } else {
-                activeIndex = 0
-            }
+            activeIndex = newIndex
         }
     }
 
-    /// Append only (load-more path) — never used for the initial catalog expand.
-    private func applyExpandedFeed(_ feed: [CountryPost], preserveID: String) {
+    /// Append only — **never** mutates `activeIndex` (append cannot change the focused clip).
+    private func applyExpandedFeed(_ feed: [CountryPost], preserveID: String = "") {
         var seen = Set(posts.map(\.id))
         var appended: [CountryPost] = []
         for p in feed where seen.insert(p.id).inserted {
-            guard ReelsRankingEngine.isSparkEligible(p) || p.id == preserveID else { continue }
+            if !preserveID.isEmpty {
+                guard ReelsRankingEngine.isSparkEligible(p) || p.id == preserveID else { continue }
+            } else {
+                guard ReelsRankingEngine.isSparkEligible(p) || p.hasVideo || p.playableVideoURL != nil
+                else { continue }
+            }
             appended.append(p)
         }
         guard !appended.isEmpty else { return }
@@ -1225,9 +1323,8 @@ struct ReelsScrollViewer: View {
         t.disablesAnimations = true
         withTransaction(t) {
             posts.append(contentsOf: appended)
-            if let idx = posts.firstIndex(where: { $0.id == preserveID }) {
-                activeIndex = idx
-            }
+            // Do NOT reassign activeIndex — even to the same id's index. Stale preserveIDs
+            // from network start were snapping the user back to the entry spark.
         }
     }
 
@@ -1247,9 +1344,9 @@ struct ReelsScrollViewer: View {
             .shuffled()
         if !remaining.isEmpty {
             let batch = Array(remaining.prefix(48))
-            applyExpandedFeed(batch, preserveID: posts.indices.contains(activeIndex) ? posts[activeIndex].id : "")
+            applyExpandedFeed(batch)
             hasMorePages = remaining.count > batch.count
-            SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 6, behind: 1)
+            SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 8, behind: 2)
             return
         }
 
@@ -1334,6 +1431,9 @@ struct ReelsScrollViewer: View {
         isExpandingFeed = true
         defer { isExpandingFeed = false }
 
+        // Capture the live clip *before* network so a mid-flight swipe still maps correctly.
+        let liveID = posts.indices.contains(activeIndex) ? posts[activeIndex].id : first.id
+
         let prepend = await PostsService.shared.loadReelsNewerBatch(
             than: first.createdAt,
             excludingIDs: Set(posts.map(\.id)),
@@ -1343,8 +1443,7 @@ struct ReelsScrollViewer: View {
             head: Array(posts.prefix(4))
         )
         if !prepend.isEmpty {
-            posts.insert(contentsOf: prepend, at: 0)
-            activeIndex += prepend.count
+            prependKeepingFocus(prepend, liveID: liveID)
             return
         }
 
@@ -1360,9 +1459,29 @@ struct ReelsScrollViewer: View {
             allowRecycle: true
         )
         if !recycled.posts.isEmpty {
-            posts.insert(contentsOf: recycled.posts, at: 0)
-            activeIndex += recycled.posts.count
+            prependKeepingFocus(recycled.posts, liveID: liveID)
         }
+    }
+
+    /// Prepend + retarget `activeIndex` to the same post id in one transaction.
+    /// Split updates (posts then index) briefly pointed activeIndex at the wrong clip
+    /// and the pager scrolled to the entry spark.
+    private func prependKeepingFocus(_ batch: [CountryPost], liveID: String) {
+        guard !batch.isEmpty else { return }
+        // Re-read live id in case the user swiped during the network call.
+        let focusID = posts.indices.contains(activeIndex) ? posts[activeIndex].id : liveID
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            posts.insert(contentsOf: batch, at: 0)
+            if let idx = posts.firstIndex(where: { $0.id == focusID }) {
+                activeIndex = idx
+            } else {
+                // Should not happen (focus was already in the list) — clamp, never force 0.
+                activeIndex = min(activeIndex + batch.count, max(0, posts.count - 1))
+            }
+        }
+        SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 6, behind: 2)
     }
 }
 

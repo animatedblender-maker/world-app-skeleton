@@ -29,6 +29,8 @@ struct VideoPlayerView: View {
     var onViewed: (() -> Void)? = nil
     /// Progress callback for Sparks timeline scrubber: (currentSeconds, durationSeconds).
     var onProgress: ((Double, Double) -> Void)? = nil
+    /// Natural presentation size (for Sparks smart fill vs letterbox).
+    var onVideoSize: ((CGSize) -> Void)? = nil
     /// When set to a non-nil value, seek there once then clear via `onSeekConsumed`.
     var seekToSeconds: Double? = nil
     var onSeekConsumed: (() -> Void)? = nil
@@ -48,6 +50,8 @@ struct VideoPlayerView: View {
     @State private var timeObserverPlayer: AVPlayer?
     @State private var loadFailed = false
     @State private var didRetryWithPublicURL = false
+    /// Hard cap on cold recoveries — prevents infinite fail loops on dead media.
+    @State private var playbackRecoveryPasses = 0
     @State private var configuredURL: URL?
     @State private var showFullscreen = false
     @State private var isPlaying = false
@@ -68,6 +72,8 @@ struct VideoPlayerView: View {
     @State private var isRestartSeeking = false
     /// Keep poster on top until AVPlayer is actually producing frames (not just “play() called”).
     @State private var showPosterCover = true
+    @State private var didReportVideoSize = false
+    @State private var presentationSizeObserver: NSKeyValueObservation?
 
     private var shouldShowAd: Bool {
         adsEnabled && isActive && !adFinished && placement != nil
@@ -93,7 +99,7 @@ struct VideoPlayerView: View {
             // Never pure black under Sparks — poster or dark paper while buffering.
             Color.black
 
-            // Always paint poster under the layer when available.
+            // Poster matches video gravity (fill/fit) so there is no framing jump.
             if let posterURL {
                 CachedAsyncImage(
                     url: posterURL,
@@ -152,7 +158,7 @@ struct VideoPlayerView: View {
                 ProgressView().tint(Theme.accentBright)
             }
 
-            // Poster cover only while cold — same gravity as video (no fill/fit mismatch zoom).
+            // Poster cover only while cold — same gravity as video.
             if let posterURL, shouldShowPosterCover {
                 CachedAsyncImage(
                     url: posterURL,
@@ -161,6 +167,7 @@ struct VideoPlayerView: View {
                     placeholder: AnyView(Color.black)
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
                 .allowsHitTesting(false)
             }
         }
@@ -184,6 +191,7 @@ struct VideoPlayerView: View {
             // Buffer the moment the cell mounts (feed + Sparks) — don't wait for focus.
             handleActivationOrMount(forceRebuild: player?.currentItem == nil)
             if showsControls { scheduleChromeHide() }
+            reportVideoSizeIfNeeded(from: player?.currentItem)
         }
         // Screenshot / Control Center must not leave video paused.
         .onReceive(NotificationCenter.default.publisher(for: .matteryaResumePlaybackAfterInterrupt)) { _ in
@@ -217,11 +225,9 @@ struct VideoPlayerView: View {
                     showPosterCover = false
                     return
                 }
-                // Warm / ready items already have a decoded frame — do NOT slam poster cover
-                // (that was the black "refresh" on every swipe).
-                let ready = player?.currentItem?.status == .readyToPlay
-                if !ready {
-                    showPosterCover = true
+                // Warm / ready items already have a decoded frame — never slam poster (blink).
+                if player?.currentItem?.status == .readyToPlay {
+                    showPosterCover = false
                 }
                 // Re-bind progress + ensure observer is alive after focus (preload path).
                 if let player {
@@ -232,6 +238,7 @@ struct VideoPlayerView: View {
                     currentSeconds = cur
                     if let item = player.currentItem {
                         updateDuration(from: item)
+                        reportVideoSizeIfNeeded(from: item)
                     }
                     liveGate.onProgress?(cur, durationSeconds)
                 }
@@ -275,10 +282,8 @@ struct VideoPlayerView: View {
                 lastHandledRestartToken = token
                 return
             }
-            // Never force poster on warm ready players (black flash on swipe).
-            if player?.currentItem?.status != .readyToPlay {
-                showPosterCover = true
-            } else {
+            // Never force poster on warm ready players (blink on swipe).
+            if player?.currentItem?.status == .readyToPlay {
                 showPosterCover = false
             }
             guard isActive || liveGate.isActive else {
@@ -311,6 +316,16 @@ struct VideoPlayerView: View {
             }
         }
         .onChange(of: url) { _, _ in
+            // Drop the old surface immediately — never paint one Spark’s frame on another.
+            showPosterCover = true
+            isRestartSeeking = false
+            teardownPlayer(park: false)
+            Task { await ensurePlayer(forceRebuild: true) }
+        }
+        .onChange(of: postID) { _, _ in
+            showPosterCover = true
+            isRestartSeeking = false
+            teardownPlayer(park: false)
             Task { await ensurePlayer(forceRebuild: true) }
         }
         .onChange(of: seekToSeconds) { _, target in
@@ -339,13 +354,21 @@ struct VideoPlayerView: View {
     }
 
     private var unavailableState: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 10) {
             Image(systemName: "play.slash")
                 .font(.title2)
                 .foregroundStyle(Theme.accentBright.opacity(0.85))
             Text("Video unavailable")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.white.opacity(0.7))
+            Button("Try again") {
+                loadFailed = false
+                didRetryWithPublicURL = false
+                playbackRecoveryPasses = 0
+                Task { await ensurePlayer(forceRebuild: true) }
+            }
+            .font(.caption.weight(.bold))
+            .foregroundStyle(Theme.accentBright)
         }
     }
 
@@ -440,16 +463,16 @@ struct VideoPlayerView: View {
     @MainActor
     private func restartLoop(on player: AVPlayer) {
         guard liveGate.isActive, !liveGate.userWantsPause else { return }
-        // Soft keyframe loop — exact zero seek flashes black every loop.
-        player.seek(
-            to: .zero,
-            toleranceBefore: .positiveInfinity,
-            toleranceAfter: .positiveInfinity
-        ) { [weak player] finished in
-            guard finished, let player else { return }
-            Task { @MainActor in
-                self.kickAudiblePlayback(on: player)
-            }
+        player.pause()
+        player.rate = 0
+        Task { @MainActor in
+            _ = await player.seek(
+                to: .zero,
+                toleranceBefore: .zero,
+                toleranceAfter: .zero
+            )
+            guard self.liveGate.isActive, !self.liveGate.userWantsPause else { return }
+            self.kickAudiblePlayback(on: player)
         }
     }
 
@@ -488,22 +511,17 @@ struct VideoPlayerView: View {
         Task { await ensurePlayer(forceRebuild: forceRebuild || player?.currentItem == nil) }
     }
 
-    /// Soft seek to start. When already near 0, play immediately with no cover swap.
+    /// Soft seek to start. When already at t≈0, play immediately — never free-play then snap.
     @MainActor
     private func softSeekToBeginning(playAfter: Bool) {
         currentSeconds = 0
         lastNotedPlaybackSecond = -1
         guard let player, player.currentItem != nil else {
             isRestartSeeking = false
-            if playAfter, liveGate.isActive, !liveGate.userWantsPause {
-                // Cold — cover until item installs.
-                showPosterCover = true
-            }
             return
         }
-        let t = player.currentTime().seconds
-        // Already at the start — no seek, no poster, just play (instant swipe).
-        if t.isFinite, t >= 0, t < 1.0 {
+        // Warm pool parks at exact 0 — only treat true start as ready (not <1.5s mid-clip).
+        if SparkWarmPool.isAtStart(player) {
             isRestartSeeking = false
             showPosterCover = false
             if playAfter, liveGate.isActive, !liveGate.userWantsPause {
@@ -511,21 +529,24 @@ struct VideoPlayerView: View {
             }
             return
         }
-        // Mid-clip → 0: keep layer visible (decoded frames) while keyframe-seeking.
-        // Do not force poster — that was the black refresh on scroll-back.
-        isRestartSeeking = true
-        player.seek(
-            to: .zero,
-            toleranceBefore: .positiveInfinity,
-            toleranceAfter: .positiveInfinity
-        ) { [weak player] finished in
-            guard finished, let player else { return }
-            Task { @MainActor in
-                self.currentSeconds = 0
-                self.isRestartSeeking = false
-                if playAfter, self.liveGate.isActive, !self.liveGate.userWantsPause {
-                    self.kickAudiblePlayback(on: player)
-                }
+        // Mid-clip → exact 0, then play. Zero tolerance so we don't land on a late keyframe.
+        isRestartSeeking = false
+        showPosterCover = false
+        player.pause()
+        player.rate = 0
+        Task { @MainActor in
+            guard self.player === player else { return }
+            _ = await player.seek(
+                to: .zero,
+                toleranceBefore: .zero,
+                toleranceAfter: .zero
+            )
+            guard self.player === player else { return }
+            self.currentSeconds = 0
+            self.isRestartSeeking = false
+            self.showPosterCover = false
+            if playAfter, self.liveGate.isActive, !self.liveGate.userWantsPause {
+                self.kickAudiblePlayback(on: player)
             }
         }
     }
@@ -604,22 +625,28 @@ struct VideoPlayerView: View {
             teardownPlayer(park: false)
             configuredURL = url
             didRetryWithPublicURL = false
+            playbackRecoveryPasses = 0
             userWantsPause = false
         }
 
         if player == nil {
             loadFailed = false
-            // Instagram-speed: adopt a pre-buffered / parked SparkWarmPool player when available.
+            // Instagram-speed: claim warm-pool by postID when the item is still healthy.
+            var installedClaim = false
             if let postID, let claimed = SparkWarmPool.shared.claim(postID: postID) {
                 installClaimedPlayer(claimed)
-            } else {
+                installedClaim = true
+            }
+            if !installedClaim {
                 if let postID { SparkWarmPool.shared.markInUse(postID: postID) }
-                // R2 / plain HTTPS: skip Archive CDN resolve (that was multi-second for Sparks).
-                let configuration: MediaPlaybackConfiguration
-                if ArchiveVideoPlayback.isArchiveURL(url) {
-                    configuration = await MediaURLResolver.playbackConfiguration(for: url)
-                } else {
-                    configuration = MediaPlaybackConfiguration(url: url, headers: nil)
+                // Always go through playbackConfiguration — R2 is re-resolved via API
+                // (object is permanent; only old signed links die).
+                let configuration = await MediaURLResolver.playbackConfiguration(
+                    for: url,
+                    postID: postID
+                )
+                if configuration.url != url {
+                    configuredURL = configuration.url
                 }
                 installPlayer(using: configuration)
             }
@@ -649,37 +676,32 @@ struct VideoPlayerView: View {
 
     @MainActor
     private func installClaimedPlayer(_ claimed: AVPlayer) {
-        // Warm pool kept it muted/paused — only unmute if this card is the active Spark.
+        // Warm pool kept it muted/paused at t≈0. Never free-play then seek — that was the
+        // “wrong position → adjust → play” glitch on every Spark.
+        claimed.pause()
+        claimed.rate = 0
         claimed.automaticallyWaitsToMinimizeStalling = false
         claimed.actionAtItemEnd = loops ? .none : .pause
         MediaPlaybackCoordinator.shared.register(claimed)
-        // Parked players may sit mid-clip — soft-seek to 0 only when Sparks needs a clean start.
-        let mustStartAtZero = restartFromBeginningToken > 0 || (loops && liveGate.isActive)
-        if mustStartAtZero {
-            let t = claimed.currentTime().seconds
-            if !(t.isFinite && t >= 0 && t < 0.35) {
-                claimed.seek(
-                    to: .zero,
-                    toleranceBefore: .positiveInfinity,
-                    toleranceAfter: .positiveInfinity
-                )
-            }
-            currentSeconds = 0
-        }
+
+        let gate = liveGate
+        let needsExactStart = restartFromBeginningToken > 0 || loops
+        let alreadyAtStart = SparkWarmPool.isAtStart(claimed)
+
         if liveGate.isActive {
             _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
                 keeping: claimed,
                 pageEpoch: liveGate.pageEpoch
             )
-            claimed.isMuted = liveGate.isMuted
-            claimed.volume = liveGate.isMuted ? 0 : 1
+            // Stay muted until playhead is confirmed at 0.
+            claimed.isMuted = true
+            claimed.volume = 0
         } else {
             claimed.pause()
             claimed.isMuted = true
             claimed.volume = 0
         }
-        let gate = liveGate
-        let startAtZero = mustStartAtZero
+
         if let item = claimed.currentItem {
             item.preferredForwardBufferDuration = 8
             statusObserver = item.observe(\.status, options: [.new, .initial]) { item, _ in
@@ -688,28 +710,13 @@ struct VideoPlayerView: View {
                     case .readyToPlay:
                         loadFailed = false
                         updateDuration(from: item)
-                        if startAtZero {
-                            let t = claimed.currentTime().seconds
-                            if !(t.isFinite && t >= 0 && t < 0.35) {
-                                claimed.seek(
-                                    to: .zero,
-                                    toleranceBefore: .positiveInfinity,
-                                    toleranceAfter: .positiveInfinity
-                                )
-                            }
-                            currentSeconds = 0
-                        }
-                        if gate.isActive, !gate.userWantsPause {
-                            kickAudiblePlayback(on: claimed)
-                        } else {
-                            claimed.pause()
-                            claimed.isMuted = true
-                            claimed.volume = 0
-                            isPlaying = false
-                        }
+                        reportVideoSizeIfNeeded(from: item)
                     case .failed:
-                        // Cold rebuild if warm item died.
+                        // Dump dead warm item and cold-start with a fresh resolve.
                         teardownPlayer(park: false)
+                        loadFailed = false
+                        didRetryWithPublicURL = false
+                        playbackRecoveryPasses = 0
                         Task { await ensurePlayer(forceRebuild: true) }
                     default:
                         break
@@ -731,9 +738,56 @@ struct VideoPlayerView: View {
         }
         attachTimeObserver(to: claimed)
         player = claimed
-        // Claimed players are already buffered — play immediately on the same runloop.
-        if liveGate.isActive, !liveGate.userWantsPause {
-            kickAudiblePlayback(on: claimed)
+        reportVideoSizeIfNeeded(from: claimed.currentItem)
+        currentSeconds = 0
+
+        // If already at t≈0 (warm pool contract), play immediately — no seek, no jump.
+        if alreadyAtStart || !needsExactStart {
+            showPosterCover = false
+            if liveGate.isActive, !liveGate.userWantsPause {
+                kickAudiblePlayback(on: claimed)
+            }
+            return
+        }
+
+        // Rare: claim mid-fill. Seek to exact 0 *before* unmuting / play so first paint is start.
+        Task { @MainActor in
+            guard self.player === claimed else { return }
+            _ = await claimed.seek(
+                to: .zero,
+                toleranceBefore: .zero,
+                toleranceAfter: .zero
+            )
+            guard self.player === claimed else { return }
+            claimed.pause()
+            claimed.rate = 0
+            self.currentSeconds = 0
+            self.showPosterCover = false
+            if self.liveGate.isActive, !self.liveGate.userWantsPause {
+                self.kickAudiblePlayback(on: claimed)
+            } else {
+                claimed.isMuted = true
+                claimed.volume = 0
+            }
+        }
+    }
+
+    private func reportVideoSizeIfNeeded(from item: AVPlayerItem?) {
+        guard let item else { return }
+        let size = item.presentationSize
+        if size.width > 2, size.height > 2 {
+            didReportVideoSize = true
+            onVideoSize?(size)
+        }
+        if presentationSizeObserver == nil {
+            presentationSizeObserver = item.observe(\.presentationSize, options: [.new, .initial]) { item, _ in
+                let s = item.presentationSize
+                guard s.width > 2, s.height > 2 else { return }
+                Task { @MainActor in
+                    self.didReportVideoSize = true
+                    self.onVideoSize?(s)
+                }
+            }
         }
     }
 
@@ -756,19 +810,35 @@ struct VideoPlayerView: View {
                 case .readyToPlay:
                     loadFailed = false
                     updateDuration(from: item)
+                    reportVideoSizeIfNeeded(from: item)
                     let resumeAt = resolvedStartTime()
                     if resumeAt > 0.5 {
-                        await newPlayer.seek(to: CMTime(seconds: resumeAt, preferredTimescale: 600))
+                        // Hubs resume only — Sparks always 0 (never start mid then snap).
+                        await newPlayer.seek(
+                            to: CMTime(seconds: resumeAt, preferredTimescale: 600),
+                            toleranceBefore: .zero,
+                            toleranceAfter: .zero
+                        )
                         currentSeconds = resumeAt
+                    } else if restartFromBeginningToken > 0 || loops {
+                        // Cold Spark path: lock exact start before first play.
+                        await newPlayer.seek(
+                            to: .zero,
+                            toleranceBefore: .zero,
+                            toleranceAfter: .zero
+                        )
+                        currentSeconds = 0
                     }
                     if gate.isActive, !gate.userWantsPause {
                         kickAudiblePlayback(on: newPlayer)
                     } else {
-                        // Preload path: keep buffering silently.
+                        // Preload path: stay paused at start (never free-play to buffer).
                         newPlayer.pause()
+                        newPlayer.rate = 0
                         newPlayer.isMuted = true
                         newPlayer.volume = 0
                         isPlaying = false
+                        showPosterCover = false
                     }
                 case .failed:
                     await handlePlaybackFailure(for: configuration.url)
@@ -851,17 +921,71 @@ struct VideoPlayerView: View {
 
     @MainActor
     private func handlePlaybackFailure(for failedURL: URL) async {
-        if !didRetryWithPublicURL,
-           let fallback = MediaURLResolver.playbackFallbackConfiguration(for: failedURL) {
-            didRetryWithPublicURL = true
-            removeTimeObserver()
-            teardownPlayerObservers()
-            player = nil
-            installPlayer(using: fallback)
-            return
+        // Drop any dead warm-pool slot so a later claim/cold start can rebuild cleanly.
+        if let postID {
+            SparkWarmPool.shared.release(postID: postID)
         }
+        playbackRecoveryPasses += 1
         removeTimeObserver()
         teardownPlayerObservers()
+        player = nil
+        loadFailed = false
+
+        // Pass 1: invalidate cache + force API playbackMedia (permanent object, new link).
+        if playbackRecoveryPasses == 1 {
+            didRetryWithPublicURL = true
+            if let postID {
+                R2PlaybackResolver.shared.invalidate(postID: postID)
+                if let live = await R2PlaybackResolver.shared.playURL(postID: postID, fallback: nil) {
+                    configuredURL = live
+                    installPlayer(using: MediaPlaybackConfiguration(url: live, headers: nil))
+                    return
+                }
+            }
+            // 1b) Full resolve of the card’s original URL (Archive / Supabase).
+            let primary = await MediaURLResolver.playbackConfiguration(for: url, postID: postID)
+            if primary.url != failedURL || primary.headers != nil {
+                installPlayer(using: primary)
+                return
+            }
+            // 2) Re-resolve the failed hop (Archive CDN / auth).
+            let config = await MediaURLResolver.playbackConfiguration(for: failedURL, postID: postID)
+            if config.url != failedURL || config.headers != nil {
+                installPlayer(using: config)
+                return
+            }
+            // 3) Supabase public bucket flip.
+            if let fallback = MediaURLResolver.playbackFallbackConfiguration(for: failedURL)
+                ?? MediaURLResolver.playbackFallbackConfiguration(for: url) {
+                installPlayer(using: fallback)
+                return
+            }
+            // 4) Plain original URL once more (transient CDN flake).
+            installPlayer(using: MediaPlaybackConfiguration(url: url, headers: nil))
+            return
+        }
+
+        // Pass 2: brief pause + hard re-resolve (network flake).
+        if playbackRecoveryPasses == 2 {
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard liveGate.isActive || preloadsWhenInactive || postID != nil else {
+                loadFailed = true
+                return
+            }
+            if let postID {
+                R2PlaybackResolver.shared.invalidate(postID: postID)
+                if let live = await R2PlaybackResolver.shared.playURL(postID: postID, fallback: url) {
+                    configuredURL = live
+                    installPlayer(using: MediaPlaybackConfiguration(url: live, headers: nil))
+                    return
+                }
+            }
+            let lastChance = await MediaURLResolver.playbackConfiguration(for: url, postID: postID)
+            installPlayer(using: lastChance)
+            return
+        }
+
+        // Terminal — show unavailable (user can swipe; Retry button still works).
         loadFailed = true
         player = nil
     }
@@ -928,6 +1052,9 @@ struct VideoPlayerView: View {
         persistPlaybackPosition()
         removeTimeObserver()
         teardownPlayerObservers()
+        presentationSizeObserver?.invalidate()
+        presentationSizeObserver = nil
+        didReportVideoSize = false
         if let player {
             player.pause()
             player.isMuted = true
@@ -948,6 +1075,7 @@ struct VideoPlayerView: View {
         player = nil
         configuredURL = nil
         didRetryWithPublicURL = false
+        playbackRecoveryPasses = 0
         loadFailed = false
         isPlaying = false
         chromeTask?.cancel()
@@ -1227,7 +1355,6 @@ private struct MatteryaVideoSurface: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: MatteryaPlayerUIView, context: Context) {
-        // Only re-assert locked gravity — never flip fill↔fit on updates.
         uiView.lockGravity(fillsFrame: fillsFrame)
         if uiView.playerLayer.player !== player {
             uiView.playerLayer.player = player
@@ -1241,18 +1368,17 @@ private final class MatteryaPlayerUIView: UIView {
 
     var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
 
-    private var lockedGravity: AVLayerVideoGravity = .resizeAspect
+    private var lockedGravity: AVLayerVideoGravity = .resizeAspectFill
     private var gravityLocked = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .black
-        // Sparks: fit. Set before any frames decode.
-        playerLayer.videoGravity = .resizeAspect
-        lockedGravity = .resizeAspect
+        // Default fill (FB/IG feed + Sparks); host may switch to fit for wide clips.
+        playerLayer.videoGravity = .resizeAspectFill
+        lockedGravity = .resizeAspectFill
         isUserInteractionEnabled = false
         clipsToBounds = true
-        // Disable implicit CA animations on gravity/bounds (layout settle used to zoom).
         playerLayer.actions = [
             "bounds": NSNull(),
             "position": NSNull(),
@@ -1265,21 +1391,14 @@ private final class MatteryaPlayerUIView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    /// Lock gravity once; later calls with the same mode are no-ops.
+    /// Apply gravity without CA zoom. Allows one fill↔fit switch when Sparks learns size.
     func lockGravity(fillsFrame: Bool) {
         let gravity: AVLayerVideoGravity = fillsFrame ? .resizeAspectFill : .resizeAspect
-        if gravityLocked, lockedGravity == gravity {
-            // Still re-assert in case UIKit reset it — without animation.
-            if playerLayer.videoGravity != gravity {
-                CATransaction.begin()
-                CATransaction.setDisableActions(true)
-                playerLayer.videoGravity = gravity
-                CATransaction.commit()
-            }
+        if lockedGravity == gravity, playerLayer.videoGravity == gravity {
             return
         }
-        gravityLocked = true
         lockedGravity = gravity
+        gravityLocked = true
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         playerLayer.videoGravity = gravity

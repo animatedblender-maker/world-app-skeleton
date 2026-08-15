@@ -31,6 +31,8 @@ struct PostMediaPayload: Sendable {
     let isReel: Bool
     let isStory: Bool
     let expiresAt: Date?
+    /// R2 object key — used when signed GET URLs expire and need a fresh post fetch.
+    let r2Key: String?
 
     static func parse(from mediaURL: String?) -> PostMediaPayload? {
         guard let raw = mediaURL?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
@@ -50,7 +52,8 @@ struct PostMediaPayload: Sendable {
                     types: urls.map { inferMediaType(from: $0) },
                     isReel: false,
                     isStory: false,
-                    expiresAt: nil
+                    expiresAt: nil,
+                    r2Key: nil
                 )
             }
 
@@ -61,6 +64,8 @@ struct PostMediaPayload: Sendable {
                 urls = list.filter { !$0.isEmpty }
             } else if let single = object["url"] as? String, !single.isEmpty {
                 urls = [single]
+            } else if let signed = object["signedUrl"] as? String, !signed.isEmpty {
+                urls = [signed]
             } else {
                 urls = []
             }
@@ -84,7 +89,18 @@ struct PostMediaPayload: Sendable {
             let reel = boolValue(object["reel"])
             let story = boolValue(object["story"])
             let expiresAt = parseDate(object["expires_at"] as? String)
-            return PostMediaPayload(urls: urls, types: types, isReel: reel, isStory: story, expiresAt: expiresAt)
+                ?? parseDate(object["signed_at"] as? String)
+            let r2Raw = (object["r2_key"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let r2Key = (r2Raw?.isEmpty == false) ? r2Raw : nil
+            return PostMediaPayload(
+                urls: urls,
+                types: types,
+                isReel: reel,
+                isStory: story,
+                expiresAt: expiresAt,
+                r2Key: r2Key
+            )
         }
 
         return PostMediaPayload(
@@ -92,7 +108,8 @@ struct PostMediaPayload: Sendable {
             types: [inferMediaType(from: raw)],
             isReel: false,
             isStory: false,
-            expiresAt: nil
+            expiresAt: nil,
+            r2Key: nil
         )
     }
 
@@ -899,6 +916,44 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
         return false
     }
 
+    /// Stable key so original Spark + its feed re-share collapse to one card.
+    var homeFeedContentKey: String {
+        if let origin = SparkShareMarker.originID(from: body)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased(),
+           !origin.isEmpty {
+            return "spark:\(origin)"
+        }
+        if let shared = sharedPostID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased(),
+           !shared.isEmpty,
+           isSparkFeedShare || isReel || hasVideo {
+            return "spark:\(shared)"
+        }
+        // Original Sparks: key by own id so a later share of this id collapses onto it.
+        if isReel || isSpark {
+            return "spark:\(id.lowercased())"
+        }
+        // Same media file (strip signed query) — share + original often differ only by id.
+        if let media = playableVideoURL?.absoluteString
+            ?? primaryMediaURL
+            ?? mediaPayload?.primaryURL {
+            let bare = media.split(separator: "?").first.map(String.init) ?? media
+            let lower = bare.lowercased()
+            if lower.contains("r2") || lower.contains("mp4") || lower.contains("video") {
+                return "media:\(lower)"
+            }
+        }
+        if let r2 = mediaPayload?.r2Key?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased(),
+           !r2.isEmpty {
+            return "r2:\(r2)"
+        }
+        return "id:\(id.lowercased())"
+    }
+
     /// Subtle location line for post cards (country name or ISO).
     var authorLocationLabel: String? {
         let name = (author?.countryName ?? countryName)?
@@ -948,6 +1003,60 @@ extension Array where Element == CountryPost {
 
     func excludingMoments() -> [CountryPost] {
         filter { !$0.isStory }
+    }
+
+    /// Home feed surface: text, long-form, **and** Sparks (R2 originals + shares as SparkFeedCard).
+    /// Moments / demo fakes / archive seeds stay out. Never drop the R2 library.
+    func forHomeFeed() -> [CountryPost] {
+        filter { post in
+            if post.isStory { return false }
+            if post.authorID.hasPrefix("user_") { return false }
+            if post.id.hasPrefix("post_") || post.id.hasPrefix("demo_") { return false }
+            if post.id.hasPrefix("ia_") || post.id.hasPrefix("hub_") { return false }
+            if post.isHubSeedVideo { return false }
+            if !AppConfig.archiveContentEnabled {
+                if post.isArchiveSparkSource { return false }
+                if PlayPlatformBridge.isArchiveCatalogMedia(post) { return false }
+            }
+            // Sparks with no playable path are useless on feed; keep text/photo posts.
+            if post.isSpark || post.isReel || PlayPlatformBridge.isSparkFeedCard(post) {
+                return post.playableVideoURL != nil
+                    || post.hasVideo
+                    || !(post.mediaURL ?? "").isEmpty
+            }
+            if post.hasFeedVisibleContent { return true }
+            if post.hasVideo || post.mediaURL != nil { return true }
+            let body = post.body.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !body.isEmpty
+        }
+    }
+
+    /// Collapse original Spark + feed re-share of the **same** clip into one card.
+    /// Pipeline seeds both rows; without this every Spark shows twice.
+    func dedupeHomeFeedContent() -> [CountryPost] {
+        // Prefer feed shares (social context) over bare channel originals.
+        let ranked = sorted { a, b in
+            let aShare = a.isSparkFeedShare || SparkShareMarker.isMarked(a.body)
+            let bShare = b.isSparkFeedShare || SparkShareMarker.isMarked(b.body)
+            if aShare != bShare { return aShare && !bShare }
+            let aDate = a.createdDate ?? .distantPast
+            let bDate = b.createdDate ?? .distantPast
+            return aDate > bDate
+        }
+        var seenIDs = Set<String>()
+        var seenKeys = Set<String>()
+        var unique: [CountryPost] = []
+        unique.reserveCapacity(ranked.count)
+        for post in ranked {
+            guard seenIDs.insert(post.id).inserted else { continue }
+            let key = post.homeFeedContentKey
+            guard seenKeys.insert(key).inserted else { continue }
+            unique.append(post)
+        }
+        // Restore newest-first timeline for the surviving set.
+        return unique.sorted {
+            ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast)
+        }
     }
 
     /// Profile / feed lists — no blank cards, moments, or sparks.
