@@ -2135,7 +2135,8 @@ final class PostsService {
         """
         var variables: [String: Any] = ["limit": limit]
         if let before, !before.isEmpty {
-            variables["before"] = before
+            // Always ISO-8601 for GraphQL before: — never raw epoch ms.
+            variables["before"] = Self.graphqlTimestamptzCursor(before)
         }
         var real: [CountryPost] = []
         for attempt in 0..<2 {
@@ -2282,6 +2283,17 @@ final class PostsService {
         return posts
             .filter { seen.insert($0.id).inserted && !$0.isStory }
             .sorted { ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast) }
+    }
+
+    /// GraphQL `before` / cursor — always ISO-8601 (never bare epoch ms for Postgres).
+    static func graphqlTimestamptzCursor(_ raw: String) -> String {
+        let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.contains("-") || s.contains("T") { return s }
+        if let n = Double(s) {
+            let seconds = n > 1_000_000_000_000 ? n / 1000.0 : n
+            return ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: seconds))
+        }
+        return s
     }
 
     /// Home feed order: **newest upload first** so R2 / backend / user posts always surface at top.
