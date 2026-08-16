@@ -1452,12 +1452,17 @@ final class PostsService {
     }
 
     func addComment(_ postID: String, body: String, parentID: String? = nil) async throws -> PostComment {
-        if AppConfig.useDemoDataset, await demo.isDemoPostID(postID) {
-            return await demo.addComment(postID, body: body, parentID: parentID)
+        // Never `await` inside `||` / comma if — Swift treats RHS as non-async autoclosure.
+        if AppConfig.useDemoDataset {
+            if await demo.isDemoPostID(postID) {
+                return await demo.addComment(postID, body: body, parentID: parentID)
+            }
         }
         // Seed / hub / archive — persist on-device (GraphQL has no post row).
-        let useLocal = HubEngagementStore.usesLocalEngagement(postID: postID)
-            || (await shouldEngageLocally(postID: postID))
+        var useLocal = HubEngagementStore.usesLocalEngagement(postID: postID)
+        if !useLocal {
+            useLocal = await shouldEngageLocally(postID: postID)
+        }
         if useLocal {
             return localHubComment(postID: postID, body: body, parentID: parentID)
         }
