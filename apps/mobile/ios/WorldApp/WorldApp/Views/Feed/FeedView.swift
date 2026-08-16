@@ -106,36 +106,22 @@ struct FeedView: View {
                     }
 
                     // Sparks → Continue watching (Hubs) → New on Hubs — always above posts.
-                    // Hidden on Following (relationship stream, not discovery rails).
-                    if store.homeMode == .forYou {
-                        if !feedReels.isEmpty {
-                            feedReelsStrip
-                        }
-                        if !continueWatching.isEmpty {
-                            continueWatchingStrip
-                        }
-                        if !newOnPlay.isEmpty {
-                            newOnPlayStrip
-                        }
+                    // Single unified feed (Phase-0 recsys mixes following + discovery).
+                    if !feedReels.isEmpty {
+                        feedReelsStrip
                     }
-
-                    homeModeChips
-                        .padding(.bottom, 4)
+                    if !continueWatching.isEmpty {
+                        continueWatchingStrip
+                    }
+                    if !newOnPlay.isEmpty {
+                        newOnPlayStrip
+                    }
 
                     // Posts still bootstrapping but rails already visible.
                     if store.showsSkeleton && store.displayedPosts.isEmpty {
                         ProgressView()
                             .padding(.vertical, 28)
                             .frame(maxWidth: .infinity)
-                    }
-
-                    if store.homeMode == .following, store.displayedPosts.isEmpty, !store.showsSkeleton {
-                        ContentUnavailableView(
-                            "No posts from people you follow",
-                            systemImage: "person.2",
-                            description: Text("Follow people to fill this tab. For you still has discovery.")
-                        )
-                        .padding(.vertical, 32)
                     }
 
                     ForEach(store.displayedPosts) { post in
@@ -168,7 +154,7 @@ struct FeedView: View {
                             store.onRowAppear(post: post)
                             EngagementTracker.shared.feedPostAppeared(
                                 post,
-                                surface: store.homeMode.surface.rawValue
+                                surface: RecommendationSurface.homeForYou.rawValue
                             )
                             Task { await PostsService.shared.recordView(post) }
                         }
@@ -213,25 +199,6 @@ struct FeedView: View {
                 }
             }
         }
-    }
-
-    /// For you / Following — two explicit feed policies (recsys roadmap).
-    private var homeModeChips: some View {
-        HStack(spacing: 10) {
-            ForEach(HomeFeedMode.allCases) { mode in
-                Button {
-                    withAnimation(MatteryaMotion.snappy) {
-                        store.setHomeMode(mode)
-                    }
-                } label: {
-                    Text(mode.title)
-                }
-                .pillTab(isSelected: store.homeMode == mode)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, Theme.pagePadding)
-        .padding(.vertical, 8)
     }
 
     private var feedReelsStrip: some View {

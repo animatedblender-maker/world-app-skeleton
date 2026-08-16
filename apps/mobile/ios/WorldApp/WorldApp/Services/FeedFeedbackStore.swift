@@ -84,25 +84,14 @@ final class FeedFeedbackStore {
     }
 }
 
-// MARK: - Home feed mode chips
+// MARK: - Home feed mode (legacy)
 
+/// Dual chips removed — home is one Phase-0 recsys stream (`homeForYou` policy:
+/// following priority + discovery). Kept as a thin alias for any residual call sites.
 enum HomeFeedMode: String, CaseIterable, Identifiable, Sendable {
     case forYou
-    case following
 
     var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .forYou: return "For you"
-        case .following: return "Following"
-        }
-    }
-
-    var surface: RecommendationSurface {
-        switch self {
-        case .forYou: return .homeForYou
-        case .following: return .homeFollowing
-        }
-    }
+    var title: String { "Home" }
+    var surface: RecommendationSurface { .homeForYou }
 }

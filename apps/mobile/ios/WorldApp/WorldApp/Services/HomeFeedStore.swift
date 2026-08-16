@@ -51,8 +51,8 @@ final class HomeFeedStore {
     private(set) var didPaint = false
     /// Uploading / sharing video shadows at the top of the feed.
     private(set) var pendingUploads: [FeedUploadPlaceholder] = []
-    /// Home dual policy: For you (discovery) vs Following (relationships only).
-    private(set) var homeMode: HomeFeedMode = .forYou
+    /// Single home surface — Phase-0 recsys (following priority + discovery in one stream).
+    private let homeSurface: RecommendationSurface = .homeForYou
 
     private var nextCursor: String?
     /// Bumps cancel obsolete network merges / load-more.
@@ -90,30 +90,6 @@ final class HomeFeedStore {
             ?? AuthService.shared.currentUser?.id
     }
 
-    /// Switch For you ↔ Following without dropping the in-memory pool.
-    func setHomeMode(_ mode: HomeFeedMode) {
-        guard mode != homeMode else { return }
-        homeMode = mode
-        userEngagedThisSession = false
-        // Re-rank the pool under the new surface policy; keep window sensible.
-        let reordered = rankForSession(posts)
-        var t = Transaction()
-        t.disablesAnimations = true
-        withTransaction(t) {
-            posts = reordered
-            windowLimit = min(max(firstWindow, windowLimit), max(reordered.count, 0))
-        }
-        EngagementTracker.shared.enqueueRecommendationEvent(
-            type: "ranked_served",
-            surface: mode.surface.rawValue,
-            meta: [
-                "action": "home_mode_switch",
-                "mode": mode.rawValue,
-                "count": "\(reordered.count)",
-            ]
-        )
-    }
-
     /// Hide / not interested — remove from list + persist feedback.
     func applyNegativeFeedback(postID: String, kind: FeedNegativeKind) {
         guard let post = posts.first(where: { $0.id == postID }) else {
@@ -138,31 +114,19 @@ final class HomeFeedStore {
     }
 
     /// Session order + hard hide of already-viewed posts (open / reload / app open / load-more).
-    /// Phase-0 recsys: baseline order → constrained re-rank under active home policy.
+    /// Phase-0 recsys: unviewed → following first → discovery, then constrained re-rank.
     private func rankForSession(_ posts: [CountryPost]) -> [CountryPost] {
         let cleaned = FeedFeedbackStore.shared.filterOutFeedback(posts.dedupeHomeFeedContent())
-        let surface = homeMode.surface
+        let surface = homeSurface
         let policy = surface.policy
 
-        let baseline: [CountryPost]
-        switch homeMode {
-        case .following:
-            // Relationships only — recency, no global discovery mix.
-            let me = sessionMyUserID ?? ""
-            baseline = cleaned
-                .filter {
-                    sessionFollowingIDs.contains($0.authorID)
-                        || (!me.isEmpty && $0.authorID == me)
-                }
-                .sorted { ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast) }
-        case .forYou:
-            baseline = SparkDiscoveryEngine.sessionHomeFeedOrder(
-                cleaned,
-                followingIDs: sessionFollowingIDs,
-                myUserID: sessionMyUserID,
-                sessionSeed: sessionRankSeed
-            )
-        }
+        // One stream: your posts + people you follow (newest) + discovery (session shuffle).
+        let baseline = SparkDiscoveryEngine.sessionHomeFeedOrder(
+            cleaned,
+            followingIDs: sessionFollowingIDs,
+            myUserID: sessionMyUserID,
+            sessionSeed: sessionRankSeed
+        )
 
         let blocked = Set(BlockService.shared.blocked.map(\.userID))
         // Author penalties from “Not interested” act as soft blocks when strong.
@@ -203,7 +167,7 @@ final class HomeFeedStore {
     func applyServerRankIfPossible() async {
         let snapshot = posts
         guard snapshot.count >= 4 else { return }
-        let surface = homeMode.surface
+        let surface = homeSurface
         let ranked = await RecommendationClient.rankPosts(
             snapshot,
             surface: surface,
