@@ -138,30 +138,56 @@ struct YouTubeAppView: View {
     }
 
     /// Endless For you: grow local slug pool first (instant), light network only if dry.
+    /// Mid-fling: expand the local window only — never soft-merge / network (that hitch was the lag).
     private func ensureMoreForYou(around index: Int) {
-        let threshold = max(0, stableDiscoverVideos.count - 6)
+        ScrollBudget.noteCellAppear()
+        let fling = ScrollBudget.isFlinging
+        // During a fling, grow earlier + larger so LazyVStack always has cells ready.
+        let growWhenWithin = fling ? 10 : 6
+        let growBy = fling ? Self.hubsGrowBy * 2 : Self.hubsGrowBy
+        let threshold = max(0, stableDiscoverVideos.count - growWhenWithin)
         guard index >= threshold else { return }
 
         // 1) Reveal more of the already-ranked slug pool (instant — no network).
         if hubsDisplayLimit < hubsForYouPool.count {
             hubsDisplayLimit = min(
                 hubsForYouPool.count,
-                hubsDisplayLimit + Self.hubsGrowBy
+                hubsDisplayLimit + growBy
             )
             let window = Array(hubsForYouPool.prefix(hubsDisplayLimit))
-            stableHomeVideos = window
-            stableDiscoverVideos = window
-            // Prefetch only the newly revealed rows (current slug window).
-            ImageCache.shared.prefetchPostThumbnails(
-                Array(window.suffix(Self.hubsGrowBy)),
-                maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel,
-                aggressive: false
-            )
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) {
+                stableHomeVideos = window
+                stableDiscoverVideos = window
+            }
+            // Settled only: warm thumbs for the new page. Mid-fling skip (image storm).
+            if !fling {
+                ImageCache.shared.prefetchPostThumbnails(
+                    Array(window.suffix(Self.hubsGrowBy)),
+                    maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel,
+                    aggressive: false
+                )
+            }
             return
         }
 
-        // 2) Pool exhausted → light top-up (fast path, not full channel flood).
+        // 2) Pool exhausted → light top-up after fling settles (never mid-fling).
+        guard !fling else {
+            scheduleSettledHubsTopUp()
+            return
+        }
         requestMoreHubsLongForm()
+    }
+
+    /// After a fast fling, top up the catalog once scroll has settled.
+    private func scheduleSettledHubsTopUp() {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 280_000_000)
+            guard !ScrollBudget.isFlinging else { return }
+            guard hubsDisplayLimit >= hubsForYouPool.count else { return }
+            requestMoreHubsLongForm()
+        }
     }
 
     private func requestMoreHubsLongForm() {
@@ -495,15 +521,19 @@ struct YouTubeAppView: View {
                                 YouTubeVideoListRow(post: post, onTap: {
                                     openVideo(post)
                                 }, onAppearRow: {
-                                    // Tight window — wide aggressive prefetch was saturating the network on open.
-                                    ImageCache.shared.prefetchHubsWindow(
-                                        posts: stableDiscoverVideos,
-                                        around: index,
-                                        behind: 2,
-                                        ahead: 10,
-                                        maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel
-                                    )
-                                    // Endless For you — grow ranked window + bulk long-form flood.
+                                    ScrollBudget.noteCellAppear()
+                                    let fling = ScrollBudget.isFlinging
+                                    // Settled: warm a few thumbs ahead. Fling: skip (cells use memory-only first).
+                                    if !fling {
+                                        ImageCache.shared.prefetchHubsWindow(
+                                            posts: stableDiscoverVideos,
+                                            around: index,
+                                            behind: 1,
+                                            ahead: 5,
+                                            maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel
+                                        )
+                                    }
+                                    // Endless For you — local window grow always; network only when settled.
                                     ensureMoreForYou(around: index)
                                 })
                                 .padding(.bottom, 18)
@@ -997,6 +1027,7 @@ struct YouTubeAppView: View {
 
     /// Soft-merge background catalog into session without nuking the visible list.
     /// Keeps a soft cap so Hubs stays YouTube-light (slug shelves, not a mega dump).
+    /// Skips re-rank while the user is flinging — mid-scroll list mutation was a major hitch.
     private func softMergeHubCatalog(_ videos: [CountryPost]) {
         guard !videos.isEmpty else { return }
         var byID = Dictionary(uniqueKeysWithValues: allVideos.map { ($0.id, $0) })
@@ -1024,21 +1055,38 @@ struct YouTubeAppView: View {
         )
         rebuildChannels()
         // Re-rank slug pool quietly — never remount the LazyVStack.
+        // Defer re-rank mid-fling so For you doesn't hitch on every soft-merge.
         if added > 0 {
-            rebuildStableHomeLists(shuffle: false, remountList: false)
-            if hubsDisplayLimit < hubsForYouPool.count {
-                hubsDisplayLimit = min(
-                    hubsForYouPool.count,
-                    max(hubsDisplayLimit, Self.hubsFirstWindow) + (added > 8 ? Self.hubsGrowBy : 0)
-                )
-                let window = Array(hubsForYouPool.prefix(hubsDisplayLimit))
-                stableHomeVideos = window
-                stableDiscoverVideos = window
+            if ScrollBudget.isFlinging {
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 320_000_000)
+                    guard !ScrollBudget.isFlinging else { return }
+                    applySoftMergeDisplayGrowth(added: added)
+                }
+            } else {
+                applySoftMergeDisplayGrowth(added: added)
             }
         }
         #if DEBUG
         print("[Hubs] soft-merge +\(added) total=\(merged.count) pool=\(hubsForYouPool.count) display=\(stableDiscoverVideos.count)")
         #endif
+    }
+
+    private func applySoftMergeDisplayGrowth(added: Int) {
+        rebuildStableHomeLists(shuffle: false, remountList: false)
+        if hubsDisplayLimit < hubsForYouPool.count {
+            hubsDisplayLimit = min(
+                hubsForYouPool.count,
+                max(hubsDisplayLimit, Self.hubsFirstWindow) + (added > 8 ? Self.hubsGrowBy : 0)
+            )
+            let window = Array(hubsForYouPool.prefix(hubsDisplayLimit))
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) {
+                stableHomeVideos = window
+                stableDiscoverVideos = window
+            }
+        }
     }
 
     private func warmSlugShelvesInBackground() {

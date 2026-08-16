@@ -605,31 +605,109 @@ final class YouTubeCatalogService {
         bindToUser(nil)
     }
 
+    /// "More on Matterya" shelf — **unique per source video**.
+    /// Seeds shuffle from `post.id` so two videos never share the same related order,
+    /// even when they share a slug/author. Mixes same-slug, sibling slugs, and off-slug.
     func relatedVideos(to post: CountryPost, from catalog: [CountryPost], limit: Int = 12) -> [CountryPost] {
-        // Same-slug first (light), then same author, then unviewed others — no 400-row rank.
         let pool = catalog.filter {
             livingEligible($0)
                 && $0.id != post.id
                 && PlayPlatformBridge.isHubsForYouLongForm($0)
         }
+        guard !pool.isEmpty else { return [] }
+
+        let seed = Self.stableSeed(from: post.id)
         let slug = Self.parentHubSlug(for: post)
-        let sameSlug = pool.filter { Self.parentHubSlug(for: $0) == slug }
-        let sameAuthor = pool.filter { $0.authorID == post.authorID }
-        var seen = Set<String>()
-        var out: [CountryPost] = []
-        func absorb(_ items: [CountryPost]) {
-            for p in SparkDiscoveryEngine.rankForDiscovery(items) {
-                guard seen.insert(p.id).inserted else { continue }
-                out.append(p)
-                if out.count >= limit { return }
+        let parent = HubCategoryClassifier.parentCategory(of: slug)
+
+        // Bucket candidates by relationship to the source video.
+        var sameSlug: [CountryPost] = []
+        var siblingSlug: [CountryPost] = []
+        var sameAuthor: [CountryPost] = []
+        var offSlug: [CountryPost] = []
+        for p in pool {
+            let pSlug = Self.parentHubSlug(for: p)
+            if p.authorID == post.authorID {
+                sameAuthor.append(p)
+            }
+            if pSlug == slug {
+                sameSlug.append(p)
+            } else if HubCategoryClassifier.parentCategory(of: pSlug) == parent {
+                siblingSlug.append(p)
+            } else {
+                offSlug.append(p)
             }
         }
-        absorb(sameSlug)
-        if out.count < limit { absorb(sameAuthor) }
+
+        // Each tier is shuffled with a different salt of the source seed → unique mix per video.
+        let tierSame = Self.seededShuffle(sameSlug, seed: seed &+ 0x11)
+        let tierSibling = Self.seededShuffle(siblingSlug, seed: seed &+ 0x33)
+        let tierAuthor = Self.seededShuffle(sameAuthor, seed: seed &+ 0x55)
+        let tierOff = Self.seededShuffle(offSlug, seed: seed &+ 0x77)
+
+        // Prefer unviewed inside each tier without collapsing to a global rank order.
+        func preferFresh(_ items: [CountryPost]) -> [CountryPost] {
+            let fresh = items.filter { !SparkDiscoveryEngine.isViewed($0.id) }
+            let seen = items.filter { SparkDiscoveryEngine.isViewed($0.id) }
+            return fresh + seen
+        }
+
+        var out: [CountryPost] = []
+        var used = Set<String>()
+        var authorHits: [String: Int] = [:]
+
+        func take(_ items: [CountryPost], max: Int) {
+            guard max > 0 else { return }
+            var taken = 0
+            for p in preferFresh(items) {
+                guard used.insert(p.id).inserted else { continue }
+                // Cap same-author spam so related doesn't look identical across an author.
+                let hits = authorHits[p.authorID, default: 0]
+                if hits >= 2, out.count + 1 < limit { continue }
+                authorHits[p.authorID] = hits + 1
+                out.append(p)
+                taken += 1
+                if taken >= max || out.count >= limit { return }
+            }
+        }
+
+        // Recipe unique to this video: ~half same-slug, sprinkle siblings/author, rest off-slug diversity.
+        let sameBudget = max(3, limit / 2)
+        let siblingBudget = max(2, limit / 5)
+        let authorBudget = 2
+        take(tierSame, max: sameBudget)
+        if out.count < limit { take(tierSibling, max: siblingBudget) }
+        if out.count < limit { take(tierAuthor, max: authorBudget) }
+        if out.count < limit { take(tierOff, max: limit - out.count) }
+        // Fill leftovers from any remaining pool (seeded so order still differs per source).
         if out.count < limit {
-            absorb(pool.filter { !seen.contains($0.id) })
+            let rest = Self.seededShuffle(pool.filter { !used.contains($0.id) }, seed: seed &+ 0x99)
+            take(rest, max: limit - out.count)
         }
         return out
+    }
+
+    /// Stable 64-bit seed from a post id (deterministic across launches).
+    private static func stableSeed(from id: String) -> UInt64 {
+        var h: UInt64 = 0xcbf29ce484222325
+        for b in id.utf8 {
+            h ^= UInt64(b)
+            h &*= 0x100000001b3
+        }
+        return h == 0 ? 0xC0FFEE : h
+    }
+
+    /// Deterministic Fisher–Yates so each source video gets its own related order.
+    private static func seededShuffle(_ items: [CountryPost], seed: UInt64) -> [CountryPost] {
+        guard items.count > 1 else { return items }
+        var arr = items
+        var state = seed == 0 ? 0xC0FFEE : seed
+        for i in stride(from: arr.count - 1, through: 1, by: -1) {
+            state = state &* 6364136223846793005 &+ 1
+            let j = Int(state % UInt64(i + 1))
+            arr.swapAt(i, j)
+        }
+        return arr
     }
 
     private func keywordFilter(_ videos: [CountryPost], words: [String]) -> [CountryPost] {

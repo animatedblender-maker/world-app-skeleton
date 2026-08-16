@@ -63,19 +63,21 @@ final class ImageCache: @unchecked Sendable {
     }
 
     /// Background prefetch for upcoming feed / Hubs rows.
-    /// - Parameter aggressive: Hubs For you far-scroll — larger window, higher priority.
+    /// - Parameter aggressive: settled scroll only — far-ahead warm. Mid-fling always stays tiny.
     func prefetch(_ urls: [URL], maxPixelSize: CGFloat = 420, aggressive: Bool = false) {
+        let fling = ScrollBudget.isFlinging
+        // Fast fling: starve the network so decode/download don't hitch the main thread.
+        // Settled: warm a healthy ahead window so cells paint from memory.
         let cap: Int
-        if aggressive {
-            // Keep warming far ahead even while flinging — blank For you was from starving this.
-            cap = ScrollBudget.isFlinging ? 28 : 48
+        if fling {
+            cap = aggressive ? 4 : 3
         } else {
-            cap = ScrollBudget.isFlinging ? 10 : 24
+            cap = aggressive ? 20 : 12
         }
         let unique = Array(Set(urls.map(\.absoluteString))).prefix(cap).compactMap(URL.init(string:))
-        let priority: TaskPriority = aggressive
-            ? .userInitiated
-            : (ScrollBudget.isFlinging ? .utility : .userInitiated)
+        let priority: TaskPriority = fling
+            ? .background
+            : (aggressive ? .utility : .utility)
         for url in unique {
             if imageIfCached(for: url, maxPixelSize: maxPixelSize) != nil { continue }
             Task.detached(priority: priority) {
@@ -90,6 +92,7 @@ final class ImageCache: @unchecked Sendable {
     }
 
     /// Hubs For you: prefetch a sliding window around `index` (behind + ahead).
+    /// Mid-fling uses a tight window so rapid cell churn doesn't stampede downloads.
     func prefetchHubsWindow(
         posts: [CountryPost],
         around index: Int,
@@ -98,10 +101,18 @@ final class ImageCache: @unchecked Sendable {
         maxPixelSize: CGFloat = YouTubeMediaLayout.hubsListThumbMaxPixel
     ) {
         guard !posts.isEmpty else { return }
-        let lo = max(0, index - behind)
-        let hi = min(posts.count, index + ahead + 1)
+        let fling = ScrollBudget.isFlinging
+        let useBehind = fling ? min(behind, 0) : min(behind, 2)
+        let useAhead = fling ? min(ahead, 2) : min(ahead, 6)
+        let lo = max(0, index - useBehind)
+        let hi = min(posts.count, index + useAhead + 1)
         guard lo < hi else { return }
-        prefetchPostThumbnails(Array(posts[lo..<hi]), maxPixelSize: maxPixelSize, aggressive: true)
+        // Never aggressive mid-fling — that was the For you hitch.
+        prefetchPostThumbnails(
+            Array(posts[lo..<hi]),
+            maxPixelSize: maxPixelSize,
+            aggressive: !fling
+        )
     }
 
     /// Prefetch an entire hub_slug shelf (category chip) for instant filter switches.
@@ -453,6 +464,16 @@ struct CachedAsyncImage: View {
             } else if image != nil {
                 return
             }
+            // Fast fling: wait — if the cell is recycled, .task cancels and we never download.
+            // Settled: short wait so first paint stays snappy without stampeding mid-scroll.
+            let delayNs: UInt64 = ScrollBudget.isFlinging ? 110_000_000 : 24_000_000
+            try? await Task.sleep(nanoseconds: delayNs)
+            guard !Task.isCancelled else { return }
+            if let cached = ImageCache.shared.imageIfCached(for: url, maxPixelSize: maxPixelSize) {
+                image = cached
+                loadedURL = url.absoluteString
+                return
+            }
             let loaded = await ImageCache.shared.image(for: url, maxPixelSize: maxPixelSize)
             // Apply even if the task was cancelled after the download finished —
             // SwiftUI cancels .task on fling; dropping the result left blank cells.
@@ -471,7 +492,7 @@ struct CachedAsyncImage: View {
 
 /// Tracks rapid cell churn so we can treat a fling differently from a settled scroll.
 enum ScrollBudget: Sendable {
-    nonisolated(unsafe) private static let lock = NSLock()
+    private static let lock = NSLock()
     nonisolated(unsafe) private static var lastAppear = Date.distantPast
     nonisolated(unsafe) private static var burst = 0
     nonisolated(unsafe) private static var flingUntil = Date.distantPast
@@ -487,15 +508,15 @@ enum ScrollBudget: Sendable {
             burst = max(0, burst - 1)
         }
         lastAppear = now
-        // 4+ cells in quick succession ≈ finger fling / deceleration.
-        if burst >= 4 {
-            flingUntil = now.addingTimeInterval(0.35)
+        // 3+ cells in quick succession ≈ finger fling / deceleration.
+        if burst >= 3 {
+            flingUntil = now.addingTimeInterval(0.45)
         }
     }
 
     nonisolated static var isFlinging: Bool {
         lock.lock()
         defer { lock.unlock() }
-        return Date() < flingUntil || burst >= 4
+        return Date() < flingUntil || burst >= 3
     }
 }

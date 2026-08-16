@@ -577,8 +577,10 @@ struct YouTubeWatchView: View {
 
     private func warmRelatedAround(_ item: RelatedShelfItem) {
         guard let idx = relatedWindow.firstIndex(where: { $0.id == item.id }) else { return }
-        // Next few posters only — never Archive CDN resolve on scroll (that was the lag).
-        let end = min(relatedWindow.count, idx + 5)
+        ScrollBudget.noteCellAppear()
+        // Mid-fling: skip prefetch (cells paint from memory). Settled: next 2–3 only.
+        guard !ScrollBudget.isFlinging else { return }
+        let end = min(relatedWindow.count, idx + 3)
         guard idx < end else { return }
         warmRelatedMedia(prefix: end - idx, from: Array(relatedWindow[idx..<end]), resolveArchive: false)
     }
@@ -594,7 +596,7 @@ struct YouTubeWatchView: View {
         ImageCache.shared.prefetchPostThumbnails(
             posts,
             maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel,
-            aggressive: true
+            aggressive: false
         )
         guard resolveArchive else { return }
         // At most the next play candidate — never a bulk CDN storm under the player.

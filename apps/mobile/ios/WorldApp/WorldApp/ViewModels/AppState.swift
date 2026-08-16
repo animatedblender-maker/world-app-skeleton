@@ -1229,7 +1229,7 @@ final class AppState {
             ImageCache.shared.prefetchPostThumbnails(
                 Array(related.prefix(6)),
                 maxPixelSize: 480,
-                aggressive: true
+                aggressive: false
             )
             for post in related.prefix(3) {
                 if let u = post.playableVideoURL {
