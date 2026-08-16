@@ -1776,31 +1776,30 @@ final class ArchiveVideoPlayerController: UIViewController {
         loadTask = Task { [weak self] in
             guard let self else { return }
 
-            // Hubs open race: warmSingle is kicked on open, but used to markInUse
-            // immediately — that aborted the warm and forced a cold AVPlayerItem.
-            // Wait briefly for the in-flight warm, then claim.
+            // Only wait on warm if one is already in-flight / parked — never add a fixed
+            // 400ms stall on a true cold open (that made every hubs share feel laggy).
             if let postID {
                 SparkWarmPool.shared.warmSingle(postID: postID, url: url)
-                // Short wait — public R2 often ready in <300ms; Archive a bit longer.
-                let timeout: TimeInterval = ArchiveVideoPlayback.isArchiveURL(url) ? 0.55 : 0.40
-                await SparkWarmPool.shared.awaitReady(postIDs: [postID], timeout: timeout)
-                if let claimed = SparkWarmPool.shared.claim(postID: postID) {
-                    await MainActor.run {
-                        self.installClaimedPlayerSync(
-                            claimed,
-                            original: url,
-                            muted: muted,
-                            startTime: startTime,
-                            autoplay: autoplay
-                        )
+                if SparkWarmPool.shared.hasWarmOrInflight(postID: postID) {
+                    let timeout: TimeInterval = ArchiveVideoPlayback.isArchiveURL(url) ? 0.28 : 0.18
+                    await SparkWarmPool.shared.awaitReady(postIDs: [postID], timeout: timeout)
+                    if let claimed = SparkWarmPool.shared.claim(postID: postID) {
+                        await MainActor.run {
+                            self.installClaimedPlayerSync(
+                                claimed,
+                                original: url,
+                                muted: muted,
+                                startTime: startTime,
+                                autoplay: autoplay
+                            )
+                        }
+                        return
                     }
-                    return
                 }
-                // Only block re-warm once we commit to a cold install.
                 SparkWarmPool.shared.markInUse(postID: postID)
             }
 
-            // Public R2 / non-Archive: skip CDN chase (resolvedPlaybackURL is a no-op there).
+            // Public R2 / non-Archive: skip CDN chase.
             let playURL: URL
             if ArchiveVideoPlayback.isArchiveURL(url) {
                 playURL = await ArchiveVideoPlayback.resolvedPlaybackURL(for: url)
@@ -1814,7 +1813,6 @@ final class ArchiveVideoPlayerController: UIViewController {
                 self.player?.pause()
                 self.player?.isMuted = true
                 self.player?.volume = 0
-                // Park head at 0 for instant next focus.
                 if self.restartsFromBeginningOnFocus {
                     self.softSeekToBeginning(playAfter: false)
                 }

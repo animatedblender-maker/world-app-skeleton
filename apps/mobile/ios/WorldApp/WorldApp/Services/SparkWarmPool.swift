@@ -230,6 +230,16 @@ final class SparkWarmPool {
         Task { await warm(postID: postID, sourceURL: url, deepPreroll: true) }
     }
 
+    /// True while a warm Task is still building a parked player for this id.
+    func isWarming(postID: String) -> Bool {
+        warming.contains(postID)
+    }
+
+    /// True if parked or actively warming (claim may succeed shortly).
+    func hasWarmOrInflight(postID: String) -> Bool {
+        slots[postID] != nil || warming.contains(postID)
+    }
+
     /// True when a parked (or in-use) player is ready at t≈0 for seamless first paint.
     func isReadyAtStart(postID: String) -> Bool {
         if inUse.contains(postID) { return true }

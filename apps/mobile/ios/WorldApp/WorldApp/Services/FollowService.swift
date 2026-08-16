@@ -7,8 +7,17 @@ final class FollowService {
     private let gql = GraphQLService.shared
     /// Offline-only fallback for synthetic non-UUID authors (cannot FK into user_follows).
     private let localFollowingKey = "matterya.local_following_ids.v1"
+    /// Last known counts for instant profile paint.
+    private var countsCache: [String: FollowCounts] = [:]
 
     private init() {}
+
+    /// Sync cache hit for profile header (never blocks).
+    func cachedCounts(userID: String) -> FollowCounts? {
+        let id = userID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return nil }
+        return countsCache[id]
+    }
 
     /// True only for synthetic demo/seed ids that **cannot** be stored in Supabase `user_follows`
     /// (FK to auth.users). Real channel owners are UUIDs → always Supabase.
@@ -44,7 +53,9 @@ final class FollowService {
         // Synthetic authors: local follower bit only.
         if Self.usesLocalFollow(userID: id) {
             let followers = localFollowingIDs.contains(id) ? 1 : 0
-            return FollowCounts(followers: followers, following: 0)
+            let result = FollowCounts(followers: followers, following: 0)
+            countsCache[id] = result
+            return result
         }
         struct Response: Decodable {
             struct Counts: Decodable {
@@ -63,12 +74,14 @@ final class FollowService {
                 query: query,
                 variables: ["userId": id]
             )
-            return FollowCounts(
+            let counts = FollowCounts(
                 followers: result.followCounts?.followers ?? 0,
                 following: result.followCounts?.following ?? 0
             )
+            countsCache[id] = counts
+            return counts
         } catch {
-            return FollowCounts(followers: 0, following: 0)
+            return countsCache[id] ?? FollowCounts(followers: 0, following: 0)
         }
     }
 

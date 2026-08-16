@@ -321,13 +321,18 @@ struct YouTubeAppView: View {
         appState.hubPlaybackPost != nil && !appState.hubPlaybackExpanded
     }
 
-    /// Watch chrome is only fully covering when expanded and not mid-pull.
-    /// Critical: never hide home while mini (expanded=false) — that was the white screen.
+    /// Watch chrome covers home only while fully expanded (not mid-pull, not mini).
     private var watchFullyCoveringHome: Bool {
         guard case .watch = route else { return false }
         guard appState.hubPlaybackExpanded else { return false }
-        // As soon as the user pulls a hair, home must show through fading chrome.
-        return appState.hubPlaybackPullProgress < 0.04
+        // Pull progress fades chrome; keep home under once pull starts.
+        return appState.hubPlaybackPullProgress < 0.08
+    }
+
+    /// Watch overlay opacity — never zero when expanded with pull cleared.
+    private var watchOverlayOpacity: Double {
+        guard appState.hubPlaybackExpanded else { return 0 }
+        return max(0, min(1, 1 - Double(appState.hubPlaybackPullProgress)))
     }
 
     /// Content under the watch overlay — always kept alive so mini never leaves a white hole.
@@ -380,9 +385,8 @@ struct YouTubeAppView: View {
                     )
                     .id("hub-watch-\(watchPost.id)")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    // Fade with pull progress (1 = full chrome, 0 = gone).
-                    .opacity(max(0, 1 - Double(appState.hubPlaybackPullProgress)))
-                    .allowsHitTesting(appState.hubPlaybackPullProgress < 0.35)
+                    .opacity(watchOverlayOpacity)
+                    .allowsHitTesting(watchOverlayOpacity > 0.4)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1181,15 +1185,20 @@ struct YouTubeAppView: View {
         }
     }
 
-    /// Idle top-up — pull the rest of the catalog so For you can scroll endlessly.
+    /// Idle top-up — only while Hubs is the active tab (never on app launch / other tabs).
     private func scheduleDeferredFullCatalogWarm() {
         Task(priority: .utility) {
-            try? await Task.sleep(nanoseconds: 1_600_000_000)
-            guard appState.selectedTab == .hubs || appState.isPlayPresented else { return }
-            // Always try full once after open so Archive / R2 long-form fill the pool.
-            await loadVideos(forceRefresh: false, mode: .full)
-            // Second pass: every seed long-form on disk.
+            try? await Task.sleep(nanoseconds: 2_800_000_000)
+            // Do not compete with feed first paint — only deepen catalog when user is on Hubs.
+            guard appState.selectedTab == .hubs else { return }
+            let longForm = allVideos.filter { PlayPlatformBridge.isHubsForYouLongForm($0) }.count
+            if longForm < 80 {
+                await loadVideos(forceRefresh: false, mode: .full)
+            }
+            // Full Archive seed only after user has been on Hubs a bit (scroll can also pull more).
             if AppConfig.archiveContentEnabled {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                guard appState.selectedTab == .hubs else { return }
                 let seedLong = await HubVideoSeedService.shared.longFormVideos()
                 if !seedLong.isEmpty {
                     softMergeHubCatalog(seedLong)

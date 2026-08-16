@@ -105,22 +105,24 @@ struct GlobalHubPlaybackLayer: View {
             syncPullProgressFromCollapse()
         }
         .onChange(of: expanded) { _, isExpanded in
-            // External expand/minimize (tab switch, chevron, mini tap) — no double morph.
-            guard !isDragging else { return }
+            // External expand/minimize (tab switch, chevron, mini tap from chat).
+            // Always clear drag — a stuck isDragging blocked expand forever.
+            isDragging = false
             if isExpanded {
-                withAnimation(MatteryaMotion.expand) {
+                // Instant full stage — snappy maximize from mini / chat.
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) {
                     collapse = 0
+                    appState.hubPlaybackPullProgress = 0
                 }
-                appState.hubPlaybackPullProgress = 0
             } else {
-                // Already mini or jump to mini without gesture.
                 var t = Transaction()
                 t.disablesAnimations = true
                 withTransaction(t) {
                     collapse = 1
                     appState.hubPlaybackPullProgress = 1
                 }
-                // Clear pull flag after a beat so watch chrome can fully dismiss.
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 80_000_000)
                     guard !appState.hubPlaybackExpanded else { return }

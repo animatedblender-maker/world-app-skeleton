@@ -40,18 +40,24 @@ struct ProfileView: View {
             await loadCounts()
         }
         .task(id: ProfileLoadToken(userID: profileUserID, generation: appState.contentLoadGeneration)) {
-            await appState.refreshProfile()
-            await appState.refreshSavedPosts()
-            await loadPosts()
-            await loadCounts()
+            // Instant paint from cache, then parallel network — never sequential waterfall.
+            paintProfileFromCache()
+            async let profile: Void = appState.refreshProfile()
+            async let saved: Void = appState.refreshSavedPosts()
+            async let postsTask: Void = loadPosts()
+            async let countsTask: Void = loadCounts()
+            _ = await (profile, saved, postsTask, countsTask)
         }
         .onChange(of: appState.selectedTab) { _, tab in
             guard tab == .profile else { return }
             // Re-elect autoplay winner for profile cards (feed was holding focus while mounted).
             FeedVideoFocus.shared.resetAll()
+            // Cache-first; refresh only if empty or stale.
+            paintProfileFromCache()
             Task {
-                await loadPosts()
-                await loadCounts()
+                async let postsTask: Void = loadPosts()
+                async let countsTask: Void = loadCounts()
+                _ = await (postsTask, countsTask)
             }
         }
         .onChange(of: appState.profileLibrarySection) { _, _ in
@@ -383,6 +389,21 @@ struct ProfileView: View {
         }
     }
 
+    /// Paint posts / channel flag from disk cache so Profile never waits on GraphQL.
+    private func paintProfileFromCache() {
+        if posts.isEmpty, let cached = ContentCache.shared.posts(for: .profilePosts), !cached.isEmpty {
+            posts = cached.forProfileFeedGrid()
+        }
+        if let userID = profileUserID {
+            hasOwnHubsChannel = LivingChannelMarker.hasChannel(profile: profile)
+                || posts.contains { !$0.isReel && PlayPlatformBridge.isHubChannelUpload($0) }
+            // Local follow cache if available.
+            if let cached = FollowService.shared.cachedCounts(userID: userID) {
+                followCounts = cached
+            }
+        }
+    }
+
     private func loadPosts() async {
         guard let userID = profileUserID, !userID.isEmpty else { return }
         let showSpinner = posts.isEmpty
@@ -392,30 +413,35 @@ struct ProfileView: View {
             if showSpinner { isLoadingPosts = false }
         }
         do {
-            // Higher limit so a new Spark isn't buried past a tiny page; keep Sparks (not stripped).
-            posts = try await PostsService.shared.listForAuthor(userID, limit: 120)
+            // First page is enough for snappy open; grid is lazy.
+            let loaded = try await PostsService.shared.listForAuthor(userID, limit: 40)
                 .forProfileFeedGrid()
-            ContentCache.shared.setPosts(posts, for: .profilePosts)
+            posts = loaded
+            ContentCache.shared.setPosts(loaded, for: .profilePosts)
         } catch {
-            errorMessage = error.localizedDescription
+            if posts.isEmpty {
+                errorMessage = error.localizedDescription
+            }
         }
+        // Channel resolve is secondary — don't block first paint.
         hasOwnHubsChannel = await resolveHasOwnHubsChannel(userID: userID)
     }
 
     private func resolveHasOwnHubsChannel(userID: String) async -> Bool {
         if LivingChannelMarker.hasChannel(profile: profile) { return true }
+        // Prefer local posts before network channel lookup.
+        if posts.contains(where: { !$0.isReel && PlayPlatformBridge.isHubChannelUpload($0) }) {
+            return true
+        }
         if let channel = try? await ChannelsService.shared.channelByOwner(userID: userID),
            !channel.id.isEmpty {
             return true
         }
-        // Intentional Hubs long-form publishes only — never origin/feed re-shares.
-        return posts.contains { post in
-            !post.isReel && PlayPlatformBridge.isHubChannelUpload(post)
-        }
+        return false
     }
 
     private func loadCounts() async {
-        guard let userID = profile?.userID else { return }
+        guard let userID = profile?.userID ?? profileUserID else { return }
         followCounts = await FollowService.shared.counts(userID: userID)
     }
 

@@ -487,44 +487,26 @@ struct PlayFeedLinkCard: View {
     @ViewBuilder
     private var hubFeedPlayerSurface: some View {
         if let url = post.playableVideoURL {
-            if ArchiveVideoPlayback.isArchiveURL(url) || post.isHubSeedVideo {
-                MatteryaHubPlayerView(
-                    url: url,
-                    posterURL: post.posterImageURL,
-                    isActive: feedPlayerActive,
-                    startTime: YouTubeCatalogService.shared.playbackPosition(for: post.id),
-                    postID: post.id,
-                    showsControls: true,
-                    loops: false,
-                    fillsFrame: false,
-                    isMuted: feedMutedBinding,
-                    allowsFullscreen: false,
-                    onReady: {
-                        Task { await PostsService.shared.recordView(post) }
-                    }
-                )
-                .id("hub-feed-\(post.id)")
-            } else {
-                // R2 LongForm / public hubs — use the same claimable warm pool path as Archive.
-                MatteryaHubPlayerView(
-                    url: url,
-                    posterURL: post.posterImageURL,
-                    isActive: feedPlayerActive,
-                    startTime: YouTubeCatalogService.shared.playbackPosition(for: post.id),
-                    postID: post.id,
-                    showsControls: true,
-                    loops: false,
-                    fillsFrame: false,
-                    isMuted: feedMutedBinding,
-                    allowsFullscreen: false,
-                    onReady: {
-                        Task { await PostsService.shared.recordView(post) }
-                    }
-                )
-                .id("hub-feed-\(post.id)")
-                .onAppear {
-                    SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
+            // Always aspect-fill the 16:9 feed frame — `fillsFrame: false` letterboxed
+            // (black bars top/bottom) on R2 / Archive hubs shares.
+            MatteryaHubPlayerView(
+                url: url,
+                posterURL: post.posterImageURL,
+                isActive: feedPlayerActive,
+                startTime: YouTubeCatalogService.shared.playbackPosition(for: post.id),
+                postID: post.id,
+                showsControls: true,
+                loops: false,
+                fillsFrame: true,
+                isMuted: feedMutedBinding,
+                allowsFullscreen: false,
+                onReady: {
+                    Task { await PostsService.shared.recordView(post) }
                 }
+            )
+            .id("hub-feed-\(post.id)")
+            .onAppear {
+                SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
             }
         } else {
             YouTubeVideoThumbnail(

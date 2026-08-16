@@ -296,19 +296,20 @@ final class AppState {
             async let stories: Void = { await refreshStories() }()
             _ = await (stats, saved, stories)
         }
-        // Warm Hubs longform in the background (fast path only) so first Hubs open is cache-hit.
+        // Warm a *light* Hubs catalog after open — never pull the full Archive corpus on launch
+        // (that competed with feed first paint and made open feel heavy).
         Task(priority: .utility) {
-            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
             guard currentProfile != nil else { return }
-            if PostsService.shared.hubsSessionIsWarm() { return }
-            if ContentCache.shared.isFresh(.livingVideos) {
-                if let cached = ContentCache.shared.posts(for: .livingVideos) {
-                    PostsService.shared.rememberHubsSessionCatalog(cached)
-                }
+            if PostsService.shared.hubsSessionIsWarm(minLongForm: 12) { return }
+            if ContentCache.shared.isFresh(.livingVideos),
+               let cached = ContentCache.shared.posts(for: .livingVideos),
+               cached.filter({ !$0.isReel }).count >= 8 {
+                PostsService.shared.rememberHubsSessionCatalog(cached)
                 return
             }
             _ = await PostsService.shared.loadPlayCatalog(
-                globalLimit: 28,
+                globalLimit: 24,
                 forceRefresh: false,
                 viewerCountry: currentProfile?.countryCode,
                 followingIDs: followingIDs,
@@ -1317,9 +1318,16 @@ final class AppState {
         selectedTab = .hubs
         hubPlaybackPlaying = true
         hubWatchScrollCollapse = 0
-        withAnimation(MatteryaMotion.expand) {
+        // CRITICAL: clear pull/collapse so watch chrome is visible again.
+        // Leaving pullProgress=1 made watch opacity 0 after expand from chat (broken maximize).
+        hubPlaybackPullProgress = 0
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
             hubPlaybackExpanded = true
         }
+        // Nudge continuous layer + hubs route after tab is selected.
+        NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
     }
 
     func stopHubPlayback() {
