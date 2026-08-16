@@ -179,12 +179,13 @@ final class HomeFeedStore {
             followingIDs: sessionFollowingIDs,
             limit: max(baseline.count, policy.pageSize)
         )
-        // Decision log (sampled) so warehouse can reconstruct home ranking later.
-        if !composed.isEmpty {
+        let local = composed.isEmpty ? baseline : composed
+        // Client decision log (always) — server logs again when rank API is hit.
+        if !local.isEmpty {
             RecommendationDecisionLog.shared.logServedPage(
                 surface: surface,
                 requestID: feedSessionId,
-                items: composed.prefix(policy.pageSize).enumerated().map { i, post in
+                items: local.prefix(policy.pageSize).enumerated().map { i, post in
                     RecommendationDecisionLog.ServedItem(
                         postID: post.id,
                         authorID: post.authorID,
@@ -194,7 +195,39 @@ final class HomeFeedStore {
                 }
             )
         }
-        return composed.isEmpty ? baseline : composed
+        return local
+    }
+
+    /// After a network page lands, ask the server ranker to personalize order (scale path).
+    /// Never blocks first paint — call from load paths in the background.
+    func applyServerRankIfPossible() async {
+        let snapshot = posts
+        guard snapshot.count >= 4 else { return }
+        let surface = homeMode.surface
+        let ranked = await RecommendationClient.rankPosts(
+            snapshot,
+            surface: surface,
+            sessionId: feedSessionId,
+            followingIDs: sessionFollowingIDs,
+            limit: min(snapshot.count, 100)
+        )
+        guard ranked.map(\.id) != snapshot.map(\.id) else { return }
+        // Don't yank the head if user is mid-scroll on the first screen.
+        if userEngagedThisSession, let first = snapshot.first, ranked.first?.id != first.id {
+            // Keep first few stable; reorder the rest.
+            let headCount = min(3, snapshot.count)
+            let headIDs = Set(snapshot.prefix(headCount).map(\.id))
+            let head = Array(snapshot.prefix(headCount))
+            let tail = ranked.filter { !headIDs.contains($0.id) }
+            let merged = head + tail
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { posts = merged }
+            return
+        }
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) { posts = ranked }
     }
 
     var displayedPosts: [CountryPost] {
@@ -413,6 +446,9 @@ final class HomeFeedStore {
         }
 
         isBootstrapping = false
+
+        // Server recsys rank (personalization) after first paint — never blocks open.
+        Task { await applyServerRankIfPossible() }
 
         // 3) Warm a light Sparks catalog off the critical path so scroll has R2 fuel.
         // Deep (thousands) expands on demand in load-more — never block first paint.
@@ -746,6 +782,8 @@ final class HomeFeedStore {
         #if DEBUG
         print("[HomeFeed] loadMore +\(appended.count) pool=\(posts.count) window=\(windowLimit) recycle=\(recyclePass)")
         #endif
+        // Re-personalize after pool growth (head stays stable if user engaged).
+        Task { await applyServerRankIfPossible() }
     }
 
     private func applyPosts(_ next: [CountryPost], replace: Bool, sessionId: String) {

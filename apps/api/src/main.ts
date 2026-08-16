@@ -44,6 +44,11 @@ import {
   renderEngagementReportHtml,
 } from './engagement/engagement.service.js';
 import {
+  rankCandidates,
+  refreshItemStats,
+  refreshUserFeatures,
+} from './recommendation/rank.service.js';
+import {
   handleReportsGet,
   handleReportsLogin,
   handleReportsLogout,
@@ -271,6 +276,8 @@ app.get('/health', (_req: Request, res: Response) =>
       contentPipeline: true,
       contentPipelinePage: true,
       r2PlaybackResolve: true,
+      recsysRank: true,
+      recsysWarehouse: true,
     },
     apnsConfigured: apns.isConfigured(),
     authMail: authMailStatus(),
@@ -610,9 +617,71 @@ app.post('/v1/engagement/batch', async (req: Request, res: Response) => {
       sessionId: req.body?.sessionId ?? null,
       events: Array.isArray(req.body?.events) ? req.body.events : [],
     });
+    // Keep online features warm while users scroll (async — never block the client).
+    if (result.accepted > 0) {
+      void refreshUserFeatures(user.id).catch(() => {});
+    }
     return res.json({ ok: true, ...result });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message ?? 'engagement_ingest_failed' });
+  }
+});
+
+/**
+ * Server-side recsys ranker (scale path).
+ * Client sends candidate post IDs; server returns ordered IDs + scores + decision log.
+ * POST /v1/recommendation/rank
+ * body: { surface, candidateIds[], sessionId?, followingIds?, limit? }
+ */
+app.post('/v1/recommendation/rank', async (req: Request, res: Response) => {
+  const user = await getUserFromRequest(req);
+  if (!user?.id) return res.status(401).json({ error: 'unauthenticated' });
+  try {
+    const ranked = await rankCandidates({
+      entityId: user.id,
+      surface: String(req.body?.surface ?? 'home_for_you'),
+      candidateIds: Array.isArray(req.body?.candidateIds) ? req.body.candidateIds : [],
+      sessionId: req.body?.sessionId ?? null,
+      followingIds: Array.isArray(req.body?.followingIds) ? req.body.followingIds : [],
+      limit: req.body?.limit,
+    });
+    return res.json({ ok: true, ...ranked });
+  } catch (err: any) {
+    console.error('[recsys/rank]', err?.message ?? err);
+    return res.status(500).json({ error: err?.message ?? 'rank_failed' });
+  }
+});
+
+/**
+ * Refresh online features for the caller (affinity / personality).
+ * Also used by ops: POST /v1/recommendation/refresh-item-stats?hours=72 with cron secret.
+ */
+app.post('/v1/recommendation/refresh-features', async (req: Request, res: Response) => {
+  const user = await getUserFromRequest(req);
+  if (!user?.id) return res.status(401).json({ error: 'unauthenticated' });
+  try {
+    const out = await refreshUserFeatures(user.id);
+    return res.json({ ok: out.ok !== false, features: out });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'refresh_failed' });
+  }
+});
+
+app.post('/v1/recommendation/refresh-item-stats', async (req: Request, res: Response) => {
+  const secret = String(req.headers['x-cron-secret'] ?? req.query.secret ?? '').trim();
+  const expected = String(process.env.CONTENT_CRON_SECRET ?? process.env.INSIGHTS_CRON_SECRET ?? '').trim();
+  const user = await getUserFromRequest(req);
+  const adminKey = String(req.headers['x-admin-key'] ?? '').trim();
+  const isAdmin = !!ADMIN_PORTAL_KEY && adminKey === ADMIN_PORTAL_KEY;
+  if ((!expected || secret !== expected) && !user?.id && !isAdmin) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  try {
+    const hours = Number(req.body?.hours ?? req.query.hours ?? 72);
+    const out = await refreshItemStats(hours);
+    return res.json({ ok: true, updated: out.updated });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'item_stats_failed' });
   }
 });
 
