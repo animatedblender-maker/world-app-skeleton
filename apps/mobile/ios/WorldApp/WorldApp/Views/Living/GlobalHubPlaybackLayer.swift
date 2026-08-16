@@ -186,8 +186,10 @@ struct GlobalHubPlaybackLayer: View {
     }
 
     private func expandedFrame(in geo: GeometryProxy) -> PlayerLayout {
+        // Stage height follows the clip’s natural aspect so aspect-fit never crops.
         let stageHeight = YouTubeMediaLayout.hubsExpandedStageHeight(
-            containerWidth: geo.size.width
+            containerWidth: geo.size.width,
+            videoAspect: appState.hubPlaybackVideoAspect
         )
         return PlayerLayout(
             x: 0,
@@ -246,7 +248,8 @@ struct GlobalHubPlaybackLayer: View {
                 postID: post.id,
                 showsControls: showControls,
                 loops: false,
-                fillsFrame: true,
+                // Expanded: fit full picture (no crop). Mini strip: fill the bar edge-to-edge.
+                fillsFrame: collapse > 0.55,
                 chromeOpacity: chromeOpacity,
                 isMuted: mutedBinding,
                 allowsFullscreen: false,
@@ -265,6 +268,9 @@ struct GlobalHubPlaybackLayer: View {
                 onProgress: { current, duration in
                     miniCurrentSeconds = current
                     if duration > 0.25 { miniDurationSeconds = duration }
+                },
+                onVideoSize: { size in
+                    appState.noteHubPlaybackVideoSize(size)
                 },
                 seekToSeconds: miniSeekToSeconds,
                 onSeekConsumed: { miniSeekToSeconds = nil }

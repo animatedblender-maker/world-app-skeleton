@@ -1408,7 +1408,8 @@ final class ArchiveVideoPlayerController: UIViewController {
         didRetry = false
         didKickPlayback = false
         didReportVideoSize = false
-        preferredVideoGravity = .resizeAspectFill
+        // Do NOT reset preferredVideoGravity here — SwiftUI already set fill vs fit via
+        // `applyVideoGravity` from `fillsFrame`. Forcing fill re-cropped Hubs watch.
         presentationSizeObs?.invalidate()
         presentationSizeObs = nil
         resolvedPlayURL = nil

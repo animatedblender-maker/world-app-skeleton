@@ -104,7 +104,8 @@ struct YouTubeWatchView: View {
             // Pure 16:9 below the safe area — matches continuous player (y = safeTop).
             // Dynamic Island stays above the video, never inside it.
             let reservedPlayerHeight = YouTubeMediaLayout.hubsExpandedStageHeight(
-                containerWidth: geo.size.width
+                containerWidth: geo.size.width,
+                videoAspect: appState.hubPlaybackVideoAspect
             )
 
             VStack(spacing: 0) {
@@ -396,7 +397,7 @@ struct YouTubeWatchView: View {
                         showsControls: true,
                         allowsFullscreen: false,
                         startTime: YouTubeCatalogService.shared.playbackPosition(for: currentPost.id),
-                        fillsFrame: true, // fill the stage edge-to-edge
+                        fillsFrame: false, // fit full frame — never crop Hubs watch
                         onViewed: { Task { await PostsService.shared.recordView(currentPost) } }
                     )
                 }

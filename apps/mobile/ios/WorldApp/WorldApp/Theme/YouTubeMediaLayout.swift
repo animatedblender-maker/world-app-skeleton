@@ -54,32 +54,48 @@ enum YouTubeMediaLayout {
     /// Prefetch + display MUST match or ImageCache keys miss and every row re-downloads.
     static let hubsListThumbMaxPixel: CGFloat = 320
 
-    /// Hubs watch stage height — pure 16:9 of width (below the Dynamic Island, not under it).
-    static func hubsContinuousStageHeight(containerWidth: CGFloat) -> CGFloat {
+    /// Hubs watch stage height for a given **video aspect** (width ÷ height).
+    /// Box is sized so aspect-fit shows the full picture without cropping.
+    /// - Parameter videoAspect: natural width/height (default 16:9 until the player reports size).
+    static func hubsContinuousStageHeight(
+        containerWidth: CGFloat,
+        videoAspect: CGFloat = aspect
+    ) -> CGFloat {
         let w = max(1, containerWidth)
-        let classic16x9 = w / aspect
+        let ar: CGFloat = {
+            guard videoAspect.isFinite, videoAspect > 0.35, videoAspect < 3.2 else { return aspect }
+            return videoAspect
+        }()
+        // Height that shows the full frame at full width (no crop when using aspect-fit).
+        let ideal = w / ar
         let contentH = hubsContentColumnHeight
-        let preferred = max(classic16x9, contentH * 0.34)
-        let maxH = max(classic16x9, contentH - hubsWatchMetaReserve)
-        return min(preferred, maxH)
+        let maxH = max(160, contentH - hubsWatchMetaReserve)
+        // Tall (9:16) clips are capped so title/comments still fit; fit gravity shows the whole frame.
+        let minH = max(140, w / 2.4)
+        return min(max(ideal, minH), maxH)
     }
 
-    /// Expanded stage height = 16:9 body only (no safe-top bleed).
-    /// Video starts **below** the Dynamic Island; island is never inside the frame.
-    static func hubsExpandedStageHeight(containerWidth: CGFloat) -> CGFloat {
-        hubsContinuousStageHeight(containerWidth: containerWidth)
+    /// Expanded stage — matches continuous player (below Dynamic Island).
+    static func hubsExpandedStageHeight(
+        containerWidth: CGFloat,
+        videoAspect: CGFloat = aspect
+    ) -> CGFloat {
+        hubsContinuousStageHeight(containerWidth: containerWidth, videoAspect: videoAspect)
     }
 
     /// Embedded watch player — same stage as continuous hubs playback.
-    static func watchPlayerHeight(containerWidth: CGFloat, containerHeight: CGFloat) -> CGFloat {
+    static func watchPlayerHeight(
+        containerWidth: CGFloat,
+        containerHeight: CGFloat,
+        videoAspect: CGFloat = aspect
+    ) -> CGFloat {
         let w = max(1, containerWidth)
-        let classic16x9 = w / aspect
+        let stage = hubsContinuousStageHeight(containerWidth: w, videoAspect: videoAspect)
         if containerHeight > 200 {
-            let preferred = max(classic16x9, containerHeight * 0.34)
-            let maxH = max(classic16x9, containerHeight - hubsWatchMetaReserve)
-            return min(preferred, maxH)
+            let maxH = max(160, containerHeight - hubsWatchMetaReserve)
+            return min(stage, maxH)
         }
-        return hubsContinuousStageHeight(containerWidth: w)
+        return stage
     }
 
     /// Gap between video bottom and title (flush — actions sit tight under title).
