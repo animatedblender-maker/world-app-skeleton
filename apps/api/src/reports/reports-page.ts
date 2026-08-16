@@ -190,20 +190,7 @@ function escapeHtml(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
-function wrapReportHtml(reportHtml: string): string {
-  // Inject logout + Matterya brand bar into the existing report document.
-  const bar = `
-  <div style="position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 24px;background:#2c2825;color:#f8f6f2;font:600 12px/1.2 ui-sans-serif,system-ui,sans-serif;letter-spacing:.08em;text-transform:uppercase">
-    <span>Matterya · Reports</span>
-    <a href="/reports/logout" style="color:#f8f6f2;text-decoration:none;opacity:.85">Log out</a>
-  </div>`;
-  if (reportHtml.includes('<body>')) {
-    return reportHtml.replace('<body>', `<body>${bar}`);
-  }
-  return bar + reportHtml;
-}
-
-/** GET /reports — login or full report HTML */
+/** GET /reports — login or full Insights dashboard */
 export async function handleReportsGet(req: Request, res: Response): Promise<void> {
   if (!hasReportsAccess(req)) {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -211,10 +198,13 @@ export async function handleReportsGet(req: Request, res: Response): Promise<voi
     return;
   }
   try {
-    const hours = Number(req.query.hours ?? 24);
+    // Support 1h … 30d (founder-friendly ranges).
+    const hours = Math.max(1, Math.min(720, Number(req.query.hours ?? 24) || 24));
     const report = await getEngagementReport(hours);
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.status(200).send(wrapReportHtml(renderEngagementReportHtml(report)));
+    res.setHeader('Cache-Control', 'no-store');
+    // Full Meta-style dashboard (includes logout + ranges).
+    res.status(200).send(renderEngagementReportHtml(report));
   } catch (err: any) {
     res.status(500).type('html').send(
       renderReportsLoginHtml({

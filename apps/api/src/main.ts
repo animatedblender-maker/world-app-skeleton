@@ -702,7 +702,7 @@ app.get('/v1/engagement/report', async (req: Request, res: Response) => {
     return res.status(401).json({ error: 'unauthenticated' });
   }
   try {
-    const hours = Number(req.query.hours ?? 24);
+    const hours = Math.max(1, Math.min(720, Number(req.query.hours ?? 24) || 24));
     const report = await getEngagementReport(hours);
     const format = String(req.query.format ?? 'json').toLowerCase();
     if (format === 'html') {
