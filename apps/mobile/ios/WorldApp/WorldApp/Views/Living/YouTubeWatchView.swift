@@ -35,6 +35,8 @@ struct YouTubeWatchView: View {
     @State private var metaScrollOffset: CGFloat = 0
     /// Live pull progress for YT-style grab-to-fullscreen on non-video chrome.
     @State private var fullscreenPullProgress: CGFloat = 0
+    /// FS pull only if the drag *began* at scroll top (YouTube: mid-thread scroll stays scroll).
+    @State private var metaFSPullArmed = false
 
     init(
         post: CountryPost,
@@ -140,13 +142,12 @@ struct YouTubeWatchView: View {
                     .clipped()
                     .zIndex(2)
 
-                // Title + Like/Send/Keep OUTSIDE ScrollView — zero scroll-inset gap.
-                // YouTube: drag down on non-video chrome → landscape fullscreen (not minimize).
+                // Title + Like/Send/Keep OUTSIDE ScrollView — always at "top" for FS pull.
                 titleAndActionsChrome
                     .background(watchChromeBackground)
                     .opacity(chromeOpacity)
                     .allowsHitTesting(chromeOpacity > 0.25)
-                    .simultaneousGesture(metaFullscreenDragGesture)
+                    .simultaneousGesture(titleFullscreenDragGesture)
 
                 // Scroll from top (channel → comments). Related is below — never land there
                 // when opening a new video from "More on Matterya".
@@ -201,6 +202,10 @@ struct YouTubeWatchView: View {
                     .coordinateSpace(name: "hub-watch-meta-scroll")
                     .onPreferenceChange(HubWatchMetaScrollOffsetKey.self) { y in
                         metaScrollOffset = y
+                        // Left the top while pulling → cancel FS, hand control back to scroll.
+                        if !isMetaAtScrollTop, fullscreenPullProgress > 0 || metaFSPullArmed {
+                            cancelMetaFullscreenPull(animated: false)
+                        }
                     }
                     .contentMargins(.all, 0, for: .scrollContent)
                     .scrollDismissesKeyboard(.interactively)
@@ -208,8 +213,11 @@ struct YouTubeWatchView: View {
                     .background(watchChromeBackground.opacity(chromeOpacity))
                     .opacity(chromeOpacity)
                     .allowsHitTesting(chromeOpacity > 0.25)
-                    // Pull-down on meta (at scroll top) → fullscreen, never reloads comments.
-                    .simultaneousGesture(metaFullscreenDragGesture)
+                    // FS pull only when at top (or mid-pull). Otherwise .subviews → pure scroll.
+                    .simultaneousGesture(
+                        scrollMetaFullscreenDragGesture,
+                        including: metaScrollAllowsFSPull ? .all : .subviews
+                    )
                     .onAppear {
                         scrollMetaToTop(proxy)
                     }
@@ -420,24 +428,67 @@ struct YouTubeWatchView: View {
             }
     }
 
-    /// YouTube-style: drag **down** on non-video chrome (title / comments / related)
-    /// → landscape fullscreen with live grab feedback. Does not remount comments.
-    private var metaFullscreenDragGesture: some Gesture {
-        DragGesture(minimumDistance: 10, coordinateSpace: .local)
+    /// True when meta ScrollView cannot scroll up any further (YouTube gate for FS pull).
+    private var isMetaAtScrollTop: Bool {
+        // Content top ≈ 0 when pinned; scrolled content is clearly negative.
+        metaScrollOffset >= -4
+    }
+
+    /// Allow FS gesture on the scroll view only at top or while an armed pull is in flight.
+    private var metaScrollAllowsFSPull: Bool {
+        isMetaAtScrollTop || metaFSPullArmed || fullscreenPullProgress > 0.01
+    }
+
+    /// Title/actions sit outside the ScrollView — always eligible for pull-to-fullscreen.
+    private var titleFullscreenDragGesture: some Gesture {
+        metaFullscreenDragGesture(requiresScrollTop: false)
+    }
+
+    /// Comments / related — FS only if the drag began while scroll was at top.
+    private var scrollMetaFullscreenDragGesture: some Gesture {
+        metaFullscreenDragGesture(requiresScrollTop: true)
+    }
+
+    /// YouTube-style: drag **down** → fullscreen **only** when there is no more scroll-up.
+    /// Mid-thread (comments / More on Matterya): normal scroll only.
+    private func metaFullscreenDragGesture(requiresScrollTop: Bool) -> some Gesture {
+        DragGesture(minimumDistance: requiresScrollTop ? 16 : 10, coordinateSpace: .local)
             .onChanged { value in
                 guard appState.hubPlaybackPost != nil, appState.hubPlaybackExpanded else { return }
                 guard !isMinimizingGrab else { return }
-                // Only when meta is scrolled to top (or title chrome — always "top").
-                guard metaScrollOffset > -24 else {
-                    if fullscreenPullProgress != 0 { fullscreenPullProgress = 0 }
-                    return
-                }
+
                 let y = value.translation.height
                 let x = abs(value.translation.width)
-                guard y > 0, y > x * 0.85 else {
-                    if fullscreenPullProgress != 0 { fullscreenPullProgress = 0 }
+
+                // Arm once at drag start.
+                if !metaFSPullArmed, fullscreenPullProgress < 0.01 {
+                    if requiresScrollTop {
+                        // Must already be at top — otherwise this drag is pure scroll.
+                        guard isMetaAtScrollTop else { return }
+                        // Need a clear downward pull (not a horizontal flick).
+                        guard y > 12, y > x * 0.9 else { return }
+                        metaFSPullArmed = true
+                    } else {
+                        // Title chrome — arm on clear downward pull.
+                        guard y > 8, y > x * 0.85 else { return }
+                        metaFSPullArmed = true
+                    }
+                }
+
+                guard metaFSPullArmed || !requiresScrollTop else { return }
+                // If we scrolled off the top mid-gesture, abort FS.
+                if requiresScrollTop, !isMetaAtScrollTop, fullscreenPullProgress < 0.08 {
+                    cancelMetaFullscreenPull(animated: false)
                     return
                 }
+
+                guard y > 0, y > x * 0.75 else {
+                    if fullscreenPullProgress > 0 {
+                        cancelMetaFullscreenPull(animated: false)
+                    }
+                    return
+                }
+
                 // 1:1 grab feel (cap at 1) — drives continuous player morph + pill.
                 let p = min(1, max(0, y / 140))
                 var t = Transaction()
@@ -448,53 +499,59 @@ struct YouTubeWatchView: View {
                 }
             }
             .onEnded { value in
+                defer { metaFSPullArmed = false }
+
                 guard appState.hubPlaybackPost != nil, appState.hubPlaybackExpanded else {
-                    withAnimation(MatteryaMotion.ytMorph) {
-                        fullscreenPullProgress = 0
-                        appState.setHubFullscreenPullProgress(0)
-                    }
+                    cancelMetaFullscreenPull(animated: true)
                     return
                 }
                 guard !isMinimizingGrab else {
-                    withAnimation(MatteryaMotion.ytMorph) {
-                        fullscreenPullProgress = 0
-                        appState.setHubFullscreenPullProgress(0)
-                    }
+                    cancelMetaFullscreenPull(animated: true)
                     return
                 }
-                guard metaScrollOffset > -24 else {
-                    withAnimation(MatteryaMotion.ytMorph) {
-                        fullscreenPullProgress = 0
-                        appState.setHubFullscreenPullProgress(0)
-                    }
+                // Scroll-area pull: must have been armed at top.
+                if requiresScrollTop, !metaFSPullArmed, fullscreenPullProgress < 0.05 {
+                    cancelMetaFullscreenPull(animated: false)
                     return
                 }
+                if requiresScrollTop, !isMetaAtScrollTop, fullscreenPullProgress < 0.2 {
+                    cancelMetaFullscreenPull(animated: true)
+                    return
+                }
+
                 let y = value.translation.height
                 let x = abs(value.translation.width)
                 let predicted = value.predictedEndTranslation.height
-                guard y > x * 0.85 else {
-                    withAnimation(MatteryaMotion.ytMorph) {
-                        fullscreenPullProgress = 0
-                        appState.setHubFullscreenPullProgress(0)
-                    }
+                guard y > x * 0.75 else {
+                    cancelMetaFullscreenPull(animated: true)
                     return
                 }
                 if y > 52 || predicted > 120 || fullscreenPullProgress > 0.42 {
-                    // Commit: continuous layer springs fsProgress → 1. Do NOT zero
-                    // hubFullscreenPullProgress here (that fought the morph and felt like a double enter).
+                    // Commit FS — leave hubFullscreenPullProgress for continuous layer morph.
                     ReelsTwistHaptics.pullDismiss()
                     withAnimation(MatteryaMotion.micro) {
                         fullscreenPullProgress = 0
                     }
                     appState.requestHubFullscreen()
                 } else {
-                    // Snap back to stage.
-                    withAnimation(MatteryaMotion.ytMorph) {
-                        fullscreenPullProgress = 0
-                        appState.setHubFullscreenPullProgress(0)
-                    }
+                    cancelMetaFullscreenPull(animated: true)
                 }
             }
+    }
+
+    private func cancelMetaFullscreenPull(animated: Bool) {
+        metaFSPullArmed = false
+        let clear = {
+            fullscreenPullProgress = 0
+            appState.setHubFullscreenPullProgress(0)
+        }
+        if animated {
+            withAnimation(MatteryaMotion.ytMorph) { clear() }
+        } else {
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { clear() }
+        }
     }
 
     private var playerSurface: some View {
