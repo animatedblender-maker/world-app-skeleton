@@ -44,17 +44,9 @@ struct GlobalHubPlaybackLayer: View {
 
     private var expanded: Bool { appState.hubPlaybackExpanded }
 
-    /// Butter morph: spring into mini / expand without remounting the continuous AVPlayer.
-    private static let morphAnim = Animation.interactiveSpring(
-        response: 0.30,
-        dampingFraction: 0.90,
-        blendDuration: 0.10
-    )
-    private static let minimizeMorphAnim = Animation.interactiveSpring(
-        response: 0.24,
-        dampingFraction: 0.92,
-        blendDuration: 0.08
-    )
+    /// Expand: soft spring. Minimize: **short easeOut only** — interactiveSpring hung mid-screen.
+    private static let morphAnim = Animation.easeOut(duration: 0.22)
+    private static let minimizeMorphAnim = Animation.easeOut(duration: 0.16)
 
     /// Prefer docking into the reported mini-bar / chat hole whenever minimized.
     /// (Floating mini reports the same preference key as the chat dock.)
@@ -134,12 +126,14 @@ struct GlobalHubPlaybackLayer: View {
             } else {
                 // Keep pullProgress = 1 through the morph so watch chrome/title never
                 // flash back over a white stage hole while the player docks to mini.
-                dragOffset = 0
                 isPullingMinimize = false
                 preferMiniFill = true
+                // Animate dragOffset → 0 with the same ease as layout (never hard-zero mid-flight).
+                withAnimation(Self.minimizeMorphAnim) {
+                    dragOffset = 0
+                }
                 Task { @MainActor in
-                    // Match spring settle so chrome doesn't snap mid-morph.
-                    try? await Task.sleep(nanoseconds: 280_000_000)
+                    try? await Task.sleep(nanoseconds: 170_000_000)
                     guard !appState.hubPlaybackExpanded else { return }
                     appState.hubPlaybackPullProgress = 0
                 }
@@ -189,12 +183,13 @@ struct GlobalHubPlaybackLayer: View {
                 )
             )
             .offset(x: layout.x, y: liveY)
-            // Finger tracking: no implicit anim. Release→mini uses withAnimation on expanded.
+            // Finger tracking: no implicit anim. Release→mini: one short easeOut on geometry.
             .animation(isPullingMinimize ? nil : Self.minimizeMorphAnim, value: expanded)
             .animation(isPullingMinimize ? nil : Self.minimizeMorphAnim, value: layout.width)
             .animation(isPullingMinimize ? nil : Self.minimizeMorphAnim, value: layout.height)
             .animation(isPullingMinimize ? nil : Self.minimizeMorphAnim, value: layout.x)
             .animation(isPullingMinimize ? nil : Self.minimizeMorphAnim, value: layout.y)
+            .animation(isPullingMinimize ? nil : Self.minimizeMorphAnim, value: dragOffset)
             // Pull-to-mini only while expanded (mini chrome owns taps when minimized).
             .simultaneousGesture(expanded ? minimizeGesture : nil)
             .id("global-hub-continuous-\(post.id)")
@@ -226,27 +221,30 @@ struct GlobalHubPlaybackLayer: View {
             )
         }
 
-        // Lock to the mini bar’s real frame (floating or chat).
+        // Always target the **bottom mini strip first** so morph never parks mid-screen
+        // waiting for the dock preference key (that was the 1s hang in the middle).
+        let barW = geo.size.width
+        let size = YouTubeMiniPlayerBar.videoSize(forBarWidth: barW)
+        let fallbackTop = max(0, geo.size.height - floatingBottomClearance - miniStripHeight)
+        let fallback = PlayerLayout(x: 0, y: fallbackTop, width: size.width, height: size.height)
+
+        // Only snap to a reported dock hole when it is clearly the mini bar (bottom band).
         if hasDockSlot, let global = dockSlotGlobal {
             let containerGlobal = geo.frame(in: .global)
             let x = global.minX - containerGlobal.minX
             let y = global.minY - containerGlobal.minY
-            let looksLikeMiniSlot = global.height > 48
-                && global.height < max(120, geo.size.height * 0.45)
+            let inBottomBand = y >= geo.size.height * 0.55
+            let looksLikeMiniSlot = global.height > 40
+                && global.height < 120
                 && global.width > 40
-                && y > geo.size.height * 0.15
+                && inBottomBand
             if looksLikeMiniSlot,
                y > -20, y + global.height <= geo.size.height + 24,
                x > -40, x < geo.size.width + 40 {
                 return PlayerLayout(x: x, y: y, width: global.width, height: global.height)
             }
         }
-
-        // Fallback: full-width strip flush above the tab bar.
-        let barW = geo.size.width
-        let size = YouTubeMiniPlayerBar.videoSize(forBarWidth: barW)
-        let barTop = max(0, geo.size.height - floatingBottomClearance - miniStripHeight)
-        return PlayerLayout(x: 0, y: barTop, width: size.width, height: size.height)
+        return fallback
     }
 
     // MARK: - Player
@@ -346,10 +344,8 @@ struct GlobalHubPlaybackLayer: View {
                 )
                 if shouldMini {
                     ReelsTwistHaptics.pullDismiss()
-                    // Keep dragOffset until expanded flips — zeroing first snaps the
-                    // video back to the top stage and hangs mid-minimize.
-                    // Unlock layout animation so the stage morphs from the grabbed
-                    // position straight into the mini dock (short ease, no pause).
+                    // One continuous easeOut: expand→mini + dragOffset→0 together.
+                    // Never hard-zero dragOffset first (that parked the video mid-screen).
                     var lock = Transaction()
                     lock.disablesAnimations = true
                     withTransaction(lock) {
@@ -358,10 +354,6 @@ struct GlobalHubPlaybackLayer: View {
                     }
                     withAnimation(Self.minimizeMorphAnim) {
                         appState.minimizeHubPlayback(returnToChat: true, animated: false)
-                    }
-                    var clear = Transaction()
-                    clear.disablesAnimations = true
-                    withTransaction(clear) {
                         dragOffset = 0
                     }
                 } else {

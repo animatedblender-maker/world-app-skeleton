@@ -1256,8 +1256,8 @@ final class AppState {
             hubPlaybackPullProgress = max(hubPlaybackPullProgress, 1)
         }
         if animated {
-            // Match GlobalHubPlaybackLayer spring morph — continuous player never remounts.
-            withAnimation(.interactiveSpring(response: 0.24, dampingFraction: 0.92, blendDuration: 0.08)) {
+            // Short easeOut — matches GlobalHubPlaybackLayer (no spring mid-screen hang).
+            withAnimation(.easeOut(duration: 0.16)) {
                 hubPlaybackExpanded = false
             }
         } else {
@@ -1269,12 +1269,12 @@ final class AppState {
         let conversationID = hubPlaybackReturnConversationID
         Task { @MainActor in
             // Let the morph start painting first.
-            try? await Task.sleep(nanoseconds: 40_000_000)
+            try? await Task.sleep(nanoseconds: 20_000_000)
             FeedVideoFocus.shared.resetAll()
             syncHubPlaybackChatReturnWithPath()
-            // Navigation after morph is underway — avoids sticky “freeze then jump”.
+            // Navigation only after mini has landed (avoid freeze-then-jump mid morph).
             if shouldReturn, let conversationID {
-                try? await Task.sleep(nanoseconds: 120_000_000)
+                try? await Task.sleep(nanoseconds: 180_000_000)
                 guard hubPlaybackPost != nil, !hubPlaybackExpanded else { return }
                 selectedTab = .messages
                 navigationPath = [.conversation(conversationID)]
@@ -1299,7 +1299,7 @@ final class AppState {
         selectedTab = .hubs
         hubPlaybackPlaying = true
         hubWatchScrollCollapse = 0
-        withAnimation(.interactiveSpring(response: 0.30, dampingFraction: 0.90, blendDuration: 0.10)) {
+        withAnimation(.easeOut(duration: 0.22)) {
             hubPlaybackExpanded = true
         }
     }

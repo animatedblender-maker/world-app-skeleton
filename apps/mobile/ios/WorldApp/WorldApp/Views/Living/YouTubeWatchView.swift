@@ -93,19 +93,21 @@ struct YouTubeWatchView: View {
                     .clipped()
                     .zIndex(2)
 
-                // Tiny gap between video and title (YouTube-tight).
-                Color.clear
-                    .frame(height: YouTubeMediaLayout.hubsTitleGapBelowVideo)
-                    .frame(maxWidth: .infinity)
-                    .background(Theme.canvas.opacity(chromeOpacity))
+                // No spacer between video and title — chrome sits flush under the stage.
+                if YouTubeMediaLayout.hubsTitleGapBelowVideo > 0 {
+                    Color.clear
+                        .frame(height: YouTubeMediaLayout.hubsTitleGapBelowVideo)
+                        .frame(maxWidth: .infinity)
+                        .background(Theme.canvas.opacity(chromeOpacity))
+                }
 
                 ScrollView {
-                    // Non-lazy chrome: title + actions flush (LazyVStack was adding ghost gaps).
+                    // Non-lazy chrome: title + actions flush (no ScrollView-in-scroll gaps).
                     VStack(alignment: .leading, spacing: 0) {
                         titleAndActionsChrome
 
                         channelSection
-                            .padding(.top, 10)
+                            .padding(.top, 12)
 
                         descriptionSection
                             .padding(.horizontal, Theme.pagePadding)
@@ -341,7 +343,7 @@ struct YouTubeWatchView: View {
         }
     }
 
-    /// Title + meta + Like/Send/Keep in one tight chrome block (no LazyVStack gaps).
+    /// Title + meta + Like/Send/Keep — **zero gap** between title block and action chips.
     @ViewBuilder
     private var titleAndActionsChrome: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -351,11 +353,11 @@ struct YouTubeWatchView: View {
                     .foregroundStyle(Theme.ink)
                     .lineLimit(3)
                     .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, Theme.pagePadding)
-                    .padding(.top, 4)
+                    .padding(.top, 6)
             }
-            // Meta line — views · time (flush under title).
+            // Meta line — views · time (tight under title).
             HStack(spacing: 6) {
                 if currentPost.viewCount > 0 {
                     Text("\(currentPost.viewCount.formatted()) views")
@@ -375,11 +377,14 @@ struct YouTubeWatchView: View {
             }
             .padding(.horizontal, Theme.pagePadding)
             .padding(.top, 2)
+            .padding(.bottom, 0)
 
-            // Like · Send · Keep — immediately under meta (YouTube-tight).
+            // Like · Send · Keep — flush under meta (no ScrollView safe-area gap).
             actionSection
-                .padding(.top, 6)
+                .padding(.top, 4)
+                .padding(.bottom, 0)
         }
+        .padding(.bottom, 0)
     }
 
     @ViewBuilder
@@ -397,41 +402,40 @@ struct YouTubeWatchView: View {
         }
     }
 
-    /// Matterya action chips (Like · Send · Keep) — compact pill row, no extra chrome height.
+    /// Matterya action chips — plain HStack (ScrollView was adding vertical safe-area inset).
     private var actionSection: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                watchActionChip(
-                    icon: currentPost.likedByMe ? "heart.fill" : "heart",
-                    label: currentPost.likeCount > 0 ? "\(currentPost.likeCount)" : "Like",
-                    accent: currentPost.likedByMe,
-                    accentColor: Theme.like
-                ) {
-                    toggleLike()
-                }
-                .disabled(isLiking)
-
-                watchActionChip(icon: "arrowshape.turn.up.right", label: "Send") {
-                    appState.hubPlaybackPlaying = true
-                    appState.presentShareSheet(for: currentPost)
-                    NotificationCenter.default.post(
-                        name: .matteryaResumePlaybackAfterInterrupt,
-                        object: nil
-                    )
-                }
-
-                watchActionChip(
-                    icon: appState.isPostSaved(currentPost.id) ? "bookmark.fill" : "bookmark",
-                    label: appState.isPostSaved(currentPost.id) ? "Kept" : "Keep",
-                    accent: appState.isPostSaved(currentPost.id)
-                ) {
-                    Task { _ = await appState.toggleSavePost(currentPost) }
-                }
+        HStack(spacing: 8) {
+            watchActionChip(
+                icon: currentPost.likedByMe ? "heart.fill" : "heart",
+                label: currentPost.likeCount > 0 ? "\(currentPost.likeCount)" : "Like",
+                accent: currentPost.likedByMe,
+                accentColor: Theme.like
+            ) {
+                toggleLike()
             }
-            .padding(.horizontal, Theme.pagePadding)
-            .padding(.vertical, 0)
+            .disabled(isLiking)
+
+            watchActionChip(icon: "arrowshape.turn.up.right", label: "Send") {
+                appState.hubPlaybackPlaying = true
+                appState.presentShareSheet(for: currentPost)
+                NotificationCenter.default.post(
+                    name: .matteryaResumePlaybackAfterInterrupt,
+                    object: nil
+                )
+            }
+
+            watchActionChip(
+                icon: appState.isPostSaved(currentPost.id) ? "bookmark.fill" : "bookmark",
+                label: appState.isPostSaved(currentPost.id) ? "Kept" : "Keep",
+                accent: appState.isPostSaved(currentPost.id)
+            ) {
+                Task { _ = await appState.toggleSavePost(currentPost) }
+            }
+
+            Spacer(minLength: 0)
         }
-        .fixedSize(horizontal: false, vertical: true)
+        .padding(.horizontal, Theme.pagePadding)
+        .padding(.vertical, 0)
     }
 
     private func watchActionChip(
