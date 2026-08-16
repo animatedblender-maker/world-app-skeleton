@@ -227,6 +227,8 @@ None of these block a tester build; they define the next performance sprint.
 | `a23a499` / `bf260b7` / `c1eabe1` | FS scroll gate, swipe-up exit, black edges |
 | `f895260` | Sid kill, mini paint, chat/call/push polish |
 | `acf8532` | Hubs comments local path |
+| `9590479` | This sprint report |
+| *(follow-up)* | Mini docks to floating hole; API/model strip hub `sid=`; chat title sanitized |
 
 ---
 

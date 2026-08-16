@@ -126,6 +126,11 @@ enum ContentSanitizer {
                 // Drop leftover pure control tokens / key=value stamp lines.
                 if line.hasPrefix("__"), line.contains("|") { return nil }
                 if isControlFieldLine(line) { return nil }
+                // Mid-line stamp (e.g. "Watch this __hub_origin__|sid=…").
+                if line.range(of: #"__hub_origin__\|"#, options: .regularExpression) != nil
+                    || line.range(of: #"__spark_share__\|"#, options: .regularExpression) != nil {
+                    return nil
+                }
                 if fakeShareCaptions.contains(line) { return nil }
                 return line
             }

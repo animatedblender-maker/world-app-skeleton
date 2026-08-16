@@ -61,11 +61,11 @@ struct GlobalHubPlaybackLayer: View {
     /// True once mostly fullscreen — unlocks landscape + hides status bar.
     private var isHubFullscreen: Bool { fsProgress > 0.88 }
 
-    /// Chat dock only — floating mini uses a fixed bottom strip.
-    private var hasChatDockSlot: Bool {
+    /// Any measured mini hole (floating bar OR chat dock) — not chat-only.
+    /// Floating mini used to ignore dockSlotGlobal → film misaligned → solid black ink bed.
+    private var hasMiniDockSlot: Bool {
         !expanded
             && fsProgress < 0.05
-            && appState.hubPlaybackDockInChat
             && dockSlotGlobal != nil
             && (dockSlotGlobal?.width ?? 0) > 8
             && (dockSlotGlobal?.height ?? 0) > 8
@@ -73,7 +73,7 @@ struct GlobalHubPlaybackLayer: View {
 
     private var floatingBottomClearance: CGFloat {
         if fsProgress > 0.2 { return 0 }
-        if hasChatDockSlot { return 0 }
+        if hasMiniDockSlot { return 0 }
         if collapse > 0.5 || !expanded, appState.navigationPath.isEmpty {
             return Theme.tabBarHeight
         }
@@ -322,6 +322,21 @@ struct GlobalHubPlaybackLayer: View {
     }
 
     private func stageFrame(in geo: GeometryProxy) -> PlayerLayout {
+        // Prefer measured watch-stage hole so expand lands on the real video rect.
+        if expanded, let global = watchStageGlobal,
+           global.width > 40, global.height > 80 {
+            let container = geo.frame(in: .global)
+            let x = global.minX - container.minX
+            let y = global.minY - container.minY
+            if y > -40, y + global.height <= geo.size.height + 80 {
+                return PlayerLayout(
+                    x: max(0, x),
+                    y: max(0, y),
+                    width: min(geo.size.width, global.width),
+                    height: max(120, global.height)
+                )
+            }
+        }
         let stageHeight = YouTubeMediaLayout.hubsExpandedStageHeight(
             containerWidth: geo.size.width,
             videoAspect: appState.hubPlaybackVideoAspect
@@ -341,17 +356,27 @@ struct GlobalHubPlaybackLayer: View {
     private func miniFrame(in geo: GeometryProxy) -> PlayerLayout {
         let barW = max(1, geo.size.width)
         let size = YouTubeMiniPlayerBar.videoSize(forBarWidth: barW)
+        var x: CGFloat = 0
         var y = max(0, geo.size.height - floatingBottomClearance - size.height)
-        if hasChatDockSlot, let global = dockSlotGlobal {
+        var w = size.width
+        var h = size.height
+
+        // Dock continuous film to the real mini hole (floating bar or chat).
+        if hasMiniDockSlot, let global = dockSlotGlobal {
             let containerGlobal = geo.frame(in: .global)
+            let dockX = global.minX - containerGlobal.minX
             let dockY = global.minY - containerGlobal.minY
+            let dockW = global.width
             let dockH = global.height
-            if dockH > 40, dockH < 280,
-               dockY > -20, dockY + size.height <= geo.size.height + 48 {
+            if dockW > 40, dockH > 40, dockH < 320,
+               dockY > -40, dockY + dockH <= geo.size.height + 80 {
+                x = dockX
                 y = dockY
+                w = dockW
+                h = dockH
             }
         }
-        return PlayerLayout(x: 0, y: y, width: size.width, height: size.height)
+        return PlayerLayout(x: x, y: y, width: max(1, w), height: max(1, h))
     }
 
     private func playerLayout(in geo: GeometryProxy) -> PlayerLayout {

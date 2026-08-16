@@ -53,8 +53,11 @@ export function stripBodyMarkers(body: string | null | undefined): string {
     for (const m of markers) {
       if (line.startsWith(m)) {
         line = line.slice(m.length).trim();
-        // share header may be `sid=…|aid=…` with no caption on that line
-        if (m === '__spark_share__|' && (/^sid=/i.test(line) || !line)) {
+        // Share / hub-origin header is pure control: `sid=…|aid=…|an=…` — never a caption.
+        if (
+          (m === '__spark_share__|' || m === '__hub_origin__|') &&
+          (/^sid\s*=/i.test(line) || !line)
+        ) {
           line = '';
         }
         peeled = true;
@@ -62,6 +65,8 @@ export function stripBodyMarkers(body: string | null | undefined): string {
       }
     }
     if (!line) continue;
+    // Bare control stamp line (even without marker prefix).
+    if (/^sid\s*=/i.test(line)) continue;
     if (!peeled && line.startsWith('__') && line.includes('|')) continue;
     lines.push(line);
   }

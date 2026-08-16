@@ -566,7 +566,7 @@ struct ChatFixedMiniPlayer: View {
 
     private var metaColumn: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if let title = share.title, !title.isEmpty {
+            if let title = ContentSanitizer.clean(share.title), !title.isEmpty {
                 Text(title)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Theme.ink)

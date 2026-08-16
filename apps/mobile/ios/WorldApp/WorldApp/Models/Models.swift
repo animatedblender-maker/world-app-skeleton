@@ -236,12 +236,7 @@ enum HubChannelPostMarker {
     }
 
     static func strip(_ body: String) -> String {
-        body
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.hasPrefix(token) && $0 != token.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        ContentSanitizer.clean(body) ?? ContentSanitizer.stripInternalMarkers(body)
     }
 
     static func isMarked(_ body: String?) -> Bool {
@@ -281,12 +276,7 @@ enum SparkShareMarker {
     }
 
     static func strip(_ body: String) -> String {
-        body
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.hasPrefix(token) }
-            .joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        ContentSanitizer.clean(body) ?? ContentSanitizer.stripInternalMarkers(body)
     }
 
     /// Original spark id when this post is a feed re-share of a Spark.
@@ -353,12 +343,8 @@ enum HubOriginShareMarker {
     }
 
     static func strip(_ body: String) -> String {
-        body
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.hasPrefix(token) && !$0.hasPrefix("__hub_channel__") }
-            .joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        // Must kill bare `sid=…|aid=…` lines — prefix-only filter left stamps in UI.
+        ContentSanitizer.clean(body) ?? ContentSanitizer.stripInternalMarkers(body)
     }
 
     /// Rebuild a presentation post for Hubs watch: same media as the share, original channel author.
