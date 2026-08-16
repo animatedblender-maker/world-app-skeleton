@@ -1013,6 +1013,8 @@ struct FacebookPostCard: View {
         actionBusy = true
         defer { actionBusy = false }
         do {
+            // PostsService.deletePost tombstones + purges caches + broadcasts userPostDidDelete
+            // so feed AND profile drop the card (and it stays gone after relaunch).
             let deleted = try await PostsService.shared.deletePost(post.id)
             guard deleted else {
                 actionMessage = "Could not delete post."

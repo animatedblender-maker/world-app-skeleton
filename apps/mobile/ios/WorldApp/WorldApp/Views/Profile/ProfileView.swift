@@ -75,6 +75,17 @@ struct ProfileView: View {
                 Task { await loadPosts() }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .userPostDidDelete)) { notification in
+            guard let id = notification.userInfo?["postID"] as? String else { return }
+            posts.removeAll { $0.id == id || $0.sharedPostID == id }
+            appState.savedPosts.removeAll { $0.id == id || $0.sharedPostID == id }
+            appState.savedPostIDs.remove(id)
+            appState.reelPresentationSavedIDs.remove(id)
+            if var cached = ContentCache.shared.posts(for: .profilePosts) {
+                cached.removeAll { $0.id == id || $0.sharedPostID == id }
+                ContentCache.shared.setPosts(cached, for: .profilePosts)
+            }
+        }
     }
 
     private var profileHeader: some View {

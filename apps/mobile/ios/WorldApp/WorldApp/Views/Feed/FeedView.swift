@@ -79,6 +79,13 @@ struct FeedView: View {
                 Task { await refreshFeedReels(network: true) }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .userPostDidDelete)) { notification in
+            guard let id = notification.userInfo?["postID"] as? String else { return }
+            store.removePost(id: id)
+            feedReels.removeAll { $0.id == id || $0.sharedPostID == id }
+            continueWatching.removeAll { $0.id == id || $0.sharedPostID == id }
+            newOnPlay.removeAll { $0.id == id || $0.sharedPostID == id }
+        }
     }
 
     private var feedList: some View {

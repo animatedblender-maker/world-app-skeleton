@@ -271,7 +271,9 @@ struct PublicProfileView: View {
                             }
                             appState.openReelsViewer(startingPost: post, seedPosts: sparks)
                         },
-                        onPostDeleted: { id in posts.removeAll { $0.id == id } },
+                        onPostDeleted: { id in
+                            posts.removeAll { $0.id == id || $0.sharedPostID == id }
+                        },
                         onPostUpdated: { updated in
                             if let index = posts.firstIndex(where: { $0.id == updated.id }) {
                                 posts[index] = updated

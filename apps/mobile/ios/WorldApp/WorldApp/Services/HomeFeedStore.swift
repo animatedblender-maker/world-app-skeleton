@@ -461,7 +461,7 @@ final class HomeFeedStore {
     /// (includes DE Million Post Corpus seeds + their comments).
     /// **Keeps R2 Sparks** — they render as SparkFeedCard on the main feed.
     private static func liveOnlyPosts(_ posts: [CountryPost]) -> [CountryPost] {
-        posts.forHomeFeed()
+        posts.excludingDeletedPosts().forHomeFeed()
     }
 
     // MARK: - Scroll / prefetch
@@ -630,7 +630,12 @@ final class HomeFeedStore {
     }
 
     func removePost(id: String) {
-        posts.removeAll { $0.id == id }
+        posts.removeAll { $0.id == id || $0.sharedPostID == id }
+        // Keep disk cache in sync so relaunch does not resurrect the card.
+        if var cached = ContentCache.shared.posts(for: .homeFeed) {
+            cached.removeAll { $0.id == id || $0.sharedPostID == id }
+            ContentCache.shared.setPosts(cached, for: .homeFeed)
+        }
     }
 
     // MARK: - Private

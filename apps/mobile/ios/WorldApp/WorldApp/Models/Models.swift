@@ -1046,6 +1046,7 @@ extension Array where Element == CountryPost {
     /// Moments / demo fakes / archive seeds stay out. Never drop the R2 library.
     func forHomeFeed() -> [CountryPost] {
         filter { post in
+            if DeletedPostsStore.shared.isDeleted(post.id) { return false }
             if post.isStory { return false }
             if post.authorID.hasPrefix("user_") { return false }
             if post.id.hasPrefix("post_") || post.id.hasPrefix("demo_") { return false }
@@ -1096,9 +1097,10 @@ extension Array where Element == CountryPost {
         }
     }
 
-    /// Profile lists — keep Sparks (user's own reels belong on profile), drop moments/blanks.
+    /// Profile lists — keep Sparks (user's own reels belong on profile), drop moments/blanks/deleted.
     func forProfileFeedGrid() -> [CountryPost] {
-        excludingMoments()
+        excludingDeletedPosts()
+            .excludingMoments()
             .filter(\.hasFeedVisibleContent)
     }
 }

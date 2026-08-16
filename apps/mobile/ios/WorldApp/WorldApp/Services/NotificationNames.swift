@@ -6,5 +6,7 @@ extension Notification.Name {
     static let authTokenDidRefresh = Notification.Name("authTokenDidRefresh")
     static let socialNotificationsDidChange = Notification.Name("socialNotificationsDidChange")
     static let userPostsDidChange = Notification.Name("userPostsDidChange")
+    /// User deleted a post — feed, profile, caches must drop it (userInfo: `postID`).
+    static let userPostDidDelete = Notification.Name("userPostDidDelete")
     static let pushDeepLinkRequested = Notification.Name("pushDeepLinkRequested")
 }

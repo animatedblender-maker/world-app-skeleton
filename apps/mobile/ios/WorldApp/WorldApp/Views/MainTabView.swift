@@ -143,6 +143,10 @@ struct MainTabView: View {
                 EngagementTracker.shared.hubsOpened()
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .userPostDidDelete)) { notification in
+            guard let id = notification.userInfo?["postID"] as? String else { return }
+            appState.applyPostDeleted(id: id)
+        }
         .onChange(of: appState.selectedTab) { oldTab, tab in
             // Hard rule: leave a surface → no orphan audio from off-screen video.
             FeedVideoFocus.shared.resetAll()

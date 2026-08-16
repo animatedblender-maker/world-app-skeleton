@@ -64,7 +64,7 @@ final class PostsService {
         }
         """
         let result: Response = try await gql.authenticatedRequest(query: query, variables: ["authorId": authorID, "limit": limit])
-        return result.postsByAuthor.map(\.toModel)
+        return result.postsByAuthor.map(\.toModel).excludingDeletedPosts()
     }
 
     func loadFollowingFeed(limitPerAuthor: Int = 4, maxAuthors: Int = 12) async -> [CountryPost] {
@@ -2197,10 +2197,69 @@ final class PostsService {
     }
 
     func deletePost(_ postID: String) async throws -> Bool {
-        struct Response: Decodable { let deletePost: Bool }
-        let mutation = "mutation($postId: ID!) { deletePost(post_id: $postId) }"
-        let result: Response = try await gql.authenticatedRequest(query: mutation, variables: ["postId": postID])
-        return result.deletePost
+        let id = postID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return false }
+
+        // Seed / Archive / non-UUID rows never live in public.posts — treat as local delete.
+        let localOnly = Self.isLocalOnlyPostID(id)
+
+        var serverDeleted = false
+        if !localOnly {
+            struct Response: Decodable { let deletePost: Bool }
+            let mutation = "mutation($postId: ID!) { deletePost(post_id: $postId) }"
+            do {
+                let result: Response = try await gql.authenticatedRequest(
+                    query: mutation,
+                    variables: ["postId": id]
+                )
+                serverDeleted = result.deletePost
+            } catch {
+                #if DEBUG
+                print("[Posts] deletePost server error: \(error.localizedDescription)")
+                #endif
+            }
+        }
+
+        // Hide when server deleted OR local-only seed. Ownership reject → false (no tombstone).
+        let shouldHide = localOnly || serverDeleted
+        guard shouldHide else { return false }
+
+        DeletedPostsStore.shared.markDeleted(id)
+        purgePostFromLocalCaches(id)
+        NotificationCenter.default.post(
+            name: .userPostDidDelete,
+            object: nil,
+            userInfo: ["postID": id]
+        )
+        return true
+    }
+
+    /// Non-UUID / seed / hub catalog ids are not server rows.
+    static func isLocalOnlyPostID(_ postID: String) -> Bool {
+        let id = postID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if id.isEmpty { return true }
+        if UUID(uuidString: id) == nil { return true }
+        let lower = id.lowercased()
+        if lower.hasPrefix("ia_") || lower.hasPrefix("hub_") || lower.hasPrefix("demo_")
+            || lower.hasPrefix("post_") || lower.hasPrefix("spark_") {
+            return true
+        }
+        return false
+    }
+
+    /// Drop a deleted post from every in-memory / disk surface so it cannot reappear on relaunch.
+    func purgePostFromLocalCaches(_ postID: String) {
+        let id = postID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return }
+
+        for key: ContentCacheKey in [.homeFeed, .profilePosts, .livingVideos, .savedPosts] {
+            if let cached = ContentCache.shared.posts(for: key) {
+                let next = cached.filter { $0.id != id && $0.sharedPostID != id }
+                ContentCache.shared.setPosts(next, for: key)
+            }
+        }
+
+        hubsSessionCatalog.removeAll { $0.id == id || $0.sharedPostID == id }
     }
 
     func reportPost(_ postID: String, reason: String) async throws -> Bool {

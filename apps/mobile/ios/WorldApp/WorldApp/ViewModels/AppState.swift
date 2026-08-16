@@ -1401,6 +1401,22 @@ final class AppState {
         FeedVideoFocus.shared.resetAll()
     }
 
+    /// Drop a deleted post from saved / hubs session UI (feed + profile listen separately).
+    func applyPostDeleted(id: String) {
+        let key = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return }
+        savedPosts.removeAll { $0.id == key || $0.sharedPostID == key }
+        savedPostIDs.remove(key)
+        reelPresentationSavedIDs.remove(key)
+        if hubPlaybackPost?.id == key || hubPlaybackPost?.sharedPostID == key {
+            stopHubPlayback()
+        }
+        if let cached = ContentCache.shared.posts(for: .savedPosts) {
+            let next = cached.filter { $0.id != key && $0.sharedPostID != key }
+            ContentCache.shared.setPosts(next, for: .savedPosts)
+        }
+    }
+
     /// Update stage aspect from the player’s natural size (width/height).
     func noteHubPlaybackVideoSize(_ size: CGSize) {
         guard size.width > 2, size.height > 2 else { return }

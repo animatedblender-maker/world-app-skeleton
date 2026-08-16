@@ -107,22 +107,47 @@ enum ContentSanitizer {
                     guard line.hasPrefix(prefix) else { continue }
                     line = String(line.dropFirst(prefix.count))
                         .trimmingCharacters(in: .whitespacesAndNewlines)
-                    // Share header is `sid=…|aid=…` with no human caption on that line.
-                    if prefix.hasPrefix("__spark_share__"),
-                       line.hasPrefix("sid=") || line.isEmpty {
+                    // Share / hub-origin header is pure control: `sid=…|aid=…|an=…`
+                    // (was leaking into feed/profile description as "sid blabla…").
+                    if isControlFieldLine(line) || line.isEmpty {
                         return nil
                     }
                     break
                 }
 
                 if line.isEmpty { return nil }
-                // Drop leftover pure control tokens.
+                // Drop leftover pure control tokens / key=value stamp lines.
                 if line.hasPrefix("__"), line.contains("|") { return nil }
+                if isControlFieldLine(line) { return nil }
                 if fakeShareCaptions.contains(line) { return nil }
                 return line
             }
 
         return kept.joined(separator: "\n")
+    }
+
+    /// True for internal stamp payloads like `sid=uuid|aid=…|an=Name` (not user captions).
+    static func isControlFieldLine(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return false }
+        // Classic hub/spark share stamp.
+        if trimmed.hasPrefix("sid=") { return true }
+        if trimmed.hasPrefix("aid=") || trimmed.hasPrefix("an=") || trimmed.hasPrefix("au=") {
+            return true
+        }
+        // Entire line is only key=value pairs joined by `|`.
+        let parts = trimmed.split(separator: "|")
+        guard !parts.isEmpty else { return false }
+        let controlKeys: Set<String> = ["sid", "aid", "an", "au", "cid", "oid", "uid"]
+        var controlCount = 0
+        for part in parts {
+            let s = String(part)
+            guard let eq = s.firstIndex(of: "=") else { return false }
+            let key = String(s[..<eq]).lowercased()
+            if controlKeys.contains(key) { controlCount += 1 }
+            else { return false }
+        }
+        return controlCount > 0
     }
 
     static func stripStoryMarker(_ value: String) -> String {
