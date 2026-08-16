@@ -347,7 +347,7 @@ struct ReelsPagerCard: View {
                 .padding(.bottom, max(10, bottomInset - 4))
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .animation(.spring(response: 0.34, dampingFraction: 0.62), value: showLikeBurst)
+        .animation(MatteryaMotion.like, value: showLikeBurst)
         .onChange(of: isActive) { _, active in
             if !active {
                 isPaused = false
@@ -758,12 +758,12 @@ struct ReelsPagerCard: View {
         // Burst only when liking, not when unliking.
         let willLike = fromButton ? !post.likedByMe : !post.likedByMe
         if willLike || !fromButton {
-            withAnimation(.spring(response: 0.28, dampingFraction: 0.55)) {
+            withAnimation(MatteryaMotion.like) {
                 showLikeBurst = true
-                likeButtonScale = 1.22
+                likeButtonScale = 1.18
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
-                withAnimation(.easeOut(duration: 0.2)) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                withAnimation(MatteryaMotion.micro) {
                     showLikeBurst = false
                     likeButtonScale = 1
                 }
@@ -1004,7 +1004,7 @@ private struct SparksCommentsOverlay: View {
                 if dy > 90 || predicted > 180 {
                     dismiss()
                 } else {
-                    withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                    withAnimation(MatteryaMotion.sheet) {
                         dragOffset = 0
                     }
                 }
@@ -1015,11 +1015,11 @@ private struct SparksCommentsOverlay: View {
         guard !isDismissing else { return }
         isDismissing = true
         // Fade dimmer + drop sheet together — no residual black veil on the Spark.
-        withAnimation(.easeOut(duration: 0.2)) {
+        withAnimation(MatteryaMotion.sheet) {
             dragOffset = max(dragOffset, UIScreen.main.bounds.height * 0.55)
             dimOpacity = 0
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
             onClose()
         }
     }
@@ -1183,8 +1183,8 @@ struct ReelsScrollViewer: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black.ignoresSafeArea(.all))
         .ignoresSafeArea(.all)
-        .animation(.spring(response: 0.32, dampingFraction: 0.9), value: appState.sharePostSheet?.id)
-        .animation(.spring(response: 0.32, dampingFraction: 0.9), value: commentsPostID)
+        .animation(MatteryaMotion.sheet, value: appState.sharePostSheet?.id)
+        .animation(MatteryaMotion.sheet, value: commentsPostID)
         .toolbar(.hidden, for: .navigationBar)
         // Status bar hidden so film can paint under the Dynamic Island.
         .statusBarHidden(true)
@@ -1203,14 +1203,14 @@ struct ReelsScrollViewer: View {
                 CommentsWarmCache.shared.warm(posts[activeIndex].id)
             }
             let headIDs = Array(posts.dropFirst(activeIndex).prefix(SparkWarmPool.deepPrerollAhead).map(\.id))
-            await SparkWarmPool.shared.awaitReady(postIDs: headIDs, timeout: 1.8)
+            await SparkWarmPool.shared.awaitReady(postIDs: headIDs, timeout: 0.9)
 
             // 2) Grow the queue without remounting the live head (append-only).
             seedFromWarmCatalogIfNeeded()
             SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
             await SparkWarmPool.shared.awaitReady(
                 postIDs: Array(posts.dropFirst(activeIndex).prefix(6).map(\.id)),
-                timeout: 1.2
+                timeout: 0.7
             )
 
             // 3) Deep catalog — append unseen only (full replace remounted first pages → glitch).

@@ -177,6 +177,8 @@ final class MediaPlaybackCoordinator {
         }
         // Catch any non-solo player that still has rate (ghost audio) without touching
         // parked warm buffers that are already silent at t≈0.
+        // Skip silenceAllBuffered — warm pool is already muted; iterating 32 slots per
+        // swipe added main-thread cost without fixing ghosts.
         for player in players.allObjects {
             if let previous, player === previous { continue }
             if player.rate > 0.01
@@ -185,7 +187,6 @@ final class MediaPlaybackCoordinator {
                 hardSilence(player)
             }
         }
-        SparkWarmPool.shared.silenceAllBuffered()
     }
 
     /// Only `keep` may produce sound — used when a Spark becomes the focused page.

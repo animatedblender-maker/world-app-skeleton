@@ -1031,7 +1031,7 @@ final class AppState {
         if hubPlaybackPost != nil {
             hubPlaybackPlaying = true
             if hubPlaybackExpanded {
-                withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.88)) {
+                withAnimation(MatteryaMotion.snappy) {
                     hubPlaybackExpanded = false
                 }
             }
@@ -1257,7 +1257,7 @@ final class AppState {
         }
         if animated {
             // Short easeOut — matches GlobalHubPlaybackLayer (no spring mid-screen hang).
-            withAnimation(.easeOut(duration: 0.16)) {
+            withAnimation(MatteryaMotion.snappy) {
                 hubPlaybackExpanded = false
             }
         } else {
@@ -1299,7 +1299,7 @@ final class AppState {
         selectedTab = .hubs
         hubPlaybackPlaying = true
         hubWatchScrollCollapse = 0
-        withAnimation(.easeOut(duration: 0.22)) {
+        withAnimation(MatteryaMotion.expand) {
             hubPlaybackExpanded = true
         }
     }
@@ -1529,7 +1529,7 @@ final class AppState {
         Task { @MainActor in
             await SparkWarmPool.shared.awaitReady(
                 postIDs: Array(seeds.prefix(SparkWarmPool.deepPrerollAhead).map(\.id)),
-                timeout: 2.2
+                timeout: 1.0
             )
         }
         // Always kick catalog fuel in the background so expandFeed has bulk ready.

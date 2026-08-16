@@ -53,6 +53,29 @@ enum Theme {
     static let tabBarHeight: CGFloat = 49
 }
 
+// MARK: - Premium motion (YouTube / IG / FB snappy feel — short easeOut, no hangy springs)
+
+/// App-wide motion tokens. Prefer these over ad-hoc `interactiveSpring` (which can hang mid-path).
+enum MatteryaMotion {
+    /// Page / tab / mini morph — lands immediately.
+    static let snappy = Animation.easeOut(duration: 0.14)
+    /// Sheets, comments, share overlays.
+    static let sheet = Animation.easeOut(duration: 0.18)
+    /// Expand Hubs watch / larger surfaces.
+    static let expand = Animation.easeOut(duration: 0.20)
+    /// Micro UI (mute chip, glyph, heart pop settle).
+    static let micro = Animation.easeOut(duration: 0.12)
+    /// Like burst — short punch, not a bouncy spring that feels laggy.
+    static let like = Animation.easeOut(duration: 0.16)
+    /// Scroll-to-top / list chrome.
+    static let scroll = Animation.easeOut(duration: 0.22)
+    /// Feed upload shadow insert.
+    static let insert = Animation.easeOut(duration: 0.18)
+
+    /// UIKit: faster than system default for feed-like lists.
+    static var collectionDeceleration: UIScrollView.DecelerationRate { .fast }
+}
+
 extension View {
     func screenBackground() -> some View {
         background {

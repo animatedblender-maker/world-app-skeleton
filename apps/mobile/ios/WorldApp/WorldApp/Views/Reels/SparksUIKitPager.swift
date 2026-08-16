@@ -123,7 +123,11 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         cv.dataSource = self
         cv.delegate = self
         cv.register(SparksPageCell.self, forCellWithReuseIdentifier: SparksPageCell.reuseID)
-        cv.decelerationRate = .fast
+        // Snappy page settle — same family as IG/TikTok reels.
+        cv.decelerationRate = MatteryaMotion.collectionDeceleration
+        // Prefetch cells so configure + warm-pool claim happen before the page lands.
+        cv.isPrefetchingEnabled = true
+        cv.prefetchDataSource = self
         return cv
     }()
 
@@ -446,10 +450,19 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         guard !isApplyingScroll else { return }
         let h = max(pageSize.height, 1)
         let page = Int(round(collectionView.contentOffset.y / h))
+        commitPage(page)
+    }
+
+    /// Focus handoff — warm next window first, then silence previous (snappier first frame).
+    private func commitPage(_ page: Int) {
         let clamped = min(max(0, page), max(0, posts.count - 1))
         guard clamped != activeIndex else {
             refreshVisibleCells()
             return
+        }
+        // Pre-warm the landing page *before* killing the outgoing solo so claim is hot.
+        if posts.indices.contains(clamped) {
+            SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: clamped)
         }
         MediaPlaybackCoordinator.shared.silenceForSparkPageChange()
         focusGeneration &+= 1
@@ -466,10 +479,38 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         }
 
         if posts.indices.contains(clamped) {
-            let post = posts[clamped]
-            SparkDiscoveryEngine.markWatched(post.id)
-            SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: clamped)
+            SparkDiscoveryEngine.markWatched(posts[clamped].id)
         }
+    }
+
+    // MARK: Early snap — commit focus as soon as the target page is known (zero-lag audio).
+
+    func scrollViewWillEndDragging(
+        _ scrollView: UIScrollView,
+        withVelocity velocity: CGPoint,
+        targetContentOffset: UnsafeMutablePointer<CGPoint>
+    ) {
+        let h = max(pageSize.height, 1)
+        let targetPage = Int(round(targetContentOffset.pointee.y / h))
+        // Fast fling: hand off focus before deceleration finishes.
+        if abs(velocity.y) > 0.35 || targetPage != activeIndex {
+            if posts.indices.contains(targetPage) {
+                SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: targetPage)
+            }
+            // Only early-commit when the target is clearly a neighbor (avoid double-jump).
+            if abs(targetPage - activeIndex) == 1 {
+                commitPage(targetPage)
+            }
+        }
+    }
+}
+
+// MARK: - Prefetch (warm AV before cells appear)
+
+extension SparksPagerViewController: UICollectionViewDataSourcePrefetching {
+    func collectionView(_ collectionView: UICollectionView, prefetchItemsAt indexPaths: [IndexPath]) {
+        guard let first = indexPaths.map(\.item).min() else { return }
+        SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: first)
     }
 }
 

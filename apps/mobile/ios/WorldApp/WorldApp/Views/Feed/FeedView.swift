@@ -160,10 +160,10 @@ struct FeedView: View {
                 }
                 .padding(.top, 8)
                 .padding(.bottom, 16)
-                .animation(.spring(response: 0.42, dampingFraction: 0.86), value: store.pendingUploads.map(\.id))
+                .animation(MatteryaMotion.insert, value: store.pendingUploads.map(\.id))
             }
             .onChange(of: appState.feedScrollToTopToken) { _, _ in
-                withAnimation(.easeOut(duration: 0.35)) {
+                withAnimation(MatteryaMotion.scroll) {
                     if let firstUpload = store.pendingUploads.first {
                         proxy.scrollTo("upload-\(firstUpload.id)", anchor: .top)
                     } else if let first = store.displayedPosts.first {
@@ -175,7 +175,7 @@ struct FeedView: View {
             }
             .onChange(of: store.pendingUploads.first?.id) { _, newID in
                 guard let newID else { return }
-                withAnimation(.easeOut(duration: 0.3)) {
+                withAnimation(MatteryaMotion.insert) {
                     proxy.scrollTo("upload-\(newID)", anchor: .top)
                 }
             }

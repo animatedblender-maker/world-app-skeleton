@@ -44,9 +44,9 @@ struct GlobalHubPlaybackLayer: View {
 
     private var expanded: Bool { appState.hubPlaybackExpanded }
 
-    /// Expand: soft spring. Minimize: **short easeOut only** — interactiveSpring hung mid-screen.
-    private static let morphAnim = Animation.easeOut(duration: 0.22)
-    private static let minimizeMorphAnim = Animation.easeOut(duration: 0.16)
+    /// Expand / minimize — shared premium tokens (no hangy springs).
+    private static let morphAnim = MatteryaMotion.expand
+    private static let minimizeMorphAnim = MatteryaMotion.snappy
 
     /// Prefer docking into the reported mini-bar / chat hole whenever minimized.
     /// (Floating mini reports the same preference key as the chat dock.)
@@ -133,7 +133,7 @@ struct GlobalHubPlaybackLayer: View {
                     dragOffset = 0
                 }
                 Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 170_000_000)
+                    try? await Task.sleep(nanoseconds: 150_000_000)
                     guard !appState.hubPlaybackExpanded else { return }
                     appState.hubPlaybackPullProgress = 0
                 }
