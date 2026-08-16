@@ -163,25 +163,27 @@ struct GlobalHubPlaybackLayer: View {
     private func videoStack(post: CountryPost, layout: PlayerLayout, liveY: CGFloat) -> some View {
         ZStack(alignment: .topLeading) {
             ZStack {
+                // Ink bed so mini never shows white letterbox while video fills.
+                Theme.ink
                 playerSurface(
                     for: post,
                     showControls: showTransportChrome,
                     chromeOpacity: transportChromeOpacity
                 )
                     .frame(width: layout.width, height: layout.height)
-                    // No ink bed under filled video — ink read as black top/bottom margins.
-                    .background(Color.clear)
                     .clipped()
 
                 // Mini chrome lives on YouTubeMiniPlayerBar (above this layer) so buttons work.
             }
             .frame(width: layout.width, height: layout.height)
+            .background(Theme.ink)
             .clipShape(
                 RoundedRectangle(
                     cornerRadius: expanded ? (isPullingMinimize ? 14 : 0) : 0,
                     style: .continuous
                 )
             )
+            .clipped()
             .offset(x: layout.x, y: liveY)
             // Finger tracking: no implicit anim. Release→mini: one short easeOut on geometry.
             .animation(isPullingMinimize ? nil : Self.minimizeMorphAnim, value: expanded)
@@ -221,30 +223,23 @@ struct GlobalHubPlaybackLayer: View {
             )
         }
 
-        // Always target the **bottom mini strip first** so morph never parks mid-screen
-        // waiting for the dock preference key (that was the 1s hang in the middle).
-        let barW = geo.size.width
+        // Mini: **always** full-bleed strip matching YouTubeMiniPlayerBar (width × barHeight).
+        // Never use a partial dock rect — that left letterbox / unfilled mini video.
+        let barW = max(1, geo.size.width)
         let size = YouTubeMiniPlayerBar.videoSize(forBarWidth: barW)
-        let fallbackTop = max(0, geo.size.height - floatingBottomClearance - miniStripHeight)
-        let fallback = PlayerLayout(x: 0, y: fallbackTop, width: size.width, height: size.height)
-
-        // Only snap to a reported dock hole when it is clearly the mini bar (bottom band).
+        // Prefer live dock Y when the floating bar has reported a bottom-band hole.
+        var y = max(0, geo.size.height - floatingBottomClearance - size.height)
         if hasDockSlot, let global = dockSlotGlobal {
             let containerGlobal = geo.frame(in: .global)
-            let x = global.minX - containerGlobal.minX
-            let y = global.minY - containerGlobal.minY
-            let inBottomBand = y >= geo.size.height * 0.55
-            let looksLikeMiniSlot = global.height > 40
-                && global.height < 120
-                && global.width > 40
-                && inBottomBand
-            if looksLikeMiniSlot,
-               y > -20, y + global.height <= geo.size.height + 24,
-               x > -40, x < geo.size.width + 40 {
-                return PlayerLayout(x: x, y: y, width: global.width, height: global.height)
+            let dockY = global.minY - containerGlobal.minY
+            let inBottomBand = dockY >= geo.size.height * 0.50
+            let heightOK = global.height > 80 && global.height < 280
+            if inBottomBand, heightOK,
+               dockY > -20, dockY + size.height <= geo.size.height + 40 {
+                y = dockY
             }
         }
-        return fallback
+        return PlayerLayout(x: 0, y: y, width: size.width, height: size.height)
     }
 
     // MARK: - Player
@@ -257,6 +252,8 @@ struct GlobalHubPlaybackLayer: View {
     ) -> some View {
         let stored = YouTubeCatalogService.shared.playbackPosition(for: post.id)
         let resumeAt = stored > 3 ? stored : 0
+        // Mini + expanded: always aspect-fill the container (no letterbox).
+        let mustFill = true
         if let url = post.playableVideoURL {
             MatteryaHubPlayerView(
                 url: url,
@@ -266,8 +263,7 @@ struct GlobalHubPlaybackLayer: View {
                 postID: post.id,
                 showsControls: showControls,
                 loops: false,
-                // Always fill the stage (expanded + mini) — no letterbox gaps in the container.
-                fillsFrame: true,
+                fillsFrame: mustFill,
                 chromeOpacity: chromeOpacity,
                 isMuted: mutedBinding,
                 allowsFullscreen: false,
@@ -290,13 +286,14 @@ struct GlobalHubPlaybackLayer: View {
                 seekToSeconds: miniSeekToSeconds,
                 onSeekConsumed: { miniSeekToSeconds = nil }
             )
+            // Stable id — remounting on expand/mini would restart audio (never do that).
             .id("hub-continuous-\(post.id)")
         } else {
             YouTubeVideoThumbnail(
                 post: post,
                 maxPixelSize: showControls ? 900 : 420,
                 showsPlayIcon: false,
-                frameStyle: showControls ? .watch : .card,
+                frameStyle: .feed,
                 embedsFrame: false
             )
         }

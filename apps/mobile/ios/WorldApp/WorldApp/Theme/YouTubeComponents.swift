@@ -552,8 +552,8 @@ struct YouTubeMiniPlayerBar: View {
                         .allowsHitTesting(false)
                     }
                 } else {
-                    // Clear hole + dock preference — continuous video paints under this stack.
-                    Color.clear
+                    // Ink hole (not white) + dock preference — continuous video fills under this stack.
+                    Theme.ink
                         .allowsHitTesting(false)
                         .overlay(
                             GeometryReader { g in
@@ -576,8 +576,9 @@ struct YouTubeMiniPlayerBar: View {
         }
         .frame(maxWidth: .infinity)
         .frame(height: Self.barHeight)
-        .background(embedsVideo ? Theme.ink : Color.clear)
-        .shadow(color: Theme.ink.opacity(embedsVideo ? 0.32 : 0.18), radius: 12, y: -3)
+        // Always ink under the mini strip — clear flashed paper-white between morph frames.
+        .background(Theme.ink)
+        .shadow(color: Theme.ink.opacity(0.28), radius: 12, y: -3)
         .overlay(alignment: .top) {
             Rectangle()
                 .fill(Color.white.opacity(0.08))

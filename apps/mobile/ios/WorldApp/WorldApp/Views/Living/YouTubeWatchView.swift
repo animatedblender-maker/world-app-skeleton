@@ -65,6 +65,23 @@ struct YouTubeWatchView: View {
             || appState.hubPlaybackPullProgress > 0.01
     }
 
+    /// Paper under chrome when expanded; ink while grabbing so the route never flashes white.
+    private var watchChromeBackground: Color {
+        if isMinimizingGrab || appState.hubPlaybackPullProgress > 0.02 {
+            return Theme.ink
+        }
+        return Theme.canvas
+    }
+
+    /// Root backdrop behind continuous Hubs player — never paper-white mid-minimize.
+    private var watchRootBackground: Color {
+        if !embedsPlayer {
+            if !appState.hubPlaybackExpanded { return .clear }
+            if isMinimizingGrab || chromeOpacity < 0.92 { return Theme.ink }
+        }
+        return Theme.canvas
+    }
+
     private var isHubContent: Bool {
         PlayPlatformBridge.isHubCatalogContent(currentPost)
             || HubEngagementStore.isHubContentID(currentPost.id)
@@ -93,21 +110,16 @@ struct YouTubeWatchView: View {
                     .clipped()
                     .zIndex(2)
 
-                // No spacer between video and title — chrome sits flush under the stage.
-                if YouTubeMediaLayout.hubsTitleGapBelowVideo > 0 {
-                    Color.clear
-                        .frame(height: YouTubeMediaLayout.hubsTitleGapBelowVideo)
-                        .frame(maxWidth: .infinity)
-                        .background(Theme.canvas.opacity(chromeOpacity))
-                }
+                // Title + Like/Send/Keep OUTSIDE ScrollView — zero scroll-inset gap.
+                titleAndActionsChrome
+                    .background(watchChromeBackground)
+                    .opacity(chromeOpacity)
+                    .allowsHitTesting(chromeOpacity > 0.25)
 
                 ScrollView {
-                    // Non-lazy chrome: title + actions flush (no ScrollView-in-scroll gaps).
                     VStack(alignment: .leading, spacing: 0) {
-                        titleAndActionsChrome
-
                         channelSection
-                            .padding(.top, 12)
+                            .padding(.top, 10)
 
                         descriptionSection
                             .padding(.horizontal, Theme.pagePadding)
@@ -140,10 +152,10 @@ struct YouTubeWatchView: View {
                     }
                     .padding(.bottom, 28)
                 }
-                .contentMargins(.top, 0, for: .scrollContent)
+                .contentMargins(.all, 0, for: .scrollContent)
                 .scrollDismissesKeyboard(.interactively)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Theme.canvas.opacity(chromeOpacity))
+                .background(watchChromeBackground.opacity(chromeOpacity))
                 .opacity(chromeOpacity)
                 .allowsHitTesting(chromeOpacity > 0.25)
             }
@@ -152,14 +164,11 @@ struct YouTubeWatchView: View {
             .opacity(appState.hubPlaybackExpanded || embedsPlayer ? 1 : 0)
             .allowsHitTesting(appState.hubPlaybackExpanded || embedsPlayer)
         }
-        // During grab: video over clear/ink so only the player remains visible.
-        .background(
-            (!appState.hubPlaybackExpanded && !embedsPlayer)
-                ? Color.clear
-                : (chromeOpacity < 0.45 ? Theme.ink : Theme.canvas)
-        )
+        // Continuous player: never flash paper-white under a faded watch route.
+        // Grab / mini → ink. Expanded idle → canvas under chrome.
+        .background(watchRootBackground)
         .animation(
-            isMinimizingGrab ? nil : .easeOut(duration: 0.2),
+            isMinimizingGrab ? nil : MatteryaMotion.micro,
             value: chromeOpacity
         )
         // Stay in the safe area — video begins *below* the Dynamic Island.
@@ -343,48 +352,48 @@ struct YouTubeWatchView: View {
         }
     }
 
-    /// Title + meta + Like/Send/Keep — **zero gap** between title block and action chips.
+    /// Title + meta + Like/Send/Keep — single tight stack (YouTube: title then actions, no air gap).
     @ViewBuilder
     private var titleAndActionsChrome: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let headline = currentPost.displayHeadline {
                 Text(headline)
-                    .font(.system(size: 17, weight: .semibold, design: .default))
-                    .foregroundStyle(Theme.ink)
-                    .lineLimit(3)
+                    .font(.system(size: 16, weight: .semibold, design: .default))
+                    .foregroundStyle(isMinimizingGrab ? Theme.paper : Theme.ink)
+                    .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, Theme.pagePadding)
-                    .padding(.top, 6)
+                    .padding(.top, 8)
             }
-            // Meta line — views · time (tight under title).
-            HStack(spacing: 6) {
-                if currentPost.viewCount > 0 {
-                    Text("\(currentPost.viewCount.formatted()) views")
-                        .font(.caption)
-                        .foregroundStyle(Theme.inkMuted)
+            // Meta — 2pt under title.
+            if currentPost.viewCount > 0 || !currentPost.createdAt.isEmpty {
+                HStack(spacing: 6) {
+                    if currentPost.viewCount > 0 {
+                        Text("\(currentPost.viewCount.formatted()) views")
+                            .font(.caption2)
+                            .foregroundStyle(isMinimizingGrab ? Theme.paper.opacity(0.7) : Theme.inkMuted)
+                    }
+                    if currentPost.viewCount > 0, !currentPost.createdAt.isEmpty {
+                        Text("·")
+                            .font(.caption2)
+                            .foregroundStyle(isMinimizingGrab ? Theme.paper.opacity(0.5) : Theme.inkMuted)
+                    }
+                    if !currentPost.createdAt.isEmpty {
+                        Text(RelativeTime.format(currentPost.createdAt))
+                            .font(.caption2)
+                            .foregroundStyle(isMinimizingGrab ? Theme.paper.opacity(0.7) : Theme.inkMuted)
+                    }
                 }
-                if currentPost.viewCount > 0, !currentPost.createdAt.isEmpty {
-                    Text("·")
-                        .font(.caption)
-                        .foregroundStyle(Theme.inkMuted)
-                }
-                if !currentPost.createdAt.isEmpty {
-                    Text(RelativeTime.format(currentPost.createdAt))
-                        .font(.caption)
-                        .foregroundStyle(Theme.inkMuted)
-                }
+                .padding(.horizontal, Theme.pagePadding)
+                .padding(.top, 2)
             }
-            .padding(.horizontal, Theme.pagePadding)
-            .padding(.top, 2)
-            .padding(.bottom, 0)
 
-            // Like · Send · Keep — flush under meta (no ScrollView safe-area gap).
+            // Like · Send · Keep — immediately under meta (3pt only).
             actionSection
-                .padding(.top, 4)
-                .padding(.bottom, 0)
+                .padding(.top, 3)
+                .padding(.bottom, 6)
         }
-        .padding(.bottom, 0)
     }
 
     @ViewBuilder
@@ -402,7 +411,7 @@ struct YouTubeWatchView: View {
         }
     }
 
-    /// Matterya action chips — plain HStack (ScrollView was adding vertical safe-area inset).
+    /// Matterya action chips — plain HStack, no nested ScrollView (that added a tall gap).
     private var actionSection: some View {
         HStack(spacing: 8) {
             watchActionChip(
@@ -436,6 +445,7 @@ struct YouTubeWatchView: View {
         }
         .padding(.horizontal, Theme.pagePadding)
         .padding(.vertical, 0)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private func watchActionChip(
