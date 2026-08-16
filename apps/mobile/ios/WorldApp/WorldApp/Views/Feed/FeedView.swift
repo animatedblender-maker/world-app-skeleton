@@ -54,17 +54,17 @@ struct FeedView: View {
         .toolbar(.hidden, for: .navigationBar)
         .refreshable {
             paintStripsFromCache()
-            async let boot: Void = store.beginFreshSession()
-            async let strips: Void = refreshStrips(network: true)
-            _ = await (boot, strips)
+            await store.beginFreshSession()
+            await refreshStrips(network: true)
         }
         .task(id: "\(appState.contentLoadGeneration)-\(appState.feedFreshSessionToken)") {
-            // App open / login / 3+ min away: new mix of user shares + Sparks rails.
+            // App open: paint rails from cache instantly, boot feed first, then light strip network.
+            // Never run beginFreshSparksSession here — that deep catalog freeze lagged the top of the feed.
             paintStripsFromCache()
-            async let boot: Void = store.beginFreshSession()
-            async let strips: Void = refreshStrips(network: true)
-            _ = await (boot, strips)
+            await store.beginFreshSession()
             paintStripsFromCache()
+            // Defer strip network so first posts can scroll immediately.
+            await refreshStrips(network: true)
         }
         .onAppear {
             paintStripsFromCache()
@@ -210,9 +210,13 @@ struct FeedView: View {
             .padding(.horizontal, Theme.pagePadding)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: 12) {
+                LazyHStack(alignment: .top, spacing: 12) {
                     ForEach(newOnPlay) { post in
-                        HubsShelfThumbCard(post: post, width: 168) {
+                        HubsShelfThumbCard(
+                            post: post,
+                            width: 160,
+                            extractFrameIfNeeded: false
+                        ) {
                             appState.openPost(post)
                         }
                     }
@@ -243,9 +247,13 @@ struct FeedView: View {
             .padding(.horizontal, Theme.pagePadding)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: 12) {
+                LazyHStack(alignment: .top, spacing: 12) {
                     ForEach(continueWatching) { post in
-                        HubsShelfThumbCard(post: post, width: 168) {
+                        HubsShelfThumbCard(
+                            post: post,
+                            width: 160,
+                            extractFrameIfNeeded: false
+                        ) {
                             appState.openPost(post)
                         }
                     }
@@ -314,26 +322,38 @@ struct FeedView: View {
     }
 
     private func refreshFeedReels(network: Bool) async {
-        // Top Sparks strip: fresh shuffle from the full session pool every refresh.
+        // Top Sparks strip only — keep this LIGHT. Never call beginFreshSparksSession
+        // (deep multi-page catalog) for a 12-tile rail; that froze the feed top.
         var pool: [CountryPost] = PostsService.shared.sparksCatalogSnapshot()
         if network {
-            // Full catalog pull + shuffle (same source as the Sparks player).
-            pool = await PostsService.shared.beginFreshSparksSession(preferStart: nil)
+            // One small random sample + light catalog grow — not a full player session.
+            async let sample = PostsService.shared.fetchDiscoverSparks(limit: 24)
+            async let light = PostsService.shared.loadSparksDiscoveryCatalog(
+                forceRefresh: pool.count < 20,
+                deep: false
+            )
+            let remote = await sample
+            let catalog = await light
+            pool = remote + catalog + pool
         } else if pool.count > 1 {
             pool.shuffle()
         }
 
+        // Unviewed first so the rail matches discovery rules without heavy ranking.
+        let ranked = SparkDiscoveryEngine.rankForDiscovery(
+            pool.filter { ReelsRankingEngine.isSparkEligible($0) && $0.playableVideoURL != nil }
+        )
         var seen = Set<String>()
         var merged: [CountryPost] = []
-        for post in pool {
-            guard ReelsRankingEngine.isSparkEligible(post), post.playableVideoURL != nil else { continue }
+        for post in ranked {
             guard seen.insert(post.id).inserted else { continue }
             merged.append(post)
-            if merged.count >= 16 { break }
+            if merged.count >= 12 { break }
         }
         if !merged.isEmpty {
             feedReels = merged
-            SparkWarmPool.shared.prepare(posts: Array(feedReels.prefix(3)), around: 0, ahead: 2, behind: 0)
+            // Thumbnails only — do not deep-warm AVPlayers for the whole strip.
+            ImageCache.shared.prefetchFeedMedia(Array(merged.prefix(4)), maxPixelSize: 280)
         }
     }
 

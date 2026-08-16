@@ -121,7 +121,7 @@ struct YouTubeVideoFrame<Content: View>: View {
                     }
                     .clipShape(Rectangle())
             case .feed:
-                // Facebook-style in-feed height (~55–68% of screen), not short 16:9.
+                // Full post-card width; height is 16:9 of screen width (never shrink width).
                 Color.clear
                     .frame(maxWidth: .infinity)
                     .frame(height: FacebookMediaLayout.dominantFeedVideoHeight())
@@ -746,6 +746,8 @@ struct HubsShelfThumbCard: View {
     /// When true, show a one-line meta row under the title (channel · views).
     var showsMetadata: Bool = false
     var titleFont: Font = .caption.weight(.semibold)
+    /// Frame extract is expensive — off on feed rails for scroll smoothness.
+    var extractFrameIfNeeded: Bool = true
     var onTap: () -> Void
 
     private var thumbHeight: CGFloat { (width / YouTubeMediaLayout.aspect).rounded() }
@@ -759,11 +761,11 @@ struct HubsShelfThumbCard: View {
                 // `embedsFrame: false` — outer frame owns size; avoid card aspect fighting fixed height.
                 YouTubeVideoThumbnail(
                     post: post,
-                    maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel,
+                    maxPixelSize: min(YouTubeMediaLayout.hubsListThumbMaxPixel, 360),
                     showsPlayIcon: false,
                     frameStyle: .card,
                     embedsFrame: false,
-                    extractFrameIfNeeded: true,
+                    extractFrameIfNeeded: extractFrameIfNeeded,
                     showsHubBadge: false
                 )
                 .frame(width: width, height: thumbHeight)

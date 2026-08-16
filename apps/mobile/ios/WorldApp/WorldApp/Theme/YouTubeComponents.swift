@@ -355,7 +355,7 @@ struct SparksStripTile: View {
 
     var body: some View {
         Button(action: onTap) {
-            SparksTileChrome(post: post, playIconSize: 28, maxPixelSize: 420)
+            SparksTileChrome(post: post, playIconSize: 28, maxPixelSize: 280)
                 .frame(width: width, height: height)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay(
@@ -432,7 +432,8 @@ struct SparksHorizontalStrip: View {
             .padding(.horizontal, Theme.pagePadding)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
+                // LazyHStack: only load visible strip tiles (HStack built all 12 at once → lag).
+                LazyHStack(spacing: 10) {
                     ForEach(posts) { post in
                         SparksStripTile(post: post) {
                             onOpen(post)
