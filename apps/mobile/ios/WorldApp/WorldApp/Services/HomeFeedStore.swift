@@ -62,6 +62,8 @@ final class HomeFeedStore {
     private var sessionRankSeed: UInt64 = UInt64.random(in: 1...UInt64.max)
     private var sessionFollowingIDs: Set<String> = []
     private var sessionMyUserID: String?
+    /// True once the user has seen/scrolled a row this session — blocks head-replacing network merges.
+    private var userEngagedThisSession = false
 
     private let pageSize = 24
     private let windowPageSize = 12
@@ -74,6 +76,13 @@ final class HomeFeedStore {
     private func refreshSessionRankingContext() async {
         sessionRankSeed = UInt64.random(in: 1...UInt64.max)
             ^ UInt64(Date().timeIntervalSince1970 * 1_000_000)
+        sessionFollowingIDs = await FollowService.shared.followingIDs()
+        sessionMyUserID = ContentCache.shared.cachedProfile()?.userID
+            ?? AuthService.shared.currentUser?.id
+    }
+
+    /// Refresh follow/me ids without reshuffling session seed (stable head while watching).
+    private func refreshFollowingContextOnly() async {
         sessionFollowingIDs = await FollowService.shared.followingIDs()
         sessionMyUserID = ContentCache.shared.cachedProfile()?.userID
             ?? AuthService.shared.currentUser?.id
@@ -99,61 +108,137 @@ final class HomeFeedStore {
 
     // MARK: - Lifecycle
 
-    /// New browsing session (app open / 3+ min away / pull):
-    /// **new mix every open**, priority = unviewed from people you follow.
-    func beginFreshSession() async {
+    /// New browsing session (app open / 3+ min away / pull).
+    /// - Parameter forceReplace: pull-to-refresh / explicit reshuffle — rebuilds the whole list.
+    ///   Default **false**: after the first paint, network only soft-merges so a late
+    ///   first-paint response never rips out the row the user is already watching.
+    func beginFreshSession(forceReplace: Bool = false) async {
         generation += 1
         let gen = generation
         errorMessage = nil
-        feedSessionId = UUID().uuidString
         nextCursor = nil
         hasMore = true
         isRefreshing = true
         defer { isRefreshing = false }
 
-        await refreshSessionRankingContext()
-
-        // 1) Instant paint from cache — already re-ranked for this session seed.
-        var pool: [CountryPost] = posts
-        if pool.isEmpty, let cached = ContentCache.shared.posts(for: .homeFeed) {
-            pool = Self.liveOnlyPosts(cached)
-        }
-        pool = Self.liveOnlyPosts(
-            BlockService.shared.filterPosts(pool.excludingMoments().forHomeFeed())
-        )
-        if !pool.isEmpty {
-            applyPosts(Array(rankForSession(pool).prefix(80)), replace: true, sessionId: feedSessionId)
-            isBootstrapping = false
-            didPaint = true
-            warmHead()
+        if forceReplace {
+            userEngagedThisSession = false
+            feedSessionId = UUID().uuidString
+            await refreshSessionRankingContext()
+        } else if posts.isEmpty {
+            feedSessionId = UUID().uuidString
+            await refreshSessionRankingContext()
         } else {
-            isBootstrapping = true
+            // Already showing rows — keep session seed so the head order stays stable.
+            await refreshFollowingContextOnly()
         }
 
-        // 2) Network — following + discovery shares, session-ranked (not sticky recency).
+        // 1) Instant paint from cache only when empty or forced reshape.
+        let paintedBefore = didPaint && !posts.isEmpty
+        if forceReplace || posts.isEmpty {
+            var pool: [CountryPost] = posts
+            if pool.isEmpty, let cached = ContentCache.shared.posts(for: .homeFeed) {
+                pool = Self.liveOnlyPosts(cached)
+            }
+            pool = Self.liveOnlyPosts(
+                BlockService.shared.filterPosts(pool.excludingMoments().forHomeFeed())
+            )
+            if !pool.isEmpty {
+                applyPosts(Array(rankForSession(pool).prefix(80)), replace: true, sessionId: feedSessionId)
+                isBootstrapping = false
+                didPaint = true
+                warmHead()
+            } else {
+                isBootstrapping = true
+            }
+        }
+
+        // 2) Network — never hard-replace a feed the user is already watching.
         let live = Self.liveOnlyPosts(await PostsService.shared.fetchFirstPaintHomePosts(limit: 72))
         guard gen == generation else { return }
 
-        let realBatch = Self.liveOnlyPosts(live + posts)
-        let capped = Array(rankForSession(realBatch).prefix(min(realBatch.count, 90)))
+        let preserveHead = !forceReplace
+            && (paintedBefore || userEngagedThisSession || (didPaint && !posts.isEmpty))
 
-        if !capped.isEmpty {
-            applyPosts(capped, replace: true, sessionId: feedSessionId)
-            ContentCache.shared.setPosts(posts, for: .homeFeed)
+        if preserveHead {
+            softMergePreservingHead(live)
+            isBootstrapping = false
             didPaint = true
-            warmHead()
             hasMore = true
             recyclePass = 0
             #if DEBUG
-            print("[HomeFeed] freshSession total=\(capped.count) following=\(sessionFollowingIDs.count) seed=\(sessionRankSeed)")
+            print("[HomeFeed] freshSession soft-merge live=\(live.count) pool=\(posts.count) window=\(windowLimit) engaged=\(userEngagedThisSession)")
             #endif
-        } else if posts.isEmpty {
-            applyPosts([], replace: true, sessionId: feedSessionId)
-            ContentCache.shared.invalidate(.homeFeed)
-            hasMore = true
+        } else {
+            let realBatch = Self.liveOnlyPosts(live + posts)
+            let capped = Array(rankForSession(realBatch).prefix(min(realBatch.count, 90)))
+
+            if !capped.isEmpty {
+                applyPosts(capped, replace: true, sessionId: feedSessionId)
+                ContentCache.shared.setPosts(posts, for: .homeFeed)
+                didPaint = true
+                warmHead()
+                hasMore = true
+                recyclePass = 0
+                #if DEBUG
+                print("[HomeFeed] freshSession replace total=\(capped.count) following=\(sessionFollowingIDs.count) seed=\(sessionRankSeed)")
+                #endif
+            } else if posts.isEmpty {
+                applyPosts([], replace: true, sessionId: feedSessionId)
+                ContentCache.shared.invalidate(.homeFeed)
+                hasMore = true
+            }
         }
 
         isBootstrapping = false
+    }
+
+    /// Append / weave network rows **under** the visible head — never remounts what the user is watching.
+    private func softMergePreservingHead(_ incoming: [CountryPost]) {
+        let clean = Self.liveOnlyPosts(
+            BlockService.shared.filterPosts(incoming.excludingMoments().forHomeFeed())
+        )
+        guard !clean.isEmpty else { return }
+
+        // Pin everything already on screen (and a little buffer) in its current order.
+        let pinCount = max(windowLimit, firstWindow, min(posts.count, 16))
+        let head = Array(posts.prefix(pinCount))
+        var seen = Set(head.map(\.id))
+        var contentKeys = Set(head.map(\.homeFeedContentKey))
+
+        // Rank the rest of the library for the tail only.
+        let ranked = rankForSession(clean + posts)
+        var tail: [CountryPost] = []
+        tail.reserveCapacity(ranked.count)
+        for post in ranked {
+            guard seen.insert(post.id).inserted else { continue }
+            guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
+            tail.append(post)
+        }
+
+        guard !tail.isEmpty || head.count != posts.count else {
+            // Still refresh disk cache with current pool.
+            if !posts.isEmpty {
+                ContentCache.shared.setPosts(
+                    Array(posts.prefix(ContentCache.maxCachedPosts)),
+                    for: .homeFeed
+                )
+            }
+            return
+        }
+
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            posts = head + tail
+            // Critical: do NOT reset windowLimit — that was the “feed refreshed” jump.
+        }
+        nextCursor = Self.cursor(from: posts.last)
+        hasMore = true
+        ContentCache.shared.setPosts(
+            Array(posts.prefix(ContentCache.maxCachedPosts)),
+            for: .homeFeed
+        )
     }
 
     /// Smooth open: cache → tiny first-paint network → done.
@@ -197,24 +282,35 @@ final class HomeFeedStore {
         let live = Self.liveOnlyPosts(await PostsService.shared.fetchFirstPaintHomePosts(limit: 72))
         guard gen == generation else { return }
 
-        let existingLive = posts.filter { !$0.isStory }
-        let realBatch = Self.liveOnlyPosts(live + existingLive)
-        let capped = Array(rankForSession(realBatch).prefix(min(realBatch.count, 90)))
-
-        if !capped.isEmpty {
-            applyPosts(capped, replace: true, sessionId: feedSessionId)
-            ContentCache.shared.setPosts(posts, for: .homeFeed)
-            didPaint = true
-            warmHead()
+        // If cache already painted (or user started watching), soft-merge only.
+        if didPaint && !posts.isEmpty {
+            softMergePreservingHead(live)
+            isBootstrapping = false
             hasMore = true
             recyclePass = 0
             #if DEBUG
-            print("[HomeFeed] firstPaint total=\(capped.count) network=\(live.count)")
+            print("[HomeFeed] bootstrap soft-merge live=\(live.count) pool=\(posts.count)")
             #endif
-        } else if posts.isEmpty {
-            applyPosts([], replace: true, sessionId: feedSessionId)
-            ContentCache.shared.invalidate(.homeFeed)
-            hasMore = true
+        } else {
+            let existingLive = posts.filter { !$0.isStory }
+            let realBatch = Self.liveOnlyPosts(live + existingLive)
+            let capped = Array(rankForSession(realBatch).prefix(min(realBatch.count, 90)))
+
+            if !capped.isEmpty {
+                applyPosts(capped, replace: true, sessionId: feedSessionId)
+                ContentCache.shared.setPosts(posts, for: .homeFeed)
+                didPaint = true
+                warmHead()
+                hasMore = true
+                recyclePass = 0
+                #if DEBUG
+                print("[HomeFeed] firstPaint total=\(capped.count) network=\(live.count)")
+                #endif
+            } else if posts.isEmpty {
+                applyPosts([], replace: true, sessionId: feedSessionId)
+                ContentCache.shared.invalidate(.homeFeed)
+                hasMore = true
+            }
         }
 
         isBootstrapping = false
@@ -239,6 +335,8 @@ final class HomeFeedStore {
     /// Fast fling: grow the local window aggressively, skip heavy network work until scroll settles.
     func onRowAppear(post: CountryPost) {
         ScrollBudget.noteCellAppear()
+        // Any row appear counts as engagement — late network must not remount the head.
+        userEngagedThisSession = true
         guard let index = displayedPosts.firstIndex(where: { $0.id == post.id }) else { return }
 
         let fling = ScrollBudget.isFlinging
@@ -545,7 +643,13 @@ final class HomeFeedStore {
         withTransaction(t) {
             posts = ordered
             if replace {
-                windowLimit = min(firstWindow, max(ordered.count, 0))
+                // Only shrink/reset the window when the user has not started watching yet.
+                // Resetting windowLimit mid-watch felt like a full feed refresh.
+                if !userEngagedThisSession {
+                    windowLimit = min(firstWindow, max(ordered.count, 0))
+                } else {
+                    windowLimit = min(max(windowLimit, firstWindow), max(ordered.count, 0))
+                }
             }
         }
         if !ordered.isEmpty {

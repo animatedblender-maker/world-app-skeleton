@@ -54,7 +54,8 @@ struct FeedView: View {
         .toolbar(.hidden, for: .navigationBar)
         .refreshable {
             paintStripsFromCache()
-            await store.beginFreshSession()
+            // Explicit pull — full reshape is OK (user asked for a new mix).
+            await store.beginFreshSession(forceReplace: true)
             await refreshStrips(network: true)
         }
         .task(id: "\(appState.contentLoadGeneration)-\(appState.feedFreshSessionToken)") {
