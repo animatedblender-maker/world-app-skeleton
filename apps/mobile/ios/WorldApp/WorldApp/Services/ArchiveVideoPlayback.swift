@@ -457,10 +457,22 @@ struct MatteryaHubPlayerView: View {
                 chromeHideTask?.cancel()
                 showChrome = false
             }
-            // Expand ↔ mini only toggles chrome — never pause or remount.
-            if isActive {
+            // Expand ↔ mini / stage ↔ FS only toggles chrome — never pause or remount.
+            // Continuous hubs: skip re-solo on every chrome flip (keeps YT-smooth morph).
+            if isActive, !isContinuousHubPlayer {
                 bridge.controller?.setActive(true)
                 bridge.controller?.ensureContinuingPlayback()
+            }
+        }
+        .onChange(of: fillsFrame) { _, _ in
+            // Gravity update only — never reconfigure the item (would hitch mid-morph).
+            bridge.controller?.applyVideoGravity(fillsFrame ? .resizeAspectFill : .resizeAspect)
+        }
+        .onChange(of: isFullscreenActive) { _, full in
+            // YT: reveal chrome on FS enter; auto-hide after a beat while playing.
+            if full {
+                showChrome = true
+                scheduleChromeHide()
             }
         }
         .onChange(of: isMuted) { _, muted in

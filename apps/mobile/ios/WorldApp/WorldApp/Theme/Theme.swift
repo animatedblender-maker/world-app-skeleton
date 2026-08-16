@@ -65,8 +65,8 @@ enum MatteryaMotion {
     static let sheet = Animation.easeOut(duration: 0.16)
     /// YouTube maximize from mini → full watch (snappy — was hanging at ~0.34s + tab work).
     static let expand = Animation.spring(response: 0.22, dampingFraction: 0.92)
-    /// Fullscreen present / dismiss.
-    static let fullscreen = Animation.spring(response: 0.30, dampingFraction: 0.92)
+    /// Fullscreen present / dismiss (legacy alias).
+    static let fullscreen = Animation.spring(response: 0.28, dampingFraction: 0.94)
     /// Micro UI (mute chip, glyph, heart pop settle).
     static let micro = Animation.easeOut(duration: 0.10)
     /// Like burst — short punch, not a bouncy spring that feels laggy.
@@ -75,6 +75,15 @@ enum MatteryaMotion {
     static let scroll = Animation.easeOut(duration: 0.18)
     /// Feed upload shadow insert.
     static let insert = Animation.easeOut(duration: 0.16)
+
+    // MARK: YouTube-parity hubs geometry (stage ↔ FS ↔ mini)
+
+    /// Continuous morph settle — finger-up stage/FS/mini (tight, no hang).
+    static let ytMorph = Animation.spring(response: 0.28, dampingFraction: 0.94)
+    /// Maximize from mini → watch stage.
+    static let ytExpand = Animation.spring(response: 0.24, dampingFraction: 0.93)
+    /// Device tilt / content rotation while FS (short ease, no bounce).
+    static let ytRotate = Animation.easeInOut(duration: 0.20)
 
     /// UIKit: faster than system default for feed-like lists.
     static var collectionDeceleration: UIScrollView.DecelerationRate { .fast }

@@ -448,22 +448,51 @@ struct YouTubeWatchView: View {
                 }
             }
             .onEnded { value in
-                defer {
-                    withAnimation(.easeOut(duration: 0.16)) {
+                guard appState.hubPlaybackPost != nil, appState.hubPlaybackExpanded else {
+                    withAnimation(MatteryaMotion.ytMorph) {
                         fullscreenPullProgress = 0
                         appState.setHubFullscreenPullProgress(0)
                     }
+                    return
                 }
-                guard appState.hubPlaybackPost != nil, appState.hubPlaybackExpanded else { return }
-                guard !isMinimizingGrab else { return }
-                guard metaScrollOffset > -24 else { return }
+                guard !isMinimizingGrab else {
+                    withAnimation(MatteryaMotion.ytMorph) {
+                        fullscreenPullProgress = 0
+                        appState.setHubFullscreenPullProgress(0)
+                    }
+                    return
+                }
+                guard metaScrollOffset > -24 else {
+                    withAnimation(MatteryaMotion.ytMorph) {
+                        fullscreenPullProgress = 0
+                        appState.setHubFullscreenPullProgress(0)
+                    }
+                    return
+                }
                 let y = value.translation.height
                 let x = abs(value.translation.width)
                 let predicted = value.predictedEndTranslation.height
-                guard y > x * 0.85 else { return }
+                guard y > x * 0.85 else {
+                    withAnimation(MatteryaMotion.ytMorph) {
+                        fullscreenPullProgress = 0
+                        appState.setHubFullscreenPullProgress(0)
+                    }
+                    return
+                }
                 if y > 52 || predicted > 120 || fullscreenPullProgress > 0.42 {
+                    // Commit: continuous layer springs fsProgress → 1. Do NOT zero
+                    // hubFullscreenPullProgress here (that fought the morph and felt like a double enter).
                     ReelsTwistHaptics.pullDismiss()
+                    withAnimation(MatteryaMotion.micro) {
+                        fullscreenPullProgress = 0
+                    }
                     appState.requestHubFullscreen()
+                } else {
+                    // Snap back to stage.
+                    withAnimation(MatteryaMotion.ytMorph) {
+                        fullscreenPullProgress = 0
+                        appState.setHubFullscreenPullProgress(0)
+                    }
                 }
             }
     }
