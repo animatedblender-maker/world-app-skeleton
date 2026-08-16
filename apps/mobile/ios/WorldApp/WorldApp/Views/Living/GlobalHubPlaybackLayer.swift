@@ -72,12 +72,15 @@ struct GlobalHubPlaybackLayer: View {
 
     private var showTransportChrome: Bool {
         // Keep controls mounted while expanded so opacity can fade with the pull slider.
+        // Mini never shows in-player transport (HubMiniPlayerChrome owns controls).
         expanded
     }
 
     /// 1 = full player chrome; 0 = fully faded (mirrors meta chrome under the video).
+    /// Mini: always 1 for the video layer (chrome is off via showTransportChrome).
     private var transportChromeOpacity: Double {
-        Double(1 - min(1, max(0, appState.hubPlaybackPullProgress)))
+        if !expanded { return 1 }
+        return Double(1 - min(1, max(0, appState.hubPlaybackPullProgress)))
     }
 
     private var playingBinding: Binding<Bool> {
@@ -223,22 +226,24 @@ struct GlobalHubPlaybackLayer: View {
             )
         }
 
-        // Mini: **always** full-bleed strip matching YouTubeMiniPlayerBar (width × barHeight).
-        // Never use a partial dock rect — that left letterbox / unfilled mini video.
+        // Mini: full-bleed strip matching YouTubeMiniPlayerBar — same size as the clear hole.
         let barW = max(1, geo.size.width)
         let size = YouTubeMiniPlayerBar.videoSize(forBarWidth: barW)
-        // Prefer live dock Y when the floating bar has reported a bottom-band hole.
+        // Align Y to the live mini-bar hole when available (exact dock).
         var y = max(0, geo.size.height - floatingBottomClearance - size.height)
         if hasDockSlot, let global = dockSlotGlobal {
             let containerGlobal = geo.frame(in: .global)
             let dockY = global.minY - containerGlobal.minY
-            let inBottomBand = dockY >= geo.size.height * 0.50
-            let heightOK = global.height > 80 && global.height < 280
+            let dockH = global.height
+            let inBottomBand = dockY >= geo.size.height * 0.45
+            // Accept the real mini bar height band (¼ screen ≈ 160–230).
+            let heightOK = dockH > 100 && dockH < 280
             if inBottomBand, heightOK,
-               dockY > -20, dockY + size.height <= geo.size.height + 40 {
+               dockY > -20, dockY + size.height <= geo.size.height + 48 {
                 y = dockY
             }
         }
+        // Full width × bar height — aspect-fill paints edge-to-edge in this rect.
         return PlayerLayout(x: 0, y: y, width: size.width, height: size.height)
     }
 

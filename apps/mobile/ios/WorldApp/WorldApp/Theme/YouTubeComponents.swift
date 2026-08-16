@@ -552,8 +552,9 @@ struct YouTubeMiniPlayerBar: View {
                         .allowsHitTesting(false)
                     }
                 } else {
-                    // Ink hole (not white) + dock preference — continuous video fills under this stack.
-                    Theme.ink
+                    // MUST be clear — continuous GlobalHubPlaybackLayer (zIndex below)
+                    // paints the live video through this hole. Opaque ink = black mini.
+                    Color.clear
                         .allowsHitTesting(false)
                         .overlay(
                             GeometryReader { g in
@@ -576,8 +577,8 @@ struct YouTubeMiniPlayerBar: View {
         }
         .frame(maxWidth: .infinity)
         .frame(height: Self.barHeight)
-        // Always ink under the mini strip — clear flashed paper-white between morph frames.
-        .background(Theme.ink)
+        // Clear when continuous player paints through; ink only when this bar embeds its own player.
+        .background(embedsVideo ? Theme.ink : Color.clear)
         .shadow(color: Theme.ink.opacity(0.28), radius: 12, y: -3)
         .overlay(alignment: .top) {
             Rectangle()

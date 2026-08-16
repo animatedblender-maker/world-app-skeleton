@@ -69,13 +69,13 @@ struct MainTabView: View {
 
             // Continuous AVPlayer.
             // Expanded: above page content so the watch stage is visible.
-            // Mini: *below* the bottom chrome stack so the clear mini hole reveals video
-            // and the real tab bar always paints on top (never under/over the strip wrong).
+            // Mini: *below* the mini-bar chrome (z70) so the **clear** hole reveals video;
+            // never put an opaque ink fill in that hole (that made a black miniplayer).
             GlobalHubPlaybackLayer(
                 dockSlotGlobal: hubContinuousDockSlotGlobal,
                 watchStageGlobal: hubWatchStageGlobal
             )
-            .zIndex(appState.hubPlaybackExpanded ? 55 : 40)
+            .zIndex(appState.hubPlaybackExpanded ? 55 : 45)
 
             // One bottom stack: mini strip (if any) then tab bar — YouTube order, no overlap.
             if showsFloatingMiniBar || appState.navigationPath.isEmpty {
@@ -234,7 +234,6 @@ struct MainTabView: View {
         )) { context in
             ReelsScrollViewer(context: context)
                 .withAppState(appState)
-                // Edge-to-edge from first paint — no safe-area reflow after video mounts.
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .ignoresSafeArea(.all)
                 .statusBarHidden(true)
