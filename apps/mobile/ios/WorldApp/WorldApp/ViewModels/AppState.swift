@@ -1157,6 +1157,13 @@ final class AppState {
     func startHubPlayback(_ post: CountryPost, expanded: Bool = true) {
         // Instant: paint + play with the post we already have (no await before first frame).
         let quick = PlayPlatformBridge.hubWatchPresentation(for: post)
+        // Kick AV buffer **before** any pauseAll / route swap so claim can hit a warm slot.
+        if let url = quick.playableVideoURL {
+            if ArchiveVideoPlayback.isArchiveURL(url) {
+                ArchiveVideoPlayback.warmResolve(url)
+            }
+            SparkWarmPool.shared.warmSingle(postID: quick.id, url: url)
+        }
         applyHubPlayback(quick, expanded: expanded)
         // Background: upgrade to full catalog identity if needed (sharer → channel).
         Task { @MainActor in
@@ -1164,6 +1171,9 @@ final class AppState {
             guard hubPlaybackPost?.id == quick.id || hubPlaybackPost?.id == post.id else { return }
             if resolved.authorID != hubPlaybackPost?.authorID
                 || resolved.playableVideoURL != nil && hubPlaybackPost?.playableVideoURL == nil {
+                if let url = resolved.playableVideoURL {
+                    SparkWarmPool.shared.warmSingle(postID: resolved.id, url: url)
+                }
                 applyHubPlayback(resolved, expanded: hubPlaybackExpanded)
             }
         }
@@ -1191,9 +1201,11 @@ final class AppState {
         }
 
         let switchingVideo = hubPlaybackPost?.id != watchPost.id
+        // Keep warm-pool player for *this* post alive — pauseAll must not kill its buffer.
+        let keepWarm = SparkWarmPool.shared.parkedPlayer(for: watchPost.id)
         if switchingVideo {
             // Soft-pause others only — never stopAll/tear-down (that delayed first frame).
-            MediaPlaybackCoordinator.shared.pauseAll()
+            MediaPlaybackCoordinator.shared.pauseAll(except: keepWarm)
             hubPlaybackPost = watchPost
             hubWatchScrollCollapse = 0
             hubPlaybackVideoAspect = 16.0 / 9.0
@@ -1236,7 +1248,8 @@ final class AppState {
                 maxPixelSize: 480,
                 aggressive: false
             )
-            for post in related.prefix(3) {
+            // Warm more related players — next tap should claim, not cold-start.
+            for post in related.prefix(5) {
                 if let u = post.playableVideoURL {
                     SparkWarmPool.shared.warmSingle(postID: post.id, url: u)
                 }

@@ -505,31 +505,25 @@ struct PlayFeedLinkCard: View {
                 )
                 .id("hub-feed-\(post.id)")
             } else {
-                VideoPlayerView(
+                // R2 LongForm / public hubs — use the same claimable warm pool path as Archive.
+                MatteryaHubPlayerView(
                     url: url,
                     posterURL: post.posterImageURL,
-                    placement: nil,
-                    countryCode: post.countryCode,
-                    contentCountryCode: post.countryCode,
-                    postID: post.id,
-                    adsEnabled: false,
                     isActive: feedPlayerActive,
-                    loops: false,
-                    muted: appState.feedVideosMuted,
-                    showsControls: true,
-                    allowsFullscreen: false,
                     startTime: YouTubeCatalogService.shared.playbackPosition(for: post.id),
-                    persistsPositionOnTeardown: true,
-                    sharesFeedMute: true,
+                    postID: post.id,
+                    showsControls: true,
+                    loops: false,
                     fillsFrame: false,
-                    preloadsWhenInactive: true,
-                    onViewed: { Task { await PostsService.shared.recordView(post) } }
+                    isMuted: feedMutedBinding,
+                    allowsFullscreen: false,
+                    onReady: {
+                        Task { await PostsService.shared.recordView(post) }
+                    }
                 )
                 .id("hub-feed-\(post.id)")
                 .onAppear {
-                    if let url = post.playableVideoURL {
-                        SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
-                    }
+                    SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
                 }
             }
         } else {

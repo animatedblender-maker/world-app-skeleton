@@ -547,7 +547,7 @@ struct YouTubeAppView: View {
                                 }, onAppearRow: {
                                     ScrollBudget.noteCellAppear()
                                     let fling = ScrollBudget.isFlinging
-                                    // Settled: warm a few thumbs ahead. Fling: skip (cells use memory-only first).
+                                    // Settled: warm a few thumbs + next video buffers for instant open.
                                     if !fling {
                                         ImageCache.shared.prefetchHubsWindow(
                                             posts: stableDiscoverVideos,
@@ -556,6 +556,15 @@ struct YouTubeAppView: View {
                                             ahead: 5,
                                             maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel
                                         )
+                                        // Pre-buffer the next couple of long-form clips (claim on open).
+                                        let end = min(stableDiscoverVideos.count, index + 3)
+                                        if index < end {
+                                            for p in stableDiscoverVideos[index..<end] {
+                                                if let u = p.playableVideoURL {
+                                                    SparkWarmPool.shared.warmSingle(postID: p.id, url: u)
+                                                }
+                                            }
+                                        }
                                     }
                                     // Endless For you — local window grow always; network only when settled.
                                     ensureMoreForYou(around: index)
@@ -1602,6 +1611,10 @@ struct YouTubeAppView: View {
             watchPost = post
         }
         EngagementTracker.shared.hubVideoOpened(watchPost)
+        // Warm AV **before** route/player remount so claim hits a buffered slot.
+        if let url = watchPost.playableVideoURL {
+            SparkWarmPool.shared.warmSingle(postID: watchPost.id, url: url)
+        }
         appState.startHubPlayback(watchPost, expanded: true)
         // No easeInOut on the whole hubs tree — that lagged related taps + minimize.
         // .id(watchPost.id) on YouTubeWatchView resets scroll to title/comments (not related).

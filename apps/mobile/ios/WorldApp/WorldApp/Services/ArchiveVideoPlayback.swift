@@ -1770,15 +1770,43 @@ final class ArchiveVideoPlayerController: UIViewController {
             installClaimedPlayerSync(claimed, original: url, muted: muted, startTime: startTime, autoplay: autoplay)
             return
         }
-        if let postID {
-            SparkWarmPool.shared.markInUse(postID: postID)
-        }
 
         // Never spin on Sparks swipe — poster stays until first frame.
         spinner.stopAnimating()
         loadTask = Task { [weak self] in
             guard let self else { return }
-            let playURL = await ArchiveVideoPlayback.resolvedPlaybackURL(for: url)
+
+            // Hubs open race: warmSingle is kicked on open, but used to markInUse
+            // immediately — that aborted the warm and forced a cold AVPlayerItem.
+            // Wait briefly for the in-flight warm, then claim.
+            if let postID {
+                SparkWarmPool.shared.warmSingle(postID: postID, url: url)
+                // Short wait — public R2 often ready in <300ms; Archive a bit longer.
+                let timeout: TimeInterval = ArchiveVideoPlayback.isArchiveURL(url) ? 0.55 : 0.40
+                await SparkWarmPool.shared.awaitReady(postIDs: [postID], timeout: timeout)
+                if let claimed = SparkWarmPool.shared.claim(postID: postID) {
+                    await MainActor.run {
+                        self.installClaimedPlayerSync(
+                            claimed,
+                            original: url,
+                            muted: muted,
+                            startTime: startTime,
+                            autoplay: autoplay
+                        )
+                    }
+                    return
+                }
+                // Only block re-warm once we commit to a cold install.
+                SparkWarmPool.shared.markInUse(postID: postID)
+            }
+
+            // Public R2 / non-Archive: skip CDN chase (resolvedPlaybackURL is a no-op there).
+            let playURL: URL
+            if ArchiveVideoPlayback.isArchiveURL(url) {
+                playURL = await ArchiveVideoPlayback.resolvedPlaybackURL(for: url)
+            } else {
+                playURL = url
+            }
             guard !Task.isCancelled else { return }
             await self.installPlayer(url: playURL, original: url, muted: muted, startTime: startTime)
             if !autoplay {
@@ -2168,12 +2196,14 @@ final class ArchiveVideoPlayerController: UIViewController {
         guard !Task.isCancelled else { return }
 
         let item = AVPlayerItem(asset: asset)
-        item.preferredForwardBufferDuration = 4
+        // Hubs long-form needs a bit more head buffer; Sparks stay lighter.
+        item.preferredForwardBufferDuration = loops ? 4 : 8
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+        item.preferredPeakBitRate = 0
 
         let newPlayer = AVPlayer(playerItem: item)
         newPlayer.isMuted = muted
-        // false = kick playback as soon as enough is buffered (snappier Sparks).
+        // false = kick playback as soon as enough is buffered (snappier Sparks / Hubs).
         newPlayer.automaticallyWaitsToMinimizeStalling = false
         newPlayer.actionAtItemEnd = loops ? .none : .pause
 

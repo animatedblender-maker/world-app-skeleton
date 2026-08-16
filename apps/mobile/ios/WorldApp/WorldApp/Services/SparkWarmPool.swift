@@ -117,6 +117,11 @@ final class SparkWarmPool {
         }
     }
 
+    /// Parked player still in the pool (not claimed) — used so pauseAll can spare it.
+    func parkedPlayer(for postID: String) -> AVPlayer? {
+        slots[postID]?.player
+    }
+
     /// Hand a fully buffered player to the visible card (removes it from the pool).
     /// Caller must treat the player as **paused at t≈0** (pool enforces that before parking).
     /// Returns nil if the parked item is missing or already failed (forces a clean cold start).
