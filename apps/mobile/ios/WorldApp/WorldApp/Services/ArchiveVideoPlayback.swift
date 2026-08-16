@@ -800,10 +800,10 @@ struct MatteryaHubPlayerView: View {
     }
 }
 
-// MARK: - Landscape fullscreen (hub / archive)
+// MARK: - Fullscreen (hub / archive) — portrait + landscape
 
-/// Full-screen hub player. Unlocks landscape so tilting the device rotates playback.
-/// YouTube-style: drag down to dismiss, tap chrome, mute, scrub.
+/// Full-screen hub player. Follows the phone’s orientation (portrait or landscape).
+/// Aspect-fit only — never crop or zoom the picture. Drag down to dismiss.
 struct MatteryaLandscapeFullscreenPlayer: View {
     let url: URL
     var posterURL: URL? = nil
@@ -819,67 +819,84 @@ struct MatteryaLandscapeFullscreenPlayer: View {
     @State private var showChrome = true
     @State private var chromeHideTask: Task<Void, Never>?
     @State private var isScrubbing = false
-    /// YouTube drag-down dismiss offset.
+    /// YouTube drag-down dismiss offset (no scale/zoom).
     @State private var dismissDrag: CGFloat = 0
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-                .opacity(max(0.35, 1 - Double(dismissDrag / 420)))
+        GeometryReader { geo in
+            let size = geo.size
+            ZStack {
+                Color.black.ignoresSafeArea()
+                    .opacity(max(0.4, 1 - Double(dismissDrag / 480)))
 
-            ArchiveVideoPlayerView(
-                url: url,
-                posterURL: posterURL,
-                isActive: true,
-                muted: isMuted,
-                startTime: startTime,
-                loops: false,
-                fillsFrame: true,
-                bridge: bridge,
-                onReady: {
-                    bridge.publishReady(playing: true)
-                    scheduleChromeHide()
-                },
-                onProgress: { current, duration in
-                    guard !isScrubbing else { return }
-                    let playing = bridge.controller?.isPlaying
-                    bridge.publishProgress(current: current, duration: duration, playing: playing)
+                // Full bounds + aspect-fit: entire frame visible in portrait *and* landscape.
+                // Never fillsFrame (that crops) and never scaleEffect (that zooms).
+                ArchiveVideoPlayerView(
+                    url: url,
+                    posterURL: posterURL,
+                    isActive: true,
+                    muted: isMuted,
+                    startTime: startTime,
+                    loops: false,
+                    fillsFrame: false,
+                    bridge: bridge,
+                    onReady: {
+                        bridge.publishReady(playing: true)
+                        // Re-assert fit after first frame (configure must not force fill).
+                        bridge.controller?.applyVideoGravity(.resizeAspect)
+                        scheduleChromeHide()
+                    },
+                    onProgress: { current, duration in
+                        guard !isScrubbing else { return }
+                        let playing = bridge.controller?.isPlaying
+                        bridge.publishProgress(current: current, duration: duration, playing: playing)
+                    }
+                )
+                .frame(width: size.width, height: size.height)
+                .offset(y: max(0, dismissDrag))
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        showChrome.toggle()
+                    }
+                    if showChrome { scheduleChromeHide() }
                 }
-            )
-            .ignoresSafeArea()
-            .scaleEffect(max(0.86, 1 - dismissDrag / 1400), anchor: .center)
-            .offset(y: max(0, dismissDrag))
-            .contentShape(Rectangle())
-            .onTapGesture {
-                withAnimation(.easeInOut(duration: 0.18)) {
-                    showChrome.toggle()
-                }
-                if showChrome { scheduleChromeHide() }
-            }
-            .gesture(fullscreenDismissGesture)
+                .gesture(fullscreenDismissGesture)
 
-            if (showChrome || !bridge.isPlaying), dismissDrag < 24 {
-                fullscreenChrome
-                    .transition(.opacity)
+                if (showChrome || !bridge.isPlaying), dismissDrag < 24 {
+                    fullscreenChrome
+                        .frame(width: size.width, height: size.height)
+                        .transition(.opacity)
+                }
             }
+            .frame(width: size.width, height: size.height)
         }
         .ignoresSafeArea()
         .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)
+        // Rotate with the device while fullscreen (portrait + landscape).
         .onAppear {
             isMuted = initialMuted
             AppDelegate.orientationLock = .allButUpsideDown
             Self.refreshSupportedOrientations()
+            // Prefer current physical orientation instead of forcing landscape.
+            Self.requestGeometryUpdateIfNeeded()
             scheduleChromeHide()
         }
         .onDisappear {
             chromeHideTask?.cancel()
             AppDelegate.orientationLock = .portrait
             Self.refreshSupportedOrientations()
+            Self.requestGeometryUpdateIfNeeded()
         }
         .onChange(of: isMuted) { _, muted in
             bridge.controller?.setMuted(muted)
             bridge.publishMuted(muted)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+            // Keep aspect-fit after rotation (layer frame updates in viewDidLayoutSubviews).
+            bridge.controller?.applyVideoGravity(.resizeAspect)
+            Self.refreshSupportedOrientations()
         }
     }
 
@@ -1067,6 +1084,16 @@ struct MatteryaLandscapeFullscreenPlayer: View {
 
     private static func refreshSupportedOrientations() {
         guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
+        for window in scene.windows {
+            window.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+        }
+    }
+
+    /// Ask the window scene to re-evaluate orientation so portrait↔landscape follows the phone.
+    private static func requestGeometryUpdateIfNeeded() {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
+        // iOS 16+: update geometry preferences so rotate-to-landscape works while unlocked.
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: AppDelegate.orientationLock)) { _ in }
         for window in scene.windows {
             window.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
         }

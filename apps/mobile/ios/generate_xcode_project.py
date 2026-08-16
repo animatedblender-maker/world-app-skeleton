@@ -348,7 +348,8 @@ for config_id, name, is_target in [
         add("\t\t\t\tINFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;")
         add("\t\t\t\tINFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;")
         add("\t\t\t\tINFOPLIST_KEY_UILaunchScreen_Generation = YES;")
-        add("\t\t\t\tINFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;")
+        # Portrait default; landscape allowed so Hubs fullscreen can follow device orientation.
+        add("\t\t\t\tINFOPLIST_KEY_UISupportedInterfaceOrientations = \"UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight\";")
         add("\t\t\t\tINFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = \"UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown\";")
         add("\t\t\t\tIPHONEOS_DEPLOYMENT_TARGET = 17.0;")
         add("\t\t\t\tLD_RUNPATH_SEARCH_PATHS = (")
