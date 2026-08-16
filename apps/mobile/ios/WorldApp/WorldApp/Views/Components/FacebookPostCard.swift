@@ -18,6 +18,10 @@ struct FacebookPostCard: View {
     var onOpenReel: (() -> Void)? = nil
     var onPostDeleted: ((String) -> Void)?
     var onPostUpdated: ((CountryPost) -> Void)?
+    /// Home feed: hide this post (local + ranking signal).
+    var onHide: ((String) -> Void)? = nil
+    /// Home feed: not interested (hide + author penalty + ranking signal).
+    var onNotInterested: ((String) -> Void)? = nil
     /// Always expand/collapse comments on the card — never jump to post detail for comments.
     var expandsCommentsInline: Bool = true
     var viewingCountryISO: String? = nil
@@ -619,8 +623,23 @@ struct FacebookPostCard: View {
                 Button("Edit") { showEditSheet = true }
                 Button("Delete", role: .destructive) { showDeleteConfirm = true }
             }
-            Button("Report", role: .destructive) { showReportConfirm = true }
             if !isOwnPost {
+                if onHide != nil {
+                    Button {
+                        onHide?(post.id)
+                        actionMessage = "Hidden from your feed."
+                    } label: {
+                        Label("Hide post", systemImage: "eye.slash")
+                    }
+                }
+                if onNotInterested != nil {
+                    Button {
+                        onNotInterested?(post.id)
+                        actionMessage = "We'll show less like this."
+                    } label: {
+                        Label("Not interested", systemImage: "hand.thumbsdown")
+                    }
+                }
                 Button("Block \(post.authorDisplayName)", role: .destructive) {
                     appState.blockUser(
                         post.authorID,
@@ -629,6 +648,7 @@ struct FacebookPostCard: View {
                     )
                 }
             }
+            Button("Report", role: .destructive) { showReportConfirm = true }
         } label: {
             Image(systemName: "ellipsis")
                 .font(.body.weight(.semibold))

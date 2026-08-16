@@ -51,6 +51,8 @@ final class HomeFeedStore {
     private(set) var didPaint = false
     /// Uploading / sharing video shadows at the top of the feed.
     private(set) var pendingUploads: [FeedUploadPlaceholder] = []
+    /// Home dual policy: For you (discovery) vs Following (relationships only).
+    private(set) var homeMode: HomeFeedMode = .forYou
 
     private var nextCursor: String?
     /// Bumps cancel obsolete network merges / load-more.
@@ -88,21 +90,91 @@ final class HomeFeedStore {
             ?? AuthService.shared.currentUser?.id
     }
 
-    /// Session order + hard hide of already-viewed posts (open / reload / app open / load-more).
-    /// Phase-0 recsys: baseline order → constrained re-rank under `homeForYou` policy.
-    private func rankForSession(_ posts: [CountryPost]) -> [CountryPost] {
-        let baseline = SparkDiscoveryEngine.sessionHomeFeedOrder(
-            posts.dedupeHomeFeedContent(),
-            followingIDs: sessionFollowingIDs,
-            myUserID: sessionMyUserID,
-            sessionSeed: sessionRankSeed
+    /// Switch For you ↔ Following without dropping the in-memory pool.
+    func setHomeMode(_ mode: HomeFeedMode) {
+        guard mode != homeMode else { return }
+        homeMode = mode
+        userEngagedThisSession = false
+        // Re-rank the pool under the new surface policy; keep window sensible.
+        let reordered = rankForSession(posts)
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            posts = reordered
+            windowLimit = min(max(firstWindow, windowLimit), max(reordered.count, 0))
+        }
+        EngagementTracker.shared.enqueueRecommendationEvent(
+            type: "ranked_served",
+            surface: mode.surface.rawValue,
+            meta: [
+                "action": "home_mode_switch",
+                "mode": mode.rawValue,
+                "count": "\(reordered.count)",
+            ]
         )
-        let policy = RecommendationSurface.homeForYou.policy
+    }
+
+    /// Hide / not interested — remove from list + persist feedback.
+    func applyNegativeFeedback(postID: String, kind: FeedNegativeKind) {
+        guard let post = posts.first(where: { $0.id == postID }) else {
+            // Still remove if already gone from pool but UI holds id.
+            posts.removeAll { $0.id == postID }
+            return
+        }
+        switch kind {
+        case .hide:
+            FeedFeedbackStore.shared.hide(post: post)
+        case .notInterested:
+            FeedFeedbackStore.shared.notInterested(post: post)
+        }
+        withAnimation(MatteryaMotion.insert) {
+            posts.removeAll { $0.id == postID }
+        }
+    }
+
+    enum FeedNegativeKind {
+        case hide
+        case notInterested
+    }
+
+    /// Session order + hard hide of already-viewed posts (open / reload / app open / load-more).
+    /// Phase-0 recsys: baseline order → constrained re-rank under active home policy.
+    private func rankForSession(_ posts: [CountryPost]) -> [CountryPost] {
+        let cleaned = FeedFeedbackStore.shared.filterOutFeedback(posts.dedupeHomeFeedContent())
+        let surface = homeMode.surface
+        let policy = surface.policy
+
+        let baseline: [CountryPost]
+        switch homeMode {
+        case .following:
+            // Relationships only — recency, no global discovery mix.
+            let me = sessionMyUserID ?? ""
+            baseline = cleaned
+                .filter {
+                    sessionFollowingIDs.contains($0.authorID)
+                        || (!me.isEmpty && $0.authorID == me)
+                }
+                .sorted { ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast) }
+        case .forYou:
+            baseline = SparkDiscoveryEngine.sessionHomeFeedOrder(
+                cleaned,
+                followingIDs: sessionFollowingIDs,
+                myUserID: sessionMyUserID,
+                sessionSeed: sessionRankSeed
+            )
+        }
+
         let blocked = Set(BlockService.shared.blocked.map(\.userID))
+        // Author penalties from “Not interested” act as soft blocks when strong.
+        let penalizedAuthors = Set(
+            FeedFeedbackStore.shared.authorPenalties
+                .filter { $0.value >= 0.85 }
+                .map(\.key)
+        )
         let composed = FeedCompositionEngine.compose(
             candidates: baseline,
             policy: policy,
-            blockedAuthorIDs: blocked,
+            blockedAuthorIDs: blocked.union(penalizedAuthors),
             alreadyServedIDs: [],
             followingIDs: sessionFollowingIDs,
             limit: max(baseline.count, policy.pageSize)
@@ -110,14 +182,14 @@ final class HomeFeedStore {
         // Decision log (sampled) so warehouse can reconstruct home ranking later.
         if !composed.isEmpty {
             RecommendationDecisionLog.shared.logServedPage(
-                surface: .homeForYou,
+                surface: surface,
                 requestID: feedSessionId,
-                items: composed.prefix(policy.pageSize).map { post in
+                items: composed.prefix(policy.pageSize).enumerated().map { i, post in
                     RecommendationDecisionLog.ServedItem(
                         postID: post.id,
                         authorID: post.authorID,
                         sources: sessionFollowingIDs.contains(post.authorID) ? ["following"] : ["explore"],
-                        position: 0
+                        position: i
                     )
                 }
             )

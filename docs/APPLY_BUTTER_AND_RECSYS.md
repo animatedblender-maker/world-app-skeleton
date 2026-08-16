@@ -65,7 +65,7 @@ These are **not** implementable as pure app code without decisions and services 
 | Item | Why | What we need from you |
 |---|---|---|
 | **Kafka / Redpanda in prod** | Decision logs only help if they land in a stream/warehouse | Confirm `KAFKA_ENABLED=true` on API deploy; Redpanda/Kafka brokers; access to Console |
-| **Warehouse / lakehouse** | Phase 0 exit: reconstruct feeds offline | Snowflake / BigQuery / ClickHouse / S3+Iceberg choice + credentials |
+| **Warehouse / lakehouse** | Long-term analytics DB (not required for live product). Events already go Kafka → can land in a warehouse later for ML training. | Optional later — not blocking For you / Following / hide |
 | **Experiment assignment** | A/B for ranker vs baseline | Randomization unit (user_id), holdout %, who owns experiment config |
 | **Feature store** | Dual online/offline features | Redis/KV + offline tables — vendor or self-host |
 | **ANN / embeddings** | Two-tower retrieval (Phase 2) | GPU budget, embedding model choice, vector DB (pgvector / Pinecone / …) |

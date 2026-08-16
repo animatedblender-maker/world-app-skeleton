@@ -99,21 +99,36 @@ struct FeedView: View {
                     }
 
                     // Sparks → Continue watching (Hubs) → New on Hubs — always above posts.
-                    if !feedReels.isEmpty {
-                        feedReelsStrip
+                    // Hidden on Following (relationship stream, not discovery rails).
+                    if store.homeMode == .forYou {
+                        if !feedReels.isEmpty {
+                            feedReelsStrip
+                        }
+                        if !continueWatching.isEmpty {
+                            continueWatchingStrip
+                        }
+                        if !newOnPlay.isEmpty {
+                            newOnPlayStrip
+                        }
                     }
-                    if !continueWatching.isEmpty {
-                        continueWatchingStrip
-                    }
-                    if !newOnPlay.isEmpty {
-                        newOnPlayStrip
-                    }
+
+                    homeModeChips
+                        .padding(.bottom, 4)
 
                     // Posts still bootstrapping but rails already visible.
                     if store.showsSkeleton && store.displayedPosts.isEmpty {
                         ProgressView()
                             .padding(.vertical, 28)
                             .frame(maxWidth: .infinity)
+                    }
+
+                    if store.homeMode == .following, store.displayedPosts.isEmpty, !store.showsSkeleton {
+                        ContentUnavailableView(
+                            "No posts from people you follow",
+                            systemImage: "person.2",
+                            description: Text("Follow people to fill this tab. For you still has discovery.")
+                        )
+                        .padding(.vertical, 32)
                     }
 
                     ForEach(store.displayedPosts) { post in
@@ -131,12 +146,23 @@ struct FeedView: View {
                                 appState.openGlobalSparksViewer(startingPost: post)
                             },
                             onPostDeleted: { id in store.removePost(id: id) },
-                            onPostUpdated: { updated in store.applyLocalUpdate(updated) }
+                            onPostUpdated: { updated in store.applyLocalUpdate(updated) },
+                            onHide: { id in
+                                store.applyNegativeFeedback(postID: id, kind: .hide)
+                                appState.showToast("Hidden from your feed.", style: .info)
+                            },
+                            onNotInterested: { id in
+                                store.applyNegativeFeedback(postID: id, kind: .notInterested)
+                                appState.showToast("We'll show less like this.", style: .info)
+                            }
                         )
                         .id(post.id)
                         .onAppear {
                             store.onRowAppear(post: post)
-                            EngagementTracker.shared.feedPostAppeared(post, surface: "home")
+                            EngagementTracker.shared.feedPostAppeared(
+                                post,
+                                surface: store.homeMode.surface.rawValue
+                            )
                             Task { await PostsService.shared.recordView(post) }
                         }
                         .onDisappear {
@@ -180,6 +206,25 @@ struct FeedView: View {
                 }
             }
         }
+    }
+
+    /// For you / Following — two explicit feed policies (recsys roadmap).
+    private var homeModeChips: some View {
+        HStack(spacing: 10) {
+            ForEach(HomeFeedMode.allCases) { mode in
+                Button {
+                    withAnimation(MatteryaMotion.snappy) {
+                        store.setHomeMode(mode)
+                    }
+                } label: {
+                    Text(mode.title)
+                }
+                .pillTab(isSelected: store.homeMode == mode)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Theme.pagePadding)
+        .padding(.vertical, 8)
     }
 
     private var feedReelsStrip: some View {
