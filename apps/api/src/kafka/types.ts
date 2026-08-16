@@ -116,6 +116,12 @@ export const EngagementEventTypes = {
   /** Generic surface open (feed, search, globe, messages, …) */
   ScreenOpened: 'EngagementScreenOpened',
   ScreenLeft: 'EngagementScreenLeft',
+  /** RecSys Phase 0 — decision / exposure telemetry */
+  Impression: 'EngagementImpression',
+  RankedServed: 'EngagementRankedServed',
+  ViewportVisible: 'EngagementViewportVisible',
+  Hide: 'EngagementHide',
+  NotInterested: 'EngagementNotInterested',
 } as const;
 
 export type EngagementPayload = {

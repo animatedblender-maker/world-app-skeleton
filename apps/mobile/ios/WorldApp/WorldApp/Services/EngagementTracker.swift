@@ -196,11 +196,35 @@ final class EngagementTracker {
         Task { await flushNow() }
     }
 
+    // MARK: - Recommendation decisions (RecSys Phase 0)
+
+    /// Impression / ranked_served / viewport_visible / hide / not_interested.
+    /// Keeps the event envelope small; full decision reconstruction uses meta + sessionId.
+    func enqueueRecommendationEvent(
+        type: String,
+        contentId: String? = nil,
+        authorId: String? = nil,
+        surface: String? = nil,
+        meta: [String: String]? = nil
+    ) {
+        var m = meta ?? [:]
+        m["schemaVersion"] = "1"
+        m["sessionId"] = sessionId
+        enqueue(
+            type: type,
+            contentId: contentId,
+            authorId: authorId,
+            surface: surface,
+            meta: m
+        )
+    }
+
     // MARK: - Queue
 
     private func enqueue(
         type: String,
         post: CountryPost? = nil,
+        contentId: String? = nil,
         authorId: String? = nil,
         surface: String? = nil,
         hubSlug: String? = nil,
@@ -212,7 +236,7 @@ final class EngagementTracker {
         queue.append(
             PendingEvent(
                 type: type,
-                contentId: p?.id,
+                contentId: contentId ?? p?.id,
                 authorId: authorId ?? p?.authorID,
                 countryCode: p?.countryCode,
                 hubSlug: hubSlug,

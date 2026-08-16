@@ -55,6 +55,31 @@ const CLIENT_TYPES: Record<
   },
   screen_open: { eventType: EngagementEventTypes.ScreenOpened, defaultStrength: 0.05 },
   screen_leave: { eventType: EngagementEventTypes.ScreenLeft, defaultStrength: 0.05 },
+  /** RecSys Phase 0 decision / exposure */
+  impression: {
+    eventType: EngagementEventTypes.Impression,
+    defaultStrength: 0.15,
+    needsContent: true,
+  },
+  ranked_served: {
+    eventType: EngagementEventTypes.RankedServed,
+    defaultStrength: 0.05,
+  },
+  viewport_visible: {
+    eventType: EngagementEventTypes.ViewportVisible,
+    defaultStrength: 0.25,
+    needsContent: true,
+  },
+  hide: {
+    eventType: EngagementEventTypes.Hide,
+    defaultStrength: -0.85,
+    needsContent: true,
+  },
+  not_interested: {
+    eventType: EngagementEventTypes.NotInterested,
+    defaultStrength: -0.7,
+    needsContent: true,
+  },
 };
 
 export type ClientEngagementEvent = {

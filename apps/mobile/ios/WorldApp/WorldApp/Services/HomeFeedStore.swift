@@ -89,13 +89,40 @@ final class HomeFeedStore {
     }
 
     /// Session order + hard hide of already-viewed posts (open / reload / app open / load-more).
+    /// Phase-0 recsys: baseline order → constrained re-rank under `homeForYou` policy.
     private func rankForSession(_ posts: [CountryPost]) -> [CountryPost] {
-        SparkDiscoveryEngine.sessionHomeFeedOrder(
+        let baseline = SparkDiscoveryEngine.sessionHomeFeedOrder(
             posts.dedupeHomeFeedContent(),
             followingIDs: sessionFollowingIDs,
             myUserID: sessionMyUserID,
             sessionSeed: sessionRankSeed
         )
+        let policy = RecommendationSurface.homeForYou.policy
+        let blocked = Set(BlockService.shared.blocked.map(\.userID))
+        let composed = FeedCompositionEngine.compose(
+            candidates: baseline,
+            policy: policy,
+            blockedAuthorIDs: blocked,
+            alreadyServedIDs: [],
+            followingIDs: sessionFollowingIDs,
+            limit: max(baseline.count, policy.pageSize)
+        )
+        // Decision log (sampled) so warehouse can reconstruct home ranking later.
+        if !composed.isEmpty {
+            RecommendationDecisionLog.shared.logServedPage(
+                surface: .homeForYou,
+                requestID: feedSessionId,
+                items: composed.prefix(policy.pageSize).map { post in
+                    RecommendationDecisionLog.ServedItem(
+                        postID: post.id,
+                        authorID: post.authorID,
+                        sources: sessionFollowingIDs.contains(post.authorID) ? ["following"] : ["explore"],
+                        position: 0
+                    )
+                }
+            )
+        }
+        return composed.isEmpty ? baseline : composed
     }
 
     var displayedPosts: [CountryPost] {
@@ -338,6 +365,14 @@ final class HomeFeedStore {
         // Any row appear counts as engagement — late network must not remount the head.
         userEngagedThisSession = true
         guard let index = displayedPosts.firstIndex(where: { $0.id == post.id }) else { return }
+
+        // True exposure (viewport) — stronger label than "returned by ranking".
+        // Dwell/skip still come from FeedView appear/disappear.
+        RecommendationDecisionLog.shared.logViewportVisible(
+            post: post,
+            surface: .homeForYou,
+            position: index
+        )
 
         let fling = ScrollBudget.isFlinging
         // During a fling, jump the window ahead so LazyVStack always has cells ready.
