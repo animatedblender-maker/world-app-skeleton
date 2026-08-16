@@ -137,10 +137,11 @@ struct YouTubeVideoFrame<Content: View>: View {
                     }
                     .clipShape(Rectangle())
             case .feed:
-                // Full post-card width; height is 16:9 of screen width (never shrink width).
+                // Compact true 16:9 — Hubs aspect-fit fills the box (no tall black letterbox).
+                // Sparks use SparkFeedCard + dominantFeedVideoHeight, not this frame.
                 Color.clear
                     .frame(maxWidth: .infinity)
-                    .frame(height: FacebookMediaLayout.dominantFeedVideoHeight())
+                    .frame(height: FacebookMediaLayout.hubFeedVideoHeight())
                     .background(Theme.ink)
                     .overlay {
                         content().clipShape(Rectangle())

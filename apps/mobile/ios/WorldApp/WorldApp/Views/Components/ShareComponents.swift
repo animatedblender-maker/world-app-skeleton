@@ -294,7 +294,8 @@ struct SharedPostEmbedView: View {
                         .frame(maxWidth: .infinity)
                         .modifier(SharedEmbedMediaSizeModifier(
                             isVideo: isVideo,
-                            photoAspect: photoAspect
+                            photoAspect: photoAspect,
+                            isHubCompact: isHub
                         ))
                         .clipped()
 
@@ -342,13 +343,17 @@ struct SharedPostEmbedView: View {
 private struct SharedEmbedMediaSizeModifier: ViewModifier {
     let isVideo: Bool
     let photoAspect: CGFloat
+    var isHubCompact: Bool = false
 
     @ViewBuilder
     func body(content: Content) -> some View {
         if isVideo {
+            let height = isHubCompact
+                ? FacebookMediaLayout.hubFeedVideoHeight()
+                : FacebookMediaLayout.dominantFeedVideoHeight()
             content
                 .frame(maxWidth: .infinity)
-                .frame(height: FacebookMediaLayout.dominantFeedVideoHeight())
+                .frame(height: height)
         } else {
             content
                 .frame(maxWidth: .infinity)

@@ -736,7 +736,11 @@ struct FacebookPostCard: View {
             .modifier(FeedMediaSizeModifier(
                 isVideo: post.hasVideo && mediaContext == .feed && !opensAsSpark,
                 photoAspect: aspect,
-                usesYouTubeFrame: usesYouTubeVideoFrame
+                usesYouTubeFrame: usesYouTubeVideoFrame,
+                // Hubs only: compact 16:9 (no black gaps). Sparks/photos keep tall/aspect sizing.
+                isHubCompact: PlayPlatformBridge.isHubFeedCardVideo(post)
+                    || PlayPlatformBridge.isHubCatalogContent(post)
+                    || isHubOriginShareCard
             ))
             .clipped()
             .overlay(alignment: .bottom) {
@@ -1308,20 +1312,25 @@ private struct PostEditSheet: View {
     }
 }
 
-/// Videos: full post-card width + classic tall feed height. Photos keep aspect ratio.
+/// Videos: full post-card width + height by kind. Photos keep aspect ratio.
+/// Hubs → compact 16:9 (aspect-fit, no black bands). Sparks/other video → tall FB box.
 /// Always clamps size so LazyVStack never lets media (or the whole card) escape the screen.
 private struct FeedMediaSizeModifier: ViewModifier {
     let isVideo: Bool
     let photoAspect: CGFloat
     let usesYouTubeFrame: Bool
+    var isHubCompact: Bool = false
 
     @ViewBuilder
     func body(content: Content) -> some View {
         let aspect = FacebookMediaLayout.clampedAspect(photoAspect)
         if isVideo {
+            let height = isHubCompact
+                ? FacebookMediaLayout.hubFeedVideoHeight()
+                : FacebookMediaLayout.dominantFeedVideoHeight()
             content
                 .frame(minWidth: 0, maxWidth: .infinity)
-                .frame(height: FacebookMediaLayout.dominantFeedVideoHeight())
+                .frame(height: height)
                 .clipped()
                 .contentShape(Rectangle())
         } else {

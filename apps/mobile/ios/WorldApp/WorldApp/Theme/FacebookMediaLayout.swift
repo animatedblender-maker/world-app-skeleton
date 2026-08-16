@@ -19,6 +19,7 @@ enum FacebookMediaLayout {
 
     /// Facebook mobile feed: full-width, tall media (~4:5 immersion, not flat 16:9).
     /// Pair with `fillsFrame: true` so the picture fills the box (no letterbox “tiny video”).
+    /// Sparks + short-form use this; **not** Hubs long-form (see `hubFeedVideoHeight`).
     static func dominantFeedVideoHeight(
         forWidth width: CGFloat = UIScreen.main.bounds.width,
         screenHeight: CGFloat = UIScreen.main.bounds.height
@@ -34,6 +35,17 @@ enum FacebookMediaLayout {
         let preferred = max(classic16x9 * 1.15, min(fbLike, maxDominant))
         let raw = min(max(preferred, minDominant), maxDominant)
         return min(max(raw, minFeedMediaHeight), maxFeedMediaHeight + 20)
+    }
+
+    /// Compact Hubs long-form feed card — true 16:9 of card width.
+    /// Hubs use aspect-fit (no crop); a tall FB box would show black letterbox bands.
+    /// Photos and Sparks must **not** use this.
+    static func hubFeedVideoHeight(
+        forWidth width: CGFloat = UIScreen.main.bounds.width
+    ) -> CGFloat {
+        let w = max(200, width.isFinite ? width : UIScreen.main.bounds.width)
+        let h = w / feedVideoAspect
+        return min(max(h, minFeedMediaHeight), maxFeedMediaHeight)
     }
 
     /// Clamp aspect ratios so a bad media metadata value can't blow out the card.
@@ -59,6 +71,11 @@ enum FacebookMediaLayout {
                 || context == .reel
             if isSpark {
                 return sparkFeedCardHeight(forWidth: width)
+            }
+            // Hubs long-form: compact 16:9 so aspect-fit has no black gaps.
+            if PlayPlatformBridge.isHubFeedCardVideo(post)
+                || PlayPlatformBridge.showsPlayLinkInFeed(post, context: context) {
+                return hubFeedVideoHeight(forWidth: width)
             }
             if usesYouTubeFrame(for: post, context: context) || context == .feed {
                 return dominantFeedVideoHeight(forWidth: width)
