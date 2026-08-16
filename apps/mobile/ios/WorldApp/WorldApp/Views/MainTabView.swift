@@ -67,6 +67,22 @@ struct MainTabView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+            // Ink plate under the mini strip — if continuous video is mid-morph, never show
+            // home paper (white placeholder) through the clear mini hole.
+            if showsFloatingMiniBar {
+                VStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    Theme.ink
+                        .frame(height: YouTubeMiniPlayerBar.barHeight)
+                        .frame(maxWidth: .infinity)
+                    if appState.navigationPath.isEmpty {
+                        Color.clear.frame(height: Theme.tabBarHeight)
+                    }
+                }
+                .allowsHitTesting(false)
+                .zIndex(44)
+            }
+
             // Continuous AVPlayer.
             // Expanded: above page content so the watch stage is visible.
             // Mini: *below* the mini-bar chrome (z70) so the **clear** hole reveals video;
@@ -83,7 +99,10 @@ struct MainTabView: View {
                     if showsFloatingMiniBar, let post = appState.hubPlaybackPost {
                         YouTubeMiniPlayerBar(
                             post: post,
-                            onExpand: { appState.expandHubPlayback() },
+                            onExpand: {
+                                // Expand immediately — no Task hop.
+                                appState.expandHubPlayback()
+                            },
                             onClose: { appState.stopHubPlayback() },
                             embedsVideo: false,
                             isPlaying: Binding(

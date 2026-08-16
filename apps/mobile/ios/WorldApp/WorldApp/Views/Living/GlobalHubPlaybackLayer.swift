@@ -138,23 +138,24 @@ struct GlobalHubPlaybackLayer: View {
             syncPullProgressFromCollapse()
         }
         .onChange(of: expanded) { _, isExpanded in
-            // External expand/minimize (tab switch, chevron, mini tap from chat).
+            // External expand / session flip after morph-minimize.
             isDragging = false
             if isExpanded {
-                // YouTube maximize: spring collapse 1 → 0 (full stage).
+                // YouTube maximize: spring collapse 1 → 0 (full stage) immediately.
                 appState.hubPlaybackPullProgress = 0
+                // If already open, still re-assert full stage (tap maximize while mid-drag).
                 withAnimation(MatteryaMotion.expand) {
                     collapse = 0
                 }
             } else {
-                // External minimize (tab leave): spring to mini strip.
-                withAnimation(MatteryaMotion.minimize) {
+                // Session already mini — geometry must already be at strip (no white hole).
+                // Never re-animate 0→1 here (that left a clear mini chrome over home paper).
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) {
                     collapse = 1
-                    appState.hubPlaybackPullProgress = 1
                 }
-                Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 280_000_000)
-                    guard !appState.hubPlaybackExpanded else { return }
+                if appState.hubPlaybackPullProgress > 0.5 {
                     appState.hubPlaybackPullProgress = 0
                 }
             }
@@ -176,6 +177,14 @@ struct GlobalHubPlaybackLayer: View {
             // Meta-area drag / external request → fullscreen (YouTube).
             guard expanded, collapse < 0.35, appState.hubPlaybackPost != nil else { return }
             showFullscreen = true
+        }
+        .onChange(of: appState.hubMinimizeMorphToken) { _, _ in
+            // AppState requested morph-then-mini (close, tab leave, etc.).
+            guard expanded, appState.hubPlaybackPost != nil else {
+                appState.finishMinimizeHubPlayback(returnToChat: appState.hubMinimizeReturnToChat)
+                return
+            }
+            commitMinimize()
         }
     }
 
@@ -205,7 +214,7 @@ struct GlobalHubPlaybackLayer: View {
             .clipped()
             .offset(x: layout.x, y: layout.y)
             // Finger 1:1 while dragging; spring only on settle / expand.
-            .animation(isDragging ? nil : MatteryaMotion.minimize, value: collapse)
+            .animation(isDragging ? nil : (expanded ? MatteryaMotion.expand : MatteryaMotion.minimize), value: collapse)
             // YouTube: pull down → mini · pull up (expanded) → fullscreen · pull up (mini) → expand.
             .simultaneousGesture(playerDragGesture)
             .id("global-hub-continuous-\(post.id)")
@@ -436,28 +445,30 @@ struct GlobalHubPlaybackLayer: View {
     }
 
     /// Animate collapse → 1, then flip session to mini **without** a second layout jump.
+    /// Critical: wait until the morph has mostly landed before mounting the clear mini chrome
+    /// (flipping expanded after ~16ms left a white hole where the strip is).
     private func commitMinimize() {
-        // Drive chrome + geometry to mini in one short easeOut.
+        let returnToChat = appState.hubMinimizeReturnToChat
+        // Drive chrome + geometry to mini in one short spring.
         withAnimation(MatteryaMotion.minimize) {
             collapse = 1
             appState.hubPlaybackPullProgress = 1
         }
-        // Flip expanded after the morph starts painting — geometry already at mini
-        // so this must NOT re-animate. Side-effects (chat return) stay deferred.
         Task { @MainActor in
-            // Let one frame paint collapse=1.
-            try? await Task.sleep(nanoseconds: 16_000_000)
-            appState.minimizeHubPlayback(returnToChat: true, animated: false)
-            // Ensure collapse stays 1 after state flip (onChange may race).
+            // ~spring response — video must sit in the mini strip before chrome mounts.
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            // Pin geometry before session flip.
             var t = Transaction()
             t.disablesAnimations = true
             withTransaction(t) {
                 collapse = 1
             }
-            // Clear pull flag after mini bar is up so home isn't treated as "grabbing".
-            try? await Task.sleep(nanoseconds: 90_000_000)
-            guard !appState.hubPlaybackExpanded else { return }
-            appState.hubPlaybackPullProgress = 0
+            appState.finishMinimizeHubPlayback(returnToChat: returnToChat)
+            var t2 = Transaction()
+            t2.disablesAnimations = true
+            withTransaction(t2) {
+                collapse = 1
+            }
         }
     }
 }

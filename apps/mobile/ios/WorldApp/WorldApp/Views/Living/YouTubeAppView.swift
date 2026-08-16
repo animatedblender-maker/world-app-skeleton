@@ -446,7 +446,12 @@ struct YouTubeAppView: View {
             EngagementTracker.shared.hubsOpened()
             paintInstantHubsIfPossible()
             isLoading = false
-            // New pure shuffle of everything every time user opens Hubs.
+            // Maximize from mini → watch: never reshuffle/remount (felt like multi-second expand).
+            if appState.hubPlaybackExpanded, appState.hubPlaybackPost != nil {
+                syncRouteFromHubSession()
+                return
+            }
+            // New pure shuffle of everything every time user opens Hubs home.
             if !allVideos.isEmpty {
                 refreshHubsVisitShuffle(remountList: true)
             }

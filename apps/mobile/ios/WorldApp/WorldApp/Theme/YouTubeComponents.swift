@@ -514,8 +514,8 @@ struct YouTubeMiniPlayerBar: View {
     var body: some View {
         GeometryReader { geo in
             ZStack {
-                // Expand hit target behind controls (never wraps the buttons).
-                // YouTube: tap or swipe up on mini → full player.
+                // Expand hit target (YouTube: tap / swipe up → full player).
+                // Sits under chrome; Spacers in chrome must not steal hits.
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture(perform: onExpand)
@@ -559,8 +559,8 @@ struct YouTubeMiniPlayerBar: View {
                         .allowsHitTesting(false)
                     }
                 } else {
-                    // MUST be clear — continuous GlobalHubPlaybackLayer (zIndex below)
-                    // paints the live video through this hole. Opaque ink = black mini.
+                    // Clear hole — continuous layer paints through. Ink underlay lives in
+                    // MainTabView *below* the continuous layer so home paper never shows.
                     Color.clear
                         .allowsHitTesting(false)
                         .overlay(
@@ -584,7 +584,7 @@ struct YouTubeMiniPlayerBar: View {
         }
         .frame(maxWidth: .infinity)
         .frame(height: Self.barHeight)
-        // Clear when continuous player paints through; ink only when this bar embeds its own player.
+        // Clear when continuous paints through; ink when this bar owns its own player.
         .background(embedsVideo ? Theme.ink : Color.clear)
         .shadow(color: Theme.ink.opacity(0.28), radius: 12, y: -3)
         .overlay(alignment: .top) {
@@ -614,6 +614,7 @@ struct HubMiniPlayerChrome: View {
 
     var body: some View {
         ZStack {
+            // Gradients never steal expand taps.
             VStack(spacing: 0) {
                 LinearGradient(
                     colors: [.black.opacity(0.22), .clear],
@@ -631,9 +632,11 @@ struct HubMiniPlayerChrome: View {
             }
             .allowsHitTesting(false)
 
+            // Only the three controls hit-test — Spacers used to swallow expand taps.
             VStack(spacing: 0) {
                 HStack {
                     Spacer(minLength: 0)
+                        .allowsHitTesting(false)
                     Button(action: onClose) {
                         Image(systemName: "xmark")
                             .font(.system(size: btn * 0.38, weight: .bold))
@@ -650,9 +653,11 @@ struct HubMiniPlayerChrome: View {
                 .padding(.trailing, pad)
 
                 Spacer(minLength: 0)
+                    .allowsHitTesting(false)
 
                 HStack(spacing: 12) {
                     Spacer(minLength: 0)
+                        .allowsHitTesting(false)
                     Button {
                         isMuted.toggle()
                     } label: {
@@ -662,6 +667,7 @@ struct HubMiniPlayerChrome: View {
                             .frame(width: btn, height: btn)
                             .background(chipFill, in: Circle())
                             .overlay(Circle().stroke(chipStroke, lineWidth: 0.5))
+                            .contentShape(Circle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(isMuted ? "Unmute" : "Mute")
@@ -679,6 +685,7 @@ struct HubMiniPlayerChrome: View {
                                 .foregroundStyle(Theme.paper.opacity(0.95))
                                 .offset(x: isPlaying ? 0 : 1)
                         }
+                        .contentShape(Circle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(isPlaying ? "Pause" : "Play")
@@ -688,6 +695,8 @@ struct HubMiniPlayerChrome: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Empty chrome area must not block the expand layer underneath.
+        .allowsHitTesting(true)
     }
 }
 

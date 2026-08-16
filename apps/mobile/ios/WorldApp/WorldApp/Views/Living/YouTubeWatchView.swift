@@ -76,12 +76,16 @@ struct YouTubeWatchView: View {
     }
 
     /// Root backdrop — clear on pull/mini so Hubs home (underlay) is never covered by white/ink.
+    /// Never leave a white slab over the video stage while continuous player owns the pixels.
     private var watchRootBackground: Color {
         if !embedsPlayer {
             if !appState.hubPlaybackExpanded { return .clear }
             if isMinimizingGrab || appState.hubPlaybackPullProgress > 0.02 {
                 return .clear
             }
+            // Stage hole is clear; only meta below needs paper. Use clear root so the
+            // continuous layer never sits under a canvas flash during expand/minimize.
+            return .clear
         }
         return Theme.canvas
     }
@@ -111,7 +115,8 @@ struct YouTubeWatchView: View {
             VStack(spacing: 0) {
                 playerSection
                     .frame(width: geo.size.width, height: max(120, reservedPlayerHeight))
-                    .background(embedsPlayer ? Theme.ink : Color.clear)
+                    // Continuous player paints the stage — never canvas/white under the hole.
+                    .background(embedsPlayer ? Theme.ink : Theme.ink.opacity(isMinimizingGrab ? 0 : 1))
                     .background {
                         GeometryReader { stageGeo in
                             Color.clear.preference(

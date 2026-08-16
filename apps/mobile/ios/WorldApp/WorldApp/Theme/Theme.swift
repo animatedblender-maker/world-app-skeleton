@@ -60,11 +60,11 @@ enum MatteryaMotion {
     /// Page / tab morph — lands immediately.
     static let snappy = Animation.easeOut(duration: 0.12)
     /// YouTube mini settle after finger-up (snappy spring, not a hangy bounce).
-    static let minimize = Animation.spring(response: 0.28, dampingFraction: 0.92)
+    static let minimize = Animation.spring(response: 0.22, dampingFraction: 0.92)
     /// Sheets, comments, share overlays.
     static let sheet = Animation.easeOut(duration: 0.16)
-    /// YouTube maximize from mini → full watch.
-    static let expand = Animation.spring(response: 0.34, dampingFraction: 0.90)
+    /// YouTube maximize from mini → full watch (snappy — was hanging at ~0.34s + tab work).
+    static let expand = Animation.spring(response: 0.22, dampingFraction: 0.92)
     /// Fullscreen present / dismiss.
     static let fullscreen = Animation.spring(response: 0.30, dampingFraction: 0.92)
     /// Micro UI (mute chip, glyph, heart pop settle).

@@ -80,6 +80,11 @@ final class AppState {
     /// Bumped to request landscape fullscreen on the continuous Hubs player
     /// (meta drag-below-video, external chrome). GlobalHubPlaybackLayer observes.
     var hubPlaybackFullscreenToken: Int = 0
+    /// Bumped to request mini morph on the continuous layer **before** flipping
+    /// `hubPlaybackExpanded` (avoids white mini hole while video is still full-stage).
+    var hubMinimizeMorphToken: Int = 0
+    /// Consumed by the layer when finishing a morph-minimize.
+    var hubMinimizeReturnToChat: Bool = true
     /// 0…1 YouTube-style collapse while scrolling meta/comments under the video.
     /// 0 = full stage; 1 = sticky compact height at the top.
     var hubWatchScrollCollapse: CGFloat = 0
@@ -1031,15 +1036,13 @@ final class AppState {
         }
 
         // Keep Hubs audio going as mini while chatting (dock under composer).
-        // Never stop/pause — only collapse expanded watch if needed.
+        // Morph-first minimize — never snap expanded=false (white mini hole).
         if hubPlaybackPost != nil {
             hubPlaybackPlaying = true
-            if hubPlaybackExpanded {
-                withAnimation(MatteryaMotion.snappy) {
-                    hubPlaybackExpanded = false
-                }
-            }
             hubPlaybackReturnConversationID = trimmed
+            if hubPlaybackExpanded {
+                minimizeHubPlayback(returnToChat: false)
+            }
         }
 
         // Already on this chat — don't rebuild the stack (feels like "closing everything").
@@ -1264,39 +1267,53 @@ final class AppState {
     }
 
     /// Collapse to mini — **playback keeps running** (same continuous AVPlayer, only layout changes).
-    /// Geometry morph is owned by `GlobalHubPlaybackLayer` (`collapse` 0→1). This only flips session flags.
-    /// - Parameter animated: when false, layer already finished the morph — no second animation.
+    /// Geometry morph is owned by `GlobalHubPlaybackLayer` (`collapse` 0→1).
+    /// - Parameter animated: when true and currently expanded, layer morphs first then flips session.
+    ///   When false, layer already finished the morph — flip flags only (no second jump / white hole).
     func minimizeHubPlayback(returnToChat: Bool = true, animated: Bool = true) {
         guard hubPlaybackPost != nil else { return }
         // Never stop/pause mini — GlobalHubPlaybackLayer only resizes the stage.
         hubPlaybackPlaying = true
         hubWatchScrollCollapse = 0
-        // Hold pull at 1 so watch chrome stays fully faded through the handoff.
-        if hubPlaybackExpanded {
+
+        // Morph-first path: video must reach the mini strip **before** the clear mini chrome
+        // mounts, or the hole shows home paper (white placeholder).
+        if animated, hubPlaybackExpanded {
             hubPlaybackPullProgress = 1
+            hubMinimizeReturnToChat = returnToChat
+            hubMinimizeMorphToken &+= 1
+            return
         }
-        if animated {
-            withAnimation(MatteryaMotion.minimize) {
-                hubPlaybackExpanded = false
-            }
-        } else {
-            // Layer already at mini frame — flip with zero animation to avoid a second jump.
-            var t = Transaction()
-            t.disablesAnimations = true
-            withTransaction(t) {
-                hubPlaybackExpanded = false
-            }
+
+        finishMinimizeHubPlayback(returnToChat: returnToChat)
+    }
+
+    /// Called by `GlobalHubPlaybackLayer` after collapse≈1 (or for non-animated minimize).
+    func finishMinimizeHubPlayback(returnToChat: Bool) {
+        guard hubPlaybackPost != nil else { return }
+        hubPlaybackPlaying = true
+        hubWatchScrollCollapse = 0
+        hubPlaybackPullProgress = 1
+        // Layer already at mini frame — flip with zero animation to avoid a second jump.
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            hubPlaybackExpanded = false
         }
 
         // Defer side-effects so they never hitch the release / morph frame.
         let shouldReturn = returnToChat
         let conversationID = hubPlaybackReturnConversationID
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 120_000_000)
+            // Clear pull once mini chrome is up so home isn’t stuck in “grabbing”.
+            try? await Task.sleep(nanoseconds: 40_000_000)
+            if !hubPlaybackExpanded {
+                hubPlaybackPullProgress = 0
+            }
             FeedVideoFocus.shared.resetAll()
             syncHubPlaybackChatReturnWithPath()
             if shouldReturn, let conversationID {
-                try? await Task.sleep(nanoseconds: 60_000_000)
+                try? await Task.sleep(nanoseconds: 40_000_000)
                 guard hubPlaybackPost != nil, !hubPlaybackExpanded else { return }
                 selectedTab = .messages
                 navigationPath = [.conversation(conversationID)]
@@ -1313,19 +1330,31 @@ final class AppState {
 
     /// Tap miniplayer (from chat dock or floating bar) → full Hubs watch with comments.
     /// Same continuous player — expand only grows the stage; audio/video never restart.
-    /// YouTube-style: spring expand (handled in GlobalHubPlaybackLayer via collapse 1→0).
+    /// Instant flag flip; layer springs geometry (no hubs reshuffle stall).
     func expandHubPlayback() {
         guard hubPlaybackPost != nil else { return }
         rememberHubPlaybackChatReturnIfNeeded()
-        // Always leave chat / other pushes so Hubs watch (player + comments) is the real screen.
-        navigationPath.removeAll()
-        selectedTab = .hubs
         hubPlaybackPlaying = true
         hubWatchScrollCollapse = 0
         // Clear pull so watch chrome is fully visible during expand.
         hubPlaybackPullProgress = 0
-        withAnimation(MatteryaMotion.expand) {
-            hubPlaybackExpanded = true
+
+        // Expand **first** with no transaction animation — layer owns the spring.
+        // (withAnimation on this flag delayed maximize by a full navigation cycle.)
+        if !hubPlaybackExpanded {
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) {
+                hubPlaybackExpanded = true
+            }
+        }
+
+        // Lightweight navigation after expand so video starts growing immediately.
+        if selectedTab != .hubs {
+            selectedTab = .hubs
+        }
+        if !navigationPath.isEmpty {
+            navigationPath.removeAll()
         }
         NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
     }
@@ -1344,6 +1373,7 @@ final class AppState {
         hubWatchScrollCollapse = 0
         hubPlaybackVideoAspect = 16.0 / 9.0
         hubPlaybackFullscreenToken = 0
+        hubMinimizeMorphToken = 0
         hubPlaybackReturnConversationID = nil
         MediaPlaybackCoordinator.shared.stopAllPlayback()
         // Mini closed — feed/profile may elect autoplay again.
