@@ -1500,31 +1500,32 @@ final class AppState {
 
     /// Shared open path for feed + chat: multi-seed queue + warm pool + deep expand later.
     private func presentGlobalSparks(starting start: CountryPost) {
-        let seeds = Self.instantSparksSeedQueue(starting: start)
+        // Large instant bulk so the player never waits on network for the first ~dozen swipes.
+        let seeds = Self.instantSparksSeedQueue(starting: start, limit: 72)
         openReelsViewer(startingPost: start, seedPosts: seeds)
         if let url = start.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) {
             ArchiveVideoPlayback.warmResolve(url)
         }
-        // Warm the head immediately so the first swipes aren't cold-start glitches.
-        let ahead = min(6, max(0, seeds.count - 1))
-        SparkWarmPool.shared.prepare(posts: seeds, around: 0, ahead: ahead, behind: 0)
+        // Warm a full bulk window immediately (deep preroll + light outer ring).
+        SparkWarmPool.shared.preparePlayerWindow(posts: seeds, around: 0)
         Task { @MainActor in
             await SparkWarmPool.shared.awaitReady(
-                postIDs: Array(seeds.prefix(5).map(\.id)),
-                timeout: 2.0
+                postIDs: Array(seeds.prefix(SparkWarmPool.deepPrerollAhead).map(\.id)),
+                timeout: 2.2
             )
         }
-        // If memory is thin, kick a light catalog pull so expandFeed / swipe has more fuel.
-        if seeds.count < 12 {
-            Task { @MainActor in
-                _ = await PostsService.shared.loadSparksDiscoveryCatalog(forceRefresh: false, deep: false)
-            }
+        // Always kick catalog fuel in the background so expandFeed has bulk ready.
+        Task { @MainActor in
+            _ = await PostsService.shared.loadSparksDiscoveryCatalog(
+                forceRefresh: seeds.count < 24,
+                deep: seeds.count < 40
+            )
         }
     }
 
     /// Instant swipe seed — **eligible originals only**, **unviewed discovery order**
     /// (not a sticky shuffle of the same catalog head).
-    private static func instantSparksSeedQueue(starting start: CountryPost, limit: Int = 48) -> [CountryPost] {
+    private static func instantSparksSeedQueue(starting start: CountryPost, limit: Int = 72) -> [CountryPost] {
         let head = ReelsRankingEngine.resolvePlayerStart(start)
         var out: [CountryPost] = [head]
         var seen: Set<String> = [head.id]
@@ -1555,7 +1556,8 @@ final class AppState {
             openPlay()
             return
         }
-        SparkWarmPool.shared.prepare(posts: Array(reels.prefix(12)), around: 0, ahead: 6, behind: 1)
+        let head = Array(reels.prefix(max(24, SparkWarmPool.playerAhead + 4)))
+        SparkWarmPool.shared.preparePlayerWindow(posts: head, around: 0)
         openReelsViewer(startingPost: first, seedPosts: reels)
     }
 

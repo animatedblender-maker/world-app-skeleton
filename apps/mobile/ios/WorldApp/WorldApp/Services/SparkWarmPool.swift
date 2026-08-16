@@ -5,9 +5,20 @@ import Foundation
 ///
 /// Cards **claim** a player when visible, and **park** it back (item intact) when they
 /// scroll away — scrolling back reclaims the same buffered player instead of cold-start.
+///
+/// Player bulk policy (TikTok-style):
+/// - Deep preroll the next ~8 swipes (first frame + audio ready at t=0)
+/// - Light-load the next bulk window so claim never cold-starts mid-scroll
+/// - Catalog/queue growth is separate (ReelsScrollViewer) — this only buffers AVPlayers
 @MainActor
 final class SparkWarmPool {
     static let shared = SparkWarmPool()
+
+    /// Default Sparks player window — next bulk is already warm before the finger lands.
+    static let playerAhead = 14
+    static let playerBehind = 2
+    /// Full preroll (first-frame ready) for this many neighbors ahead of focus.
+    static let deepPrerollAhead = 8
 
     private struct Slot {
         let postID: String
@@ -19,19 +30,30 @@ final class SparkWarmPool {
     private var warming = Set<String>()
     /// Visible owners currently holding a claimed player — never re-warm these.
     private var inUse = Set<String>()
-    /// Deep window: Sparks pager needs several neighbors fully buffered before swipe.
-    private let maxSlots = 20
-    private let forwardBufferSeconds: Double = 12
+    /// Bulk window: enough concurrent players that fast swipe never hits a cold slot.
+    private let maxSlots = 32
+    private let forwardBufferSeconds: Double = 16
 
     private init() {}
 
+    /// Convenience for Sparks player — always uses the bulk ahead/behind defaults.
+    func preparePlayerWindow(posts: [CountryPost], around index: Int) {
+        prepare(
+            posts: posts,
+            around: index,
+            ahead: Self.playerAhead,
+            behind: Self.playerBehind
+        )
+    }
+
     /// Warm CDN resolves for the whole list (cheap) and full-buffer players for a window.
     /// Call early (open + every page) so the next Spark is already at first-frame ready.
-    func prepare(posts: [CountryPost], around index: Int, ahead: Int = 8, behind: Int = 2) {
+    func prepare(posts: [CountryPost], around index: Int, ahead: Int = 14, behind: Int = 2) {
         guard !posts.isEmpty else { return }
 
+        // Resolve + thumbs for a *wider* band than full AV buffers (cheap).
         let resolveLo = max(0, index - behind)
-        let resolveHi = min(posts.count, index + ahead + 3)
+        let resolveHi = min(posts.count, index + max(ahead, Self.playerAhead) + 6)
         if resolveLo < resolveHi {
             if AppConfig.archiveContentEnabled {
                 for post in posts[resolveLo..<resolveHi] {
@@ -51,7 +73,15 @@ final class SparkWarmPool {
         let hi = min(posts.count, index + ahead + 1)
         guard lo < hi else { return }
         let window = Array(posts[lo..<hi])
-        let keep = Set(window.map(\.id)).union(inUse)
+        // Never evict the next bulk ahead of focus — only drop far-behind / far-ahead tails.
+        let protectHi = min(posts.count, index + max(ahead, Self.deepPrerollAhead) + 1)
+        let protectLo = max(0, index - behind)
+        var keep = Set(window.map(\.id)).union(inUse)
+        if protectLo < protectHi {
+            for p in posts[protectLo..<protectHi] {
+                keep.insert(p.id)
+            }
+        }
 
         for id in slots.keys where !keep.contains(id) {
             evict(id)
@@ -78,7 +108,12 @@ final class SparkWarmPool {
                 }()
             guard let url else { continue }
             if inUse.contains(post.id) { continue }
-            Task { await warm(postID: post.id, sourceURL: url) }
+            let postIndex = posts.firstIndex(where: { $0.id == post.id }) ?? index
+            let distanceAhead = postIndex - index
+            // Deep preroll for the next bulk of swipes; light load for the outer ring.
+            let deep = distanceAhead >= 0 && distanceAhead <= Self.deepPrerollAhead
+                || abs(distanceAhead) <= 1
+            Task { await warm(postID: post.id, sourceURL: url, deepPreroll: deep) }
         }
     }
 
@@ -187,7 +222,7 @@ final class SparkWarmPool {
     /// Warm a single post by id+url (feed card mount).
     func warmSingle(postID: String, url: URL) {
         guard slots[postID] == nil, !inUse.contains(postID) else { return }
-        Task { await warm(postID: postID, sourceURL: url) }
+        Task { await warm(postID: postID, sourceURL: url, deepPreroll: true) }
     }
 
     /// True when a parked (or in-use) player is ready at t≈0 for seamless first paint.
@@ -218,7 +253,7 @@ final class SparkWarmPool {
 
     // MARK: - Private
 
-    private func warm(postID: String, sourceURL: URL) async {
+    private func warm(postID: String, sourceURL: URL, deepPreroll: Bool) async {
         if slots[postID] != nil || inUse.contains(postID) { return }
         guard !warming.contains(postID) else { return }
         warming.insert(postID)
@@ -259,7 +294,8 @@ final class SparkWarmPool {
             return
         }
         // Deep buffer so first frame + audio are ready before the user lands on the card.
-        item.preferredForwardBufferDuration = forwardBufferSeconds
+        // Outer bulk ring uses a slightly smaller forward buffer to save memory/bandwidth.
+        item.preferredForwardBufferDuration = deepPreroll ? forwardBufferSeconds : 8
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         item.preferredPeakBitRate = 0
 
@@ -290,7 +326,38 @@ final class SparkWarmPool {
 
         MediaPlaybackCoordinator.shared.register(player)
         slots[postID] = Slot(postID: postID, player: player, parkedAt: Date())
-        Task { await silentBufferFill(postID: postID, player: player) }
+        if deepPreroll {
+            Task { await silentBufferFill(postID: postID, player: player) }
+        } else {
+            // Light path: get readyToPlay + park at t=0 without full preroll cost.
+            Task { await lightReady(postID: postID, player: player) }
+        }
+    }
+
+    /// Outer bulk ring — asset loads + seek 0, no full preroll (saves CPU for deep neighbors).
+    private func lightReady(postID: String, player: AVPlayer) async {
+        for _ in 0..<50 {
+            guard isParked(postID: postID, player: player) else { return }
+            if player.currentItem == nil || player.status == .failed
+                || player.currentItem?.status == .failed {
+                evict(postID)
+                return
+            }
+            if player.status == .readyToPlay || player.currentItem?.status == .readyToPlay {
+                player.isMuted = true
+                player.volume = 0
+                player.rate = 0
+                _ = await player.seek(
+                    to: .zero,
+                    toleranceBefore: .zero,
+                    toleranceAfter: .zero
+                )
+                player.pause()
+                player.rate = 0
+                return
+            }
+            try? await Task.sleep(nanoseconds: 40_000_000)
+        }
     }
 
     /// Decode first frame + fill forward buffer **without advancing playhead**.

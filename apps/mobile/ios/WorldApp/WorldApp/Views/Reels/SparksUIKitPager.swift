@@ -421,6 +421,12 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
                 self?.coordinator?.openComments(post.id)
             }
         )
+        // Prefetch AV bulk as cells approach the viewport (before page commit).
+        SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: indexPath.item)
+        // Queue catalog bulk early — never wait until the last 5 clips.
+        if indexPath.item >= posts.count - 16 {
+            coordinator?.nearEnd()
+        }
     }
 
     private func commitPageFromScroll() {
@@ -438,7 +444,8 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         coordinator?.setActiveIndex(clamped)
         refreshVisibleCells()
 
-        if clamped >= posts.count - 5 {
+        // Keep ≥~16 unviewed pages in the queue ahead of the finger.
+        if clamped >= posts.count - 16 {
             coordinator?.nearEnd()
         }
         if clamped <= 2 {
@@ -448,7 +455,7 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         if posts.indices.contains(clamped) {
             let post = posts[clamped]
             SparkDiscoveryEngine.markWatched(post.id)
-            SparkWarmPool.shared.prepare(posts: posts, around: clamped, ahead: 6, behind: 2)
+            SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: clamped)
         }
     }
 }

@@ -57,7 +57,7 @@ struct ReelsVerticalFeed: View {
             MediaPlaybackCoordinator.shared.silenceForSparkPageChange()
             if posts.indices.contains(activeIndex) {
                 recordView(at: activeIndex)
-                SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 8, behind: 2)
+                SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
             }
         }
         .onDisappear {
@@ -66,7 +66,11 @@ struct ReelsVerticalFeed: View {
         }
         .onChange(of: activeIndex) { _, idx in
             recordView(at: idx)
-            SparkWarmPool.shared.prepare(posts: posts, around: idx, ahead: 8, behind: 2)
+            SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: idx)
+            // Request next catalog bulk well before the user reaches the tail.
+            if idx >= posts.count - 16 {
+                onNearEnd?()
+            }
         }
     }
 
@@ -1079,10 +1083,17 @@ struct ReelsScrollViewer: View {
     @State private var posts: [CountryPost]
     @State private var activeIndex = 0
     @State private var isExpandingFeed = false
+    /// If near-end fires while a bulk load is in flight, run another bulk immediately after.
+    @State private var loadMoreQueued = false
     @State private var feedCursor: String?
     @State private var hasMorePages = true
     @State private var recyclePass = 0
     @State private var commentsPostID: String?
+
+    /// How many unplayed pages we always try to keep ahead of the focused Spark.
+    private static let minQueueAhead = 28
+    /// Catalog bulk size per load-more (R2 library is large — fetch in chunks).
+    private static let bulkBatchSize = 80
 
     init(context: ReelsViewerContext) {
         self.context = context
@@ -1121,7 +1132,7 @@ struct ReelsScrollViewer: View {
                     showsProgressRail: false,
                     viewerCountryCode: appState.currentProfile?.countryCode,
                     isScrollEnabled: commentsPostID == nil && appState.sharePostSheet == nil,
-                    onNearEnd: { Task { await loadMoreReels() } },
+                    onNearEnd: { requestLoadMore() },
                     onNearStart: { Task { await loadEarlierReels() } },
                     onOpenComments: { id in
                         CommentsWarmCache.shared.warm(id)
@@ -1167,33 +1178,62 @@ struct ReelsScrollViewer: View {
             // Idle-warm comments for the focused Spark so Chat is instant.
             guard posts.indices.contains(idx) else { return }
             CommentsWarmCache.shared.warm(posts[idx].id)
+            // Keep a bulk of unplayed Sparks ahead of the finger at all times.
+            Task { await ensureBulkQueueAhead() }
         }
         .task {
             // 1) Warm the head *before* catalog churn so the first swipes aren't cold.
-            SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 6, behind: 1)
+            SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
             if posts.indices.contains(activeIndex) {
                 CommentsWarmCache.shared.warm(posts[activeIndex].id)
             }
-            let headIDs = posts.prefix(5).map(\.id)
-            await SparkWarmPool.shared.awaitReady(postIDs: Array(headIDs), timeout: 1.5)
+            let headIDs = Array(posts.dropFirst(activeIndex).prefix(SparkWarmPool.deepPrerollAhead).map(\.id))
+            await SparkWarmPool.shared.awaitReady(postIDs: headIDs, timeout: 1.8)
 
             // 2) Grow the queue without remounting the live head (append-only).
             seedFromWarmCatalogIfNeeded()
-            SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 8, behind: 1)
+            SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
             await SparkWarmPool.shared.awaitReady(
-                postIDs: Array(posts.prefix(5).map(\.id)),
+                postIDs: Array(posts.dropFirst(activeIndex).prefix(6).map(\.id)),
                 timeout: 1.2
             )
 
             // 3) Deep catalog — append unseen only (full replace remounted first pages → glitch).
             await expandFeed()
-            SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 8, behind: 2)
+            SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
+
+            // 4) Top up until we have a full bulk ahead — scroll must never wait on network.
+            await ensureBulkQueueAhead(target: Self.minQueueAhead)
+            SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
+        }
+    }
+
+    /// Fire-and-forget catalog bulk; queues a second pass if one is already in flight.
+    private func requestLoadMore() {
+        if isExpandingFeed {
+            loadMoreQueued = true
+            return
+        }
+        Task { await loadMoreReels() }
+    }
+
+    /// Keep at least `target` unplayed Sparks after the focused index.
+    private func ensureBulkQueueAhead(target: Int = Self.minQueueAhead) async {
+        var guardPasses = 0
+        while guardPasses < 4 {
+            guardPasses += 1
+            let remaining = max(0, posts.count - activeIndex - 1)
+            guard remaining < target else { return }
+            let before = posts.count
+            await loadMoreReels()
+            if posts.count <= before { return }
+            SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
         }
     }
 
     /// Instant neighbors from memory — **unviewed discovery order**, append only.
     private func seedFromWarmCatalogIfNeeded() {
-        guard posts.count < 12 else { return }
+        guard posts.count < Self.minQueueAhead else { return }
         var seen = Set(posts.map(\.id))
         var toAppend: [CountryPost] = []
         let warm = SparkDiscoveryEngine.rankForDiscovery(
@@ -1207,7 +1247,7 @@ struct ReelsScrollViewer: View {
                 || post.hasVideo
             guard hasPath else { continue }
             toAppend.append(post)
-            if posts.count + toAppend.count >= 48 { break }
+            if posts.count + toAppend.count >= 96 { break }
         }
         guard !toAppend.isEmpty else { return }
         var t = Transaction()
@@ -1216,13 +1256,22 @@ struct ReelsScrollViewer: View {
             posts.append(contentsOf: toAppend)
         }
         hasMorePages = true
-        SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 8, behind: 1)
+        SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
     }
 
     private func expandFeed() async {
-        guard !isExpandingFeed else { return }
+        guard !isExpandingFeed else {
+            loadMoreQueued = true
+            return
+        }
         isExpandingFeed = true
-        defer { isExpandingFeed = false }
+        defer {
+            isExpandingFeed = false
+            if loadMoreQueued {
+                loadMoreQueued = false
+                Task { await loadMoreReels() }
+            }
+        }
 
         feedCursor = nil
         hasMorePages = true
@@ -1278,7 +1327,7 @@ struct ReelsScrollViewer: View {
         }
 
         hasMorePages = posts.count > 12 || !upcoming.isEmpty
-        SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 8, behind: 2)
+        SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
         #if DEBUG
         let unviewedAhead = posts.dropFirst(activeIndex + 1)
             .filter { !SparkDiscoveryEngine.isViewed($0.id) }.count
@@ -1334,42 +1383,65 @@ struct ReelsScrollViewer: View {
     }
 
     private func loadMoreReels() async {
-        guard !isExpandingFeed else { return }
+        if isExpandingFeed {
+            loadMoreQueued = true
+            return
+        }
         isExpandingFeed = true
-        defer { isExpandingFeed = false }
+        defer {
+            isExpandingFeed = false
+            if loadMoreQueued {
+                loadMoreQueued = false
+                Task { await loadMoreReels() }
+            }
+        }
 
         let existingIDs = Set(posts.map(\.id))
-        let tail = Array(posts.suffix(6))
+        let tail = Array(posts.suffix(8))
+        let bulk = Self.bulkBatchSize
+
+        // Parallel bulk sources — catalog + random library sample at once.
+        async let catalogTask = PostsService.shared.loadSparksDiscoveryCatalog(
+            forceRefresh: false,
+            deep: true
+        )
+        async let discoverTask = PostsService.shared.fetchDiscoverSparks(
+            limit: min(120, bulk + 20),
+            excluding: Array(existingIDs) + SparkDiscoveryEngine.viewedIDList(limit: 500)
+        )
+        let catalog = await catalogTask
+        let discover = await discoverTask
 
         // Prefer unviewed catalog + random DB sample — never re-queue watched Sparks first.
-        let catalog = await PostsService.shared.loadSparksDiscoveryCatalog(forceRefresh: false, deep: true)
         let remaining = SparkDiscoveryEngine.rankForDiscovery(
-            catalog.filter { !existingIDs.contains($0.id) && ReelsRankingEngine.isSparkEligible($0) }
+            (catalog + discover).filter {
+                !existingIDs.contains($0.id) && ReelsRankingEngine.isSparkEligible($0)
+            }
         )
         if !remaining.isEmpty {
-            let batch = Array(remaining.prefix(48))
+            let batch = Array(remaining.prefix(bulk))
             applyExpandedFeed(batch)
-            hasMorePages = remaining.count > batch.count
-            SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 8, behind: 2)
+            hasMorePages = remaining.count > batch.count || !discover.isEmpty
+            SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
             return
         }
 
-        // Fetch more unviewed from full library before any recycle.
+        // Second remote bulk if catalog was empty of unviewed.
         let more = await PostsService.shared.fetchDiscoverSparks(
-            limit: 60,
-            excluding: Array(existingIDs) + SparkDiscoveryEngine.viewedIDList(limit: 500)
+            limit: min(120, bulk + 20),
+            excluding: Array(existingIDs) + SparkDiscoveryEngine.viewedIDList(limit: 600)
         )
         if !more.isEmpty {
             applyExpandedFeed(SparkDiscoveryEngine.rankForDiscovery(more, excluding: existingIDs))
             hasMorePages = true
-            SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 8, behind: 2)
+            SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
             return
         }
 
         let fromCatalog = ReelsRankingEngine.nextBatch(
             from: catalog,
             excluding: existingIDs,
-            limit: 48,
+            limit: bulk,
             viewerCountry: appState.currentProfile?.countryCode,
             followingIDs: appState.followingIDs,
             tail: tail,
@@ -1377,16 +1449,17 @@ struct ReelsScrollViewer: View {
             allowRecycle: recyclePass > 2
         )
         if !fromCatalog.isEmpty {
-            posts.append(contentsOf: ReelsRankingEngine.sessionFreshOrder(fromCatalog))
+            applyExpandedFeed(ReelsRankingEngine.sessionFreshOrder(fromCatalog))
             hasMorePages = true
+            SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
             return
         }
 
         let page = await PostsService.shared.loadReelsFeedPage(
             excludingIDs: existingIDs,
             cursor: feedCursor,
-            batchSize: 28,
-            fetchLimit: 100,
+            batchSize: bulk / 2,
+            fetchLimit: 120,
             viewerCountry: appState.currentProfile?.countryCode,
             followingIDs: appState.followingIDs,
             tail: tail,
@@ -1394,13 +1467,10 @@ struct ReelsScrollViewer: View {
         )
 
         if !page.posts.isEmpty {
-            var batch: [CountryPost] = []
-            for post in page.posts where !existingIDs.contains(post.id) {
-                batch.append(post)
-            }
-            posts.append(contentsOf: ReelsRankingEngine.sessionFreshOrder(batch))
+            applyExpandedFeed(ReelsRankingEngine.sessionFreshOrder(page.posts))
             feedCursor = page.nextCursor ?? feedCursor
             hasMorePages = page.hasMore
+            SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
             return
         }
 
@@ -1408,15 +1478,16 @@ struct ReelsScrollViewer: View {
             let retry = await PostsService.shared.loadReelsFeedPage(
                 excludingIDs: Set(posts.map(\.id)),
                 cursor: page.nextCursor ?? feedCursor,
-                batchSize: 28,
-                fetchLimit: 100,
+                batchSize: bulk / 2,
+                fetchLimit: 120,
                 viewerCountry: appState.currentProfile?.countryCode,
                 followingIDs: appState.followingIDs,
                 tail: tail,
                 allowRecycle: false
             )
-            for post in retry.posts where !posts.contains(where: { $0.id == post.id }) {
-                posts.append(post)
+            if !retry.posts.isEmpty {
+                applyExpandedFeed(retry.posts)
+                SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
             }
             self.feedCursor = retry.nextCursor
             hasMorePages = retry.hasMore
@@ -1431,14 +1502,15 @@ struct ReelsScrollViewer: View {
         let recycled = ReelsRankingEngine.nextBatch(
             from: reshuffled,
             excluding: Set(posts.map(\.id)),
-            limit: 40,
+            limit: bulk,
             viewerCountry: appState.currentProfile?.countryCode,
             followingIDs: appState.followingIDs,
             tail: tail,
             allowRecycle: true
         )
-        for post in recycled where !posts.contains(where: { $0.id == post.id }) {
-            posts.append(post)
+        if !recycled.isEmpty {
+            applyExpandedFeed(recycled)
+            SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
         }
         hasMorePages = true
     }
@@ -1498,7 +1570,7 @@ struct ReelsScrollViewer: View {
                 activeIndex = min(activeIndex + batch.count, max(0, posts.count - 1))
             }
         }
-        SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 6, behind: 2)
+        SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
     }
 }
 
