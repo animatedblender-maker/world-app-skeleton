@@ -66,7 +66,7 @@ This sprint treated Matterya as **one product surface** (feed, Sparks, Hubs, mes
 | White notch / bottom in FS | Edge-to-edge black + hide tab bar |
 | FS exit felt wrong | **Swipe up** exits (not down) |
 | Meta pull blocked comments scroll | FS pull only when scroll is **at top** |
-| **Mini black screen** | Higher mini z-index (65), **fill** mini frame, reassert play/audio on minimize |
+| **Mini black screen** | Higher mini z-index (65), **fill** mini frame, reassert play/audio; **dock film to measured mini hole** (`adb9c1d` — floating bar was ignored → black ink bed) |
 
 ---
 
