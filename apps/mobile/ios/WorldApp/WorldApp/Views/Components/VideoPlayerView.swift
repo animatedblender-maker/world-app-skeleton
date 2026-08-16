@@ -944,7 +944,7 @@ struct VideoPlayerView: View {
         if playbackRecoveryPasses == 1 {
             didRetryWithPublicURL = true
             if let postID {
-                R2PlaybackResolver.shared.invalidate(postID: postID)
+                await R2PlaybackResolver.shared.invalidate(postID: postID)
                 if let live = await R2PlaybackResolver.shared.playURL(postID: postID, fallback: nil) {
                     configuredURL = live
                     installPlayer(using: MediaPlaybackConfiguration(url: live, headers: nil))
@@ -982,7 +982,7 @@ struct VideoPlayerView: View {
                 return
             }
             if let postID {
-                R2PlaybackResolver.shared.invalidate(postID: postID)
+                await R2PlaybackResolver.shared.invalidate(postID: postID)
                 if let live = await R2PlaybackResolver.shared.playURL(postID: postID, fallback: url) {
                     configuredURL = live
                     installPlayer(using: MediaPlaybackConfiguration(url: live, headers: nil))
