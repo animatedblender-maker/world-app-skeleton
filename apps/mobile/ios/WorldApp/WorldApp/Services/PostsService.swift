@@ -2654,11 +2654,11 @@ enum SparkDiscoveryEngine {
         for p in unique {
             let viewed = isViewed(p.id)
             if isMine(p) {
-                (viewed ? mineViewed : mineUnviewed).append(p)
+                if viewed { mineViewed.append(p) } else { mineUnviewed.append(p) }
             } else if isFollow(p) {
-                (viewed ? followViewed : followUnviewed).append(p)
+                if viewed { followViewed.append(p) } else { followUnviewed.append(p) }
             } else {
-                (viewed ? otherViewed : otherUnviewed).append(p)
+                if viewed { otherViewed.append(p) } else { otherUnviewed.append(p) }
             }
         }
 

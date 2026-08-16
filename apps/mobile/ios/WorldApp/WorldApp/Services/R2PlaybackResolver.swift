@@ -3,8 +3,8 @@ import Foundation
 /// Resolves a **currently playable** URL for R2 video posts **when needed**.
 ///
 /// Call only when a presign is expired/near-expiry or playback failed — not on every play.
-/// (GraphQL-on-every-play blocked the UI → stuck loading, feed lag, random audio.)
-final class R2PlaybackResolver: @unchecked Sendable {
+/// Actor isolation keeps cache access async-safe (no NSLock in async contexts).
+actor R2PlaybackResolver {
     static let shared = R2PlaybackResolver()
 
     private struct CacheEntry {
@@ -13,38 +13,28 @@ final class R2PlaybackResolver: @unchecked Sendable {
         let cachedAt: Date
     }
 
-    private let lock = NSLock()
     private var cache: [String: CacheEntry] = [:]
     private var inflight: [String: Task<URL?, Never>] = [:]
     private let cacheTTL: TimeInterval = 20 * 3600
-
-    private init() {}
 
     /// Live play URL for a post. Prefer `fallback` path when API is slow/fails.
     func playURL(postID: String, fallback: URL? = nil) async -> URL? {
         let key = postID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return fallback }
 
-        lock.lock()
         if let hit = cache[key], Date().timeIntervalSince(hit.cachedAt) < cacheTTL {
-            let url = hit.url
-            lock.unlock()
-            return url
+            return hit.url
         }
         if let existing = inflight[key] {
-            lock.unlock()
             return await existing.value ?? fallback
         }
-        let task = Task<URL?, Never> {
+
+        let task = Task { () -> URL? in
             await self.fetchAndCache(postID: key, fallback: fallback)
         }
         inflight[key] = task
-        lock.unlock()
-
         let result = await task.value
-        lock.lock()
         inflight[key] = nil
-        lock.unlock()
         return result
     }
 
@@ -52,12 +42,10 @@ final class R2PlaybackResolver: @unchecked Sendable {
         do {
             let media = try await fetchPlaybackMedia(postID: postID)
             if let url = URL(string: media.url), url.scheme != nil {
-                lock.lock()
                 cache[postID] = CacheEntry(url: url, mediaURLPayload: media.media_url, cachedAt: Date())
                 if cache.count > 4000, let first = cache.keys.first {
                     cache.removeValue(forKey: first)
                 }
-                lock.unlock()
                 return url
             }
         } catch {
@@ -71,11 +59,9 @@ final class R2PlaybackResolver: @unchecked Sendable {
     /// Drop cache so the next play re-fetches (after 403 / unavailable).
     func invalidate(postID: String) {
         let key = postID.trimmingCharacters(in: .whitespacesAndNewlines)
-        lock.lock()
         cache.removeValue(forKey: key)
         inflight[key]?.cancel()
         inflight[key] = nil
-        lock.unlock()
     }
 
     private struct PlaybackMediaDTO: Decodable {
@@ -94,8 +80,6 @@ final class R2PlaybackResolver: @unchecked Sendable {
           }
         }
         """
-        // Prefer unauthenticated path when possible — but our GraphQL usually needs auth.
-        // Use a short timeout via REST first (lighter than GraphQL for this one field).
         if let rest = try? await fetchPlaybackMediaREST(postID: postID) {
             return rest
         }
