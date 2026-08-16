@@ -885,7 +885,7 @@ export class PostsService {
   ): Promise<PostRow[]> {
     const safeLimit = Math.max(1, Math.min(120, limit || 48));
     const viewer = viewerId && isUuid(viewerId) ? viewerId : null;
-    const exclude = (excludeIds || []).filter((id) => isUuid(id)).slice(0, 400);
+    const exclude = (excludeIds || []).filter((id) => isUuid(id)).slice(0, 2000);
     const savedByMe = await this.savedByMeExpr('$2::uuid');
     const savedByMeShared = await this.savedByMeSharedExpr('$2::uuid');
 

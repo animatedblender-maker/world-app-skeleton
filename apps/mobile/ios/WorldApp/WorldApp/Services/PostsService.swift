@@ -463,32 +463,28 @@ final class PostsService {
         sparksSessionLoadedAt = nil
     }
 
-    /// **Every Sparks player open** (feed / chat / Hubs / strip / menu): full catalog + pure shuffle.
-    /// Returns only **eligible originals** so the queue is thousands of distinct Sparks, not recycled shares.
+    /// **Every Sparks player open**: build a queue of **unviewed** Sparks first.
     func beginFreshSparksSession(preferStart: CountryPost? = nil) async -> [CountryPost] {
-        SparkDiscoveryEngine.resetSession()
-        ReelsRankingEngine.resetSession()
+        SparkDiscoveryEngine.beginNewBrowseSession()
         invalidateSparksDiscoveryCatalog()
 
-        // Deep channel/country pull + **random DB samples** so we don't stick to the same
-        // recentPosts head (that felt like “always the same 50 Sparks”).
         var catalog = await loadSparksDiscoveryCatalog(forceRefresh: true, deep: true)
-
         var seen = Set(catalog.map(\.id))
-        // Several random windows from the full Postgres spark library (10k–28k when seeded).
-        for _ in 0..<6 {
-            let sample = await fetchDiscoverSparks(
-                limit: 80,
-                excluding: Array(seen.prefix(300))
-            )
+        let watchedExclude = SparkDiscoveryEngine.viewedIDList(limit: 800)
+
+        // Random DB windows — always pass watched ids so the server skips them.
+        for _ in 0..<8 {
+            var exclude = Array(seen.prefix(200))
+            exclude.append(contentsOf: watchedExclude)
+            let sample = await fetchDiscoverSparks(limit: 80, excluding: exclude)
             if sample.isEmpty { break }
             for post in sample where seen.insert(post.id).inserted {
                 guard ReelsRankingEngine.isSparkEligible(post) else { continue }
+                // Prefer never-viewed into the pool; still keep for last-resort tail.
                 catalog.append(post)
             }
         }
 
-        // Extra recent pages so brand-new uploads join the pool this session.
         var before: String? = nil
         for _ in 0..<12 {
             let page = await fetchRecentPosts(limit: 100, before: before)
@@ -497,41 +493,31 @@ final class PostsService {
                 guard ReelsRankingEngine.isSparkEligible(post) else { continue }
                 catalog.append(post)
             }
-            before = Self.graphqlTimestamptzCursor(page.last?.createdAt ?? "")
-            if before.isEmpty { before = page.last?.createdAt }
+            if let raw = page.last?.createdAt, !raw.isEmpty {
+                let cursor = Self.graphqlTimestamptzCursor(raw)
+                before = cursor.isEmpty ? raw : cursor
+            }
             if page.count < 40 { break }
         }
 
-        // Hard filter — drop any share shells / long-form that slipped in.
         catalog = catalog.filter { ReelsRankingEngine.isSparkEligible($0) && $0.playableVideoURL != nil }
 
-        // Unseen first (impression TTL), then pure shuffle — never sticky recency order.
+        // Unviewed only at the head — never shuffle watched into the first swipes.
         catalog = SparkDiscoveryEngine.rankForDiscovery(catalog)
-        let seed = UInt64.random(in: 1...UInt64.max)
-            ^ UInt64(Date().timeIntervalSince1970 * 1_000_000)
-            ^ UInt64(catalog.count &<< 12)
-        var rng = SeededRNG(seed: seed)
-        // Second shuffle of the “fresh” head so rank isn't deterministic across opens.
-        if catalog.count > 8 {
-            let head = min(catalog.count, 200)
-            var prefix = Array(catalog.prefix(head))
-            prefix.shuffle(using: &rng)
-            catalog = prefix + Array(catalog.dropFirst(head))
-        }
 
         if let rawStart = preferStart {
             let start = ReelsRankingEngine.resolvePlayerStart(rawStart)
             if start.playableVideoURL != nil {
                 catalog.removeAll { $0.id == start.id }
                 catalog.insert(start, at: 0)
-                seen.insert(start.id)
             }
         }
 
         sparksSessionCatalog = catalog
         sparksSessionLoadedAt = Date()
         #if DEBUG
-        print("[Sparks] fresh session size=\(catalog.count) seed=\(seed)")
+        let unviewed = catalog.filter { !SparkDiscoveryEngine.isViewed($0.id) }.count
+        print("[Sparks] fresh session size=\(catalog.count) unviewed=\(unviewed)")
         #endif
         return catalog
     }
@@ -545,8 +531,13 @@ final class PostsService {
         }
         """
         var variables: [String: Any] = ["limit": min(max(limit, 1), 120)]
-        if !excluding.isEmpty {
-            variables["exclude_ids"] = Array(excluding.prefix(200))
+        // Always merge local watched history into exclude (API hard rule: suggest unviewed).
+        var exclude = excluding
+        exclude.append(contentsOf: SparkDiscoveryEngine.viewedIDList(limit: 600))
+        var seenEx = Set<String>()
+        exclude = exclude.filter { seenEx.insert($0).inserted }
+        if !exclude.isEmpty {
+            variables["exclude_ids"] = Array(exclude.prefix(800))
         }
         do {
             let result: Response = try await gql.authenticatedRequest(
@@ -618,11 +609,15 @@ final class PostsService {
     func homeFeedSparkTopUp(excluding: Set<String>, limit: Int, forceRefresh: Bool = false) async -> [CountryPost] {
         guard limit > 0 else { return [] }
 
-        // Always pull a random window from the server when possible — breaks sticky order.
+        // Always pull a random window from the server — exclude everything already viewed.
         var out: [CountryPost] = []
-        var seen = excluding
-        let remote = await fetchDiscoverSparks(limit: max(limit * 2, 40), excluding: Array(excluding.prefix(200)))
-        for post in SparkDiscoveryEngine.rankForDiscovery(remote, excluding: excluding) {
+        var seen = excluding.union(Set(SparkDiscoveryEngine.viewedIDList(limit: 800)))
+        let remote = await fetchDiscoverSparks(
+            limit: max(limit * 2, 40),
+            excluding: Array(seen.prefix(800))
+        )
+        for post in SparkDiscoveryEngine.rankForDiscovery(remote, excluding: seen) {
+            guard !SparkDiscoveryEngine.isViewed(post.id) else { continue }
             guard seen.insert(post.id).inserted else { continue }
             guard post.playableVideoURL != nil || post.hasVideo || !(post.mediaURL ?? "").isEmpty else { continue }
             out.append(post)
@@ -2442,11 +2437,14 @@ enum PostsServiceError: LocalizedError {
 
 // MARK: - Temporary Spark discovery (same file as PostsService so Xcode always compiles it)
 
-/// Pre-launch stand-in for the official recommender: novelty + diversity over the full R2 catalog.
+/// Pre-launch stand-in for the official recommender.
+/// **Hard rule:** always prefer posts/Sparks the user has **not** already viewed.
 enum SparkDiscoveryEngine {
-    private static let defaultsKey = "spark.discovery.impressions.v1"
-    private static let maxPersisted = 2_500
-    private static let impressionTTLDays: Double = 21
+    private static let defaultsKey = "spark.discovery.impressions.v2"
+    /// Keep enough history for a large R2 library (was 2.5k → recycled too early).
+    private static let maxPersisted = 20_000
+    /// Viewed = suppressed for this long before eligible as last-resort recycle.
+    private static let impressionTTLDays: Double = 90
     private static let lock = NSLock()
 
     private static var impressions: [String: TimeInterval] = load()
@@ -2477,7 +2475,48 @@ enum SparkDiscoveryEngine {
         ReelsRankingEngine.markWatched(postID)
     }
 
+    /// True if this user already viewed the post this session or within the TTL window.
+    static func isViewed(_ postID: String) -> Bool {
+        guard !postID.isEmpty else { return false }
+        let now = Date().timeIntervalSince1970
+        let ttl = impressionTTLDays * 24 * 3600
+        lock.lock()
+        defer { lock.unlock() }
+        if sessionServed.contains(postID) { return true }
+        if let t = impressions[postID], now - t < ttl { return true }
+        return false
+    }
+
+    /// IDs to exclude from API `discoverSparks` / paging (newest watches first).
+    static func viewedIDList(limit: Int = 800) -> [String] {
+        let now = Date().timeIntervalSince1970
+        let ttl = impressionTTLDays * 24 * 3600
+        lock.lock()
+        let session = sessionServed
+        let imp = impressions
+        lock.unlock()
+        var pairs: [(String, TimeInterval)] = session.map { ($0, now) }
+        for (id, t) in imp where now - t < ttl {
+            pairs.append((id, t))
+        }
+        var seen = Set<String>()
+        var out: [String] = []
+        for (id, _) in pairs.sorted(by: { $0.1 > $1.1 }) {
+            guard seen.insert(id).inserted else { continue }
+            out.append(id)
+            if out.count >= limit { break }
+        }
+        return out
+    }
+
     static func resetSession() {
+        // Keep durable impressions — only clear in-session set for UI state if needed.
+        // Do NOT wipe sessionServed mid-browse or the same Sparks reappear immediately.
+        ReelsRankingEngine.resetSession()
+    }
+
+    /// Call when the user explicitly starts a *new* Sparks session (optional soft reset).
+    static func beginNewBrowseSession() {
         lock.lock()
         sessionServed.removeAll()
         lock.unlock()
@@ -2490,10 +2529,12 @@ enum SparkDiscoveryEngine {
         impressions.removeAll()
         lock.unlock()
         UserDefaults.standard.removeObject(forKey: defaultsKey)
+        UserDefaults.standard.removeObject(forKey: "spark.discovery.impressions.v1")
         ReelsRankingEngine.resetSession()
     }
 
-    /// Unseen first, then least-recently-seen; R2 + author/country spacing.
+    /// **Unviewed only** while any remain; otherwise least-recently-viewed recycle.
+    /// Never interleave already-watched clips ahead of fresh ones.
     static func rankForDiscovery(
         _ candidates: [CountryPost],
         excluding: Set<String> = [],
@@ -2515,23 +2556,18 @@ enum SparkDiscoveryEngine {
         let impSnap = impressions
         lock.unlock()
 
-        var fresh: [CountryPost] = []
-        var stale: [CountryPost] = []
-        var recent: [CountryPost] = []
+        var unviewed: [CountryPost] = []
+        var viewed: [(CountryPost, TimeInterval)] = []
 
         for post in pool {
             if sessionSnap.contains(post.id) {
-                recent.append(post)
+                viewed.append((post, now))
                 continue
             }
             if let t = impSnap[post.id], now - t < ttl {
-                if now - t > 2 * 24 * 3600 {
-                    stale.append(post)
-                } else {
-                    recent.append(post)
-                }
+                viewed.append((post, t))
             } else {
-                fresh.append(post)
+                unviewed.append(post)
             }
         }
 
@@ -2542,13 +2578,32 @@ enum SparkDiscoveryEngine {
             return spacedPick(from: r2 + rest, limit: items.count)
         }
 
-        var out = diversityShuffle(fresh) + diversityShuffle(stale) + diversityShuffle(recent)
+        // HARD RULE: if anything unviewed exists, only suggest those.
+        var out: [CountryPost]
+        if !unviewed.isEmpty {
+            out = diversityShuffle(unviewed)
+        } else {
+            // Last resort: oldest view first (longest since last watch).
+            out = viewed.sorted { $0.1 < $1.1 }.map(\.0)
+            out = diversityShuffle(out)
+        }
         out = spacedPick(from: out, limit: out.count)
 
         if let limit, limit > 0, out.count > limit {
             return Array(out.prefix(limit))
         }
         return out
+    }
+
+    /// Feed-friendly order: unviewed first (by recency within bucket), then viewed.
+    static func preferUnviewedFeedOrder(_ posts: [CountryPost]) -> [CountryPost] {
+        var seen = Set<String>()
+        let unique = posts.filter { seen.insert($0.id).inserted && !$0.isStory }
+        let unviewed = unique.filter { !isViewed($0.id) }
+            .sorted { ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast) }
+        let viewed = unique.filter { isViewed($0.id) }
+            .sorted { ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast) }
+        return unviewed + viewed
     }
 
     static func nextBatch(
@@ -2560,25 +2615,17 @@ enum SparkDiscoveryEngine {
     ) -> [CountryPost] {
         guard limit > 0 else { return [] }
 
-        lock.lock()
-        let sessionSnap = sessionServed
-        lock.unlock()
-
         let eligible = candidates.filter {
             !existingIDs.contains($0.id) && ReelsRankingEngine.isSparkEligible($0)
         }
+        // Always try unviewed first — ignore allowRecycle until unviewed pool is empty.
+        let unviewed = eligible.filter { !isViewed($0.id) }
         let pool: [CountryPost]
-        if !eligible.isEmpty {
-            pool = eligible
+        if !unviewed.isEmpty {
+            pool = unviewed
         } else if allowRecycle {
-            let recycled = candidates.filter {
-                !existingIDs.contains($0.id)
-                    && ReelsRankingEngine.isSparkEligible($0)
-                    && !sessionSnap.contains($0.id)
-            }
-            pool = recycled.isEmpty
-                ? candidates.filter { ReelsRankingEngine.isSparkEligible($0) }
-                : recycled
+            // Recycle only least-recently-viewed, never session-just-watched if alternatives exist.
+            pool = rankForDiscovery(eligible, excluding: existingIDs)
         } else {
             pool = []
         }
@@ -2594,6 +2641,10 @@ enum SparkDiscoveryEngine {
             let recentCountries = Set(context.suffix(2).compactMap { $0.countryCode?.uppercased() })
 
             let diverse = remaining.enumerated().filter { _, post in
+                // Never pick viewed while any unviewed remains in remaining.
+                if isViewed(post.id), remaining.contains(where: { !isViewed($0.id) }) {
+                    return false
+                }
                 if recentAuthors.contains(post.authorID) { return false }
                 if let c = post.countryCode?.uppercased(), recentCountries.contains(c) { return false }
                 return true
@@ -2602,6 +2653,8 @@ enum SparkDiscoveryEngine {
             let choice: CountryPost
             if let d = diverse.first {
                 choice = remaining.remove(at: d.offset)
+            } else if let u = remaining.firstIndex(where: { !isViewed($0.id) }) {
+                choice = remaining.remove(at: u)
             } else {
                 choice = remaining.removeFirst()
             }
@@ -2609,9 +2662,7 @@ enum SparkDiscoveryEngine {
             context.append(choice)
         }
 
-        // Do NOT markImpressed here — that burned entire batches as “seen” before the
-        // user watched them and recycled the same handful of Sparks. markWatched only
-        // when a Spark is actually focused in the player / feed.
+        // Do NOT markImpressed here — only when actually focused / viewed.
         return picked
     }
 
@@ -2641,12 +2692,22 @@ enum SparkDiscoveryEngine {
     }
 
     private static func load() -> [String: TimeInterval] {
-        guard let data = UserDefaults.standard.data(forKey: defaultsKey),
-              let decoded = try? JSONDecoder().decode([String: TimeInterval].self, from: data)
-        else { return [:] }
         let now = Date().timeIntervalSince1970
         let ttl = impressionTTLDays * 24 * 3600
-        return decoded.filter { now - $0.value < ttl }
+        var merged: [String: TimeInterval] = [:]
+        for key in [defaultsKey, "spark.discovery.impressions.v1"] {
+            guard let data = UserDefaults.standard.data(forKey: key),
+                  let decoded = try? JSONDecoder().decode([String: TimeInterval].self, from: data)
+            else { continue }
+            for (id, t) in decoded where now - t < ttl {
+                if let existing = merged[id] {
+                    merged[id] = max(existing, t)
+                } else {
+                    merged[id] = t
+                }
+            }
+        }
+        return merged
     }
 
     private static func trimAndSave() {

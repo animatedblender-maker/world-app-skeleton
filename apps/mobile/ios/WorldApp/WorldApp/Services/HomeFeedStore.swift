@@ -482,8 +482,9 @@ final class HomeFeedStore {
             return
         }
 
-        // Append unique content only.
-        posts.append(contentsOf: appended)
+        // Append unviewed first within the new batch (never lead with already-watched).
+        let orderedAppend = SparkDiscoveryEngine.preferUnviewedFeedOrder(appended)
+        posts.append(contentsOf: orderedAppend)
         // Grow window so new rows appear without waiting for another appear cycle.
         var t = Transaction()
         t.disablesAnimations = true
@@ -513,8 +514,8 @@ final class HomeFeedStore {
 
     private func applyPosts(_ next: [CountryPost], replace: Bool, sessionId: String) {
         feedSessionId = sessionId
-        // Always collapse original+share pairs and id dups.
-        let ordered = next.dedupeHomeFeedContent()
+        // Dedupe, then **unviewed first** so the algorithm never leads with watched posts/Sparks.
+        let ordered = SparkDiscoveryEngine.preferUnviewedFeedOrder(next.dedupeHomeFeedContent())
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) {

@@ -1309,12 +1309,19 @@ struct ReelsScrollViewer: View {
     private func applyExpandedFeed(_ feed: [CountryPost], preserveID: String = "") {
         var seen = Set(posts.map(\.id))
         var appended: [CountryPost] = []
+        let hasUnviewedIncoming = feed.contains {
+            !seen.contains($0.id) && !SparkDiscoveryEngine.isViewed($0.id)
+        }
         for p in feed where seen.insert(p.id).inserted {
             if !preserveID.isEmpty {
                 guard ReelsRankingEngine.isSparkEligible(p) || p.id == preserveID else { continue }
             } else {
                 guard ReelsRankingEngine.isSparkEligible(p) || p.hasVideo || p.playableVideoURL != nil
                 else { continue }
+            }
+            // Skip already-viewed while we still have unviewed candidates in this batch.
+            if hasUnviewedIncoming, SparkDiscoveryEngine.isViewed(p.id), p.id != preserveID {
+                continue
             }
             appended.append(p)
         }
@@ -1336,16 +1343,27 @@ struct ReelsScrollViewer: View {
         let existingIDs = Set(posts.map(\.id))
         let tail = Array(posts.suffix(6))
 
-        // Prefer a re-ranked slice of the deep discovery catalog first (breadth).
+        // Prefer unviewed catalog + random DB sample — never re-queue watched Sparks first.
         let catalog = await PostsService.shared.loadSparksDiscoveryCatalog(forceRefresh: false, deep: true)
-        // Pure unseen shuffle from remaining catalog — avoid recycling the same dozen.
-        let remaining = catalog
-            .filter { !existingIDs.contains($0.id) && ReelsRankingEngine.isSparkEligible($0) }
-            .shuffled()
+        let remaining = SparkDiscoveryEngine.rankForDiscovery(
+            catalog.filter { !existingIDs.contains($0.id) && ReelsRankingEngine.isSparkEligible($0) }
+        )
         if !remaining.isEmpty {
             let batch = Array(remaining.prefix(48))
             applyExpandedFeed(batch)
             hasMorePages = remaining.count > batch.count
+            SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 8, behind: 2)
+            return
+        }
+
+        // Fetch more unviewed from full library before any recycle.
+        let more = await PostsService.shared.fetchDiscoverSparks(
+            limit: 60,
+            excluding: Array(existingIDs) + SparkDiscoveryEngine.viewedIDList(limit: 500)
+        )
+        if !more.isEmpty {
+            applyExpandedFeed(SparkDiscoveryEngine.rankForDiscovery(more, excluding: existingIDs))
+            hasMorePages = true
             SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 8, behind: 2)
             return
         }
@@ -1357,7 +1375,8 @@ struct ReelsScrollViewer: View {
             viewerCountry: appState.currentProfile?.countryCode,
             followingIDs: appState.followingIDs,
             tail: tail,
-            allowRecycle: recyclePass > 0
+            // Only after unviewed catalog + discoverSparks are empty.
+            allowRecycle: recyclePass > 2
         )
         if !fromCatalog.isEmpty {
             posts.append(contentsOf: ReelsRankingEngine.sessionFreshOrder(fromCatalog))
