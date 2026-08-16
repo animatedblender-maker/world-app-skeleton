@@ -370,19 +370,26 @@ struct FeedView: View {
     private func refreshFeedReels(network: Bool) async {
         // Top Sparks strip only — keep this LIGHT. Never call beginFreshSparksSession
         // (deep multi-page catalog) for a 12-tile rail; that froze the feed top.
-        var pool: [CountryPost] = PostsService.shared.sparksCatalogSnapshot()
+        let snapshot = PostsService.shared.sparksCatalogSnapshot()
+        let pool: [CountryPost]
         if network {
             // One small random sample + light catalog grow — not a full player session.
+            // Capture snapshot.count only — never mutate a var across async-let boundaries.
+            let forceRefresh = snapshot.count < 20
             async let sample = PostsService.shared.fetchDiscoverSparks(limit: 24)
             async let light = PostsService.shared.loadSparksDiscoveryCatalog(
-                forceRefresh: pool.count < 20,
+                forceRefresh: forceRefresh,
                 deep: false
             )
             let remote = await sample
             let catalog = await light
-            pool = remote + catalog + pool
-        } else if pool.count > 1 {
-            pool.shuffle()
+            pool = remote + catalog + snapshot
+        } else if snapshot.count > 1 {
+            var shuffled = snapshot
+            shuffled.shuffle()
+            pool = shuffled
+        } else {
+            pool = snapshot
         }
 
         // Unviewed first so the rail matches discovery rules without heavy ranking.

@@ -1342,9 +1342,10 @@ final class PostsService {
     }
 
     /// First paint for watch / feed expand — small page, no blocking origin resolve.
-    static let commentsFirstPageLimit = 48
+    /// `nonisolated` so default params / non-MainActor call sites can read the constant.
+    nonisolated static let commentsFirstPageLimit = 48
     /// Background top-up after first paint (full threads still available via View all).
-    static let commentsBackgroundLimit = 400
+    nonisolated static let commentsBackgroundLimit = 400
 
     func listComments(_ postID: String, limit: Int = 2000) async throws -> [PostComment] {
         try await listComments(postID, limit: limit, resolveOrigin: true)

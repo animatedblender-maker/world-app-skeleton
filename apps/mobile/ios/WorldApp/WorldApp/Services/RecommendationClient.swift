@@ -36,7 +36,7 @@ enum RecommendationClient {
             return posts
         }
 
-        var byId = Dictionary(uniqueKeysWithValues: posts.map { ($0.id, $0) })
+        let byId = Dictionary(uniqueKeysWithValues: posts.map { ($0.id, $0) })
         var out: [CountryPost] = []
         var used = Set<String>()
         for item in ranked.items {

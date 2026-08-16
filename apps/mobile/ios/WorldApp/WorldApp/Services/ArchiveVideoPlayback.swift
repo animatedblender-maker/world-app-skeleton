@@ -315,7 +315,6 @@ struct MatteryaHubPlayerView: View {
                 loops: loops,
                 fillsFrame: fillsFrame,
                 bridge: bridge,
-                isContinuousHubPlayer: isContinuousHubPlayer,
                 onReady: {
                     bridge.publishReady(playing: true)
                     if isContinuousHubPlayer, let p = bridge.controller?.avPlayer {
@@ -346,7 +345,9 @@ struct MatteryaHubPlayerView: View {
                     onVideoSize?(size)
                 },
                 seekToSeconds: seekToSeconds,
-                onSeekConsumed: onSeekConsumed
+                onSeekConsumed: onSeekConsumed,
+                // Must follow callbacks (memberwise property order on ArchiveVideoPlayerView).
+                isContinuousHubPlayer: isContinuousHubPlayer
             )
 
             if showsControls {
