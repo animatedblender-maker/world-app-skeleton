@@ -901,6 +901,7 @@ private struct SparksShareOverlay: View {
 
 /// Bottom comments card over the live Sparks player — video keeps playing (no .sheet).
 /// Dismiss: tap outside (dimmer) or drag the grabber down — **no Close button**.
+/// Dimmer + sheet shadow fade with drag/dismiss so nothing black stains the film.
 private struct SparksCommentsOverlay: View {
     @Environment(AppState.self) private var appState
     let postID: String
@@ -908,6 +909,8 @@ private struct SparksCommentsOverlay: View {
 
     @State private var dragOffset: CGFloat = 0
     @State private var isDismissing = false
+    /// Full-screen dim strength; always fades to 0 on dismiss (never leaves a black veil).
+    @State private var dimOpacity: Double = 0.32
 
     private var sheetShape: UnevenRoundedRectangle {
         UnevenRoundedRectangle(
@@ -922,18 +925,20 @@ private struct SparksCommentsOverlay: View {
     var body: some View {
         GeometryReader { geo in
             let maxSheetH = max(geo.size.height * 0.62, 280)
+            // Fade dimmer as the user pulls the sheet down (1:1 with finger).
+            let dragProgress = min(1, max(0, dragOffset / max(maxSheetH * 0.55, 120)))
+            let liveDim = isDismissing ? dimOpacity : dimOpacity * (1 - dragProgress * 0.92)
+            // Hide upward sheet shadow while dragging / dismissing — that was the black stain.
+            let shadowOpacity = (isDismissing || dragOffset > 6) ? 0.0 : 0.18
 
-            VStack(spacing: 0) {
-                // Flexible dimmer above the sheet — reliable hit target for “tap outside”.
-                Color.black.opacity(0.01)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            ZStack(alignment: .bottom) {
+                // Full-screen dimmer — opacity-driven so dismiss never leaves a black rectangle.
+                Color.black
+                    .opacity(liveDim)
+                    .ignoresSafeArea()
                     .contentShape(Rectangle())
                     .onTapGesture { dismiss() }
-                    .background(
-                        Color.black.opacity(0.32)
-                            .ignoresSafeArea()
-                            .allowsHitTesting(false)
-                    )
+                    .allowsHitTesting(!isDismissing)
                     .accessibilityLabel("Dismiss comments")
                     .accessibilityAddTraits(.isButton)
 
@@ -963,9 +968,11 @@ private struct SparksCommentsOverlay: View {
                 .frame(height: maxSheetH, alignment: .top)
                 .background(Theme.surface)
                 .clipShape(sheetShape)
-                .shadow(color: .black.opacity(0.35), radius: 20, y: -4)
+                // Clip shadow to the sheet bounds so it can't paint over the video after dismiss.
+                .compositingGroup()
+                .shadow(color: .black.opacity(shadowOpacity), radius: 12, y: -2)
                 .offset(y: max(0, dragOffset))
-                // Sheet stays above dimmer for hits; list scroll is free inside NavigationStack.
+                .opacity(isDismissing ? max(0, 1 - dragProgress) : 1)
             }
             .frame(width: geo.size.width, height: geo.size.height, alignment: .bottom)
         }
@@ -1007,10 +1014,12 @@ private struct SparksCommentsOverlay: View {
     private func dismiss() {
         guard !isDismissing else { return }
         isDismissing = true
-        withAnimation(.easeOut(duration: 0.18)) {
-            dragOffset = max(dragOffset, 240)
+        // Fade dimmer + drop sheet together — no residual black veil on the Spark.
+        withAnimation(.easeOut(duration: 0.2)) {
+            dragOffset = max(dragOffset, UIScreen.main.bounds.height * 0.55)
+            dimOpacity = 0
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             onClose()
         }
     }
@@ -1151,7 +1160,13 @@ struct ReelsScrollViewer: View {
                     NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
                 }
                 .zIndex(75)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                // Removal is pure opacity — move+opacity left a black dimmer stain over the film.
+                .transition(
+                    .asymmetric(
+                        insertion: .move(edge: .bottom).combined(with: .opacity),
+                        removal: .opacity
+                    )
+                )
                 .onAppear { CommentsWarmCache.shared.warm(commentsID) }
             }
 
