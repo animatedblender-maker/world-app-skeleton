@@ -415,13 +415,19 @@ export class ApnsService {
       return { attempted, delivered, failures };
     }
 
+    // Messages + social: system default tone (WhatsApp-class UX). Custom .caf can replace later.
+    const notifType = String(data.type ?? payload.category ?? 'message').toLowerCase();
+    const isMessage = notifType === 'message' || notifType === 'chat' || notifType === 'dm';
     const apnsBody = {
       aps: {
         alert: {
           title: payload.title,
           body: payload.body ?? '',
         },
+        // Always play a tone for message alerts when not suppressed client-side.
         sound: 'default',
+        // Message interrupts quietly-playing media less aggressively than calls.
+        ...(isMessage ? { 'interruption-level': 'time-sensitive' as const } : {}),
       },
       ...sanitizeApnsData({
         ...data,

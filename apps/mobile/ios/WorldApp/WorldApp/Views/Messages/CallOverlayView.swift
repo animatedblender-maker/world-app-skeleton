@@ -95,15 +95,22 @@ struct CallOverlayView: View {
         if callManager.callKind == .video, callManager.remoteVideoTrack != nil {
             Color.black.ignoresSafeArea()
         } else {
+            // Matterya paper/ink family — not generic blue-black (matches app theme).
             LinearGradient(
                 colors: [
-                    Color(red: 0.08, green: 0.10, blue: 0.16),
-                    Color(red: 0.03, green: 0.04, blue: 0.08),
+                    Theme.ink.opacity(0.92),
+                    Theme.canvasDeep,
+                    Theme.ink,
                 ],
-                startPoint: .top,
-                endPoint: .bottom
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
             )
             .ignoresSafeArea()
+            .overlay {
+                Theme.accentBright.opacity(0.08)
+                    .ignoresSafeArea()
+                    .blendMode(.plusLighter)
+            }
         }
     }
 
@@ -261,14 +268,27 @@ struct CallOverlayView: View {
                     }
                 }
             } else {
-                HStack(spacing: 22) {
+                HStack(spacing: 18) {
                     roundCallButton(
                         title: callManager.isMuted ? "Unmute" : "Mute",
                         systemImage: callManager.isMuted ? "mic.slash.fill" : "mic.fill",
                         tint: Color.white.opacity(0.18),
-                        size: 64
+                        size: 60
                     ) {
                         callManager.toggleMute()
+                    }
+
+                    roundCallButton(
+                        title: callManager.isSpeakerOn ? "Speaker" : "Earpiece",
+                        systemImage: callManager.isSpeakerOn
+                            ? "speaker.wave.2.fill"
+                            : "speaker.wave.1.fill",
+                        tint: callManager.isSpeakerOn
+                            ? Theme.accentBright.opacity(0.55)
+                            : Color.white.opacity(0.18),
+                        size: 60
+                    ) {
+                        callManager.toggleSpeaker()
                     }
 
                     if callManager.callKind == .video {
@@ -276,7 +296,7 @@ struct CallOverlayView: View {
                             title: callManager.isCameraOff ? "Camera" : "Camera off",
                             systemImage: callManager.isCameraOff ? "video.slash.fill" : "video.fill",
                             tint: Color.white.opacity(0.18),
-                            size: 64
+                            size: 60
                         ) {
                             callManager.toggleCamera()
                         }
@@ -286,7 +306,7 @@ struct CallOverlayView: View {
                         title: "End",
                         systemImage: "phone.down.fill",
                         tint: Theme.danger,
-                        size: 74
+                        size: 70
                     ) {
                         callManager.endCall()
                     }

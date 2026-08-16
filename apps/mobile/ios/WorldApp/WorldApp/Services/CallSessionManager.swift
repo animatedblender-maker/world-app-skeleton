@@ -26,6 +26,8 @@ final class CallSessionManager: NSObject {
     var isActive = false
     var isMuted = false
     var isCameraOff = false
+    /// Loudspeaker on (WhatsApp-style). Default on for video, off for audio until toggled.
+    var isSpeakerOn = true
     var errorMessage: String?
     var timerSeconds = 0
 
@@ -483,6 +485,33 @@ final class CallSessionManager: NSObject {
         isCameraOff.toggle()
         Task {
             _ = try? await room?.localParticipant.setCamera(enabled: !isCameraOff)
+        }
+    }
+
+    /// Route call audio to loudspeaker (on) or earpiece (off).
+    func toggleSpeaker() {
+        isSpeakerOn.toggle()
+        applySpeakerRoute()
+    }
+
+    func applySpeakerRoute() {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(
+                .playAndRecord,
+                mode: .voiceChat,
+                options: isSpeakerOn ? [.defaultToSpeaker, .allowBluetooth] : [.allowBluetooth]
+            )
+            try session.setActive(true, options: [])
+            if isSpeakerOn {
+                try session.overrideOutputAudioPort(.speaker)
+            } else {
+                try session.overrideOutputAudioPort(.none)
+            }
+        } catch {
+            #if DEBUG
+            print("[Call] speaker route failed: \(error.localizedDescription)")
+            #endif
         }
     }
 

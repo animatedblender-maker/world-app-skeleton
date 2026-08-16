@@ -45,6 +45,13 @@ enum ContentSanitizer {
         let trimmed = rebrandCompetitorNames(stripInternalMarkers(value))
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !looksLikeId(trimmed) else { return nil }
+        // Final gate: pure control / stamp leftovers never reach UI.
+        if isControlFieldLine(trimmed) { return nil }
+        if trimmed.range(of: #"\bsid\s*="#, options: .regularExpression) != nil,
+           trimmed.count < 200,
+           trimmed.contains("|") || trimmed.contains("aid=") {
+            return nil
+        }
         return trimmed
     }
 
@@ -130,24 +137,29 @@ enum ContentSanitizer {
     static func isControlFieldLine(_ line: String) -> Bool {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return false }
-        // Classic hub/spark share stamp.
-        if trimmed.hasPrefix("sid=") { return true }
-        if trimmed.hasPrefix("aid=") || trimmed.hasPrefix("an=") || trimmed.hasPrefix("au=") {
-            return true
-        }
-        // Entire line is only key=value pairs joined by `|`.
-        let parts = trimmed.split(separator: "|")
+        // Classic hub/spark share stamp (with optional spaces).
+        if trimmed.range(of: #"^sid\s*="#, options: .regularExpression) != nil { return true }
+        if trimmed.range(of: #"^(aid|an|au)\s*="#, options: .regularExpression) != nil { return true }
+        // Line is mostly `key=value|key=value` control pairs (even if a stray word sneaks in).
+        let parts = trimmed.split(separator: "|").map(String.init)
         guard !parts.isEmpty else { return false }
         let controlKeys: Set<String> = ["sid", "aid", "an", "au", "cid", "oid", "uid"]
         var controlCount = 0
+        var otherCount = 0
         for part in parts {
-            let s = String(part)
-            guard let eq = s.firstIndex(of: "=") else { return false }
-            let key = String(s[..<eq]).lowercased()
+            let s = part.trimmingCharacters(in: .whitespaces)
+            guard let eq = s.firstIndex(of: "=") else {
+                otherCount += 1
+                continue
+            }
+            let key = String(s[..<eq]).trimmingCharacters(in: .whitespaces).lowercased()
             if controlKeys.contains(key) { controlCount += 1 }
-            else { return false }
+            else { otherCount += 1 }
         }
-        return controlCount > 0
+        // Pure control stamp, or control-dominant garbage (e.g. sid=…|aid=…|junk).
+        if controlCount >= 1, otherCount == 0 { return true }
+        if controlCount >= 2, otherCount <= 1 { return true }
+        return false
     }
 
     static func stripStoryMarker(_ value: String) -> String {

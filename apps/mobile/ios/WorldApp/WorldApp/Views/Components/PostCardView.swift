@@ -103,9 +103,9 @@ struct PostCardView: View {
                 .clipped()
             }
             .buttonStyle(.plain)
-        } else if !post.body.isEmpty {
+        } else if !post.displayBody.isEmpty {
             Button { onOpenPost?() } label: {
-                Text(post.body)
+                Text(post.displayBody)
                     .font(.body)
                     .foregroundStyle(Theme.ink)
                     .padding(.horizontal, Theme.pagePadding)
@@ -185,14 +185,14 @@ struct PostCardView: View {
                 .buttonStyle(.plain)
             }
 
-            if let title = post.title, !title.isEmpty {
+            if let title = post.displayTitle, !title.isEmpty {
                 Text(title)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Theme.ink)
             }
 
-            if !post.body.isEmpty, post.mediaURL != nil || post.thumbURL != nil {
-                Text(post.body)
+            if !post.displayExcerpt.isEmpty, post.mediaURL != nil || post.thumbURL != nil {
+                Text(post.displayExcerpt)
                     .font(.subheadline)
                     .foregroundStyle(Theme.ink)
                     .lineLimit(3)

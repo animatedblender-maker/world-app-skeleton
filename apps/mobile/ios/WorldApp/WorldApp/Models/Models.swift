@@ -926,6 +926,15 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
             let originBody = origin.displayBody
             if !originBody.isEmpty { return String(originBody.prefix(120)) }
         }
+        // Hubs origin share: never fall back to control stamps; use embed title/body.
+        if isHubOriginFeedShare {
+            if let embed = sharedPost?.asCountryPost {
+                if let t = embed.displayTitle { return t }
+                let b = embed.displayBody
+                if !b.isEmpty { return String(b.prefix(120)) }
+            }
+            return nil
+        }
         let text = displayBody
         if text.isEmpty { return nil }
         return String(text.prefix(120))
@@ -933,6 +942,8 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
 
     var displayExcerpt: String {
         let text = displayBody
+        // Marker-only hub/spark bodies clean to empty — never show sid= lines.
+        if text.isEmpty { return "" }
         guard let title = displayTitle, !title.isEmpty else { return text }
         if text == title { return "" }
         return text

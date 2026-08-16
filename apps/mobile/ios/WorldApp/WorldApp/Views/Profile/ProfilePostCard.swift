@@ -102,10 +102,8 @@ struct ProfilePostCard: View {
     }
 
     private var excerpt: String {
-        let trimmed = post.body.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let title = post.title?.nilIfWhitespace, !title.isEmpty else { return trimmed }
-        if trimmed == title { return "" }
-        return trimmed
+        // Always sanitized — never raw __hub_origin__|sid=… stamps.
+        post.displayExcerpt
     }
 
     private var mediaPlaceholder: some View {

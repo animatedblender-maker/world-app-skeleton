@@ -866,18 +866,42 @@ private struct MessageBubble: View {
         }
         .simultaneousGesture(swipeToReplyGesture)
         .contextMenu {
-            Menu("Add Emoji", systemImage: "face.smiling") {
+            // Clean WhatsApp/iMessage-style actions (theme via system menu + SF Symbols).
+            Button { onReply() } label: {
+                Label("Reply", systemImage: "arrowshape.turn.up.left")
+            }
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                onLike()
+            } label: {
+                Label("Like", systemImage: "heart")
+            }
+            Menu {
                 ForEach(MessageReactionIndex.quickEmojis, id: \.self) { emoji in
                     Button(emoji) { onReact(emoji) }
                 }
+            } label: {
+                Label("React", systemImage: "face.smiling")
             }
-            if isMine {
-                Button("Unsend for Everyone", systemImage: "arrow.uturn.backward.circle", role: .destructive) {
-                    onUnsend()
+            if let text = message.displayText, !text.isEmpty {
+                Button {
+                    UIPasteboard.general.string = text
+                } label: {
+                    Label("Copy", systemImage: "doc.on.doc")
                 }
             }
-            Button("Remove from This Device", systemImage: "iphone.and.arrow.forward", role: .destructive) {
+            Divider()
+            if isMine {
+                Button(role: .destructive) {
+                    onUnsend()
+                } label: {
+                    Label("Unsend for Everyone", systemImage: "arrow.uturn.backward.circle")
+                }
+            }
+            Button(role: .destructive) {
                 onRemoveLocally()
+            } label: {
+                Label("Remove from This Device", systemImage: "trash")
             }
         }
         .task(id: message.mediaPath) {

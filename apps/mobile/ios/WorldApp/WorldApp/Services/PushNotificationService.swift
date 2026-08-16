@@ -1,3 +1,4 @@
+import AudioToolbox
 import Foundation
 import OSLog
 import UIKit
@@ -580,9 +581,14 @@ final class PushNotificationService: NSObject, UNUserNotificationCenterDelegate 
             return []
         }
 
-        // Social / message banners: refresh badges only — navigate on tap (didReceive).
+        // Social / message banners: tone + banner (WhatsApp-class). Navigate on tap (didReceive).
         await refreshFromForegroundPayload(payload)
-        return [.banner, .sound, .badge]
+        let type = ((payload["type"] as? String) ?? (payload["category"] as? String) ?? "").lowercased()
+        if type == "message" || type == "chat" || type == "dm" {
+            // Extra short system chime when app is foreground (APNs sound alone can be muted by focus).
+            AudioServicesPlaySystemSound(1003) // SMSReceived-ish short tone
+        }
+        return [.banner, .sound, .badge, .list]
     }
 
     /// True when the user is already inside this conversation's chat screen.

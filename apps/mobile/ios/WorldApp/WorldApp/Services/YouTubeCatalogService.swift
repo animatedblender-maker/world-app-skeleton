@@ -645,21 +645,21 @@ final class YouTubeCatalogService {
         let tierAuthor = Self.seededShuffle(sameAuthor, seed: seed &+ 0x55)
         let tierOff = Self.seededShuffle(offSlug, seed: seed &+ 0x77)
 
-        // Prefer unviewed inside each tier without collapsing to a global rank order.
-        func preferFresh(_ items: [CountryPost]) -> [CountryPost] {
+        // HARD: unviewed only while any remain in the tier (watched clips last-resort only).
+        func preferFresh(_ items: [CountryPost], allowSeen: Bool) -> [CountryPost] {
             let fresh = items.filter { !SparkDiscoveryEngine.isViewed($0) }
-            let seen = items.filter { SparkDiscoveryEngine.isViewed($0) }
-            return fresh + seen
+            if !fresh.isEmpty { return fresh }
+            return allowSeen ? items.filter { SparkDiscoveryEngine.isViewed($0) } : []
         }
 
         var out: [CountryPost] = []
         var used = Set<String>()
         var authorHits: [String: Int] = [:]
 
-        func take(_ items: [CountryPost], max: Int) {
+        func take(_ items: [CountryPost], max: Int, allowSeen: Bool) {
             guard max > 0 else { return }
             var taken = 0
-            for p in preferFresh(items) {
+            for p in preferFresh(items, allowSeen: allowSeen) {
                 guard used.insert(p.id).inserted else { continue }
                 // Cap same-author spam so related doesn't look identical across an author.
                 let hits = authorHits[p.authorID, default: 0]
@@ -672,17 +672,32 @@ final class YouTubeCatalogService {
         }
 
         // Recipe unique to this video: ~half same-slug, sprinkle siblings/author, rest off-slug diversity.
+        // Pass 1: unviewed only across all tiers.
         let sameBudget = max(3, limit / 2)
         let siblingBudget = max(2, limit / 5)
         let authorBudget = 2
-        take(tierSame, max: sameBudget)
-        if out.count < limit { take(tierSibling, max: siblingBudget) }
-        if out.count < limit { take(tierAuthor, max: authorBudget) }
-        if out.count < limit { take(tierOff, max: limit - out.count) }
-        // Fill leftovers from any remaining pool (seeded so order still differs per source).
+        take(tierSame, max: sameBudget, allowSeen: false)
+        if out.count < limit { take(tierSibling, max: siblingBudget, allowSeen: false) }
+        if out.count < limit { take(tierAuthor, max: authorBudget, allowSeen: false) }
+        if out.count < limit { take(tierOff, max: limit - out.count, allowSeen: false) }
+        // Pass 2: only if unviewed library exhausted for this shelf.
+        if out.count < limit { take(tierSame, max: limit - out.count, allowSeen: true) }
+        if out.count < limit { take(tierSibling, max: limit - out.count, allowSeen: true) }
+        if out.count < limit { take(tierOff, max: limit - out.count, allowSeen: true) }
+        // Fill leftovers from remaining pool (unviewed first, then seen only if needed).
         if out.count < limit {
-            let rest = Self.seededShuffle(pool.filter { !used.contains($0.id) }, seed: seed &+ 0x99)
-            take(rest, max: limit - out.count)
+            let restFresh = Self.seededShuffle(
+                pool.filter { !used.contains($0.id) && !SparkDiscoveryEngine.isViewed($0) },
+                seed: seed &+ 0x99
+            )
+            take(restFresh, max: limit - out.count, allowSeen: false)
+        }
+        if out.count < limit {
+            let restSeen = Self.seededShuffle(
+                pool.filter { !used.contains($0.id) },
+                seed: seed &+ 0xAA
+            )
+            take(restSeen, max: limit - out.count, allowSeen: true)
         }
         return out
     }

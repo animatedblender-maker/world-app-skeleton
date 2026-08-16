@@ -30,14 +30,11 @@ struct ChatShareCard: View {
             return ContentSanitizer.clean(t)
         }
         if let b = effective.bodyText?.trimmingCharacters(in: .whitespacesAndNewlines), !b.isEmpty {
-            let cleaned = b
-                .replacingOccurrences(of: "__spark__|", with: "")
-                .replacingOccurrences(of: "__reel__|", with: "")
-                .replacingOccurrences(of: "__spark_share__|", with: "")
-                .replacingOccurrences(of: "__hub_origin__|", with: "")
+            // Full sanitizer — strips hub_origin / sid= stamps, not just spark prefixes.
+            let cleaned = (ContentSanitizer.clean(b) ?? ContentSanitizer.stripInternalMarkers(b))
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if cleaned.isEmpty { return nil }
-            return ContentSanitizer.clean(String(cleaned.prefix(100)))
+            return String(cleaned.prefix(100))
         }
         return nil
     }

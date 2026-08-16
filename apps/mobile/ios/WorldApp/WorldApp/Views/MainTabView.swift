@@ -91,7 +91,13 @@ struct MainTabView: View {
                 dockSlotGlobal: hubContinuousDockSlotGlobal,
                 watchStageGlobal: hubWatchStageGlobal
             )
-            .zIndex(hubsImmersiveFullscreen ? 200 : (appState.hubPlaybackExpanded ? 55 : 45))
+            // Mini must sit above feed paper (z45 was under opaque tab content on some paths → black hole).
+            // Keep below mini chrome (70) so the clear video slot still reveals the continuous film.
+            .zIndex(
+                hubsImmersiveFullscreen
+                    ? 200
+                    : (appState.hubPlaybackExpanded ? 55 : 65)
+            )
             .ignoresSafeArea(hubsImmersiveFullscreen ? .all : [])
 
             // One bottom stack: mini strip (if any) then tab bar — YouTube order, no overlap.

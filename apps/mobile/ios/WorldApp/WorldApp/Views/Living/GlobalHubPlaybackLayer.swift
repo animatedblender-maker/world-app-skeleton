@@ -161,6 +161,15 @@ struct GlobalHubPlaybackLayer: View {
                 if appState.hubPlaybackPullProgress > 0.5 {
                     appState.hubPlaybackPullProgress = 0
                 }
+                // Mini handoff: re-assert paint + audio so the strip never stays black.
+                appState.hubPlaybackPlaying = true
+                MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
+                    userMuted: appState.hubPlaybackMuted
+                )
+                NotificationCenter.default.post(
+                    name: .matteryaResumePlaybackAfterInterrupt,
+                    object: nil
+                )
             }
         }
         .onChange(of: appState.hubPlaybackPost?.id) { _, _ in
@@ -396,8 +405,8 @@ struct GlobalHubPlaybackLayer: View {
                 postID: post.id,
                 showsControls: showControls,
                 loops: false,
-                // YT: aspect-fit on stage + FS (full picture). Mini strip fills the bar.
-                fillsFrame: fsProgress < 0.15 && collapse > 0.55,
+                // YT: aspect-fit on stage + FS. Mini strip **must fill** or letterbox reads as black.
+                fillsFrame: !isHubFullscreen && (collapse > 0.45 || !expanded),
                 chromeOpacity: chromeOpacity,
                 isMuted: mutedBinding,
                 allowsFullscreen: expanded && collapse < 0.4,
