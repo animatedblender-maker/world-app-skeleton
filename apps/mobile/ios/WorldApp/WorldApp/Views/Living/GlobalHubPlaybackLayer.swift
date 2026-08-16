@@ -104,23 +104,36 @@ struct GlobalHubPlaybackLayer: View {
     var body: some View {
         Group {
             if let post = appState.hubPlaybackPost {
-                GeometryReader { geo in
-                    let layout = playerLayout(in: geo)
-                    let hitRect = fsProgress > 0.5
-                        ? CGRect(origin: .zero, size: geo.size)
-                        : CGRect(
-                            x: layout.x,
-                            y: layout.y,
-                            width: layout.width,
-                            height: layout.height
-                        )
-
-                    HubPassThroughContainer(interactiveRect: hitRect) {
-                        videoStack(post: post, layout: layout, containerSize: geo.size)
-                            .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+                // Edge-to-edge black bed first so notch + home indicator never flash paper white.
+                ZStack {
+                    if fsProgress > 0.02 {
+                        Color.black
+                            .opacity(Double(min(1, max(0, fsProgress))))
+                            .ignoresSafeArea(.all)
+                            .allowsHitTesting(false)
                     }
+
+                    GeometryReader { geo in
+                        let layout = playerLayout(in: geo)
+                        let hitRect = fsProgress > 0.5
+                            ? CGRect(origin: .zero, size: geo.size)
+                            : CGRect(
+                                x: layout.x,
+                                y: layout.y,
+                                width: layout.width,
+                                height: layout.height
+                            )
+
+                        HubPassThroughContainer(interactiveRect: hitRect) {
+                            videoStack(post: post, layout: layout, containerSize: geo.size)
+                                .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    // FS must measure the full window (including safe areas), not the inset stage.
+                    .ignoresSafeArea(fsProgress > 0.5 ? .all : [])
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .zIndex(fsProgress > 0.15 ? 500 : 0)
             }
         }
@@ -235,7 +248,7 @@ struct GlobalHubPlaybackLayer: View {
         let scrimOpacity = Double(fsProgress) * max(0.35, 1 - Double(max(0, layout.y) / 480))
 
         ZStack(alignment: .topLeading) {
-            // Immersive black scrim under the film (YT fullscreen bed).
+            // Full-window black under the film (covers any letterbox / safe-area residual).
             if fsProgress > 0.02 {
                 Color.black
                     .frame(width: screenW, height: screenH)
@@ -272,6 +285,8 @@ struct GlobalHubPlaybackLayer: View {
             // Stable identity — never remount across stage / FS / mini.
             .id("global-hub-continuous-\(post.id)")
         }
+        .frame(width: screenW, height: screenH, alignment: .topLeading)
+        .background(fsProgress > 0.5 ? Color.black : Color.clear)
         .statusBarHidden(isHubFullscreen)
         .persistentSystemOverlays(isHubFullscreen ? .hidden : .automatic)
     }

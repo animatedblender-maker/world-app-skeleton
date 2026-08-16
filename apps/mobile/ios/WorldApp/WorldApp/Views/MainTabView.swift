@@ -86,15 +86,17 @@ struct MainTabView: View {
             // Continuous AVPlayer.
             // Expanded: above page content so the watch stage is visible.
             // Mini: *below* the mini-bar chrome (z70) so the **clear** hole reveals video;
-            // never put an opaque ink fill in that hole (that made a black miniplayer).
+            // Immersive FS: above tab bar, edge-to-edge black (notch + home indicator).
             GlobalHubPlaybackLayer(
                 dockSlotGlobal: hubContinuousDockSlotGlobal,
                 watchStageGlobal: hubWatchStageGlobal
             )
-            .zIndex(appState.hubPlaybackExpanded ? 55 : 45)
+            .zIndex(hubsImmersiveFullscreen ? 200 : (appState.hubPlaybackExpanded ? 55 : 45))
+            .ignoresSafeArea(hubsImmersiveFullscreen ? .all : [])
 
             // One bottom stack: mini strip (if any) then tab bar — YouTube order, no overlap.
-            if showsFloatingMiniBar || appState.navigationPath.isEmpty {
+            // Hidden in immersive FS so white/paper never peeks under the black bed.
+            if !hubsImmersiveFullscreen, showsFloatingMiniBar || appState.navigationPath.isEmpty {
                 VStack(spacing: 0) {
                     if showsFloatingMiniBar, let post = appState.hubPlaybackPost {
                         YouTubeMiniPlayerBar(
@@ -127,6 +129,7 @@ struct MainTabView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(hubsImmersiveFullscreen ? Color.black : Color.clear)
         .onPreferenceChange(HubContinuousVideoSlotKey.self) { frame in
             hubContinuousDockSlotGlobal = frame
         }
@@ -320,6 +323,11 @@ struct MainTabView: View {
                 appState.openPlay(tab: .home)
             }
         }
+    }
+
+    /// Continuous player is in immersive fullscreen (notch + bottom must be black).
+    private var hubsImmersiveFullscreen: Bool {
+        appState.hubPlaybackPost != nil && appState.hubFullscreenPullProgress > 0.85
     }
 
     /// Floating mini above the tab bar (not docked into chat).
