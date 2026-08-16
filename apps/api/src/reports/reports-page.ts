@@ -214,6 +214,25 @@ export async function handleReportsGet(req: Request, res: Response): Promise<voi
   }
 }
 
+/**
+ * GET /reports/data?hours=24 — JSON for snappy client-side range switches
+ * (same cookie auth as the HTML page; no full document reload).
+ */
+export async function handleReportsDataGet(req: Request, res: Response): Promise<void> {
+  if (!hasReportsAccess(req)) {
+    res.status(401).json({ ok: false, error: 'unauthenticated' });
+    return;
+  }
+  try {
+    const hours = Math.max(1, Math.min(720, Number(req.query.hours ?? 24) || 24));
+    const report = await getEngagementReport(hours);
+    res.setHeader('Cache-Control', 'private, max-age=15');
+    res.json({ ok: true, report });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err?.message ?? 'report_failed' });
+  }
+}
+
 /** POST /reports/login */
 export function handleReportsLogin(req: Request, res: Response): void {
   const body = (req.body ?? {}) as { password?: string; next?: string };

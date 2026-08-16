@@ -725,229 +725,241 @@ export async function getEngagementReport(windowHours = 24): Promise<HumanEngage
 
   try {
     const intervalSql = `now() - make_interval(hours => $1::int)`;
+    // Larger windows return fewer detail rows so filters stay snappy.
+    const interactionLimit = hours <= 24 ? 600 : hours <= 168 ? 400 : 250;
+    const uploadLimit = hours <= 24 ? 400 : 200;
 
-    const { rows: totalRows } = await pool.query<{ n: string }>(
-      `
-      select count(*)::text as n
-      from public.entity_engagement_events
-      where occurred_at > ${intervalSql}
-      `,
-      [hours]
-    );
-
-    const { rows: byType } = await pool.query<{ event_type: string; count: string }>(
-      `
-      select event_type, count(*)::text as count
-      from public.entity_engagement_events
-      where occurred_at > ${intervalSql}
-      group by event_type
-      order by count(*) desc
-      `,
-      [hours]
-    );
-
-    const { rows: uniquePeopleRows } = await pool.query<{ n: string }>(
-      `
-      select count(distinct entity_id)::text as n
-      from public.entity_engagement_events
-      where occurred_at > ${intervalSql}
-      `,
-      [hours]
-    );
-
-    const { rows: topPeople } = await pool.query<{
-      entity_id: string;
-      count: string;
-      display_name: string | null;
-      username: string | null;
-    }>(
-      `
-      select e.entity_id::text,
-             count(*)::text as count,
-             max(p.display_name) as display_name,
-             max(p.username) as username
-      from public.entity_engagement_events e
-      left join public.profiles p on p.user_id = e.entity_id
-      where e.occurred_at > ${intervalSql}
-      group by e.entity_id
-      order by count(*) desc
-      limit 40
-      `,
-      [hours]
-    );
-
-    const { rows: topPosts } = await pool.query<{
-      content_id: string;
-      count: string;
-      avg_strength: string;
-      preview: string | null;
-    }>(
-      `
-      select e.content_id::text,
-             count(*)::text as count,
-             avg(e.strength)::text as avg_strength,
-             max(
+    // All independent queries in parallel (was sequential waterfall).
+    const [
+      totalRes,
+      byTypeRes,
+      uniquePeopleRes,
+      topPeopleRes,
+      topPostsRes,
+      lookRes,
+      hourlyRes,
+      surfaceRes,
+      allInteractionsRes,
+      uploadRes,
+      rankRes,
+    ] = await Promise.all([
+      pool.query<{ n: string }>(
+        `select count(*)::text as n from public.entity_engagement_events where occurred_at > ${intervalSql}`,
+        [hours]
+      ),
+      pool.query<{ event_type: string; count: string }>(
+        `
+        select event_type, count(*)::text as count
+        from public.entity_engagement_events
+        where occurred_at > ${intervalSql}
+        group by event_type
+        order by count(*) desc
+        `,
+        [hours]
+      ),
+      pool.query<{ n: string }>(
+        `
+        select count(distinct entity_id)::text as n
+        from public.entity_engagement_events
+        where occurred_at > ${intervalSql}
+        `,
+        [hours]
+      ),
+      pool.query<{
+        entity_id: string;
+        count: string;
+        display_name: string | null;
+        username: string | null;
+      }>(
+        `
+        select e.entity_id::text,
+               count(*)::text as count,
+               max(p.display_name) as display_name,
+               max(p.username) as username
+        from public.entity_engagement_events e
+        left join public.profiles p on p.user_id = e.entity_id
+        where e.occurred_at > ${intervalSql}
+        group by e.entity_id
+        order by count(*) desc
+        limit 40
+        `,
+        [hours]
+      ),
+      pool.query<{
+        content_id: string;
+        count: string;
+        avg_strength: string;
+        preview: string | null;
+      }>(
+        `
+        select e.content_id::text,
+               count(*)::text as count,
+               avg(e.strength)::text as avg_strength,
+               max(
+                 left(
+                   coalesce(
+                     nullif(trim(po.title), ''),
+                     nullif(trim(regexp_replace(po.body, E'[\\n\\r]+', ' ', 'g')), ''),
+                     nullif(trim(po.media_type), ''),
+                     'Post ' || left(e.content_id::text, 8)
+                   ),
+                   140
+                 )
+               ) as preview
+        from public.entity_engagement_events e
+        left join public.posts po on po.id::text = e.content_id::text
+        where e.occurred_at > ${intervalSql}
+          and e.content_id is not null
+        group by e.content_id
+        order by count(*) desc
+        limit 40
+        `,
+        [hours]
+      ),
+      pool.query<{ n: string; avg_ms: string }>(
+        `
+        select count(*)::text as n, coalesce(avg(duration_ms), 0)::text as avg_ms
+        from public.entity_engagement_events
+        where occurred_at > ${intervalSql}
+          and event_type = $2
+        `,
+        [hours, EngagementEventTypes.ScrollDwell]
+      ),
+      pool.query<{ hour: string; count: string }>(
+        `
+        select to_char(date_trunc('hour', occurred_at at time zone 'UTC'), 'YYYY-MM-DD HH24:00') as hour,
+               count(*)::text as count
+        from public.entity_engagement_events
+        where occurred_at > ${intervalSql}
+        group by 1
+        order by 1 asc
+        `,
+        [hours]
+      ),
+      pool.query<{ surface: string; count: string }>(
+        `
+        select coalesce(nullif(trim(surface), ''), '(unknown)') as surface,
+               count(*)::text as count
+        from public.entity_engagement_events
+        where occurred_at > ${intervalSql}
+        group by 1
+        order by count(*) desc
+        limit 20
+        `,
+        [hours]
+      ),
+      pool.query(
+        `
+        select e.event_id::text,
+               e.event_type,
+               e.entity_id::text,
+               e.content_id::text,
+               e.strength,
+               e.duration_ms,
+               e.surface,
+               e.hub_slug,
+               e.media_type,
+               e.meta,
+               e.occurred_at,
+               p.display_name,
+               p.username,
                left(
                  coalesce(
                    nullif(trim(po.title), ''),
-                   nullif(trim(regexp_replace(po.body, E'[\\n\\r]+', ' ', 'g')), ''),
-                   nullif(trim(po.media_type), ''),
-                   'Post ' || left(e.content_id::text, 8)
+                   nullif(trim(regexp_replace(coalesce(po.body, ''), E'[\\n\\r]+', ' ', 'g')), ''),
+                   case when e.hub_slug is not null and e.hub_slug <> '' then 'Hub: ' || e.hub_slug end,
+                   case when e.media_type is not null and e.media_type <> '' and e.media_type <> 'none'
+                     then initcap(e.media_type) || ' post' end,
+                   case when e.content_id is not null then 'Post ' || left(e.content_id::text, 8) end,
+                   null
                  ),
-                 140
-               )
-             ) as preview
-      from public.entity_engagement_events e
-      left join public.posts po on po.id::text = e.content_id::text
-      where e.occurred_at > ${intervalSql}
-        and e.content_id is not null
-      group by e.content_id
-      order by count(*) desc
-      limit 40
-      `,
-      [hours]
-    );
+                 120
+               ) as post_preview
+        from public.entity_engagement_events e
+        left join public.profiles p on p.user_id = e.entity_id
+        left join public.posts po on po.id::text = e.content_id::text
+        where e.occurred_at > ${intervalSql}
+        order by e.occurred_at desc
+        limit ${interactionLimit}
+        `,
+        [hours]
+      ),
+      pool.query(
+        `
+        select e.event_id::text,
+               e.entity_id::text,
+               e.content_id::text,
+               e.media_type,
+               e.is_spark,
+               e.surface,
+               e.country_code,
+               e.hub_slug,
+               e.meta,
+               e.occurred_at,
+               p.display_name,
+               p.username,
+               po.title as post_title
+        from public.entity_engagement_events e
+        left join public.profiles p on p.user_id = e.entity_id
+        left join public.posts po on po.id::text = e.content_id::text
+        where e.occurred_at > ${intervalSql}
+          and e.event_type = $2
+        order by e.occurred_at desc
+        limit ${uploadLimit}
+        `,
+        [hours, ContentEventTypes.Posted]
+      ),
+      pool
+        .query<{
+          request_id: string;
+          surface: string;
+          policy_version: string;
+          served_count: number;
+          candidate_count: number;
+          latency_ms: number | null;
+          created_at: Date;
+        }>(
+          `
+          select request_id, surface, policy_version, served_count, candidate_count, latency_ms, created_at
+          from public.recommendation_decisions
+          where created_at > ${intervalSql}
+          order by created_at desc
+          limit 100
+          `,
+          [hours]
+        )
+        .catch(() => ({ rows: [] as any[] })),
+    ]);
 
-    const { rows: lookRows } = await pool.query<{ n: string; avg_ms: string }>(
-      `
-      select count(*)::text as n, coalesce(avg(duration_ms), 0)::text as avg_ms
-      from public.entity_engagement_events
-      where occurred_at > ${intervalSql}
-        and event_type = $2
-      `,
-      [hours, EngagementEventTypes.ScrollDwell]
-    );
-
-    const { rows: hourlyRows } = await pool.query<{ hour: string; count: string }>(
-      `
-      select to_char(date_trunc('hour', occurred_at at time zone 'UTC'), 'YYYY-MM-DD HH24:00') as hour,
-             count(*)::text as count
-      from public.entity_engagement_events
-      where occurred_at > ${intervalSql}
-      group by 1
-      order by 1 asc
-      `,
-      [hours]
-    );
-
-    const { rows: surfaceRows } = await pool.query<{ surface: string; count: string }>(
-      `
-      select coalesce(nullif(trim(surface), ''), '(unknown)') as surface,
-             count(*)::text as count
-      from public.entity_engagement_events
-      where occurred_at > ${intervalSql}
-      group by 1
-      order by count(*) desc
-      limit 20
-      `,
-      [hours]
-    );
-
-    // Every interaction with timestamp (newest first). Cap 800 for dashboard.
-    const { rows: allInteractions } = await pool.query(
-      `
-      select e.event_id::text,
-             e.event_type,
-             e.entity_id::text,
-             e.content_id::text,
-             e.strength,
-             e.duration_ms,
-             e.surface,
-             e.hub_slug,
-             e.media_type,
-             e.meta,
-             e.occurred_at,
-             p.display_name,
-             p.username,
-             left(
-               coalesce(
-                 nullif(trim(po.title), ''),
-                 nullif(trim(regexp_replace(coalesce(po.body, ''), E'[\\n\\r]+', ' ', 'g')), ''),
-                 case when e.hub_slug is not null and e.hub_slug <> '' then 'Hub: ' || e.hub_slug end,
-                 case when e.media_type is not null and e.media_type <> '' and e.media_type <> 'none'
-                   then initcap(e.media_type) || ' post' end,
-                 case when e.content_id is not null then 'Post ' || left(e.content_id::text, 8) end,
-                 null
-               ),
-               120
-             ) as post_preview
-      from public.entity_engagement_events e
-      left join public.profiles p on p.user_id = e.entity_id
-      left join public.posts po on po.id::text = e.content_id::text
-      where e.occurred_at > ${intervalSql}
-      order by e.occurred_at desc
-      limit 800
-      `,
-      [hours]
-    );
+    const totalRows = totalRes.rows;
+    const byType = byTypeRes.rows;
+    const uniquePeopleRows = uniquePeopleRes.rows;
+    const topPeople = topPeopleRes.rows;
+    const topPosts = topPostsRes.rows;
+    const lookRows = lookRes.rows;
+    const hourlyRows = hourlyRes.rows;
+    const surfaceRows = surfaceRes.rows;
+    const allInteractions = allInteractionsRes.rows;
+    const uploadRows = uploadRes.rows;
+    const rankRows = rankRes.rows;
 
     const total = Number(totalRows[0]?.n ?? 0);
     const lookTimes = Number(lookRows[0]?.n ?? 0);
     const avgLookMs = Number(lookRows[0]?.avg_ms ?? 0);
 
-    // Uploads tab — every ContentPosted (R2 / app / backend publish).
-    const { rows: uploadRows } = await pool.query(
-      `
-      select e.event_id::text,
-             e.entity_id::text,
-             e.content_id::text,
-             e.media_type,
-             e.is_spark,
-             e.surface,
-             e.country_code,
-             e.hub_slug,
-             e.meta,
-             e.occurred_at,
-             p.display_name,
-             p.username,
-             po.title as post_title
-      from public.entity_engagement_events e
-      left join public.profiles p on p.user_id = e.entity_id
-      left join public.posts po on po.id::text = e.content_id::text
-      where e.occurred_at > ${intervalSql}
-        and e.event_type = $2
-      order by e.occurred_at desc
-      limit 500
-      `,
-      [hours, ContentEventTypes.Posted]
-    );
-
-    let rankDecisions: RankDecisionRow[] = [];
-    try {
-      const { rows: rankRows } = await pool.query<{
-        request_id: string;
-        surface: string;
-        policy_version: string;
-        served_count: number;
-        candidate_count: number;
-        latency_ms: number | null;
-        created_at: Date;
-      }>(
-        `
-        select request_id, surface, policy_version, served_count, candidate_count, latency_ms, created_at
-        from public.recommendation_decisions
-        where created_at > ${intervalSql}
-        order by created_at desc
-        limit 100
-        `,
-        [hours]
-      );
-      rankDecisions = rankRows.map((r) => {
-        const t = formatWhen(r.created_at);
-        return {
-          requestId: r.request_id,
-          surface: r.surface,
-          policyVersion: r.policy_version,
-          servedCount: Number(r.served_count) || 0,
-          candidateCount: Number(r.candidate_count) || 0,
-          latencyMs: r.latency_ms != null ? Number(r.latency_ms) : null,
-          when: t.when,
-          timestamp: t.timestamp,
-        };
-      });
-    } catch {
-      rankDecisions = [];
-    }
+    const rankDecisions: RankDecisionRow[] = rankRows.map((r) => {
+      const t = formatWhen(r.created_at);
+      return {
+        requestId: r.request_id,
+        surface: r.surface,
+        policyVersion: r.policy_version,
+        servedCount: Number(r.served_count) || 0,
+        candidateCount: Number(r.candidate_count) || 0,
+        latencyMs: r.latency_ms != null ? Number(r.latency_ms) : null,
+        when: t.when,
+        timestamp: t.timestamp,
+      };
+    });
 
     const kpis: EngagementKpis = {
       uniquePeople: Number(uniquePeopleRows[0]?.n ?? 0),
@@ -1129,7 +1141,7 @@ export function renderEngagementReportHtml(report: HumanEngagementReport): strin
   const rangeBtns = ranges
     .map(
       (r) =>
-        `<a class="range-btn${r.h === hours ? ' active' : ''}" href="/reports?hours=${r.h}">${esc(r.label)}</a>`
+        `<button type="button" class="range-btn${r.h === hours ? ' active' : ''}" data-hours="${r.h}">${esc(r.label)}</button>`
     )
     .join('');
 
@@ -1318,10 +1330,22 @@ export function renderEngagementReportHtml(report: HumanEngagementReport): strin
     .topbar .sub { margin: 4px 0 0; color: var(--muted); font-size: 13px; max-width: 48rem; line-height: 1.4; }
     .ranges { display: flex; flex-wrap: wrap; gap: 6px; }
     .range-btn {
+      appearance: none; cursor: pointer;
       padding: 8px 12px; border-radius: 999px; border: 1px solid var(--border);
       background: var(--panel); color: var(--muted); font-size: 12px; font-weight: 700;
+      transition: background .12s ease, color .12s ease, transform .08s ease, opacity .12s ease;
     }
-    .range-btn.active, .range-btn:hover { background: #fff; color: #111; border-color: #fff; }
+    .range-btn:hover { background: #2a2a2e; color: #fff; }
+    .range-btn.active { background: #fff; color: #111; border-color: #fff; }
+    .range-btn:active { transform: scale(0.96); }
+    .range-btn:disabled { opacity: 0.45; cursor: wait; }
+    .main.is-loading { opacity: 0.55; pointer-events: none; transition: opacity .12s ease; }
+    .loading-dot {
+      display: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+      animation: pulse 0.7s ease infinite alternate; margin-left: 8px;
+    }
+    .main.is-loading .loading-dot { display: inline-block; }
+    @keyframes pulse { from { opacity: 0.35; } to { opacity: 1; } }
     .kpi-grid {
       display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 10px; margin: 14px 0 18px;
     }
@@ -1408,13 +1432,13 @@ export function renderEngagementReportHtml(report: HumanEngagementReport): strin
     <main class="main">
       <div class="topbar">
         <div>
-          <h2>${esc(report.title)}</h2>
-          <p class="sub">${esc(report.summary)}</p>
+          <h2 id="insights-title">${esc(report.title)} <span class="loading-dot" aria-hidden="true"></span></h2>
+          <p class="sub" id="insights-summary">${esc(report.summary)}</p>
         </div>
-        <div class="ranges" title="Time window">${rangeBtns}</div>
+        <div class="ranges" id="range-bar" title="Time window">${rangeBtns}</div>
       </div>
 
-      <div class="kpi-grid">
+      <div class="kpi-grid" id="kpi-grid">
         ${kpi('Total signals', report.totalInteractions.toLocaleString())}
         ${kpi('People', k.uniquePeople.toLocaleString(), 'unique actors')}
         ${kpi('Likes', k.likes.toLocaleString())}
@@ -1554,6 +1578,22 @@ export function renderEngagementReportHtml(report: HumanEngagementReport): strin
   <script type="application/json" id="report-json">${reportJson}</script>
   <script>
     (function () {
+      var cache = Object.create(null);
+      var currentHours = ${hours};
+      var inflight = null;
+      var main = document.querySelector('.main');
+      try {
+        var boot = JSON.parse(document.getElementById('report-json').textContent || '{}');
+        if (boot && boot.windowHours) cache[String(boot.windowHours)] = boot;
+      } catch (e) {}
+
+      function esc(s) {
+        return String(s == null ? '' : s)
+          .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+      }
+      function n(v) { return Number(v || 0).toLocaleString(); }
+
       var tabs = document.querySelectorAll('.nav button[data-tab]');
       var panels = document.querySelectorAll('.panel');
       tabs.forEach(function (btn) {
@@ -1567,11 +1607,12 @@ export function renderEngagementReportHtml(report: HumanEngagementReport): strin
         });
       });
 
-      var search = document.getElementById('activity-search');
-      var table = document.getElementById('activity-table');
-      var countEl = document.getElementById('activity-count');
-      if (search && table) {
-        search.addEventListener('input', function () {
+      function wireSearch() {
+        var search = document.getElementById('activity-search');
+        var table = document.getElementById('activity-table');
+        var countEl = document.getElementById('activity-count');
+        if (!search || !table) return;
+        search.oninput = function () {
           var q = (search.value || '').toLowerCase().trim();
           var rows = table.querySelectorAll('tbody tr');
           var shown = 0;
@@ -1582,15 +1623,223 @@ export function renderEngagementReportHtml(report: HumanEngagementReport): strin
             if (ok) shown += 1;
           });
           if (countEl) countEl.textContent = 'Showing ' + shown + ' filtered rows';
+        };
+      }
+      wireSearch();
+
+      function setRangeActive(h) {
+        document.querySelectorAll('.range-btn').forEach(function (b) {
+          b.classList.toggle('active', Number(b.getAttribute('data-hours')) === Number(h));
         });
       }
+
+      function setLoading(on) {
+        if (main) main.classList.toggle('is-loading', !!on);
+        document.querySelectorAll('.range-btn').forEach(function (b) { b.disabled = !!on; });
+      }
+
+      function kpi(label, value, hint) {
+        return '<div class="kpi"><div class="kpi-v">' + esc(value) + '</div><div class="kpi-l">' +
+          esc(label) + '</div>' + (hint ? '<div class="kpi-h">' + esc(hint) + '</div>' : '') + '</div>';
+      }
+
+      function renderReport(report) {
+        if (!report) return;
+        currentHours = report.windowHours;
+        var k = report.kpis || {};
+        var sum = document.getElementById('insights-summary');
+        if (sum) sum.textContent = report.summary || '';
+        var grid = document.getElementById('kpi-grid');
+        if (grid) {
+          grid.innerHTML = [
+            kpi('Total signals', n(report.totalInteractions)),
+            kpi('People', n(k.uniquePeople), 'unique actors'),
+            kpi('Likes', n(k.likes)),
+            kpi('Shares', n(k.shares)),
+            kpi('Saves', n(k.saves)),
+            kpi('Comments', n(k.comments)),
+            kpi('Looks', n(k.dwells), 'stopped to read'),
+            kpi('Skips', n(k.skips)),
+            kpi('Full watches', n(k.watchesComplete)),
+            kpi('Partial watches', n(k.watchesPartial)),
+            kpi('Impressions', n(k.impressions)),
+            kpi('In viewport', n(k.viewportVisible)),
+            kpi('Hides', n(k.hides)),
+            kpi('Not interested', n(k.notInterested)),
+            kpi('Follows', n(k.follows)),
+            kpi('Profile opens', n(k.profileOpens)),
+            kpi('Hub opens', n(k.hubOpens)),
+            kpi('Hub videos', n(k.hubVideoOpens)),
+            kpi('Uploads', n(report.uploadCount)),
+            kpi('Avg look', report.stoppedToLook && report.stoppedToLook.averageLookTime || '—')
+          ].join('');
+        }
+
+        var maxHour = 1;
+        (report.hourly || []).forEach(function (h) { if (h.count > maxHour) maxHour = h.count; });
+        var barsEl = document.querySelector('#panel-overview .bars');
+        if (barsEl) {
+          barsEl.innerHTML = (report.hourly || []).map(function (h) {
+            var pct = Math.max(4, Math.round((h.count / maxHour) * 100));
+            return '<div class="bar-col" title="' + esc(h.hour) + ': ' + esc(h.count) + '">' +
+              '<div class="bar" style="height:' + pct + '%"></div><span class="bar-n">' + esc(h.count) + '</span></div>';
+          }).join('') || '<div class="empty">No hourly data yet</div>';
+        }
+
+        var br = document.querySelector('#panel-overview .card:nth-child(2)');
+        // breakdown is second card in first grid - find by h3
+        document.querySelectorAll('#panel-overview .card').forEach(function (card) {
+          var h3 = card.querySelector('h3');
+          if (!h3) return;
+          if (h3.textContent.indexOf('What people did') !== -1) {
+            var total = report.totalInteractions || 1;
+            card.innerHTML = '<h3>What people did</h3>' + ((report.activityBreakdown || []).map(function (r) {
+              var pct = Math.round((r.count / total) * 100);
+              return '<div class="breakdown-row"><div class="br-label">' + esc(r.action) +
+                '</div><div class="br-track"><div class="br-fill" style="width:' + pct +
+                '%"></div></div><div class="br-count">' + esc(r.count) + '</div></div>';
+            }).join('') || '<div class="empty">No breakdown yet</div>');
+          }
+        });
+
+        function peopleRows(list) {
+          return (list || []).map(function (p, i) {
+            var name = p.name || p.username || (p.personId || '').slice(0, 8) + '…';
+            var handle = p.username ? '@' + p.username : '—';
+            return '<tr><td class="num muted">' + (i + 1) + '</td><td><div class="person"><span class="avatar">' +
+              esc(String(name).slice(0, 1).toUpperCase()) + '</span><div><strong>' + esc(name) +
+              '</strong><div class="muted small">' + esc(handle) + '</div></div></div></td><td class="num">' +
+              esc(p.interactions) + '</td></tr>';
+          }).join('') || '<tr><td colspan="3" class="empty">—</td></tr>';
+        }
+
+        var surfaceHtml = (report.bySurface || []).map(function (s) {
+          return '<tr><td>' + esc(s.surface) + '</td><td class="num">' + esc(s.count) + '</td></tr>';
+        }).join('') || '<tr><td colspan="2" class="empty">—</td></tr>';
+
+        document.querySelectorAll('#panel-overview .table-wrap table tbody').forEach(function (tb, idx) {
+          if (idx === 0) tb.innerHTML = surfaceHtml;
+          if (idx === 1) tb.innerHTML = peopleRows(report.mostActivePeople);
+        });
+
+        var actBody = document.querySelector('#activity-table tbody');
+        if (actBody) {
+          actBody.innerHTML = (report.interactions || []).map(function (i) {
+            var hay = [i.action, i.personName, i.personUsername, i.postPreview, i.where, i.actionCode]
+              .filter(Boolean).join(' ').toLowerCase();
+            var person = i.personName || i.personUsername || (i.personId || '').slice(0, 8) + '…';
+            var post = i.postPreview || (i.postId ? String(i.postId).slice(0, 8) + '…' : '—');
+            return '<tr data-search="' + esc(hay) + '"><td class="nowrap">' + esc(i.when) +
+              '</td><td><span class="pill">' + esc(i.action) + '</span></td><td>' + esc(person) +
+              '</td><td class="clip">' + esc(post) + '</td><td>' + esc(i.where) + '</td><td>' +
+              esc(i.lookTime || '—') + '</td><td class="muted small">' + esc(i.interest) + '</td></tr>';
+          }).join('') || '<tr><td colspan="7" class="empty">No interactions yet</td></tr>';
+        }
+        var countEl = document.getElementById('activity-count');
+        if (countEl) {
+          countEl.textContent = 'Showing ' + (report.interactionCountReturned || 0) +
+            ' of ' + (report.totalInteractions || 0);
+        }
+
+        var contentBody = document.querySelector('#panel-content tbody');
+        if (contentBody) {
+          contentBody.innerHTML = (report.mostViewedPosts || []).map(function (p, i) {
+            return '<tr><td class="num muted">' + (i + 1) + '</td><td>' +
+              esc(p.preview || (p.postId || '').slice(0, 10) + '…') +
+              '</td><td class="num">' + esc(p.interactions) +
+              '</td><td class="num">' + esc(p.averageInterest) + '</td></tr>';
+          }).join('') || '<tr><td colspan="4" class="empty">No content signals yet</td></tr>';
+        }
+
+        var peopleBody = document.querySelector('#panel-people tbody');
+        if (peopleBody) peopleBody.innerHTML = peopleRows(report.mostActivePeople);
+
+        var upBody = document.querySelector('#panel-uploads tbody');
+        if (upBody) {
+          upBody.innerHTML = (report.uploads || []).map(function (u) {
+            var who = u.personName || u.personUsername || (u.personId ? String(u.personId).slice(0, 8) + '…' : '—');
+            return '<tr><td class="nowrap">' + esc(u.when) + '</td><td>' + esc(u.summary) +
+              '</td><td>' + esc(who) + '</td><td class="clip">' + esc(u.title || '—') +
+              '</td><td>' + esc(u.where) + '</td><td>' + esc(u.country || '—') +
+              '</td><td>' + esc(u.channelName || '—') + '</td><td>' + esc(u.mediaType || '—') + '</td></tr>';
+          }).join('') || '<tr><td colspan="8" class="empty">No uploads in this window</td></tr>';
+        }
+
+        var rankBody = document.querySelector('#panel-ranking tbody');
+        if (rankBody) {
+          rankBody.innerHTML = (report.rankDecisions || []).map(function (r) {
+            return '<tr><td class="nowrap">' + esc(r.when) + '</td><td>' + esc(r.surface) +
+              '</td><td class="muted small">' + esc(r.policyVersion) +
+              '</td><td class="num">' + esc(r.servedCount) +
+              '</td><td class="num">' + esc(r.candidateCount) +
+              '</td><td class="num">' + esc(r.latencyMs != null ? r.latencyMs + ' ms' : '—') +
+              '</td><td class="muted small clip">' + esc(String(r.requestId || '').slice(0, 12)) + '…</td></tr>';
+          }).join('') || '<tr><td colspan="7" class="empty">No rank calls yet</td></tr>';
+        }
+
+        var jsonEl = document.getElementById('report-json');
+        if (jsonEl) jsonEl.textContent = JSON.stringify(report);
+        setRangeActive(report.windowHours);
+        wireSearch();
+        var search = document.getElementById('activity-search');
+        if (search) search.value = '';
+      }
+
+      function fetchReport(hours, force) {
+        var key = String(hours);
+        if (!force && cache[key]) {
+          renderReport(cache[key]);
+          history.replaceState({ hours: hours }, '', '/reports?hours=' + hours);
+          return Promise.resolve(cache[key]);
+        }
+        if (inflight && inflight.key === key) return inflight.p;
+        setLoading(true);
+        var p = fetch('/reports/data?hours=' + encodeURIComponent(hours), {
+          credentials: 'same-origin',
+          headers: { 'Accept': 'application/json' }
+        })
+          .then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
+          })
+          .then(function (data) {
+            var report = data.report || data;
+            cache[key] = report;
+            renderReport(report);
+            history.replaceState({ hours: hours }, '', '/reports?hours=' + hours);
+            return report;
+          })
+          .catch(function (err) {
+            console.warn('[insights] load failed', err);
+            // Fallback: full navigation only if we have nothing
+            if (!cache[key]) window.location.href = '/reports?hours=' + hours;
+          })
+          .finally(function () {
+            setLoading(false);
+            inflight = null;
+          });
+        inflight = { key: key, p: p };
+        return p;
+      }
+
+      document.getElementById('range-bar') && document.getElementById('range-bar').addEventListener('click', function (e) {
+        var btn = e.target.closest('.range-btn');
+        if (!btn) return;
+        var h = Number(btn.getAttribute('data-hours'));
+        if (!h || h === currentHours) {
+          // same range → soft refresh only if forced later
+          setRangeActive(h);
+          if (cache[String(h)]) renderReport(cache[String(h)]);
+          return;
+        }
+        setRangeActive(h);
+        fetchReport(h, false);
+      });
 
       var refresh = document.getElementById('btn-refresh');
       if (refresh) {
         refresh.addEventListener('click', function () {
-          var u = new URL(window.location.href);
-          u.searchParams.set('_', String(Date.now()));
-          window.location.href = u.toString();
+          fetchReport(currentHours, true);
         });
       }
 
@@ -1605,6 +1854,33 @@ export function renderEngagementReportHtml(report: HumanEngagementReport): strin
           a.download = 'matterya-insights-' + Date.now() + '.json';
           a.click();
           URL.revokeObjectURL(a.href);
+        });
+      }
+
+      // Prefetch other ranges in the background for instant clicks.
+      var PREFETCH = [1, 6, 24, 72, 168, 720];
+      if (window.requestIdleCallback) {
+        requestIdleCallback(function () { prefetchAll(); }, { timeout: 1200 });
+      } else {
+        setTimeout(prefetchAll, 400);
+      }
+      function prefetchAll() {
+        PREFETCH.forEach(function (h, i) {
+          if (String(h) === String(currentHours)) return;
+          setTimeout(function () {
+            if (cache[String(h)]) return;
+            fetch('/reports/data?hours=' + h, {
+              credentials: 'same-origin',
+              headers: { 'Accept': 'application/json' }
+            })
+              .then(function (r) { return r.ok ? r.json() : null; })
+              .then(function (data) {
+                if (data && (data.report || data.windowHours)) {
+                  cache[String(h)] = data.report || data;
+                }
+              })
+              .catch(function () {});
+          }, 120 * i);
         });
       }
     })();

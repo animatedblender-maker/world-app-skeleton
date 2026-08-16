@@ -49,6 +49,7 @@ import {
   refreshUserFeatures,
 } from './recommendation/rank.service.js';
 import {
+  handleReportsDataGet,
   handleReportsGet,
   handleReportsLogin,
   handleReportsLogout,
@@ -239,6 +240,10 @@ app.use(
 // https://api.matterya.com/reports  ·  password via REPORTS_PAGE_PASSWORD
 app.get('/reports', (req, res) => {
   void handleReportsGet(req, res);
+});
+/** Snappy Insights JSON (cookie auth) — used by time-range filters without full reload */
+app.get('/reports/data', (req, res) => {
+  void handleReportsDataGet(req, res);
 });
 app.post('/reports/login', handleReportsLogin);
 app.get('/reports/logout', handleReportsLogout);
