@@ -22,15 +22,9 @@ struct ExpandableBodyText: View {
                 .foregroundStyle(color)
                 .lineSpacing(lineSpacing)
                 .lineLimit(expanded ? nil : collapsedLineLimit)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    GeometryReader { geo in
-                        Color.clear.preference(
-                            key: ExpandableTextHeightKey.self,
-                            value: geo.size.height
-                        )
-                    }
-                )
+                // Long tokens / URLs must wrap — never force the post card past screen width.
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
 
             if isTruncated || expanded {
                 Button(expanded ? lessTitle : moreTitle) {
@@ -43,8 +37,9 @@ struct ExpandableBodyText: View {
                 .buttonStyle(.plain)
             }
         }
-        .background(
-            // Measure full height vs collapsed to know if "See more" is needed.
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        .background(alignment: .topLeading) {
+            // Measure off-layout (zero size) so full text never expands the card.
             Text(text)
                 .font(font)
                 .lineSpacing(lineSpacing)
@@ -59,7 +54,10 @@ struct ExpandableBodyText: View {
                             }
                     }
                 )
-        )
+                .frame(width: 0, height: 0, alignment: .topLeading)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
     }
 
     private func updateTruncation(fullHeight: CGFloat) {

@@ -207,7 +207,8 @@ extension View {
             .lineLimit(lineLimit)
             .minimumScaleFactor(0.9)
             .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // minWidth:0 lets long titles wrap inside edge-to-edge cards (no horizontal blowout).
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
     }
 }
 

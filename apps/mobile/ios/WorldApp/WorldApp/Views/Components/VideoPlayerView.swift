@@ -1979,6 +1979,7 @@ struct InFrameVideoPlayer: View {
 
     /// Reports on-screen fraction so only the most-visible video plays.
     private var visibilityProbe: some View {
+        // Match parent bounds only — never let GeometryReader inflate the card off-screen.
         GeometryReader { proxy in
             let frame = proxy.frame(in: .global)
             Color.clear
@@ -1999,7 +2000,9 @@ struct InFrameVideoPlayer: View {
                     reportVisibility(proxy.frame(in: .global))
                 }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
     private func reportVisibility(_ frame: CGRect) {

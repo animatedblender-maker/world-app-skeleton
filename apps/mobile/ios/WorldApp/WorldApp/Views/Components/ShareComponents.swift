@@ -57,7 +57,7 @@ struct SparkFeedCard: View {
 
     private var corner: CGFloat { edgeToEdge ? 0 : 12 }
 
-    /// Match `FeedMediaSizeModifier` / long-form feed video height exactly.
+    /// Facebook-style: full-width tall media area (same as other feed video posts).
     private var cardHeight: CGFloat {
         FacebookMediaLayout.dominantFeedVideoHeight()
     }
@@ -66,8 +66,8 @@ struct SparkFeedCard: View {
         ZStack(alignment: .topLeading) {
             Theme.ink
 
-            if let url = post.playableVideoURL {
-                // Aspect-fit — never crop shared Sparks on the feed (full picture, letterbox OK).
+            if let url = post.playableVideoURL ?? MediaURLResolver.videoURL(for: post) {
+                // Facebook: size the box, then **fill** it — no letterbox that shrinks the picture.
                 InFrameVideoPlayer(
                     url: url,
                     posterURL: post.posterImageURL,
@@ -76,26 +76,25 @@ struct SparkFeedCard: View {
                     contentCountryCode: post.countryCode,
                     postID: post.id,
                     muted: appState.feedVideosMuted,
-                    // Shared Sparks on the feed must loop like the full Sparks player.
                     loops: true,
                     preferArchivePlayer: post.isHubSeedVideo || ArchiveVideoPlayback.isArchiveURL(url),
                     showsControls: false,
                     muteOnlyControls: true,
-                    fillsFrame: false,
+                    fillsFrame: true,
                     sharesFeedMute: true,
                     autoplaySurface: autoplaySurface,
                     onViewed: { Task { await PostsService.shared.recordView(post) } }
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
                 .onAppear {
-                    // Start silent buffer before focus elects this card (and again after park).
                     SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
                 }
             } else {
                 VideoThumbnailView(
                     post: post,
                     maxPixelSize: 720,
-                    contentMode: .fit,
+                    contentMode: .fill,
                     showsPlayIcon: true,
                     playIconSize: 36,
                     placeholder: AnyView(
@@ -103,6 +102,7 @@ struct SparkFeedCard: View {
                     )
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
             }
 
             SparksOriginBadge(compact: true)
@@ -119,10 +119,11 @@ struct SparkFeedCard: View {
                     .onTapGesture { openFullPlayer() }
             }
         }
-        .frame(maxWidth: .infinity)
+        .frame(minWidth: 0, maxWidth: .infinity)
         .frame(height: cardHeight)
         .clipped()
         .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+        .contentShape(Rectangle())
         .overlay {
             if !edgeToEdge {
                 RoundedRectangle(cornerRadius: corner, style: .continuous)
@@ -332,7 +333,7 @@ struct SharedPostEmbedView: View {
     }
 }
 
-/// Matches `FeedMediaSizeModifier` so shared photos/videos use the same height caps as feed media.
+/// Matches `FeedMediaSizeModifier` — full card width, height from that width (never shrink width).
 private struct SharedEmbedMediaSizeModifier: ViewModifier {
     let isVideo: Bool
     let photoAspect: CGFloat
@@ -345,6 +346,7 @@ private struct SharedEmbedMediaSizeModifier: ViewModifier {
                 .frame(height: FacebookMediaLayout.dominantFeedVideoHeight())
         } else {
             content
+                .frame(maxWidth: .infinity)
                 .aspectRatio(photoAspect, contentMode: .fit)
                 .frame(maxHeight: FacebookMediaLayout.maxFeedMediaHeight)
         }

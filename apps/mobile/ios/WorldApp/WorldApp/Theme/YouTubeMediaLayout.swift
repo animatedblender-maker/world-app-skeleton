@@ -543,6 +543,7 @@ struct PlayFeedLinkCard: View {
     }
 
     private var visibilityProbe: some View {
+        // Zero-size probe — GeometryReader must never expand the feed card.
         GeometryReader { proxy in
             let frame = proxy.frame(in: .global)
             Color.clear
@@ -563,7 +564,9 @@ struct PlayFeedLinkCard: View {
                     reportVisibility(proxy.frame(in: .global))
                 }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
     private func reportVisibility(_ frame: CGRect) {

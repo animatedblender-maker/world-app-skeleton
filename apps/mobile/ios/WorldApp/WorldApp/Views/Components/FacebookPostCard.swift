@@ -334,8 +334,13 @@ struct FacebookPostCard: View {
                 }
             }
         }
+        // Critical containment: LazyVStack can propose unbounded width/height for some
+        // own-upload media. Without minWidth:0 + clip, the whole card (buttons included)
+        // lays out outside the screen frame.
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         .background(edgeToEdge ? Theme.canvas : Theme.surface)
         .clipShape(cardShape)
+        .clipped()
         .overlay {
             if !edgeToEdge {
                 cardShape
@@ -1273,6 +1278,7 @@ private struct PostEditSheet: View {
 }
 
 /// Videos: full post-card width + classic tall feed height. Photos keep aspect ratio.
+/// Always clamps size so LazyVStack never lets media (or the whole card) escape the screen.
 private struct FeedMediaSizeModifier: ViewModifier {
     let isVideo: Bool
     let photoAspect: CGFloat
@@ -1280,15 +1286,26 @@ private struct FeedMediaSizeModifier: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
+        let aspect = FacebookMediaLayout.clampedAspect(photoAspect)
         if isVideo {
             content
-                .frame(maxWidth: .infinity)
+                .frame(minWidth: 0, maxWidth: .infinity)
                 .frame(height: FacebookMediaLayout.dominantFeedVideoHeight())
+                .clipped()
+                .contentShape(Rectangle())
         } else {
             content
-                .frame(maxWidth: .infinity)
-                .aspectRatio(photoAspect, contentMode: .fit)
-                .frame(maxHeight: usesYouTubeFrame ? nil : FacebookMediaLayout.maxFeedMediaHeight)
+                .frame(minWidth: 0, maxWidth: .infinity)
+                .aspectRatio(aspect, contentMode: .fit)
+                .frame(
+                    minWidth: 0,
+                    maxWidth: .infinity,
+                    maxHeight: usesYouTubeFrame
+                        ? FacebookMediaLayout.maxFeedMediaHeight
+                        : FacebookMediaLayout.maxFeedMediaHeight
+                )
+                .clipped()
+                .contentShape(Rectangle())
         }
     }
 }

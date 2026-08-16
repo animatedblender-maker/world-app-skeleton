@@ -14,25 +14,55 @@ enum FacebookMediaLayout {
     static let reelAspect: CGFloat = 9.0 / 16.0
     /// Max height for in-feed photos — tall enough for 4:5 immersion on phones.
     static let maxFeedMediaHeight: CGFloat = 520
+    /// Hard floor/ceiling so LazyVStack never proposes infinite/zero media boxes.
+    static let minFeedMediaHeight: CGFloat = 160
 
-    /// In-feed video height — Facebook-like tall card (one dominant video per viewport).
-    /// Taller than 16:9 so the post feels immersive; still leaves room for chrome.
+    /// Facebook mobile feed: full-width, tall media (~4:5 immersion, not flat 16:9).
+    /// Pair with `fillsFrame: true` so the picture fills the box (no letterbox “tiny video”).
     static func dominantFeedVideoHeight(
         forWidth width: CGFloat = UIScreen.main.bounds.width,
         screenHeight: CGFloat = UIScreen.main.bounds.height
     ) -> CGFloat {
-        let classic16x9 = width / feedVideoAspect
-        // FB mobile feed videos read closer to ~4:5 immersion than flat 16:9.
-        let fbLike = width / photoPortraitAspect
-        let minDominant = screenHeight * 0.58
-        let maxDominant = min(screenHeight * 0.72, maxFeedMediaHeight + 80)
-        let preferred = max(classic16x9 * 1.35, min(fbLike, maxDominant))
-        return min(max(preferred, minDominant), maxDominant)
+        // Guard against zero/negative window sizes during first layout (splits, rotation).
+        let w = max(200, width.isFinite ? width : UIScreen.main.bounds.width)
+        let h = max(400, screenHeight.isFinite ? screenHeight : UIScreen.main.bounds.height)
+        let classic16x9 = w / feedVideoAspect
+        // FB mobile feed reads closer to ~4:5 than flat 16:9.
+        let fbLike = w / photoPortraitAspect
+        let minDominant = min(h * 0.42, maxFeedMediaHeight)
+        let maxDominant = min(h * 0.62, maxFeedMediaHeight + 20)
+        let preferred = max(classic16x9 * 1.15, min(fbLike, maxDominant))
+        let raw = min(max(preferred, minDominant), maxDominant)
+        return min(max(raw, minFeedMediaHeight), maxFeedMediaHeight + 20)
+    }
+
+    /// Clamp aspect ratios so a bad media metadata value can't blow out the card.
+    static func clampedAspect(_ aspect: CGFloat) -> CGFloat {
+        guard aspect.isFinite, aspect > 0.05 else { return photoPortraitAspect }
+        // 9:16 … 2.4:1
+        return min(max(aspect, 0.45), 2.4)
+    }
+
+    /// Spark share on feed — same Facebook tall media box as other video posts.
+    static func sparkFeedCardHeight(
+        forWidth width: CGFloat = UIScreen.main.bounds.width,
+        screenHeight: CGFloat = UIScreen.main.bounds.height
+    ) -> CGFloat {
+        dominantFeedVideoHeight(forWidth: width, screenHeight: screenHeight)
     }
 
     static func mediaHeight(for width: CGFloat, post: CountryPost, context: MediaContext = .feed) -> CGFloat {
-        if post.hasVideo, usesYouTubeFrame(for: post, context: context) || context == .feed {
-            return dominantFeedVideoHeight(forWidth: width)
+        if post.hasVideo {
+            let isSpark = post.isReel
+                || post.isSpark
+                || post.isSparkFeedShare
+                || context == .reel
+            if isSpark {
+                return sparkFeedCardHeight(forWidth: width)
+            }
+            if usesYouTubeFrame(for: post, context: context) || context == .feed {
+                return dominantFeedVideoHeight(forWidth: width)
+            }
         }
         let aspect = aspectRatio(for: post, context: context) ?? photoPortraitAspect
         let natural = width / aspect
