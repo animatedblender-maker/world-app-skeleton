@@ -54,15 +54,17 @@ final class FeedVideoFocus {
     /// Last non-zero ratio per id — used to ignore single-frame 0 glitches from GeometryReader.
     private var stickyRatios: [String: CGFloat] = [:]
     private var zeroStreak: [String: Int] = [:]
+    /// Debounced silence when no winner — layout flaps used to kill in-frame hubs audio.
+    private var silenceWhenEmptyTask: Task<Void, Never>?
 
     /// Must be at least this visible to *start* (or take over) autoplay.
-    private let minVisibleToPlay: CGFloat = 0.30
+    private let minVisibleToPlay: CGFloat = 0.28
     /// Keep current winner until it drops below this (same as start — 70% off-screen rule).
-    private let minVisibleToKeep: CGFloat = 0.30
+    private let minVisibleToKeep: CGFloat = 0.25
     /// Challenger must beat the current winner by this much to steal focus.
-    private let stealEpsilon: CGFloat = 0.08
+    private let stealEpsilon: CGFloat = 0.12
     /// Ignore this many consecutive near-zero layout reports before clearing a candidate.
-    private let zeroGlitchTolerance = 3
+    private let zeroGlitchTolerance = 6
 
     private init() {}
 
@@ -102,11 +104,13 @@ final class FeedVideoFocus {
 
     /// Drop every candidate (tab switch / push). Cards re-report when their surface is live.
     func resetAll() {
+        silenceWhenEmptyTask?.cancel()
+        silenceWhenEmptyTask = nil
         guard !ratios.isEmpty || activeID != nil else { return }
         ratios.removeAll(keepingCapacity: true)
         stickyRatios.removeAll(keepingCapacity: true)
         zeroStreak.removeAll(keepingCapacity: true)
-        publish(winner: nil, previous: activeID)
+        publish(winner: nil, previous: activeID, silenceImmediately: true)
     }
 
     func isActive(id: String) -> Bool {
@@ -130,7 +134,7 @@ final class FeedVideoFocus {
             return
         }
 
-        // No sticky winner (or it fell below 30%) — elect the most visible ≥ 30%.
+        // No sticky winner (or it fell below keep threshold) — elect most visible.
         if let best = bestCandidate(minRatio: minVisibleToPlay) {
             publish(winner: best.key, previous: previous)
             return
@@ -149,13 +153,27 @@ final class FeedVideoFocus {
         return (winner.key, winner.value)
     }
 
-    private func publish(winner: String?, previous: String?) {
+    private func publish(winner: String?, previous: String?, silenceImmediately: Bool = false) {
         guard winner != previous else { return }
         activeID = winner
         generation &+= 1
-        // No in-frame winner → hard-silence feed/Sparks audio (keep continuous Hubs if protected).
-        if winner == nil {
-            MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
+        if let winner {
+            silenceWhenEmptyTask?.cancel()
+            silenceWhenEmptyTask = nil
+            _ = winner
+        } else {
+            // Debounce silence — LazyVStack recycle used to clear winner for one frame and
+            // hard-pause a fully visible Hubs card (felt random).
+            silenceWhenEmptyTask?.cancel()
+            if silenceImmediately {
+                MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
+            } else {
+                silenceWhenEmptyTask = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 450_000_000)
+                    guard !Task.isCancelled, self.activeID == nil else { return }
+                    MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
+                }
+            }
         }
         NotificationCenter.default.post(name: .feedVideoFocusDidChange, object: winner)
     }

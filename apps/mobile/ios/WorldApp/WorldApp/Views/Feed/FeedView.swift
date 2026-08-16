@@ -163,18 +163,16 @@ struct FeedView: View {
                         }
                     }
 
-                    if store.isLoadingMore {
+                    // Endless sentinel — always top up ahead. Spinner only when truly empty tail.
+                    Color.clear
+                        .frame(height: 1)
+                        .onAppear {
+                            store.requestLoadMore()
+                        }
+                    if store.isLoadingMore, store.displayedPosts.count < 6 {
                         ProgressView()
                             .padding(.vertical, 16)
                             .frame(maxWidth: .infinity)
-                    } else {
-                        // Endless feed sentinel — always request more as the user nears the tail.
-                        // R2 Sparks (28k+) keep filling; this must never be a dead end.
-                        Color.clear
-                            .frame(height: 1)
-                            .onAppear {
-                                store.requestLoadMore()
-                            }
                     }
                 }
                 .padding(.top, 8)

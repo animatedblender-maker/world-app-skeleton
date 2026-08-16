@@ -512,14 +512,15 @@ struct PlayFeedLinkCard: View {
     private var hubFeedPlayerSurface: some View {
         if let url = post.playableVideoURL {
             // Always aspect-fit — never crop hubs cards (letterbox bars OK, full picture).
+            // Feed: loop + start near 0 so cards never "end and freeze" mid-scroll.
             MatteryaHubPlayerView(
                 url: url,
                 posterURL: post.posterImageURL,
                 isActive: feedPlayerActive,
-                startTime: YouTubeCatalogService.shared.playbackPosition(for: post.id),
+                startTime: 0,
                 postID: post.id,
                 showsControls: true,
-                loops: false,
+                loops: true,
                 fillsFrame: false,
                 isMuted: feedMutedBinding,
                 allowsFullscreen: false,
@@ -533,6 +534,13 @@ struct PlayFeedLinkCard: View {
                 // Pre-warm aggressively so feed hubs shares start without a long black wait.
                 ArchiveVideoPlayback.warmResolve(url)
                 SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
+            }
+            .onChange(of: feedPlayerActive) { _, active in
+                // When we win focus, re-warm so first paint isn't a cold AVPlayer.
+                if active {
+                    ArchiveVideoPlayback.warmResolve(url)
+                    SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
+                }
             }
         } else {
             YouTubeVideoThumbnail(
@@ -621,12 +629,12 @@ struct PlayFeedLinkCard: View {
             playGate = false
             return
         }
-        // Focus lost — debounce so layout glitches never pause a fully visible card.
+        // Focus lost — long debounce so layout glitches never pause a fully visible card.
         guard playGate else { return }
-        _ = immediate
         deactivateTask?.cancel()
+        let delay: UInt64 = immediate ? 180_000_000 : 480_000_000
         deactivateTask = Task {
-            try? await Task.sleep(nanoseconds: 280_000_000)
+            try? await Task.sleep(nanoseconds: delay)
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 if !shouldPlay { playGate = false }

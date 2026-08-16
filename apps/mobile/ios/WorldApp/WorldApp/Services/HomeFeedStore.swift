@@ -67,11 +67,15 @@ final class HomeFeedStore {
     /// True once the user has seen/scrolled a row this session — blocks head-replacing network merges.
     private var userEngagedThisSession = false
 
-    private let pageSize = 24
-    private let windowPageSize = 12
-    private let firstWindow = 10
-    /// Prefetch next page when user reaches ~55% of the currently loaded pool.
-    private let prefetchRatio = 0.55
+    /// Network page size — fat pages so the tail never feels "loading more".
+    private let pageSize = 40
+    private let windowPageSize = 18
+    /// First paint window — enough for 2+ screens without load-more spinner.
+    private let firstWindow = 20
+    /// Prefetch next page early (Facebook-style always-ahead pool).
+    private let prefetchRatio = 0.32
+    /// Keep at least this many posts buffered in `posts` (beyond the visible window).
+    private let minBufferedPool = 56
 
     private init() {}
 
@@ -287,6 +291,22 @@ final class HomeFeedStore {
         }
 
         isBootstrapping = false
+        // Facebook-style: never leave the user waiting at the tail — fill the pool in background.
+        Task(priority: .utility) { [weak self] in
+            await self?.ensureBufferedPool()
+        }
+    }
+
+    /// Keep a deep post pool so scroll rarely hits "loading more".
+    private func ensureBufferedPool() async {
+        var guardPasses = 0
+        while posts.count < minBufferedPool, hasMore, guardPasses < 5 {
+            guardPasses += 1
+            let gen = generation
+            // Force network — don't only expand the local window.
+            await loadMore(generation: gen, forceNetwork: true)
+            guard gen == generation else { return }
+        }
     }
 
     /// Append / weave network rows **under** the visible head — never remounts what the user is watching.
@@ -461,29 +481,33 @@ final class HomeFeedStore {
             hasMore = true
         }
 
-        // Media: fling = small ahead buffer; settled = deeper prefetch so sparks/videos land on time.
-        let ahead = fling ? 4 : 10
+        // Media: fling = small ahead buffer; settled = deep warm so hubs/sparks land on time.
+        let ahead = fling ? 6 : 14
         let end = min(displayedPosts.count, index + ahead)
         if index < end {
             let window = Array(displayedPosts[index..<end])
             ImageCache.shared.prefetchFeedMedia(window, maxPixelSize: fling ? 280 : 360)
-            // Pre-buffer upcoming feed Sparks + playable clips so first frame is almost instant.
-            let sparkPosts = window.filter {
+            // Pre-buffer upcoming feed Sparks + hubs long-form so first frame is almost instant.
+            let videoPosts = window.filter {
                 $0.isSparkFeedShare || $0.isReel || PlayPlatformBridge.isSparkFeedCard($0)
+                    || PlayPlatformBridge.isHubFeedCardVideo($0)
                     || $0.hasVideo || $0.playableVideoURL != nil
             }
-            if !sparkPosts.isEmpty {
+            if !videoPosts.isEmpty {
                 SparkWarmPool.shared.prepare(
-                    posts: sparkPosts,
+                    posts: videoPosts,
                     around: 0,
-                    ahead: max(0, sparkPosts.count - 1),
+                    ahead: max(0, videoPosts.count - 1),
                     behind: 0
                 )
             }
-            if !fling {
-                for p in window.prefix(4) {
-                    guard let url = p.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) else { continue }
+            // Always warm a few hubs URLs even mid-fling (resolve is cheap; cold play is not).
+            let warmCount = fling ? 3 : 8
+            for p in window.prefix(warmCount) {
+                guard let url = p.playableVideoURL else { continue }
+                if ArchiveVideoPlayback.isArchiveURL(url) || PlayPlatformBridge.isHubFeedCardVideo(p) {
                     ArchiveVideoPlayback.warmResolve(url)
+                    SparkWarmPool.shared.warmSingle(postID: p.id, url: url)
                 }
             }
         }
@@ -491,8 +515,9 @@ final class HomeFeedStore {
         // Don't kick network load-more mid-fling (causes hitch + image storms).
         guard !fling else { return }
 
+        // Top up pool early — never wait until the last few cells.
         let threshold = max(0, Int(Double(max(posts.count, 1)) * prefetchRatio) - 1)
-        if index >= threshold, windowLimit >= posts.count - windowPageSize {
+        if index >= threshold || posts.count < minBufferedPool {
             requestLoadMore()
         }
     }
@@ -632,9 +657,9 @@ final class HomeFeedStore {
         #endif
     }
 
-    private func loadMore(generation gen: Int) async {
+    private func loadMore(generation gen: Int, forceNetwork: Bool = false) async {
         // Prefer expanding the local window through the already-loaded pool.
-        if windowLimit < posts.count {
+        if !forceNetwork, windowLimit < posts.count {
             var t = Transaction()
             t.disablesAnimations = true
             withTransaction(t) {
@@ -646,8 +671,10 @@ final class HomeFeedStore {
         }
 
         // Never permanently stop — R2 Sparks keep the tail alive.
-        isLoadingMore = true
-        defer { isLoadingMore = false }
+        // Background buffer top-ups stay silent (no spinner) when the list already has rows.
+        let showSpinner = displayedPosts.count < 8
+        if showSpinner { isLoadingMore = true }
+        defer { if showSpinner { isLoadingMore = false } }
 
         let cursor = nextCursor
         let seenIDs = Set(posts.map(\.id))
@@ -736,23 +763,38 @@ final class HomeFeedStore {
         nextCursor = page.nextCursor ?? Self.cursor(from: posts.last)
         hasMore = true
         ContentCache.shared.setPosts(Array(posts.prefix(ContentCache.maxCachedPosts)), for: .homeFeed)
-        ImageCache.shared.prefetchFeedMedia(Array(appended.prefix(8)), maxPixelSize: 360)
-        let sparkPosts = appended.filter {
+        ImageCache.shared.prefetchFeedMedia(Array(appended.prefix(12)), maxPixelSize: 360)
+        let videoPosts = appended.filter {
             $0.isSparkFeedShare || $0.isReel || PlayPlatformBridge.isSparkFeedCard($0)
+                || PlayPlatformBridge.isHubFeedCardVideo($0)
+                || $0.hasVideo || $0.playableVideoURL != nil
         }
-        if !sparkPosts.isEmpty {
+        if !videoPosts.isEmpty {
             SparkWarmPool.shared.prepare(
-                posts: sparkPosts,
+                posts: videoPosts,
                 around: 0,
-                ahead: max(0, sparkPosts.count - 1),
+                ahead: max(0, videoPosts.count - 1),
                 behind: 0
             )
+        }
+        for p in appended.prefix(10) {
+            guard let url = p.playableVideoURL else { continue }
+            if ArchiveVideoPlayback.isArchiveURL(url) || PlayPlatformBridge.isHubFeedCardVideo(p) {
+                ArchiveVideoPlayback.warmResolve(url)
+                SparkWarmPool.shared.warmSingle(postID: p.id, url: url)
+            }
         }
         #if DEBUG
         print("[HomeFeed] loadMore +\(appended.count) pool=\(posts.count) window=\(windowLimit) recycle=\(recyclePass)")
         #endif
         // Re-personalize after pool growth (head stays stable if user engaged).
         Task { await applyServerRankIfPossible() }
+        // Keep pool deep so the next scroll never waits on network.
+        if posts.count < minBufferedPool {
+            Task(priority: .utility) { [weak self] in
+                await self?.ensureBufferedPool()
+            }
+        }
     }
 
     private func applyPosts(_ next: [CountryPost], replace: Bool, sessionId: String) {
@@ -780,25 +822,31 @@ final class HomeFeedStore {
     }
 
     private func warmHead() {
-        // First screen + next rows so sparks/videos paint on time (not after scroll).
-        let head = Array(posts.prefix(max(firstWindow, 14)))
+        // First ~2 screens + next rows so sparks/hubs paint on time (not after scroll).
+        let head = Array(posts.prefix(max(firstWindow + 6, 24)))
         ImageCache.shared.prefetchFeedMedia(head, maxPixelSize: 360)
-        let sparks = head.filter {
+        let videoPosts = head.filter {
             $0.isSparkFeedShare || $0.isReel || PlayPlatformBridge.isSparkFeedCard($0)
+                || PlayPlatformBridge.isHubFeedCardVideo($0)
                 || $0.hasVideo || $0.playableVideoURL != nil
         }
-        if !sparks.isEmpty {
+        if !videoPosts.isEmpty {
             SparkWarmPool.shared.prepare(
-                posts: Array(sparks.prefix(8)),
+                posts: Array(videoPosts.prefix(14)),
                 around: 0,
-                ahead: min(6, max(0, sparks.count - 1)),
+                ahead: min(12, max(0, videoPosts.count - 1)),
                 behind: 0
             )
         }
-        // Archive long-form hubs on the feed head.
-        for post in head.prefix(6) {
-            guard let url = post.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) else { continue }
-            ArchiveVideoPlayback.warmResolve(url)
+        // Hubs long-form: resolve + warm players for the whole head (cold start was the black wait).
+        for post in head.prefix(12) {
+            guard let url = post.playableVideoURL else { continue }
+            if ArchiveVideoPlayback.isArchiveURL(url)
+                || PlayPlatformBridge.isHubFeedCardVideo(post)
+                || PlayPlatformBridge.isHubCatalogContent(post) {
+                ArchiveVideoPlayback.warmResolve(url)
+                SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
+            }
         }
     }
 
