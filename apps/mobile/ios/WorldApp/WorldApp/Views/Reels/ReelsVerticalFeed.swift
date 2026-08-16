@@ -1191,14 +1191,15 @@ struct ReelsScrollViewer: View {
         }
     }
 
-    /// Instant neighbors from memory — **append only** (never replace the live head).
+    /// Instant neighbors from memory — **unviewed discovery order**, append only.
     private func seedFromWarmCatalogIfNeeded() {
         guard posts.count < 12 else { return }
         var seen = Set(posts.map(\.id))
         var toAppend: [CountryPost] = []
-        let warm = PostsService.shared.sparksCatalogSnapshot()
-            .filter { ReelsRankingEngine.isSparkEligible($0) }
-            .shuffled()
+        let warm = SparkDiscoveryEngine.rankForDiscovery(
+            PostsService.shared.sparksCatalogSnapshot()
+                .filter { ReelsRankingEngine.isSparkEligible($0) }
+        )
         for post in warm {
             guard seen.insert(post.id).inserted else { continue }
             let hasPath = MediaURLResolver.videoURL(for: post) != nil
@@ -1213,7 +1214,6 @@ struct ReelsScrollViewer: View {
         t.disablesAnimations = true
         withTransaction(t) {
             posts.append(contentsOf: toAppend)
-            // Append only — leave activeIndex alone.
         }
         hasMorePages = true
         SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 8, behind: 1)
@@ -1228,63 +1228,61 @@ struct ReelsScrollViewer: View {
         hasMorePages = true
         recyclePass = 0
 
-        // Snapshot for catalog ranking only — never snap the pager back to this later.
-        // User may swipe freely while the network runs; we must honor whatever is
-        // under their finger *at apply time*, not the entry spark.
-        let rankingAnchorID = posts.indices.contains(activeIndex)
+        // Live clip under the finger (user may have swiped during network).
+        let liveID = posts.indices.contains(activeIndex)
             ? posts[activeIndex].id
             : context.startingPostID
         let rankingAnchor = ReelsRankingEngine.resolvePlayerStart(
-            posts.first(where: { $0.id == rankingAnchorID }) ?? context.startingPost
+            posts.first(where: { $0.id == liveID }) ?? context.startingPost
         )
 
-        // Unified entry (feed / chat / Hubs / strip / menu): full library + pure random order.
+        // Full discovery session: unviewed first + random library samples.
         let fresh = await PostsService.shared.beginFreshSparksSession(preferStart: rankingAnchor)
 
-        // Live clip under the finger right now (may differ from rankingAnchor after swipes).
-        let liveID = posts.indices.contains(activeIndex)
+        // Re-read live id after await (swipe during load).
+        let keepID = posts.indices.contains(activeIndex)
             ? posts[activeIndex].id
-            : rankingAnchorID
+            : liveID
+        let liveIndex = posts.firstIndex(where: { $0.id == keepID }) ?? activeIndex
 
-        // Append unseen only — replacing the queue remounted the first pages mid-watch
-        // and caused the “first few Sparks glitch then smooth” bug.
-        var excluding = Set(posts.map(\.id))
-        var toAppend: [CountryPost] = []
-        for post in fresh where excluding.insert(post.id).inserted {
-            guard ReelsRankingEngine.isSparkEligible(post) || post.id == liveID else { continue }
-            // Soft URL gate: keep clips with any media path (resolve can succeed later).
+        // Keep only what the user already swiped + current clip (no jump).
+        // Replace **upcoming** with the discovery queue — previously we only *appended*
+        // after a sticky seed, so the algorithm never drove the next swipes.
+        let history = Array(posts.prefix(max(0, liveIndex + 1)))
+        var seen = Set(history.map(\.id))
+        var upcoming: [CountryPost] = []
+        for post in fresh {
+            guard seen.insert(post.id).inserted else { continue }
+            guard ReelsRankingEngine.isSparkEligible(post) || post.id == keepID else { continue }
             let hasPath = MediaURLResolver.videoURL(for: post) != nil
                 || !(post.mediaURL ?? "").isEmpty
                 || post.hasVideo
             guard hasPath else { continue }
-            toAppend.append(post)
+            upcoming.append(post)
         }
-        if !toAppend.isEmpty {
-            // Append only — never rewrite activeIndex (that snapped back to entry spark).
-            applyExpandedFeed(toAppend)
-        } else if posts.count < 4 {
-            // Tiny queue fallback only — re-read live ID so we never jump to entry.
-            let keepID = posts.indices.contains(activeIndex)
-                ? posts[activeIndex].id
-                : liveID
-            var tiny: [CountryPost] = []
-            if let live = posts.first(where: { $0.id == keepID }) {
-                tiny.append(live)
-            } else if rankingAnchor.playableVideoURL != nil || rankingAnchor.hasVideo {
-                tiny.append(rankingAnchor)
+
+        if !upcoming.isEmpty || history.count != posts.count {
+            let queue = history + upcoming
+            if queue.count >= 2 {
+                replacePlayerQueue(queue, preserveID: keepID)
+            } else if !upcoming.isEmpty {
+                applyExpandedFeed(upcoming)
             }
-            for p in fresh where p.id != keepID {
+        } else if posts.count < 4, rankingAnchor.playableVideoURL != nil || rankingAnchor.hasVideo {
+            var tiny = [rankingAnchor]
+            for p in fresh where p.id != rankingAnchor.id {
                 tiny.append(p)
                 if tiny.count >= 40 { break }
             }
-            if !tiny.isEmpty {
-                replacePlayerQueue(tiny, preserveID: keepID)
-            }
+            replacePlayerQueue(tiny, preserveID: keepID)
         }
-        hasMorePages = posts.count > 12 || !toAppend.isEmpty
+
+        hasMorePages = posts.count > 12 || !upcoming.isEmpty
         SparkWarmPool.shared.prepare(posts: posts, around: activeIndex, ahead: 8, behind: 2)
         #if DEBUG
-        print("[Sparks] player queue size=\(posts.count) live=\(liveID.prefix(8))")
+        let unviewedAhead = posts.dropFirst(activeIndex + 1)
+            .filter { !SparkDiscoveryEngine.isViewed($0.id) }.count
+        print("[Sparks] player queue size=\(posts.count) live=\(keepID.prefix(8)) unviewedAhead=\(unviewedAhead)")
         #endif
     }
 

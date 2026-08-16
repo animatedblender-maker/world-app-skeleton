@@ -1522,14 +1522,17 @@ final class AppState {
         }
     }
 
-    /// Instant swipe seed — **eligible originals only** (never recycle feed share shells).
+    /// Instant swipe seed — **eligible originals only**, **unviewed discovery order**
+    /// (not a sticky shuffle of the same catalog head).
     private static func instantSparksSeedQueue(starting start: CountryPost, limit: Int = 48) -> [CountryPost] {
         let head = ReelsRankingEngine.resolvePlayerStart(start)
         var out: [CountryPost] = [head]
         var seen: Set<String> = [head.id]
 
         func absorb(_ posts: [CountryPost]) {
-            for post in posts {
+            // rankForDiscovery = unviewed first (never re-queue watched ahead of fresh).
+            let ranked = SparkDiscoveryEngine.rankForDiscovery(posts)
+            for post in ranked {
                 guard seen.insert(post.id).inserted else { continue }
                 guard ReelsRankingEngine.isSparkEligible(post) else { continue }
                 out.append(post)
@@ -1537,9 +1540,9 @@ final class AppState {
             }
         }
 
-        absorb(PostsService.shared.sparksCatalogSnapshot().shuffled())
+        absorb(PostsService.shared.sparksCatalogSnapshot())
         if out.count < limit {
-            absorb(PostsService.shared.hubsSessionCatalog.shuffled())
+            absorb(PostsService.shared.hubsSessionCatalog)
         }
         return out
     }
