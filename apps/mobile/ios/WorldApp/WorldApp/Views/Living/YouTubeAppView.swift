@@ -1498,16 +1498,21 @@ struct YouTubeAppView: View {
         if appState.hubPlaybackExpanded, let post = appState.hubPlaybackPost {
             let watchPost = PlayPlatformBridge.hubWatchPresentation(for: post)
             if case .watch(let existing) = route, existing.id == watchPost.id { return }
-            withAnimation(.easeInOut(duration: 0.18)) {
+            withAnimation(MatteryaMotion.expand) {
                 route = .watch(watchPost)
             }
         } else if case .watch = route {
-            // Drop watch chrome immediately on minimize — any linger leaves a white
-            // stage hole + title while the continuous player is already at mini.
-            var t = Transaction()
-            t.disablesAnimations = true
-            withTransaction(t) {
-                route = nil
+            // Chrome is already faded via hubPlaybackPullProgress. Defer tearing down the
+            // watch tree until the mini morph finishes — remounting home mid-morph was the lag.
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                guard !appState.hubPlaybackExpanded else { return }
+                guard case .watch = route else { return }
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) {
+                    route = nil
+                }
             }
         }
     }
@@ -1654,14 +1659,19 @@ struct YouTubeAppView: View {
         if minimize {
             // Pull-down / close → if we opened from chat, restore that conversation + dock.
             appState.minimizeHubPlayback(returnToChat: true)
+            // Let mini morph paint first; then drop watch (home remount is expensive).
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                guard !appState.hubPlaybackExpanded else { return }
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) { route = nil }
+            }
         } else {
             appState.stopHubPlayback()
-        }
-        // Instant route clear — never leave title/meta over an empty white stage.
-        var t = Transaction()
-        t.disablesAnimations = true
-        withTransaction(t) {
-            route = nil
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { route = nil }
         }
     }
 }

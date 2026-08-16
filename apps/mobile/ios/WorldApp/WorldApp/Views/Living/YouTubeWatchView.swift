@@ -167,10 +167,11 @@ struct YouTubeWatchView: View {
         // Continuous player: never flash paper-white under a faded watch route.
         // Grab / mini → ink. Expanded idle → canvas under chrome.
         .background(watchRootBackground)
-        .animation(
-            isMinimizingGrab ? nil : MatteryaMotion.micro,
-            value: chromeOpacity
-        )
+        // No implicit chrome animation while grabbing — 1:1 with finger via pull progress.
+        .animation(isMinimizingGrab ? nil : MatteryaMotion.micro, value: chromeOpacity)
+        .transaction { txn in
+            if isMinimizingGrab { txn.disablesAnimations = true }
+        }
         // Stay in the safe area — video begins *below* the Dynamic Island.
         // Feed / non-expanded share still uses the sheet. Expanded Hubs uses an overlay so
         // GlobalHubPlaybackLayer never pauses or collapses to mini.

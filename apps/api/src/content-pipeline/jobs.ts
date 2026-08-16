@@ -21,9 +21,23 @@ let lastRun: {
 let running = false;
 
 export function getPipelineStatus() {
+  const publicBase = process.env.R2_PUBLIC_BASE_URL?.trim() || '';
+  // When set, pipeline + GraphQL write permanent public URLs (no X-Amz expiry).
+  // When unset, falls back to 7-day presigned GETs.
   return {
     running,
     r2Configured: r2Configured(),
+    r2PublicBaseConfigured: publicBase.length > 0,
+    r2PublicBaseHost: publicBase
+      ? (() => {
+          try {
+            return new URL(publicBase).host;
+          } catch {
+            return 'invalid';
+          }
+        })()
+      : null,
+    mediaUrlMode: publicBase ? 'public_permanent' : 'presigned_7d',
     kafkaEnabled: kafkaEnabled(),
     lastRun,
   };

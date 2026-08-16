@@ -57,20 +57,22 @@ enum Theme {
 
 /// App-wide motion tokens. Prefer these over ad-hoc `interactiveSpring` (which can hang mid-path).
 enum MatteryaMotion {
-    /// Page / tab / mini morph — lands immediately.
-    static let snappy = Animation.easeOut(duration: 0.14)
+    /// Page / tab morph — lands immediately.
+    static let snappy = Animation.easeOut(duration: 0.12)
+    /// Pull-to-mini only — shorter than snappy so grab release feels instant.
+    static let minimize = Animation.easeOut(duration: 0.09)
     /// Sheets, comments, share overlays.
-    static let sheet = Animation.easeOut(duration: 0.18)
+    static let sheet = Animation.easeOut(duration: 0.16)
     /// Expand Hubs watch / larger surfaces.
-    static let expand = Animation.easeOut(duration: 0.20)
+    static let expand = Animation.easeOut(duration: 0.16)
     /// Micro UI (mute chip, glyph, heart pop settle).
-    static let micro = Animation.easeOut(duration: 0.12)
+    static let micro = Animation.easeOut(duration: 0.10)
     /// Like burst — short punch, not a bouncy spring that feels laggy.
-    static let like = Animation.easeOut(duration: 0.16)
+    static let like = Animation.easeOut(duration: 0.14)
     /// Scroll-to-top / list chrome.
-    static let scroll = Animation.easeOut(duration: 0.22)
+    static let scroll = Animation.easeOut(duration: 0.18)
     /// Feed upload shadow insert.
-    static let insert = Animation.easeOut(duration: 0.18)
+    static let insert = Animation.easeOut(duration: 0.16)
 
     /// UIKit: faster than system default for feed-like lists.
     static var collectionDeceleration: UIScrollView.DecelerationRate { .fast }

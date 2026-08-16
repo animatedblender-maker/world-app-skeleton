@@ -44,18 +44,20 @@ struct GlobalHubPlaybackLayer: View {
 
     private var expanded: Bool { appState.hubPlaybackExpanded }
 
-    /// Expand / minimize — shared premium tokens (no hangy springs).
+    /// Expand / minimize — short easeOut only (never spring — springs hang mid-screen).
     private static let morphAnim = MatteryaMotion.expand
-    private static let minimizeMorphAnim = MatteryaMotion.snappy
+    private static let minimizeMorphAnim = MatteryaMotion.minimize
 
-    /// Prefer docking into the reported mini-bar / chat hole whenever minimized.
-    /// (Floating mini reports the same preference key as the chat dock.)
-    private var hasDockSlot: Bool {
+    /// Chat dock only — floating mini uses a fixed bottom strip (no preference lag).
+    private var hasChatDockSlot: Bool {
         !expanded
+            && appState.hubPlaybackDockInChat
             && dockSlotGlobal != nil
             && (dockSlotGlobal?.width ?? 0) > 8
             && (dockSlotGlobal?.height ?? 0) > 8
     }
+
+    private var hasDockSlot: Bool { hasChatDockSlot }
 
     private var miniStripHeight: CGFloat {
         YouTubeMiniPlayerBar.barHeight
@@ -122,23 +124,28 @@ struct GlobalHubPlaybackLayer: View {
         }
         .onChange(of: expanded) { _, isExpanded in
             if isExpanded {
-                dragOffset = 0
-                isPullingMinimize = false
-                preferMiniFill = false
-                appState.hubPlaybackPullProgress = 0
-            } else {
-                // Keep pullProgress = 1 through the morph so watch chrome/title never
-                // flash back over a white stage hole while the player docks to mini.
-                isPullingMinimize = false
-                preferMiniFill = true
-                // Animate dragOffset → 0 with the same ease as layout (never hard-zero mid-flight).
-                withAnimation(Self.minimizeMorphAnim) {
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) {
                     dragOffset = 0
-                }
-                Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 150_000_000)
-                    guard !appState.hubPlaybackExpanded else { return }
+                    isPullingMinimize = false
+                    preferMiniFill = false
                     appState.hubPlaybackPullProgress = 0
+                }
+            } else {
+                // Morph already owns dragOffset→0 in the gesture end. Don't re-animate here
+                // (double animation made grab-to-mini feel sluggish).
+                preferMiniFill = true
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    guard !appState.hubPlaybackExpanded else { return }
+                    var t = Transaction()
+                    t.disablesAnimations = true
+                    withTransaction(t) {
+                        isPullingMinimize = false
+                        dragOffset = 0
+                        appState.hubPlaybackPullProgress = 0
+                    }
                 }
             }
         }
@@ -182,19 +189,15 @@ struct GlobalHubPlaybackLayer: View {
             .background(Theme.ink)
             .clipShape(
                 RoundedRectangle(
-                    cornerRadius: expanded ? (isPullingMinimize ? 14 : 0) : 0,
+                    cornerRadius: isPullingMinimize ? 12 : 0,
                     style: .continuous
                 )
             )
             .clipped()
             .offset(x: layout.x, y: liveY)
-            // Finger tracking: no implicit anim. Release→mini: one short easeOut on geometry.
-            .animation(isPullingMinimize ? nil : Self.minimizeMorphAnim, value: expanded)
-            .animation(isPullingMinimize ? nil : Self.minimizeMorphAnim, value: layout.width)
-            .animation(isPullingMinimize ? nil : Self.minimizeMorphAnim, value: layout.height)
-            .animation(isPullingMinimize ? nil : Self.minimizeMorphAnim, value: layout.x)
-            .animation(isPullingMinimize ? nil : Self.minimizeMorphAnim, value: layout.y)
-            .animation(isPullingMinimize ? nil : Self.minimizeMorphAnim, value: dragOffset)
+            // No implicit .animation on geometry — those stacked with withAnimation and
+            // made pull-to-mini feel sluggish. Finger: Transaction disablesAnimations.
+            // Release: single withAnimation(MatteryaMotion.minimize) in the gesture end.
             // Pull-to-mini only while expanded (mini chrome owns taps when minimized).
             .simultaneousGesture(expanded ? minimizeGesture : nil)
             .id("global-hub-continuous-\(post.id)")
@@ -229,16 +232,14 @@ struct GlobalHubPlaybackLayer: View {
         // Mini: full-bleed strip matching YouTubeMiniPlayerBar — same size as the clear hole.
         let barW = max(1, geo.size.width)
         let size = YouTubeMiniPlayerBar.videoSize(forBarWidth: barW)
-        // Align Y to the live mini-bar hole when available (exact dock).
+        // Default: fixed strip above the tab bar (stable — no preference-key lag mid-morph).
         var y = max(0, geo.size.height - floatingBottomClearance - size.height)
-        if hasDockSlot, let global = dockSlotGlobal {
+        // Chat dock only: follow the message bubble hole once reported.
+        if hasChatDockSlot, let global = dockSlotGlobal {
             let containerGlobal = geo.frame(in: .global)
             let dockY = global.minY - containerGlobal.minY
             let dockH = global.height
-            let inBottomBand = dockY >= geo.size.height * 0.45
-            // Accept the real mini bar height band (¼ screen ≈ 160–230).
-            let heightOK = dockH > 100 && dockH < 280
-            if inBottomBand, heightOK,
+            if dockH > 40, dockH < 280,
                dockY > -20, dockY + size.height <= geo.size.height + 48 {
                 y = dockY
             }
@@ -312,7 +313,8 @@ struct GlobalHubPlaybackLayer: View {
     }
 
     private var minimizeGesture: some Gesture {
-        DragGesture(minimumDistance: 8, coordinateSpace: .local)
+        // minimumDistance 4 — engage instantly on a real grab (8 felt sticky).
+        DragGesture(minimumDistance: 4, coordinateSpace: .local)
             .onChanged { value in
                 guard expanded else { return }
                 var offset = dragOffset
@@ -332,9 +334,13 @@ struct GlobalHubPlaybackLayer: View {
             }
             .onEnded { value in
                 guard expanded else {
-                    dragOffset = 0
-                    isPullingMinimize = false
-                    appState.hubPlaybackPullProgress = 0
+                    var t = Transaction()
+                    t.disablesAnimations = true
+                    withTransaction(t) {
+                        dragOffset = 0
+                        isPullingMinimize = false
+                        appState.hubPlaybackPullProgress = 0
+                    }
                     return
                 }
                 // Moment finger leaves: if not still “up”, commit mini immediately.
@@ -346,21 +352,22 @@ struct GlobalHubPlaybackLayer: View {
                 )
                 if shouldMini {
                     ReelsTwistHaptics.pullDismiss()
-                    // One continuous easeOut: expand→mini + dragOffset→0 together.
-                    // Never hard-zero dragOffset first (that parked the video mid-screen).
+                    // Single short easeOut for the whole morph — keep isPullingMinimize true
+                    // so no other implicit animators re-engage mid-flight.
                     var lock = Transaction()
                     lock.disablesAnimations = true
                     withTransaction(lock) {
                         appState.hubPlaybackPullProgress = 1
-                        isPullingMinimize = false
                     }
                     withAnimation(Self.minimizeMorphAnim) {
+                        // animated:false → expanded flips inside this withAnimation only once.
                         appState.minimizeHubPlayback(returnToChat: true, animated: false)
                         dragOffset = 0
+                        preferMiniFill = true
                     }
                 } else {
-                    // Release still “up” — chrome slides back in.
-                    withAnimation(.easeOut(duration: 0.16)) {
+                    // Release still “up” — chrome snaps back.
+                    withAnimation(MatteryaMotion.micro) {
                         dragOffset = 0
                         isPullingMinimize = false
                         appState.hubPlaybackPullProgress = 0

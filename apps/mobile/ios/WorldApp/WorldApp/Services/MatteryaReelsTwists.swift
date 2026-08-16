@@ -50,16 +50,110 @@ enum ReelsTwistHaptics {
     }
 }
 
+/// Full-screen Sparks stage gravity (Facebook / IG Reels style).
+///
+/// • Portrait / square → always **fill** (covers notch; slight side crop is OK).
+/// • Landscape → **fill** only if crop is small; else **fit** (letterbox, no hard crop-zoom).
+/// • Unknown → **fill** (most Sparks are vertical; stage stays full-bleed under the island).
+enum SparksStageLayout {
+    /// For landscape only: max crop on the tight axis when filling.
+    static let maxLandscapeCropFraction: CGFloat = 0.12
+
+    static func shouldFillWithoutCrop(videoSize: CGSize, stageSize: CGSize) -> Bool {
+        // Optimistic fill until size is known (vertical Sparks + notch coverage).
+        guard videoSize.width > 2, videoSize.height > 2 else { return true }
+        guard stageSize.width > 2, stageSize.height > 2 else { return true }
+
+        // Portrait / near-square — same as Facebook Reels: always fill the stage.
+        if videoSize.height >= videoSize.width * 0.92 {
+            return true
+        }
+
+        // Landscape / wide: fill only when it barely crops.
+        let scaleFit = min(stageSize.width / videoSize.width, stageSize.height / videoSize.height)
+        let scaleFill = max(stageSize.width / videoSize.width, stageSize.height / videoSize.height)
+        guard scaleFill > 0.0001 else { return false }
+        let visibleFraction = scaleFit / scaleFill
+        return visibleFraction >= (1 - maxLandscapeCropFraction)
+    }
+
+    static var defaultStageSize: CGSize {
+        physicalScreenSize
+    }
+
+    /// Physical screen — Sparks pages are always full-screen; never size video to a settling layout.
+    static var physicalScreenSize: CGSize {
+        if let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first(where: { $0.activationState == .foregroundActive || $0.activationState == .foregroundInactive }) {
+            let s = scene.screen.bounds.size
+            if s.width > 2, s.height > 2 { return s }
+        }
+        return UIScreen.main.bounds.size
+    }
+
+    static var physicalScreenBounds: CGRect {
+        CGRect(origin: .zero, size: physicalScreenSize)
+    }
+
+    /// True when a view is already full-page (not mid-layout zero/partial bounds).
+    static func isStableFullStage(_ bounds: CGRect) -> Bool {
+        let screen = physicalScreenSize
+        return bounds.width >= screen.width - 2
+            && bounds.height >= screen.height * 0.85
+    }
+
+    /// Prefer real bounds; if the host is still 0×0 / tiny, use the screen so the
+    /// first painted AVPlayerLayer frame is already full-screen (no grow-in blink).
+    static func stageFrame(forHostBounds bounds: CGRect) -> CGRect {
+        if isStableFullStage(bounds) {
+            return CGRect(origin: .zero, size: bounds.size)
+        }
+        return physicalScreenBounds
+    }
+}
+
 enum MatteryaPullDownDismiss {
-    /// Distance that fully minimizes / fully hides chrome (slider “1.0”).
+    /// Distance that fully fades meta chrome (slider “1.0”).
     static let dismissDistance: CGFloat = 140
-    static let predictedDismissDistance: CGFloat = 240
+    static let predictedDismissDistance: CGFloat = 180
     /// Pull distance that fully fades meta chrome (same as dismiss for 1:1 slider feel).
     static let chromeFadeDistance: CGFloat = 140
+    /// Below this progress on release = still “up” → snap back to expanded.
+    /// Anything past this commits to mini immediately (no mid hang).
+    static let releaseSnapBackProgress: CGFloat = 0.06
+    static let releaseSnapBackTranslation: CGFloat = 14
 
     static func shouldDismiss(_ value: DragGesture.Value) -> Bool {
         value.translation.height > dismissDistance
             || value.predictedEndTranslation.height > predictedDismissDistance
+    }
+
+    /// On finger-up: minimize unless the grab is still essentially at the top.
+    /// One-grab-down must commit the moment the finger leaves — never hang mid-screen.
+    static func shouldMinimizeOnRelease(
+        _ value: DragGesture.Value,
+        dragOffset: CGFloat = 0,
+        pullProgress: CGFloat = 0
+    ) -> Bool {
+        let progress = max(
+            pullProgress,
+            Self.pullProgress(forVertical: value.translation.height)
+        )
+        let y = max(0, value.translation.height)
+        let predicted = value.predictedEndTranslation.height
+        // Still “up” only when barely moved and no downward fling.
+        let nearTop = progress < releaseSnapBackProgress
+            && y < releaseSnapBackTranslation
+            && dragOffset < releaseSnapBackTranslation
+            && predicted < 40
+        if nearTop { return false }
+        // Any real downward grab → mini now.
+        return progress > 0.04
+            || y > 10
+            || dragOffset > 10
+            || predicted > 48
+            || shouldDismiss(value)
     }
 
     /// 0…1 slider from raw downward translation (moving up lowers the value).
@@ -106,8 +200,8 @@ enum MatteryaPullDownDismiss {
             return
         }
 
-        // Engage on clear downward drag (horizontal pans still ignored).
-        guard vertical > 12, vertical > horizontal * 0.75 else { return }
+        // Engage early so the grab feels glued to the finger (horizontal pans still ignored).
+        guard vertical > 6, vertical > horizontal * 0.7 else { return }
         isDragging = true
         offset = vertical
     }
@@ -124,7 +218,7 @@ enum MatteryaPullDownDismiss {
             dismiss()
             return
         }
-        withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
+        withAnimation(MatteryaMotion.micro) {
             offset = 0
         }
     }
