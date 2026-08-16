@@ -232,6 +232,9 @@ struct MatteryaHubPlayerView: View {
     var allowsFullscreen: Bool = false
     /// External trigger (e.g. swipe-up on player) — set true to open fullscreen, cleared after present.
     @Binding var presentFullscreen: Bool
+    /// When set, parent owns fullscreen presentation (required when nested under
+    /// HubPassThroughContainer — SwiftUI fullScreenCover inside that host fails silently).
+    var onRequestFullscreen: (() -> Void)? = nil
 
     @StateObject private var bridge = ArchivePlayerBridge()
     @State private var showChrome = true
@@ -255,6 +258,7 @@ struct MatteryaHubPlayerView: View {
         isMuted: Binding<Bool> = .constant(false),
         allowsFullscreen: Bool = false,
         presentFullscreen: Binding<Bool> = .constant(false),
+        onRequestFullscreen: (() -> Void)? = nil,
         onReady: (() -> Void)? = nil,
         onPlayingChange: ((Bool) -> Void)? = nil,
         onProgress: ((Double, Double) -> Void)? = nil,
@@ -274,12 +278,24 @@ struct MatteryaHubPlayerView: View {
         self._isMuted = isMuted
         self.allowsFullscreen = allowsFullscreen
         self._presentFullscreen = presentFullscreen
+        self.onRequestFullscreen = onRequestFullscreen
         self.onReady = onReady
         self.onPlayingChange = onPlayingChange
         self.onProgress = onProgress
         self.onVideoSize = onVideoSize
         self.seekToSeconds = seekToSeconds
         self.onSeekConsumed = onSeekConsumed
+    }
+
+    /// Prefer parent-owned fullscreen (continuous Hubs layer); fall back to local cover.
+    private func enterFullscreen() {
+        guard allowsFullscreen else { return }
+        if let onRequestFullscreen {
+            onRequestFullscreen()
+        } else {
+            showFullscreen = true
+        }
+        scheduleChromeHide()
     }
 
     var body: some View {
@@ -416,7 +432,7 @@ struct MatteryaHubPlayerView: View {
                 return
             }
             presentFullscreen = false
-            showFullscreen = true
+            enterFullscreen()
         }
         .onChange(of: showsControls) { _, visible in
             if visible {
@@ -494,8 +510,7 @@ struct MatteryaHubPlayerView: View {
                             systemName: "arrow.up.left.and.arrow.down.right",
                             label: "Full screen"
                         ) {
-                            showFullscreen = true
-                            scheduleChromeHide()
+                            enterFullscreen()
                         }
                     }
                 }
@@ -583,8 +598,7 @@ struct MatteryaHubPlayerView: View {
 
                         if allowsFullscreen {
                             Button {
-                                showFullscreen = true
-                                scheduleChromeHide()
+                                enterFullscreen()
                             } label: {
                                 Image(systemName: "arrow.up.left.and.arrow.down.right")
                                     .font(.system(size: 13, weight: .semibold))

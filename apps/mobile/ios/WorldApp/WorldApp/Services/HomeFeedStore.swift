@@ -354,15 +354,16 @@ final class HomeFeedStore {
             hasMore = true
         }
 
-        // Media: fling = small ahead buffer; settled = normal prefetch.
-        let ahead = fling ? 3 : 6
+        // Media: fling = small ahead buffer; settled = deeper prefetch so sparks/videos land on time.
+        let ahead = fling ? 4 : 10
         let end = min(displayedPosts.count, index + ahead)
         if index < end {
             let window = Array(displayedPosts[index..<end])
             ImageCache.shared.prefetchFeedMedia(window, maxPixelSize: fling ? 280 : 360)
-            // Pre-buffer upcoming feed Sparks so first frame is almost instant.
+            // Pre-buffer upcoming feed Sparks + playable clips so first frame is almost instant.
             let sparkPosts = window.filter {
                 $0.isSparkFeedShare || $0.isReel || PlayPlatformBridge.isSparkFeedCard($0)
+                    || $0.hasVideo || $0.playableVideoURL != nil
             }
             if !sparkPosts.isEmpty {
                 SparkWarmPool.shared.prepare(
@@ -371,6 +372,12 @@ final class HomeFeedStore {
                     ahead: max(0, sparkPosts.count - 1),
                     behind: 0
                 )
+            }
+            if !fling {
+                for p in window.prefix(4) {
+                    guard let url = p.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) else { continue }
+                    ArchiveVideoPlayback.warmResolve(url)
+                }
             }
         }
 
@@ -659,14 +666,25 @@ final class HomeFeedStore {
     }
 
     private func warmHead() {
-        // Only what the first screen can show — never warm the whole pool.
-        let head = Array(posts.prefix(firstWindow))
-        ImageCache.shared.prefetchFeedMedia(head, maxPixelSize: 320)
-        let sparks = head.prefix(2).filter {
+        // First screen + next rows so sparks/videos paint on time (not after scroll).
+        let head = Array(posts.prefix(max(firstWindow, 14)))
+        ImageCache.shared.prefetchFeedMedia(head, maxPixelSize: 360)
+        let sparks = head.filter {
             $0.isSparkFeedShare || $0.isReel || PlayPlatformBridge.isSparkFeedCard($0)
+                || $0.hasVideo || $0.playableVideoURL != nil
         }
         if !sparks.isEmpty {
-            SparkWarmPool.shared.prepare(posts: Array(sparks), around: 0, ahead: 1, behind: 0)
+            SparkWarmPool.shared.prepare(
+                posts: Array(sparks.prefix(8)),
+                around: 0,
+                ahead: min(6, max(0, sparks.count - 1)),
+                behind: 0
+            )
+        }
+        // Archive long-form hubs on the feed head.
+        for post in head.prefix(6) {
+            guard let url = post.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) else { continue }
+            ArchiveVideoPlayback.warmResolve(url)
         }
     }
 

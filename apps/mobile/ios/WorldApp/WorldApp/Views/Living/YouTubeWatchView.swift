@@ -124,10 +124,12 @@ struct YouTubeWatchView: View {
                     .zIndex(2)
 
                 // Title + Like/Send/Keep OUTSIDE ScrollView — zero scroll-inset gap.
+                // YouTube: drag down on this meta strip → landscape fullscreen.
                 titleAndActionsChrome
                     .background(watchChromeBackground)
                     .opacity(chromeOpacity)
                     .allowsHitTesting(chromeOpacity > 0.25)
+                    .simultaneousGesture(metaFullscreenDragGesture)
 
                 // Scroll from top (channel → comments). Related is below — never land there
                 // when opening a new video from "More on Matterya".
@@ -375,6 +377,25 @@ struct YouTubeWatchView: View {
                         dismissDragOffset = 0
                         isPullingToMinimize = false
                     }
+                }
+            }
+    }
+
+    /// YouTube-style: drag **down** on the chrome/meta **below** the video → fullscreen.
+    private var metaFullscreenDragGesture: some Gesture {
+        DragGesture(minimumDistance: 14, coordinateSpace: .local)
+            .onEnded { value in
+                // Continuous Hubs player owns landscape fullscreen.
+                guard appState.hubPlaybackPost != nil, appState.hubPlaybackExpanded else { return }
+                guard !isMinimizingGrab else { return }
+                let y = value.translation.height
+                let x = abs(value.translation.width)
+                let predicted = value.predictedEndTranslation.height
+                // Clearly downward, not a horizontal pan.
+                guard y > x * 1.1 else { return }
+                if y > 48 || predicted > 110 {
+                    ReelsTwistHaptics.pullDismiss()
+                    appState.requestHubFullscreen()
                 }
             }
     }

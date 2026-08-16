@@ -43,8 +43,9 @@ struct GlobalHubPlaybackLayer: View {
     @State private var miniCurrentSeconds: Double = 0
     @State private var miniDurationSeconds: Double = 0
     @State private var miniSeekToSeconds: Double? = nil
-    /// YouTube: swipe up on the player → landscape fullscreen.
-    @State private var presentFullscreen = false
+    /// YouTube: swipe up on the player / drag meta below → landscape fullscreen.
+    /// Owned here (outside HubPassThroughContainer) so fullScreenCover actually presents.
+    @State private var showFullscreen = false
 
     private var expanded: Bool { appState.hubPlaybackExpanded }
 
@@ -100,6 +101,36 @@ struct GlobalHubPlaybackLayer: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                // Present OUTSIDE pass-through host — nested fullScreenCover never appeared.
+                .fullScreenCover(isPresented: $showFullscreen) {
+                    if let url = post.playableVideoURL {
+                        MatteryaLandscapeFullscreenPlayer(
+                            url: url,
+                            posterURL: post.posterImageURL,
+                            startTime: miniCurrentSeconds,
+                            initialMuted: appState.hubPlaybackMuted,
+                            isArchive: true,
+                            onDismiss: { muted, seconds in
+                                appState.hubPlaybackMuted = muted
+                                YouTubeCatalogService.shared.notePlaybackPosition(
+                                    seconds,
+                                    for: post.id,
+                                    duration: miniDurationSeconds > 0 ? miniDurationSeconds : nil
+                                )
+                                miniSeekToSeconds = seconds
+                                miniCurrentSeconds = seconds
+                                showFullscreen = false
+                                if appState.hubPlaybackPlaying {
+                                    NotificationCenter.default.post(
+                                        name: .matteryaResumePlaybackAfterInterrupt,
+                                        object: nil
+                                    )
+                                }
+                            }
+                        )
+                        .ignoresSafeArea()
+                    }
+                }
             }
         }
         .onAppear {
@@ -135,10 +166,16 @@ struct GlobalHubPlaybackLayer: View {
             miniCurrentSeconds = 0
             miniDurationSeconds = 0
             miniSeekToSeconds = nil
+            showFullscreen = false
         }
         .onChange(of: appState.hubPlaybackPlaying) { _, playing in
             guard playing, appState.hubPlaybackPost != nil else { return }
             NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
+        }
+        .onChange(of: appState.hubPlaybackFullscreenToken) { _, _ in
+            // Meta-area drag / external request → fullscreen (YouTube).
+            guard expanded, collapse < 0.35, appState.hubPlaybackPost != nil else { return }
+            showFullscreen = true
         }
     }
 
@@ -242,7 +279,8 @@ struct GlobalHubPlaybackLayer: View {
             MatteryaHubPlayerView(
                 url: url,
                 posterURL: post.posterImageURL,
-                isActive: appState.hubPlaybackPlaying,
+                // Pause continuous surface while parent-owned fullscreen is up (no dual audio).
+                isActive: appState.hubPlaybackPlaying && !showFullscreen,
                 startTime: resumeAt,
                 postID: post.id,
                 showsControls: showControls,
@@ -252,8 +290,12 @@ struct GlobalHubPlaybackLayer: View {
                 chromeOpacity: chromeOpacity,
                 isMuted: mutedBinding,
                 // YouTube-style landscape fullscreen from the player chrome + swipe-up.
-                allowsFullscreen: collapse < 0.25,
-                presentFullscreen: $presentFullscreen,
+                allowsFullscreen: collapse < 0.35 && expanded,
+                presentFullscreen: .constant(false),
+                onRequestFullscreen: {
+                    guard expanded, collapse < 0.35 else { return }
+                    showFullscreen = true
+                },
                 onReady: {
                     Task { await PostsService.shared.recordView(post) }
                     if appState.hubPlaybackPlaying {
@@ -350,7 +392,7 @@ struct GlobalHubPlaybackLayer: View {
                         collapse = 0
                         appState.hubPlaybackPullProgress = 0
                     }
-                    presentFullscreen = true
+                    showFullscreen = true
                     return
                 }
 

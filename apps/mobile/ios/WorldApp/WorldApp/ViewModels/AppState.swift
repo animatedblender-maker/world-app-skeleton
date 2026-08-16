@@ -77,6 +77,9 @@ final class AppState {
     /// 0…1 while user is pulling the continuous player down to mini.
     /// Watch page chrome (title, comments, related) hides instantly when > 0.
     var hubPlaybackPullProgress: CGFloat = 0
+    /// Bumped to request landscape fullscreen on the continuous Hubs player
+    /// (meta drag-below-video, external chrome). GlobalHubPlaybackLayer observes.
+    var hubPlaybackFullscreenToken: Int = 0
     /// 0…1 YouTube-style collapse while scrolling meta/comments under the video.
     /// 0 = full stage; 1 = sticky compact height at the top.
     var hubWatchScrollCollapse: CGFloat = 0
@@ -1327,6 +1330,12 @@ final class AppState {
         NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
     }
 
+    /// YouTube: drag down on the meta strip under the video → landscape fullscreen.
+    func requestHubFullscreen() {
+        guard hubPlaybackPost != nil, hubPlaybackExpanded else { return }
+        hubPlaybackFullscreenToken &+= 1
+    }
+
     func stopHubPlayback() {
         hubPlaybackPost = nil
         hubPlaybackExpanded = false
@@ -1334,6 +1343,7 @@ final class AppState {
         hubPlaybackPullProgress = 0
         hubWatchScrollCollapse = 0
         hubPlaybackVideoAspect = 16.0 / 9.0
+        hubPlaybackFullscreenToken = 0
         hubPlaybackReturnConversationID = nil
         MediaPlaybackCoordinator.shared.stopAllPlayback()
         // Mini closed — feed/profile may elect autoplay again.
@@ -1547,12 +1557,12 @@ final class AppState {
         if let url = start.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) {
             ArchiveVideoPlayback.warmResolve(url)
         }
-        // Warm a full bulk window immediately (deep preroll + light outer ring).
+        // Warm a bulk window immediately — short await so open never stalls/flickers.
         SparkWarmPool.shared.preparePlayerWindow(posts: seeds, around: 0)
         Task { @MainActor in
             await SparkWarmPool.shared.awaitReady(
-                postIDs: Array(seeds.prefix(SparkWarmPool.deepPrerollAhead).map(\.id)),
-                timeout: 1.0
+                postIDs: Array(seeds.prefix(3).map(\.id)),
+                timeout: 0.35
             )
         }
         // Always kick catalog fuel in the background so expandFeed has bulk ready.

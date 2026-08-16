@@ -163,6 +163,27 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         dismissPan = pan
     }
 
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        // Clear any leftover dismiss transform from a prior close (open “hallucination”).
+        collectionView.transform = .identity
+        view.backgroundColor = .black
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        collectionView.transform = .identity
+        view.backgroundColor = .black
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        // Don't leave a half-dismiss transform for the next present.
+        collectionView.layer.removeAllAnimations()
+        collectionView.transform = .identity
+        view.backgroundColor = .black
+    }
+
     // MARK: - Swipe right to close
 
     @objc private func handleDismissPan(_ g: UIPanGestureRecognizer) {
@@ -525,8 +546,8 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         )
         // Prefetch AV bulk as cells approach the viewport (before page commit).
         SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: indexPath.item)
-        // Queue catalog bulk early — never wait until the last 5 clips.
-        if indexPath.item >= posts.count - 16 {
+        // Queue catalog bulk early — endless scroll must never hit a hard wall.
+        if indexPath.item >= max(0, posts.count - 24) {
             coordinator?.nearEnd()
         }
     }
@@ -555,8 +576,8 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         coordinator?.setActiveIndex(clamped)
         refreshVisibleCells()
 
-        // Keep ≥~16 unviewed pages in the queue ahead of the finger.
-        if clamped >= posts.count - 16 {
+        // Keep a deep bulk ahead — fire load-more well before the last page.
+        if clamped >= max(0, posts.count - 24) {
             coordinator?.nearEnd()
         }
         if clamped <= 2 {
