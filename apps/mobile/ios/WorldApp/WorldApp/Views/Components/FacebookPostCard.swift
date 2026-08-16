@@ -76,6 +76,11 @@ struct FacebookPostCard: View {
     private var isHubOriginShareCard: Bool {
         if opensAsSpark { return false }
         if PlayPlatformBridge.isHubOriginShare(post) { return true }
+        if PlayPlatformBridge.isR2LongFormMedia(post),
+           PlayPlatformBridge.isLikelyLiveUserAuthor(post.authorID),
+           !PlayPlatformBridge.isHubChannelUpload(post) {
+            return true
+        }
         if PlayPlatformBridge.isFeedOnlyShare(post),
            PlayPlatformBridge.isArchiveCatalogMedia(post),
            !opensAsSpark {
@@ -266,7 +271,7 @@ struct FacebookPostCard: View {
                     post: post,
                     onOpen: { openPlayVideo() },
                     edgeToEdge: edgeToEdge,
-                    forceHubsBadge: PlayPlatformBridge.isHubCatalogContent(post),
+                    forceHubsBadge: true,
                     autoplaySurface: autoplaySurface
                 )
             } else if post.hasMedia {

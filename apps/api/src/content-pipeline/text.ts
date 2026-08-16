@@ -125,16 +125,44 @@ export function pickBody(kind: string, caption: string, meta: Record<string, unk
   if (kind === 'spark') {
     return `__spark__|${t}`;
   }
+  // LongForm Hubs catalog originals — intentional channel publish marker (iOS badge + Hubs shelves).
+  if (kind === 'longform') {
+    return `__hub_channel__|\n${t}`;
+  }
   const channel = cleanText(meta.channel ?? meta.author_name, 80);
   if (channel) return cleanText(`${t}\n\n— ${channel}`, 4000);
   return t;
 }
 
+/** Spark feed re-share stamp (Spark card, not Hubs long-form). */
 export function markShareBody(originId: string, caption: string): string {
   const sid = originId.replace(/\|/g, '');
   const header = `__spark_share__|sid=${sid}`;
   const cap = cleanText(caption, 2800);
   // Always attach original caption when we have it — never invent “this one 🔥”.
+  if (!cap || isFakeShareCaption(cap)) return header;
+  return `${header}\n${cap}`;
+}
+
+/**
+ * Hubs long-form feed re-share stamp.
+ * iOS reads `__hub_origin__|sid=…|aid=…|an=…` for “Shared from …” + Hubs badge.
+ */
+export function markHubOriginShareBody(opts: {
+  originId: string;
+  originAuthorId: string;
+  originAuthorName?: string | null;
+  originUsername?: string | null;
+  caption?: string | null;
+}): string {
+  const sid = String(opts.originId || '').replace(/\|/g, '');
+  const aid = String(opts.originAuthorId || '').replace(/\|/g, '');
+  const an = cleanText(opts.originAuthorName ?? '', 80).replace(/\|/g, ' ');
+  const au = cleanText(opts.originUsername ?? '', 40).replace(/\|/g, '');
+  let header = `__hub_origin__|sid=${sid}|aid=${aid}`;
+  if (an) header += `|an=${an}`;
+  if (au) header += `|au=${au}`;
+  const cap = cleanText(opts.caption ?? '', 2800);
   if (!cap || isFakeShareCaption(cap)) return header;
   return `${header}\n${cap}`;
 }

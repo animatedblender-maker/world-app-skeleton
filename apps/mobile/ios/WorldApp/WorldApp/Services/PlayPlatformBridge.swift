@@ -17,8 +17,32 @@ enum PlayPlatformBridge {
         if HubVideoSeedService.isArchiveChannelAuthor(post.authorID) { return true }
         // User-authored row that still carries Archive/catalog media (legacy re-share).
         if isArchiveCatalogMedia(post) { return true }
+        // R2 LongForm catalog (public or signed) — even if markers were missing from an older pipeline run.
+        if isR2LongFormMedia(post) { return true }
         let id = post.id.lowercased()
         if id.hasPrefix("ia_") || id.hasPrefix("hub_") || id.hasPrefix("hub_spark_") { return true }
+        return false
+    }
+
+    /// True for R2 LongForm / Hubs catalog video media (not Sparks / ShortForm).
+    static func isR2LongFormMedia(_ post: CountryPost) -> Bool {
+        if post.isReel || post.isSpark || SparkShareMarker.isMarked(post.body) { return false }
+        let media = (post.mediaURL ?? post.playableVideoURL?.absoluteString ?? "").lowercased()
+        if media.isEmpty { return false }
+        // JSON payload from content pipeline.
+        if media.contains("\"kind\":\"longform\"") || media.contains("\"kind\": \"longform\"") {
+            return true
+        }
+        if media.contains("longform/") { return true }
+        if media.contains("r2_hub_share") || media.contains("r2-hubshare") { return true }
+        // Source tags used on catalog originals.
+        if media.contains("\"source\":\"r2_focus_seed\"") || media.contains("\"source\": \"r2_focus_seed\"") {
+            // Only when not a spark reel payload.
+            if media.contains("\"reel\":true") || media.contains("\"reel\": true") { return false }
+            if media.contains("\"kind\":\"spark\"") || media.contains("\"kind\": \"spark\"") { return false }
+            // LongForm keys look like Country/id or LongForm/Country/id — prefer explicit LongForm.
+            if media.contains("longform") { return true }
+        }
         return false
     }
 
@@ -378,12 +402,18 @@ enum PlayPlatformBridge {
     /// Hub catalog long-form only — opens Hubs watch / shows Hubs badge in feed.
     /// Never Sparks or Spark re-shares (those use SparkFeedCard → infinite Sparks player).
     static func isHubFeedCardVideo(_ post: CountryPost) -> Bool {
-        guard isHubCatalogContent(post), post.hasVideo, !post.isStory else { return false }
+        guard post.hasVideo, !post.isStory else { return false }
         // Spark chrome wins over Hubs chrome.
-        if post.isReel || post.isSparkFeedShare || SparkShareMarker.isMarked(post.body) {
+        if post.isReel || post.isSpark || post.isSparkFeedShare || SparkShareMarker.isMarked(post.body) {
             return false
         }
-        return true
+        if isSparkFeedCard(post) { return false }
+        // Explicit Hubs stamps / R2 LongForm / Archive catalog.
+        if isHubOriginShare(post) { return true }
+        if HubChannelPostMarker.isMarked(post.body) { return true }
+        if isR2LongFormMedia(post) { return true }
+        if isHubCatalogContent(post) { return true }
+        return false
     }
 
     static func isReelVideo(_ post: CountryPost) -> Bool {

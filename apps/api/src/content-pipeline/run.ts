@@ -18,6 +18,7 @@ import { defaultCategoryId, loadOwnersByCountry, pickOwner, pickSharer } from '.
 import {
   extractCommentTexts,
   isFakeShareCaption,
+  markHubOriginShareBody,
   markShareBody,
   pickBody,
   pickCaption,
@@ -248,7 +249,33 @@ export async function runContentPipeline(opts: PipelineOptions = {}): Promise<Pi
         timedOut,
       });
       pipelineLog(
-        `Share backfill: +${stats.insertedShares - before} (total shares this run: ${stats.insertedShares})`,
+        `Spark share backfill: +${stats.insertedShares - before} (total shares this run: ${stats.insertedShares})`,
+        'ok'
+      );
+    }
+
+    // Hubs long-form feed shares (`__hub_origin__|`) — badge + “Shared from …” on the home feed.
+    if (!timedOut() && stats.insertedShares < maxShares) {
+      const remainingShares = Number.isFinite(maxShares)
+        ? maxShares - stats.insertedShares
+        : Number.POSITIVE_INFINITY;
+      pipelineLog(
+        `Backfilling Hubs long-form feed shares (${Number.isFinite(remainingShares) ? `up to ${remainingShares}` : 'ALL missing'})…`,
+        'step'
+      );
+      const beforeHub = stats.insertedShares;
+      await ensureHubOriginShares({
+        dryRun,
+        maxShares: remainingShares,
+        ownersByCc,
+        categoryId,
+        stats,
+        timedOut,
+      });
+      // Repair longform originals missing `__hub_channel__|` (last run wrote plain bodies).
+      await repairHubChannelMarkers({ dryRun, maxRepair: 800, stats, timedOut });
+      pipelineLog(
+        `Hubs share backfill: +${stats.insertedShares - beforeHub} (total shares this run: ${stats.insertedShares})`,
         'ok'
       );
     }
@@ -481,7 +508,8 @@ async function ingestOriginal(
     mediaUrl,
   });
 
-  // Immediate spark share for feed density — uses **same original caption**.
+  // Immediate feed share for density — same original caption.
+  // Sparks → `__spark_share__|` (Spark card). LongForm → `__hub_origin__|` (Hubs badge + Shared from).
   if (pack.kind === 'spark') {
     const shared = await createSparkShare({
       originId: postId,
@@ -498,7 +526,176 @@ async function ingestOriginal(
     return shared ? 'ok_shared' : 'ok';
   }
 
+  if (pack.kind === 'longform') {
+    const shared = await createHubOriginShare({
+      originId: postId,
+      originMediaUrl: mediaUrl,
+      originAuthorId: author.userId,
+      originAuthorName: author.countryName || pack.countryName,
+      originUsername: null,
+      originCaption: caption,
+      owners,
+      categoryId,
+      countryCode: pack.countryCode,
+      countryName: author.countryName || pack.countryName,
+      dryRun: false,
+      seed: pack.mediaPath,
+    });
+    return shared ? 'ok_shared' : 'ok';
+  }
+
   return 'ok';
+}
+
+/**
+ * Feed re-share of a Hubs LongForm original — Hubs badge + “Shared from …” on the home feed.
+ */
+async function createHubOriginShare(opts: {
+  originId: string;
+  originMediaUrl: string;
+  originAuthorId: string;
+  originAuthorName?: string | null;
+  originUsername?: string | null;
+  originCaption?: string | null;
+  owners: ProfileOwner[];
+  categoryId: string | null;
+  countryCode: string;
+  countryName: string;
+  dryRun: boolean;
+  seed: string;
+}): Promise<boolean> {
+  const sharer = pickSharer(opts.owners, opts.originAuthorId, opts.seed);
+  if (!sharer) return false;
+
+  const { rows: existing } = await pool.query<{ id: string }>(
+    `
+    select id from public.posts
+    where body like $1
+    limit 1
+    `,
+    [`%__hub_origin__|sid=${opts.originId}%`]
+  );
+  if (existing[0]) return false;
+  if (opts.dryRun) return true;
+
+  let caption = (opts.originCaption || '').trim();
+  if (isFakeShareCaption(caption)) caption = '';
+  if (!caption) {
+    const { rows: originRows } = await pool.query<{ title: string | null; body: string | null }>(
+      `select title, body from public.posts where id = $1::uuid limit 1`,
+      [opts.originId]
+    );
+    const o = originRows[0];
+    const fromBody = stripBodyMarkers(o?.body);
+    if (fromBody) caption = fromBody;
+    else if (o?.title?.trim() && !isFakeShareCaption(o.title)) caption = o.title.trim();
+  }
+
+  let authorName = (opts.originAuthorName || '').trim();
+  let username = (opts.originUsername || '').trim();
+  if (!authorName || !username) {
+    try {
+      const { rows: prof } = await pool.query<{ display_name: string | null; username: string | null }>(
+        `select display_name, username from public.profiles where user_id = $1::uuid limit 1`,
+        [opts.originAuthorId]
+      );
+      if (!authorName) {
+        authorName = (prof[0]?.display_name || prof[0]?.username || opts.countryName || 'Hubs').trim();
+      }
+      if (!username) username = (prof[0]?.username || '').trim();
+    } catch {
+      if (!authorName) authorName = opts.countryName || 'Hubs';
+    }
+  }
+
+  const body = markHubOriginShareBody({
+    originId: opts.originId,
+    originAuthorId: opts.originAuthorId,
+    originAuthorName: authorName,
+    originUsername: username || null,
+    caption,
+  });
+  const sharePath = opts.seed.startsWith('r2:')
+    ? `r2-hubshare:${opts.seed.slice(3)}`
+    : `r2-hubshare:${opts.seed}`;
+
+  let mediaUrl = opts.originMediaUrl;
+  try {
+    if (mediaUrl.startsWith('{')) {
+      const obj = JSON.parse(mediaUrl) as Record<string, unknown>;
+      obj.reel = false;
+      obj.kind = 'longform';
+      obj.source = 'r2_hub_share';
+      mediaUrl = JSON.stringify(obj);
+    }
+  } catch {
+    /* keep */
+  }
+
+  const createdAt = new Date().toISOString();
+  const { rows } = await pool.query<{ id: string }>(
+    `
+    insert into public.posts
+      (author_id, category_id, country_name, country_code, city_name,
+       title, body, media_type, media_url, media_path, shared_post_id, visibility,
+       like_count, comment_count, created_at, updated_at, moderation_status)
+    values
+      ($1, $2, $3, $4, $5,
+       $6, $7, 'video', $8, $9, $10::uuid, 'public',
+       0, 0, $11::timestamptz, $11::timestamptz, 'active')
+    returning id
+    `,
+    [
+      sharer.userId,
+      opts.categoryId,
+      sharer.countryName || opts.countryName,
+      opts.countryCode,
+      sharer.cityName,
+      caption ? caption.slice(0, 200) : null,
+      body,
+      mediaUrl,
+      sharePath,
+      opts.originId,
+      createdAt,
+    ]
+  );
+
+  const shareId = rows[0]?.id;
+  if (!shareId) return false;
+
+  try {
+    if (caption) {
+      await pool.query(
+        `
+        insert into public.post_media_captions (post_id, caption)
+        values ($1::uuid, $2)
+        on conflict (post_id) do update set caption = excluded.caption
+        `,
+        [shareId, caption]
+      );
+    }
+  } catch {
+    /* optional */
+  }
+
+  void emitContentPosted({
+    entityId: sharer.userId,
+    contentId: shareId,
+    authorId: sharer.userId,
+    mediaType: 'video',
+    countryCode: opts.countryCode,
+    countryName: sharer.countryName || opts.countryName,
+    isSpark: false,
+    isHubLongForm: true,
+    sharedPostId: opts.originId,
+    title: caption || null,
+    summary: `Hubs video shared to the home feed from ${opts.countryName}`,
+    destination: 'share',
+    surface: 'feed',
+    mediaUrl,
+  });
+
+  return true;
 }
 
 async function createSparkShare(opts: {
@@ -691,6 +888,136 @@ async function ensureSparkShares(opts: {
     } catch (err: any) {
       opts.stats.errors.push(`share ${row.id}: ${err?.message ?? err}`);
     }
+  }
+}
+
+/** LongForm R2 originals missing a `__hub_origin__|` feed share. */
+async function ensureHubOriginShares(opts: {
+  dryRun: boolean;
+  maxShares: number;
+  ownersByCc: Map<string, ProfileOwner[]>;
+  categoryId: string | null;
+  stats: PipelineStats;
+  timedOut: () => boolean;
+}): Promise<void> {
+  const { rows } = await pool.query<{
+    id: string;
+    author_id: string;
+    media_url: string | null;
+    media_path: string | null;
+    country_code: string | null;
+    country_name: string | null;
+    title: string | null;
+    body: string | null;
+  }>(
+    `
+    select p.id, p.author_id, p.media_url, p.media_path, p.country_code, p.country_name, p.title, p.body
+    from public.posts p
+    where p.media_path like 'r2:%'
+      and (
+        p.media_path ilike '%/LongForm/%'
+        or p.media_url ilike '%LongForm/%'
+        or p.media_url ilike '%"kind":"longform"%'
+        or p.body like '%__hub_channel__|%'
+      )
+      and p.body not like '%__spark__|%'
+      and p.body not like '%__spark_share__|%'
+      and p.body not like '%__hub_origin__|%'
+      and not exists (
+        select 1 from public.posts s
+        where s.body like '%__hub_origin__|sid=' || p.id::text || '%'
+        limit 1
+      )
+    order by p.created_at desc
+    limit $1
+    `,
+    [
+      Number.isFinite(opts.maxShares)
+        ? Math.max(1, Math.floor(opts.maxShares * 2))
+        : 100_000,
+    ]
+  );
+
+  for (const row of rows) {
+    if (opts.timedOut() || opts.stats.insertedShares >= opts.maxShares) break;
+    const cc = (row.country_code || '').toUpperCase();
+    const owners = opts.ownersByCc.get(cc) ?? [];
+    if (!owners.length) {
+      opts.stats.skippedNoOwner += 1;
+      continue;
+    }
+    try {
+      const cap = stripBodyMarkers(row.body) || (row.title || '').trim();
+      const ok = await createHubOriginShare({
+        originId: row.id,
+        originMediaUrl: row.media_url || '',
+        originAuthorId: row.author_id,
+        originCaption: cap,
+        owners,
+        categoryId: opts.categoryId,
+        countryCode: cc || 'US',
+        countryName: row.country_name || cc,
+        dryRun: opts.dryRun,
+        seed: row.media_path || row.id,
+      });
+      if (ok) opts.stats.insertedShares += 1;
+    } catch (err: any) {
+      opts.stats.errors.push(`hub-share ${row.id}: ${err?.message ?? err}`);
+    }
+  }
+}
+
+/**
+ * Stamp `__hub_channel__|` on LongForm R2 originals that were ingested without it
+ * (so iOS treats them as Hubs catalog / channel content).
+ */
+async function repairHubChannelMarkers(opts: {
+  dryRun: boolean;
+  maxRepair: number;
+  stats: PipelineStats;
+  timedOut: () => boolean;
+}): Promise<void> {
+  const { rows } = await pool.query<{ id: string; body: string | null }>(
+    `
+    select id, body
+    from public.posts
+    where media_path like 'r2:%'
+      and (
+        media_path ilike '%/LongForm/%'
+        or media_url ilike '%LongForm/%'
+        or media_url ilike '%"kind":"longform"%'
+      )
+      and coalesce(body, '') not like '%__hub_channel__|%'
+      and coalesce(body, '') not like '%__spark__|%'
+      and coalesce(body, '') not like '%__hub_origin__|%'
+      and coalesce(body, '') not like '%__spark_share__|%'
+    order by updated_at asc nulls first
+    limit $1
+    `,
+    [opts.maxRepair]
+  );
+
+  let fixed = 0;
+  for (const row of rows) {
+    if (opts.timedOut()) break;
+    const raw = (row.body || '').trim();
+    const next = raw ? `__hub_channel__|\n${raw}` : '__hub_channel__|';
+    if (opts.dryRun) {
+      fixed += 1;
+      continue;
+    }
+    try {
+      await pool.query(
+        `update public.posts set body = $2, updated_at = now() where id = $1::uuid`,
+        [row.id, next]
+      );
+      fixed += 1;
+    } catch (err: any) {
+      opts.stats.errors.push(`hub-channel repair ${row.id}: ${err?.message ?? err}`);
+    }
+  }
+  if (fixed > 0) {
+    pipelineLog(`  stamped __hub_channel__| on ${fixed} LongForm original(s)`, 'ok');
   }
 }
 

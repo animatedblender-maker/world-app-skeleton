@@ -407,13 +407,23 @@ struct PlayFeedLinkCard: View {
 
     /// Hub catalog clips + forced share path show the Hubs origin chip.
     private var showsHubsOriginBadge: Bool {
-        forceHubsBadge || PlayPlatformBridge.isHubCatalogContent(post)
+        forceHubsBadge
+            || PlayPlatformBridge.isHubFeedCardVideo(post)
+            || PlayPlatformBridge.isHubOriginShare(post)
+            || PlayPlatformBridge.isHubCatalogContent(post)
     }
 
     var body: some View {
-        // Player full-bleed. Hubs badge is top-leading so transport chrome never covers it.
+        // Player full-bleed. Badge is **outside** clipShape so it never gets cropped.
         YouTubeVideoFrame(style: .feed) {
             hubFeedPlayerSurface
+        }
+        .clipShape(RoundedRectangle(cornerRadius: edgeToEdge ? 0 : 12, style: .continuous))
+        .overlay {
+            if !edgeToEdge {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Theme.border, lineWidth: 0.5)
+            }
         }
         .overlay(alignment: .topLeading) {
             if showsHubsOriginBadge {
@@ -421,18 +431,11 @@ struct PlayFeedLinkCard: View {
                     HubsOriginBadge()
                 }
                 .buttonStyle(.plain)
-                .padding(.leading, 12)
-                .padding(.top, 12)
+                .padding(.leading, 10)
+                .padding(.top, 10)
                 .zIndex(40)
                 .accessibilityLabel(MatteryaCopy.watchOnHubs)
                 .accessibilityHint("Opens this video in Matterya Hubs")
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: edgeToEdge ? 0 : 12, style: .continuous))
-        .overlay {
-            if !edgeToEdge {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Theme.border, lineWidth: 0.5)
             }
         }
         .padding(.horizontal, edgeToEdge ? 0 : horizontalPadding)
