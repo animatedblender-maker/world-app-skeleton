@@ -463,7 +463,7 @@ struct MatteryaHubPlayerView: View {
             youtubeGestureLayer
                 .zIndex(0)
 
-            // Top tools — mute only (no fullscreen control on Hubs watch).
+            // Top tools — mute + fullscreen (YouTube-style).
             VStack {
                 HStack(spacing: 10) {
                     Spacer(minLength: 0)
@@ -476,9 +476,17 @@ struct MatteryaHubPlayerView: View {
                         bridge.publishMuted(isMuted)
                         scheduleChromeHide()
                     }
+                    if allowsFullscreen {
+                        youtubeTopIcon(
+                            systemName: "arrow.up.left.and.arrow.down.right",
+                            label: "Full screen"
+                        ) {
+                            showFullscreen = true
+                            scheduleChromeHide()
+                        }
+                    }
                 }
                 .padding(.horizontal, 12)
-                // Stage is already below the island — modest top pad only.
                 .padding(.top, 10)
                 Spacer(minLength: 0)
             }
@@ -559,6 +567,21 @@ struct MatteryaHubPlayerView: View {
                             .foregroundStyle(Theme.paper.opacity(0.72))
 
                         Spacer(minLength: 0)
+
+                        if allowsFullscreen {
+                            Button {
+                                showFullscreen = true
+                                scheduleChromeHide()
+                            } label: {
+                                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(Theme.paper.opacity(0.95))
+                                    .frame(width: 32, height: 28)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Full screen")
+                        }
                     }
                     .padding(.horizontal, 14)
                     .padding(.bottom, 10)
@@ -767,6 +790,7 @@ struct MatteryaHubPlayerView: View {
 // MARK: - Landscape fullscreen (hub / archive)
 
 /// Full-screen hub player. Unlocks landscape so tilting the device rotates playback.
+/// YouTube-style: drag down to dismiss, tap chrome, mute, scrub.
 struct MatteryaLandscapeFullscreenPlayer: View {
     let url: URL
     var posterURL: URL? = nil
@@ -782,10 +806,13 @@ struct MatteryaLandscapeFullscreenPlayer: View {
     @State private var showChrome = true
     @State private var chromeHideTask: Task<Void, Never>?
     @State private var isScrubbing = false
+    /// YouTube drag-down dismiss offset.
+    @State private var dismissDrag: CGFloat = 0
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
+                .opacity(max(0.35, 1 - Double(dismissDrag / 420)))
 
             ArchiveVideoPlayerView(
                 url: url,
@@ -794,6 +821,7 @@ struct MatteryaLandscapeFullscreenPlayer: View {
                 muted: isMuted,
                 startTime: startTime,
                 loops: false,
+                fillsFrame: true,
                 bridge: bridge,
                 onReady: {
                     bridge.publishReady(playing: true)
@@ -806,6 +834,8 @@ struct MatteryaLandscapeFullscreenPlayer: View {
                 }
             )
             .ignoresSafeArea()
+            .scaleEffect(max(0.86, 1 - dismissDrag / 1400), anchor: .center)
+            .offset(y: max(0, dismissDrag))
             .contentShape(Rectangle())
             .onTapGesture {
                 withAnimation(.easeInOut(duration: 0.18)) {
@@ -813,8 +843,9 @@ struct MatteryaLandscapeFullscreenPlayer: View {
                 }
                 if showChrome { scheduleChromeHide() }
             }
+            .gesture(fullscreenDismissGesture)
 
-            if showChrome || !bridge.isPlaying {
+            if (showChrome || !bridge.isPlaying), dismissDrag < 24 {
                 fullscreenChrome
                     .transition(.opacity)
             }
@@ -837,6 +868,31 @@ struct MatteryaLandscapeFullscreenPlayer: View {
             bridge.controller?.setMuted(muted)
             bridge.publishMuted(muted)
         }
+    }
+
+    private var fullscreenDismissGesture: some Gesture {
+        DragGesture(minimumDistance: 12, coordinateSpace: .local)
+            .onChanged { value in
+                guard !isScrubbing else { return }
+                let y = value.translation.height
+                let x = abs(value.translation.width)
+                guard y > 0, y > x * 0.6 else { return }
+                dismissDrag = y
+                showChrome = false
+            }
+            .onEnded { value in
+                let y = value.translation.height
+                let predicted = value.predictedEndTranslation.height
+                if y > 140 || predicted > 280 {
+                    close()
+                } else {
+                    withAnimation(MatteryaMotion.fullscreen) {
+                        dismissDrag = 0
+                    }
+                    showChrome = true
+                    scheduleChromeHide()
+                }
+            }
     }
 
     private var fullscreenChrome: some View {

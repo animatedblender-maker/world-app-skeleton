@@ -114,23 +114,27 @@ enum SparksStageLayout {
 }
 
 enum MatteryaPullDownDismiss {
-    /// Distance that fully fades meta chrome (slider “1.0”).
-    static let dismissDistance: CGFloat = 140
-    static let predictedDismissDistance: CGFloat = 180
-    /// Pull distance that fully fades meta chrome (same as dismiss for 1:1 slider feel).
-    static let chromeFadeDistance: CGFloat = 140
-    /// Below this progress on release = still “up” → snap back to expanded.
-    /// Anything past this commits to mini immediately (no mid hang).
-    static let releaseSnapBackProgress: CGFloat = 0.06
-    static let releaseSnapBackTranslation: CGFloat = 14
+    /// YouTube-style: full collapse over this pull distance.
+    static let dismissDistance: CGFloat = 220
+    /// Strong fling predicted end → commit mini (YouTube velocity).
+    static let predictedDismissDistance: CGFloat = 320
+    /// Pull distance that maps to collapse progress 1.0.
+    static let chromeFadeDistance: CGFloat = 220
+    /// Release below this progress (and weak velocity) → snap back to expanded.
+    static let releaseSnapBackProgress: CGFloat = 0.32
+    static let releaseSnapBackTranslation: CGFloat = 70
+    /// Predicted end Y above this commits mini even if progress is mid-way.
+    static let flingCommitPredicted: CGFloat = 200
 
     static func shouldDismiss(_ value: DragGesture.Value) -> Bool {
         value.translation.height > dismissDistance
             || value.predictedEndTranslation.height > predictedDismissDistance
     }
 
-    /// On finger-up: minimize unless the grab is still essentially at the top.
-    /// One-grab-down must commit the moment the finger leaves — never hang mid-screen.
+    /// YouTube mini-player commit rules:
+    /// - progress ≥ ~1/3 → mini
+    /// - strong downward fling → mini
+    /// - otherwise spring back to expanded
     static func shouldMinimizeOnRelease(
         _ value: DragGesture.Value,
         dragOffset: CGFloat = 0,
@@ -142,18 +146,13 @@ enum MatteryaPullDownDismiss {
         )
         let y = max(0, value.translation.height)
         let predicted = value.predictedEndTranslation.height
-        // Still “up” only when barely moved and no downward fling.
-        let nearTop = progress < releaseSnapBackProgress
-            && y < releaseSnapBackTranslation
-            && dragOffset < releaseSnapBackTranslation
-            && predicted < 40
-        if nearTop { return false }
-        // Any real downward grab → mini now.
-        return progress > 0.04
-            || y > 10
-            || dragOffset > 10
-            || predicted > 48
-            || shouldDismiss(value)
+        // Velocity-style: finger already “thrown” past the mid zone.
+        if predicted > flingCommitPredicted { return true }
+        if shouldDismiss(value) { return true }
+        // Position threshold (YouTube ~30–40% of the collapse track).
+        if progress >= releaseSnapBackProgress { return true }
+        if y >= releaseSnapBackTranslation && predicted > 90 { return true }
+        return false
     }
 
     /// 0…1 slider from raw downward translation (moving up lowers the value).

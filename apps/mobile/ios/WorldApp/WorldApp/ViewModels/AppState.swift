@@ -1310,6 +1310,7 @@ final class AppState {
 
     /// Tap miniplayer (from chat dock or floating bar) → full Hubs watch with comments.
     /// Same continuous player — expand only grows the stage; audio/video never restart.
+    /// YouTube-style: spring expand (handled in GlobalHubPlaybackLayer via collapse 1→0).
     func expandHubPlayback() {
         guard hubPlaybackPost != nil else { return }
         rememberHubPlaybackChatReturnIfNeeded()
@@ -1318,15 +1319,11 @@ final class AppState {
         selectedTab = .hubs
         hubPlaybackPlaying = true
         hubWatchScrollCollapse = 0
-        // CRITICAL: clear pull/collapse so watch chrome is visible again.
-        // Leaving pullProgress=1 made watch opacity 0 after expand from chat (broken maximize).
+        // Clear pull so watch chrome is fully visible during expand.
         hubPlaybackPullProgress = 0
-        var t = Transaction()
-        t.disablesAnimations = true
-        withTransaction(t) {
+        withAnimation(MatteryaMotion.expand) {
             hubPlaybackExpanded = true
         }
-        // Nudge continuous layer + hubs route after tab is selected.
         NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
     }
 

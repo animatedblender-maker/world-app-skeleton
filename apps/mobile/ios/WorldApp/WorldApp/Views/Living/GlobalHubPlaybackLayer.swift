@@ -106,25 +106,21 @@ struct GlobalHubPlaybackLayer: View {
         }
         .onChange(of: expanded) { _, isExpanded in
             // External expand/minimize (tab switch, chevron, mini tap from chat).
-            // Always clear drag — a stuck isDragging blocked expand forever.
             isDragging = false
             if isExpanded {
-                // Instant full stage — snappy maximize from mini / chat.
-                var t = Transaction()
-                t.disablesAnimations = true
-                withTransaction(t) {
+                // YouTube maximize: spring collapse 1 → 0 (full stage).
+                appState.hubPlaybackPullProgress = 0
+                withAnimation(MatteryaMotion.expand) {
                     collapse = 0
-                    appState.hubPlaybackPullProgress = 0
                 }
             } else {
-                var t = Transaction()
-                t.disablesAnimations = true
-                withTransaction(t) {
+                // External minimize (tab leave): spring to mini strip.
+                withAnimation(MatteryaMotion.minimize) {
                     collapse = 1
                     appState.hubPlaybackPullProgress = 1
                 }
                 Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 80_000_000)
+                    try? await Task.sleep(nanoseconds: 280_000_000)
                     guard !appState.hubPlaybackExpanded else { return }
                     appState.hubPlaybackPullProgress = 0
                 }
@@ -169,9 +165,9 @@ struct GlobalHubPlaybackLayer: View {
             )
             .clipped()
             .offset(x: layout.x, y: layout.y)
-            // Finger-driven collapse — no implicit animation while dragging.
+            // Finger 1:1 while dragging; spring only on settle / expand.
             .animation(isDragging ? nil : MatteryaMotion.minimize, value: collapse)
-            .simultaneousGesture(expanded ? minimizeGesture : nil)
+            .simultaneousGesture(expanded && collapse < 0.98 ? minimizeGesture : nil)
             .id("global-hub-continuous-\(post.id)")
         }
     }
@@ -252,7 +248,8 @@ struct GlobalHubPlaybackLayer: View {
                 fillsFrame: collapse > 0.55,
                 chromeOpacity: chromeOpacity,
                 isMuted: mutedBinding,
-                allowsFullscreen: false,
+                // YouTube-style landscape fullscreen from the player chrome.
+                allowsFullscreen: collapse < 0.25,
                 onReady: {
                     Task { await PostsService.shared.recordView(post) }
                     if appState.hubPlaybackPlaying {
@@ -290,22 +287,18 @@ struct GlobalHubPlaybackLayer: View {
     // MARK: - Gesture
 
     private var minimizeGesture: some Gesture {
-        DragGesture(minimumDistance: 3, coordinateSpace: .local)
+        // YouTube: grab the player and pull down — rubber-band past full collapse.
+        DragGesture(minimumDistance: 4, coordinateSpace: .local)
             .onChanged { value in
                 guard expanded else { return }
                 let y = value.translation.height
                 let x = abs(value.translation.width)
-                // Ignore clear horizontal pans.
                 if !isDragging {
-                    guard y > 5, y > x * 0.65 else { return }
+                    guard y > 8, y > x * 0.75 else { return }
                     isDragging = true
-                } else if y < 0 {
-                    // Finger back up → collapse back toward expanded.
-                    applyCollapse(0, animated: false)
-                    return
                 }
-                // 1:1 with finger over dismiss distance.
-                let progress = MatteryaPullDownDismiss.pullProgress(forVertical: max(0, y))
+                // Allow slight upward rubber-band back toward expanded.
+                let progress = MatteryaPullDownDismiss.pullProgress(forVertical: y)
                 applyCollapse(progress, animated: false)
             }
             .onEnded { value in
@@ -323,8 +316,8 @@ struct GlobalHubPlaybackLayer: View {
                     ReelsTwistHaptics.pullDismiss()
                     commitMinimize()
                 } else {
-                    // Snap back to full stage.
-                    withAnimation(MatteryaMotion.micro) {
+                    // YouTube snap-back to full player.
+                    withAnimation(MatteryaMotion.expand) {
                         collapse = 0
                         appState.hubPlaybackPullProgress = 0
                     }
