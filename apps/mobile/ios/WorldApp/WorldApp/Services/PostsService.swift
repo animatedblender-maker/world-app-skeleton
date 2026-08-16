@@ -1357,8 +1357,10 @@ final class PostsService {
         limit: Int,
         resolveOrigin: Bool
     ) async throws -> [PostComment] {
-        if AppConfig.useDemoDataset, await demo.isDemoPostID(postID) {
-            return await demo.listComments(postID, limit: limit)
+        if AppConfig.useDemoDataset {
+            if await demo.isDemoPostID(postID) {
+                return await demo.listComments(postID, limit: limit)
+            }
         }
 
         // Seed / Archive / hub local IDs — GraphQL has no rows; use on-device thread.
