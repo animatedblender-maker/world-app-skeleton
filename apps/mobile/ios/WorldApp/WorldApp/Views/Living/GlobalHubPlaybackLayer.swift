@@ -43,6 +43,8 @@ struct GlobalHubPlaybackLayer: View {
     @State private var miniCurrentSeconds: Double = 0
     @State private var miniDurationSeconds: Double = 0
     @State private var miniSeekToSeconds: Double? = nil
+    /// YouTube: swipe up on the player → landscape fullscreen.
+    @State private var presentFullscreen = false
 
     private var expanded: Bool { appState.hubPlaybackExpanded }
 
@@ -167,7 +169,8 @@ struct GlobalHubPlaybackLayer: View {
             .offset(x: layout.x, y: layout.y)
             // Finger 1:1 while dragging; spring only on settle / expand.
             .animation(isDragging ? nil : MatteryaMotion.minimize, value: collapse)
-            .simultaneousGesture(expanded && collapse < 0.98 ? minimizeGesture : nil)
+            // YouTube: pull down → mini · pull up (expanded) → fullscreen · pull up (mini) → expand.
+            .simultaneousGesture(playerDragGesture)
             .id("global-hub-continuous-\(post.id)")
         }
     }
@@ -248,8 +251,9 @@ struct GlobalHubPlaybackLayer: View {
                 fillsFrame: collapse > 0.55,
                 chromeOpacity: chromeOpacity,
                 isMuted: mutedBinding,
-                // YouTube-style landscape fullscreen from the player chrome.
+                // YouTube-style landscape fullscreen from the player chrome + swipe-up.
                 allowsFullscreen: collapse < 0.25,
+                presentFullscreen: $presentFullscreen,
                 onReady: {
                     Task { await PostsService.shared.recordView(post) }
                     if appState.hubPlaybackPlaying {
@@ -284,39 +288,82 @@ struct GlobalHubPlaybackLayer: View {
         }
     }
 
-    // MARK: - Gesture
+    // MARK: - Gesture (YouTube mini + fullscreen)
 
-    private var minimizeGesture: some Gesture {
-        // YouTube: grab the player and pull down — rubber-band past full collapse.
-        DragGesture(minimumDistance: 4, coordinateSpace: .local)
+    /// Unified vertical drag on the continuous player:
+    /// - Expanded + drag **down** → mini player
+    /// - Expanded + drag **up** → landscape fullscreen (like YT)
+    /// - Mini + drag **up** → maximize to full watch
+    private var playerDragGesture: some Gesture {
+        DragGesture(minimumDistance: 6, coordinateSpace: .local)
             .onChanged { value in
-                guard expanded else { return }
                 let y = value.translation.height
                 let x = abs(value.translation.width)
-                if !isDragging {
-                    guard y > 8, y > x * 0.75 else { return }
-                    isDragging = true
+                // Horizontal pans ignored.
+                guard abs(y) > x * 0.65 else { return }
+
+                if expanded, collapse < 0.98 {
+                    // Only track downward collapse while expanded (up is handled on end → FS).
+                    if y > 0 {
+                        if !isDragging {
+                            guard y > 8 else { return }
+                            isDragging = true
+                        }
+                        let progress = MatteryaPullDownDismiss.pullProgress(forVertical: y)
+                        applyCollapse(progress, animated: false)
+                    } else if isDragging {
+                        // Finger reversed upward while collapsing → ease back toward full.
+                        let progress = MatteryaPullDownDismiss.pullProgress(forVertical: max(0, y))
+                        applyCollapse(progress, animated: false)
+                    }
                 }
-                // Allow slight upward rubber-band back toward expanded.
-                let progress = MatteryaPullDownDismiss.pullProgress(forVertical: y)
-                applyCollapse(progress, animated: false)
+                // Mini: no live collapse tracking; expand commits on end.
             }
             .onEnded { value in
-                guard expanded else {
-                    isDragging = false
+                let y = value.translation.height
+                let x = abs(value.translation.width)
+                let predicted = value.predictedEndTranslation.height
+                isDragging = false
+
+                // ── Mini: swipe up → maximize (YouTube) ──
+                if !expanded || collapse > 0.85 {
+                    if y < -28 || predicted < -80 {
+                        ReelsTwistHaptics.pullDismiss()
+                        appState.expandHubPlayback()
+                    }
                     return
                 }
+
+                guard expanded else { return }
+                guard abs(y) > x * 0.5 else {
+                    // Ambiguous → snap open.
+                    withAnimation(MatteryaMotion.expand) {
+                        collapse = 0
+                        appState.hubPlaybackPullProgress = 0
+                    }
+                    return
+                }
+
+                // ── Expanded: swipe up → fullscreen (YouTube) ──
+                if y < -36 || predicted < -120 {
+                    withAnimation(MatteryaMotion.expand) {
+                        collapse = 0
+                        appState.hubPlaybackPullProgress = 0
+                    }
+                    presentFullscreen = true
+                    return
+                }
+
+                // ── Expanded: swipe down → mini ──
                 let shouldMini = MatteryaPullDownDismiss.shouldMinimizeOnRelease(
                     value,
-                    dragOffset: max(0, value.translation.height),
+                    dragOffset: max(0, y),
                     pullProgress: collapse
                 )
-                isDragging = false
                 if shouldMini {
                     ReelsTwistHaptics.pullDismiss()
                     commitMinimize()
                 } else {
-                    // YouTube snap-back to full player.
                     withAnimation(MatteryaMotion.expand) {
                         collapse = 0
                         appState.hubPlaybackPullProgress = 0

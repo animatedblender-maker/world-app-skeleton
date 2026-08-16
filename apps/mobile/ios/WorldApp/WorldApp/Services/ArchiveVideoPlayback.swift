@@ -228,8 +228,10 @@ struct MatteryaHubPlayerView: View {
     var seekToSeconds: Double? = nil
     var onSeekConsumed: (() -> Void)? = nil
 
-    /// Hubs watch never shows a fullscreen control (top or bottom).
+    /// When true, show the fullscreen control (YouTube expand arrows).
     var allowsFullscreen: Bool = false
+    /// External trigger (e.g. swipe-up on player) — set true to open fullscreen, cleared after present.
+    @Binding var presentFullscreen: Bool
 
     @StateObject private var bridge = ArchivePlayerBridge()
     @State private var showChrome = true
@@ -252,6 +254,7 @@ struct MatteryaHubPlayerView: View {
         chromeOpacity: Double = 1,
         isMuted: Binding<Bool> = .constant(false),
         allowsFullscreen: Bool = false,
+        presentFullscreen: Binding<Bool> = .constant(false),
         onReady: (() -> Void)? = nil,
         onPlayingChange: ((Bool) -> Void)? = nil,
         onProgress: ((Double, Double) -> Void)? = nil,
@@ -270,6 +273,7 @@ struct MatteryaHubPlayerView: View {
         self.chromeOpacity = chromeOpacity
         self._isMuted = isMuted
         self.allowsFullscreen = allowsFullscreen
+        self._presentFullscreen = presentFullscreen
         self.onReady = onReady
         self.onPlayingChange = onPlayingChange
         self.onProgress = onProgress
@@ -404,6 +408,15 @@ struct MatteryaHubPlayerView: View {
                 bridge.controller?.ensureContinuingPlayback()
                 bridge.isPlaying = true
             }
+        }
+        .onChange(of: presentFullscreen) { _, want in
+            // YouTube swipe-up / parent gesture → open landscape fullscreen.
+            guard want, allowsFullscreen else {
+                if want { presentFullscreen = false }
+                return
+            }
+            presentFullscreen = false
+            showFullscreen = true
         }
         .onChange(of: showsControls) { _, visible in
             if visible {

@@ -515,9 +515,19 @@ struct YouTubeMiniPlayerBar: View {
         GeometryReader { geo in
             ZStack {
                 // Expand hit target behind controls (never wraps the buttons).
+                // YouTube: tap or swipe up on mini → full player.
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture(perform: onExpand)
+                    .gesture(
+                        DragGesture(minimumDistance: 12, coordinateSpace: .local)
+                            .onEnded { value in
+                                if value.translation.height < -24
+                                    || value.predictedEndTranslation.height < -70 {
+                                    onExpand()
+                                }
+                            }
+                    )
                     .accessibilityLabel("Expand video")
                     .accessibilityAddTraits(.isButton)
 
