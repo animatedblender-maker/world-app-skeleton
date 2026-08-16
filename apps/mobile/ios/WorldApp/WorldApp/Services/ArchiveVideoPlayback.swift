@@ -1019,19 +1019,20 @@ struct MatteryaLandscapeFullscreenPlayer: View {
     }
 
     private var fullscreenDismissGesture: some Gesture {
+        // Swipe **up** to exit fullscreen (matches continuous Hubs layer).
         DragGesture(minimumDistance: 12, coordinateSpace: .local)
             .onChanged { value in
                 guard !isScrubbing else { return }
                 let y = value.translation.height
                 let x = abs(value.translation.width)
-                guard y > 0, y > x * 0.6 else { return }
-                dismissDrag = y
+                guard y < 0, -y > x * 0.6 else { return }
+                dismissDrag = -y
                 showChrome = false
             }
             .onEnded { value in
                 let y = value.translation.height
                 let predicted = value.predictedEndTranslation.height
-                if y > 140 || predicted > 280 {
+                if y < -140 || predicted < -280 {
                     close()
                 } else {
                     withAnimation(MatteryaMotion.fullscreen) {

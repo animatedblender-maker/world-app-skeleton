@@ -456,7 +456,7 @@ struct GlobalHubPlaybackLayer: View {
     // MARK: - Gestures (YouTube)
 
     /// Unified vertical drag:
-    /// - FS: drag down → shrink fsProgress (exit)
+    /// - FS: drag **up** → shrink fsProgress (exit)
     /// - Stage: drag up → grow fsProgress (enter FS)
     /// - Stage: drag down → collapse to mini
     /// - Mini: drag up → maximize
@@ -467,12 +467,12 @@ struct GlobalHubPlaybackLayer: View {
                 let x = abs(value.translation.width)
                 guard abs(y) > x * 0.55 else { return }
 
-                // ── Fullscreen active: drag down exits 1:1 ──
+                // ── Fullscreen active: swipe **up** exits 1:1 (not down) ──
                 if fsProgress > 0.5 {
-                    if y > 0 {
+                    if y < 0 {
                         isFSDragging = true
-                        // Map pull to remaining progress (1 → 0).
-                        let p = 1 - min(1, max(0, y / 280))
+                        // Map upward pull to remaining progress (1 → 0).
+                        let p = 1 - min(1, max(0, -y / 280))
                         setFSProgress(p, animated: false)
                     }
                     return
@@ -511,11 +511,12 @@ struct GlobalHubPlaybackLayer: View {
                 isDragging = false
                 isFSDragging = false
 
-                // ── Fullscreen morph settle (YT: threshold + fling) ──
+                // ── Fullscreen morph settle: swipe **up** exits ──
                 if wasFS || fsProgress > 0.12 {
-                    let flingDown = predicted > 160 || y > 100
-                    let flingUp = predicted < -100 || y < -36
-                    if flingDown || (fsProgress < 0.42 && !flingUp) {
+                    let flingUp = predicted < -160 || y < -100
+                    let flingDown = predicted > 100 || y > 36
+                    // Exit on upward fling or if progress collapsed past threshold.
+                    if flingUp || (fsProgress < 0.42 && !flingDown) {
                         closeFullscreen(animated: true)
                     } else {
                         openFullscreenSeamless()
