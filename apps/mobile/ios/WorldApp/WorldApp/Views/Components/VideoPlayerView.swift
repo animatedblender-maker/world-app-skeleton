@@ -1920,7 +1920,16 @@ struct InFrameVideoPlayer: View {
             syncPlayGate(immediate: true)
         }
         .onChange(of: appState.reelsViewerContext?.id) { _, ctx in
-            syncPlayGate(immediate: ctx != nil)
+            if ctx == nil {
+                lastReportedRatio = -1
+                refreshFocusWinner()
+                syncPlayGate(immediate: true)
+                if shouldPlay, !isMuted {
+                    activatePlaybackAudioIfNeeded(unmuted: true)
+                }
+            } else {
+                syncPlayGate(immediate: true)
+            }
         }
         .onChange(of: shouldPlay) { _, play in
             // Start immediately; delay pause so layout noise never kills a fully visible card.

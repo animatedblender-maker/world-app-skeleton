@@ -256,8 +256,9 @@ struct MainTabView: View {
             get: { appState.reelsViewerContext },
             set: { newValue in
                 if newValue == nil {
-                    // Dismiss Sparks → kill every Spark/feed player; spare continuous Hubs mini.
-                    MediaPlaybackCoordinator.shared.stopAllPlayback()
+                    // Dismiss Sparks → silence audio hard, but **do not** tear down feed
+                    // AVPlayerItems (that caused feed “audio only / black video” on return).
+                    MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
                     SparkWarmPool.shared.silenceAllBuffered()
                     FeedVideoFocus.shared.resetAll()
                     // Restore mini Hubs if it was paused for Sparks.
@@ -265,6 +266,12 @@ struct MainTabView: View {
                         appState.hubPlaybackPlaying = true
                         NotificationCenter.default.post(
                             name: .matteryaResumePlaybackAfterInterrupt,
+                            object: nil
+                        )
+                    } else {
+                        // Let feed re-elect a winner and re-attach video+audio together.
+                        NotificationCenter.default.post(
+                            name: .feedVideoFocusDidChange,
                             object: nil
                         )
                     }

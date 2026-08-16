@@ -1674,6 +1674,21 @@ final class ArchiveVideoPlayerController: UIViewController {
             // Do NOT restart-from-0 here. Sparks focus restarts only via
             // `restartFromBeginningAndPlay()` (token). Calling both caused
             // play → re-layout → play (video “jumps to center” and restarts).
+            //
+            // After Sparks dismiss, stopAllPlayback may have nil'd currentItem while
+            // the AVPlayer shell remains → audio-only / black until reconfigure.
+            if let player, player.currentItem == nil, let sourceURL {
+                let resume = restartsFromBeginningOnFocus
+                    ? 0
+                    : max(lastKnownSeconds, currentSeconds)
+                startPlayback(
+                    url: sourceURL,
+                    muted: mutedFlag,
+                    startTime: resume > 0.5 ? resume : 0,
+                    autoplay: true
+                )
+                return
+            }
             if let player {
                 if isContinuousHubPlayer {
                     MediaPlaybackCoordinator.shared.protectContinuous(player)
@@ -1683,6 +1698,13 @@ final class ArchiveVideoPlayerController: UIViewController {
                     keeping: player,
                     pageEpoch: isContinuousHubPlayer ? nil : activePageEpoch
                 )
+                // Re-assert layer geometry so video paints (not audio-only black).
+                if view.bounds.width > 2, view.bounds.height > 2 {
+                    playerLayer?.frame = view.bounds
+                    playerLayer?.opacity = 1
+                    playerLayer?.isHidden = false
+                }
+                posterView.isHidden = true
                 if player.currentItem != nil {
                     player.play()
                     player.safePlayImmediately(atRate: 1.0)

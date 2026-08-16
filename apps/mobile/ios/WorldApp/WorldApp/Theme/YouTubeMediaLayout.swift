@@ -493,7 +493,14 @@ struct PlayFeedLinkCard: View {
             syncPlayGate(immediate: true)
         }
         .onChange(of: appState.reelsViewerContext?.id) { _, ctx in
-            syncPlayGate(immediate: ctx != nil)
+            // Sparks closed → force re-eval so feed video paints (not audio-only).
+            if ctx == nil {
+                lastReportedRatio = -1
+                refreshFocusWinner()
+                syncPlayGate(immediate: true)
+            } else {
+                syncPlayGate(immediate: true)
+            }
         }
         .onChange(of: shouldPlay) { _, play in
             syncPlayGate(immediate: play)

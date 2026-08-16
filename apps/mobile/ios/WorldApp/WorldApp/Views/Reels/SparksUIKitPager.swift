@@ -197,31 +197,34 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
             let x = max(0, t.x)
             let progress = min(1, x / w)
             collectionView.transform = CGAffineTransform(translationX: x, y: 0)
-            view.backgroundColor = UIColor.black.withAlphaComponent(max(0.35, 1 - progress * 0.55))
+            view.backgroundColor = UIColor.black.withAlphaComponent(max(0.25, 1 - progress * 0.7))
         case .ended, .cancelled, .failed:
             let x = t.x
-            let shouldClose = x > w * 0.22 || v.x > 900
+            // Snappy close — lower distance / velocity thresholds (IG/YT feel).
+            let shouldClose = x > w * 0.12 || v.x > 550
             if shouldClose {
+                // Kill audio immediately; dismiss cover without waiting for the slide to finish.
+                MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
+                SparkWarmPool.shared.silenceAllBuffered()
+                self.coordinator?.dismissSparks()
                 UIView.animate(
-                    withDuration: 0.22,
+                    withDuration: 0.12,
                     delay: 0,
-                    options: [.curveEaseOut, .allowUserInteraction]
+                    options: [.curveEaseOut, .beginFromCurrentState, .allowUserInteraction]
                 ) {
-                    self.collectionView.transform = CGAffineTransform(translationX: w, y: 0)
-                    self.view.backgroundColor = UIColor.black.withAlphaComponent(0.2)
+                    self.collectionView.transform = CGAffineTransform(translationX: w * 1.05, y: 0)
+                    self.view.backgroundColor = UIColor.black.withAlphaComponent(0)
                 } completion: { _ in
-                    self.coordinator?.dismissSparks()
-                    // Reset if cover dismiss is slow so next open is clean.
                     self.collectionView.transform = .identity
                     self.view.backgroundColor = .black
                 }
             } else {
                 UIView.animate(
-                    withDuration: 0.28,
+                    withDuration: 0.16,
                     delay: 0,
-                    usingSpringWithDamping: 0.9,
-                    initialSpringVelocity: 0.4,
-                    options: [.allowUserInteraction]
+                    usingSpringWithDamping: 0.92,
+                    initialSpringVelocity: 0.6,
+                    options: [.allowUserInteraction, .beginFromCurrentState]
                 ) {
                     self.collectionView.transform = .identity
                     self.view.backgroundColor = .black
