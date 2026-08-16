@@ -1301,16 +1301,21 @@ struct ReelsScrollViewer: View {
         }
         .task {
             // Open must paint immediately — never block first frames on network/warm.
+            MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
             SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
             if posts.indices.contains(activeIndex) {
                 CommentsWarmCache.shared.warm(posts[activeIndex].id)
             }
             // Short head warm only (was 0.9+0.7s serial waits → open “hallucinations”).
-            let headIDs = Array(posts.dropFirst(activeIndex).prefix(3).map(\.id))
-            await SparkWarmPool.shared.awaitReady(postIDs: headIDs, timeout: 0.28)
+            let headIDs = Array(posts.dropFirst(activeIndex).prefix(4).map(\.id))
+            await SparkWarmPool.shared.awaitReady(postIDs: headIDs, timeout: 0.45)
 
             // Instant local bulk (no remount) then deep expand off the critical path.
             seedFromWarmCatalogIfNeeded()
+            // Thin seed from “Sparks for you” — force catalog fuel immediately.
+            if posts.count < 12 {
+                await ensureBulkQueueAhead(target: 24)
+            }
             SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
 
             // Catalog expand + bulk top-up in background — swipe never waits.
@@ -1318,7 +1323,17 @@ struct ReelsScrollViewer: View {
                 await expandFeed()
                 await ensureBulkQueueAhead(target: Self.minQueueAhead)
                 SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
+                // Second pass if still thin (cold catalog).
+                if posts.count < Self.minQueueAhead {
+                    await loadMoreReels()
+                    await ensureBulkQueueAhead(target: Self.minQueueAhead)
+                }
             }
+        }
+        .onDisappear {
+            // Closing Sparks: kill every non-hub player (safety net).
+            MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
+            SparkWarmPool.shared.silenceAllBuffered()
         }
     }
 

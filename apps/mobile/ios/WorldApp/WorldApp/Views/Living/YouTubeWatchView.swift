@@ -438,15 +438,21 @@ struct YouTubeWatchView: View {
                     if fullscreenPullProgress != 0 { fullscreenPullProgress = 0 }
                     return
                 }
-                // 1:1 grab feel (cap at 1).
+                // 1:1 grab feel (cap at 1) — drives continuous player morph + pill.
                 let p = min(1, max(0, y / 140))
                 var t = Transaction()
                 t.disablesAnimations = true
-                withTransaction(t) { fullscreenPullProgress = p }
+                withTransaction(t) {
+                    fullscreenPullProgress = p
+                    appState.setHubFullscreenPullProgress(p)
+                }
             }
             .onEnded { value in
                 defer {
-                    withAnimation(.easeOut(duration: 0.16)) { fullscreenPullProgress = 0 }
+                    withAnimation(.easeOut(duration: 0.16)) {
+                        fullscreenPullProgress = 0
+                        appState.setHubFullscreenPullProgress(0)
+                    }
                 }
                 guard appState.hubPlaybackPost != nil, appState.hubPlaybackExpanded else { return }
                 guard !isMinimizingGrab else { return }

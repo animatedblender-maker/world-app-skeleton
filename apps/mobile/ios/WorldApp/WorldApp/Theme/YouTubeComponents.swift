@@ -515,21 +515,24 @@ struct YouTubeMiniPlayerBar: View {
         GeometryReader { geo in
             ZStack {
                 // Expand hit target (YouTube: tap / swipe up → full player).
-                // Sits under chrome; Spacers in chrome must not steal hits.
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture(perform: onExpand)
-                    .gesture(
-                        DragGesture(minimumDistance: 12, coordinateSpace: .local)
-                            .onEnded { value in
-                                if value.translation.height < -24
-                                    || value.predictedEndTranslation.height < -70 {
-                                    onExpand()
-                                }
+                // Button is more reliable than onTapGesture under competing chrome.
+                Button(action: onExpand) {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .buttonStyle(.plain)
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 12, coordinateSpace: .local)
+                        .onEnded { value in
+                            if value.translation.height < -24
+                                || value.predictedEndTranslation.height < -70 {
+                                onExpand()
                             }
-                    )
-                    .accessibilityLabel("Expand video")
-                    .accessibilityAddTraits(.isButton)
+                        }
+                )
+                .accessibilityLabel("Expand video")
+                .accessibilityAddTraits(.isButton)
 
                 if embedsVideo {
                     Theme.ink.allowsHitTesting(false)

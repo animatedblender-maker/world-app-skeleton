@@ -27,6 +27,8 @@ final class MediaPlaybackCoordinator {
     private var players = NSHashTable<AVPlayer>.weakObjects()
     /// The only player allowed to have volume > 0 / rate > 0 with audio.
     private weak var soloPlayer: AVPlayer?
+    /// Continuous Hubs AVPlayer — never kill when silencing feed/Sparks (tab switch / focus loss).
+    private weak var protectedContinuousPlayer: AVPlayer?
     /// Solo player that was actively playing when the app briefly resigned (screenshot, CC, etc.).
     private weak var soloPlayingThroughInterrupt: AVPlayer?
     /// Bumps on every Sparks page change so late observers from the previous page cannot re-solo.
@@ -115,12 +117,46 @@ final class MediaPlaybackCoordinator {
         if soloPlayingThroughInterrupt === player {
             soloPlayingThroughInterrupt = nil
         }
+        if protectedContinuousPlayer === player {
+            protectedContinuousPlayer = nil
+        }
+    }
+
+    /// Mark the global continuous Hubs player so tab switches never kill mini audio.
+    func protectContinuous(_ player: AVPlayer?) {
+        protectedContinuousPlayer = player
+        if let player {
+            soloPlayer = player
+            register(player)
+        }
+    }
+
+    func clearContinuousProtection() {
+        protectedContinuousPlayer = nil
     }
 
     /// True when this player is the current Sparks/Hubs audio owner.
     func isSolo(_ player: AVPlayer?) -> Bool {
         guard let player else { return false }
         return soloPlayer === player
+    }
+
+    /// **Hard rule:** if video is off-screen / tab changed / Sparks closed — silence everything
+    /// except the optional protected continuous Hubs mini/watch player.
+    func silenceAllOffScreenAudio() {
+        sparkPageEpoch &+= 1
+        let keep = protectedContinuousPlayer
+        soloPlayingThroughInterrupt = nil
+        for player in players.allObjects {
+            if let keep, player === keep { continue }
+            hardSilence(player)
+        }
+        SparkWarmPool.shared.silenceAllBuffered()
+        if let keep {
+            soloPlayer = keep
+        } else {
+            soloPlayer = nil
+        }
     }
 
     /// Pause and mute every known player, then release the audio session.
@@ -131,17 +167,22 @@ final class MediaPlaybackCoordinator {
 
     /// Stop every registered player except an optional keep-alive (global hub continuous).
     func stopAllPlayback(except keep: AVPlayer?) {
+        // When keep is nil → full stop (including continuous). When keep set → spare that one.
+        // silenceAllOffScreenAudio uses pauseAll which spares protected continuous.
+        let spare = keep
         for player in players.allObjects {
-            if let keep, player === keep { continue }
+            if let spare, player === spare { continue }
             hardSilence(player)
             player.replaceCurrentItem(with: nil)
             players.remove(player)
         }
+        SparkWarmPool.shared.silenceAllBuffered()
 
-        if let keep {
-            soloPlayer = keep
+        if let spare {
+            soloPlayer = spare
         } else {
             soloPlayer = nil
+            protectedContinuousPlayer = nil
             players.removeAllObjects()
             soloPlayingThroughInterrupt = nil
             let session = AVAudioSession.sharedInstance()
@@ -151,15 +192,17 @@ final class MediaPlaybackCoordinator {
 
     /// Pause others without tearing them down (e.g. feed → hubs handoff).
     func pauseAll(except keep: AVPlayer? = nil) {
+        let protected = keep ?? protectedContinuousPlayer
         for player in players.allObjects {
-            if let keep, player === keep { continue }
+            if let protected, player === protected { continue }
             hardSilence(player)
         }
-        if let keep {
-            soloPlayer = keep
+        if let protected {
+            soloPlayer = protected
         } else {
             soloPlayer = nil
         }
+        SparkWarmPool.shared.silenceAllBuffered()
     }
 
     /// Sparks page change: kill the *outgoing* page’s audio only.

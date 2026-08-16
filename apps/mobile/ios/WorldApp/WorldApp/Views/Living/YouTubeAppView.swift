@@ -446,16 +446,18 @@ struct YouTubeAppView: View {
             EngagementTracker.shared.hubsOpened()
             paintInstantHubsIfPossible()
             isLoading = false
-            // Maximize from mini → watch: never reshuffle/remount (felt like multi-second expand).
-            if appState.hubPlaybackExpanded, appState.hubPlaybackPost != nil {
+            // Maximize / mini handoff: never reshuffle (that lagged tab switches + expand).
+            if appState.hubPlaybackPost != nil {
                 syncRouteFromHubSession()
                 return
             }
-            // New pure shuffle of everything every time user opens Hubs home.
-            if !allVideos.isEmpty {
-                refreshHubsVisitShuffle(remountList: true)
-            }
-            Task {
+            // Defer shuffle so the tab paint is instant.
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 280_000_000)
+                guard appState.selectedTab == .hubs, appState.hubPlaybackPost == nil else { return }
+                if !allVideos.isEmpty {
+                    refreshHubsVisitShuffle(remountList: true)
+                }
                 if allVideos.filter({ !$0.isReel }).count < 8 {
                     await loadVideos(forceRefresh: false, mode: .fast)
                     refreshHubsVisitShuffle(remountList: true)

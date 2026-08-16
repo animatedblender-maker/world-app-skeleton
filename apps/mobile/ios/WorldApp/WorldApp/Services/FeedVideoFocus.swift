@@ -153,6 +153,10 @@ final class FeedVideoFocus {
         guard winner != previous else { return }
         activeID = winner
         generation &+= 1
+        // No in-frame winner → hard-silence feed/Sparks audio (keep continuous Hubs if protected).
+        if winner == nil {
+            MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
+        }
         NotificationCenter.default.post(name: .feedVideoFocusDidChange, object: winner)
     }
 

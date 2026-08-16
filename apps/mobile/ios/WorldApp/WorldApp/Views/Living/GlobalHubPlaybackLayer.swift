@@ -179,6 +179,20 @@ struct GlobalHubPlaybackLayer: View {
             guard expanded, collapse < 0.35, appState.hubPlaybackPost != nil else { return }
             openFullscreenSeamless()
         }
+        .onChange(of: appState.hubExpandToken) { _, _ in
+            // Mini maximize — force spring even if expanded was already true.
+            guard appState.hubPlaybackPost != nil else { return }
+            isDragging = false
+            appState.hubPlaybackPullProgress = 0
+            withAnimation(MatteryaMotion.expand) {
+                collapse = 0
+            }
+            appState.hubPlaybackPlaying = true
+            NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
+        }
+        .onChange(of: appState.hubFullscreenPullProgress) { _, _ in
+            // Live layout morph while grabbing meta (no animation lag).
+        }
         .onChange(of: appState.hubMinimizeMorphToken) { _, _ in
             // AppState requested morph-then-mini (close, tab leave, etc.).
             guard expanded, appState.hubPlaybackPost != nil else {
@@ -237,11 +251,15 @@ struct GlobalHubPlaybackLayer: View {
             containerWidth: geo.size.width,
             videoAspect: appState.hubPlaybackVideoAspect
         )
+        // Pull-to-fullscreen morph: grow stage toward full screen while grabbing meta.
+        let pull = min(1, max(0, appState.hubFullscreenPullProgress))
+        let fullH = geo.size.height
+        let h = max(120, stageHeight + (fullH - stageHeight) * pull)
         return PlayerLayout(
             x: 0,
             y: 0,
             width: geo.size.width,
-            height: max(120, stageHeight)
+            height: h
         )
     }
 
@@ -306,6 +324,7 @@ struct GlobalHubPlaybackLayer: View {
                     guard expanded, collapse < 0.35 else { return }
                     openFullscreenSeamless()
                 },
+                isContinuousHubPlayer: true,
                 onReady: {
                     Task { await PostsService.shared.recordView(post) }
                     if appState.hubPlaybackPlaying {
@@ -450,7 +469,15 @@ struct GlobalHubPlaybackLayer: View {
         guard !showFullscreen else { return }
         // Keep hubPlaybackPlaying true — FS mounts at current seconds and underlay stays warm.
         appState.hubPlaybackPlaying = true
-        showFullscreen = true
+        // Brief morph to full height, then present cover (YT-like grab completion).
+        withAnimation(MatteryaMotion.fullscreen) {
+            appState.hubFullscreenPullProgress = 1
+        }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            showFullscreen = true
+            appState.hubFullscreenPullProgress = 0
+        }
     }
 
     /// Animate collapse → 1, then flip session to mini **without** a second layout jump.

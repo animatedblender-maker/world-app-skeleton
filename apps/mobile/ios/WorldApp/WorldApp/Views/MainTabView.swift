@@ -144,16 +144,27 @@ struct MainTabView: View {
             }
         }
         .onChange(of: appState.selectedTab) { oldTab, tab in
-            // Off Hubs → mini player; do not force-return to a chat (only pull-down / minimize does).
+            // Hard rule: leave a surface → no orphan audio from off-screen video.
+            FeedVideoFocus.shared.resetAll()
+            MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
+
+            // Off Hubs → mini (if expanded). Already-mini: skip morph (was lagging tab switches).
             if tab != .hubs {
-                appState.minimizeHubPlayback(returnToChat: false)
+                if appState.hubPlaybackExpanded {
+                    appState.minimizeHubPlayback(returnToChat: false)
+                }
                 EngagementTracker.shared.hubsLeft()
             } else {
                 EngagementTracker.shared.hubsOpened()
+                // Re-kick continuous hubs audio after silence pass.
+                if appState.hubPlaybackPost != nil, appState.hubPlaybackPlaying {
+                    NotificationCenter.default.post(
+                        name: .matteryaResumePlaybackAfterInterrupt,
+                        object: nil
+                    )
+                }
             }
             EngagementTracker.shared.screenOpened(tab.rawValue)
-            // Feed stays mounted under Profile — clear focus so profile can elect its own winner.
-            FeedVideoFocus.shared.resetAll()
             // 3+ min off feed → new feed mix; Hubs open → new For you order.
             appState.noteSelectedTabChanged(from: oldTab, to: tab)
         }
@@ -245,8 +256,18 @@ struct MainTabView: View {
             get: { appState.reelsViewerContext },
             set: { newValue in
                 if newValue == nil {
-                    // Dismiss Sparks → hard-stop any DB/Archive players immediately.
+                    // Dismiss Sparks → kill every Spark/feed player; spare continuous Hubs mini.
                     MediaPlaybackCoordinator.shared.stopAllPlayback()
+                    SparkWarmPool.shared.silenceAllBuffered()
+                    FeedVideoFocus.shared.resetAll()
+                    // Restore mini Hubs if it was paused for Sparks.
+                    if appState.hubPlaybackPost != nil {
+                        appState.hubPlaybackPlaying = true
+                        NotificationCenter.default.post(
+                            name: .matteryaResumePlaybackAfterInterrupt,
+                            object: nil
+                        )
+                    }
                 }
                 appState.reelsViewerContext = newValue
             }

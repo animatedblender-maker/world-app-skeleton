@@ -235,6 +235,8 @@ struct MatteryaHubPlayerView: View {
     /// When set, parent owns fullscreen presentation (required when nested under
     /// HubPassThroughContainer — SwiftUI fullScreenCover inside that host fails silently).
     var onRequestFullscreen: (() -> Void)? = nil
+    /// Global continuous Hubs surface — protected from tab-switch silence.
+    var isContinuousHubPlayer: Bool = false
 
     @StateObject private var bridge = ArchivePlayerBridge()
     @State private var showChrome = true
@@ -259,6 +261,7 @@ struct MatteryaHubPlayerView: View {
         allowsFullscreen: Bool = false,
         presentFullscreen: Binding<Bool> = .constant(false),
         onRequestFullscreen: (() -> Void)? = nil,
+        isContinuousHubPlayer: Bool = false,
         onReady: (() -> Void)? = nil,
         onPlayingChange: ((Bool) -> Void)? = nil,
         onProgress: ((Double, Double) -> Void)? = nil,
@@ -279,6 +282,7 @@ struct MatteryaHubPlayerView: View {
         self.allowsFullscreen = allowsFullscreen
         self._presentFullscreen = presentFullscreen
         self.onRequestFullscreen = onRequestFullscreen
+        self.isContinuousHubPlayer = isContinuousHubPlayer
         self.onReady = onReady
         self.onPlayingChange = onPlayingChange
         self.onProgress = onProgress
@@ -311,8 +315,12 @@ struct MatteryaHubPlayerView: View {
                 loops: loops,
                 fillsFrame: fillsFrame,
                 bridge: bridge,
+                isContinuousHubPlayer: isContinuousHubPlayer,
                 onReady: {
                     bridge.publishReady(playing: true)
+                    if isContinuousHubPlayer, let p = bridge.controller?.avPlayer {
+                        MediaPlaybackCoordinator.shared.protectContinuous(p)
+                    }
                     DispatchQueue.main.async {
                         onReady?()
                         if showsControls {
@@ -828,10 +836,16 @@ struct MatteryaLandscapeFullscreenPlayer: View {
     @State private var isScrubbing = false
     /// YouTube drag-down dismiss offset (no scale/zoom).
     @State private var dismissDrag: CGFloat = 0
+    /// When Control Center orientation lock blocks UIKit rotation, rotate content like YT.
+    @State private var contentRotation: Angle = .zero
+    @State private var useLandscapeLayout = false
 
     var body: some View {
         GeometryReader { geo in
-            let size = geo.size
+            let portraitSize = geo.size
+            // When UI stays portrait under lock, swap axes so video still lays out landscape.
+            let layoutW = useLandscapeLayout ? max(portraitSize.width, portraitSize.height) : portraitSize.width
+            let layoutH = useLandscapeLayout ? min(portraitSize.width, portraitSize.height) : portraitSize.height
             ZStack {
                 Color.black.ignoresSafeArea()
                     .opacity(max(0.4, 1 - Double(dismissDrag / 480)))
@@ -851,6 +865,8 @@ struct MatteryaLandscapeFullscreenPlayer: View {
                         bridge.publishReady(playing: true)
                         // Re-assert fit after first frame (configure must not force fill).
                         bridge.controller?.applyVideoGravity(.resizeAspect)
+                        bridge.controller?.setActive(true)
+                        bridge.controller?.ensureContinuingPlayback()
                         scheduleChromeHide()
                     },
                     onProgress: { current, duration in
@@ -859,7 +875,9 @@ struct MatteryaLandscapeFullscreenPlayer: View {
                         bridge.publishProgress(current: current, duration: duration, playing: playing)
                     }
                 )
-                .frame(width: size.width, height: size.height)
+                .frame(width: layoutW, height: layoutH)
+                .rotationEffect(contentRotation)
+                .frame(width: portraitSize.width, height: portraitSize.height)
                 .offset(y: max(0, dismissDrag))
                 .contentShape(Rectangle())
                 .onTapGesture {
@@ -872,11 +890,12 @@ struct MatteryaLandscapeFullscreenPlayer: View {
 
                 if (showChrome || !bridge.isPlaying), dismissDrag < 24 {
                     fullscreenChrome
-                        .frame(width: size.width, height: size.height)
+                        .frame(width: portraitSize.width, height: portraitSize.height)
+                        .rotationEffect(contentRotation)
                         .transition(.opacity)
                 }
             }
-            .frame(width: size.width, height: size.height)
+            .frame(width: portraitSize.width, height: portraitSize.height)
         }
         .ignoresSafeArea()
         .statusBarHidden(true)
@@ -891,6 +910,7 @@ struct MatteryaLandscapeFullscreenPlayer: View {
             Self.requestGeometryUpdateIfNeeded()
             // Follow the phone if already landscape; otherwise stay portrait until tilt.
             Self.alignToDeviceOrientation()
+            applyContentOrientationFromDevice()
             // Kick playback hard — continuous layer stays warm under us (muted).
             bridge.controller?.setMuted(isMuted)
             bridge.controller?.setActive(true)
@@ -915,6 +935,47 @@ struct MatteryaLandscapeFullscreenPlayer: View {
             AppDelegate.orientationLock = .allButUpsideDown
             Self.refreshSupportedOrientations()
             Self.alignToDeviceOrientation()
+            // YT-style: even with Control Center lock, rotate the film with the phone.
+            withAnimation(.easeInOut(duration: 0.22)) {
+                applyContentOrientationFromDevice()
+            }
+        }
+    }
+
+    /// Rotate video content when UIKit cannot leave portrait (system orientation lock).
+    private func applyContentOrientationFromDevice() {
+        let o = UIDevice.current.orientation
+        switch o {
+        case .landscapeLeft:
+            contentRotation = .degrees(90)
+            useLandscapeLayout = true
+        case .landscapeRight:
+            contentRotation = .degrees(-90)
+            useLandscapeLayout = true
+        case .portraitUpsideDown:
+            contentRotation = .degrees(180)
+            useLandscapeLayout = false
+        case .portrait, .faceUp, .faceDown, .unknown:
+            // If interface already landscape, don't fight it.
+            if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
+                switch scene.interfaceOrientation {
+                case .landscapeLeft:
+                    contentRotation = .degrees(90)
+                    useLandscapeLayout = true
+                    return
+                case .landscapeRight:
+                    contentRotation = .degrees(-90)
+                    useLandscapeLayout = true
+                    return
+                default:
+                    break
+                }
+            }
+            contentRotation = .degrees(0)
+            useLandscapeLayout = false
+        @unknown default:
+            contentRotation = .degrees(0)
+            useLandscapeLayout = false
         }
     }
 
@@ -1241,6 +1302,8 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
     var restartFromBeginningToken: UInt = 0
     /// User pause while page is still focused — freeze frame, don't deactivate / seek to 0.
     var isPausedByUser: Bool = false
+    /// Global continuous Hubs player — protected from tab-switch silence.
+    var isContinuousHubPlayer: Bool = false
 
     final class Coordinator {
         var lastURL: URL?
@@ -1261,6 +1324,7 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
         let vc = ArchiveVideoPlayerController()
         vc.loops = loops
         vc.postID = postID
+        vc.isContinuousHubPlayer = isContinuousHubPlayer
         vc.restartsFromBeginningOnFocus = restartFromBeginningToken > 0
         vc.onReady = onReady
         vc.onFailed = onFailed
@@ -1291,6 +1355,7 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
         vc.applyVideoGravity(videoGravity)
         vc.loops = loops
         vc.postID = postID
+        vc.isContinuousHubPlayer = isContinuousHubPlayer
         vc.restartsFromBeginningOnFocus = restartFromBeginningToken > 0
         vc.onReady = onReady
         vc.onFailed = onFailed
@@ -1596,6 +1661,11 @@ final class ArchiveVideoPlayerController: UIViewController {
 
     /// When true (Sparks player), becoming focused always seeks to t=0.
     var restartsFromBeginningOnFocus = false
+    /// Continuous Hubs mini/watch — protected from tab-switch silence.
+    var isContinuousHubPlayer = false
+
+    /// Exposed for continuous-hub protection registration.
+    var avPlayer: AVPlayer? { player }
 
     func setActive(_ active: Bool) {
         if active {
@@ -1605,7 +1675,14 @@ final class ArchiveVideoPlayerController: UIViewController {
             // `restartFromBeginningAndPlay()` (token). Calling both caused
             // play → re-layout → play (video “jumps to center” and restarts).
             if let player {
+                if isContinuousHubPlayer {
+                    MediaPlaybackCoordinator.shared.protectContinuous(player)
+                }
                 applyUserAudioOutput(on: player)
+                _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
+                    keeping: player,
+                    pageEpoch: isContinuousHubPlayer ? nil : activePageEpoch
+                )
                 if player.currentItem != nil {
                     player.play()
                     player.safePlayImmediately(atRate: 1.0)
@@ -1631,9 +1708,12 @@ final class ArchiveVideoPlayerController: UIViewController {
             userWantsPlayback = false
             isScrubbing = false
             // Silence inactive pages — prevents stacked audio. mutedFlag stays as user choice.
-            player?.pause()
-            player?.isMuted = true
-            player?.volume = 0
+            // Continuous hubs: only mute if parent asked (mini still active elsewhere).
+            if !isContinuousHubPlayer {
+                player?.pause()
+                player?.isMuted = true
+                player?.volume = 0
+            }
             // Keep last frame painted (no poster) so a fast swipe-back never blacks out.
             posterView.isHidden = true
             spinner.stopAnimating()
@@ -1745,12 +1825,18 @@ final class ArchiveVideoPlayerController: UIViewController {
     /// Never **steal** solo from another Spark (comments overlay used to wake older pages).
     func ensureContinuingPlayback() {
         guard userWantsPlayback, !isScrubbing, let player else { return }
-        // Only the current solo may resume. Off-screen / previous Sparks stay silent.
-        guard MediaPlaybackCoordinator.shared.isSolo(player) else {
-            player.pause()
-            player.isMuted = true
-            player.volume = 0
-            return
+        // Continuous Hubs always reclaims solo (tab switch may have reassigned).
+        if isContinuousHubPlayer {
+            MediaPlaybackCoordinator.shared.protectContinuous(player)
+            _ = MediaPlaybackCoordinator.shared.soloSparkAudio(keeping: player)
+        } else {
+            // Only the current solo may resume. Off-screen / previous Sparks stay silent.
+            guard MediaPlaybackCoordinator.shared.isSolo(player) else {
+                player.pause()
+                player.isMuted = true
+                player.volume = 0
+                return
+            }
         }
         applyUserAudioOutput(on: player)
         if player.rate < 0.05 {

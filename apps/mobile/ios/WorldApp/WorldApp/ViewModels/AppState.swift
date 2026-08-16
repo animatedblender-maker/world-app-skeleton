@@ -80,6 +80,10 @@ final class AppState {
     /// Bumped to request landscape fullscreen on the continuous Hubs player
     /// (meta drag-below-video, external chrome). GlobalHubPlaybackLayer observes.
     var hubPlaybackFullscreenToken: Int = 0
+    /// 0…1 live pull-to-fullscreen morph (meta grab). Layer expands stage toward full screen.
+    var hubFullscreenPullProgress: CGFloat = 0
+    /// Bumped when mini → expand should re-run even if already expanded.
+    var hubExpandToken: Int = 0
     /// Bumped to request mini morph on the continuous layer **before** flipping
     /// `hubPlaybackExpanded` (avoids white mini hole while video is still full-stage).
     var hubMinimizeMorphToken: Int = 0
@@ -1334,35 +1338,43 @@ final class AppState {
     func expandHubPlayback() {
         guard hubPlaybackPost != nil else { return }
         rememberHubPlaybackChatReturnIfNeeded()
+        // Kill feed/Sparks audio so only continuous Hubs is heard.
+        MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
         hubPlaybackPlaying = true
         hubWatchScrollCollapse = 0
-        // Clear pull so watch chrome is fully visible during expand.
         hubPlaybackPullProgress = 0
 
-        // Expand **first** with no transaction animation — layer owns the spring.
-        // (withAnimation on this flag delayed maximize by a full navigation cycle.)
-        if !hubPlaybackExpanded {
-            var t = Transaction()
-            t.disablesAnimations = true
-            withTransaction(t) {
-                hubPlaybackExpanded = true
-            }
-        }
-
-        // Lightweight navigation after expand so video starts growing immediately.
-        if selectedTab != .hubs {
-            selectedTab = .hubs
-        }
+        // Navigation first so Hubs watch route can mount under the expanding player.
         if !navigationPath.isEmpty {
             navigationPath.removeAll()
         }
+        if selectedTab != .hubs {
+            selectedTab = .hubs
+        }
+        // Always force expanded (even if already true — re-assert collapse spring).
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            hubPlaybackExpanded = true
+        }
+        // Bump token so GlobalHubPlaybackLayer re-runs expand even if expanded was already true.
+        hubExpandToken &+= 1
         NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
     }
 
     /// YouTube: drag down on the meta strip under the video → landscape fullscreen.
     func requestHubFullscreen() {
         guard hubPlaybackPost != nil, hubPlaybackExpanded else { return }
+        hubFullscreenPullProgress = 0
         hubPlaybackFullscreenToken &+= 1
+    }
+
+    /// Live grab progress while pulling meta toward fullscreen (0…1).
+    func setHubFullscreenPullProgress(_ progress: CGFloat) {
+        let p = min(1, max(0, progress))
+        if abs(p - hubFullscreenPullProgress) > 0.01 {
+            hubFullscreenPullProgress = p
+        }
     }
 
     func stopHubPlayback() {
@@ -1370,13 +1382,15 @@ final class AppState {
         hubPlaybackExpanded = false
         hubPlaybackPlaying = false
         hubPlaybackPullProgress = 0
+        hubFullscreenPullProgress = 0
         hubWatchScrollCollapse = 0
         hubPlaybackVideoAspect = 16.0 / 9.0
         hubPlaybackFullscreenToken = 0
+        hubExpandToken = 0
         hubMinimizeMorphToken = 0
         hubPlaybackReturnConversationID = nil
+        MediaPlaybackCoordinator.shared.clearContinuousProtection()
         MediaPlaybackCoordinator.shared.stopAllPlayback()
-        // Mini closed — feed/profile may elect autoplay again.
         FeedVideoFocus.shared.resetAll()
     }
 
@@ -1534,11 +1548,20 @@ final class AppState {
     func openReelsViewer(startingPost: CountryPost, seedPosts: [CountryPost] = []) {
         // Feed / hubs audio must die before Sparks scroll takes over.
         // Do not drain warm pool here — callers may pre-warm the first few clips.
+        FeedVideoFocus.shared.resetAll()
+        MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
         MediaPlaybackCoordinator.shared.pauseAll()
         hubPlaybackPlaying = false
+        var seeds = seedPosts
+        if seeds.isEmpty {
+            seeds = Self.instantSparksSeedQueue(starting: startingPost, limit: 72)
+        }
+        if !seeds.contains(where: { $0.id == startingPost.id }) {
+            seeds.insert(ReelsRankingEngine.resolvePlayerStart(startingPost), at: 0)
+        }
         reelsViewerContext = ReelsViewerContext(
             startingPost: startingPost,
-            seedPosts: seedPosts
+            seedPosts: seeds
         )
     }
 
