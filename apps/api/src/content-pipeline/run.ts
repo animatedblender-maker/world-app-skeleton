@@ -311,6 +311,26 @@ async function loadExistingMediaPaths(): Promise<Set<string>> {
   return set;
 }
 
+/**
+ * Seed `like_count` from TikTok/YouTube **engagement** only.
+ * Never use play_count / view_count / views — those capped at 5000 and looked fake.
+ * Soft ceiling only guards absurd meta (not a product “max likes” display).
+ */
+export function seedLikeCountFromMeta(meta: Record<string, unknown>): number {
+  const raw =
+    meta.digg_count ??
+    meta.like_count ??
+    meta.likes ??
+    meta.heart ??
+    meta.hearts ??
+    null;
+  if (raw == null || raw === '') return 0;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  // Soft sanity only (billions from bad scrapes) — not the old hard 5000 product cap.
+  return Math.min(Math.floor(n), 50_000_000);
+}
+
 async function ingestOriginal(
   client: S3Client,
   opts: {
@@ -380,20 +400,9 @@ async function ingestOriginal(
         mediaType,
         mediaUrl,
         pack.mediaPath,
-        Math.min(
-          5000,
-          Math.max(
-            0,
-            Number(
-              meta.digg_count ??
-                meta.like_count ??
-                meta.play_count ??
-                meta.view_count ??
-                meta.views ??
-                0
-            ) || 0
-          )
-        ),
+        // Seed likes: digg/like only — never play_count/views (those made everything show 5000).
+        // No artificial 5000 cap; soft sanity ceiling only for garbage meta.
+        seedLikeCountFromMeta(meta),
         createdAt,
       ]
     );
