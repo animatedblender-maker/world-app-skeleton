@@ -272,9 +272,7 @@ struct PostCommentsView: View {
     }
 
     private func loadComments() async {
-        // Always go through PostsService — it merges demo Reddit threads (comments.jsonl)
-        // with any on-device replies. The old HubEngagementStore-only path left fake posts empty.
-        // Prefer warm cache first so the sheet opens already filled (no post-tap spinner).
+        // Prefer warm cache first so the sheet / Hubs watch opens already filled.
         if comments.isEmpty, let warm = CommentsWarmCache.shared.cached(postID) {
             comments = warm
         }
@@ -283,31 +281,39 @@ struct PostCommentsView: View {
         defer { isLoading = false }
 
         do {
-            // Join any in-flight warm so we don't double-fetch on Chat open.
-            let loaded = await CommentsWarmCache.shared.load(postID)
+            // Progressive load — first page only on the critical path (was 2000 × 2 GraphQL calls).
+            let loaded = await CommentsWarmCache.shared.loadProgressive(postID)
             if !loaded.isEmpty || comments.isEmpty {
                 comments = loaded
             }
-            // Refresh from network if warm was empty or stale (still instant paint above).
             if loaded.isEmpty {
-                let fresh = try await PostsService.shared.listComments(postID, limit: 2000)
+                let fresh = try await PostsService.shared.listComments(
+                    postID,
+                    limit: PostsService.commentsFirstPageLimit,
+                    resolveOrigin: true
+                )
                 comments = fresh
                 CommentsWarmCache.shared.store(postID, comments: fresh)
-            } else {
-                // Background refresh without spinner.
-                Task {
-                    if let fresh = try? await PostsService.shared.listComments(postID, limit: 2000) {
-                        await MainActor.run {
-                            comments = fresh
-                            CommentsWarmCache.shared.store(postID, comments: fresh)
-                        }
-                    }
-                }
+            }
+            // Top up fuller thread without spinner; only replace if we got more rows.
+            let capturedCount = comments.count
+            Task { @MainActor in
+                let more = (try? await PostsService.shared.listComments(
+                    postID,
+                    limit: PostsService.commentsBackgroundLimit,
+                    resolveOrigin: true
+                )) ?? []
+                guard more.count > capturedCount else { return }
+                comments = more
+                CommentsWarmCache.shared.store(postID, comments: more)
             }
         } catch {
             // Seed / offline fallback — never surface GraphQL "Unexpected error".
             if comments.isEmpty {
-                comments = HubEngagementStore.shared.listComments(postID, limit: 2000)
+                comments = HubEngagementStore.shared.listComments(
+                    postID,
+                    limit: PostsService.commentsFirstPageLimit
+                )
             }
         }
     }
@@ -324,7 +330,8 @@ struct PostCommentsView: View {
                 body: body,
                 parentID: parentID
             )
-            var refreshed = (try? await PostsService.shared.listComments(postID, limit: 2000)) ?? []
+            // Prefer local append over re-downloading the whole thread after every send.
+            var refreshed = comments
             if !refreshed.contains(where: { $0.id == created.id }) {
                 refreshed.append(created)
             }

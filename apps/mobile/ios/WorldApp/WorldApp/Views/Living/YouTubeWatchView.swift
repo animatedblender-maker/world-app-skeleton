@@ -223,12 +223,23 @@ struct YouTubeWatchView: View {
         }
         .animation(.spring(response: 0.32, dampingFraction: 0.9), value: appState.sharePostSheet?.id)
         .task(id: currentPost.id) {
+            // Instant warm paint, then progressive comments (never block on 2k rows).
+            if let warm = CommentsWarmCache.shared.cached(currentPost.id), !warm.isEmpty {
+                inlineComments = warm
+            }
             await hydrateEngagement()
             YouTubeCatalogService.shared.recordWatch(currentPost.id)
             resetRelatedShelf()
         }
         .onChange(of: post.id) { _, _ in
             currentPost = HubEngagementStore.shared.applyLikeState(to: post)
+            // Drop previous video's thread so we don't flash wrong comments.
+            if let warm = CommentsWarmCache.shared.cached(post.id), !warm.isEmpty {
+                inlineComments = warm
+            } else {
+                inlineComments = []
+            }
+            commentsExpanded = false
             resetRelatedShelf()
         }
         .onChange(of: related.count) { _, _ in
@@ -247,23 +258,53 @@ struct YouTubeWatchView: View {
     }
 
     private func hydrateEngagement() async {
+        let postID = currentPost.id
         // Re-apply local likes first (never wipe optimistic engagement).
+        // Skip getPostByID on the hot path — it delayed first comments paint by a full RTT.
         if isHubContent {
             currentPost = HubEngagementStore.shared.applyLikeState(to: currentPost)
-        } else if let refreshed = try? await PostsService.shared.getPostByID(currentPost.id) {
-            currentPost = refreshed
         }
 
-        // PostsService loads demo Reddit threads + merges local replies (hub / post_* / GraphQL).
-        // Full R2 threads often exceed 50 — match Sparks sheet (2000).
-        let loaded = (try? await PostsService.shared.listComments(currentPost.id, limit: 2000)) ?? []
-        inlineComments = loaded
+        // Progressive comments: first page paints fast; fuller thread tops up in background.
+        // Also seeds CommentsWarmCache so PostCommentsView does not re-fetch 2000 rows.
+        let loaded = await CommentsWarmCache.shared.loadProgressive(postID)
+        guard !Task.isCancelled, currentPost.id == postID else { return }
+        if !loaded.isEmpty || inlineComments.isEmpty {
+            inlineComments = loaded
+        }
         if isHubContent || loaded.count > currentPost.commentCount {
             currentPost = currentPost.withEngagement(
                 likedByMe: currentPost.likedByMe,
                 likeCount: currentPost.likeCount,
                 commentCount: max(currentPost.commentCount, loaded.count)
             )
+        }
+
+        // Background top-up → update the live binding (cache alone wouldn't refresh UI).
+        Task { @MainActor in
+            let more = (try? await PostsService.shared.listComments(
+                postID,
+                limit: PostsService.commentsBackgroundLimit,
+                resolveOrigin: true
+            )) ?? []
+            guard currentPost.id == postID, more.count > inlineComments.count else { return }
+            inlineComments = more
+            CommentsWarmCache.shared.store(postID, comments: more)
+            currentPost = currentPost.withEngagement(
+                likedByMe: currentPost.likedByMe,
+                likeCount: currentPost.likeCount,
+                commentCount: max(currentPost.commentCount, more.count)
+            )
+        }
+
+        // Optional light post refresh (likes) after comments are already on screen.
+        if !isHubContent {
+            Task {
+                if let refreshed = try? await PostsService.shared.getPostByID(postID),
+                   currentPost.id == postID {
+                    currentPost = HubEngagementStore.shared.applyLikeState(to: refreshed)
+                }
+            }
         }
     }
 

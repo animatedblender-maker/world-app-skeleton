@@ -1211,6 +1211,11 @@ final class AppState {
         // Continuous Hubs player (mini or full) owns audio — kill feed/profile autoplay.
         FeedVideoFocus.shared.resetAll()
         YouTubeCatalogService.shared.recordWatch(watchPost.id)
+        // Prefetch first comment page so Hubs watch paints threads instantly.
+        CommentsWarmCache.shared.warm(watchPost.id)
+        if let origin = PostsService.commentThreadOriginID(for: watchPost.id, post: watchPost) {
+            CommentsWarmCache.shared.warm(origin)
+        }
         if let url = watchPost.playableVideoURL {
             if ArchiveVideoPlayback.isArchiveURL(url) {
                 ArchiveVideoPlayback.warmResolve(url)

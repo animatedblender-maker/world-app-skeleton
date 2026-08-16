@@ -1343,31 +1343,71 @@ final class PostsService {
         cachedPost(id: id)
     }
 
+    /// First paint for watch / feed expand — small page, no blocking origin resolve.
+    static let commentsFirstPageLimit = 48
+    /// Background top-up after first paint (full threads still available via View all).
+    static let commentsBackgroundLimit = 400
+
     func listComments(_ postID: String, limit: Int = 2000) async throws -> [PostComment] {
+        try await listComments(postID, limit: limit, resolveOrigin: true)
+    }
+
+    /// - Parameter resolveOrigin: when false, skip share→origin merge (fast first paint).
+    func listComments(
+        _ postID: String,
+        limit: Int,
+        resolveOrigin: Bool
+    ) async throws -> [PostComment] {
         if AppConfig.useDemoDataset, await demo.isDemoPostID(postID) {
             return await demo.listComments(postID, limit: limit)
         }
-        var comments = try await fetchCommentsByPost(postID, limit: limit)
 
-        // Spark feed shares may have a partial seed thread — prefer the fuller R2 origin thread.
-        if let post = try? await getPostByID(postID) {
-            let originID = SparkShareMarker.originID(from: post.body)
-                ?? post.sharedPostID
-                ?? post.sharedPost?.id
-            if let originID, originID != postID {
-                let originComments = (try? await fetchCommentsByPost(originID, limit: limit)) ?? []
-                if originComments.count > comments.count {
-                    // Prefer origin (R2) comments; keep any real replies on the share after.
-                    var seen = Set(originComments.map(\.id))
-                    var merged = originComments
-                    for c in comments where seen.insert(c.id).inserted {
-                        merged.append(c)
-                    }
-                    comments = Array(merged.prefix(limit))
+        // Resolve origin from cache / body markers first — never await getPostByID on the hot path.
+        let originID: String? = resolveOrigin ? Self.commentThreadOriginID(for: postID) : nil
+
+        if let originID, originID != postID {
+            // Parallel: share thread + origin (R2) thread — was 2–3 sequential GraphQL calls.
+            async let shareTask = fetchCommentsByPost(postID, limit: limit)
+            async let originTask = fetchCommentsByPost(originID, limit: limit)
+            let shareComments = (try? await shareTask) ?? []
+            let originComments = (try? await originTask) ?? []
+            if originComments.isEmpty { return shareComments }
+            if shareComments.isEmpty { return originComments }
+            if originComments.count >= shareComments.count {
+                var seen = Set(originComments.map(\.id))
+                var merged = originComments
+                for c in shareComments where seen.insert(c.id).inserted {
+                    merged.append(c)
                 }
+                return Array(merged.prefix(limit))
             }
+            return shareComments
         }
-        return comments
+
+        return try await fetchCommentsByPost(postID, limit: limit)
+    }
+
+    /// Origin post id for comment threads (hub origin / spark share / shared_post_id) — cache only.
+    static func commentThreadOriginID(for postID: String, post: CountryPost? = nil) -> String? {
+        let resolved = post ?? PostsService.shared.cachedPost(id: postID)
+        guard let resolved else { return nil }
+        if let sid = HubOriginShareMarker.parseFields(from: resolved.body)?["sid"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !sid.isEmpty, sid != postID {
+            return sid
+        }
+        if let sid = SparkShareMarker.originID(from: resolved.body),
+           !sid.isEmpty, sid != postID {
+            return sid
+        }
+        if let shared = resolved.sharedPostID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !shared.isEmpty, shared != postID {
+            return shared
+        }
+        if let embedID = resolved.sharedPost?.id, embedID != postID {
+            return embedID
+        }
+        return nil
     }
 
     private func fetchCommentsByPost(_ postID: String, limit: Int) async throws -> [PostComment] {
