@@ -204,6 +204,8 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         let ids = posts.map(\.id)
         let dataChanged = ids != lastPostedIDs
         let indexChanged = activeIndex != self.activeIndex
+        // Like / unlike / comment counts change without IDs changing — must repaint hearts.
+        let engagementChanged = Self.engagementFingerprint(self.posts) != Self.engagementFingerprint(posts)
 
         // Keep posts array fresh for like counts even without full reload.
         var didPurePrepend = false
@@ -249,6 +251,10 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
             }
         } else if !posts.isEmpty {
             self.posts = posts
+            // Same IDs — only engagement / metadata flipped (heart, counts).
+            if engagementChanged {
+                refreshVisibleCells()
+            }
         }
 
         if indexChanged || dataChanged {
@@ -283,6 +289,13 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
                 self.isApplyingScroll = false
             }
         }
+    }
+
+    /// Detect like/unlike / count-only updates so hearts repaint without reloadData.
+    private static func engagementFingerprint(_ posts: [CountryPost]) -> String {
+        posts.map {
+            "\($0.id):\($0.likedByMe ? 1 : 0):\($0.likeCount):\($0.commentCount):\($0.savedByMe ? 1 : 0)"
+        }.joined(separator: "|")
     }
 
     private func refreshVisibleCells() {

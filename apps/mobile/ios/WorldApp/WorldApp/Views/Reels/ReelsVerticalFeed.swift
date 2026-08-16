@@ -98,27 +98,27 @@ struct ReelsVerticalFeed: View {
             : max(0, current.likeCount - 1)
 
         // Optimistic UI so the heart flips immediately (including unlike).
-        posts[index] = copyPost(current, likedByMe: nextLiked, likeCount: nextCount)
+        // Prefer withEngagement so we keep every media/author field intact.
+        let optimistic = current.withEngagement(
+            likedByMe: nextLiked,
+            likeCount: nextCount,
+            commentCount: current.commentCount
+        )
+        posts[index] = optimistic
 
-        do {
-            if wasLiked {
-                try await PostsService.shared.unlikePost(
-                    current.id,
-                    baseLikeCount: current.likeCount
-                )
-            } else {
-                try await PostsService.shared.likePost(
-                    current.id,
-                    baseLikeCount: current.likeCount
-                )
-            }
-            EngagementTracker.shared.enqueueLike(post: current, liked: nextLiked)
-        } catch {
-            // Roll back on hard failure so the button stays truthful.
-            if posts.indices.contains(index), posts[index].id == current.id {
-                posts[index] = current
-            }
+        // unlikePost / likePost are local-first and do not throw on network failure.
+        if wasLiked {
+            try? await PostsService.shared.unlikePost(
+                current.id,
+                baseLikeCount: current.likeCount
+            )
+        } else {
+            try? await PostsService.shared.likePost(
+                current.id,
+                baseLikeCount: current.likeCount
+            )
         }
+        EngagementTracker.shared.enqueueLike(post: current, liked: nextLiked)
     }
 }
 
