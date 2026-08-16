@@ -44,7 +44,17 @@ struct GlobalHubPlaybackLayer: View {
 
     private var expanded: Bool { appState.hubPlaybackExpanded }
 
-    private static let morphAnim = Animation.easeOut(duration: 0.24)
+    /// Butter morph: spring into mini / expand without remounting the continuous AVPlayer.
+    private static let morphAnim = Animation.interactiveSpring(
+        response: 0.30,
+        dampingFraction: 0.90,
+        blendDuration: 0.10
+    )
+    private static let minimizeMorphAnim = Animation.interactiveSpring(
+        response: 0.24,
+        dampingFraction: 0.92,
+        blendDuration: 0.08
+    )
 
     /// Prefer docking into the reported mini-bar / chat hole whenever minimized.
     /// (Floating mini reports the same preference key as the chat dock.)
@@ -122,12 +132,15 @@ struct GlobalHubPlaybackLayer: View {
                 preferMiniFill = false
                 appState.hubPlaybackPullProgress = 0
             } else {
+                // Keep pullProgress = 1 through the morph so watch chrome/title never
+                // flash back over a white stage hole while the player docks to mini.
                 dragOffset = 0
                 isPullingMinimize = false
+                preferMiniFill = true
                 Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 260_000_000)
+                    // Match spring settle so chrome doesn't snap mid-morph.
+                    try? await Task.sleep(nanoseconds: 280_000_000)
                     guard !appState.hubPlaybackExpanded else { return }
-                    preferMiniFill = true
                     appState.hubPlaybackPullProgress = 0
                 }
             }
@@ -176,11 +189,12 @@ struct GlobalHubPlaybackLayer: View {
                 )
             )
             .offset(x: layout.x, y: liveY)
-            .animation(isPullingMinimize ? nil : Self.morphAnim, value: expanded)
-            .animation(isPullingMinimize ? nil : Self.morphAnim, value: layout.width)
-            .animation(isPullingMinimize ? nil : Self.morphAnim, value: layout.height)
-            .animation(isPullingMinimize ? nil : Self.morphAnim, value: layout.x)
-            .animation(isPullingMinimize ? nil : Self.morphAnim, value: layout.y)
+            // Finger tracking: no implicit anim. Release→mini uses withAnimation on expanded.
+            .animation(isPullingMinimize ? nil : Self.minimizeMorphAnim, value: expanded)
+            .animation(isPullingMinimize ? nil : Self.minimizeMorphAnim, value: layout.width)
+            .animation(isPullingMinimize ? nil : Self.minimizeMorphAnim, value: layout.height)
+            .animation(isPullingMinimize ? nil : Self.minimizeMorphAnim, value: layout.x)
+            .animation(isPullingMinimize ? nil : Self.minimizeMorphAnim, value: layout.y)
             // Pull-to-mini only while expanded (mini chrome owns taps when minimized).
             .simultaneousGesture(expanded ? minimizeGesture : nil)
             .id("global-hub-continuous-\(post.id)")
@@ -323,32 +337,36 @@ struct GlobalHubPlaybackLayer: View {
                     appState.hubPlaybackPullProgress = 0
                     return
                 }
-                let shouldMini = MatteryaPullDownDismiss.shouldDismiss(value)
-                    || dragOffset > MatteryaPullDownDismiss.dismissDistance * 0.75
-                    || value.predictedEndTranslation.height > 160
+                // Moment finger leaves: if not still “up”, commit mini immediately.
+                // Never zero dragOffset while still expanded — that hangs the video mid-screen.
+                let shouldMini = MatteryaPullDownDismiss.shouldMinimizeOnRelease(
+                    value,
+                    dragOffset: dragOffset,
+                    pullProgress: appState.hubPlaybackPullProgress
+                )
                 if shouldMini {
                     ReelsTwistHaptics.pullDismiss()
-                    withAnimation(.easeOut(duration: 0.18)) {
+                    // Keep dragOffset until expanded flips — zeroing first snaps the
+                    // video back to the top stage and hangs mid-minimize.
+                    // Unlock layout animation so the stage morphs from the grabbed
+                    // position straight into the mini dock (short ease, no pause).
+                    var lock = Transaction()
+                    lock.disablesAnimations = true
+                    withTransaction(lock) {
                         appState.hubPlaybackPullProgress = 1
-                    }
-                    var snap = Transaction()
-                    snap.disablesAnimations = true
-                    withTransaction(snap) {
-                        dragOffset = 0
                         isPullingMinimize = false
                     }
-                    withAnimation(Self.morphAnim) {
+                    withAnimation(Self.minimizeMorphAnim) {
                         appState.minimizeHubPlayback(returnToChat: true, animated: false)
                     }
-                    Task { @MainActor in
-                        try? await Task.sleep(nanoseconds: 280_000_000)
-                        if !appState.hubPlaybackExpanded {
-                            appState.hubPlaybackPullProgress = 0
-                        }
+                    var clear = Transaction()
+                    clear.disablesAnimations = true
+                    withTransaction(clear) {
+                        dragOffset = 0
                     }
                 } else {
-                    // Release without mini — slide chrome back in smoothly.
-                    withAnimation(.easeOut(duration: 0.22)) {
+                    // Release still “up” — chrome slides back in.
+                    withAnimation(.easeOut(duration: 0.16)) {
                         dragOffset = 0
                         isPullingMinimize = false
                         appState.hubPlaybackPullProgress = 0

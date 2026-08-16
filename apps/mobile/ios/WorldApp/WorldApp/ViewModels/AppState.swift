@@ -1219,6 +1219,24 @@ final class AppState {
             SparkWarmPool.shared.warmSingle(postID: watchPost.id, url: url)
         }
         ImageCache.shared.prefetchPostThumbnails([watchPost], maxPixelSize: 720)
+        // Prefetch next related long-form so related taps / auto-next feel instant.
+        Task(priority: .utility) {
+            let related = YouTubeCatalogService.shared.relatedVideos(
+                to: watchPost,
+                from: PostsService.shared.hubsSessionCatalog,
+                limit: 8
+            )
+            ImageCache.shared.prefetchPostThumbnails(
+                Array(related.prefix(6)),
+                maxPixelSize: 480,
+                aggressive: true
+            )
+            for post in related.prefix(3) {
+                if let u = post.playableVideoURL {
+                    SparkWarmPool.shared.warmSingle(postID: post.id, url: u)
+                }
+            }
+        }
         // Kick continuous surface if it was paused.
         NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
     }
@@ -1238,8 +1256,8 @@ final class AppState {
             hubPlaybackPullProgress = max(hubPlaybackPullProgress, 1)
         }
         if animated {
-            // Match GlobalHubPlaybackLayer morph — short easeOut, no mid-path stall.
-            withAnimation(.easeOut(duration: 0.14)) {
+            // Match GlobalHubPlaybackLayer spring morph — continuous player never remounts.
+            withAnimation(.interactiveSpring(response: 0.24, dampingFraction: 0.92, blendDuration: 0.08)) {
                 hubPlaybackExpanded = false
             }
         } else {
@@ -1281,7 +1299,7 @@ final class AppState {
         selectedTab = .hubs
         hubPlaybackPlaying = true
         hubWatchScrollCollapse = 0
-        withAnimation(.easeOut(duration: 0.24)) {
+        withAnimation(.interactiveSpring(response: 0.30, dampingFraction: 0.90, blendDuration: 0.10)) {
             hubPlaybackExpanded = true
         }
     }

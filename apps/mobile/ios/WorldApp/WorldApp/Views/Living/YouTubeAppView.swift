@@ -22,11 +22,19 @@ struct YouTubeAppView: View {
     @State private var searchQuery = ""
     @State private var isLoading = true
     @State private var errorMessage: String?
-    /// Shuffled Sparks rail — pure random every Hubs visit (until ranking algorithm).
+    /// Shuffled Sparks rail — pure random every Hubs visit.
     @State private var sparksStrip: [CountryPost] = []
-    /// For you / shelf rows — pure-shuffled on every Hubs navigate (not mid-scroll).
+    /// For you / shelf rows — discovery-ranked (unviewed + following first).
     @State private var stableHomeVideos: [CountryPost] = []
     @State private var stableDiscoverVideos: [CountryPost] = []
+    /// Full ranked For you pool (endless scroll grows the display window from this).
+    @State private var hubsForYouPool: [CountryPost] = []
+    /// How many ranked rows LazyVStack may show (grows on scroll — never ends).
+    @State private var hubsDisplayLimit: Int = 28
+    @State private var isLoadingMoreHubs = false
+    @State private var hubsLoadMoreQueued = false
+    /// Session seed for For you mix (new every open / pull / filter).
+    @State private var hubsSessionSeed: UInt64 = UInt64.random(in: 1...UInt64.max)
     /// Continue-watching strip order (shuffled subset of history).
     @State private var stableContinueWatching: [CountryPost] = []
     /// Following preview videos (shuffled).
@@ -35,6 +43,9 @@ struct YouTubeAppView: View {
     @State private var homeListEpoch: Int = 0
     /// Bumps whenever we intentionally re-roll Hubs surfaces (tab enter / home return).
     @State private var hubsVisitEpoch: Int = 0
+
+    private static let hubsFirstWindow = 28
+    private static let hubsGrowBy = 24
 
     private enum PlayScrollAnchor {
         static let subscriptions = "play-subscriptions"
@@ -57,7 +68,7 @@ struct YouTubeAppView: View {
         stableDiscoverVideos
     }
 
-    /// Pure random order — temporary until a real ranking algorithm is provided.
+    /// Pure random for strips only (Continue / Following previews) — not For you.
     private static func pureShuffle<T>(_ items: [T]) -> [T] {
         guard items.count > 1 else { return items }
         var copy = items
@@ -66,18 +77,21 @@ struct YouTubeAppView: View {
         return copy
     }
 
-    /// Rebuild **all** Hubs home surfaces with a fresh pure shuffle.
+    /// Rebuild **all** Hubs home surfaces with a fresh discovery mix.
     /// Call on every navigate-to-Hubs / return-to-home / pull-to-refresh.
     private func refreshHubsVisitShuffle(remountList: Bool = true) {
         hubsVisitEpoch &+= 1
+        hubsSessionSeed = UInt64.random(in: 1...UInt64.max)
+            ^ UInt64(Date().timeIntervalSince1970 * 1_000_000)
         rebuildStableHomeLists(shuffle: true, remountList: remountList)
         rebuildContinueAndFollowingShuffled()
         // Sparks strip is async (network top-up) — fire and forget.
         Task { await reshuffleSparksStrip() }
     }
 
-    /// Build home/discover lists. When `shuffle` is true (default on visit), pure-randomize
-    /// every filter shelf — no sticky rank until product ships an algorithm.
+    /// Build home/discover lists with the **same algorithm as Sparks/feed**:
+    /// unviewed first → following unviewed → other unviewed (session-seeded).
+    /// Already-watched long-form never re-enters while unviewed remain.
     /// - Parameter remountList: only true for intentional reshuffles — background merges must
     ///   NOT remount the LazyVStack (that caused multi-second lag after open).
     private func rebuildStableHomeLists(shuffle: Bool = true, remountList: Bool = true) {
@@ -92,19 +106,96 @@ struct YouTubeAppView: View {
         if home.isEmpty {
             home = allVideos.filter { PlayPlatformBridge.isHubsForYouLongForm($0) }
         }
-        // ALWAYS pure shuffle on visit / filter change when requested — any chip, not just For you.
-        if shuffle, home.count > 1 {
-            home = Self.pureShuffle(home)
+
+        if shuffle {
+            hubsSessionSeed = UInt64.random(in: 1...UInt64.max)
+                ^ UInt64(Date().timeIntervalSince1970 * 1_000)
         }
-        // Cap LazyVStack size (prefix of shuffled list = random sample).
-        let displayCap = homeFilter == .all ? 64 : 80
-        if home.count > displayCap {
-            home = Array(home.prefix(displayCap))
+
+        // Algorithmic rank (not pure shuffle) — endless pool, windowed display.
+        let ranked = catalog.rankForYou(
+            home,
+            followingIDs: appState.followingIDs,
+            myUserID: appState.currentProfile?.userID ?? AuthService.shared.currentUser?.id,
+            sessionSeed: hubsSessionSeed
+        )
+        hubsForYouPool = ranked
+
+        if shuffle || hubsDisplayLimit < Self.hubsFirstWindow {
+            hubsDisplayLimit = min(Self.hubsFirstWindow, max(ranked.count, 0))
+        } else {
+            hubsDisplayLimit = min(max(hubsDisplayLimit, Self.hubsFirstWindow), ranked.count)
         }
-        stableHomeVideos = home
-        stableDiscoverVideos = home
+        // No hard cap — window grows via ensureMoreForYou (endless scroll).
+        let window = Array(ranked.prefix(hubsDisplayLimit))
+        stableHomeVideos = window
+        stableDiscoverVideos = window
         if remountList {
             homeListEpoch &+= 1
+        }
+    }
+
+    /// Endless For you: grow local window, then bulk-fetch more long-form from the library.
+    private func ensureMoreForYou(around index: Int) {
+        let threshold = max(0, stableDiscoverVideos.count - 10)
+        guard index >= threshold else { return }
+
+        // 1) Reveal more of the already-ranked pool (instant — no network).
+        if hubsDisplayLimit < hubsForYouPool.count {
+            hubsDisplayLimit = min(
+                hubsForYouPool.count,
+                hubsDisplayLimit + Self.hubsGrowBy
+            )
+            let window = Array(hubsForYouPool.prefix(hubsDisplayLimit))
+            stableHomeVideos = window
+            stableDiscoverVideos = window
+            return
+        }
+
+        // 2) Pool exhausted → bulk network top-up (same spirit as Sparks load-more).
+        requestMoreHubsLongForm()
+    }
+
+    private func requestMoreHubsLongForm() {
+        if isLoadingMoreHubs {
+            hubsLoadMoreQueued = true
+            return
+        }
+        Task { await loadMoreHubsLongForm() }
+    }
+
+    private func loadMoreHubsLongForm() async {
+        if isLoadingMoreHubs {
+            hubsLoadMoreQueued = true
+            return
+        }
+        isLoadingMoreHubs = true
+        defer {
+            isLoadingMoreHubs = false
+            if hubsLoadMoreQueued {
+                hubsLoadMoreQueued = false
+                Task { await loadMoreHubsLongForm() }
+            }
+        }
+
+        let more = await PostsService.shared.loadPlayCatalog(
+            globalLimit: 200,
+            forceRefresh: false,
+            viewerCountry: appState.currentProfile?.countryCode,
+            followingIDs: appState.followingIDs,
+            fast: false
+        )
+        guard !more.isEmpty else { return }
+        softMergeHubCatalog(more)
+        // Grow display into newly ranked unviewed long-form.
+        if hubsDisplayLimit < hubsForYouPool.count {
+            hubsDisplayLimit = min(
+                hubsForYouPool.count,
+                hubsDisplayLimit + Self.hubsGrowBy * 2
+            )
+            let window = Array(hubsForYouPool.prefix(hubsDisplayLimit))
+            stableHomeVideos = window
+            stableDiscoverVideos = window
         }
     }
 
@@ -198,7 +289,8 @@ struct YouTubeAppView: View {
                    height: geo.size.height > 0 ? geo.size.height : nil)
         }
         .animation(.easeInOut(duration: 0.2), value: appState.hubPlaybackPost?.id)
-        .animation(.easeInOut(duration: 0.2), value: appState.hubPlaybackExpanded)
+        // No tree-wide animation on expand/collapse — that stalled minimize mid-screen
+        // and could re-show watch chrome over a white stage hole.
         .screenBackground()
         .toolbar(.hidden, for: .navigationBar)
         .refreshable {
@@ -400,9 +492,11 @@ struct YouTubeAppView: View {
                                         posts: stableDiscoverVideos,
                                         around: index,
                                         behind: 2,
-                                        ahead: 8,
+                                        ahead: 10,
                                         maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel
                                     )
+                                    // Endless For you — grow ranked window + bulk long-form flood.
+                                    ensureMoreForYou(around: index)
                                 })
                                 .padding(.bottom, 18)
                             }
@@ -910,12 +1004,22 @@ struct YouTubeAppView: View {
             for: .livingVideos
         )
         rebuildChannels()
-        // Keep current order mid-scroll — only top-up display if thin (no reshuffle).
-        if stableDiscoverVideos.count < 24, added > 0 {
+        // Always re-rank pool with new long-form (no remount) so endless For you floods.
+        if added > 0 {
             rebuildStableHomeLists(shuffle: false, remountList: false)
+            // If the user is deep in the list, grow the window into new unviewed rows.
+            if hubsDisplayLimit < hubsForYouPool.count {
+                hubsDisplayLimit = min(
+                    hubsForYouPool.count,
+                    max(hubsDisplayLimit, Self.hubsFirstWindow) + (added > 12 ? Self.hubsGrowBy : 0)
+                )
+                let window = Array(hubsForYouPool.prefix(hubsDisplayLimit))
+                stableHomeVideos = window
+                stableDiscoverVideos = window
+            }
         }
         #if DEBUG
-        print("[Hubs] soft-merge +\(added) total=\(merged.count) display=\(stableDiscoverVideos.count)")
+        print("[Hubs] soft-merge +\(added) total=\(merged.count) pool=\(hubsForYouPool.count) display=\(stableDiscoverVideos.count)")
         #endif
     }
 
@@ -932,15 +1036,33 @@ struct YouTubeAppView: View {
     }
 
     /// Full catalog after the UI is idle — never races first paint.
+    /// Flood Matterya Hubs with long-form so For you can scroll endlessly.
     private func scheduleDeferredFullCatalogWarm() {
-        Task(priority: .background) {
-            try? await Task.sleep(nanoseconds: 4_500_000_000)
+        Task(priority: .utility) {
+            try? await Task.sleep(nanoseconds: 1_800_000_000)
             guard appState.selectedTab == .hubs || appState.isPlayPresented else { return }
-            let longForm = allVideos.filter { !$0.isReel }.count
-            // Already rich enough for shelves / search.
-            if longForm >= 40 { return }
-            if PostsService.shared.hubsSessionCatalog.filter({ !$0.isReel }).count >= 40 { return }
+            let longForm = allVideos.filter { PlayPlatformBridge.isHubsForYouLongForm($0) }.count
+            // Keep pulling until the library is fat enough for endless For you.
+            if longForm >= 200,
+               PostsService.shared.hubsSessionCatalog.filter({ !$0.isReel }).count >= 200 {
+                return
+            }
             await loadVideos(forceRefresh: false, mode: .full)
+            // Second wave — deeper channel sample for true flood when still thin.
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            guard appState.selectedTab == .hubs || appState.isPlayPresented else { return }
+            let nowLong = allVideos.filter { PlayPlatformBridge.isHubsForYouLongForm($0) }.count
+            guard nowLong < 180 else { return }
+            let more = await PostsService.shared.loadPlayCatalog(
+                globalLimit: 300,
+                forceRefresh: nowLong < 80,
+                viewerCountry: appState.currentProfile?.countryCode,
+                followingIDs: appState.followingIDs,
+                fast: false
+            )
+            if !more.isEmpty {
+                softMergeHubCatalog(more)
+            }
         }
     }
 
@@ -962,12 +1084,11 @@ struct YouTubeAppView: View {
                 #endif
                 return
             }
-            // Full: session already useful — don't re-pull 4×500.
-            if mode == .full, longFormNow >= 40 || PostsService.shared.hubsSessionCatalog.filter({ !$0.isReel }).count >= 40 {
+            // Full: only skip when the library is already flooded (endless For you fuel).
+            if mode == .full,
+               longFormNow >= 200,
+               PostsService.shared.hubsSessionCatalog.filter({ !$0.isReel }).count >= 200 {
                 isLoading = false
-                if sparksNow < 8 {
-                    // Optional light spark top-up only — no full channel walk.
-                }
                 #if DEBUG
                 print("[Hubs] skip FULL network — \(longFormNow) longform \(sparksNow) sparks")
                 #endif
@@ -988,9 +1109,9 @@ struct YouTubeAppView: View {
             uniqueKeysWithValues: allVideos.map { ($0.id, $0) }
         )
 
-        // Network: FAST = longform only; FULL = deeper channel sample (not 500×4 on open).
+        // Network: FAST = longform first paint; FULL = flood channel long-form library.
         let network = await PostsService.shared.loadPlayCatalog(
-            globalLimit: forceRefresh ? 200 : (mode == .fast ? 28 : 100),
+            globalLimit: forceRefresh ? 300 : (mode == .fast ? 40 : 200),
             forceRefresh: forceRefresh,
             viewerCountry: appState.currentProfile?.countryCode,
             followingIDs: appState.followingIDs,
@@ -1332,8 +1453,11 @@ struct YouTubeAppView: View {
                 route = .watch(watchPost)
             }
         } else if case .watch = route {
-            // Collapse watch → stay in library if we came from there; otherwise home.
-            withAnimation(.easeInOut(duration: 0.18)) {
+            // Drop watch chrome immediately on minimize — any linger leaves a white
+            // stage hole + title while the continuous player is already at mini.
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) {
                 route = nil
             }
         }
@@ -1484,7 +1608,10 @@ struct YouTubeAppView: View {
         } else {
             appState.stopHubPlayback()
         }
-        withAnimation(.easeInOut(duration: 0.22)) {
+        // Instant route clear — never leave title/meta over an empty white stage.
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
             route = nil
         }
     }

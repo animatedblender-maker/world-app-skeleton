@@ -100,14 +100,18 @@ struct YouTubeWatchView: View {
                     .background(Theme.canvas.opacity(chromeOpacity))
 
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
+                    // Tight stack: title → actions almost touch (user asked for smaller gap).
+                    LazyVStack(alignment: .leading, spacing: 4) {
                         titleSection
-                        // Like · Send · Keep under the title (not under the channel card).
+                        // Like · Send · Keep directly under title/meta.
                         actionSection
+                            .padding(.top, 2)
                         channelSection
+                            .padding(.top, 8)
 
                         descriptionSection
                             .padding(.horizontal, Theme.pagePadding)
+                            .padding(.top, 6)
                             .id("desc-\(currentPost.id)")
 
                         Divider().padding(.horizontal, Theme.pagePadding)
@@ -139,9 +143,16 @@ struct YouTubeWatchView: View {
                 .allowsHitTesting(chromeOpacity > 0.25)
             }
             .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
+            // When continuous player collapses, never leave title/meta over a white hole.
+            .opacity(appState.hubPlaybackExpanded || embedsPlayer ? 1 : 0)
+            .allowsHitTesting(appState.hubPlaybackExpanded || embedsPlayer)
         }
         // During grab: video over clear/ink so only the player remains visible.
-        .background(chromeOpacity < 0.45 ? Theme.ink : Theme.canvas)
+        .background(
+            (!appState.hubPlaybackExpanded && !embedsPlayer)
+                ? Color.clear
+                : (chromeOpacity < 0.45 ? Theme.ink : Theme.canvas)
+        )
         .animation(
             isMinimizingGrab ? nil : .easeOut(duration: 0.2),
             value: chromeOpacity
@@ -268,14 +279,17 @@ struct YouTubeWatchView: View {
                 }
             }
             .onEnded { value in
-                if MatteryaPullDownDismiss.shouldDismiss(value)
-                    || dismissDragOffset > MatteryaPullDownDismiss.dismissDistance * 0.75
-                    || value.predictedEndTranslation.height > 160 {
+                // Same rule as continuous layer: leave grab mid-pull → mini now.
+                if MatteryaPullDownDismiss.shouldMinimizeOnRelease(
+                    value,
+                    dragOffset: dismissDragOffset,
+                    pullProgress: MatteryaPullDownDismiss.pullProgress(forOffset: dismissDragOffset)
+                ) {
                     dismissDragOffset = 0
                     isPullingToMinimize = false
                     onBack()
                 } else {
-                    withAnimation(.easeOut(duration: 0.22)) {
+                    withAnimation(.easeOut(duration: 0.16)) {
                         dismissDragOffset = 0
                         isPullingToMinimize = false
                     }
@@ -354,7 +368,8 @@ struct YouTubeWatchView: View {
             }
         }
         .padding(.horizontal, Theme.pagePadding)
-        .padding(.top, 2)
+        .padding(.top, 0)
+        .padding(.bottom, 0)
     }
 
     @ViewBuilder
@@ -375,7 +390,7 @@ struct YouTubeWatchView: View {
     /// Matterya action chips (Like · Send · Keep) — pill chips, warm paper chrome.
     private var actionSection: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 watchActionChip(
                     icon: currentPost.likedByMe ? "heart.fill" : "heart",
                     label: currentPost.likeCount > 0 ? "\(currentPost.likeCount)" : "Like",
@@ -404,6 +419,7 @@ struct YouTubeWatchView: View {
                 }
             }
             .padding(.horizontal, Theme.pagePadding)
+            .padding(.vertical, 0)
         }
     }
 
@@ -426,8 +442,8 @@ struct YouTubeWatchView: View {
                     ? (accentColor != nil ? accentColor! : Theme.paper)
                     : Theme.ink
             )
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
             .background(
                 Capsule().fill(
                     accent

@@ -82,8 +82,8 @@ enum YouTubeMediaLayout {
         return hubsContinuousStageHeight(containerWidth: w)
     }
 
-    /// Gap between video bottom and title.
-    static let hubsTitleGapBelowVideo: CGFloat = 18
+    /// Gap between video bottom and title (tight — actions sit close under meta).
+    static let hubsTitleGapBelowVideo: CGFloat = 8
 }
 
 enum MatteryaPlayerFrameStyle {

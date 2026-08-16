@@ -294,7 +294,7 @@ final class YouTubeCatalogService {
         let base = videos.filter { PlayPlatformBridge.isHubsForYouLongForm($0) }
         switch homeFilter {
         case .all:
-            // Unsorted pool — callers pure-shuffle on every Hubs visit (until ranking algorithm).
+            // Unsorted pool — callers apply sessionHomeFeedOrder (unviewed / following first).
             return base
         case .trending:
             return base.sorted {
@@ -380,12 +380,31 @@ final class YouTubeCatalogService {
     }
 
     func recordWatch(_ postID: String) {
+        // Same discovery rule as Sparks/feed — already-watched long-form drops in For you.
+        SparkDiscoveryEngine.markWatched(postID)
         // No signed-in user → no continue-watching trail (and never write globals).
         guard let userID = activeUserID else { return }
         var history = historyIDs()
         history.removeAll { $0 == postID }
         history.insert(postID, at: 0)
         UserDefaults.standard.set(Array(history.prefix(120)), forKey: historyKey(for: userID))
+    }
+
+    /// **For you** order — same algorithm as home feed / Sparks:
+    /// unviewed first, following unviewed priority, session-seeded mix every open.
+    func rankForYou(
+        _ videos: [CountryPost],
+        followingIDs: Set<String>,
+        myUserID: String?,
+        sessionSeed: UInt64
+    ) -> [CountryPost] {
+        let longForm = videos.filter { PlayPlatformBridge.isHubsForYouLongForm($0) }
+        return SparkDiscoveryEngine.sessionHomeFeedOrder(
+            longForm,
+            followingIDs: followingIDs,
+            myUserID: myUserID,
+            sessionSeed: sessionSeed
+        )
     }
 
     func playbackPosition(for postID: String) -> Double {
@@ -462,12 +481,21 @@ final class YouTubeCatalogService {
     }
 
     func relatedVideos(to post: CountryPost, from catalog: [CountryPost], limit: Int = 12) -> [CountryPost] {
-        // Temporary: pure shuffle until product ranking algorithm lands.
-        // Prefer same-author first (still shuffled within), then the rest shuffled.
-        let pool = catalog.filter { livingEligible($0) && $0.id != post.id && !$0.isReel }
-        let sameAuthor = pool.filter { $0.authorID == post.authorID }.shuffled()
-        let others = pool.filter { $0.authorID != post.authorID }.shuffled()
-        return Array((sameAuthor + others).prefix(limit))
+        // Unviewed long-form first (same discovery engine as For you / Sparks).
+        let pool = catalog.filter {
+            livingEligible($0)
+                && $0.id != post.id
+                && PlayPlatformBridge.isHubsForYouLongForm($0)
+        }
+        let sameAuthor = pool.filter { $0.authorID == post.authorID }
+        let others = pool.filter { $0.authorID != post.authorID }
+        let rankedSame = SparkDiscoveryEngine.rankForDiscovery(sameAuthor)
+        let rankedOthers = SparkDiscoveryEngine.rankForDiscovery(others)
+        let combined = rankedSame + rankedOthers
+        if combined.isEmpty {
+            return Array(SparkDiscoveryEngine.rankForDiscovery(pool).prefix(max(limit, 0)))
+        }
+        return Array(combined.prefix(max(limit, 0)))
     }
 
     private func keywordFilter(_ videos: [CountryPost], words: [String]) -> [CountryPost] {
