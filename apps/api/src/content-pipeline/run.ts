@@ -107,15 +107,26 @@ export async function runContentPipeline(opts: PipelineOptions = {}): Promise<Pi
     pipelineLog(`Default category_id: ${categoryId ?? '(none)'}`, 'info');
 
     if (!opts.ingestOnly) {
-      pipelineLog(`Re-signing up to ${maxResign} R2 media URLs…`, 'step');
+      // "Re-sign" is legacy naming: with R2_PUBLIC_BASE_URL this writes permanent public
+      // URLs (no X-Amz expiry). Without it, it mints fresh 7-day presigned GETs.
+      const publicBase = process.env.R2_PUBLIC_BASE_URL?.trim();
+      pipelineLog(
+        publicBase
+          ? `Refreshing up to ${maxResign} R2 media URLs → permanent public base…`
+          : `Re-signing up to ${maxResign} R2 media URLs (7-day presign; set R2_PUBLIC_BASE_URL for permanent)…`,
+        'step'
+      );
       await resignExpiring(client, { dryRun, maxResign, stats, timedOut });
-      pipelineLog(`Re-sign done: ${stats.resigned} updated`, stats.resigned ? 'ok' : 'info');
+      pipelineLog(
+        `Media URL refresh done: ${stats.resigned} updated`,
+        stats.resigned ? 'ok' : 'info'
+      );
     }
 
     if (opts.resignOnly || timedOut()) {
       if (timedOut()) pipelineLog('Stopped early (time budget / resignOnly)', 'warn');
       stats.ms = Date.now() - started;
-      pipelineLog(`Finished in ${stats.ms}ms (resign phase only)`, 'step');
+      pipelineLog(`Finished in ${stats.ms}ms (media URL refresh only)`, 'step');
       return stats;
     }
 
@@ -1063,8 +1074,15 @@ async function resignExpiring(
     [opts.maxResign]
   );
 
-  pipelineLog(`Re-sign candidates: ${rows.length}`, 'info');
+  const publicBase = process.env.R2_PUBLIC_BASE_URL?.trim().replace(/\/+$/, '') || '';
+  const usingPublic = publicBase.length > 0;
+  pipelineLog(
+    `Media URL refresh candidates: ${rows.length}` +
+      (usingPublic ? ` (public base ${publicBase.replace(/^https?:\/\//, '')})` : ' (presigned mode)'),
+    'info'
+  );
   let i = 0;
+  let skippedAlreadyGood = 0;
   for (const row of rows) {
     if (opts.timedOut()) break;
     i += 1;
@@ -1074,24 +1092,39 @@ async function resignExpiring(
     if (!key) continue;
 
     try {
-      const signed = await presignGet(client, key);
-      let next = signed;
+      // Already permanent public URL for this key → skip (no DB write, no “re-sign” thrash).
+      if (usingPublic && mediaUrlAlreadyPublic(row.media_url, publicBase, key)) {
+        skippedAlreadyGood += 1;
+        if (i === 1 || i % 100 === 0 || i === rows.length) {
+          pipelineLog(
+            `  refresh progress ${i}/${rows.length} (updated=${opts.stats.resigned} already_public=${skippedAlreadyGood})`,
+            'info'
+          );
+        }
+        continue;
+      }
+
+      // Name is legacy: with R2_PUBLIC_BASE_URL this returns a permanent public URL.
+      const playUrl = await presignGet(client, key);
+      let next = playUrl;
       const raw = (row.media_url || '').trim();
       if (raw.startsWith('{')) {
         try {
           const obj = JSON.parse(raw) as Record<string, unknown>;
           const urls = Array.isArray(obj.urls) ? [...obj.urls] : [];
-          if (urls.length) urls[0] = signed;
-          else urls.push(signed);
+          if (urls.length) urls[0] = playUrl;
+          else urls.push(playUrl);
           obj.urls = urls;
           if (!obj.types) obj.types = ['video'];
           obj.r2_key = key;
+          // Timestamp of last URL write (not “signature expiry” when public).
           obj.signed_at = new Date().toISOString();
+          if (usingPublic) obj.url_mode = 'public_permanent';
           next = JSON.stringify(obj);
         } catch {
           const kind = packKindFromR2Key(key);
           next = encodeMediaUrl({
-            signedUrl: signed,
+            signedUrl: playUrl,
             reel: kind === 'spark',
             r2Key: key,
             sourceId: key,
@@ -1101,7 +1134,7 @@ async function resignExpiring(
       } else {
         const kind = packKindFromR2Key(key);
         next = encodeMediaUrl({
-          signedUrl: signed,
+          signedUrl: playUrl,
           reel: kind === 'spark',
           r2Key: key,
           sourceId: key,
@@ -1119,13 +1152,47 @@ async function resignExpiring(
         opts.stats.resigned += 1;
       }
       if (i === 1 || i % 25 === 0 || i === rows.length) {
-        pipelineLog(`  re-sign progress ${i}/${rows.length} (ok=${opts.stats.resigned})`, 'info');
+        pipelineLog(
+          `  refresh progress ${i}/${rows.length} (updated=${opts.stats.resigned} already_public=${skippedAlreadyGood})`,
+          'info'
+        );
       }
     } catch (err: any) {
       opts.stats.errors.push(`resign ${row.id}: ${err?.message ?? err}`);
-      pipelineLog(`  re-sign fail ${row.id.slice(0, 8)}…: ${err?.message ?? err}`, 'error');
+      pipelineLog(`  refresh fail ${row.id.slice(0, 8)}…: ${err?.message ?? err}`, 'error');
     }
   }
+  if (skippedAlreadyGood > 0) {
+    pipelineLog(
+      `  skipped ${skippedAlreadyGood} already on permanent public URL`,
+      'ok'
+    );
+  }
+}
+
+/** True when media_url already points at the permanent public object for this key. */
+function mediaUrlAlreadyPublic(
+  mediaUrl: string | null | undefined,
+  publicBase: string,
+  key: string
+): boolean {
+  if (!mediaUrl || !publicBase) return false;
+  // Still has AWS query-sig → not permanent public.
+  if (mediaUrl.includes('X-Amz-Signature') || mediaUrl.includes('X-Amz-Algorithm')) {
+    return false;
+  }
+  const expected = `${publicBase.replace(/\/+$/, '')}/${key.replace(/^\/+/, '')}`;
+  const raw = mediaUrl.trim();
+  if (raw.startsWith('{')) {
+    try {
+      const obj = JSON.parse(raw) as { urls?: unknown[] };
+      const first = Array.isArray(obj.urls) ? String(obj.urls[0] ?? '') : '';
+      return first === expected;
+    } catch {
+      return false;
+    }
+  }
+  return raw === expected;
 }
 
 
