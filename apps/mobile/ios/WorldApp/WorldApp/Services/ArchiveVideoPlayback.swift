@@ -237,6 +237,8 @@ struct MatteryaHubPlayerView: View {
     var onRequestFullscreen: (() -> Void)? = nil
     /// Global continuous Hubs surface — protected from tab-switch silence.
     var isContinuousHubPlayer: Bool = false
+    /// Continuous layer is already full-screen (icon becomes exit, no second cover).
+    var isFullscreenActive: Bool = false
 
     @StateObject private var bridge = ArchivePlayerBridge()
     @State private var showChrome = true
@@ -262,6 +264,7 @@ struct MatteryaHubPlayerView: View {
         presentFullscreen: Binding<Bool> = .constant(false),
         onRequestFullscreen: (() -> Void)? = nil,
         isContinuousHubPlayer: Bool = false,
+        isFullscreenActive: Bool = false,
         onReady: (() -> Void)? = nil,
         onPlayingChange: ((Bool) -> Void)? = nil,
         onProgress: ((Double, Double) -> Void)? = nil,
@@ -283,6 +286,7 @@ struct MatteryaHubPlayerView: View {
         self._presentFullscreen = presentFullscreen
         self.onRequestFullscreen = onRequestFullscreen
         self.isContinuousHubPlayer = isContinuousHubPlayer
+        self.isFullscreenActive = isFullscreenActive
         self.onReady = onReady
         self.onPlayingChange = onPlayingChange
         self.onProgress = onProgress
@@ -296,7 +300,7 @@ struct MatteryaHubPlayerView: View {
         guard allowsFullscreen else { return }
         if let onRequestFullscreen {
             onRequestFullscreen()
-        } else {
+        } else if !isFullscreenActive {
             showFullscreen = true
         }
         scheduleChromeHide()
@@ -602,14 +606,16 @@ struct MatteryaHubPlayerView: View {
                             Button {
                                 enterFullscreen()
                             } label: {
-                                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                Image(systemName: isFullscreenActive
+                                      ? "arrow.down.right.and.arrow.up.left"
+                                      : "arrow.up.left.and.arrow.down.right")
                                     .font(.system(size: 13, weight: .semibold))
                                     .foregroundStyle(Theme.paper.opacity(0.95))
                                     .frame(width: 32, height: 28)
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
-                            .accessibilityLabel("Full screen")
+                            .accessibilityLabel(isFullscreenActive ? "Exit full screen" : "Full screen")
                         }
                     }
                     .padding(.horizontal, 14)
@@ -904,15 +910,12 @@ struct MatteryaLandscapeFullscreenPlayer: View {
         // Rotate with the device while fullscreen (portrait + landscape).
         .onAppear {
             isMuted = initialMuted
-            // Unlock rotation immediately so tilting the phone goes landscape.
+            // Unlock rotation — free axes only (no force-landscape-then-revert flip-flops).
             AppDelegate.orientationLock = .allButUpsideDown
             UIDevice.current.beginGeneratingDeviceOrientationNotifications()
             Self.refreshSupportedOrientations()
             Self.requestGeometryUpdateIfNeeded()
-            // Follow the phone if already landscape; otherwise stay portrait until tilt.
-            Self.alignToDeviceOrientation()
             applyContentOrientationFromDevice()
-            // Kick playback hard — continuous layer stays warm under us (muted).
             bridge.controller?.setMuted(isMuted)
             bridge.controller?.setActive(true)
             bridge.controller?.ensureContinuingPlayback()
@@ -931,13 +934,13 @@ struct MatteryaLandscapeFullscreenPlayer: View {
             bridge.publishMuted(muted)
         }
         .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
-            // Keep aspect-fit after rotation and honor the physical tilt.
+            // Keep aspect-fit; content rotation covers system orientation lock.
+            // Do NOT force landscape geometry then flip back — that caused FS hallucinations.
             bridge.controller?.applyVideoGravity(.resizeAspect)
             AppDelegate.orientationLock = .allButUpsideDown
             Self.refreshSupportedOrientations()
-            Self.alignToDeviceOrientation()
-            // YT-style: even with Control Center lock, rotate the film with the phone.
-            withAnimation(.easeInOut(duration: 0.22)) {
+            Self.requestGeometryUpdateIfNeeded()
+            withAnimation(.easeInOut(duration: 0.2)) {
                 applyContentOrientationFromDevice()
             }
         }
@@ -1177,36 +1180,8 @@ struct MatteryaLandscapeFullscreenPlayer: View {
     /// Ask the window scene to re-evaluate orientation so portrait↔landscape follows the phone.
     private static func requestGeometryUpdateIfNeeded() {
         guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
-        // iOS 16+: update geometry preferences so rotate-to-landscape works while unlocked.
+        // Free axes only — never snap landscape then revert (double-rotate hallucination).
         scene.requestGeometryUpdate(.iOS(interfaceOrientations: AppDelegate.orientationLock)) { _ in }
-        refreshSupportedOrientations()
-    }
-
-    /// When the user is already holding the phone in landscape, rotate the FS player to match.
-    private static func alignToDeviceOrientation() {
-        guard AppDelegate.orientationLock.contains(.landscapeLeft)
-                || AppDelegate.orientationLock.contains(.landscapeRight) else { return }
-        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
-        let device = UIDevice.current.orientation
-        let deviceLandscape = device.isLandscape
-        let interfaceLandscape: Bool = {
-            switch scene.interfaceOrientation {
-            case .landscapeLeft, .landscapeRight: return true
-            default: return false
-            }
-        }()
-        if deviceLandscape || interfaceLandscape {
-            // Snap to landscape now, then keep both axes open so tilt-back works.
-            scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscape)) { _ in
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                    guard AppDelegate.orientationLock == .allButUpsideDown else { return }
-                    scene.requestGeometryUpdate(.iOS(interfaceOrientations: .allButUpsideDown)) { _ in }
-                    refreshSupportedOrientations()
-                }
-            }
-        } else {
-            scene.requestGeometryUpdate(.iOS(interfaceOrientations: .allButUpsideDown)) { _ in }
-        }
         refreshSupportedOrientations()
     }
 }
