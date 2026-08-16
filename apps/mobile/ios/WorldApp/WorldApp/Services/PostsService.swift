@@ -470,33 +470,54 @@ final class PostsService {
         ReelsRankingEngine.resetSession()
         invalidateSparksDiscoveryCatalog()
 
-        // Always deep + force — max R2 channel lists + multi-country sparks.
+        // Deep channel/country pull + **random DB samples** so we don't stick to the same
+        // recentPosts head (that felt like “always the same 50 Sparks”).
         var catalog = await loadSparksDiscoveryCatalog(forceRefresh: true, deep: true)
 
-        // Extra recent pages so brand-new uploads join the pool this session.
         var seen = Set(catalog.map(\.id))
+        // Several random windows from the full Postgres spark library (10k–28k when seeded).
+        for _ in 0..<6 {
+            let sample = await fetchDiscoverSparks(
+                limit: 80,
+                excluding: Array(seen.prefix(300))
+            )
+            if sample.isEmpty { break }
+            for post in sample where seen.insert(post.id).inserted {
+                guard ReelsRankingEngine.isSparkEligible(post) else { continue }
+                catalog.append(post)
+            }
+        }
+
+        // Extra recent pages so brand-new uploads join the pool this session.
         var before: String? = nil
-        for _ in 0..<8 {
+        for _ in 0..<12 {
             let page = await fetchRecentPosts(limit: 100, before: before)
             if page.isEmpty { break }
             for post in page where seen.insert(post.id).inserted {
                 guard ReelsRankingEngine.isSparkEligible(post) else { continue }
                 catalog.append(post)
             }
-            before = page.last?.createdAt
+            before = Self.graphqlTimestamptzCursor(page.last?.createdAt ?? "")
+            if before.isEmpty { before = page.last?.createdAt }
             if page.count < 40 { break }
         }
 
         // Hard filter — drop any share shells / long-form that slipped in.
         catalog = catalog.filter { ReelsRankingEngine.isSparkEligible($0) && $0.playableVideoURL != nil }
-        seen = Set(catalog.map(\.id))
 
-        // Pure random order every open (not sticky “rank” order).
+        // Unseen first (impression TTL), then pure shuffle — never sticky recency order.
+        catalog = SparkDiscoveryEngine.rankForDiscovery(catalog)
         let seed = UInt64.random(in: 1...UInt64.max)
             ^ UInt64(Date().timeIntervalSince1970 * 1_000_000)
             ^ UInt64(catalog.count &<< 12)
         var rng = SeededRNG(seed: seed)
-        catalog.shuffle(using: &rng)
+        // Second shuffle of the “fresh” head so rank isn't deterministic across opens.
+        if catalog.count > 8 {
+            let head = min(catalog.count, 200)
+            var prefix = Array(catalog.prefix(head))
+            prefix.shuffle(using: &rng)
+            catalog = prefix + Array(catalog.dropFirst(head))
+        }
 
         if let rawStart = preferStart {
             let start = ReelsRankingEngine.resolvePlayerStart(rawStart)
@@ -513,6 +534,34 @@ final class PostsService {
         print("[Sparks] fresh session size=\(catalog.count) seed=\(seed)")
         #endif
         return catalog
+    }
+
+    /// Random sample from API `discoverSparks` — full library, not just recent head.
+    func fetchDiscoverSparks(limit: Int = 48, excluding: [String] = []) async -> [CountryPost] {
+        struct Response: Decodable { let discoverSparks: [GraphQLPost] }
+        let query = """
+        query($limit: Int, $exclude_ids: [ID!]) {
+          discoverSparks(limit: $limit, exclude_ids: $exclude_ids) { \(postFields) }
+        }
+        """
+        var variables: [String: Any] = ["limit": min(max(limit, 1), 120)]
+        if !excluding.isEmpty {
+            variables["exclude_ids"] = Array(excluding.prefix(200))
+        }
+        do {
+            let result: Response = try await gql.authenticatedRequest(
+                query: query,
+                variables: variables
+            )
+            return result.discoverSparks.map(\.toModel).filter {
+                ReelsRankingEngine.isSparkEligible($0)
+            }
+        } catch {
+            #if DEBUG
+            print("[Sparks] discoverSparks failed: \(error.localizedDescription)")
+            #endif
+            return []
+        }
     }
 
     /// Deterministic PRNG for session shuffles (Swift RandomNumberGenerator).
@@ -565,39 +614,55 @@ final class PostsService {
     private var homeFeedSparkOrder: [CountryPost] = []
 
     /// Draw the next slice of R2 Sparks for the main feed (SparkFeedCard).
-    /// When the pool is exhausted, reshuffle and keep going — feed must never dead-end.
+    /// Prefers **unseen random samples** from the full library over reshuffling the same head.
     func homeFeedSparkTopUp(excluding: Set<String>, limit: Int, forceRefresh: Bool = false) async -> [CountryPost] {
         guard limit > 0 else { return [] }
-        // Ensure we have a real library — light first, deepen if thin.
+
+        // Always pull a random window from the server when possible — breaks sticky order.
+        var out: [CountryPost] = []
+        var seen = excluding
+        let remote = await fetchDiscoverSparks(limit: max(limit * 2, 40), excluding: Array(excluding.prefix(200)))
+        for post in SparkDiscoveryEngine.rankForDiscovery(remote, excluding: excluding) {
+            guard seen.insert(post.id).inserted else { continue }
+            guard post.playableVideoURL != nil || post.hasVideo || !(post.mediaURL ?? "").isEmpty else { continue }
+            out.append(post)
+            if out.count >= limit { return out }
+        }
+
         if forceRefresh || sparksSessionCatalog.count < 80 {
             _ = await loadSparksDiscoveryCatalog(forceRefresh: forceRefresh, deep: sparksSessionCatalog.count < 40)
         }
-        if homeFeedSparkOrder.isEmpty || forceRefresh {
-            homeFeedSparkOrder = sparksSessionCatalog.shuffled()
+        if homeFeedSparkOrder.isEmpty || forceRefresh || homeFeedSparkOffset >= homeFeedSparkOrder.count {
+            // Rank unseen first, then shuffle — never pure recycle of the same dozen.
+            homeFeedSparkOrder = SparkDiscoveryEngine.rankForDiscovery(sparksSessionCatalog)
             homeFeedSparkOffset = 0
         }
         if homeFeedSparkOrder.isEmpty {
-            // Last resort: channel sparks only.
             let hub = await fetchFocusMarketHubSparks(limitPerAuthor: 200)
-            homeFeedSparkOrder = hub.shuffled()
+            homeFeedSparkOrder = SparkDiscoveryEngine.rankForDiscovery(hub)
             homeFeedSparkOffset = 0
         }
-        guard !homeFeedSparkOrder.isEmpty else { return [] }
 
-        var out: [CountryPost] = []
         var attempts = 0
-        let maxAttempts = homeFeedSparkOrder.count * 2 + limit
-        while out.count < limit, attempts < maxAttempts {
+        let maxAttempts = max(homeFeedSparkOrder.count * 2, limit * 4)
+        while out.count < limit, attempts < maxAttempts, !homeFeedSparkOrder.isEmpty {
             attempts += 1
             if homeFeedSparkOffset >= homeFeedSparkOrder.count {
-                // Exhausted this shuffle — reshuffle for endless scroll.
-                homeFeedSparkOrder.shuffle()
-                homeFeedSparkOffset = 0
+                // New remote sample instead of reshuffling the same list forever.
+                let more = await fetchDiscoverSparks(limit: 60, excluding: Array(seen.prefix(200)))
+                if !more.isEmpty {
+                    homeFeedSparkOrder = SparkDiscoveryEngine.rankForDiscovery(more, excluding: seen)
+                    homeFeedSparkOffset = 0
+                } else {
+                    homeFeedSparkOrder.shuffle()
+                    homeFeedSparkOffset = 0
+                }
             }
+            guard homeFeedSparkOrder.indices.contains(homeFeedSparkOffset) else { break }
             let post = homeFeedSparkOrder[homeFeedSparkOffset]
             homeFeedSparkOffset += 1
-            if excluding.contains(post.id) { continue }
-            if out.contains(where: { $0.id == post.id }) { continue }
+            if seen.contains(post.id) { continue }
+            seen.insert(post.id)
             guard post.playableVideoURL != nil || post.hasVideo || !(post.mediaURL ?? "").isEmpty else { continue }
             out.append(post)
         }
@@ -1351,16 +1416,30 @@ final class PostsService {
             .replacingOccurrences(of: "__reel__|", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let bodyOut = "__spark__|\(cleaned.isEmpty ? "Spark" : cleaned)"
-        return try await createPost(
+        let created = try await createPost(
             authorID: authorID,
             body: bodyOut,
             countryName: countryName,
             countryCode: countryCode,
             cityName: cityName,
-            mediaType: "video",
+            // Prefer reel type so profile/API filters never drop Sparks as plain video.
+            mediaType: "reel",
             mediaURL: mediaURL,
             thumbURL: thumbURL
         )
+        // Profile grid + home feed must see the new Spark immediately.
+        ContentCache.shared.invalidate(.profilePosts)
+        if var cached = ContentCache.shared.posts(for: .homeFeed) {
+            cached.removeAll { $0.id == created.id }
+            cached.insert(created, at: 0)
+            ContentCache.shared.setPosts(Array(cached.prefix(ContentCache.maxCachedPosts)), for: .homeFeed)
+        }
+        NotificationCenter.default.post(
+            name: .userPostsDidChange,
+            object: nil,
+            userInfo: ["post": created]
+        )
+        return created
     }
 
     /// Long-form video for the **home feed** (default). Not shown as a Hubs channel item.

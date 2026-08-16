@@ -570,6 +570,11 @@ export const typeDefs = `#graphql
     postsByCountry(country_code: String!, limit: Int): [Post!]!
     postsByAuthor(user_id: ID!, limit: Int): [Post!]!
     recentPosts(limit: Int, before: String): [Post!]!
+    """
+    Random sample of Sparks from the full DB library (not just the newest page).
+    Use this so the player/feed don't recycle the same ~50 clips from recentPosts.
+    """
+    discoverSparks(limit: Int, exclude_ids: [ID!]): [Post!]!
     savedPosts(limit: Int): [Post!]!
     searchPosts(query: String!, limit: Int): [Post!]!
     postById(post_id: ID!): Post

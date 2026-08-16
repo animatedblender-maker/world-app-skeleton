@@ -33,6 +33,18 @@ export const postsResolvers = {
         return [];
       }
     },
+    discoverSparks: async (_: any, args: any, ctx: any) => {
+      const limit = typeof args.limit === 'number' ? args.limit : 48;
+      const exclude = Array.isArray(args?.exclude_ids)
+        ? args.exclude_ids.map((x: any) => String(x)).filter(Boolean)
+        : [];
+      try {
+        return await svc().discoverSparks(limit, exclude, ctx.user?.id ?? null);
+      } catch (err: any) {
+        console.warn('[discoverSparks]', err?.message ?? err);
+        return [];
+      }
+    },
     postById: async (_: any, args: any, ctx: any) => {
       if (!args?.post_id) return null;
       try {

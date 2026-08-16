@@ -1059,10 +1059,9 @@ extension Array where Element == CountryPost {
         }
     }
 
-    /// Profile / feed lists — no blank cards, moments, or sparks.
+    /// Profile lists — keep Sparks (user's own reels belong on profile), drop moments/blanks.
     func forProfileFeedGrid() -> [CountryPost] {
         excludingMoments()
-            .excludingSparks()
             .filter(\.hasFeedVisibleContent)
     }
 }

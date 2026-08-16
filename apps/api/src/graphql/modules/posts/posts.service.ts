@@ -874,6 +874,156 @@ export class PostsService {
     return await withoutMoments(rows as PostRow[]);
   }
 
+  /**
+   * Random Sparks from the **full** library (not only recentPosts head).
+   * Powers endless player/feed variety across 10k–28k+ R2-seeded rows.
+   */
+  async discoverSparks(
+    limit: number,
+    excludeIds: string[],
+    viewerId: string | null
+  ): Promise<PostRow[]> {
+    const safeLimit = Math.max(1, Math.min(120, limit || 48));
+    const viewer = viewerId && isUuid(viewerId) ? viewerId : null;
+    const exclude = (excludeIds || []).filter((id) => isUuid(id)).slice(0, 400);
+    const savedByMe = await this.savedByMeExpr('$2::uuid');
+    const savedByMeShared = await this.savedByMeSharedExpr('$2::uuid');
+
+    // Two-step sample: random offset into spark-like set, then small window.
+    // Cheaper than ORDER BY random() on the full posts table every call.
+    const countParams: any[] = [];
+    let excludeSql = '';
+    if (exclude.length) {
+      countParams.push(exclude);
+      excludeSql = `and p.id <> all($1::uuid[])`;
+    }
+    const { rows: countRows } = await pool.query<{ n: string }>(
+      `
+      select count(*)::text as n
+      from public.posts p
+      where coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
+        and p.visibility in ('public', 'country')
+        ${EXCLUDE_MOMENTS_SQL}
+        and (
+          lower(coalesce(p.media_type, '')) in ('reel', 'spark')
+          or position('__spark__|' in coalesce(p.body, '')) > 0
+          or position('"reel":true' in lower(coalesce(p.media_url, ''))) > 0
+          or (
+            coalesce(p.media_path, '') like 'r2:%'
+            and position('longform' in lower(coalesce(p.media_path, ''))) = 0
+            and position('LongForm' in coalesce(p.media_path, '')) = 0
+          )
+        )
+        ${excludeSql}
+      `,
+      countParams
+    );
+    const total = Math.max(0, parseInt(countRows[0]?.n || '0', 10) || 0);
+    if (total === 0) return [];
+
+    const maxOffset = Math.max(0, total - safeLimit);
+    const offset = maxOffset > 0 ? Math.floor(Math.random() * (maxOffset + 1)) : 0;
+
+    const params: any[] = [safeLimit, viewer, offset];
+    let excludeClause = '';
+    if (exclude.length) {
+      params.push(exclude);
+      excludeClause = `and p.id <> all($4::uuid[])`;
+    }
+
+    const { rows } = await pool.query(
+      `
+      select
+        p.*,
+        greatest(
+          coalesce(p.like_count, 0),
+          (select count(*)::int from public.post_likes pl where pl.post_id = p.id)
+        ) as like_count,
+        (select count(*)::int from public.post_comments pc where pc.post_id = p.id) as comment_count,
+        case
+          when $2::uuid is not null
+            and exists (
+              select 1 from public.post_likes pl
+              where pl.post_id = p.id and pl.user_id = $2::uuid
+            )
+          then true else false
+        end as liked_by_me,${savedByMe},
+        jsonb_build_object(
+          'user_id', pr.user_id,
+          'display_name', pr.display_name,
+          'username', pr.username,
+          'avatar_url', pr.avatar_url,
+          'country_name', pr.country_name,
+          'country_code', pr.country_code
+        ) as author,
+        case
+          when sp.id is null then null
+          else jsonb_build_object(
+            'id', sp.id,
+            'author_id', sp.author_id,
+            'category_id', sp.category_id,
+            'country_name', sp.country_name,
+            'country_code', sp.country_code,
+            'city_name', sp.city_name,
+            'title', sp.title,
+            'body', sp.body,
+            'media_type', sp.media_type,
+            'media_url', sp.media_url,
+            'thumb_url', sp.thumb_url,
+            'visibility', sp.visibility,
+            'like_count', greatest(
+              coalesce(sp.like_count, 0),
+              (select count(*)::int from public.post_likes spl where spl.post_id = sp.id)
+            ),
+            'comment_count', (select count(*)::int from public.post_comments spc where spc.post_id = sp.id),
+            'liked_by_me', false,${savedByMeShared}
+            'created_at', sp.created_at,
+            'updated_at', sp.updated_at,
+            'author', jsonb_build_object(
+              'user_id', spr.user_id,
+              'display_name', spr.display_name,
+              'username', spr.username,
+              'avatar_url', spr.avatar_url,
+              'country_name', spr.country_name,
+              'country_code', spr.country_code
+            )
+          )
+        end as shared_post
+      from public.posts p
+      left join public.profiles pr on pr.user_id = p.author_id
+      left join public.posts sp on sp.id = p.shared_post_id
+        and coalesce(sp.moderation_status, 'active') not in ('hidden', 'deleted')
+      left join public.profiles spr on spr.user_id = sp.author_id
+      where coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
+        and p.visibility in ('public', 'country')
+        ${EXCLUDE_MOMENTS_SQL}
+        and (
+          lower(coalesce(p.media_type, '')) in ('reel', 'spark')
+          or position('__spark__|' in coalesce(p.body, '')) > 0
+          or position('"reel":true' in lower(coalesce(p.media_url, ''))) > 0
+          or (
+            coalesce(p.media_path, '') like 'r2:%'
+            and position('longform' in lower(coalesce(p.media_path, ''))) = 0
+            and position('LongForm' in coalesce(p.media_path, '')) = 0
+          )
+        )
+        ${excludeClause}
+      order by p.created_at desc, p.id desc
+      offset $3
+      limit $1
+      `,
+      params
+    );
+
+    // Shuffle the page so offset windows don't feel chronological.
+    const presented = await presentPostRows(rows as PostRow[]);
+    for (let i = presented.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [presented[i], presented[j]] = [presented[j], presented[i]];
+    }
+    return presented;
+  }
+
   async postById(postId: string, viewerId: string | null): Promise<PostRow | null> {
     if (!postId) return null;
     // Seed / offline ids (ia_*, hub_*, demo_*) are not UUIDs — do not query Postgres.
@@ -1896,10 +2046,13 @@ export class PostsService {
   private normalizeMediaType(value?: string | null, url?: string | null): string {
     const normalized = String(value ?? '').trim().toLowerCase();
     if (!normalized) return url ? 'image' : 'none';
-    const allowed = new Set(['none', 'image', 'video', 'link', 'story']);
+    // Sparks / reels are first-class — never coerce to "none" (that hid new Sparks from profile).
+    const allowed = new Set(['none', 'image', 'video', 'link', 'story', 'reel', 'spark']);
     if (!allowed.has(normalized)) return 'none';
     if (normalized === 'none') return 'none';
     if (!url) return 'none';
+    // Persist as reel for spark/reel so clients can filter reliably.
+    if (normalized === 'spark') return 'reel';
     return normalized;
   }
 

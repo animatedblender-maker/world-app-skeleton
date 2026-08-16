@@ -316,7 +316,7 @@ struct PublicProfileView: View {
             followCounts = await FollowService.shared.counts(userID: profile.userID)
 
             do {
-                let loaded = try await PostsService.shared.listForAuthor(profile.userID, limit: 40)
+                let loaded = try await PostsService.shared.listForAuthor(profile.userID, limit: 120)
                 posts = loaded.forProfileFeedGrid()
             } catch {
                 posts = []

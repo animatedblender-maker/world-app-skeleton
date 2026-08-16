@@ -59,13 +59,12 @@ struct ProfileView: View {
             FeedVideoFocus.shared.resetAll()
         }
         .onReceive(NotificationCenter.default.publisher(for: .userPostsDidChange)) { notification in
+            // Include Sparks — previously `!created.isSpark` dropped every new reel from the profile.
             if let created = notification.userInfo?["post"] as? CountryPost,
                created.authorID == profileUserID,
-               !created.isSpark,
                !created.isStory {
-                if !posts.contains(where: { $0.id == created.id }) {
-                    posts.insert(created, at: 0)
-                }
+                posts.removeAll { $0.id == created.id }
+                posts.insert(created, at: 0)
             } else {
                 Task { await loadPosts() }
             }
@@ -258,9 +257,8 @@ struct ProfileView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, Theme.pagePadding)
             } else {
-                // Saved Sparks must NOT use forProfileFeedGrid (that strips isReel/Sparks).
-                let allowSparks = appState.profileLibrarySection == .savedReels
-                postCards(posts, showsAuthorInJournal: true, allowSparks: allowSparks)
+                // Posts + Saved Sparks both show Spark cards (own Sparks belong on profile).
+                postCards(posts, showsAuthorInJournal: true, allowSparks: true)
             }
         }
     }
@@ -281,13 +279,10 @@ struct ProfileView: View {
     private func postCards(
         _ items: [CountryPost],
         showsAuthorInJournal: Bool,
-        allowSparks: Bool = false
+        allowSparks: Bool = true
     ) -> some View {
-        // Match home feed: edge-to-edge cards, no double horizontal inset.
-        // Posts tab strips Sparks; Saved Sparks must keep them.
-        let visible: [CountryPost] = allowSparks
-            ? items.excludingMoments().filter(\.hasFeedVisibleContent)
-            : items.forProfileFeedGrid()
+        // Match home feed: edge-to-edge cards. Own Sparks always visible on profile.
+        let visible: [CountryPost] = items.forProfileFeedGrid()
         return LazyVStack(spacing: 0) {
             ForEach(visible) { post in
                 FacebookPostCard(
@@ -310,10 +305,10 @@ struct ProfileView: View {
                         appState.openPost(post)
                     },
                     onOpenReel: {
-                        // Prefer full saved-sparks list, not only isReel (player Keeps may be tagged differently).
-                        var sparks = allowSparks
-                            ? items
-                            : items.filter { $0.isReel || AppState.belongsInSavedSparks($0) }
+                        var sparks = items.filter {
+                            $0.isReel || $0.isSparkFeedShare || AppState.belongsInSavedSparks($0)
+                                || PlayPlatformBridge.isSparkFeedCard($0)
+                        }
                         if !sparks.contains(where: { $0.id == post.id }) {
                             sparks.insert(post, at: 0)
                         }
@@ -397,7 +392,8 @@ struct ProfileView: View {
             if showSpinner { isLoadingPosts = false }
         }
         do {
-            posts = try await PostsService.shared.listForAuthor(userID, limit: 40)
+            // Higher limit so a new Spark isn't buried past a tiny page; keep Sparks (not stripped).
+            posts = try await PostsService.shared.listForAuthor(userID, limit: 120)
                 .forProfileFeedGrid()
             ContentCache.shared.setPosts(posts, for: .profilePosts)
         } catch {
