@@ -26,6 +26,8 @@ struct SparksUIKitPager: UIViewControllerRepresentable {
     var onOpenComments: ((String) -> Void)? = nil
     var onLikeToggle: ((CountryPost) -> Void)? = nil
     var onOpenPost: ((CountryPost) -> Void)? = nil
+    /// Swipe / grab right to close Sparks (YouTube / IG style).
+    var onDismiss: (() -> Void)? = nil
 
     func makeUIViewController(context: Context) -> SparksPagerViewController {
         let vc = SparksPagerViewController()
@@ -82,12 +84,13 @@ struct SparksUIKitPager: UIViewControllerRepresentable {
         func openComments(_ id: String) { parent.onOpenComments?(id) }
         func likeToggle(_ post: CountryPost) { parent.onLikeToggle?(post) }
         func openPost(_ post: CountryPost) { parent.onOpenPost?(post) }
+        func dismissSparks() { parent.onDismiss?() }
     }
 }
 
 // MARK: - UIKit controller
 
-final class SparksPagerViewController: UIViewController, UICollectionViewDataSource, UICollectionViewDelegate, UICollectionViewDelegateFlowLayout {
+final class SparksPagerViewController: UIViewController, UICollectionViewDataSource, UICollectionViewDelegate, UICollectionViewDelegateFlowLayout, UIGestureRecognizerDelegate {
     weak var coordinator: SparksUIKitPager.Coordinator?
 
     private var posts: [CountryPost] = []
@@ -99,6 +102,8 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
     private var focusGeneration: UInt = 1
     private var isApplyingScroll = false
     private var lastPostedIDs: [String] = []
+    /// Right-swipe dismiss (does not fight vertical paging).
+    private var dismissPan: UIPanGestureRecognizer?
 
     private lazy var layout: UICollectionViewFlowLayout = {
         let l = UICollectionViewFlowLayout()
@@ -146,6 +151,86 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
             collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
         ])
+
+        // Grab / swipe right → close Sparks (YouTube Shorts / IG Reels style).
+        // Simultaneous with vertical paging; `gestureRecognizerShouldBegin` only
+        // accepts clearly horizontal rightward pans so up/down paging stays snappy.
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handleDismissPan(_:)))
+        pan.delegate = self
+        pan.cancelsTouchesInView = false
+        pan.maximumNumberOfTouches = 1
+        view.addGestureRecognizer(pan)
+        dismissPan = pan
+    }
+
+    // MARK: - Swipe right to close
+
+    @objc private func handleDismissPan(_ g: UIPanGestureRecognizer) {
+        let t = g.translation(in: view)
+        let v = g.velocity(in: view)
+        let w = max(view.bounds.width, 1)
+
+        switch g.state {
+        case .changed:
+            // Only drag right (closing).
+            let x = max(0, t.x)
+            let progress = min(1, x / w)
+            collectionView.transform = CGAffineTransform(translationX: x, y: 0)
+            view.backgroundColor = UIColor.black.withAlphaComponent(max(0.35, 1 - progress * 0.55))
+        case .ended, .cancelled, .failed:
+            let x = t.x
+            let shouldClose = x > w * 0.22 || v.x > 900
+            if shouldClose {
+                UIView.animate(
+                    withDuration: 0.22,
+                    delay: 0,
+                    options: [.curveEaseOut, .allowUserInteraction]
+                ) {
+                    self.collectionView.transform = CGAffineTransform(translationX: w, y: 0)
+                    self.view.backgroundColor = UIColor.black.withAlphaComponent(0.2)
+                } completion: { _ in
+                    self.coordinator?.dismissSparks()
+                    // Reset if cover dismiss is slow so next open is clean.
+                    self.collectionView.transform = .identity
+                    self.view.backgroundColor = .black
+                }
+            } else {
+                UIView.animate(
+                    withDuration: 0.28,
+                    delay: 0,
+                    usingSpringWithDamping: 0.9,
+                    initialSpringVelocity: 0.4,
+                    options: [.allowUserInteraction]
+                ) {
+                    self.collectionView.transform = .identity
+                    self.view.backgroundColor = .black
+                }
+            }
+        default:
+            break
+        }
+    }
+
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard gestureRecognizer === dismissPan else { return true }
+        // Don't steal when comments/share chrome disables scroll (parent sets isScrollEnabled false).
+        guard collectionView.isScrollEnabled else { return false }
+        let v = dismissPan?.velocity(in: view) ?? .zero
+        let t = dismissPan?.translation(in: view) ?? .zero
+        // Prefer velocity at begin; fall back to small translation sample.
+        let dx = abs(v.x) > 20 ? v.x : t.x
+        let dy = abs(v.y) > 20 ? v.y : t.y
+        // Must be clearly horizontal and rightward.
+        return dx > 0 && abs(dx) > abs(dy) * 1.15
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+    ) -> Bool {
+        // Allow vertical collection pan to run; we only begin when horizontal wins.
+        if gestureRecognizer === dismissPan { return true }
+        return false
     }
 
     override func viewDidLayoutSubviews() {

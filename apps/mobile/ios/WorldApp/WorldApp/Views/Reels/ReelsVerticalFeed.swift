@@ -22,6 +22,8 @@ struct ReelsVerticalFeed: View {
     var onNearEnd: (() -> Void)? = nil
     var onNearStart: (() -> Void)? = nil
     var onOpenComments: ((String) -> Void)? = nil
+    /// Swipe right to close the Sparks full-screen viewer.
+    var onDismiss: (() -> Void)? = nil
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -36,7 +38,8 @@ struct ReelsVerticalFeed: View {
                 onNearStart: onNearStart,
                 onOpenComments: onOpenComments,
                 onLikeToggle: { post in Task { await toggleLike(post) } },
-                onOpenPost: { post in openPost(post) }
+                onOpenPost: { post in openPost(post) },
+                onDismiss: onDismiss
             )
             .ignoresSafeArea(.all)
 
@@ -1146,7 +1149,8 @@ struct ReelsScrollViewer: View {
                     onOpenComments: { id in
                         CommentsWarmCache.shared.warm(id)
                         commentsPostID = id
-                    }
+                    },
+                    onDismiss: { dismiss() }
                 )
             }
 
