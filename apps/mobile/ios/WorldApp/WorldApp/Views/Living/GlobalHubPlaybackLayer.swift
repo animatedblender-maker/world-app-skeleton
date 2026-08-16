@@ -78,7 +78,8 @@ struct GlobalHubPlaybackLayer: View {
 
     private var mutedBinding: Binding<Bool> {
         Binding(
-            get: { appState.hubPlaybackMuted },
+            // While fullscreen is up, keep the underlay muted (it stays active for seamless resume).
+            get: { showFullscreen ? true : appState.hubPlaybackMuted },
             set: { appState.hubPlaybackMuted = $0 }
         )
     }
@@ -176,7 +177,7 @@ struct GlobalHubPlaybackLayer: View {
         .onChange(of: appState.hubPlaybackFullscreenToken) { _, _ in
             // Meta-area drag / external request → fullscreen (YouTube).
             guard expanded, collapse < 0.35, appState.hubPlaybackPost != nil else { return }
-            showFullscreen = true
+            openFullscreenSeamless()
         }
         .onChange(of: appState.hubMinimizeMorphToken) { _, _ in
             // AppState requested morph-then-mini (close, tab leave, etc.).
@@ -288,22 +289,22 @@ struct GlobalHubPlaybackLayer: View {
             MatteryaHubPlayerView(
                 url: url,
                 posterURL: post.posterImageURL,
-                // Pause continuous surface while parent-owned fullscreen is up (no dual audio).
-                isActive: appState.hubPlaybackPlaying && !showFullscreen,
+                // Stay active under fullscreen (muted) so FS open/close never freezes the film.
+                isActive: appState.hubPlaybackPlaying,
                 startTime: resumeAt,
                 postID: post.id,
-                showsControls: showControls,
+                showsControls: showControls && !showFullscreen,
                 loops: false,
                 // Expanded: fit full picture (no crop). Mini strip: fill the bar edge-to-edge.
                 fillsFrame: collapse > 0.55,
-                chromeOpacity: chromeOpacity,
+                chromeOpacity: showFullscreen ? 0 : chromeOpacity,
                 isMuted: mutedBinding,
                 // YouTube-style landscape fullscreen from the player chrome + swipe-up.
-                allowsFullscreen: collapse < 0.35 && expanded,
+                allowsFullscreen: collapse < 0.35 && expanded && !showFullscreen,
                 presentFullscreen: .constant(false),
                 onRequestFullscreen: {
                     guard expanded, collapse < 0.35 else { return }
-                    showFullscreen = true
+                    openFullscreenSeamless()
                 },
                 onReady: {
                     Task { await PostsService.shared.recordView(post) }
@@ -401,7 +402,7 @@ struct GlobalHubPlaybackLayer: View {
                         collapse = 0
                         appState.hubPlaybackPullProgress = 0
                     }
-                    showFullscreen = true
+                    openFullscreenSeamless()
                     return
                 }
 
@@ -442,6 +443,14 @@ struct GlobalHubPlaybackLayer: View {
 
     private func syncPullProgressFromCollapse() {
         appState.hubPlaybackPullProgress = expanded ? collapse : 0
+    }
+
+    /// Open landscape fullscreen without stopping the continuous AVPlayer (muted underlay).
+    private func openFullscreenSeamless() {
+        guard !showFullscreen else { return }
+        // Keep hubPlaybackPlaying true — FS mounts at current seconds and underlay stays warm.
+        appState.hubPlaybackPlaying = true
+        showFullscreen = true
     }
 
     /// Animate collapse → 1, then flip session to mini **without** a second layout jump.

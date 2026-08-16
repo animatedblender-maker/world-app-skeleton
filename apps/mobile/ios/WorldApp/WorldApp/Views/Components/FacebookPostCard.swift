@@ -761,6 +761,10 @@ struct FacebookPostCard: View {
 
     @ViewBuilder
     private func feedAutoplayVideo(url: URL) -> some View {
+        let isHub = PlayPlatformBridge.isHubCatalogContent(post)
+            || PlayPlatformBridge.isHubFeedCardVideo(post)
+            || isHubOriginShareCard
+            || ArchiveVideoPlayback.isArchiveURL(url)
         InFrameVideoPlayer(
             url: url,
             posterURL: post.posterImageURL,
@@ -770,15 +774,17 @@ struct FacebookPostCard: View {
             postID: post.id,
             muted: false,
             loops: true,
-            preferArchivePlayer: PlayPlatformBridge.isHubCatalogContent(post)
-                || ArchiveVideoPlayback.isArchiveURL(url),
+            preferArchivePlayer: isHub,
             showsControls: true,
-            fillsFrame: true,
+            // Hubs long-form: always fit (never crop). Sparks/short may fill.
+            fillsFrame: !isHub,
             autoplaySurface: autoplaySurface,
             onViewed: { Task { await PostsService.shared.recordView(post) } }
         )
+        .background(isHub ? Theme.ink : Color.clear)
         .onAppear {
             // Shared hubs + long-form feed: buffer before ≥28% focus wins.
+            if isHub { ArchiveVideoPlayback.warmResolve(url) }
             SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
         }
     }

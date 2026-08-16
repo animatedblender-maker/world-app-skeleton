@@ -77,17 +77,22 @@ struct SparkFeedCard: View {
                     postID: post.id,
                     muted: appState.feedVideosMuted,
                     loops: true,
-                    preferArchivePlayer: post.isHubSeedVideo || ArchiveVideoPlayback.isArchiveURL(url),
+                    preferArchivePlayer: post.isHubSeedVideo || ArchiveVideoPlayback.isArchiveURL(url)
+                        || PlayPlatformBridge.isHubCatalogContent(post),
                     showsControls: false,
                     muteOnlyControls: true,
-                    fillsFrame: true,
+                    // Hub long-form: fit full picture (no crop).
+                    fillsFrame: !(post.isHubSeedVideo || PlayPlatformBridge.isHubCatalogContent(post)
+                        || ArchiveVideoPlayback.isArchiveURL(url)),
                     sharesFeedMute: true,
                     autoplaySurface: autoplaySurface,
                     onViewed: { Task { await PostsService.shared.recordView(post) } }
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Theme.ink)
                 .clipped()
                 .onAppear {
+                    ArchiveVideoPlayback.warmResolve(url)
                     SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
                 }
             } else {

@@ -1,5 +1,13 @@
 import SwiftUI
 
+/// Tracks meta ScrollView offset so pull-down-to-fullscreen only fires at the top.
+private enum HubWatchMetaScrollOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 struct YouTubeWatchView: View {
     @Environment(AppState.self) private var appState
 
@@ -23,6 +31,10 @@ struct YouTubeWatchView: View {
     /// Endless related shelf — grows as the user scrolls.
     @State private var relatedWindow: [RelatedShelfItem] = []
     @State private var relatedCursor = 0
+    /// Scroll offset of meta content (0 = at top). Pull-down-to-FS only when near top.
+    @State private var metaScrollOffset: CGFloat = 0
+    /// Live pull progress for YT-style grab-to-fullscreen on non-video chrome.
+    @State private var fullscreenPullProgress: CGFloat = 0
 
     init(
         post: CountryPost,
@@ -129,7 +141,7 @@ struct YouTubeWatchView: View {
                     .zIndex(2)
 
                 // Title + Like/Send/Keep OUTSIDE ScrollView — zero scroll-inset gap.
-                // YouTube: drag down on this meta strip → landscape fullscreen.
+                // YouTube: drag down on non-video chrome → landscape fullscreen (not minimize).
                 titleAndActionsChrome
                     .background(watchChromeBackground)
                     .opacity(chromeOpacity)
@@ -141,9 +153,15 @@ struct YouTubeWatchView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         VStack(alignment: .leading, spacing: 0) {
-                            Color.clear
-                                .frame(height: 0)
-                                .id(Self.watchScrollTopID)
+                            GeometryReader { g in
+                                Color.clear
+                                    .preference(
+                                        key: HubWatchMetaScrollOffsetKey.self,
+                                        value: g.frame(in: .named("hub-watch-meta-scroll")).minY
+                                    )
+                            }
+                            .frame(height: 0)
+                            .id(Self.watchScrollTopID)
 
                             channelSection
                                 .padding(.top, 10)
@@ -180,12 +198,18 @@ struct YouTubeWatchView: View {
                         }
                         .padding(.bottom, 28)
                     }
+                    .coordinateSpace(name: "hub-watch-meta-scroll")
+                    .onPreferenceChange(HubWatchMetaScrollOffsetKey.self) { y in
+                        metaScrollOffset = y
+                    }
                     .contentMargins(.all, 0, for: .scrollContent)
                     .scrollDismissesKeyboard(.interactively)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(watchChromeBackground.opacity(chromeOpacity))
                     .opacity(chromeOpacity)
                     .allowsHitTesting(chromeOpacity > 0.25)
+                    // Pull-down on meta (at scroll top) → fullscreen, never reloads comments.
+                    .simultaneousGesture(metaFullscreenDragGesture)
                     .onAppear {
                         scrollMetaToTop(proxy)
                     }
@@ -198,6 +222,16 @@ struct YouTubeWatchView: View {
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
+            // Live grab feedback while pulling meta toward fullscreen (YT-style).
+            .overlay(alignment: .top) {
+                if fullscreenPullProgress > 0.02 {
+                    Capsule()
+                        .fill(Color.white.opacity(0.35 + Double(fullscreenPullProgress) * 0.4))
+                        .frame(width: 36 + fullscreenPullProgress * 28, height: 4)
+                        .padding(.top, 6)
+                        .allowsHitTesting(false)
+                }
+            }
             // When continuous player collapses, never leave title/meta over a white hole.
             .opacity(appState.hubPlaybackExpanded || embedsPlayer ? 1 : 0)
             .allowsHitTesting(appState.hubPlaybackExpanded || embedsPlayer)
@@ -386,19 +420,42 @@ struct YouTubeWatchView: View {
             }
     }
 
-    /// YouTube-style: drag **down** on the chrome/meta **below** the video → fullscreen.
+    /// YouTube-style: drag **down** on non-video chrome (title / comments / related)
+    /// → landscape fullscreen with live grab feedback. Does not remount comments.
     private var metaFullscreenDragGesture: some Gesture {
-        DragGesture(minimumDistance: 14, coordinateSpace: .local)
-            .onEnded { value in
-                // Continuous Hubs player owns landscape fullscreen.
+        DragGesture(minimumDistance: 10, coordinateSpace: .local)
+            .onChanged { value in
                 guard appState.hubPlaybackPost != nil, appState.hubPlaybackExpanded else { return }
                 guard !isMinimizingGrab else { return }
+                // Only when meta is scrolled to top (or title chrome — always "top").
+                guard metaScrollOffset > -24 else {
+                    if fullscreenPullProgress != 0 { fullscreenPullProgress = 0 }
+                    return
+                }
+                let y = value.translation.height
+                let x = abs(value.translation.width)
+                guard y > 0, y > x * 0.85 else {
+                    if fullscreenPullProgress != 0 { fullscreenPullProgress = 0 }
+                    return
+                }
+                // 1:1 grab feel (cap at 1).
+                let p = min(1, max(0, y / 140))
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) { fullscreenPullProgress = p }
+            }
+            .onEnded { value in
+                defer {
+                    withAnimation(.easeOut(duration: 0.16)) { fullscreenPullProgress = 0 }
+                }
+                guard appState.hubPlaybackPost != nil, appState.hubPlaybackExpanded else { return }
+                guard !isMinimizingGrab else { return }
+                guard metaScrollOffset > -24 else { return }
                 let y = value.translation.height
                 let x = abs(value.translation.width)
                 let predicted = value.predictedEndTranslation.height
-                // Clearly downward, not a horizontal pan.
-                guard y > x * 1.1 else { return }
-                if y > 48 || predicted > 110 {
+                guard y > x * 0.85 else { return }
+                if y > 52 || predicted > 120 || fullscreenPullProgress > 0.42 {
                     ReelsTwistHaptics.pullDismiss()
                     appState.requestHubFullscreen()
                 }

@@ -503,8 +503,7 @@ struct PlayFeedLinkCard: View {
     @ViewBuilder
     private var hubFeedPlayerSurface: some View {
         if let url = post.playableVideoURL {
-            // Always aspect-fill the 16:9 feed frame — `fillsFrame: false` letterboxed
-            // (black bars top/bottom) on R2 / Archive hubs shares.
+            // Always aspect-fit — never crop hubs cards (letterbox bars OK, full picture).
             MatteryaHubPlayerView(
                 url: url,
                 posterURL: post.posterImageURL,
@@ -513,7 +512,7 @@ struct PlayFeedLinkCard: View {
                 postID: post.id,
                 showsControls: true,
                 loops: false,
-                fillsFrame: true,
+                fillsFrame: false,
                 isMuted: feedMutedBinding,
                 allowsFullscreen: false,
                 onReady: {
@@ -521,7 +520,10 @@ struct PlayFeedLinkCard: View {
                 }
             )
             .id("hub-feed-\(post.id)")
+            .background(Theme.ink)
             .onAppear {
+                // Pre-warm aggressively so feed hubs shares start without a long black wait.
+                ArchiveVideoPlayback.warmResolve(url)
                 SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
             }
         } else {
