@@ -596,7 +596,7 @@ struct ReelsPagerCard: View {
                 }
                 sparkAction(
                     icon: appState.isPostSaved(post.id) ? "bookmark.fill" : "bookmark",
-                    label: "Keep",
+                    label: appState.isPostSaved(post.id) ? "Kept" : "Keep",
                     accent: appState.isPostSaved(post.id) ? Theme.accentBright : Theme.paper
                 ) {
                     keepPlayingThroughUIAction()
