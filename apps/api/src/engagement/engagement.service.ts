@@ -604,8 +604,13 @@ export type HumanEngagementReport = {
   uploadCount: number;
   /** Meta-style KPI strip (likes, shares, watches, …) */
   kpis: EngagementKpis;
-  /** Hourly activity for sparkline / bars */
-  hourly: { hour: string; count: number }[];
+  /**
+   * Timeline buckets for the chart (hour or day depending on window).
+   * `label` is short for the axis; `title` is full tooltip text.
+   */
+  hourly: { hour: string; count: number; label: string; title: string }[];
+  /** Plain-English chart caption (peak time, total, bucket size). */
+  timelineCaption: string;
   /** Breakdown by surface (home, hubs, sparks, …) */
   bySurface: { surface: string; count: number }[];
   /** Recent server ranking decisions (recsys warehouse) */
@@ -698,6 +703,94 @@ function countType(
     .reduce((s, r) => s + Number(r.count), 0);
 }
 
+/** Build chart series with human labels + one-line caption (no overlapping numbers). */
+function buildTimelineSeries(
+  windowHours: number,
+  rows: { hour: string; count: number }[]
+): {
+  hourly: { hour: string; count: number; label: string; title: string }[];
+  timelineCaption: string;
+} {
+  const byDay = windowHours > 48;
+  const unit = byDay ? 'day' : 'hour';
+
+  const series = rows.map((r) => {
+    const raw = String(r.hour || '');
+    // hour keys: 2026-08-16T14:00:00Z or legacy "YYYY-MM-DD HH24:00"
+    // day keys: 2026-08-16
+    let d: Date | null = null;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      d = new Date(raw + 'T00:00:00Z');
+    } else {
+      const normalized = raw.includes('T')
+        ? raw
+        : raw.replace(' ', 'T').replace(/:00$/, ':00:00Z').replace(/(\d{2}):00$/, '$1:00:00Z');
+      const tryD = new Date(normalized.endsWith('Z') ? normalized : normalized + 'Z');
+      d = Number.isNaN(tryD.getTime()) ? null : tryD;
+    }
+
+    let label = raw;
+    let title = `${raw} — ${r.count} signals`;
+    if (d && !Number.isNaN(d.getTime())) {
+      if (byDay) {
+        label = d.toLocaleDateString('en-GB', {
+          weekday: 'short',
+          day: 'numeric',
+          month: 'short',
+          timeZone: 'UTC',
+        });
+        title = `${d.toLocaleDateString('en-GB', {
+          weekday: 'long',
+          day: 'numeric',
+          month: 'long',
+          year: 'numeric',
+          timeZone: 'UTC',
+        })} UTC — ${r.count} signals (likes, looks, watches, etc.)`;
+      } else {
+        label = d.toLocaleTimeString('en-GB', {
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false,
+          timeZone: 'UTC',
+        });
+        title = `${d.toLocaleString('en-GB', {
+          weekday: 'short',
+          day: 'numeric',
+          month: 'short',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false,
+          timeZone: 'UTC',
+        })} UTC — ${r.count} signals in that hour`;
+      }
+    }
+
+    return { hour: raw, count: r.count, label, title };
+  });
+
+  if (series.length === 0) {
+    return {
+      hourly: [],
+      timelineCaption: byDay
+        ? 'Each bar is one day. No activity in this window yet.'
+        : 'Each bar is one hour. No activity in this window yet.',
+    };
+  }
+
+  let peak = series[0];
+  let total = 0;
+  for (const s of series) {
+    total += s.count;
+    if (s.count > peak.count) peak = s;
+  }
+
+  const caption = byDay
+    ? `Each bar = one day (UTC). Total ${total.toLocaleString()} signals. Busiest day: ${peak.label} (${peak.count}). Hover a bar for details.`
+    : `Each bar = one hour (UTC). Total ${total.toLocaleString()} signals. Busiest hour: ${peak.label} (${peak.count}). Hover a bar for details.`;
+
+  return { hourly: series, timelineCaption: caption };
+}
+
 export async function getEngagementReport(windowHours = 24): Promise<HumanEngagementReport> {
   // Allow up to 30 days for founder insights (was 7).
   const hours = Math.max(1, Math.min(720, windowHours));
@@ -718,6 +811,7 @@ export async function getEngagementReport(windowHours = 24): Promise<HumanEngage
     uploadCount: 0,
     kpis: emptyKpis(),
     hourly: [],
+    timelineCaption: '',
     bySurface: [],
     rankDecisions: [],
     rankDecisionCount: 0,
@@ -825,9 +919,19 @@ export async function getEngagementReport(windowHours = 24): Promise<HumanEngage
         `,
         [hours, EngagementEventTypes.ScrollDwell]
       ),
+      // Short windows: per hour. Long windows: per day (readable chart, no 720 overlapping labels).
       pool.query<{ hour: string; count: string }>(
+        hours <= 48
+          ? `
+        select to_char(date_trunc('hour', occurred_at at time zone 'UTC'), 'YYYY-MM-DD"T"HH24:00:00"Z"') as hour,
+               count(*)::text as count
+        from public.entity_engagement_events
+        where occurred_at > ${intervalSql}
+        group by 1
+        order by 1 asc
         `
-        select to_char(date_trunc('hour', occurred_at at time zone 'UTC'), 'YYYY-MM-DD HH24:00') as hour,
+          : `
+        select to_char(date_trunc('day', occurred_at at time zone 'UTC'), 'YYYY-MM-DD') as hour,
                count(*)::text as count
         from public.entity_engagement_events
         where occurred_at > ${intervalSql}
@@ -1099,7 +1203,10 @@ export async function getEngagementReport(windowHours = 24): Promise<HumanEngage
       uploads,
       uploadCount: uploads.length,
       kpis,
-      hourly: hourlyRows.map((r) => ({ hour: r.hour, count: Number(r.count) })),
+      ...buildTimelineSeries(
+        hours,
+        hourlyRows.map((r) => ({ hour: r.hour, count: Number(r.count) }))
+      ),
       bySurface: surfaceRows.map((r) => ({
         surface: r.surface,
         count: Number(r.count),
@@ -1146,15 +1253,24 @@ export function renderEngagementReportHtml(report: HumanEngagementReport): strin
     .join('');
 
   const maxHour = Math.max(1, ...report.hourly.map((h) => h.count));
+  const nBars = report.hourly.length;
+  // Label every Nth bar so axis stays readable (never print counts on every bar).
+  const labelEvery = nBars <= 8 ? 1 : nBars <= 16 ? 2 : nBars <= 32 ? 4 : Math.ceil(nBars / 8);
   const bars = report.hourly
-    .map((h) => {
-      const pct = Math.max(4, Math.round((h.count / maxHour) * 100));
-      return `<div class="bar-col" title="${esc(h.hour)}: ${esc(h.count)}">
+    .map((h, i) => {
+      const pct = Math.max(3, Math.round((h.count / maxHour) * 100));
+      const showLabel = i === 0 || i === nBars - 1 || i % labelEvery === 0;
+      const title = esc(h.title || `${h.label}: ${h.count} signals`);
+      return `<div class="bar-col" title="${title}" data-count="${esc(h.count)}" data-label="${esc(h.label)}">
         <div class="bar" style="height:${pct}%"></div>
-        <span class="bar-n">${esc(h.count)}</span>
+        <span class="bar-label">${showLabel ? esc(h.label) : ''}</span>
       </div>`;
     })
     .join('');
+  const timelineCaption = esc(
+    report.timelineCaption ||
+      'Each bar is a time bucket. Hover to see how many signals happened then.'
+  );
 
   const kpi = (
     label: string,
@@ -1361,13 +1477,31 @@ export function renderEngagementReportHtml(report: HumanEngagementReport): strin
     .card {
       background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px 16px;
     }
-    .card h3 { margin: 0 0 12px; font-size: 13px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
-    .bars {
-      display: flex; align-items: flex-end; gap: 3px; height: 120px; padding-top: 8px; overflow-x: auto;
+    .card h3 { margin: 0 0 8px; font-size: 13px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+    .chart-caption { margin: 0 0 12px; color: var(--muted); font-size: 12px; line-height: 1.45; max-width: 40rem; }
+    .chart-tip {
+      min-height: 1.35em; margin: 0 0 8px; font-size: 12px; font-weight: 600; color: #e4e4e7;
+      font-variant-numeric: tabular-nums;
     }
-    .bar-col { flex: 1 0 10px; min-width: 8px; max-width: 28px; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 4px; }
-    .bar { width: 100%; background: linear-gradient(180deg, #4dabff, #1877f2); border-radius: 4px 4px 2px 2px; min-height: 4px; }
-    .bar-n { font-size: 9px; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .chart-tip:empty::before { content: 'Hover a bar to see when and how many signals.'; color: var(--muted); font-weight: 500; }
+    .bars {
+      display: flex; align-items: flex-end; gap: 4px; height: 140px; padding: 8px 4px 0;
+      overflow-x: auto; border-bottom: 1px solid var(--border);
+    }
+    .bar-col {
+      flex: 1 1 0; min-width: 14px; max-width: 48px; height: 100%;
+      display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 6px;
+      cursor: default;
+    }
+    .bar {
+      width: 70%; max-width: 28px; background: linear-gradient(180deg, #4dabff, #1877f2);
+      border-radius: 5px 5px 2px 2px; min-height: 3px; transition: filter .12s ease, opacity .12s ease;
+    }
+    .bar-col:hover .bar { filter: brightness(1.15); }
+    .bar-label {
+      height: 28px; font-size: 10px; line-height: 1.15; color: var(--muted); text-align: center;
+      white-space: pre-line; max-width: 100%; overflow: hidden;
+    }
     .breakdown-row { display: grid; grid-template-columns: 1fr 2fr 48px; gap: 8px; align-items: center; margin-bottom: 8px; font-size: 12px; }
     .br-label { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .br-track { height: 8px; background: var(--bg); border-radius: 99px; overflow: hidden; }
@@ -1463,9 +1597,11 @@ export function renderEngagementReportHtml(report: HumanEngagementReport): strin
 
       <section id="panel-overview" class="panel active">
         <div class="grid-2">
-          <div class="card">
-            <h3>Activity over time (UTC hours)</h3>
-            <div class="bars">${bars || '<div class="empty">No hourly data yet</div>'}</div>
+          <div class="card" id="timeline-card">
+            <h3>Activity over time</h3>
+            <p class="chart-caption" id="timeline-caption">${timelineCaption}</p>
+            <p class="chart-tip" id="timeline-tip" aria-live="polite"></p>
+            <div class="bars" id="timeline-bars">${bars || '<div class="empty">No activity in this period yet</div>'}</div>
           </div>
           <div class="card">
             <h3>What people did</h3>
@@ -1627,6 +1763,19 @@ export function renderEngagementReportHtml(report: HumanEngagementReport): strin
       }
       wireSearch();
 
+      function wireTimelineHover(root) {
+        var tip = document.getElementById('timeline-tip');
+        if (!root || !tip) return;
+        root.onmouseover = function (e) {
+          var col = e.target.closest && e.target.closest('.bar-col');
+          if (!col) return;
+          var t = col.getAttribute('title') || '';
+          tip.textContent = t;
+        };
+        root.onmouseleave = function () { tip.textContent = ''; };
+      }
+      wireTimelineHover(document.getElementById('timeline-bars'));
+
       function setRangeActive(h) {
         document.querySelectorAll('.range-btn').forEach(function (b) {
           b.classList.toggle('active', Number(b.getAttribute('data-hours')) === Number(h));
@@ -1675,15 +1824,26 @@ export function renderEngagementReportHtml(report: HumanEngagementReport): strin
           ].join('');
         }
 
+        var cap = document.getElementById('timeline-caption');
+        if (cap) cap.textContent = report.timelineCaption || 'Hover a bar to see when and how many signals.';
+        var tip = document.getElementById('timeline-tip');
+        if (tip) tip.textContent = '';
         var maxHour = 1;
         (report.hourly || []).forEach(function (h) { if (h.count > maxHour) maxHour = h.count; });
-        var barsEl = document.querySelector('#panel-overview .bars');
+        var series = report.hourly || [];
+        var nBars = series.length;
+        var labelEvery = nBars <= 8 ? 1 : nBars <= 16 ? 2 : nBars <= 32 ? 4 : Math.ceil(nBars / 8);
+        var barsEl = document.getElementById('timeline-bars');
         if (barsEl) {
-          barsEl.innerHTML = (report.hourly || []).map(function (h) {
-            var pct = Math.max(4, Math.round((h.count / maxHour) * 100));
-            return '<div class="bar-col" title="' + esc(h.hour) + ': ' + esc(h.count) + '">' +
-              '<div class="bar" style="height:' + pct + '%"></div><span class="bar-n">' + esc(h.count) + '</span></div>';
-          }).join('') || '<div class="empty">No hourly data yet</div>';
+          barsEl.innerHTML = series.map(function (h, i) {
+            var pct = Math.max(3, Math.round((h.count / maxHour) * 100));
+            var showLabel = i === 0 || i === nBars - 1 || i % labelEvery === 0;
+            var title = h.title || (h.label + ' — ' + h.count + ' signals');
+            return '<div class="bar-col" title="' + esc(title) + '" data-count="' + esc(h.count) +
+              '" data-label="' + esc(h.label) + '"><div class="bar" style="height:' + pct +
+              '%"></div><span class="bar-label">' + (showLabel ? esc(h.label) : '') + '</span></div>';
+          }).join('') || '<div class="empty">No activity in this period yet</div>';
+          wireTimelineHover(barsEl);
         }
 
         var br = document.querySelector('#panel-overview .card:nth-child(2)');
