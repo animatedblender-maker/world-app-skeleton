@@ -682,6 +682,11 @@ final class PostsService {
             let post = homeFeedSparkOrder[homeFeedSparkOffset]
             homeFeedSparkOffset += 1
             if seen.contains(post.id) { continue }
+            // Never re-serve a watched spark into the home feed while unviewed remain.
+            if SparkDiscoveryEngine.isViewed(post.id) {
+                seen.insert(post.id)
+                continue
+            }
             seen.insert(post.id)
             guard post.playableVideoURL != nil || post.hasVideo || !(post.mediaURL ?? "").isEmpty else { continue }
             out.append(post)
@@ -730,6 +735,11 @@ final class PostsService {
                 break
             }
             for post in batch.forHomeFeed() {
+                // Skip already-watched — open/reload/load-more must not re-show them.
+                guard !SparkDiscoveryEngine.isViewed(post.id) else {
+                    _ = seen.insert(post.id)
+                    continue
+                }
                 guard seen.insert(post.id).inserted else { continue }
                 // Drop original when we already have its feed share (and vice versa).
                 guard seenContent.insert(post.homeFeedContentKey).inserted else { continue }
@@ -2620,16 +2630,18 @@ enum SparkDiscoveryEngine {
         return out
     }
 
-    /// Feed-friendly order: unviewed first (by recency within bucket), then viewed.
+    /// Feed-friendly order: unviewed only (same rules as session open).
     static func preferUnviewedFeedOrder(_ posts: [CountryPost]) -> [CountryPost] {
         sessionHomeFeedOrder(posts, followingIDs: [], myUserID: nil, sessionSeed: 0)
     }
 
-    /// Home feed open order — **different mix every session**, with clear priority:
-    /// 1) Your unviewed posts  
-    /// 2) **Unviewed posts from people you follow** (newest first)  
-    /// 3) Other unviewed shares / Sparks (session-seeded shuffle → changes every open)  
-    /// 4) Viewed following, then everything else viewed  
+    /// Home feed open / reload / app open order.
+    /// **Hard rule:** if the user already saw a post, it must not appear again until
+    /// every unviewed candidate is exhausted (then least-recently-viewed only).
+    /// Priority while unviewed remain:
+    /// 1) Your unviewed posts
+    /// 2) **Unviewed posts from people you follow** (newest first)
+    /// 3) Other unviewed shares / Sparks (session-seeded shuffle → different every open)
     static func sessionHomeFeedOrder(
         _ posts: [CountryPost],
         followingIDs: Set<String>,
@@ -2647,18 +2659,25 @@ enum SparkDiscoveryEngine {
         var mineUnviewed: [CountryPost] = []
         var followUnviewed: [CountryPost] = []
         var otherUnviewed: [CountryPost] = []
-        var mineViewed: [CountryPost] = []
-        var followViewed: [CountryPost] = []
-        var otherViewed: [CountryPost] = []
+        var viewedPool: [(CountryPost, TimeInterval)] = []
+
+        let now = Date().timeIntervalSince1970
+        lock.lock()
+        let impSnap = impressions
+        lock.unlock()
 
         for p in unique {
-            let viewed = isViewed(p.id)
+            if isViewed(p.id) {
+                let t = impSnap[p.id] ?? now
+                viewedPool.append((p, t))
+                continue
+            }
             if isMine(p) {
-                if viewed { mineViewed.append(p) } else { mineUnviewed.append(p) }
+                mineUnviewed.append(p)
             } else if isFollow(p) {
-                if viewed { followViewed.append(p) } else { followUnviewed.append(p) }
+                followUnviewed.append(p)
             } else {
-                if viewed { otherViewed.append(p) } else { otherUnviewed.append(p) }
+                otherUnviewed.append(p)
             }
         }
 
@@ -2673,26 +2692,18 @@ enum SparkDiscoveryEngine {
         let otherFresh = sessionSeed == 0
             ? newestFirst(otherUnviewed)
             : seededShuffle(otherUnviewed, seed: sessionSeed)
-        let followOld = newestFirst(followViewed)
-        let otherOld = sessionSeed == 0
-            ? newestFirst(otherViewed)
-            : seededShuffle(otherViewed, seed: sessionSeed &+ 0x9E37)
-        let mineOld = newestFirst(mineViewed)
 
-        // Soft interleave: after follows, weave a few discovery shares so opens feel fresh
-        // without burying follow posts.
-        var mid: [CountryPost] = []
-        mid.reserveCapacity(otherFresh.count + followFresh.count)
-        var fi = 0
-        var oi = 0
-        // All follow-unviewed first in a block (priority), then shuffled discovery.
-        mid.append(contentsOf: followFresh)
-        while oi < otherFresh.count {
-            mid.append(otherFresh[oi])
-            oi += 1
+        // HARD: never append already-seen posts while any unviewed remain.
+        let fresh = mineFresh + followFresh + otherFresh
+        if !fresh.isEmpty {
+            return fresh
         }
 
-        return mineFresh + mid + followOld + otherOld + mineOld
+        // Last resort only (library exhausted): oldest impression first so recycled
+        // items are the ones not seen for the longest time — still not "same as last open".
+        return viewedPool
+            .sorted { $0.1 < $1.1 }
+            .map(\.0)
     }
 
     private static func seededShuffle(_ items: [CountryPost], seed: UInt64) -> [CountryPost] {

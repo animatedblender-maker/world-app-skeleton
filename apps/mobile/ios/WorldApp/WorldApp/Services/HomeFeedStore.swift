@@ -79,6 +79,7 @@ final class HomeFeedStore {
             ?? AuthService.shared.currentUser?.id
     }
 
+    /// Session order + hard hide of already-viewed posts (open / reload / app open / load-more).
     private func rankForSession(_ posts: [CountryPost]) -> [CountryPost] {
         SparkDiscoveryEngine.sessionHomeFeedOrder(
             posts.dedupeHomeFeedContent(),
@@ -447,12 +448,14 @@ final class HomeFeedStore {
         var seen = seenIDs
         var contentKeys = seenContent
         for post in page.items.dedupeHomeFeedContent() {
+            // Already watched → never re-inject on scroll-more (same rule as open/reload).
+            guard !SparkDiscoveryEngine.isViewed(post.id) else { continue }
             guard seen.insert(post.id).inserted else { continue }
             guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
             appended.append(post)
         }
 
-        // Empty / all-dupes: unique R2 top-up only (never re-insert the whole head).
+        // Empty / all-dupes / all-viewed: unique R2 top-up only (never re-insert the whole head).
         if appended.isEmpty {
             recyclePass += 1
             let forceDeep = recyclePass == 1 || recyclePass % 4 == 0
@@ -462,18 +465,20 @@ final class HomeFeedStore {
                     deep: recyclePass >= 1
                 )
             }
+            let viewedExclude = Set(SparkDiscoveryEngine.viewedIDList(limit: 800))
             let topUp = await PostsService.shared.homeFeedSparkTopUp(
-                excluding: seen,
+                excluding: seen.union(viewedExclude),
                 limit: pageSize,
                 forceRefresh: recyclePass > 2
             )
             for post in topUp {
+                guard !SparkDiscoveryEngine.isViewed(post.id) else { continue }
                 guard seen.insert(post.id).inserted else { continue }
                 guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
                 appended.append(post)
             }
-            // Soft recycle ONLY after a deep session — never on first empty page
-            // (that was doubling every post: network dups → re-inject same sparks).
+            // Soft recycle ONLY when unviewed library is exhausted (deep session).
+            // sessionHomeFeedOrder will still prefer least-recently-viewed first.
             if appended.isEmpty, posts.count >= 60, recyclePass >= 3 {
                 let tailIDs = Set(posts.suffix(24).map(\.id))
                 let tailKeys = Set(posts.suffix(24).map(\.homeFeedContentKey))
@@ -501,7 +506,7 @@ final class HomeFeedStore {
             return
         }
 
-        // Rank new batch (follows unviewed first), then append without reordering the live head.
+        // Rank new batch (unviewed only; follows first), then append without reordering the live head.
         let orderedAppend = rankForSession(appended)
         posts.append(contentsOf: orderedAppend)
         // Grow window so new rows appear without waiting for another appear cycle.
@@ -533,7 +538,7 @@ final class HomeFeedStore {
 
     private func applyPosts(_ next: [CountryPost], replace: Bool, sessionId: String) {
         feedSessionId = sessionId
-        // Dedupe + session rank: unviewed follows first, then shuffled unviewed shares.
+        // Dedupe + session rank: unviewed only (following first). Seen posts never re-enter.
         let ordered = rankForSession(next)
         var t = Transaction()
         t.disablesAnimations = true
