@@ -146,65 +146,90 @@ final class PostsService {
     private static let focusMarketCodes = ["US", "DE", "EG", "AL"]
 
     /// **Smooth first paint** after sign-in / cold open.
-    /// Newest upload first so backend / R2 pipeline posts (incl. Sparks) surface at the top.
+    /// Pulls **following** heavily + recent shares, then session-ranks (unviewed follows first).
     func fetchFirstPaintHomePosts(limit: Int = 40) async -> [CountryPost] {
         await prepareFeedContext()
-        let pageLimit = min(max(limit, 24), 64)
-        // Include Sparks + text + long-form — do NOT strip the R2 library.
+        let pageLimit = min(max(limit, 24), 80)
         async let recentTask = fetchRecentFeedPosts(limit: pageLimit, preferSparkShares: true)
-        async let ownTask = fetchOwnPosts(limit: 8)
+        async let ownTask = fetchOwnPosts(limit: 10)
+        // Following is first-class fuel — not an afterthought.
+        async let followingTask = loadFollowingFeed(limitPerAuthor: 10, maxAuthors: 48)
         async let sparkTasteTask = fetchFocusMarketHubSparks(limitPerAuthor: 40)
+        async let discoverTask = fetchDiscoverSparks(limit: 24)
+
         let recent = await recentTask
         let own = await ownTask
-        // Small spark taste so first screens aren't empty when recent is text-heavy.
-        let sparkTaste = Array((await sparkTasteTask).shuffled().prefix(16))
+        let following = await followingTask
+        let sparkTaste = Array((await sparkTasteTask).shuffled().prefix(12))
+        let discover = await discoverTask
 
-        var combined = own + recent + sparkTaste
-        // Collapse original Spark + feed share of the same clip (pipeline seeds both).
+        var combined = own + following + recent + sparkTaste + discover
         combined = combined.forHomeFeed().excludingArchiveContent().dedupeHomeFeedContent()
-        // Last uploaded always on top — sparks without newer dates sit after recents.
-        var merged = chronologicalNewestFirst(combined)
+
+        let followingIDs = await follow.followingIDs()
+        let me = currentAuthorID()
+        let seed = UInt64.random(in: 1...UInt64.max)
+            ^ UInt64(Date().timeIntervalSince1970 * 1_000)
+        var merged = SparkDiscoveryEngine.sessionHomeFeedOrder(
+            combined,
+            followingIDs: followingIDs,
+            myUserID: me,
+            sessionSeed: seed
+        )
         if merged.count > pageLimit {
             merged = Array(merged.prefix(pageLimit))
         }
-        // Background-warm a light Sparks catalog so scroll load-more has fuel immediately.
         Task(priority: .utility) { [weak self] in
             _ = await self?.loadSparksDiscoveryCatalog(forceRefresh: false, deep: false)
         }
         return merged
     }
 
-    /// Live network posts for pull-to-refresh / deeper revalidate (still bounded for smoothness).
+    /// Live network posts for pull-to-refresh / deeper revalidate.
     func fetchNetworkHomePosts(limit: Int = 80) async -> [CountryPost] {
         await prepareFeedContext()
-        let cap = min(max(limit, 40), 120)
+        let cap = min(max(limit, 40), 140)
         async let ownTask = fetchOwnPosts(limit: 12)
+        async let followingTask = loadFollowingFeed(limitPerAuthor: 12, maxAuthors: 60)
         async let recentTask = fetchRecentPosts(limit: min(cap, 80))
         async let focusTask = fetchFocusMarketPosts(limit: min(48, cap))
-        async let sparksTask = fetchFocusMarketHubSparks(limitPerAuthor: 80)
+        async let sparksTask = fetchFocusMarketHubSparks(limitPerAuthor: 60)
+        async let discoverTask = fetchDiscoverSparks(limit: 40)
 
         let own = await ownTask
+        let following = await followingTask
         let recent = await recentTask
         let focus = await focusTask
         let sparks = await sparksTask
+        let discover = await discoverTask
 
         var combined: [CountryPost] = []
         combined.append(contentsOf: own)
-        combined.append(contentsOf: focus)
+        combined.append(contentsOf: following)
         combined.append(contentsOf: recent)
+        combined.append(contentsOf: focus)
         combined.append(contentsOf: sparks)
+        combined.append(contentsOf: discover)
 
-        var merged = chronologicalNewestFirst(combined)
-            .forHomeFeed()
-            .excludingArchiveContent()
-            .dedupeHomeFeedContent()
-        // Pure recency — last uploaded always at top (no density reshuffle).
+        let followingIDs = await follow.followingIDs()
+        let me = currentAuthorID()
+        let seed = UInt64.random(in: 1...UInt64.max)
+            ^ UInt64(Date().timeIntervalSince1970 * 1_000)
+        var merged = SparkDiscoveryEngine.sessionHomeFeedOrder(
+            combined.forHomeFeed().excludingArchiveContent().dedupeHomeFeedContent(),
+            followingIDs: followingIDs,
+            myUserID: me,
+            sessionSeed: seed
+        )
         if merged.count > cap {
             merged = Array(merged.prefix(cap))
         }
         if merged.isEmpty {
-            merged = chronologicalNewestFirst(
-                await fallbackFeedPosts(limit: cap).forHomeFeed().dedupeHomeFeedContent()
+            merged = SparkDiscoveryEngine.sessionHomeFeedOrder(
+                await fallbackFeedPosts(limit: cap).forHomeFeed().dedupeHomeFeedContent(),
+                followingIDs: followingIDs,
+                myUserID: me,
+                sessionSeed: seed
             )
         }
         return merged
@@ -2597,13 +2622,97 @@ enum SparkDiscoveryEngine {
 
     /// Feed-friendly order: unviewed first (by recency within bucket), then viewed.
     static func preferUnviewedFeedOrder(_ posts: [CountryPost]) -> [CountryPost] {
+        sessionHomeFeedOrder(posts, followingIDs: [], myUserID: nil, sessionSeed: 0)
+    }
+
+    /// Home feed open order — **different mix every session**, with clear priority:
+    /// 1) Your unviewed posts  
+    /// 2) **Unviewed posts from people you follow** (newest first)  
+    /// 3) Other unviewed shares / Sparks (session-seeded shuffle → changes every open)  
+    /// 4) Viewed following, then everything else viewed  
+    static func sessionHomeFeedOrder(
+        _ posts: [CountryPost],
+        followingIDs: Set<String>,
+        myUserID: String?,
+        sessionSeed: UInt64
+    ) -> [CountryPost] {
         var seen = Set<String>()
         let unique = posts.filter { seen.insert($0.id).inserted && !$0.isStory }
-        let unviewed = unique.filter { !isViewed($0.id) }
-            .sorted { ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast) }
-        let viewed = unique.filter { isViewed($0.id) }
-            .sorted { ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast) }
-        return unviewed + viewed
+        guard !unique.isEmpty else { return [] }
+
+        let me = myUserID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        func isMine(_ p: CountryPost) -> Bool { !me.isEmpty && p.authorID == me }
+        func isFollow(_ p: CountryPost) -> Bool { followingIDs.contains(p.authorID) }
+
+        var mineUnviewed: [CountryPost] = []
+        var followUnviewed: [CountryPost] = []
+        var otherUnviewed: [CountryPost] = []
+        var mineViewed: [CountryPost] = []
+        var followViewed: [CountryPost] = []
+        var otherViewed: [CountryPost] = []
+
+        for p in unique {
+            let viewed = isViewed(p.id)
+            if isMine(p) {
+                (viewed ? mineViewed : mineUnviewed).append(p)
+            } else if isFollow(p) {
+                (viewed ? followViewed : followUnviewed).append(p)
+            } else {
+                (viewed ? otherViewed : otherUnviewed).append(p)
+            }
+        }
+
+        func newestFirst(_ items: [CountryPost]) -> [CountryPost] {
+            items.sorted { ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast) }
+        }
+
+        // Following unviewed = hard priority, newest first (new post from a follow jumps the feed).
+        let followFresh = newestFirst(followUnviewed)
+        let mineFresh = newestFirst(mineUnviewed)
+        // Global shares / discovery: reshuffle every open so the feed never feels frozen.
+        let otherFresh = sessionSeed == 0
+            ? newestFirst(otherUnviewed)
+            : seededShuffle(otherUnviewed, seed: sessionSeed)
+        let followOld = newestFirst(followViewed)
+        let otherOld = sessionSeed == 0
+            ? newestFirst(otherViewed)
+            : seededShuffle(otherViewed, seed: sessionSeed &+ 0x9E37)
+        let mineOld = newestFirst(mineViewed)
+
+        // Soft interleave: after follows, weave a few discovery shares so opens feel fresh
+        // without burying follow posts.
+        var mid: [CountryPost] = []
+        mid.reserveCapacity(otherFresh.count + followFresh.count)
+        var fi = 0
+        var oi = 0
+        // All follow-unviewed first in a block (priority), then shuffled discovery.
+        mid.append(contentsOf: followFresh)
+        while oi < otherFresh.count {
+            mid.append(otherFresh[oi])
+            oi += 1
+        }
+
+        return mineFresh + mid + followOld + otherOld + mineOld
+    }
+
+    private static func seededShuffle(_ items: [CountryPost], seed: UInt64) -> [CountryPost] {
+        guard items.count > 1 else { return items }
+        var rng = FeedSeededRNG(seed: seed == 0 ? 0xC0FFEE : seed)
+        var arr = items
+        arr.shuffle(using: &rng)
+        return arr
+    }
+
+    private struct FeedSeededRNG: RandomNumberGenerator {
+        private var state: UInt64
+        init(seed: UInt64) { state = seed == 0 ? 0x9E3779B97F4A7C15 : seed }
+        mutating func next() -> UInt64 {
+            state &+= 0x9E3779B97F4A7C15
+            var z = state
+            z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9
+            z = (z ^ (z >> 27)) &* 0x94D049BB133111EB
+            return z ^ (z >> 31)
+        }
     }
 
     static func nextBatch(

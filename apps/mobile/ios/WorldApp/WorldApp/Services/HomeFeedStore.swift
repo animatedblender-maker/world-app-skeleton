@@ -58,6 +58,10 @@ final class HomeFeedStore {
     private var pendingLoadMoreTask: Task<Void, Never>?
     /// Soft recycle pass when unique network + catalog slices run dry — feed never ends.
     private var recyclePass = 0
+    /// New every app open / pull-to-refresh → different share mix.
+    private var sessionRankSeed: UInt64 = UInt64.random(in: 1...UInt64.max)
+    private var sessionFollowingIDs: Set<String> = []
+    private var sessionMyUserID: String?
 
     private let pageSize = 24
     private let windowPageSize = 12
@@ -66,6 +70,23 @@ final class HomeFeedStore {
     private let prefetchRatio = 0.55
 
     private init() {}
+
+    private func refreshSessionRankingContext() async {
+        sessionRankSeed = UInt64.random(in: 1...UInt64.max)
+            ^ UInt64(Date().timeIntervalSince1970 * 1_000_000)
+        sessionFollowingIDs = await FollowService.shared.followingIDs()
+        sessionMyUserID = ContentCache.shared.cachedProfile()?.userID
+            ?? AuthService.shared.currentUser?.id
+    }
+
+    private func rankForSession(_ posts: [CountryPost]) -> [CountryPost] {
+        SparkDiscoveryEngine.sessionHomeFeedOrder(
+            posts.dedupeHomeFeedContent(),
+            followingIDs: sessionFollowingIDs,
+            myUserID: sessionMyUserID,
+            sessionSeed: sessionRankSeed
+        )
+    }
 
     var displayedPosts: [CountryPost] {
         Array(posts.prefix(windowLimit))
@@ -77,8 +98,8 @@ final class HomeFeedStore {
 
     // MARK: - Lifecycle
 
-    /// New browsing session (app open / 3+ min away / pull): **newest upload on top**.
-    /// Network recency wins so R2 / backend pipeline posts always surface first.
+    /// New browsing session (app open / 3+ min away / pull):
+    /// **new mix every open**, priority = unviewed from people you follow.
     func beginFreshSession() async {
         generation += 1
         let gen = generation
@@ -89,7 +110,9 @@ final class HomeFeedStore {
         isRefreshing = true
         defer { isRefreshing = false }
 
-        // 1) Instant paint from memory / disk — still newest-first (not shuffled).
+        await refreshSessionRankingContext()
+
+        // 1) Instant paint from cache — already re-ranked for this session seed.
         var pool: [CountryPost] = posts
         if pool.isEmpty, let cached = ContentCache.shared.posts(for: .homeFeed) {
             pool = Self.liveOnlyPosts(cached)
@@ -98,8 +121,7 @@ final class HomeFeedStore {
             BlockService.shared.filterPosts(pool.excludingMoments().forHomeFeed())
         )
         if !pool.isEmpty {
-            let fresh = PostsService.shared.chronologicalNewestFirst(pool.dedupeHomeFeedContent())
-            applyPosts(Array(fresh.prefix(80)), replace: true, sessionId: feedSessionId)
+            applyPosts(Array(rankForSession(pool).prefix(80)), replace: true, sessionId: feedSessionId)
             isBootstrapping = false
             didPaint = true
             warmHead()
@@ -107,24 +129,22 @@ final class HomeFeedStore {
             isBootstrapping = true
         }
 
-        // 2) Network page — last uploaded always at top (includes R2 Sparks).
-        let live = Self.liveOnlyPosts(await PostsService.shared.fetchFirstPaintHomePosts(limit: 64))
+        // 2) Network — following + discovery shares, session-ranked (not sticky recency).
+        let live = Self.liveOnlyPosts(await PostsService.shared.fetchFirstPaintHomePosts(limit: 72))
         guard gen == generation else { return }
 
-        let realBatch = Self.liveOnlyPosts(live + posts).dedupeHomeFeedContent()
-        let merged = PostsService.shared.chronologicalNewestFirst(realBatch)
-        // First paint head only — load-more pulls the rest of the 28k+ library.
-        let capped = Array(merged.prefix(min(merged.count, 80)))
+        let realBatch = Self.liveOnlyPosts(live + posts)
+        let capped = Array(rankForSession(realBatch).prefix(min(realBatch.count, 90)))
 
         if !capped.isEmpty {
             applyPosts(capped, replace: true, sessionId: feedSessionId)
             ContentCache.shared.setPosts(posts, for: .homeFeed)
             didPaint = true
             warmHead()
-            hasMore = true // endless — R2 + network continue on scroll
+            hasMore = true
             recyclePass = 0
             #if DEBUG
-            print("[HomeFeed] freshSession total=\(capped.count) network=\(live.count) newest=\(capped.first?.id.prefix(8) ?? "-")")
+            print("[HomeFeed] freshSession total=\(capped.count) following=\(sessionFollowingIDs.count) seed=\(sessionRankSeed)")
             #endif
         } else if posts.isEmpty {
             applyPosts([], replace: true, sessionId: feedSessionId)
@@ -150,6 +170,8 @@ final class HomeFeedStore {
             return
         }
 
+        await refreshSessionRankingContext()
+
         // 1) Instant paint from cache (sign-in / relaunch must not wait on network).
         if posts.isEmpty, let cached = ContentCache.shared.posts(for: .homeFeed), !cached.isEmpty {
             let clean = Self.liveOnlyPosts(cached)
@@ -157,10 +179,8 @@ final class HomeFeedStore {
                 ContentCache.shared.invalidate(.homeFeed)
             } else {
                 applyPosts(
-                    PostsService.shared.chronologicalNewestFirst(
-                        BlockService.shared.filterPosts(
-                            clean.excludingMoments().forHomeFeed().dedupeHomeFeedContent()
-                        )
+                    BlockService.shared.filterPosts(
+                        clean.excludingMoments().forHomeFeed()
                     ),
                     replace: true,
                     sessionId: feedSessionId
@@ -173,13 +193,12 @@ final class HomeFeedStore {
 
         // 2) Light network first paint ONLY — never await full Sparks catalog here
         // (that blocked @MainActor for minutes and froze the feed).
-        let live = Self.liveOnlyPosts(await PostsService.shared.fetchFirstPaintHomePosts(limit: 64))
+        let live = Self.liveOnlyPosts(await PostsService.shared.fetchFirstPaintHomePosts(limit: 72))
         guard gen == generation else { return }
 
         let existingLive = posts.filter { !$0.isStory }
-        let realBatch = Self.liveOnlyPosts(live + existingLive).dedupeHomeFeedContent()
-        let merged = PostsService.shared.chronologicalNewestFirst(realBatch)
-        let capped = Array(merged.prefix(min(merged.count, 80)))
+        let realBatch = Self.liveOnlyPosts(live + existingLive)
+        let capped = Array(rankForSession(realBatch).prefix(min(realBatch.count, 90)))
 
         if !capped.isEmpty {
             applyPosts(capped, replace: true, sessionId: feedSessionId)
@@ -372,13 +391,13 @@ final class HomeFeedStore {
         nextCursor = nil
         hasMore = true
         recyclePass = 0
+        await refreshSessionRankingContext()
 
-        // Pull-to-refresh may go a bit deeper than first paint, still capped for smoothness.
+        // Pull-to-refresh: new session seed + following-first ranking.
         let live = Self.liveOnlyPosts(await PostsService.shared.fetchNetworkHomePosts(limit: 100))
         guard gen == generation else { return }
 
-        // Newest upload first — pull-to-refresh must surface brand-new R2/backend posts.
-        let filtered = PostsService.shared.chronologicalNewestFirst(live)
+        let filtered = rankForSession(live)
         applyPosts(filtered, replace: true, sessionId: feedSessionId)
         nextCursor = Self.cursor(from: filtered.last)
         // Always more — R2 library + network continue after this head.
@@ -482,8 +501,8 @@ final class HomeFeedStore {
             return
         }
 
-        // Append unviewed first within the new batch (never lead with already-watched).
-        let orderedAppend = SparkDiscoveryEngine.preferUnviewedFeedOrder(appended)
+        // Rank new batch (follows unviewed first), then append without reordering the live head.
+        let orderedAppend = rankForSession(appended)
         posts.append(contentsOf: orderedAppend)
         // Grow window so new rows appear without waiting for another appear cycle.
         var t = Transaction()
@@ -514,8 +533,8 @@ final class HomeFeedStore {
 
     private func applyPosts(_ next: [CountryPost], replace: Bool, sessionId: String) {
         feedSessionId = sessionId
-        // Dedupe, then **unviewed first** so the algorithm never leads with watched posts/Sparks.
-        let ordered = SparkDiscoveryEngine.preferUnviewedFeedOrder(next.dedupeHomeFeedContent())
+        // Dedupe + session rank: unviewed follows first, then shuffled unviewed shares.
+        let ordered = rankForSession(next)
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) {
