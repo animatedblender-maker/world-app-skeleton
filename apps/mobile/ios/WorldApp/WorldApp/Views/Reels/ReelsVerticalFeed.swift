@@ -85,7 +85,7 @@ struct ReelsVerticalFeed: View {
     private func recordView(at index: Int) {
         guard posts.indices.contains(index) else { return }
         let post = posts[index]
-        SparkDiscoveryEngine.markWatched(post.id)
+        SparkDiscoveryEngine.markWatched(post)
         Task { await PostsService.shared.recordView(post) }
     }
 
@@ -1377,7 +1377,7 @@ struct ReelsScrollViewer: View {
             )
             appState.showToast("Hidden from \(MatteryaCopy.sparks.lowercased()).", style: .info)
         }
-        SparkDiscoveryEngine.markWatched(post.id)
+        SparkDiscoveryEngine.markWatched(post)
 
         var next = posts
         next.removeAll { $0.id == post.id }
@@ -1531,7 +1531,7 @@ struct ReelsScrollViewer: View {
         SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
         #if DEBUG
         let unviewedAhead = posts.dropFirst(activeIndex + 1)
-            .filter { !SparkDiscoveryEngine.isViewed($0.id) }.count
+            .filter { !SparkDiscoveryEngine.isViewed($0) }.count
         print("[Sparks] player queue size=\(posts.count) live=\(keepID.prefix(8)) unviewedAhead=\(unviewedAhead)")
         #endif
     }
@@ -1558,7 +1558,7 @@ struct ReelsScrollViewer: View {
         var seen = Set(posts.map(\.id))
         var appended: [CountryPost] = []
         let hasUnviewedIncoming = feed.contains {
-            !seen.contains($0.id) && !SparkDiscoveryEngine.isViewed($0.id)
+            !seen.contains($0.id) && !SparkDiscoveryEngine.isViewed($0)
         }
         for p in feed where seen.insert(p.id).inserted {
             if !preserveID.isEmpty {
@@ -1568,7 +1568,7 @@ struct ReelsScrollViewer: View {
                 else { continue }
             }
             // Skip already-viewed while we still have unviewed candidates in this batch.
-            if hasUnviewedIncoming, SparkDiscoveryEngine.isViewed(p.id), p.id != preserveID {
+            if hasUnviewedIncoming, SparkDiscoveryEngine.isViewed(p), p.id != preserveID {
                 continue
             }
             appended.append(p)

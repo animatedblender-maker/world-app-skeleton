@@ -86,9 +86,9 @@ enum FeedCompositionEngine {
                 break
             }
 
-            if policy.preferUnviewed, SparkDiscoveryEngine.isViewed(post.id) {
-                // Keep as low-score recycle candidate only when policy allows.
-                if !policy.allowRecycleWhenExhausted { continue }
+            let viewed = SparkDiscoveryEngine.isViewed(post)
+            if policy.preferUnviewed, viewed, !policy.allowRecycleWhenExhausted {
+                continue
             }
 
             var sources: [RecommendationCandidateSource] = []
@@ -111,14 +111,14 @@ enum FeedCompositionEngine {
             if sources.isEmpty {
                 sources.append(.explore)
             }
-            if policy.preferUnviewed, !SparkDiscoveryEngine.isViewed(post.id) {
+            if policy.preferUnviewed, !viewed {
                 score += 1.5
-            } else if SparkDiscoveryEngine.isViewed(post.id) {
+            } else if viewed {
                 score -= 3.0
             }
 
             // Exploration: slight boost for never-seen so cold items can enter.
-            if policy.explorationBudget > 0, !SparkDiscoveryEngine.isViewed(post.id),
+            if policy.explorationBudget > 0, !viewed,
                !followingIDs.contains(post.authorID) {
                 score += policy.explorationBudget * 0.8
                 if !sources.contains(.exploration) {
@@ -134,6 +134,16 @@ enum FeedCompositionEngine {
                     retrievalReason: sources.map(\.rawValue).joined(separator: ",")
                 )
             )
+        }
+        // HARD: while any unviewed remain, drop already-watched (shares + originals).
+        if policy.preferUnviewed {
+            let fresh = out.filter { !SparkDiscoveryEngine.isViewed($0.post) }
+            if !fresh.isEmpty {
+                out = fresh
+            } else if !policy.allowRecycleWhenExhausted {
+                out = []
+            }
+            // else: library exhausted — keep low-score recycle candidates
         }
         return out.sorted { $0.baseScore > $1.baseScore }
     }
@@ -224,8 +234,8 @@ enum FeedCompositionEngine {
             }
         }
 
-        // Novelty vs recently viewed (session).
-        if SparkDiscoveryEngine.isViewed(c.post.id) {
+        // Novelty vs recently viewed (session / origin key).
+        if SparkDiscoveryEngine.isViewed(c.post) {
             s -= 2.5
         }
 

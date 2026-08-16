@@ -445,7 +445,12 @@ final class HomeFeedStore {
     /// (includes DE Million Post Corpus seeds + their comments).
     /// **Keeps R2 Sparks** — they render as SparkFeedCard on the main feed.
     private static func liveOnlyPosts(_ posts: [CountryPost]) -> [CountryPost] {
-        posts.excludingDeletedPosts().forHomeFeed()
+        // Drop deleted + already-watched Sparks/clips (origin+share collapse) while unviewed remain.
+        let base = posts.excludingDeletedPosts().forHomeFeed()
+        let unviewed = base.filter { !SparkDiscoveryEngine.isViewed($0) }
+        if !unviewed.isEmpty { return unviewed }
+        // Library exhausted — keep list (rankers still put least-recent first).
+        return base
     }
 
     // MARK: - Scroll / prefetch
@@ -692,8 +697,8 @@ final class HomeFeedStore {
         var seen = seenIDs
         var contentKeys = seenContent
         for post in page.items.dedupeHomeFeedContent() {
-            // Already watched → never re-inject on scroll-more (same rule as open/reload).
-            guard !SparkDiscoveryEngine.isViewed(post.id) else { continue }
+            // Already watched (any identity) → never re-inject while unviewed remain.
+            guard !SparkDiscoveryEngine.isViewed(post) else { continue }
             guard seen.insert(post.id).inserted else { continue }
             guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
             appended.append(post)
@@ -709,21 +714,21 @@ final class HomeFeedStore {
                     deep: recyclePass >= 1
                 )
             }
-            let viewedExclude = Set(SparkDiscoveryEngine.viewedIDList(limit: 800))
+            let viewedExclude = Set(SparkDiscoveryEngine.viewedIDList(limit: 2_000))
             let topUp = await PostsService.shared.homeFeedSparkTopUp(
                 excluding: seen.union(viewedExclude),
                 limit: pageSize,
                 forceRefresh: recyclePass > 2
             )
             for post in topUp {
-                guard !SparkDiscoveryEngine.isViewed(post.id) else { continue }
+                guard !SparkDiscoveryEngine.isViewed(post) else { continue }
                 guard seen.insert(post.id).inserted else { continue }
                 guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
                 appended.append(post)
             }
-            // Soft recycle ONLY when unviewed library is exhausted (deep session).
-            // sessionHomeFeedOrder will still prefer least-recently-viewed first.
-            if appended.isEmpty, posts.count >= 60, recyclePass >= 3 {
+            // Soft recycle ONLY when unviewed library is truly exhausted (deep session).
+            // Still prefer least-recently-viewed via rankForDiscovery — never dump random watched.
+            if appended.isEmpty, posts.count >= 100, recyclePass >= 6 {
                 let tailIDs = Set(posts.suffix(24).map(\.id))
                 let tailKeys = Set(posts.suffix(24).map(\.homeFeedContentKey))
                 let recycled = await PostsService.shared.homeFeedSparkTopUp(
@@ -731,11 +736,13 @@ final class HomeFeedStore {
                     limit: pageSize,
                     forceRefresh: true
                 )
-                for post in recycled {
+                let ordered = SparkDiscoveryEngine.rankForDiscovery(recycled, excluding: tailIDs)
+                for post in ordered {
                     if tailIDs.contains(post.id) { continue }
                     if tailKeys.contains(post.homeFeedContentKey) { continue }
                     guard seen.insert(post.id).inserted else { continue }
                     appended.append(post)
+                    if appended.count >= pageSize / 2 { break }
                 }
             }
         }

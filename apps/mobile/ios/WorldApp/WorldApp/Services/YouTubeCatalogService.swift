@@ -460,7 +460,7 @@ final class YouTubeCatalogService {
             var otherFresh: [CountryPost] = []
             var viewed: [CountryPost] = []
             for p in items {
-                if SparkDiscoveryEngine.isViewed(p.id) {
+                if SparkDiscoveryEngine.isViewed(p) {
                     viewed.append(p)
                     continue
                 }
@@ -647,8 +647,8 @@ final class YouTubeCatalogService {
 
         // Prefer unviewed inside each tier without collapsing to a global rank order.
         func preferFresh(_ items: [CountryPost]) -> [CountryPost] {
-            let fresh = items.filter { !SparkDiscoveryEngine.isViewed($0.id) }
-            let seen = items.filter { SparkDiscoveryEngine.isViewed($0.id) }
+            let fresh = items.filter { !SparkDiscoveryEngine.isViewed($0) }
+            let seen = items.filter { SparkDiscoveryEngine.isViewed($0) }
             return fresh + seen
         }
 

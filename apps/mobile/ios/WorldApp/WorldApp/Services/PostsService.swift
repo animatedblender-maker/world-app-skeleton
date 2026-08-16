@@ -541,7 +541,7 @@ final class PostsService {
         sparksSessionCatalog = catalog
         sparksSessionLoadedAt = Date()
         #if DEBUG
-        let unviewed = catalog.filter { !SparkDiscoveryEngine.isViewed($0.id) }.count
+        let unviewed = catalog.filter { !SparkDiscoveryEngine.isViewed($0) }.count
         print("[Sparks] fresh session size=\(catalog.count) unviewed=\(unviewed)")
         #endif
         return catalog
@@ -642,7 +642,7 @@ final class PostsService {
             excluding: Array(seen.prefix(800))
         )
         for post in SparkDiscoveryEngine.rankForDiscovery(remote, excluding: seen) {
-            guard !SparkDiscoveryEngine.isViewed(post.id) else { continue }
+            guard !SparkDiscoveryEngine.isViewed(post) else { continue }
             guard seen.insert(post.id).inserted else { continue }
             guard post.playableVideoURL != nil || post.hasVideo || !(post.mediaURL ?? "").isEmpty else { continue }
             out.append(post)
@@ -683,7 +683,7 @@ final class PostsService {
             homeFeedSparkOffset += 1
             if seen.contains(post.id) { continue }
             // Never re-serve a watched spark into the home feed while unviewed remain.
-            if SparkDiscoveryEngine.isViewed(post.id) {
+            if SparkDiscoveryEngine.isViewed(post) {
                 seen.insert(post.id)
                 continue
             }
@@ -736,7 +736,7 @@ final class PostsService {
             }
             for post in batch.forHomeFeed() {
                 // Skip already-watched — open/reload/load-more must not re-show them.
-                guard !SparkDiscoveryEngine.isViewed(post.id) else {
+                guard !SparkDiscoveryEngine.isViewed(post) else {
                     _ = seen.insert(post.id)
                     continue
                 }
@@ -2320,7 +2320,8 @@ final class PostsService {
     func recordView(_ post: CountryPost) async {
         guard !post.id.isEmpty, !viewedPostIDs.contains(post.id) else { return }
         viewedPostIDs.insert(post.id)
-        SparkDiscoveryEngine.markWatched(post.id)
+        // Origin + share ids — feed/Sparks must not re-surface this clip as unviewed.
+        SparkDiscoveryEngine.markWatched(post)
         await MainActor.run {
             EngagementTracker.shared.videoProgress(post: post, progress: 0.05, durationMs: 0, surface: "view")
         }
@@ -2585,9 +2586,10 @@ enum SparkDiscoveryEngine {
 
     static func markImpressed(_ postID: String) {
         guard !postID.isEmpty else { return }
+        let key = normalizeID(postID)
         lock.lock()
-        sessionServed.insert(postID)
-        impressions[postID] = Date().timeIntervalSince1970
+        sessionServed.insert(key)
+        impressions[key] = Date().timeIntervalSince1970
         lock.unlock()
         trimAndSave()
     }
@@ -2596,8 +2598,10 @@ enum SparkDiscoveryEngine {
         let now = Date().timeIntervalSince1970
         lock.lock()
         for post in posts {
-            sessionServed.insert(post.id)
-            impressions[post.id] = now
+            for key in discoveryKeys(for: post) {
+                sessionServed.insert(key)
+                impressions[key] = now
+            }
         }
         lock.unlock()
         trimAndSave()
@@ -2605,19 +2609,57 @@ enum SparkDiscoveryEngine {
 
     static func markWatched(_ postID: String) {
         markImpressed(postID)
-        ReelsRankingEngine.markWatched(postID)
+        ReelsRankingEngine.markWatched(normalizeID(postID))
+    }
+
+    /// Mark every identity for this clip (post id, share id, spark origin) so feed shares
+    /// and Sparks originals never reappear as "fresh" after one watch.
+    static func markWatched(_ post: CountryPost) {
+        for key in discoveryKeys(for: post) {
+            markWatched(key)
+        }
     }
 
     /// True if this user already viewed the post this session or within the TTL window.
     static func isViewed(_ postID: String) -> Bool {
         guard !postID.isEmpty else { return false }
+        let key = normalizeID(postID)
         let now = Date().timeIntervalSince1970
         let ttl = impressionTTLDays * 24 * 3600
         lock.lock()
         defer { lock.unlock() }
+        if sessionServed.contains(key) { return true }
+        if let t = impressions[key], now - t < ttl { return true }
+        // Also match raw key in case older history used mixed casing.
         if sessionServed.contains(postID) { return true }
         if let t = impressions[postID], now - t < ttl { return true }
         return false
+    }
+
+    /// Clip-level viewed (share + original + marker origin collapse to one watch).
+    static func isViewed(_ post: CountryPost) -> Bool {
+        discoveryKeys(for: post).contains { isViewed($0) }
+    }
+
+    /// Stable ids that all mean "this same Spark/clip" for de-dupe / unviewed rules.
+    static func discoveryKeys(for post: CountryPost) -> [String] {
+        var keys: [String] = []
+        func add(_ raw: String?) {
+            guard let n = raw.map(normalizeID), !n.isEmpty, !keys.contains(n) else { return }
+            keys.append(n)
+        }
+        add(post.id)
+        add(post.sharedPostID)
+        add(SparkShareMarker.originID(from: post.body))
+        let hk = post.homeFeedContentKey
+        if hk.hasPrefix("spark:") {
+            add(String(hk.dropFirst("spark:".count)))
+        }
+        return keys
+    }
+
+    private static func normalizeID(_ raw: String) -> String {
+        raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
     /// IDs to exclude from API `discoverSparks` / paging (newest watches first).
@@ -2693,11 +2735,18 @@ enum SparkDiscoveryEngine {
         var viewed: [(CountryPost, TimeInterval)] = []
 
         for post in pool {
-            if sessionSnap.contains(post.id) {
+            let keys = discoveryKeys(for: post)
+            if keys.contains(where: { sessionSnap.contains($0) || sessionSnap.contains(post.id) }) {
                 viewed.append((post, now))
                 continue
             }
-            if let t = impSnap[post.id], now - t < ttl {
+            var seenAt: TimeInterval?
+            for k in keys {
+                if let t = impSnap[k], now - t < ttl {
+                    seenAt = min(seenAt ?? t, t)
+                }
+            }
+            if let t = seenAt {
                 viewed.append((post, t))
             } else {
                 unviewed.append(post)
@@ -2765,8 +2814,9 @@ enum SparkDiscoveryEngine {
         lock.unlock()
 
         for p in unique {
-            if isViewed(p.id) {
-                let t = impSnap[p.id] ?? now
+            if isViewed(p) {
+                let keys = discoveryKeys(for: p)
+                let t = keys.compactMap { impSnap[$0] }.min() ?? now
                 viewedPool.append((p, t))
                 continue
             }
@@ -2837,7 +2887,7 @@ enum SparkDiscoveryEngine {
             !existingIDs.contains($0.id) && ReelsRankingEngine.isSparkEligible($0)
         }
         // Always try unviewed first — ignore allowRecycle until unviewed pool is empty.
-        let unviewed = eligible.filter { !isViewed($0.id) }
+        let unviewed = eligible.filter { !isViewed($0) }
         let pool: [CountryPost]
         if !unviewed.isEmpty {
             pool = unviewed
@@ -2860,7 +2910,7 @@ enum SparkDiscoveryEngine {
 
             let diverse = remaining.enumerated().filter { _, post in
                 // Never pick viewed while any unviewed remains in remaining.
-                if isViewed(post.id), remaining.contains(where: { !isViewed($0.id) }) {
+                if isViewed(post), remaining.contains(where: { !isViewed($0) }) {
                     return false
                 }
                 if recentAuthors.contains(post.authorID) { return false }
@@ -2871,7 +2921,7 @@ enum SparkDiscoveryEngine {
             let choice: CountryPost
             if let d = diverse.first {
                 choice = remaining.remove(at: d.offset)
-            } else if let u = remaining.firstIndex(where: { !isViewed($0.id) }) {
+            } else if let u = remaining.firstIndex(where: { !isViewed($0) }) {
                 choice = remaining.remove(at: u)
             } else {
                 choice = remaining.removeFirst()

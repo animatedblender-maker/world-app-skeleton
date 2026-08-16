@@ -588,7 +588,8 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         }
 
         if posts.indices.contains(clamped) {
-            SparkDiscoveryEngine.markWatched(posts[clamped].id)
+            // Mark all identities (origin + share) so feed never re-serves this clip.
+            SparkDiscoveryEngine.markWatched(posts[clamped])
         }
     }
 
