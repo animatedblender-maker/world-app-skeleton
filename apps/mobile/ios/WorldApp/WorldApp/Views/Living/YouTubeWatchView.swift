@@ -278,13 +278,8 @@ struct YouTubeWatchView: View {
         let text = descriptionText(for: currentPost)
         if text.isEmpty {
             EmptyView()
-        } else if isHubContent {
-            Text(text)
-                .font(.subheadline)
-                .foregroundStyle(Theme.inkSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
         } else {
+            // Same expand control for hub + live — only appears when text is truncated.
             YouTubeExpandableDescription(text: text)
         }
     }

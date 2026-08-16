@@ -244,29 +244,26 @@ struct YouTubeCompactRelatedRow: View {
     }
 }
 
+/// Hubs / watch description — “Show more” only when the copy is actually truncated.
 struct YouTubeExpandableDescription: View {
     let text: String
-    @State private var expanded = false
+    var collapsedLineLimit: Int = 3
 
     var body: some View {
-        if text.isEmpty {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
             EmptyView()
         } else {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(text)
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.inkSecondary)
-                    .lineLimit(expanded ? nil : 3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                Button(expanded ? "Show less" : "Show more") {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        expanded.toggle()
-                    }
-                }
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(Theme.accentBright)
-            }
+            ExpandableBodyText(
+                text: trimmed,
+                collapsedLineLimit: collapsedLineLimit,
+                font: .subheadline,
+                color: Theme.inkSecondary,
+                lineSpacing: 3,
+                moreTitle: "Show more",
+                lessTitle: "Show less",
+                uiTextStyle: .subheadline
+            )
             .padding(14)
             .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(
