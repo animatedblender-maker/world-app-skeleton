@@ -20,7 +20,8 @@ final class CommentsWarmCache {
 
     /// Fire-and-forget warm (tap Chat, idle on active Spark, feed card appear).
     /// Uses a small first page so warm never blocks for hundreds of R2 comments.
-    func warm(_ postID: String, limit: Int = PostsService.commentsFirstPageLimit) {
+    /// Literal default avoids Swift 6 nonisolated default-arg isolation on PostsService.
+    func warm(_ postID: String, limit: Int = 48) {
         let key = normalized(postID)
         guard !key.isEmpty else { return }
         if cache[key] != nil { return }
@@ -43,7 +44,7 @@ final class CommentsWarmCache {
     /// Await warm/network; always returns (empty on failure).
     func load(
         _ postID: String,
-        limit: Int = PostsService.commentsFirstPageLimit
+        limit: Int = 48
     ) async -> [PostComment] {
         let key = normalized(postID)
         guard !key.isEmpty else { return [] }
@@ -61,8 +62,8 @@ final class CommentsWarmCache {
     /// Fast first page + optional background top-up (Hubs watch / feed expand).
     func loadProgressive(
         _ postID: String,
-        firstPage: Int = PostsService.commentsFirstPageLimit,
-        backgroundLimit: Int = PostsService.commentsBackgroundLimit
+        firstPage: Int = 48,
+        backgroundLimit: Int = 400
     ) async -> [PostComment] {
         let key = normalized(postID)
         guard !key.isEmpty else { return [] }

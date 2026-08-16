@@ -1362,10 +1362,9 @@ final class PostsService {
         }
 
         // Seed / Archive / hub local IDs — GraphQL has no rows; use on-device thread.
+        // PostsService is @MainActor — call Hub store directly (no MainActor.run).
         if HubEngagementStore.usesLocalEngagement(postID: postID) {
-            return await MainActor.run {
-                HubEngagementStore.shared.listComments(postID, limit: limit)
-            }
+            return HubEngagementStore.shared.listComments(postID, limit: limit)
         }
 
         // Resolve origin from cache / body markers first — never await getPostByID on the hot path.
@@ -1374,9 +1373,7 @@ final class PostsService {
         if let originID, originID != postID {
             // Local origin (ia_*) + remote share, or both remote.
             if HubEngagementStore.usesLocalEngagement(postID: originID) {
-                let local = await MainActor.run {
-                    HubEngagementStore.shared.listComments(originID, limit: limit)
-                }
+                let local = HubEngagementStore.shared.listComments(originID, limit: limit)
                 let shareComments = (try? await fetchCommentsByPost(postID, limit: limit)) ?? []
                 if local.isEmpty { return shareComments }
                 if shareComments.isEmpty { return local }
@@ -1408,9 +1405,7 @@ final class PostsService {
         let remote = try await fetchCommentsByPost(postID, limit: limit)
         // Empty remote on borderline IDs: still surface local hub thread if any.
         if remote.isEmpty {
-            let local = await MainActor.run {
-                HubEngagementStore.shared.listComments(postID, limit: limit)
-            }
+            let local = HubEngagementStore.shared.listComments(postID, limit: limit)
             if !local.isEmpty { return local }
         }
         return remote
@@ -1461,28 +1456,10 @@ final class PostsService {
             return await demo.addComment(postID, body: body, parentID: parentID)
         }
         // Seed / hub / archive — persist on-device (GraphQL has no post row).
-        if HubEngagementStore.usesLocalEngagement(postID: postID)
-            || (await shouldEngageLocally(postID: postID)) {
-            let profile = await MainActor.run { ContentCache.shared.cachedProfile() }
-            let author = profile.map {
-                PostAuthor(
-                    userID: $0.userID,
-                    displayName: $0.displayName ?? "You",
-                    username: $0.username,
-                    avatarURL: $0.avatarURL,
-                    countryName: $0.countryName,
-                    countryCode: $0.countryCode,
-                    lastReadAt: nil
-                )
-            }
-            return await MainActor.run {
-                HubEngagementStore.shared.addComment(
-                    postID: postID,
-                    body: body,
-                    parentID: parentID,
-                    author: author
-                )
-            }
+        let useLocal = HubEngagementStore.usesLocalEngagement(postID: postID)
+            || (await shouldEngageLocally(postID: postID))
+        if useLocal {
+            return localHubComment(postID: postID, body: body, parentID: parentID)
         }
         struct Response: Decodable { let addComment: GraphQLComment }
         let mutation = """
@@ -1506,29 +1483,32 @@ final class PostsService {
         } catch {
             // Missing server row → local thread so Hubs comments never fail silently.
             if await shouldEngageLocally(postID: postID) {
-                let profile = await MainActor.run { ContentCache.shared.cachedProfile() }
-                let author = profile.map {
-                    PostAuthor(
-                        userID: $0.userID,
-                        displayName: $0.displayName ?? "You",
-                        username: $0.username,
-                        avatarURL: $0.avatarURL,
-                        countryName: $0.countryName,
-                        countryCode: $0.countryCode,
-                        lastReadAt: nil
-                    )
-                }
-                return await MainActor.run {
-                    HubEngagementStore.shared.addComment(
-                        postID: postID,
-                        body: body,
-                        parentID: parentID,
-                        author: author
-                    )
-                }
+                return localHubComment(postID: postID, body: body, parentID: parentID)
             }
             throw error
         }
+    }
+
+    /// On-device comment for seed/hub posts (GraphQL has no row).
+    private func localHubComment(postID: String, body: String, parentID: String?) -> PostComment {
+        let profile = ContentCache.shared.cachedProfile()
+        let author = profile.map {
+            PostAuthor(
+                userID: $0.userID,
+                displayName: $0.displayName ?? "You",
+                username: $0.username,
+                avatarURL: $0.avatarURL,
+                countryName: $0.countryName,
+                countryCode: $0.countryCode,
+                lastReadAt: nil
+            )
+        }
+        return HubEngagementStore.shared.addComment(
+            postID: postID,
+            body: body,
+            parentID: parentID,
+            author: author
+        )
     }
 
     func createReel(
@@ -2357,10 +2337,9 @@ final class PostsService {
         if AppConfig.useDemoDataset, let comment = await demo.likeComment(commentID) {
             return comment
         }
-        if HubEngagementStore.usesLocalEngagement(commentID: commentID) {
-            if let local = await MainActor.run(body: { HubEngagementStore.shared.likeComment(commentID) }) {
-                return local
-            }
+        if HubEngagementStore.usesLocalEngagement(commentID: commentID),
+           let local = HubEngagementStore.shared.likeComment(commentID) {
+            return local
         }
         struct Response: Decodable { let likeComment: GraphQLComment }
         let mutation = """
@@ -2375,7 +2354,7 @@ final class PostsService {
             let result: Response = try await gql.authenticatedRequest(query: mutation, variables: ["commentId": commentID])
             return result.likeComment.toModel
         } catch {
-            if let local = await MainActor.run(body: { HubEngagementStore.shared.likeComment(commentID) }) {
+            if let local = HubEngagementStore.shared.likeComment(commentID) {
                 return local
             }
             throw error
