@@ -109,10 +109,12 @@ struct FollowButton: View {
 
     var body: some View {
         Button {
+            guard !busy else { return }
+            busy = true
             Task {
-                busy = true
+                defer { busy = false }
+                // Keep Sparks video playing; follow is optimistic + non-blocking.
                 await appState.toggleFollow(userID)
-                busy = false
             }
         } label: {
             Text(isFollowing ? "Following" : "Follow")

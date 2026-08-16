@@ -1232,9 +1232,14 @@ final class AppState {
         // Never stop/pause mini — GlobalHubPlaybackLayer only resizes the stage.
         hubPlaybackPlaying = true
         hubWatchScrollCollapse = 0
+        // Hold pullProgress at 1 so watch title/meta never flash while the stage
+        // leaves the expanded hole (avoids white hole + stuck title).
+        if hubPlaybackExpanded {
+            hubPlaybackPullProgress = max(hubPlaybackPullProgress, 1)
+        }
         if animated {
-            // Match GlobalHubPlaybackLayer morph — easeOut, no mid-path spring stall.
-            withAnimation(.easeOut(duration: 0.24)) {
+            // Match GlobalHubPlaybackLayer morph — short easeOut, no mid-path stall.
+            withAnimation(.easeOut(duration: 0.14)) {
                 hubPlaybackExpanded = false
             }
         } else {
@@ -1500,7 +1505,15 @@ final class AppState {
         if let url = start.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) {
             ArchiveVideoPlayback.warmResolve(url)
         }
-        SparkWarmPool.shared.prepare(posts: seeds, around: 0, ahead: min(8, max(0, seeds.count - 1)), behind: 0)
+        // Warm the head immediately so the first swipes aren't cold-start glitches.
+        let ahead = min(6, max(0, seeds.count - 1))
+        SparkWarmPool.shared.prepare(posts: seeds, around: 0, ahead: ahead, behind: 0)
+        Task { @MainActor in
+            await SparkWarmPool.shared.awaitReady(
+                postIDs: Array(seeds.prefix(5).map(\.id)),
+                timeout: 2.0
+            )
+        }
         // If memory is thin, kick a light catalog pull so expandFeed / swipe has more fuel.
         if seeds.count < 12 {
             Task { @MainActor in
@@ -1975,10 +1988,22 @@ final class AppState {
             } else {
                 try await followService.follow(targetID: id)
             }
-            // Re-read from Supabase (source of truth for real UUID accounts).
-            followingIDs = await followService.followingIDs()
-            contentLoadGeneration += 1
-            // Real accounts: silent success (count already updated). Synthetic: small toast.
+            // Soft reconcile following set in the background — do NOT await a full
+            // followingIDs() round-trip on the critical path, and never bump
+            // contentLoadGeneration (that reloads Feed/Hubs/Profile under Sparks
+            // and freezes the player when Follow is tapped).
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let server = await self.followService.followingIDs()
+                // Keep optimistic bit if the network list is momentarily stale.
+                var next = server
+                if wasFollowing {
+                    next.remove(id)
+                } else {
+                    next.insert(id)
+                }
+                self.followingIDs = next
+            }
             if FollowService.usesLocalFollow(userID: id) {
                 showToast(wasFollowing ? "Unfollowed" : "Following", style: .info)
             }
