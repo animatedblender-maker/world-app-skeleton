@@ -1028,11 +1028,26 @@ private struct SparksCommentsOverlay: View {
     }
 }
 
-/// Top chrome: close (X) top-leading + “SPARKS” centered — same row, just under the notch.
+/// Top chrome: close (X) top-leading · “SPARKS” centered · ⋯ menu top-trailing (like feed cards).
 /// Sized to chrome only (not full-screen) so vertical paging is free on the rest of the stage.
 private struct SparksTopChrome: View {
+    @Environment(AppState.self) private var appState
+
+    let post: CountryPost?
     let onClose: () -> Void
+    var onNotInterested: (() -> Void)? = nil
+    var onHide: (() -> Void)? = nil
+
+    @State private var showReportConfirm = false
+    @State private var actionBusy = false
+
     private let word = MatteryaCopy.sparks.uppercased()
+    private let reportReasons = ["Spam", "Harassment", "Misinformation", "Other"]
+
+    private var isOwnPost: Bool {
+        guard let post, let me = appState.currentProfile?.userID else { return false }
+        return post.authorID == me
+    }
 
     var body: some View {
         ZStack {
@@ -1061,8 +1076,52 @@ private struct SparksTopChrome: View {
                     action: onClose
                 )
                 .offset(y: -2)
+
                 Spacer(minLength: 0)
                     .allowsHitTesting(false)
+
+                // Top-right ⋯ — same family of actions as feed cards.
+                Menu {
+                    if let post, !isOwnPost {
+                        Button {
+                            onNotInterested?()
+                        } label: {
+                            Label("Not interested", systemImage: "hand.thumbsdown")
+                        }
+                        Button {
+                            onHide?()
+                        } label: {
+                            Label("Hide \(MatteryaCopy.spark.lowercased())", systemImage: "eye.slash")
+                        }
+                        Button {
+                            appState.blockUser(
+                                post.authorID,
+                                username: post.author?.username,
+                                displayName: post.author?.displayName
+                            )
+                            appState.showToast("Blocked \(post.authorDisplayName).", style: .info)
+                            onNotInterested?()
+                        } label: {
+                            Label("Block \(post.authorDisplayName)", systemImage: "person.slash")
+                        }
+                    }
+                    if post != nil {
+                        Button("Report", role: .destructive) {
+                            showReportConfirm = true
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Color.white.opacity(0.92))
+                        .shadow(color: .black.opacity(0.45), radius: 4, y: 1)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(post == nil || actionBusy)
+                .accessibilityLabel("More options")
+                .offset(y: -2)
             }
         }
         .frame(height: 44)
@@ -1072,6 +1131,41 @@ private struct SparksTopChrome: View {
         // Height = notch + bar only — never expand to full screen (that blocked first swipe).
         .allowsHitTesting(true)
         .ignoresSafeArea(edges: .top)
+        .confirmationDialog(
+            "Report this \(MatteryaCopy.spark.lowercased())",
+            isPresented: $showReportConfirm,
+            titleVisibility: .visible
+        ) {
+            ForEach(reportReasons, id: \.self) { reason in
+                Button(reason, role: .destructive) {
+                    Task { await reportCurrent(reason: reason) }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    private func reportCurrent(reason: String) async {
+        guard let post else { return }
+        actionBusy = true
+        defer { actionBusy = false }
+        do {
+            let ok = try await PostsService.shared.reportPost(post.id, reason: reason)
+            await MainActor.run {
+                appState.showToast(
+                    ok ? "Reported. Thank you." : "Could not report.",
+                    style: ok ? .info : .error
+                )
+            }
+            if ok {
+                // Also skip past this clip after report.
+                await MainActor.run { onNotInterested?() }
+            }
+        } catch {
+            await MainActor.run {
+                appState.showToast(error.localizedDescription, style: .error)
+            }
+        }
     }
 
     private static var notchInset: CGFloat {
@@ -1154,8 +1248,13 @@ struct ReelsScrollViewer: View {
                 )
             }
 
-            SparksTopChrome(onClose: { dismiss() })
-                .zIndex(40)
+            SparksTopChrome(
+                post: posts.indices.contains(activeIndex) ? posts[activeIndex] : nil,
+                onClose: { dismiss() },
+                onNotInterested: { skipCurrentSpark(kind: .notInterested) },
+                onHide: { skipCurrentSpark(kind: .hide) }
+            )
+            .zIndex(40)
 
             if let commentsID = commentsPostID {
                 SparksCommentsOverlay(postID: commentsID) {
@@ -1230,6 +1329,56 @@ struct ReelsScrollViewer: View {
             return
         }
         Task { await loadMoreReels() }
+    }
+
+    private enum SparkSkipKind {
+        case notInterested
+        case hide
+    }
+
+    /// ⋯ menu: hide / not interested / after report — remove clip and advance (or close).
+    private func skipCurrentSpark(kind: SparkSkipKind) {
+        guard posts.indices.contains(activeIndex) else { return }
+        let post = posts[activeIndex]
+        switch kind {
+        case .notInterested:
+            FeedFeedbackStore.shared.notInterested(post: post)
+            EngagementTracker.shared.enqueueRecommendationEvent(
+                type: "not_interested",
+                contentId: post.id,
+                authorId: post.authorID,
+                surface: RecommendationSurface.sparks.rawValue,
+                meta: ["place": "sparks_menu"]
+            )
+            appState.showToast("We'll show less like this.", style: .info)
+        case .hide:
+            FeedFeedbackStore.shared.hide(post: post)
+            EngagementTracker.shared.enqueueRecommendationEvent(
+                type: "hide",
+                contentId: post.id,
+                authorId: post.authorID,
+                surface: RecommendationSurface.sparks.rawValue,
+                meta: ["place": "sparks_menu"]
+            )
+            appState.showToast("Hidden from \(MatteryaCopy.sparks.lowercased()).", style: .info)
+        }
+        SparkDiscoveryEngine.markWatched(post.id)
+
+        var next = posts
+        next.removeAll { $0.id == post.id }
+        if next.isEmpty {
+            dismiss()
+            return
+        }
+        let newIndex = min(activeIndex, next.count - 1)
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            posts = next
+            activeIndex = newIndex
+        }
+        SparkWarmPool.shared.preparePlayerWindow(posts: next, around: newIndex)
+        Task { await ensureBulkQueueAhead() }
     }
 
     /// Keep at least `target` unplayed Sparks after the focused index.
