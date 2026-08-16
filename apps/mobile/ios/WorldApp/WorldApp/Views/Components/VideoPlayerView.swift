@@ -74,6 +74,9 @@ struct VideoPlayerView: View {
     @State private var showPosterCover = true
     @State private var didReportVideoSize = false
     @State private var presentationSizeObserver: NSKeyValueObservation?
+    /// Debounce loop restarts (DidPlayToEnd + near-end time observer can both fire).
+    @State private var lastLoopRestartAt: Date = .distantPast
+    @State private var isLoopRestarting = false
 
     private var shouldShowAd: Bool {
         adsEnabled && isActive && !adFinished && placement != nil
@@ -397,9 +400,9 @@ struct VideoPlayerView: View {
     /// Solo + play only when this card is the live focused Spark / feed winner.
     @MainActor
     private func kickAudiblePlayback(on player: AVPlayer) {
-        // Both View isActive and liveGate must agree — async resolve used to unmute
-        // after the user had already scrolled away (random ghost audio).
-        guard isActive, liveGate.isActive, !liveGate.userWantsPause else {
+        // liveGate is authoritative (View `isActive` can be stale in async end-of-clip
+        // callbacks — that blocked Sparks from looping after they finished).
+        guard liveGate.isActive, !liveGate.userWantsPause else {
             player.pause()
             player.isMuted = true
             player.volume = 0
@@ -420,6 +423,10 @@ struct VideoPlayerView: View {
         }
         player.isMuted = liveGate.isMuted
         player.volume = liveGate.isMuted ? 0 : 1
+        // Ensure end-of-item still notifies so loop restarts (pool may have set .pause).
+        if loops {
+            player.actionAtItemEnd = .none
+        }
         player.play()
         player.safePlayImmediately(atRate: 1.0)
         isPlaying = true
@@ -462,20 +469,45 @@ struct VideoPlayerView: View {
         }
     }
 
-    /// Restart from 0 for looping Sparks (feed shares + full player).
+    /// Restart from 0 for looping Sparks (full player + feed shares).
+    /// Always seek to beginning and play again when the clip finishes.
     @MainActor
     private func restartLoop(on player: AVPlayer) {
+        guard loops else { return }
         guard liveGate.isActive, !liveGate.userWantsPause else { return }
+        // Debounce dual end signals (notification + near-end time observer).
+        let now = Date()
+        if isLoopRestarting || now.timeIntervalSince(lastLoopRestartAt) < 0.35 {
+            return
+        }
+        isLoopRestarting = true
+        lastLoopRestartAt = now
+        currentSeconds = 0
+        liveGate.onProgress?(0, durationSeconds)
         player.pause()
         player.rate = 0
+        player.actionAtItemEnd = .none
         Task { @MainActor in
+            defer { self.isLoopRestarting = false }
+            // Exact start — Sparks must never resume mid-clip after a loop.
             _ = await player.seek(
                 to: .zero,
                 toleranceBefore: .zero,
                 toleranceAfter: .zero
             )
-            guard self.liveGate.isActive, !self.liveGate.userWantsPause else { return }
+            guard self.player === player else { return }
+            guard self.liveGate.isActive, !self.liveGate.userWantsPause, self.loops else { return }
+            self.currentSeconds = 0
+            self.showPosterCover = false
             self.kickAudiblePlayback(on: player)
+            // If solo gate flaked, force one more play attempt at t=0.
+            if player.rate < 0.01, self.liveGate.isActive, !self.liveGate.userWantsPause {
+                player.isMuted = self.liveGate.isMuted
+                player.volume = self.liveGate.isMuted ? 0 : 1
+                player.play()
+                player.safePlayImmediately(atRate: 1.0)
+                self.isPlaying = true
+            }
         }
     }
 
@@ -732,23 +764,14 @@ struct VideoPlayerView: View {
                     }
                 }
             }
-            if loops {
-                loopObserver = NotificationCenter.default.addObserver(
-                    forName: .AVPlayerItemDidPlayToEndTime,
-                    object: item,
-                    queue: .main
-                ) { _ in
-                    Task { @MainActor in
-                        guard gate.isActive, !gate.userWantsPause else { return }
-                        restartLoop(on: claimed)
-                    }
-                }
-            }
+            attachLoopObserver(for: item, player: claimed, gate: gate)
         }
         attachTimeObserver(to: claimed)
         player = claimed
         reportVideoSizeIfNeeded(from: claimed.currentItem)
         currentSeconds = 0
+        // Claimed warm players must still loop when the Spark finishes.
+        claimed.actionAtItemEnd = loops ? .none : .pause
 
         // If already at t≈0 (warm pool contract), play immediately — no seek, no jump.
         if alreadyAtStart || !needsExactStart {
@@ -859,18 +882,7 @@ struct VideoPlayerView: View {
 
         attachTimeObserver(to: newPlayer)
 
-        if loops {
-            loopObserver = NotificationCenter.default.addObserver(
-                forName: .AVPlayerItemDidPlayToEndTime,
-                object: item,
-                queue: .main
-            ) { _ in
-                Task { @MainActor in
-                    guard gate.isActive, !gate.userWantsPause else { return }
-                    restartLoop(on: newPlayer)
-                }
-            }
-        }
+        attachLoopObserver(for: item, player: newPlayer, gate: gate)
 
         player = newPlayer
         MediaPlaybackCoordinator.shared.register(newPlayer)
@@ -882,6 +894,27 @@ struct VideoPlayerView: View {
             newPlayer.isMuted = true
             newPlayer.volume = 0
             isPlaying = false
+        }
+    }
+
+    /// Observe end-of-item and restart from t=0 while this Spark is focused.
+    @MainActor
+    private func attachLoopObserver(for item: AVPlayerItem, player: AVPlayer, gate: VideoPlayerLiveGate) {
+        if let loopObserver {
+            NotificationCenter.default.removeObserver(loopObserver)
+            self.loopObserver = nil
+        }
+        guard loops else { return }
+        player.actionAtItemEnd = .none
+        loopObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { _ in
+            Task { @MainActor in
+                guard gate.isActive, !gate.userWantsPause else { return }
+                self.restartLoop(on: player)
+            }
         }
     }
 
@@ -906,6 +939,20 @@ struct VideoPlayerView: View {
                 // Always publish — parent decides whether to paint the rail.
                 // Prefer liveGate so we never call a stale View-struct capture.
                 gate.onProgress?(cur, durationSeconds)
+
+                // Fallback loop: some R2/HLS items never fire DidPlayToEndTime.
+                // When the playhead sits at/near the end, restart from 0.
+                if self.loops,
+                   gate.isActive,
+                   !gate.userWantsPause,
+                   !self.isLoopRestarting,
+                   self.durationSeconds > 0.4 {
+                    let atEnd = cur >= self.durationSeconds - 0.08
+                    let stalledAtEnd = atEnd && player.rate < 0.01
+                    if stalledAtEnd || cur >= self.durationSeconds - 0.02 {
+                        self.restartLoop(on: player)
+                    }
+                }
             }
         }
         timeObserverPlayer = player

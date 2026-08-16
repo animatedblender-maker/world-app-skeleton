@@ -1312,13 +1312,13 @@ final class ArchiveVideoPlayerController: UIViewController {
         view.backgroundColor = .clear
         view.clipsToBounds = true
 
-        // Match video gravity (updated in applyVideoGravity) — avoid poster/video framing jump.
-        // Default fill so Sparks never flash fit→fill on first layout.
+        // Default fill — matches FB/IG; may switch to fit for wide clips only.
         posterView.contentMode = .scaleAspectFill
         posterView.clipsToBounds = true
         posterView.backgroundColor = .clear
         posterView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(posterView)
+        view.backgroundColor = .black
 
         spinner.color = .white
         spinner.translatesAutoresizingMaskIntoConstraints = false
@@ -1363,33 +1363,32 @@ final class ArchiveVideoPlayerController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        // Only size when host has real bounds — never animate gravity/frame (Sparks zoom jump).
         guard view.bounds.width > 2, view.bounds.height > 2 else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        // Layer tracks the host view only — never a larger “screen” frame (that zoomed/cropped).
         playerLayer?.frame = view.bounds
         playerLayer?.videoGravity = preferredVideoGravity
+        playerLayer?.opacity = 1
         CATransaction.commit()
     }
 
-    /// Updated every layout via `applyVideoGravity` — default fit (no crop) until told otherwise.
-    private var preferredVideoGravity: AVLayerVideoGravity = .resizeAspect
+    /// Default fill (FB/IG); landscape Sparks may switch to fit when crop would be hard.
+    private var preferredVideoGravity: AVLayerVideoGravity = .resizeAspectFill
 
     func applyVideoGravity(_ gravity: AVLayerVideoGravity) {
         preferredVideoGravity = gravity
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         playerLayer?.videoGravity = gravity
-        // Only size when host has real bounds (zero-size install was the zoom pop).
         if view.bounds.width > 2, view.bounds.height > 2 {
             playerLayer?.frame = view.bounds
         }
+        playerLayer?.opacity = 1
+        playerLayer?.backgroundColor = UIColor.black.cgColor
         CATransaction.commit()
         posterView.contentMode = gravity == .resizeAspectFill ? .scaleAspectFill : .scaleAspectFit
-        // Clear bed — no black letterbox slabs around aspectFit.
-        posterView.backgroundColor = .clear
-        view.backgroundColor = .clear
-        playerLayer?.backgroundColor = UIColor.clear.cgColor
+        view.backgroundColor = .black
     }
 
     func configure(url: URL, posterURL: URL?, muted: Bool, startTime: Double, active: Bool) {
@@ -1409,6 +1408,7 @@ final class ArchiveVideoPlayerController: UIViewController {
         didRetry = false
         didKickPlayback = false
         didReportVideoSize = false
+        preferredVideoGravity = .resizeAspectFill
         presentationSizeObs?.invalidate()
         presentationSizeObs = nil
         resolvedPlayURL = nil
@@ -1514,14 +1514,12 @@ final class ArchiveVideoPlayerController: UIViewController {
         }
     }
 
-    /// Soft start seek — skip if already near 0; never swap to poster (that was the swipe black flash).
+    /// Soft start seek — skip if already at t≈0; never play-then-snap (mid-clip first frame).
     private func softSeekToBeginning(playAfter: Bool) {
         lastKnownSeconds = 0
         guard let player, player.currentItem != nil else { return }
-        let t = player.currentTime().seconds
-        // Wide near-zero: skip seek (seek = swipe flicker).
-        if t.isFinite, t >= 0, t < 1.0 {
-            // Keep decoded first frame visible — no poster swap.
+        // True start only — wide windows (<1s) caused free-play from mid-buffer then jump.
+        if SparkWarmPool.isAtStart(player) {
             posterView.isHidden = true
             spinner.stopAnimating()
             if playAfter, userWantsPlayback {
@@ -1536,13 +1534,13 @@ final class ArchiveVideoPlayerController: UIViewController {
             }
             return
         }
-        // Mid-clip → 0: keep the live layer (last frame) while keyframe-seeking.
-        // Showing poster here felt like a full refresh on scroll.
         posterView.isHidden = true
+        player.pause()
+        player.rate = 0
         player.seek(
             to: .zero,
-            toleranceBefore: .positiveInfinity,
-            toleranceAfter: .positiveInfinity
+            toleranceBefore: .zero,
+            toleranceAfter: .zero
         ) { [weak self] finished in
             guard finished, let self else { return }
             Task { @MainActor in
@@ -1574,13 +1572,8 @@ final class ArchiveVideoPlayerController: UIViewController {
         posterView.isHidden = true
         spinner.stopAnimating()
         if let player, player.currentItem != nil {
-            // Instant path: item ready + near 0 → solo + play on this runloop (no async hop).
-            let t = player.currentTime().seconds
-            let nearZero = t.isFinite && t >= 0 && t < 1.0
-            let ready = player.currentItem?.status == .readyToPlay
-                || player.status == .readyToPlay
-            // Even if not "ready", kick play first — seek only when clearly mid-clip.
-            if nearZero {
+            // Instant path: already at exact start → play, never seek-after-play.
+            if SparkWarmPool.isAtStart(player) {
                 posterView.isHidden = true
                 spinner.stopAnimating()
                 applyUserAudioOutput(on: player)
@@ -1588,20 +1581,12 @@ final class ArchiveVideoPlayerController: UIViewController {
                     keeping: player,
                     pageEpoch: activePageEpoch
                 )
-                applyUserAudioOutput(on: player)
                 player.play()
                 player.safePlayImmediately(atRate: 1.0)
                 onPlayingChanged?(true)
                 return
             }
-            if ready {
-                applyUserAudioOutput(on: player)
-                softSeekToBeginning(playAfter: true)
-                return
-            }
-            // Not ready and mid-clip: play now, soft-seek without blanking.
-            applyUserAudioOutput(on: player)
-            player.play()
+            // Mid-clip: seek to exact 0 first, then play (never play-then-adjust).
             softSeekToBeginning(playAfter: true)
             return
         }
@@ -1780,8 +1765,7 @@ final class ArchiveVideoPlayerController: UIViewController {
         userWantsPlayback = autoplay
         activePageEpoch = MediaPlaybackCoordinator.shared.sparkPageEpoch
 
-        // Instagram-speed: claim a pre-buffered player before any CDN resolve.
-        // Install + play synchronously so the first painted frame is video, not black/poster.
+        // Claim by postID when the warm item is healthy (claim() rejects failed items).
         if let postID, let claimed = SparkWarmPool.shared.claim(postID: postID) {
             installClaimedPlayerSync(claimed, original: url, muted: muted, startTime: startTime, autoplay: autoplay)
             return
@@ -1832,12 +1816,12 @@ final class ArchiveVideoPlayerController: UIViewController {
         mutedFlag = muted
 
         let layer = AVPlayerLayer(player: claimed)
-        // Gravity + frame match the host view only — NEVER UIScreen.main.bounds
-        // (that painted full-screen zoomed video, then snapped to the page = creep).
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         layer.videoGravity = preferredVideoGravity
         layer.frame = view.bounds
+        layer.opacity = 1
+        layer.backgroundColor = UIColor.black.cgColor
         view.layer.insertSublayer(layer, above: posterView.layer)
         CATransaction.commit()
         playerLayer = layer
@@ -1848,78 +1832,53 @@ final class ArchiveVideoPlayerController: UIViewController {
             configureAudioSession()
         }
         spinner.stopAnimating()
-        // Keep poster until we have a ready item — then hide (no black gap).
-        posterView.isHidden = claimed.currentItem?.status == .readyToPlay
         errorLabel.isHidden = true
-        // Do not layoutIfNeeded with zero bounds — wait for viewDidLayoutSubviews.
+        claimed.pause()
+        claimed.rate = 0
 
-        let forcedStart = restartsFromBeginningOnFocus ? 0 : startTime
-        let t = claimed.currentTime().seconds
-        // Wide near-zero: warm park is rarely exact 0 — skip seek to kill swipe flash.
-        let nearZero = t.isFinite && t >= 0 && t < 1.0
-        let needsSeek = (restartsFromBeginningOnFocus || forcedStart < 0.5) && !nearZero
+        let atStart = SparkWarmPool.isAtStart(claimed)
+        let needsExactStart = restartsFromBeginningOnFocus || startTime < 0.5
 
-        if autoplay, userWantsPlayback {
+        let playNow = {
+            self.posterView.isHidden = true
+            if self.view.bounds.width > 2 {
+                self.playerLayer?.frame = self.view.bounds
+            }
+            guard autoplay, self.userWantsPlayback else {
+                claimed.isMuted = true
+                claimed.volume = 0
+                return
+            }
             _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
                 keeping: claimed,
-                pageEpoch: activePageEpoch
+                pageEpoch: self.activePageEpoch
             )
             claimed.isMuted = muted
             claimed.volume = muted ? 0 : 1
-        } else {
-            claimed.pause()
-            claimed.isMuted = true
-            claimed.volume = 0
+            claimed.safePlayImmediately(atRate: 1.0)
+            self.didKickPlayback = true
+            self.onPlayingChanged?(true)
+            self.reportVideoSizeIfNeeded(from: claimed.currentItem)
+            self.onReady?()
         }
 
-        if needsSeek {
-            // Keyframe seek without covering with poster — keep layer visible.
+        if atStart || !needsExactStart {
+            lastKnownSeconds = 0
+            playNow()
+        } else {
+            claimed.isMuted = true
+            claimed.volume = 0
             claimed.seek(
                 to: .zero,
-                toleranceBefore: .positiveInfinity,
-                toleranceAfter: .positiveInfinity
+                toleranceBefore: .zero,
+                toleranceAfter: .zero
             ) { [weak self] finished in
                 guard finished, let self else { return }
                 DispatchQueue.main.async {
                     self.lastKnownSeconds = 0
-                    self.posterView.isHidden = true
-                    guard self.userWantsPlayback else { return }
-                    // Already playing after a prior kick — don't re-play (visible restart).
-                    if self.didKickPlayback, claimed.rate > 0.01 { return }
-                    _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
-                        keeping: claimed,
-                        pageEpoch: self.activePageEpoch
-                    )
-                    claimed.isMuted = self.mutedFlag
-                    claimed.volume = self.mutedFlag ? 0 : 1
-                    claimed.safePlayImmediately(atRate: 1.0)
-                    self.didKickPlayback = true
-                    self.onPlayingChanged?(true)
-                    self.reportVideoSizeIfNeeded(from: claimed.currentItem)
-                    self.onReady?()
+                    playNow()
                 }
             }
-        } else if userWantsPlayback {
-            lastKnownSeconds = nearZero ? 0 : lastKnownSeconds
-            posterView.isHidden = true
-            claimed.safePlayImmediately(atRate: 1.0)
-            didKickPlayback = true
-            onPlayingChanged?(true)
-            reportVideoSizeIfNeeded(from: claimed.currentItem)
-            onReady?()
-        } else {
-            // Silent pre-buffer (off-screen page).
-            claimed.pause()
-            claimed.isMuted = true
-            claimed.volume = 0
-            if restartsFromBeginningOnFocus, !nearZero {
-                claimed.seek(
-                    to: .zero,
-                    toleranceBefore: .positiveInfinity,
-                    toleranceAfter: .positiveInfinity
-                )
-            }
-            lastKnownSeconds = 0
         }
 
         if let item = claimed.currentItem {
@@ -1980,6 +1939,7 @@ final class ArchiveVideoPlayerController: UIViewController {
                     // Always publish — parent must not rely on stale isActive captures.
                     self.onProgress?(current, dur)
                     self.onPlayingChanged?(playing)
+                    self.maybeLoopNearEnd(current: current, duration: dur, player: observed)
                 }
             }
         }
@@ -2004,8 +1964,13 @@ final class ArchiveVideoPlayerController: UIViewController {
         mutedFlag = muted
 
         let layer = AVPlayerLayer(player: claimed)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         layer.videoGravity = preferredVideoGravity
         layer.frame = view.bounds
+        layer.opacity = 1
+        layer.backgroundColor = UIColor.black.cgColor
+        CATransaction.commit()
         view.layer.insertSublayer(layer, above: posterView.layer)
         playerLayer = layer
         player = claimed
@@ -2018,8 +1983,8 @@ final class ArchiveVideoPlayerController: UIViewController {
             if !(t.isFinite && t >= 0 && t < 0.35) {
                 await claimed.seek(
                     to: .zero,
-                    toleranceBefore: .positiveInfinity,
-                    toleranceAfter: .positiveInfinity
+                    toleranceBefore: .zero,
+                    toleranceAfter: .zero
                 )
             }
             lastKnownSeconds = 0
@@ -2110,6 +2075,7 @@ final class ArchiveVideoPlayerController: UIViewController {
             self.endObserver = nil
         }
         guard loops else { return }
+        player.actionAtItemEnd = .none
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: item,
@@ -2122,28 +2088,60 @@ final class ArchiveVideoPlayerController: UIViewController {
         }
     }
 
+    private var lastLoopRestartAt: Date = .distantPast
+    private var isLoopRestarting = false
+
     private func restartFromBeginning(player: AVPlayer) {
+        guard loops, userWantsPlayback else { return }
+        let now = Date()
+        if isLoopRestarting || now.timeIntervalSince(lastLoopRestartAt) < 0.35 { return }
+        isLoopRestarting = true
+        lastLoopRestartAt = now
         // Refresh epoch so a prior Sparks page-change doesn't block feed loop restarts.
         activePageEpoch = MediaPlaybackCoordinator.shared.sparkPageEpoch
         _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
             keeping: player,
             pageEpoch: activePageEpoch
         )
+        player.actionAtItemEnd = .none
         player.isMuted = mutedFlag
         player.volume = mutedFlag ? 0 : 1
+        player.pause()
+        player.rate = 0
+        // Exact start for Sparks — never resume mid-clip after a loop.
         player.seek(
             to: .zero,
-            toleranceBefore: .positiveInfinity,
-            toleranceAfter: .positiveInfinity
+            toleranceBefore: .zero,
+            toleranceAfter: .zero
         ) { [weak self] finished in
-            guard finished else { return }
             DispatchQueue.main.async {
-                guard let self, self.userWantsPlayback else { return }
+                guard let self else { return }
+                self.isLoopRestarting = false
+                guard finished, self.userWantsPlayback, self.loops else { return }
+                self.activePageEpoch = MediaPlaybackCoordinator.shared.sparkPageEpoch
+                _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
+                    keeping: player,
+                    pageEpoch: self.activePageEpoch
+                )
+                player.isMuted = self.mutedFlag
+                player.volume = self.mutedFlag ? 0 : 1
                 player.play()
                 player.safePlayImmediately(atRate: 1.0)
                 self.lastKnownSeconds = 0
+                self.onProgress?(0, player.currentItem?.duration.seconds ?? 0)
                 self.onPlayingChanged?(true)
             }
+        }
+    }
+
+    /// Fallback when DidPlayToEndTime never fires (some R2/HLS streams).
+    private func maybeLoopNearEnd(current: Double, duration: Double, player: AVPlayer) {
+        guard loops, userWantsPlayback, !isScrubbing, !isLoopRestarting else { return }
+        guard duration > 0.4 else { return }
+        let atEnd = current >= duration - 0.08
+        let stalledAtEnd = atEnd && player.rate < 0.01
+        if stalledAtEnd || current >= duration - 0.02 {
+            restartFromBeginning(player: player)
         }
     }
 
@@ -2166,9 +2164,7 @@ final class ArchiveVideoPlayerController: UIViewController {
             ]
         )
 
-        // Don't block first frame on duration metadata (slow on Archive CDN).
-        asset.loadValuesAsynchronously(forKeys: ["playable", "duration"]) {}
-
+        // Let AVPlayerItem pull playable/duration — no deprecated loadValuesAsynchronously.
         guard !Task.isCancelled else { return }
 
         let item = AVPlayerItem(asset: asset)
@@ -2185,8 +2181,9 @@ final class ArchiveVideoPlayerController: UIViewController {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         layer.videoGravity = preferredVideoGravity
-        // Host view bounds only — never full-screen interim frame (zoom pop).
         layer.frame = view.bounds
+        layer.opacity = 1
+        layer.backgroundColor = UIColor.black.cgColor
         view.layer.insertSublayer(layer, above: posterView.layer)
         CATransaction.commit()
         playerLayer = layer
@@ -2279,6 +2276,7 @@ final class ArchiveVideoPlayerController: UIViewController {
                     self.lastKnownSeconds = current
                     self.onProgress?(current, dur)
                     self.onPlayingChanged?(playing)
+                    self.maybeLoopNearEnd(current: current, duration: dur, player: newPlayer)
                 }
             }
         }
