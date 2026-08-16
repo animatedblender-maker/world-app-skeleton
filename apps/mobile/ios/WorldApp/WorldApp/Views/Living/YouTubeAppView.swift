@@ -44,11 +44,13 @@ struct YouTubeAppView: View {
     /// Bumps whenever we intentionally re-roll Hubs surfaces (tab enter / home return).
     @State private var hubsVisitEpoch: Int = 0
 
-    /// YouTube-light first paint — small window, grow on scroll.
-    private static let hubsFirstWindow = 16
-    private static let hubsGrowBy = 12
-    /// Cap in-memory long-form for smooth Hubs (slug shelves, not a 300-row dump).
-    private static let hubsCatalogSoftCap = 96
+    /// First paint window — small LazyVStack; grows on scroll (endless).
+    private static let hubsFirstWindow = 20
+    private static let hubsGrowBy = 18
+    /// Soft memory ceiling only (thousands of rows). Display is windowed; catalog is not capped at 96.
+    private static let hubsCatalogMemoryCap = 12_000
+    /// How many times we re-cycle the ranked pool after the full catalog is shown (endless scroll).
+    @State private var hubsEndlessCycle: Int = 0
 
     private enum PlayScrollAnchor {
         static let subscriptions = "play-subscriptions"
@@ -137,42 +139,23 @@ struct YouTubeAppView: View {
         }
     }
 
-    /// Endless For you: grow local slug pool first (instant), light network only if dry.
-    /// Mid-fling: expand the local window only — never soft-merge / network (that hitch was the lag).
+    /// Endless For you: grow display window from the full ranked pool, then fetch more catalog,
+    /// then recycle the pool so scroll never dead-ends.
     private func ensureMoreForYou(around index: Int) {
         ScrollBudget.noteCellAppear()
         let fling = ScrollBudget.isFlinging
-        // During a fling, grow earlier + larger so LazyVStack always has cells ready.
-        let growWhenWithin = fling ? 10 : 6
+        let growWhenWithin = fling ? 12 : 8
         let growBy = fling ? Self.hubsGrowBy * 2 : Self.hubsGrowBy
         let threshold = max(0, stableDiscoverVideos.count - growWhenWithin)
         guard index >= threshold else { return }
 
-        // 1) Reveal more of the already-ranked slug pool (instant — no network).
+        // 1) Reveal more of the ranked pool (instant).
         if hubsDisplayLimit < hubsForYouPool.count {
-            hubsDisplayLimit = min(
-                hubsForYouPool.count,
-                hubsDisplayLimit + growBy
-            )
-            let window = Array(hubsForYouPool.prefix(hubsDisplayLimit))
-            var t = Transaction()
-            t.disablesAnimations = true
-            withTransaction(t) {
-                stableHomeVideos = window
-                stableDiscoverVideos = window
-            }
-            // Settled only: warm thumbs for the new page. Mid-fling skip (image storm).
-            if !fling {
-                ImageCache.shared.prefetchPostThumbnails(
-                    Array(window.suffix(Self.hubsGrowBy)),
-                    maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel,
-                    aggressive: false
-                )
-            }
+            growForYouDisplay(by: growBy, warmThumbs: !fling)
             return
         }
 
-        // 2) Pool exhausted → light top-up after fling settles (never mid-fling).
+        // 2) Pool exhausted → top-up catalog / recycle (never mid-fling network).
         guard !fling else {
             scheduleSettledHubsTopUp()
             return
@@ -180,10 +163,30 @@ struct YouTubeAppView: View {
         requestMoreHubsLongForm()
     }
 
-    /// After a fast fling, top up the catalog once scroll has settled.
+    private func growForYouDisplay(by growBy: Int, warmThumbs: Bool) {
+        hubsDisplayLimit = min(
+            hubsForYouPool.count,
+            hubsDisplayLimit + max(growBy, Self.hubsGrowBy)
+        )
+        let window = Array(hubsForYouPool.prefix(hubsDisplayLimit))
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            stableHomeVideos = window
+            stableDiscoverVideos = window
+        }
+        if warmThumbs {
+            ImageCache.shared.prefetchPostThumbnails(
+                Array(window.suffix(Self.hubsGrowBy)),
+                maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel,
+                aggressive: false
+            )
+        }
+    }
+
     private func scheduleSettledHubsTopUp() {
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 280_000_000)
+            try? await Task.sleep(nanoseconds: 260_000_000)
             guard !ScrollBudget.isFlinging else { return }
             guard hubsDisplayLimit >= hubsForYouPool.count else { return }
             requestMoreHubsLongForm()
@@ -212,25 +215,71 @@ struct YouTubeAppView: View {
             }
         }
 
-        // Light top-up only — never re-pull the full multi-channel flood while scrolling.
+        let beforeLong = allVideos.filter { PlayPlatformBridge.isHubsForYouLongForm($0) }.count
+        var added = 0
+
+        // A) Full Archive / seed long-form corpus (every video we have on disk).
+        if AppConfig.archiveContentEnabled {
+            let seedLong = await HubVideoSeedService.shared.longFormVideos()
+            let existing = Set(allVideos.map(\.id))
+            let fresh = seedLong.filter { existing.contains($0.id) == false }
+            if !fresh.isEmpty {
+                softMergeHubCatalog(fresh)
+                added += fresh.count
+            }
+        }
+
+        // B) Network / R2 channel catalog (full, not the tiny fast path).
         let more = await PostsService.shared.loadPlayCatalog(
-            globalLimit: 48,
+            globalLimit: 500,
             forceRefresh: false,
             viewerCountry: appState.currentProfile?.countryCode,
             followingIDs: appState.followingIDs,
-            fast: true
+            fast: false
         )
-        guard !more.isEmpty else { return }
-        softMergeHubCatalog(more)
-        if hubsDisplayLimit < hubsForYouPool.count {
-            hubsDisplayLimit = min(
-                hubsForYouPool.count,
-                hubsDisplayLimit + Self.hubsGrowBy
-            )
-            let window = Array(hubsForYouPool.prefix(hubsDisplayLimit))
-            stableHomeVideos = window
-            stableDiscoverVideos = window
+        if !more.isEmpty {
+            let existing = Set(allVideos.map(\.id))
+            let fresh = more.filter {
+                existing.contains($0.id) == false
+                    && PlayPlatformBridge.isHubsForYouLongForm($0)
+            }
+            if !fresh.isEmpty {
+                softMergeHubCatalog(fresh)
+                added += fresh.count
+            }
         }
+
+        // C) Still nothing new → recycle ranked pool so scroll is endless.
+        if added == 0, hubsDisplayLimit >= hubsForYouPool.count {
+            appendEndlessRecyclePage()
+        } else if hubsDisplayLimit < hubsForYouPool.count {
+            growForYouDisplay(by: Self.hubsGrowBy, warmThumbs: true)
+        }
+
+        #if DEBUG
+        let afterLong = allVideos.filter { PlayPlatformBridge.isHubsForYouLongForm($0) }.count
+        print("[Hubs] loadMore before=\(beforeLong) after=\(afterLong) pool=\(hubsForYouPool.count) display=\(hubsDisplayLimit) +\(added)")
+        #endif
+    }
+
+    /// Re-queue the full ranked catalog under a new seed so For you never ends.
+    private func appendEndlessRecyclePage() {
+        hubsEndlessCycle += 1
+        let home = allVideos.filter { PlayPlatformBridge.isHubsForYouLongForm($0) }
+        guard !home.isEmpty else { return }
+        let recycled = catalog.rankForYouBySlugs(
+            home,
+            followingIDs: appState.followingIDs,
+            myUserID: appState.currentProfile?.userID ?? AuthService.shared.currentUser?.id,
+            sessionSeed: hubsSessionSeed &+ UInt64(hubsEndlessCycle) &* 0x9E3779B97F4A7C15,
+            focusSlug: homeFilter.hubSlug
+        )
+        guard !recycled.isEmpty else { return }
+        hubsForYouPool.append(contentsOf: recycled)
+        growForYouDisplay(by: Self.hubsGrowBy * 2, warmThumbs: true)
+        #if DEBUG
+        print("[Hubs] endless recycle cycle=\(hubsEndlessCycle) pool=\(hubsForYouPool.count)")
+        #endif
     }
 
     private func rebuildContinueAndFollowingShuffled() {
@@ -1057,9 +1106,8 @@ struct YouTubeAppView: View {
         }
     }
 
-    /// Soft-merge background catalog into session without nuking the visible list.
-    /// Keeps a soft cap so Hubs stays YouTube-light (slug shelves, not a mega dump).
-    /// Skips re-rank while the user is flinging — mid-scroll list mutation was a major hitch.
+    /// Soft-merge catalog into session without nuking the visible list.
+    /// Keeps **all** long-form (endless For you). Only sparks are lightly capped.
     private func softMergeHubCatalog(_ videos: [CountryPost]) {
         guard !videos.isEmpty else { return }
         var byID = Dictionary(uniqueKeysWithValues: allVideos.map { ($0.id, $0) })
@@ -1068,15 +1116,17 @@ struct YouTubeAppView: View {
             if byID[post.id] == nil { added += 1 }
             byID[post.id] = post
         }
-        // Prefer long-form for the soft cap; keep a few sparks for the rail.
         let all = Array(byID.values)
-        let longForm = all.filter { PlayPlatformBridge.isHubsForYouLongForm($0) }
-        let sparks = all.filter(\.isReel)
-        let cappedLong = Array(longForm.prefix(Self.hubsCatalogSoftCap))
-        let cappedSparks = Array(sparks.prefix(24))
-        var seen = Set(cappedLong.map(\.id))
-        var merged = cappedLong
-        for s in cappedSparks where seen.insert(s.id).inserted {
+        var longForm = all.filter { PlayPlatformBridge.isHubsForYouLongForm($0) }
+        // Prefer newer first if we ever hit the extreme memory ceiling.
+        if longForm.count > Self.hubsCatalogMemoryCap {
+            longForm.sort { ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast) }
+            longForm = Array(longForm.prefix(Self.hubsCatalogMemoryCap))
+        }
+        let sparks = Array(all.filter(\.isReel).prefix(80))
+        var seen = Set(longForm.map(\.id))
+        var merged = longForm
+        for s in sparks where seen.insert(s.id).inserted {
             merged.append(s)
         }
         allVideos = merged
@@ -1086,8 +1136,6 @@ struct YouTubeAppView: View {
             for: .livingVideos
         )
         rebuildChannels()
-        // Re-rank slug pool quietly — never remount the LazyVStack.
-        // Defer re-rank mid-fling so For you doesn't hitch on every soft-merge.
         if added > 0 {
             if ScrollBudget.isFlinging {
                 Task { @MainActor in
@@ -1100,7 +1148,7 @@ struct YouTubeAppView: View {
             }
         }
         #if DEBUG
-        print("[Hubs] soft-merge +\(added) total=\(merged.count) pool=\(hubsForYouPool.count) display=\(stableDiscoverVideos.count)")
+        print("[Hubs] soft-merge +\(added) total=\(merged.count) longForm=\(longForm.count) pool=\(hubsForYouPool.count) display=\(stableDiscoverVideos.count)")
         #endif
     }
 
@@ -1133,15 +1181,20 @@ struct YouTubeAppView: View {
         }
     }
 
-    /// Idle top-up — **slug-capped**, never a multi-hundred row flood (that made Hubs heavy).
+    /// Idle top-up — pull the rest of the catalog so For you can scroll endlessly.
     private func scheduleDeferredFullCatalogWarm() {
         Task(priority: .utility) {
-            try? await Task.sleep(nanoseconds: 2_200_000_000)
+            try? await Task.sleep(nanoseconds: 1_600_000_000)
             guard appState.selectedTab == .hubs || appState.isPlayPresented else { return }
-            let longForm = allVideos.filter { PlayPlatformBridge.isHubsForYouLongForm($0) }.count
-            // Soft cap: enough for smooth endless scroll per slug shelf.
-            if longForm >= Self.hubsCatalogSoftCap { return }
+            // Always try full once after open so Archive / R2 long-form fill the pool.
             await loadVideos(forceRefresh: false, mode: .full)
+            // Second pass: every seed long-form on disk.
+            if AppConfig.archiveContentEnabled {
+                let seedLong = await HubVideoSeedService.shared.longFormVideos()
+                if !seedLong.isEmpty {
+                    softMergeHubCatalog(seedLong)
+                }
+            }
         }
     }
 
@@ -1153,7 +1206,7 @@ struct YouTubeAppView: View {
         let longFormNow = allVideos.filter { !$0.isReel }.count
         let sparksNow = allVideos.filter(\.isReel).count
         let hadPaint = !allVideos.isEmpty
-        // Warm UI: skip network when we already have enough for this mode.
+        // Warm UI: skip network only when we already have a large catalog.
         if !forceRefresh {
             if mode == .fast, longFormNow >= 8 {
                 isLoading = false
@@ -1163,9 +1216,8 @@ struct YouTubeAppView: View {
                 #endif
                 return
             }
-            // Full: skip once we have a healthy slug-capped catalog (smooth, not flooded).
-            if mode == .full,
-               longFormNow >= Self.hubsCatalogSoftCap {
+            // Full: skip only when we already hold a deep catalog (hundreds).
+            if mode == .full, longFormNow >= 400 {
                 isLoading = false
                 #if DEBUG
                 print("[Hubs] skip FULL network — \(longFormNow) longform \(sparksNow) sparks")
@@ -1187,9 +1239,9 @@ struct YouTubeAppView: View {
             uniqueKeysWithValues: allVideos.map { ($0.id, $0) }
         )
 
-        // Network: FAST first paint; FULL = modest slug-ready catalog (not a 300-row dump).
+        // Network: FAST first paint; FULL = deep catalog for endless For you.
         let network = await PostsService.shared.loadPlayCatalog(
-            globalLimit: forceRefresh ? 120 : (mode == .fast ? 36 : 80),
+            globalLimit: forceRefresh ? 500 : (mode == .fast ? 48 : 500),
             forceRefresh: forceRefresh,
             viewerCountry: appState.currentProfile?.countryCode,
             followingIDs: appState.followingIDs,
@@ -1203,14 +1255,25 @@ struct YouTubeAppView: View {
             guard PlayPlatformBridge.belongsInHubsCatalog(post)
                 || PlayPlatformBridge.isHubChannelUpload(post)
                 || PlayPlatformBridge.isHubOriginShare(post)
+                || PlayPlatformBridge.isHubsForYouLongForm(post)
             else { continue }
             byID[post.id] = post
+        }
+
+        // Full / refresh: every Archive long-form seed we ship.
+        if (mode == .full || forceRefresh), AppConfig.archiveContentEnabled {
+            let seedLong = await HubVideoSeedService.shared.longFormVideos()
+            for post in seedLong {
+                byID[post.id] = post
+            }
         }
 
         if mode == .full || forceRefresh {
             for saved in appState.savedVideoPosts + appState.savedReelPosts {
                 if PlayPlatformBridge.isFeedOnlyShare(saved) { continue }
-                if PlayPlatformBridge.belongsInHubsCatalog(saved), byID[saved.id] == nil {
+                if PlayPlatformBridge.belongsInHubsCatalog(saved)
+                    || PlayPlatformBridge.isHubsForYouLongForm(saved),
+                   byID[saved.id] == nil {
                     byID[saved.id] = saved
                 }
             }
@@ -1221,7 +1284,6 @@ struct YouTubeAppView: View {
             videos = videos.excludingArchiveContent()
         }
 
-        // Never do a second heavy longform pull on the fast path — that was the multi-second hang.
         isLoading = false
 
         if videos.isEmpty, allVideos.isEmpty {
@@ -1234,15 +1296,13 @@ struct YouTubeAppView: View {
                 // Background expand: merge quietly — no list remount / reshuffle.
                 softMergeHubCatalog(videos)
             } else {
-                // Slug-capped first paint only — never dump the entire channel list into UI.
-                let perSlug = mode == .fast ? 6 : 8
+                // First paint order: slug-diverse head, then **every** remaining video.
+                let perSlug = mode == .fast ? 8 : 16
                 let painted = Self.slugCappedFirstPaint(videos, perSlug: perSlug)
-                // Keep a small overflow buffer for endless scroll, still soft-capped.
                 var ordered = painted
                 var seen = Set(painted.map(\.id))
                 for post in videos where seen.insert(post.id).inserted {
                     ordered.append(post)
-                    if ordered.count >= Self.hubsCatalogSoftCap { break }
                 }
                 let shouldShuffle = forceRefresh || !hadPaint
                 applyHubCatalog(

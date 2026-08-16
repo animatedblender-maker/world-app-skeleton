@@ -1183,8 +1183,8 @@ final class PostsService {
                 #endif
                 return hubsSessionCatalog
             }
-            // Healthy slug-ready session — don't re-pull (keeps Hubs YouTube-light).
-            if !fast, sessionLong >= 80 {
+            // Only short-circuit full load when session is already deep (endless For you).
+            if !fast, sessionLong >= 400 {
                 #if DEBUG
                 print("[Hubs] loadPlayCatalog SESSION full hit long=\(sessionLong) sparks=\(sessionSparks)")
                 #endif
@@ -1239,16 +1239,14 @@ final class PostsService {
         }
         let own = await ownTask
 
-        // Optional Archive seed.
+        // Archive / seed catalog — full long-form corpus for endless For you (not 10/slug).
         let seedAll: [CountryPost]
         if AppConfig.archiveContentEnabled {
-            if forceRefresh {
-                seedAll = await HubVideoSeedService.shared.allVideos()
-            } else {
-                let slugLong = await HubVideoSeedService.shared.catalogLongFormVideos(perHub: 10)
-                let sparks = await HubVideoSeedService.shared.sparkSeedVideos(limit: 40)
-                seedAll = slugLong + sparks
-            }
+            let all = await HubVideoSeedService.shared.allVideos()
+            // Keep a modest spark sample; every long-form goes into the pool.
+            let sparks = all.filter(\.isReel).prefix(80)
+            let longForm = all.filter { !$0.isReel }
+            seedAll = longForm + sparks
         } else {
             seedAll = []
         }
