@@ -374,6 +374,8 @@ struct GlobalHubPlaybackLayer: View {
             MatteryaHubPlayerView(
                 url: url,
                 posterURL: post.posterImageURL,
+                // Keep surface active for whole hubs session (mini/tab morph must not deactivate).
+                // Play/pause follows hubPlaybackPlaying; false only from user chrome.
                 isActive: appState.hubPlaybackPlaying,
                 startTime: resumeAt,
                 postID: post.id,
@@ -397,6 +399,10 @@ struct GlobalHubPlaybackLayer: View {
                 isFullscreenActive: isHubFullscreen,
                 onReady: {
                     Task { await PostsService.shared.recordView(post) }
+                    // Re-assert solo after ready so tab silence always has a keep target.
+                    MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
+                        userMuted: appState.hubPlaybackMuted
+                    )
                     if appState.hubPlaybackPlaying {
                         NotificationCenter.default.post(
                             name: .matteryaResumePlaybackAfterInterrupt,
@@ -405,6 +411,8 @@ struct GlobalHubPlaybackLayer: View {
                     }
                 },
                 onPlayingChange: { playing in
+                    // Continuous: stalls no longer emit false (see MatteryaHubPlayerView).
+                    // true → keep AppState playing; false → intentional chrome pause.
                     appState.hubPlaybackPlaying = playing
                 },
                 onProgress: { current, duration in
@@ -699,6 +707,11 @@ struct GlobalHubPlaybackLayer: View {
     /// Animate collapse → 1, then flip session to mini without a second layout jump.
     private func commitMinimize() {
         if fsProgress > 0.01 { closeFullscreen(animated: false) }
+        // Audio must keep running through the morph.
+        appState.hubPlaybackPlaying = true
+        MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
+            userMuted: appState.hubPlaybackMuted
+        )
         let returnToChat = appState.hubMinimizeReturnToChat
         withAnimation(MatteryaMotion.ytMorph) {
             collapse = 1
@@ -717,6 +730,15 @@ struct GlobalHubPlaybackLayer: View {
             withTransaction(t2) {
                 collapse = 1
             }
+            // After chrome mounts: re-solo (tab/feed may have stolen focus mid-morph).
+            appState.hubPlaybackPlaying = true
+            MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
+                userMuted: appState.hubPlaybackMuted
+            )
+            NotificationCenter.default.post(
+                name: .matteryaResumePlaybackAfterInterrupt,
+                object: nil
+            )
         }
     }
 }

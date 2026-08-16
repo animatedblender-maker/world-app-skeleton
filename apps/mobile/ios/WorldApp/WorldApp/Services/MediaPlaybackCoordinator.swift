@@ -135,6 +135,9 @@ final class MediaPlaybackCoordinator {
         protectedContinuousPlayer = nil
     }
 
+    /// Continuous hubs player currently protected (mini/watch).
+    var continuousHubPlayer: AVPlayer? { protectedContinuousPlayer }
+
     /// True when this player is the current Sparks/Hubs audio owner.
     func isSolo(_ player: AVPlayer?) -> Bool {
         guard let player else { return false }
@@ -154,8 +157,27 @@ final class MediaPlaybackCoordinator {
         SparkWarmPool.shared.silenceAllBuffered()
         if let keep {
             soloPlayer = keep
+            // Tab silence must never leave continuous hubs muted/stalled.
+            // (Other paths may have hard-silenced before protect was re-bound.)
         } else {
             soloPlayer = nil
+        }
+    }
+
+    /// After tab/nav silence: re-claim continuous hubs audio with the user's mute preference.
+    /// Call whenever `hubPlaybackPost != nil` and playback should continue in mini.
+    func reassertContinuousHubsAudio(userMuted: Bool) {
+        guard let keep = protectedContinuousPlayer, keep.currentItem != nil else { return }
+        soloPlayer = keep
+        register(keep)
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playback, mode: .moviePlayback, options: [])
+        try? session.setActive(true, options: [])
+        keep.isMuted = userMuted
+        keep.volume = userMuted ? 0 : 1
+        if keep.rate < 0.05 {
+            keep.play()
+            keep.safePlayImmediately(atRate: 1.0)
         }
     }
 

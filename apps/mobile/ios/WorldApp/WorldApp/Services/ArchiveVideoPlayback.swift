@@ -428,6 +428,21 @@ struct MatteryaHubPlayerView: View {
             )
         }
         .onChange(of: isActive) { _, active in
+            if isContinuousHubPlayer {
+                // Continuous mini/watch: play/pause only from AppState / chrome intent.
+                // setActive(false) is ignored on the controller (layout thrash safe);
+                // intentional pause uses pauseKeepingFrame so audio stops cleanly.
+                if active {
+                    bridge.controller?.setMuted(isMuted)
+                    bridge.controller?.setActive(true)
+                    bridge.controller?.ensureContinuingPlayback()
+                    bridge.isPlaying = true
+                } else {
+                    bridge.controller?.pauseKeepingFrame()
+                    bridge.isPlaying = false
+                }
+                return
+            }
             // Always setActive so userWantsPlayback + audio output are restored after pause.
             bridge.controller?.setActive(active)
             if !active {
@@ -483,6 +498,14 @@ struct MatteryaHubPlayerView: View {
             // Never push "paused" while scrubbing — that cleared hubPlaybackPlaying and
             // left the clip frozen after the timeline seek.
             guard !isScrubbing else { return }
+            if isContinuousHubPlayer {
+                // Buffer stalls / layout reflow briefly set rate=0 — do NOT clear
+                // AppState.hubPlaybackPlaying or mini goes silent after tab minimize.
+                if playing {
+                    onPlayingChange?(true)
+                }
+                return
+            }
             // Chrome play/pause must update hubPlaybackPlaying so mini bar + isActive stay aligned.
             onPlayingChange?(playing)
         }
@@ -1715,15 +1738,24 @@ final class ArchiveVideoPlayerController: UIViewController {
                 )
             }
         } else {
-            userWantsPlayback = false
             isScrubbing = false
-            // Silence inactive pages — prevents stacked audio. mutedFlag stays as user choice.
-            // Continuous hubs: only mute if parent asked (mini still active elsewhere).
-            if !isContinuousHubPlayer {
-                player?.pause()
-                player?.isMuted = true
-                player?.volume = 0
+            // Continuous Hubs: SwiftUI thrash during mini/tab morph used to clear
+            // userWantsPlayback → ensureContinuingPlayback no-ops → silent mini forever.
+            // Intentional pause still goes through pauseKeepingFrame / togglePlayPause.
+            if isContinuousHubPlayer {
+                // Stay warm + protected; do not clear play intent or mute the film.
+                if let player {
+                    MediaPlaybackCoordinator.shared.protectContinuous(player)
+                }
+                posterView.isHidden = true
+                spinner.stopAnimating()
+                return
             }
+            userWantsPlayback = false
+            // Silence inactive pages — prevents stacked audio. mutedFlag stays as user choice.
+            player?.pause()
+            player?.isMuted = true
+            player?.volume = 0
             // Keep last frame painted (no poster) so a fast swipe-back never blacks out.
             posterView.isHidden = true
             spinner.stopAnimating()

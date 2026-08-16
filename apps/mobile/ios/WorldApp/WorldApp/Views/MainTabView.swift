@@ -146,38 +146,60 @@ struct MainTabView: View {
         .onChange(of: appState.selectedTab) { oldTab, tab in
             // Hard rule: leave a surface → no orphan audio from off-screen video.
             FeedVideoFocus.shared.resetAll()
+
+            // Off Hubs while expanded → snap mini FIRST (no spring vs tab layout fight).
+            // Animated morph + tab remount caused geometry hallucinations + audio drops.
+            if tab != .hubs, appState.hubPlaybackExpanded {
+                appState.minimizeHubPlayback(returnToChat: false, animated: false)
+            }
+
             MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
 
-            // Off Hubs → mini (if expanded). Already-mini: skip morph (was lagging tab switches).
+            // Continuous hubs mini must keep audio on EVERY tab (not only when entering Hubs).
+            if appState.hubPlaybackPost != nil {
+                appState.hubPlaybackPlaying = true
+                MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
+                    userMuted: appState.hubPlaybackMuted
+                )
+                NotificationCenter.default.post(
+                    name: .matteryaResumePlaybackAfterInterrupt,
+                    object: nil
+                )
+            }
+
             if tab != .hubs {
-                if appState.hubPlaybackExpanded {
-                    appState.minimizeHubPlayback(returnToChat: false)
-                }
                 EngagementTracker.shared.hubsLeft()
             } else {
                 EngagementTracker.shared.hubsOpened()
-                // Re-kick continuous hubs audio after silence pass.
-                if appState.hubPlaybackPost != nil, appState.hubPlaybackPlaying {
-                    NotificationCenter.default.post(
-                        name: .matteryaResumePlaybackAfterInterrupt,
-                        object: nil
-                    )
-                }
             }
             EngagementTracker.shared.screenOpened(tab.rawValue)
             // 3+ min off feed → new feed mix; Hubs open → new For you order.
             appState.noteSelectedTabChanged(from: oldTab, to: tab)
         }
         .onChange(of: appState.navigationPath.count) { _, count in
-            // Opening chat (or any push) while expanded → collapse to mini, keep playing.
-            // returnToChat: false — path already has the destination (including chat).
+            // Opening chat (or any push) while expanded → snap mini, keep playing.
+            // Instant (not spring) so nav push layout doesn't fight the morph.
             if count > 0, appState.hubPlaybackExpanded {
-                appState.minimizeHubPlayback(returnToChat: false)
+                appState.minimizeHubPlayback(returnToChat: false, animated: false)
+                appState.hubPlaybackPlaying = true
+                MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
+                    userMuted: appState.hubPlaybackMuted
+                )
+                NotificationCenter.default.post(
+                    name: .matteryaResumePlaybackAfterInterrupt,
+                    object: nil
+                )
             }
             // Left the pinned chat while mini → never force-return there on next minimize.
             appState.syncHubPlaybackChatReturnWithPath()
             // Push/pop (e.g. public profile over feed) — re-elect autoplay on the live surface.
             FeedVideoFocus.shared.resetAll()
+            // Nav change can silence feed; re-assert continuous mini if still running.
+            if count == 0, appState.hubPlaybackPost != nil, appState.hubPlaybackPlaying {
+                MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
+                    userMuted: appState.hubPlaybackMuted
+                )
+            }
         }
         .onChange(of: appState.navigationPath) { _, _ in
             appState.syncHubPlaybackChatReturnWithPath()
