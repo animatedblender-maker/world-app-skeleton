@@ -1183,8 +1183,8 @@ final class PostsService {
                 #endif
                 return hubsSessionCatalog
             }
-            // Fat session only — endless For you needs a flooded long-form pool.
-            if !fast, sessionLong >= 200 {
+            // Healthy slug-ready session — don't re-pull (keeps Hubs YouTube-light).
+            if !fast, sessionLong >= 80 {
                 #if DEBUG
                 print("[Hubs] loadPlayCatalog SESSION full hit long=\(sessionLong) sparks=\(sessionSparks)")
                 #endif
@@ -1195,7 +1195,7 @@ final class PostsService {
         if fast {
             let longForm = await loadLivingVideos(
                 followingLimitPerAuthor: followingLimitPerAuthor,
-                globalLimit: min(globalLimit, 48),
+                globalLimit: min(globalLimit, 36),
                 forceRefresh: forceRefresh,
                 fast: true
             )
@@ -1214,13 +1214,13 @@ final class PostsService {
             return merged
         }
 
-        // FULL: flood long-form for endless For you. Pull-to-refresh goes deepest.
-        // Background warm is still parallelized per channel (not serial freeze).
-        let perAuthor = forceRefresh ? 250 : 100
+        // FULL: modest per-channel sample for slug shelves (YouTube-light, not a dump).
+        // Pull-to-refresh goes a bit deeper; idle warm stays small.
+        let perAuthor = forceRefresh ? 80 : 40
         async let channelCatalogTask = fetchFocusMarketHubCatalog(
             limitPerAuthor: perAuthor,
             includeSparks: true,
-            topUpRecent: true
+            topUpRecent: forceRefresh
         )
         async let feedSparksTask = loadReelsFeed(
             followingLimitPerAuthor: followingLimitPerAuthor,

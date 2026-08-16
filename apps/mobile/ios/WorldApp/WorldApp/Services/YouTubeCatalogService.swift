@@ -390,21 +390,146 @@ final class YouTubeCatalogService {
         UserDefaults.standard.set(Array(history.prefix(120)), forKey: historyKey(for: userID))
     }
 
-    /// **For you** order — same algorithm as home feed / Sparks:
-    /// unviewed first, following unviewed priority, session-seeded mix every open.
+    /// **For you** order — slug-shelf algorithm (YouTube-style, light):
+    /// 1) Bucket by hub parent slug (social / travel / …)
+    /// 2) Within each slug: unviewed first, then following, then rest
+    /// 3) Round-robin across slugs so no category floods the list
+    /// Cheap O(n) — never re-sorts a giant flat pool mid-scroll.
     func rankForYou(
         _ videos: [CountryPost],
         followingIDs: Set<String>,
         myUserID: String?,
         sessionSeed: UInt64
     ) -> [CountryPost] {
-        let longForm = videos.filter { PlayPlatformBridge.isHubsForYouLongForm($0) }
-        return SparkDiscoveryEngine.sessionHomeFeedOrder(
-            longForm,
+        rankForYouBySlugs(
+            videos,
             followingIDs: followingIDs,
             myUserID: myUserID,
-            sessionSeed: sessionSeed
+            sessionSeed: sessionSeed,
+            focusSlug: nil
         )
+    }
+
+    /// Parent hub slug for a long-form row (explicit hub_slug → classifier).
+    static func parentHubSlug(for post: CountryPost) -> String {
+        if let raw = (post.hubSlug ?? post.externalRefID)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased(),
+           !raw.isEmpty {
+            return HubCategoryClassifier.parentCategory(of: raw)
+        }
+        return HubCategoryClassifier.classify(
+            title: post.title,
+            body: post.body,
+            tags: [],
+            creator: post.author?.displayName,
+            seedSlug: nil
+        )
+    }
+
+    /// Slug-first ranking. `focusSlug` non-nil → single shelf (chip), still unviewed-first.
+    func rankForYouBySlugs(
+        _ videos: [CountryPost],
+        followingIDs: Set<String>,
+        myUserID: String?,
+        sessionSeed: UInt64,
+        focusSlug: String?
+    ) -> [CountryPost] {
+        let longForm = videos.filter { PlayPlatformBridge.isHubsForYouLongForm($0) }
+        guard !longForm.isEmpty else { return [] }
+
+        let me = myUserID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        func isFollow(_ p: CountryPost) -> Bool { followingIDs.contains(p.authorID) }
+        func isMine(_ p: CountryPost) -> Bool { !me.isEmpty && p.authorID == me }
+
+        // Per-slug queues: unviewed follow/mine first, then other unviewed, then viewed last.
+        var buckets: [String: [CountryPost]] = [:]
+        for post in longForm {
+            let slug = Self.parentHubSlug(for: post)
+            if let focusSlug, slug != focusSlug, !focusSlug.isEmpty {
+                // Chip filter: also accept prefix matches (travel_cities → travel).
+                let parent = HubCategoryClassifier.parentCategory(of: focusSlug)
+                if slug != focusSlug && slug != parent { continue }
+            }
+            buckets[slug, default: []].append(post)
+        }
+
+        func rankSlugQueue(_ items: [CountryPost], salt: UInt64) -> [CountryPost] {
+            var followFresh: [CountryPost] = []
+            var mineFresh: [CountryPost] = []
+            var otherFresh: [CountryPost] = []
+            var viewed: [CountryPost] = []
+            for p in items {
+                if SparkDiscoveryEngine.isViewed(p.id) {
+                    viewed.append(p)
+                    continue
+                }
+                if isMine(p) { mineFresh.append(p) }
+                else if isFollow(p) { followFresh.append(p) }
+                else { otherFresh.append(p) }
+            }
+            func newest(_ a: [CountryPost]) -> [CountryPost] {
+                a.sorted { ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast) }
+            }
+            // Light session salt so each open feels fresh without full shuffle cost.
+            let others = salt == 0 ? newest(otherFresh) : seededInterleave(newest(otherFresh), seed: salt)
+            // Viewed only as last resort for this slug.
+            return newest(mineFresh) + newest(followFresh) + others + newest(viewed)
+        }
+
+        let slugOrder: [String]
+        if let focus = focusSlug?.lowercased(), !focus.isEmpty {
+            slugOrder = [HubCategoryClassifier.parentCategory(of: focus)]
+        } else {
+            // Hub shelf order, then any unknown slugs — rotated by session seed for variety.
+            var order = HubVideoSeedService.hubOrder
+            if sessionSeed != 0, order.count > 1 {
+                let rot = Int(sessionSeed % UInt64(order.count))
+                order = Array(order[rot...]) + Array(order[..<rot])
+            }
+            let extras = buckets.keys.filter { !order.contains($0) }.sorted()
+            slugOrder = order + extras
+        }
+
+        var queues: [String: [CountryPost]] = [:]
+        for (i, slug) in slugOrder.enumerated() {
+            guard let raw = buckets[slug], !raw.isEmpty else { continue }
+            queues[slug] = rankSlugQueue(raw, salt: sessionSeed &+ UInt64(i) &* 0x9E37)
+        }
+
+        // Round-robin across slugs (YouTube diversity) — O(n), smooth scroll fuel.
+        var out: [CountryPost] = []
+        out.reserveCapacity(longForm.count)
+        var seen = Set<String>()
+        var progressed = true
+        while progressed {
+            progressed = false
+            for slug in slugOrder {
+                guard var q = queues[slug], let next = q.first else { continue }
+                q.removeFirst()
+                queues[slug] = q
+                if seen.insert(next.id).inserted {
+                    out.append(next)
+                    progressed = true
+                }
+            }
+        }
+        return out
+    }
+
+    /// Tiny deterministic interleave (not a full Fisher–Yates) for open-to-open variety.
+    private func seededInterleave(_ items: [CountryPost], seed: UInt64) -> [CountryPost] {
+        guard items.count > 2 else { return items }
+        var arr = items
+        var state = seed == 0 ? 0xC0FFEE : seed
+        // Partial swaps — cheaper than full shuffle, enough variety per open.
+        let swaps = min(arr.count, 8)
+        for i in 0..<swaps {
+            state = state &* 6364136223846793005 &+ 1
+            let j = Int(state % UInt64(arr.count))
+            arr.swapAt(i % arr.count, j)
+        }
+        return arr
     }
 
     func playbackPosition(for postID: String) -> Double {
@@ -481,21 +606,30 @@ final class YouTubeCatalogService {
     }
 
     func relatedVideos(to post: CountryPost, from catalog: [CountryPost], limit: Int = 12) -> [CountryPost] {
-        // Unviewed long-form first (same discovery engine as For you / Sparks).
+        // Same-slug first (light), then same author, then unviewed others — no 400-row rank.
         let pool = catalog.filter {
             livingEligible($0)
                 && $0.id != post.id
                 && PlayPlatformBridge.isHubsForYouLongForm($0)
         }
+        let slug = Self.parentHubSlug(for: post)
+        let sameSlug = pool.filter { Self.parentHubSlug(for: $0) == slug }
         let sameAuthor = pool.filter { $0.authorID == post.authorID }
-        let others = pool.filter { $0.authorID != post.authorID }
-        let rankedSame = SparkDiscoveryEngine.rankForDiscovery(sameAuthor)
-        let rankedOthers = SparkDiscoveryEngine.rankForDiscovery(others)
-        let combined = rankedSame + rankedOthers
-        if combined.isEmpty {
-            return Array(SparkDiscoveryEngine.rankForDiscovery(pool).prefix(max(limit, 0)))
+        var seen = Set<String>()
+        var out: [CountryPost] = []
+        func absorb(_ items: [CountryPost]) {
+            for p in SparkDiscoveryEngine.rankForDiscovery(items) {
+                guard seen.insert(p.id).inserted else { continue }
+                out.append(p)
+                if out.count >= limit { return }
+            }
         }
-        return Array(combined.prefix(max(limit, 0)))
+        absorb(sameSlug)
+        if out.count < limit { absorb(sameAuthor) }
+        if out.count < limit {
+            absorb(pool.filter { !seen.contains($0.id) })
+        }
+        return out
     }
 
     private func keywordFilter(_ videos: [CountryPost], words: [String]) -> [CountryPost] {

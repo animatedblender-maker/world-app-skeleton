@@ -93,42 +93,45 @@ struct YouTubeWatchView: View {
                     .clipped()
                     .zIndex(2)
 
-                // Gap between video and title.
+                // Tiny gap between video and title (YouTube-tight).
                 Color.clear
                     .frame(height: YouTubeMediaLayout.hubsTitleGapBelowVideo)
                     .frame(maxWidth: .infinity)
                     .background(Theme.canvas.opacity(chromeOpacity))
 
                 ScrollView {
-                    // Tight stack: title → actions almost touch (user asked for smaller gap).
-                    LazyVStack(alignment: .leading, spacing: 4) {
-                        titleSection
-                        // Like · Send · Keep directly under title/meta.
-                        actionSection
-                            .padding(.top, 2)
+                    // Non-lazy chrome: title + actions flush (LazyVStack was adding ghost gaps).
+                    VStack(alignment: .leading, spacing: 0) {
+                        titleAndActionsChrome
+
                         channelSection
-                            .padding(.top, 8)
+                            .padding(.top, 10)
 
                         descriptionSection
                             .padding(.horizontal, Theme.pagePadding)
-                            .padding(.top, 6)
+                            .padding(.top, 8)
                             .id("desc-\(currentPost.id)")
 
-                        Divider().padding(.horizontal, Theme.pagePadding)
+                        Divider()
+                            .padding(.horizontal, Theme.pagePadding)
+                            .padding(.top, 8)
 
                         commentsSection
+                            .padding(.top, 4)
 
                         if !related.isEmpty || !relatedWindow.isEmpty {
                             relatedHeader
-                            ForEach(relatedWindow) { item in
-                                YouTubeVideoListRow(post: item.post) {
-                                    onOpenVideo(item.post)
-                                }
-                                .onAppear {
-                                    if item.id == relatedWindow.last?.id {
-                                        appendRelatedPage()
+                            LazyVStack(alignment: .leading, spacing: 0) {
+                                ForEach(relatedWindow) { item in
+                                    YouTubeVideoListRow(post: item.post) {
+                                        onOpenVideo(item.post)
                                     }
-                                    warmRelatedAround(item)
+                                    .onAppear {
+                                        if item.id == relatedWindow.last?.id {
+                                            appendRelatedPage()
+                                        }
+                                        warmRelatedAround(item)
+                                    }
                                 }
                             }
                         }
@@ -338,17 +341,21 @@ struct YouTubeWatchView: View {
         }
     }
 
+    /// Title + meta + Like/Send/Keep in one tight chrome block (no LazyVStack gaps).
     @ViewBuilder
-    private var titleSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
+    private var titleAndActionsChrome: some View {
+        VStack(alignment: .leading, spacing: 0) {
             if let headline = currentPost.displayHeadline {
                 Text(headline)
-                    .font(.system(.title3, design: .default).weight(.semibold))
+                    .font(.system(size: 17, weight: .semibold, design: .default))
                     .foregroundStyle(Theme.ink)
+                    .lineLimit(3)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, Theme.pagePadding)
+                    .padding(.top, 4)
             }
-            // Meta line — views · time (YouTube-style under title).
+            // Meta line — views · time (flush under title).
             HStack(spacing: 6) {
                 if currentPost.viewCount > 0 {
                     Text("\(currentPost.viewCount.formatted()) views")
@@ -366,10 +373,13 @@ struct YouTubeWatchView: View {
                         .foregroundStyle(Theme.inkMuted)
                 }
             }
+            .padding(.horizontal, Theme.pagePadding)
+            .padding(.top, 2)
+
+            // Like · Send · Keep — immediately under meta (YouTube-tight).
+            actionSection
+                .padding(.top, 6)
         }
-        .padding(.horizontal, Theme.pagePadding)
-        .padding(.top, 0)
-        .padding(.bottom, 0)
     }
 
     @ViewBuilder
@@ -387,7 +397,7 @@ struct YouTubeWatchView: View {
         }
     }
 
-    /// Matterya action chips (Like · Send · Keep) — pill chips, warm paper chrome.
+    /// Matterya action chips (Like · Send · Keep) — compact pill row, no extra chrome height.
     private var actionSection: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
@@ -421,6 +431,7 @@ struct YouTubeWatchView: View {
             .padding(.horizontal, Theme.pagePadding)
             .padding(.vertical, 0)
         }
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private func watchActionChip(
@@ -431,9 +442,9 @@ struct YouTubeWatchView: View {
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            HStack(spacing: 6) {
+            HStack(spacing: 5) {
                 Image(systemName: icon)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: 13, weight: .semibold))
                 Text(label)
                     .font(.caption.weight(.semibold))
             }
@@ -442,8 +453,8 @@ struct YouTubeWatchView: View {
                     ? (accentColor != nil ? accentColor! : Theme.paper)
                     : Theme.ink
             )
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 6)
             .background(
                 Capsule().fill(
                     accent
