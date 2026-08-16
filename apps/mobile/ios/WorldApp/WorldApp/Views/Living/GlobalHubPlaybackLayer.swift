@@ -25,30 +25,28 @@ enum HubWatchStageFrameKey: PreferenceKey {
 
 /// Single continuous hubs AVPlayer for the whole app.
 ///
-/// Hit-testing: only the **video rect** receives touches (UIKit pass-through host).
-/// Everything else (ScrollView under the player) scrolls normally.
-/// Expand ↔ mini only resizes the same player (stable `.id`) — playback keeps running.
+/// **Minimize model (flawless path):**
+/// One continuous progress `collapse` 0…1 interpolates the player frame between
+/// full watch stage and mini strip. Finger drag updates `collapse` 1:1.
+/// On release we animate `collapse` → 1, then flip `hubPlaybackExpanded = false`
+/// with animations disabled so layout does not jump a second time.
+/// Hit-testing: only the video rect receives touches (UIKit pass-through host).
 struct GlobalHubPlaybackLayer: View {
     @Environment(AppState.self) private var appState
 
     var dockSlotGlobal: CGRect? = nil
-    /// Live frame of the watch-page stage hole (expanded only).
     var watchStageGlobal: CGRect? = nil
 
-    @State private var dragOffset: CGFloat = 0
-    @State private var isPullingMinimize = false
-    @State private var preferMiniFill = false
+    /// 0 = full expanded stage, 1 = mini dock. Drives geometry every frame.
+    @State private var collapse: CGFloat = 0
+    @State private var isDragging = false
     @State private var miniCurrentSeconds: Double = 0
     @State private var miniDurationSeconds: Double = 0
     @State private var miniSeekToSeconds: Double? = nil
 
     private var expanded: Bool { appState.hubPlaybackExpanded }
 
-    /// Expand / minimize — short easeOut only (never spring — springs hang mid-screen).
-    private static let morphAnim = MatteryaMotion.expand
-    private static let minimizeMorphAnim = MatteryaMotion.minimize
-
-    /// Chat dock only — floating mini uses a fixed bottom strip (no preference lag).
+    /// Chat dock only — floating mini uses a fixed bottom strip.
     private var hasChatDockSlot: Bool {
         !expanded
             && appState.hubPlaybackDockInChat
@@ -57,39 +55,22 @@ struct GlobalHubPlaybackLayer: View {
             && (dockSlotGlobal?.height ?? 0) > 8
     }
 
-    private var hasDockSlot: Bool { hasChatDockSlot }
-
-    private var miniStripHeight: CGFloat {
-        YouTubeMiniPlayerBar.barHeight
-    }
-
-    /// When preference dock isn’t ready yet, sit the strip above the tab bar.
     private var floatingBottomClearance: CGFloat {
-        if hasDockSlot { return 0 }
-        if !expanded && appState.navigationPath.isEmpty {
+        if hasChatDockSlot { return 0 }
+        if collapse > 0.5 || !expanded, appState.navigationPath.isEmpty {
             return Theme.tabBarHeight
         }
         return 0
     }
 
     private var showTransportChrome: Bool {
-        // Keep controls mounted while expanded so opacity can fade with the pull slider.
-        // Mini never shows in-player transport (HubMiniPlayerChrome owns controls).
-        expanded
+        // Hide in-player chrome once mostly collapsed (mini bar owns controls).
+        expanded && collapse < 0.55
     }
 
-    /// 1 = full player chrome; 0 = fully faded (mirrors meta chrome under the video).
-    /// Mini: always 1 for the video layer (chrome is off via showTransportChrome).
     private var transportChromeOpacity: Double {
         if !expanded { return 1 }
-        return Double(1 - min(1, max(0, appState.hubPlaybackPullProgress)))
-    }
-
-    private var playingBinding: Binding<Bool> {
-        Binding(
-            get: { appState.hubPlaybackPlaying },
-            set: { appState.hubPlaybackPlaying = $0 }
-        )
+        return Double(1 - min(1, max(0, collapse)))
     }
 
     private var mutedBinding: Binding<Bool> {
@@ -103,56 +84,53 @@ struct GlobalHubPlaybackLayer: View {
         Group {
             if let post = appState.hubPlaybackPost {
                 GeometryReader { geo in
-                    let layout = playerLayout(in: geo)
-                    let liveY = layout.y + (expanded ? dragOffset : 0)
+                    let layout = playerLayout(in: geo, collapse: collapse)
                     let hitRect = CGRect(
                         x: layout.x,
-                        y: liveY,
+                        y: layout.y,
                         width: layout.width,
                         height: layout.height
                     )
 
-                    // UIKit pass-through: touches outside hitRect go to ScrollView underneath.
                     HubPassThroughContainer(interactiveRect: hitRect) {
-                        videoStack(post: post, layout: layout, liveY: liveY)
+                        videoStack(post: post, layout: layout)
                             .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                // Stay in the safe area — video starts *below* the Dynamic Island, never under it.
             }
         }
+        .onAppear {
+            collapse = expanded ? 0 : 1
+            syncPullProgressFromCollapse()
+        }
         .onChange(of: expanded) { _, isExpanded in
+            // External expand/minimize (tab switch, chevron, mini tap) — no double morph.
+            guard !isDragging else { return }
             if isExpanded {
+                withAnimation(MatteryaMotion.expand) {
+                    collapse = 0
+                }
+                appState.hubPlaybackPullProgress = 0
+            } else {
+                // Already mini or jump to mini without gesture.
                 var t = Transaction()
                 t.disablesAnimations = true
                 withTransaction(t) {
-                    dragOffset = 0
-                    isPullingMinimize = false
-                    preferMiniFill = false
-                    appState.hubPlaybackPullProgress = 0
+                    collapse = 1
+                    appState.hubPlaybackPullProgress = 1
                 }
-            } else {
-                // Morph already owns dragOffset→0 in the gesture end. Don't re-animate here
-                // (double animation made grab-to-mini feel sluggish).
-                preferMiniFill = true
+                // Clear pull flag after a beat so watch chrome can fully dismiss.
                 Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    try? await Task.sleep(nanoseconds: 80_000_000)
                     guard !appState.hubPlaybackExpanded else { return }
-                    var t = Transaction()
-                    t.disablesAnimations = true
-                    withTransaction(t) {
-                        isPullingMinimize = false
-                        dragOffset = 0
-                        appState.hubPlaybackPullProgress = 0
-                    }
+                    appState.hubPlaybackPullProgress = 0
                 }
             }
         }
         .onChange(of: appState.hubPlaybackPost?.id) { _, _ in
-            dragOffset = 0
-            isPullingMinimize = false
-            preferMiniFill = !appState.hubPlaybackExpanded
+            isDragging = false
+            collapse = expanded ? 0 : 1
             appState.hubPlaybackPullProgress = 0
             miniCurrentSeconds = 0
             miniDurationSeconds = 0
@@ -162,49 +140,41 @@ struct GlobalHubPlaybackLayer: View {
             guard playing, appState.hubPlaybackPost != nil else { return }
             NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
         }
-        .onAppear {
-            preferMiniFill = !expanded
-        }
     }
 
-    // MARK: - Video stack (only this rect is hit-testable via pass-through host)
+    // MARK: - Video stack
 
     @ViewBuilder
-    private func videoStack(post: CountryPost, layout: PlayerLayout, liveY: CGFloat) -> some View {
+    private func videoStack(post: CountryPost, layout: PlayerLayout) -> some View {
         ZStack(alignment: .topLeading) {
             ZStack {
-                // Ink bed so mini never shows white letterbox while video fills.
                 Theme.ink
                 playerSurface(
                     for: post,
                     showControls: showTransportChrome,
                     chromeOpacity: transportChromeOpacity
                 )
-                    .frame(width: layout.width, height: layout.height)
-                    .clipped()
-
-                // Mini chrome lives on YouTubeMiniPlayerBar (above this layer) so buttons work.
+                .frame(width: layout.width, height: layout.height)
+                .clipped()
             }
             .frame(width: layout.width, height: layout.height)
             .background(Theme.ink)
             .clipShape(
                 RoundedRectangle(
-                    cornerRadius: isPullingMinimize ? 12 : 0,
+                    cornerRadius: collapse > 0.08 ? 12 : 0,
                     style: .continuous
                 )
             )
             .clipped()
-            .offset(x: layout.x, y: liveY)
-            // No implicit .animation on geometry — those stacked with withAnimation and
-            // made pull-to-mini feel sluggish. Finger: Transaction disablesAnimations.
-            // Release: single withAnimation(MatteryaMotion.minimize) in the gesture end.
-            // Pull-to-mini only while expanded (mini chrome owns taps when minimized).
+            .offset(x: layout.x, y: layout.y)
+            // Finger-driven collapse — no implicit animation while dragging.
+            .animation(isDragging ? nil : MatteryaMotion.minimize, value: collapse)
             .simultaneousGesture(expanded ? minimizeGesture : nil)
             .id("global-hub-continuous-\(post.id)")
         }
     }
 
-    // MARK: - Layout
+    // MARK: - Layout (lerp expanded ↔ mini)
 
     private struct PlayerLayout {
         var x: CGFloat
@@ -213,28 +183,22 @@ struct GlobalHubPlaybackLayer: View {
         var height: CGFloat
     }
 
-    private func playerLayout(in geo: GeometryProxy) -> PlayerLayout {
-        if expanded {
-            // This layer is laid out in the safe area (no ignoresSafeArea).
-            // y = 0 is already the first point *below* the Dynamic Island — do not add
-            // safeAreaInsets.top again (that left a large empty gap under the island).
-            let stageHeight = YouTubeMediaLayout.hubsExpandedStageHeight(
-                containerWidth: geo.size.width
-            )
-            return PlayerLayout(
-                x: 0,
-                y: 0,
-                width: geo.size.width,
-                height: max(120, stageHeight)
-            )
-        }
+    private func expandedFrame(in geo: GeometryProxy) -> PlayerLayout {
+        let stageHeight = YouTubeMediaLayout.hubsExpandedStageHeight(
+            containerWidth: geo.size.width
+        )
+        return PlayerLayout(
+            x: 0,
+            y: 0,
+            width: geo.size.width,
+            height: max(120, stageHeight)
+        )
+    }
 
-        // Mini: full-bleed strip matching YouTubeMiniPlayerBar — same size as the clear hole.
+    private func miniFrame(in geo: GeometryProxy) -> PlayerLayout {
         let barW = max(1, geo.size.width)
         let size = YouTubeMiniPlayerBar.videoSize(forBarWidth: barW)
-        // Default: fixed strip above the tab bar (stable — no preference-key lag mid-morph).
         var y = max(0, geo.size.height - floatingBottomClearance - size.height)
-        // Chat dock only: follow the message bubble hole once reported.
         if hasChatDockSlot, let global = dockSlotGlobal {
             let containerGlobal = geo.frame(in: .global)
             let dockY = global.minY - containerGlobal.minY
@@ -244,8 +208,21 @@ struct GlobalHubPlaybackLayer: View {
                 y = dockY
             }
         }
-        // Full width × bar height — aspect-fill paints edge-to-edge in this rect.
         return PlayerLayout(x: 0, y: y, width: size.width, height: size.height)
+    }
+
+    private func playerLayout(in geo: GeometryProxy, collapse tRaw: CGFloat) -> PlayerLayout {
+        let t = min(1, max(0, tRaw))
+        // Ease slightly so the last bit settles cleanly into the mini strip.
+        let tEased = t * t * (3 - 2 * t)
+        let a = expandedFrame(in: geo)
+        let b = miniFrame(in: geo)
+        return PlayerLayout(
+            x: a.x + (b.x - a.x) * tEased,
+            y: a.y + (b.y - a.y) * tEased,
+            width: a.width + (b.width - a.width) * tEased,
+            height: a.height + (b.height - a.height) * tEased
+        )
     }
 
     // MARK: - Player
@@ -258,8 +235,6 @@ struct GlobalHubPlaybackLayer: View {
     ) -> some View {
         let stored = YouTubeCatalogService.shared.playbackPosition(for: post.id)
         let resumeAt = stored > 3 ? stored : 0
-        // Mini + expanded: always aspect-fill the container (no letterbox).
-        let mustFill = true
         if let url = post.playableVideoURL {
             MatteryaHubPlayerView(
                 url: url,
@@ -269,7 +244,7 @@ struct GlobalHubPlaybackLayer: View {
                 postID: post.id,
                 showsControls: showControls,
                 loops: false,
-                fillsFrame: mustFill,
+                fillsFrame: true,
                 chromeOpacity: chromeOpacity,
                 isMuted: mutedBinding,
                 allowsFullscreen: false,
@@ -292,7 +267,6 @@ struct GlobalHubPlaybackLayer: View {
                 seekToSeconds: miniSeekToSeconds,
                 onSeekConsumed: { miniSeekToSeconds = nil }
             )
-            // Stable id — remounting on expand/mini would restart audio (never do that).
             .id("hub-continuous-\(post.id)")
         } else {
             YouTubeVideoThumbnail(
@@ -305,74 +279,95 @@ struct GlobalHubPlaybackLayer: View {
         }
     }
 
-    private func expand() {
-        dragOffset = 0
-        isPullingMinimize = false
-        preferMiniFill = false
-        appState.expandHubPlayback()
-    }
+    // MARK: - Gesture
 
     private var minimizeGesture: some Gesture {
-        // minimumDistance 4 — engage instantly on a real grab (8 felt sticky).
-        DragGesture(minimumDistance: 4, coordinateSpace: .local)
+        DragGesture(minimumDistance: 3, coordinateSpace: .local)
             .onChanged { value in
                 guard expanded else { return }
-                var offset = dragOffset
-                var dragging = isPullingMinimize
-                MatteryaPullDownDismiss.applyChanged(value, offset: &offset, isDragging: &dragging)
-                // Progress from *raw* finger Y so fade is a true 1:1 slider (not rubber-band).
-                let progress = dragging
-                    ? MatteryaPullDownDismiss.pullProgress(forVertical: value.translation.height)
-                    : 0
-                var t = Transaction()
-                t.disablesAnimations = true
-                withTransaction(t) {
-                    dragOffset = offset
-                    isPullingMinimize = dragging
-                    appState.hubPlaybackPullProgress = progress
+                let y = value.translation.height
+                let x = abs(value.translation.width)
+                // Ignore clear horizontal pans.
+                if !isDragging {
+                    guard y > 5, y > x * 0.65 else { return }
+                    isDragging = true
+                } else if y < 0 {
+                    // Finger back up → collapse back toward expanded.
+                    applyCollapse(0, animated: false)
+                    return
                 }
+                // 1:1 with finger over dismiss distance.
+                let progress = MatteryaPullDownDismiss.pullProgress(forVertical: max(0, y))
+                applyCollapse(progress, animated: false)
             }
             .onEnded { value in
                 guard expanded else {
-                    var t = Transaction()
-                    t.disablesAnimations = true
-                    withTransaction(t) {
-                        dragOffset = 0
-                        isPullingMinimize = false
-                        appState.hubPlaybackPullProgress = 0
-                    }
+                    isDragging = false
                     return
                 }
-                // Moment finger leaves: if not still “up”, commit mini immediately.
-                // Never zero dragOffset while still expanded — that hangs the video mid-screen.
                 let shouldMini = MatteryaPullDownDismiss.shouldMinimizeOnRelease(
                     value,
-                    dragOffset: dragOffset,
-                    pullProgress: appState.hubPlaybackPullProgress
+                    dragOffset: max(0, value.translation.height),
+                    pullProgress: collapse
                 )
+                isDragging = false
                 if shouldMini {
                     ReelsTwistHaptics.pullDismiss()
-                    // Commit mini on this frame: pullProgress=1 fades watch chrome; home underlay
-                    // is already painted (no white). One short easeOut for geometry only.
-                    var lock = Transaction()
-                    lock.disablesAnimations = true
-                    withTransaction(lock) {
-                        appState.hubPlaybackPullProgress = 1
-                        preferMiniFill = true
-                    }
-                    withAnimation(Self.minimizeMorphAnim) {
-                        // animated:false → expanded flips inside this withAnimation only once.
-                        appState.minimizeHubPlayback(returnToChat: true, animated: false)
-                        dragOffset = 0
-                    }
+                    commitMinimize()
                 } else {
-                    // Release still “up” — chrome snaps back.
+                    // Snap back to full stage.
                     withAnimation(MatteryaMotion.micro) {
-                        dragOffset = 0
-                        isPullingMinimize = false
+                        collapse = 0
                         appState.hubPlaybackPullProgress = 0
                     }
                 }
             }
+    }
+
+    private func applyCollapse(_ progress: CGFloat, animated: Bool) {
+        let p = min(1, max(0, progress))
+        if animated {
+            withAnimation(MatteryaMotion.minimize) {
+                collapse = p
+                appState.hubPlaybackPullProgress = p
+            }
+        } else {
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) {
+                collapse = p
+                appState.hubPlaybackPullProgress = p
+            }
+        }
+    }
+
+    private func syncPullProgressFromCollapse() {
+        appState.hubPlaybackPullProgress = expanded ? collapse : 0
+    }
+
+    /// Animate collapse → 1, then flip session to mini **without** a second layout jump.
+    private func commitMinimize() {
+        // Drive chrome + geometry to mini in one short easeOut.
+        withAnimation(MatteryaMotion.minimize) {
+            collapse = 1
+            appState.hubPlaybackPullProgress = 1
+        }
+        // Flip expanded after the morph starts painting — geometry already at mini
+        // so this must NOT re-animate. Side-effects (chat return) stay deferred.
+        Task { @MainActor in
+            // Let one frame paint collapse=1.
+            try? await Task.sleep(nanoseconds: 16_000_000)
+            appState.minimizeHubPlayback(returnToChat: true, animated: false)
+            // Ensure collapse stays 1 after state flip (onChange may race).
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) {
+                collapse = 1
+            }
+            // Clear pull flag after mini bar is up so home isn't treated as "grabbing".
+            try? await Task.sleep(nanoseconds: 90_000_000)
+            guard !appState.hubPlaybackExpanded else { return }
+            appState.hubPlaybackPullProgress = 0
+        }
     }
 }

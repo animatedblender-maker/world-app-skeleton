@@ -67,22 +67,20 @@ struct YouTubeWatchView: View {
 
     private static let watchScrollTopID = "hub-watch-meta-top"
 
-    /// Paper under chrome when expanded; ink while grabbing so the stage hole stays dark.
+    /// Paper under chrome when expanded. Clear as soon as pull starts so home shows through.
     private var watchChromeBackground: Color {
         if isMinimizingGrab || appState.hubPlaybackPullProgress > 0.02 {
-            return Theme.ink
+            return .clear
         }
         return Theme.canvas
     }
 
-    /// Root backdrop — always paper (same as Hubs home). Clear only when fully mini
-    /// so the live home underlay shows through (never a blank white sheet).
+    /// Root backdrop — clear on pull/mini so Hubs home (underlay) is never covered by white/ink.
     private var watchRootBackground: Color {
         if !embedsPlayer {
             if !appState.hubPlaybackExpanded { return .clear }
-            // Mid-grab: ink under faded chrome so the continuous player hole isn't white.
             if isMinimizingGrab || appState.hubPlaybackPullProgress > 0.02 {
-                return Theme.ink
+                return .clear
             }
         }
         return Theme.canvas

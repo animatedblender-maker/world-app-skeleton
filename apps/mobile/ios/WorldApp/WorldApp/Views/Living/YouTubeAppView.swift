@@ -272,10 +272,13 @@ struct YouTubeAppView: View {
         appState.hubPlaybackPost != nil && !appState.hubPlaybackExpanded
     }
 
-    /// Watch overlay is up (expanded or mid-minimize fade).
-    private var showsWatchOverlay: Bool {
-        if case .watch = route { return true }
-        return false
+    /// Watch chrome is only fully covering when expanded and not mid-pull.
+    /// Critical: never hide home while mini (expanded=false) — that was the white screen.
+    private var watchFullyCoveringHome: Bool {
+        guard case .watch = route else { return false }
+        guard appState.hubPlaybackExpanded else { return false }
+        // As soon as the user pulls a hair, home must show through fading chrome.
+        return appState.hubPlaybackPullProgress < 0.04
     }
 
     /// Content under the watch overlay — always kept alive so mini never leaves a white hole.
@@ -293,30 +296,28 @@ struct YouTubeAppView: View {
         case .library:
             libraryScreen
         case .watch, nil:
-            // Home stays mounted even while watching (opacity 0 under watch).
+            // Home stays mounted even while watching.
             mainContent
         }
     }
 
     var body: some View {
         GeometryReader { geo in
-            // Home (or channel/library) stays mounted under watch so minimize never
-            // flashes white / remounts For you mid-morph.
+            // Home always painted under watch. Cover only while fully expanded.
             ZStack(alignment: .top) {
                 VStack(spacing: 0) {
-                    // Header only when not covering with watch (watch has its own chrome).
-                    if !showsWatchOverlay {
+                    if !watchFullyCoveringHome {
                         YouTubeAppHeader(onSearch: { showSearch = true })
                     }
                     underWatchContent
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                // Dim slightly under watch so home doesn't pop through transparent gaps.
-                .opacity(showsWatchOverlay ? 0 : 1)
-                .allowsHitTesting(!showsWatchOverlay)
+                // Hide home only when watch fully covers — never when mini/pulling.
+                .opacity(watchFullyCoveringHome ? 0 : 1)
+                .allowsHitTesting(!watchFullyCoveringHome)
 
-                if case .watch(let post) = route {
+                if case .watch(let post) = route, appState.hubPlaybackExpanded {
                     let watchPost = PlayPlatformBridge.hubWatchPresentation(for: post)
                     YouTubeWatchView(
                         post: watchPost,
@@ -328,12 +329,11 @@ struct YouTubeAppView: View {
                         onOpenVideo: { openVideo($0) },
                         onOpenChannel: { openChannel($0) }
                     )
-                    // Force fresh scroll + comments when switching "More on Matterya" videos.
                     .id("hub-watch-\(watchPost.id)")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    // Hide instantly when mini — home underneath is already painted.
-                    .opacity(appState.hubPlaybackExpanded ? 1 : 0)
-                    .allowsHitTesting(appState.hubPlaybackExpanded)
+                    // Fade with pull progress (1 = full chrome, 0 = gone).
+                    .opacity(max(0, 1 - Double(appState.hubPlaybackPullProgress)))
+                    .allowsHitTesting(appState.hubPlaybackPullProgress < 0.35)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -342,7 +342,6 @@ struct YouTubeAppView: View {
                 height: geo.size.height > 0 ? geo.size.height : nil
             )
         }
-        // Never animate the whole tree on post switch / mini — that was laggy + white flash.
         .screenBackground()
         .toolbar(.hidden, for: .navigationBar)
         .refreshable {

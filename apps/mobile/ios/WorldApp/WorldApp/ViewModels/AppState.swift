@@ -1260,40 +1260,39 @@ final class AppState {
     }
 
     /// Collapse to mini — **playback keeps running** (same continuous AVPlayer, only layout changes).
-    /// If this session started from a chat and user hasn't navigated elsewhere, restore that chat.
-    /// Chat messages stay warm in `MessagesService` cache so re-open is instant.
-    /// - Parameter animated: when false, caller already owns the morph animation (pull-to-mini release).
+    /// Geometry morph is owned by `GlobalHubPlaybackLayer` (`collapse` 0→1). This only flips session flags.
+    /// - Parameter animated: when false, layer already finished the morph — no second animation.
     func minimizeHubPlayback(returnToChat: Bool = true, animated: Bool = true) {
         guard hubPlaybackPost != nil else { return }
         // Never stop/pause mini — GlobalHubPlaybackLayer only resizes the stage.
         hubPlaybackPlaying = true
         hubWatchScrollCollapse = 0
-        // Hold pullProgress at 1 so watch title/meta never flash while the stage
-        // leaves the expanded hole (avoids white hole + stuck title).
+        // Hold pull at 1 so watch chrome stays fully faded through the handoff.
         if hubPlaybackExpanded {
-            hubPlaybackPullProgress = max(hubPlaybackPullProgress, 1)
+            hubPlaybackPullProgress = 1
         }
         if animated {
-            // Ultra-short easeOut — grab release must feel instant.
             withAnimation(MatteryaMotion.minimize) {
                 hubPlaybackExpanded = false
             }
         } else {
-            // Caller wraps this in withAnimation; flip state only.
-            hubPlaybackExpanded = false
+            // Layer already at mini frame — flip with zero animation to avoid a second jump.
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) {
+                hubPlaybackExpanded = false
+            }
         }
 
-        // Defer ALL side-effects until after the morph paints (never hitch the release frame).
+        // Defer side-effects so they never hitch the release / morph frame.
         let shouldReturn = returnToChat
         let conversationID = hubPlaybackReturnConversationID
         Task { @MainActor in
-            // Morph is ~90ms — wait it out before any other UI work.
-            try? await Task.sleep(nanoseconds: 110_000_000)
+            try? await Task.sleep(nanoseconds: 120_000_000)
             FeedVideoFocus.shared.resetAll()
             syncHubPlaybackChatReturnWithPath()
-            // Navigation only after mini has fully landed.
             if shouldReturn, let conversationID {
-                try? await Task.sleep(nanoseconds: 80_000_000)
+                try? await Task.sleep(nanoseconds: 60_000_000)
                 guard hubPlaybackPost != nil, !hubPlaybackExpanded else { return }
                 selectedTab = .messages
                 navigationPath = [.conversation(conversationID)]

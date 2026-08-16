@@ -59,8 +59,8 @@ enum Theme {
 enum MatteryaMotion {
     /// Page / tab morph — lands immediately.
     static let snappy = Animation.easeOut(duration: 0.12)
-    /// Pull-to-mini only — ultra short so grab release feels glued to the finger.
-    static let minimize = Animation.easeOut(duration: 0.07)
+    /// Pull-to-mini settle — short easeOut after finger-up (geometry already tracks the drag).
+    static let minimize = Animation.easeOut(duration: 0.11)
     /// Sheets, comments, share overlays.
     static let sheet = Animation.easeOut(duration: 0.16)
     /// Expand Hubs watch / larger surfaces.
