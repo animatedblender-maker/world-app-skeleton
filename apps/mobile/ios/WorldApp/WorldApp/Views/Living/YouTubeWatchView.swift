@@ -65,7 +65,9 @@ struct YouTubeWatchView: View {
             || appState.hubPlaybackPullProgress > 0.01
     }
 
-    /// Paper under chrome when expanded; ink while grabbing so the route never flashes white.
+    private static let watchScrollTopID = "hub-watch-meta-top"
+
+    /// Paper under chrome when expanded; ink while grabbing so the stage hole stays dark.
     private var watchChromeBackground: Color {
         if isMinimizingGrab || appState.hubPlaybackPullProgress > 0.02 {
             return Theme.ink
@@ -73,13 +75,25 @@ struct YouTubeWatchView: View {
         return Theme.canvas
     }
 
-    /// Root backdrop behind continuous Hubs player — never paper-white mid-minimize.
+    /// Root backdrop — always paper (same as Hubs home). Clear only when fully mini
+    /// so the live home underlay shows through (never a blank white sheet).
     private var watchRootBackground: Color {
         if !embedsPlayer {
             if !appState.hubPlaybackExpanded { return .clear }
-            if isMinimizingGrab || chromeOpacity < 0.92 { return Theme.ink }
+            // Mid-grab: ink under faded chrome so the continuous player hole isn't white.
+            if isMinimizingGrab || appState.hubPlaybackPullProgress > 0.02 {
+                return Theme.ink
+            }
         }
         return Theme.canvas
+    }
+
+    private func scrollMetaToTop(_ proxy: ScrollViewProxy) {
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            proxy.scrollTo(Self.watchScrollTopID, anchor: .top)
+        }
     }
 
     private var isHubContent: Bool {
@@ -116,48 +130,66 @@ struct YouTubeWatchView: View {
                     .opacity(chromeOpacity)
                     .allowsHitTesting(chromeOpacity > 0.25)
 
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        channelSection
-                            .padding(.top, 10)
+                // Scroll from top (channel → comments). Related is below — never land there
+                // when opening a new video from "More on Matterya".
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            Color.clear
+                                .frame(height: 0)
+                                .id(Self.watchScrollTopID)
 
-                        descriptionSection
-                            .padding(.horizontal, Theme.pagePadding)
-                            .padding(.top, 8)
-                            .id("desc-\(currentPost.id)")
+                            channelSection
+                                .padding(.top, 10)
 
-                        Divider()
-                            .padding(.horizontal, Theme.pagePadding)
-                            .padding(.top, 8)
+                            descriptionSection
+                                .padding(.horizontal, Theme.pagePadding)
+                                .padding(.top, 8)
+                                .id("desc-\(currentPost.id)")
 
-                        commentsSection
-                            .padding(.top, 4)
+                            Divider()
+                                .padding(.horizontal, Theme.pagePadding)
+                                .padding(.top, 8)
 
-                        if !related.isEmpty || !relatedWindow.isEmpty {
-                            relatedHeader
-                            LazyVStack(alignment: .leading, spacing: 0) {
-                                ForEach(relatedWindow) { item in
-                                    YouTubeVideoListRow(post: item.post) {
-                                        onOpenVideo(item.post)
-                                    }
-                                    .onAppear {
-                                        if item.id == relatedWindow.last?.id {
-                                            appendRelatedPage()
+                            commentsSection
+                                .padding(.top, 4)
+                                .id("comments-\(currentPost.id)")
+
+                            if !related.isEmpty || !relatedWindow.isEmpty {
+                                relatedHeader
+                                LazyVStack(alignment: .leading, spacing: 0) {
+                                    ForEach(relatedWindow) { item in
+                                        YouTubeVideoListRow(post: item.post) {
+                                            onOpenVideo(item.post)
                                         }
-                                        warmRelatedAround(item)
+                                        .onAppear {
+                                            if item.id == relatedWindow.last?.id {
+                                                appendRelatedPage()
+                                            }
+                                            warmRelatedAround(item)
+                                        }
                                     }
                                 }
                             }
                         }
+                        .padding(.bottom, 28)
                     }
-                    .padding(.bottom, 28)
+                    .contentMargins(.all, 0, for: .scrollContent)
+                    .scrollDismissesKeyboard(.interactively)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(watchChromeBackground.opacity(chromeOpacity))
+                    .opacity(chromeOpacity)
+                    .allowsHitTesting(chromeOpacity > 0.25)
+                    .onAppear {
+                        scrollMetaToTop(proxy)
+                    }
+                    .onChange(of: post.id) { _, _ in
+                        scrollMetaToTop(proxy)
+                    }
+                    .onChange(of: currentPost.id) { _, _ in
+                        scrollMetaToTop(proxy)
+                    }
                 }
-                .contentMargins(.all, 0, for: .scrollContent)
-                .scrollDismissesKeyboard(.interactively)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(watchChromeBackground.opacity(chromeOpacity))
-                .opacity(chromeOpacity)
-                .allowsHitTesting(chromeOpacity > 0.25)
             }
             .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
             // When continuous player collapses, never leave title/meta over a white hole.
@@ -165,7 +197,7 @@ struct YouTubeWatchView: View {
             .allowsHitTesting(appState.hubPlaybackExpanded || embedsPlayer)
         }
         // Continuous player: never flash paper-white under a faded watch route.
-        // Grab / mini → ink. Expanded idle → canvas under chrome.
+        // Grab / mini → canvas (matches home paper) not pure white / ink slab.
         .background(watchRootBackground)
         // No implicit chrome animation while grabbing — 1:1 with finger via pull progress.
         .animation(isMinimizingGrab ? nil : MatteryaMotion.micro, value: chromeOpacity)

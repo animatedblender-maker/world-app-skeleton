@@ -272,59 +272,77 @@ struct YouTubeAppView: View {
         appState.hubPlaybackPost != nil && !appState.hubPlaybackExpanded
     }
 
+    /// Watch overlay is up (expanded or mid-minimize fade).
+    private var showsWatchOverlay: Bool {
+        if case .watch = route { return true }
+        return false
+    }
+
+    /// Content under the watch overlay — always kept alive so mini never leaves a white hole.
+    @ViewBuilder
+    private var underWatchContent: some View {
+        switch route {
+        case .channel(let channel):
+            YouTubeChannelView(
+                channel: channel,
+                subscriberCount: followerCounts[channel.authorID],
+                onBack: { route = nil },
+                onOpenVideo: { openVideo($0) }
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        case .library:
+            libraryScreen
+        case .watch, nil:
+            // Home stays mounted even while watching (opacity 0 under watch).
+            mainContent
+        }
+    }
+
     var body: some View {
         GeometryReader { geo in
-            VStack(spacing: 0) {
-                if route == nil {
-                    YouTubeAppHeader(
-                        onSearch: { showSearch = true }
-                    )
-                }
-
-                Group {
-                    switch route {
-                    case .watch(let post):
-                        // Video is drawn by GlobalHubPlaybackLayer — reserve stage + meta only.
-                        // Origin shares present the original channel, never the feed sharer.
-                        // hubPlaybackPost is already catalog-resolved when opened from feed share.
-                        let watchPost = PlayPlatformBridge.hubWatchPresentation(for: post)
-                        YouTubeWatchView(
-                            post: watchPost,
-                            channel: channelForWatch(watchPost),
-                            related: catalog.relatedVideos(to: watchPost, from: allVideos, limit: 24),
-                            // Raw base — views resolve live via AppState.followFollowerDeltas.
-                            subscriberCount: followerCounts[watchPost.authorID],
-                            embedsPlayer: false,
-                            onBack: { closeWatch(minimize: true) },
-                            onOpenVideo: { openVideo($0) },
-                            onOpenChannel: { openChannel($0) }
-                        )
-                    case .channel(let channel):
-                        YouTubeChannelView(
-                            channel: channel,
-                            // Raw base — channel resolves live so Follow updates the count.
-                            subscriberCount: followerCounts[channel.authorID],
-                            onBack: { route = nil },
-                            onOpenVideo: { openVideo($0) }
-                        )
-                        // Fill width inside GeometryReader so channel chrome isn't side-cropped.
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    case .library:
-                        libraryScreen
-                    case nil:
-                        mainContent
+            // Home (or channel/library) stays mounted under watch so minimize never
+            // flashes white / remounts For you mid-morph.
+            ZStack(alignment: .top) {
+                VStack(spacing: 0) {
+                    // Header only when not covering with watch (watch has its own chrome).
+                    if !showsWatchOverlay {
+                        YouTubeAppHeader(onSearch: { showSearch = true })
                     }
+                    underWatchContent
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Dim slightly under watch so home doesn't pop through transparent gaps.
+                .opacity(showsWatchOverlay ? 0 : 1)
+                .allowsHitTesting(!showsWatchOverlay)
+
+                if case .watch(let post) = route {
+                    let watchPost = PlayPlatformBridge.hubWatchPresentation(for: post)
+                    YouTubeWatchView(
+                        post: watchPost,
+                        channel: channelForWatch(watchPost),
+                        related: catalog.relatedVideos(to: watchPost, from: allVideos, limit: 24),
+                        subscriberCount: followerCounts[watchPost.authorID],
+                        embedsPlayer: false,
+                        onBack: { closeWatch(minimize: true) },
+                        onOpenVideo: { openVideo($0) },
+                        onOpenChannel: { openChannel($0) }
+                    )
+                    // Force fresh scroll + comments when switching "More on Matterya" videos.
+                    .id("hub-watch-\(watchPost.id)")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // Hide instantly when mini — home underneath is already painted.
+                    .opacity(appState.hubPlaybackExpanded ? 1 : 0)
+                    .allowsHitTesting(appState.hubPlaybackExpanded)
+                }
             }
-            // Use max frame, not rigid geo size — rigid width was cropping channel chrome L/R.
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .frame(width: geo.size.width > 0 ? geo.size.width : nil,
-                   height: geo.size.height > 0 ? geo.size.height : nil)
+            .frame(
+                width: geo.size.width > 0 ? geo.size.width : nil,
+                height: geo.size.height > 0 ? geo.size.height : nil
+            )
         }
-        .animation(.easeInOut(duration: 0.2), value: appState.hubPlaybackPost?.id)
-        // No tree-wide animation on expand/collapse — that stalled minimize mid-screen
-        // and could re-show watch chrome over a white stage hole.
+        // Never animate the whole tree on post switch / mini — that was laggy + white flash.
         .screenBackground()
         .toolbar(.hidden, for: .navigationBar)
         .refreshable {
@@ -409,10 +427,16 @@ struct YouTubeAppView: View {
             EngagementTracker.shared.hubShelfSelected(homeFilter.rawValue)
         }
         .onChange(of: route) { oldRoute, newRoute in
-            // Back to Hubs home from watch / channel / library → reshuffle everything.
-            guard newRoute == nil, oldRoute != nil, appState.selectedTab == .hubs else { return }
-            if !allVideos.isEmpty {
-                refreshHubsVisitShuffle(remountList: true)
+            // Reshuffle only when intentionally leaving channel/library → home.
+            // Minimize (watch → nil) must NOT remount For you — that was the white lag.
+            guard newRoute == nil, let oldRoute, appState.selectedTab == .hubs else { return }
+            switch oldRoute {
+            case .watch:
+                return
+            case .channel, .library:
+                if !allVideos.isEmpty {
+                    refreshHubsVisitShuffle(remountList: true)
+                }
             }
         }
         .onChange(of: appState.hubPlaybackPost?.id) { _, _ in
@@ -1498,21 +1522,18 @@ struct YouTubeAppView: View {
         if appState.hubPlaybackExpanded, let post = appState.hubPlaybackPost {
             let watchPost = PlayPlatformBridge.hubWatchPresentation(for: post)
             if case .watch(let existing) = route, existing.id == watchPost.id { return }
-            withAnimation(MatteryaMotion.expand) {
+            // No tree animation — home is already under the overlay.
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) {
                 route = .watch(watchPost)
             }
         } else if case .watch = route {
-            // Chrome is already faded via hubPlaybackPullProgress. Defer tearing down the
-            // watch tree until the mini morph finishes — remounting home mid-morph was the lag.
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                guard !appState.hubPlaybackExpanded else { return }
-                guard case .watch = route else { return }
-                var t = Transaction()
-                t.disablesAnimations = true
-                withTransaction(t) {
-                    route = nil
-                }
+            // Instant clear — home is already painted underneath (no white, no remount).
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) {
+                route = nil
             }
         }
     }
@@ -1582,7 +1603,11 @@ struct YouTubeAppView: View {
         }
         EngagementTracker.shared.hubVideoOpened(watchPost)
         appState.startHubPlayback(watchPost, expanded: true)
-        withAnimation(.easeInOut(duration: 0.15)) {
+        // No easeInOut on the whole hubs tree — that lagged related taps + minimize.
+        // .id(watchPost.id) on YouTubeWatchView resets scroll to title/comments (not related).
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
             route = .watch(watchPost)
         }
         // Optional catalog upgrade (channel name / better media) without blocking start.
@@ -1591,7 +1616,9 @@ struct YouTubeAppView: View {
             guard !resolved.isReel, !ReelsRankingEngine.isSparkEligible(resolved) else { return }
             if case .watch(let current) = route, current.id == post.id || current.id == watchPost.id {
                 if resolved.authorID != current.authorID {
-                    route = .watch(resolved)
+                    var u = Transaction()
+                    u.disablesAnimations = true
+                    withTransaction(u) { route = .watch(resolved) }
                 }
             }
         }
@@ -1657,22 +1684,14 @@ struct YouTubeAppView: View {
 
     private func closeWatch(minimize: Bool) {
         if minimize {
-            // Pull-down / close → if we opened from chat, restore that conversation + dock.
+            // Pull-down / close → mini morph; home is already under the overlay.
             appState.minimizeHubPlayback(returnToChat: true)
-            // Let mini morph paint first; then drop watch (home remount is expensive).
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                guard !appState.hubPlaybackExpanded else { return }
-                var t = Transaction()
-                t.disablesAnimations = true
-                withTransaction(t) { route = nil }
-            }
         } else {
             appState.stopHubPlayback()
-            var t = Transaction()
-            t.disablesAnimations = true
-            withTransaction(t) { route = nil }
         }
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) { route = nil }
     }
 }
 

@@ -352,18 +352,18 @@ struct GlobalHubPlaybackLayer: View {
                 )
                 if shouldMini {
                     ReelsTwistHaptics.pullDismiss()
-                    // Single short easeOut for the whole morph — keep isPullingMinimize true
-                    // so no other implicit animators re-engage mid-flight.
+                    // Commit mini on this frame: pullProgress=1 fades watch chrome; home underlay
+                    // is already painted (no white). One short easeOut for geometry only.
                     var lock = Transaction()
                     lock.disablesAnimations = true
                     withTransaction(lock) {
                         appState.hubPlaybackPullProgress = 1
+                        preferMiniFill = true
                     }
                     withAnimation(Self.minimizeMorphAnim) {
                         // animated:false → expanded flips inside this withAnimation only once.
                         appState.minimizeHubPlayback(returnToChat: true, animated: false)
                         dragOffset = 0
-                        preferMiniFill = true
                     }
                 } else {
                     // Release still “up” — chrome snaps back.
