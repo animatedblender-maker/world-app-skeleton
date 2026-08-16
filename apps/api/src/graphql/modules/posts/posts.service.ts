@@ -144,15 +144,55 @@ function normalizeTimestamptzCursor(raw: string | null | undefined): string | nu
   return null;
 }
 
+/**
+ * Pipeline used to store Math.min(5000, views) as like_count — everything looked like 5000 likes.
+ * Remap exact 5000 on R2/catalog sparks to a stable 15–899 until DB is rescaled.
+ */
+function sanitizeSeedLikeCount(row: {
+  id?: string;
+  like_count?: number | string | null;
+  media_path?: string | null;
+  media_url?: string | null;
+  body?: string | null;
+  media_type?: string | null;
+}): number {
+  const n = Math.max(0, Math.floor(Number(row.like_count) || 0));
+  if (n !== 5000) return n;
+  const path = String(row.media_path ?? '');
+  const body = String(row.body ?? '');
+  const media = String(row.media_url ?? '').toLowerCase();
+  const mtype = String(row.media_type ?? '').toLowerCase();
+  const isSeed =
+    path.startsWith('r2:') ||
+    path.startsWith('r2-share:') ||
+    path.startsWith('r2-hubshare:') ||
+    body.includes('__spark__|') ||
+    mtype === 'reel' ||
+    mtype === 'spark' ||
+    media.includes('"reel":true') ||
+    media.includes('"source":"r2') ||
+    media.includes('r2_focus_seed');
+  if (!isSeed) return n;
+  const id = String(row.id ?? '');
+  let h = 2166136261;
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return 15 + (Math.abs(h) % 885);
+}
+
 function presentPostRow<T extends Record<string, any>>(row: T): T {
   if (!row) return row;
   const next: any = { ...row, body: stripMomentMarkers(row.body) };
+  next.like_count = sanitizeSeedLikeCount(row);
   let ownComments = Number(row.comment_count) || 0;
   if (row.shared_post && typeof row.shared_post === 'object') {
     const sp: any = {
       ...row.shared_post,
       body: stripMomentMarkers((row.shared_post as any).body),
     };
+    sp.like_count = sanitizeSeedLikeCount(sp);
     const originComments = Number(sp.comment_count) || 0;
     // Spark/hub *shares* often have empty local threads while the origin holds R2 comments.
     // Surface the fuller count so feed cards keep “View N comments”.

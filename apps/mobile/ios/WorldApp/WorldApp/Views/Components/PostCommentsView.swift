@@ -117,6 +117,11 @@ struct PostCommentsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            // Composer first — post without scrolling (feed cards + Sparks overlay).
+            if showsComposer {
+                composer
+            }
+
             // Show spinner while demo threads / GraphQL load — avoids a false "no comments" flash.
             if isLoading && threadedComments.isEmpty {
                 ProgressView()
@@ -158,10 +163,6 @@ struct PostCommentsView: View {
                     .buttonStyle(.plain)
                     .padding(.top, 2)
                 }
-            }
-
-            if showsComposer {
-                composer
             }
         }
         .dismissKeyboardOnTap()
@@ -544,6 +545,8 @@ struct NewsCommentsSection: View {
                 .font(.headline)
                 .foregroundStyle(Theme.ink)
 
+            composer
+
             if threadedComments.isEmpty {
                 Text("No comments yet.")
                     .font(.subheadline)
@@ -557,8 +560,6 @@ struct NewsCommentsSection: View {
                     )
                 }
             }
-
-            composer
         }
     }
 

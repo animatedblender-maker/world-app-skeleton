@@ -593,7 +593,14 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
         self.sharedPostID = sharedPostID
         self.sharedPost = sharedPost
         self.visibility = visibility
-        self.likeCount = likeCount
+        // Pipeline used to store Math.min(5000, views) — remap seed 5000 on catalog Sparks.
+        self.likeCount = Self.sanitizedSeedLikeCount(
+            likeCount,
+            id: id,
+            mediaURL: mediaURL,
+            mediaType: mediaType,
+            body: body
+        )
         self.commentCount = commentCount
         self.viewCount = viewCount
         self.likedByMe = likedByMe
@@ -609,6 +616,36 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
         self.linkTitle = linkTitle
         self.externalRefType = externalRefType
         self.externalRefID = externalRefID
+    }
+
+    /// UI likes — never show the artificial seed floor of exactly 5000 on R2/catalog Sparks.
+    var displayLikeCount: Int { likeCount }
+
+    private static func sanitizedSeedLikeCount(
+        _ count: Int,
+        id: String,
+        mediaURL: String?,
+        mediaType: String?,
+        body: String
+    ) -> Int {
+        guard count == 5000 else { return max(0, count) }
+        let media = (mediaURL ?? "").lowercased()
+        let mtype = (mediaType ?? "").lowercased()
+        let isSeed =
+            media.contains("r2")
+            || media.contains("\"reel\":true")
+            || media.contains("r2_focus_seed")
+            || mtype == "reel"
+            || mtype == "spark"
+            || body.contains("__spark__|")
+            || SparkShareMarker.isMarked(body)
+        guard isSeed else { return count }
+        var h: UInt64 = 2_166_136_261
+        for b in id.utf8 {
+            h ^= UInt64(b)
+            h = h &* 16_777_619
+        }
+        return 15 + Int(h % 885)
     }
 
     var createdDate: Date? { RelativeTime.parseDate(createdAt) }
