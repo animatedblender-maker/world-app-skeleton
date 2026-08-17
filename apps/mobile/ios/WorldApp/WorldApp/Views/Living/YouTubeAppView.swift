@@ -1201,12 +1201,13 @@ struct YouTubeAppView: View {
         }
         allVideos = merged
         // Defer disk + channel rebuild so scroll never freezes on merge.
+        // Stay on MainActor (no detached capture of non-Sendable catalog).
         let cacheSlice = Array(merged.prefix(ContentCache.maxCachedPosts))
-        Task.detached(priority: .utility) {
-            await MainActor.run {
-                PostsService.shared.rememberHubsSessionCatalog(merged)
-                ContentCache.shared.setPosts(cacheSlice, for: .livingVideos)
-            }
+        let catalogSnapshot = merged
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            PostsService.shared.rememberHubsSessionCatalog(catalogSnapshot)
+            ContentCache.shared.setPosts(cacheSlice, for: .livingVideos)
         }
         // Skip channel rebuild mid-fling — list only needs long-form pool growth.
         if !ScrollBudget.isFlinging {

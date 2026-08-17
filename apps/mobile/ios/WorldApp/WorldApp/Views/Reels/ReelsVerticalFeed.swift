@@ -246,7 +246,7 @@ private struct SparksTimelineBar: View {
     }
 
     private func formatClock(_ seconds: Double) -> String {
-        let s = max(0, Int(seconds.rounded(.down)))
+        let s = max(0, SafeNumeric.int(seconds, max: 359_999))
         let m = s / 60
         let r = s % 60
         return String(format: "%d:%02d", m, r)

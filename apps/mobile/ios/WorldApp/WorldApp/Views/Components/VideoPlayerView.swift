@@ -633,9 +633,10 @@ struct VideoPlayerView: View {
 
     private func seek(to seconds: Double) {
         guard let player else { return }
-        let time = CMTime(seconds: seconds, preferredTimescale: 600)
+        let sec = SafeNumeric.nonNegativeSeconds(seconds)
+        let time = CMTime(seconds: sec, preferredTimescale: 600)
         player.seek(to: time)
-        currentSeconds = seconds
+        currentSeconds = sec
         lastNotedPlaybackSecond = -1
         trackPlaybackPositionIfNeeded()
         scheduleChromeHide()
@@ -884,12 +885,13 @@ struct VideoPlayerView: View {
                         kickAudiblePlayback(on: newPlayer)
                     } else {
                         // Preload path: stay paused at start (never free-play to buffer).
+                        // Keep poster — revealing early paints black on feed.
                         newPlayer.pause()
                         newPlayer.rate = 0
                         newPlayer.isMuted = true
                         newPlayer.volume = 0
                         isPlaying = false
-                        showPosterCover = false
+                        showPosterCover = true
                     }
                 case .failed:
                     await handlePlaybackFailure(for: configuration.url)
@@ -947,8 +949,7 @@ struct VideoPlayerView: View {
         let gate = liveGate
         timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
             Task { @MainActor in
-                let seconds = time.seconds
-                let cur = seconds.isFinite ? max(0, seconds) : 0
+                let cur = SafeNumeric.nonNegativeSeconds(time.seconds)
                 currentSeconds = cur
                 if let item = player.currentItem {
                     updateDuration(from: item)
@@ -961,7 +962,7 @@ struct VideoPlayerView: View {
                 trackPlaybackPositionIfNeeded()
                 // Always publish — parent decides whether to paint the rail.
                 // Prefer liveGate so we never call a stale View-struct capture.
-                gate.onProgress?(cur, durationSeconds)
+                gate.onProgress?(cur, SafeNumeric.seconds(durationSeconds))
 
                 // Fallback loop: some R2/HLS items never fire DidPlayToEndTime.
                 // When the playhead sits at/near the end, restart from 0.
@@ -1106,24 +1107,29 @@ struct VideoPlayerView: View {
     }
 
     private func trackPlaybackPositionIfNeeded() {
-        guard let postID, currentSeconds >= 0.5 else { return }
-        let wholeSecond = Int(currentSeconds.rounded(.down))
+        let sec = SafeNumeric.nonNegativeSeconds(currentSeconds)
+        guard let postID, sec >= 0.5 else { return }
+        // Int(NaN/Inf) traps and crashes the app (feed autoplay path).
+        let wholeSecond = SafeNumeric.int(sec, max: 86_400 * 24)
         guard wholeSecond != lastNotedPlaybackSecond else { return }
         lastNotedPlaybackSecond = wholeSecond
+        let dur = SafeNumeric.seconds(durationSeconds)
         YouTubeCatalogService.shared.notePlaybackPosition(
-            currentSeconds,
+            sec,
             for: postID,
-            duration: durationSeconds > 0 ? durationSeconds : nil
+            duration: dur > 0 ? dur : nil
         )
     }
 
     private func persistPlaybackPosition() {
         guard let postID else { return }
         guard persistsPositionOnTeardown else { return }
+        let sec = SafeNumeric.nonNegativeSeconds(currentSeconds)
+        let dur = SafeNumeric.seconds(durationSeconds)
         YouTubeCatalogService.shared.savePlaybackPosition(
-            currentSeconds,
+            sec,
             for: postID,
-            duration: durationSeconds > 0 ? durationSeconds : nil
+            duration: dur > 0 ? dur : nil
         )
     }
 
@@ -1338,7 +1344,7 @@ private struct MatteryaFullscreenPlayer: View {
         let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
         timeObserver = newPlayer.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
             Task { @MainActor in
-                currentSeconds = max(0, time.seconds)
+                currentSeconds = SafeNumeric.nonNegativeSeconds(time.seconds)
                 if let current = newPlayer.currentItem {
                     updateDuration(from: current)
                 }
@@ -1348,7 +1354,7 @@ private struct MatteryaFullscreenPlayer: View {
         timeObserverPlayer = newPlayer
 
         player = newPlayer
-        currentSeconds = startTime
+        currentSeconds = SafeNumeric.nonNegativeSeconds(startTime)
     }
 
     private func togglePlayback() {
@@ -1371,8 +1377,9 @@ private struct MatteryaFullscreenPlayer: View {
 
     private func seek(to seconds: Double) {
         guard let player else { return }
-        player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600))
-        currentSeconds = seconds
+        let sec = SafeNumeric.nonNegativeSeconds(seconds)
+        player.seek(to: CMTime(seconds: sec, preferredTimescale: 600))
+        currentSeconds = sec
         scheduleChromeHide()
     }
 
@@ -1618,8 +1625,7 @@ private struct MatteryaVideoControls: View {
     }
 
     private func formatTime(_ seconds: Double) -> String {
-        guard seconds.isFinite, seconds >= 0 else { return "0:00" }
-        let total = Int(seconds.rounded(.down))
+        let total = SafeNumeric.int(SafeNumeric.nonNegativeSeconds(seconds), max: 359_999)
         let hours = total / 3600
         let minutes = (total % 3600) / 60
         let secs = total % 60

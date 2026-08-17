@@ -924,8 +924,7 @@ struct MatteryaHubPlayerView: View {
     }
 
     private func formatTime(_ seconds: Double) -> String {
-        guard seconds.isFinite, seconds >= 0 else { return "0:00" }
-        let total = Int(seconds.rounded(.down))
+        let total = SafeNumeric.int(SafeNumeric.nonNegativeSeconds(seconds), max: 359_999)
         let h = total / 3600
         let m = (total % 3600) / 60
         let s = total % 60
@@ -1268,8 +1267,7 @@ struct MatteryaLandscapeFullscreenPlayer: View {
     }
 
     private func formatTime(_ seconds: Double) -> String {
-        guard seconds.isFinite, seconds >= 0 else { return "0:00" }
-        let total = Int(seconds.rounded(.down))
+        let total = SafeNumeric.int(SafeNumeric.nonNegativeSeconds(seconds), max: 359_999)
         let h = total / 3600
         let m = (total % 3600) / 60
         let s = total % 60
@@ -1662,7 +1660,8 @@ final class ArchiveVideoPlayerController: UIViewController {
             object: nil,
             queue: .main
         ) { [weak self] note in
-            guard let self, self.isContinuousHubPlayer else { return }
+            // Only the live continuous hubs surface — never feed/archive cells.
+            guard let self, self.isContinuousHubPlayer, self.player != nil else { return }
             let playing = (note.userInfo?["playing"] as? Bool) ?? true
             if playing {
                 self.setActive(true)
@@ -1676,7 +1675,7 @@ final class ArchiveVideoPlayerController: UIViewController {
             object: nil,
             queue: .main
         ) { [weak self] note in
-            guard let self, self.isContinuousHubPlayer else { return }
+            guard let self, self.isContinuousHubPlayer, self.player != nil else { return }
             let muted = (note.userInfo?["muted"] as? Bool) ?? false
             self.setMuted(muted)
         }
@@ -2347,10 +2346,8 @@ final class ArchiveVideoPlayerController: UIViewController {
         let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
         timeObserver = observed.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
             guard let self else { return }
-            let raw = time.seconds
-            let current = raw.isFinite ? max(0, raw) : 0
-            let duration = item.duration.seconds
-            let dur = duration.isFinite && duration > 0 ? duration : 0
+            let current = SafeNumeric.nonNegativeSeconds(time.seconds)
+            let dur = SafeNumeric.seconds(item.duration.seconds)
             let playing = observed.rate > 0.01
             let scrubbing = self.isScrubbing
             DispatchQueue.main.async { [weak self] in
@@ -2359,13 +2356,13 @@ final class ArchiveVideoPlayerController: UIViewController {
                 if !scrubbing {
                     self.lastKnownSeconds = current
                     // Always publish — parent must not rely on stale isActive captures.
-                    self.onProgress?(current, dur)
+                    self.onProgress?(current, dur > 0 ? dur : 0)
                     self.onPlayingChanged?(playing)
                     // Drop poster only once frames are actually advancing (IG/YT).
                     if playing, self.userWantsPlayback, !self.posterView.isHidden {
                         self.posterView.isHidden = true
                     }
-                    self.maybeLoopNearEnd(current: current, duration: dur, player: observed)
+                    self.maybeLoopNearEnd(current: current, duration: dur > 0 ? dur : 0, player: observed)
                 }
             }
         }

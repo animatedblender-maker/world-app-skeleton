@@ -542,12 +542,13 @@ final class YouTubeCatalogService {
     }
 
     func playbackPosition(for postID: String) -> Double {
-        livePlaybackPositions[postID] ?? playbackPositions[postID] ?? 0
+        let raw = livePlaybackPositions[postID] ?? playbackPositions[postID] ?? 0
+        return SafeNumeric.nonNegativeSeconds(raw)
     }
 
     /// Updates in-memory position during playback; persists to disk on a short throttle.
     func notePlaybackPosition(_ seconds: Double, for postID: String, duration: Double? = nil) {
-        let clamped = max(0, seconds)
+        let clamped = SafeNumeric.nonNegativeSeconds(seconds)
         guard clamped >= 0.5 else { return }
 
         livePlaybackPositions[postID] = clamped
@@ -561,7 +562,7 @@ final class YouTubeCatalogService {
     }
 
     func savePlaybackPosition(_ seconds: Double, for postID: String, duration: Double? = nil) {
-        let clamped = max(0, seconds)
+        let clamped = SafeNumeric.nonNegativeSeconds(seconds)
         let prior = playbackPosition(for: postID)
 
         if clamped < 1 {
@@ -572,7 +573,8 @@ final class YouTubeCatalogService {
             persistPlaybackPositions()
             return
         }
-        if let duration, duration > 0, clamped >= duration - 2 {
+        let dur = duration.map { SafeNumeric.seconds($0) }
+        if let dur, dur > 0, clamped >= dur - 2 {
             playbackPositions.removeValue(forKey: postID)
             livePlaybackPositions.removeValue(forKey: postID)
             persistPlaybackPositions()
