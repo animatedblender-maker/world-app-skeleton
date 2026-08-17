@@ -258,8 +258,8 @@ struct YouTubeVideoListRow: View {
                     maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel,
                     showsPlayIcon: false,
                     frameStyle: .card,
-                    // R2 LongForm → YouTube poster URL; Sparks without poster extract one frame (cached).
-                    extractFrameIfNeeded: true,
+                    // NEVER extract frames while scrolling For you — freezes Hubs hard.
+                    extractFrameIfNeeded: false,
                     showsHubBadge: false
                 )
                 YouTubeVideoMetadataRow(post: post)
@@ -442,11 +442,12 @@ struct PlayFeedLinkCard: View {
                     ?? MediaURLResolver.videoURL(for: shared.asCountryPost)
             }) {
             ZStack {
+                // Poster stays under the player so we never flash pure black while buffering.
                 if let poster = post.posterImageURL {
                     CachedAsyncImage(
                         url: poster,
                         maxPixelSize: 480,
-                        contentMode: .fit,
+                        contentMode: .fill,
                         placeholder: AnyView(Theme.ink)
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -468,7 +469,8 @@ struct PlayFeedLinkCard: View {
                     preferArchivePlayer: ArchiveVideoPlayback.isArchiveURL(url),
                     showsControls: true,
                     muteOnlyControls: false,
-                    fillsFrame: false,
+                    // Fill the 16:9 feed box — aspect-fit left black letterbox slabs.
+                    fillsFrame: true,
                     sharesFeedMute: true,
                     autoplaySurface: autoplaySurface,
                     onViewed: { Task { await PostsService.shared.recordView(post) } }
@@ -477,8 +479,8 @@ struct PlayFeedLinkCard: View {
             .id("hub-feed-\(post.id)")
             .background(Theme.ink)
             .onAppear {
+                // Resolve CDN only — do not spin AVPlayers for every feed row (jank + black).
                 ArchiveVideoPlayback.warmResolve(url)
-                SparkWarmPool.shared.warmSingle(postID: post.id, url: url, deep: false)
             }
         } else {
             YouTubeVideoThumbnail(

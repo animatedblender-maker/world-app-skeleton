@@ -1839,6 +1839,23 @@ struct InFrameVideoPlayer: View {
                 }
             }
 
+            // Cover black AV layer until this card actually wins focus + plays.
+            if !playGate {
+                if let posterURL {
+                    CachedAsyncImage(
+                        url: posterURL,
+                        maxPixelSize: 480,
+                        contentMode: .fill,
+                        placeholder: AnyView(Theme.ink)
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+                    .allowsHitTesting(false)
+                } else {
+                    Theme.ink.allowsHitTesting(false)
+                }
+            }
+
             if muteOnlyControls {
                 VStack {
                     HStack {
@@ -1878,13 +1895,9 @@ struct InFrameVideoPlayer: View {
             } else {
                 isMuted = muted
             }
-            // Kick Archive CDN resolve as soon as the cell appears (not after focus).
+            // CDN resolve only — never warm AVPlayers for every feed/hubs cell (freezes scroll).
             if usesArchivePath {
                 ArchiveVideoPlayback.warmResolve(url)
-            }
-            // Light mount warm — deep preroll only when this card wins focus (avoids CPU thrash).
-            if let postID {
-                SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: false)
             }
             refreshFocusWinner()
             syncPlayGate(immediate: true)

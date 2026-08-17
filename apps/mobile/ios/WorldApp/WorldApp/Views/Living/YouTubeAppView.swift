@@ -179,29 +179,29 @@ struct YouTubeAppView: View {
         }
     }
 
-    /// Endless For you: grow window, then fetch **next slug page** (never full catalog dump).
+    /// Endless For you: grow window cheaply; network only after scroll settles.
     private func ensureMoreForYou(around index: Int) {
-        ScrollBudget.noteCellAppear()
-        let fling = ScrollBudget.isFlinging
-        let growWhenWithin = fling ? 12 : 8
-        let growBy = fling ? Self.hubsGrowBy * 2 : Self.hubsGrowBy
-        let threshold = max(0, stableDiscoverVideos.count - growWhenWithin)
+        // Near end of visible window only.
+        let threshold = max(0, stableDiscoverVideos.count - 6)
         guard index >= threshold else { return }
 
-        // 1) Reveal more of the ranked pool (instant).
+        // 1) Grow local pool only (no network, no image storm).
         if hubsDisplayLimit < hubsForYouPool.count {
-            growForYouDisplay(by: growBy, warmThumbs: !fling)
+            growForYouDisplay(by: Self.hubsGrowBy, warmThumbs: false)
             return
         }
 
-        // 2) Pool exhausted → next slug shelf page (never mid-fling network).
-        guard !fling else {
-            scheduleSettledHubsTopUp()
+        // 2) Network only when not flinging and not already loading.
+        guard !ScrollBudget.isFlinging, !isLoadingMoreHubs else {
+            if ScrollBudget.isFlinging { scheduleSettledHubsTopUp() }
             return
         }
         Task { @MainActor in
+            // Settle gate — avoid load during rubber-band / momentum.
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard appState.selectedTab == .hubs, !ScrollBudget.isFlinging else { return }
+            guard hubsDisplayLimit >= hubsForYouPool.count else { return }
             await loadMoreActiveShelf()
-            // If shelf API empty, fall back to legacy modest top-up once.
             if hubsDisplayLimit >= hubsForYouPool.count {
                 requestMoreHubsLongForm()
             }
@@ -209,10 +209,12 @@ struct YouTubeAppView: View {
     }
 
     private func growForYouDisplay(by growBy: Int, warmThumbs: Bool) {
-        hubsDisplayLimit = min(
+        let next = min(
             hubsForYouPool.count,
             hubsDisplayLimit + max(growBy, Self.hubsGrowBy)
         )
+        guard next > hubsDisplayLimit else { return }
+        hubsDisplayLimit = next
         let window = Array(hubsForYouPool.prefix(hubsDisplayLimit))
         var t = Transaction()
         t.disablesAnimations = true
@@ -220,21 +222,16 @@ struct YouTubeAppView: View {
             stableHomeVideos = window
             stableDiscoverVideos = window
         }
-        if warmThumbs {
-            ImageCache.shared.prefetchPostThumbnails(
-                Array(window.suffix(Self.hubsGrowBy)),
-                maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel,
-                aggressive: false
-            )
-        }
+        // Never prefetch mid-scroll grow — thumbs load lazily via AsyncImage.
+        _ = warmThumbs
     }
 
     private func scheduleSettledHubsTopUp() {
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 260_000_000)
-            guard !ScrollBudget.isFlinging else { return }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !ScrollBudget.isFlinging, !isLoadingMoreHubs else { return }
             guard hubsDisplayLimit >= hubsForYouPool.count else { return }
-            requestMoreHubsLongForm()
+            await loadMoreActiveShelf()
         }
     }
 
@@ -686,25 +683,14 @@ struct YouTubeAppView: View {
                                 YouTubeVideoListRow(post: post, onTap: {
                                     openVideo(post)
                                 }, onAppearRow: {
-                                    ScrollBudget.noteCellAppear()
-                                    // Thumbs only — never warm AVPlayers mid-scroll (that froze Hubs).
-                                    // Full warm happens on openVideo.
-                                    if !ScrollBudget.isFlinging, index % 3 == 0 {
-                                        ImageCache.shared.prefetchHubsWindow(
-                                            posts: stableDiscoverVideos,
-                                            around: index,
-                                            behind: 0,
-                                            ahead: 2,
-                                            maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel
-                                        )
-                                    }
-                                    // Endless For you — grow window; network only when settled.
+                                    // Scroll path must stay empty of network/AV/image storms.
+                                    // Only grow the local window near the end (no prefetch here).
                                     ensureMoreForYou(around: index)
                                 })
                                 .padding(.bottom, 18)
                             }
                         }
-                        .id(homeListEpoch)
+                        // Avoid remounting entire list via .id — that freezes mid-scroll.
                         .padding(.top, 8)
                         .padding(.bottom, isMiniPlayback ? YouTubeMiniPlayerBar.contentBottomInset : 12)
                     }
