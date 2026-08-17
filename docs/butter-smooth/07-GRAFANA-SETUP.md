@@ -91,9 +91,73 @@ Reply: **`grafana step2 done`** when 2a–2d work (or paste any error text).
 
 ---
 
-## Step 3 — Dashboard panels (agent guides after step2)
+## Step 2 status
 
-- Panels for: `app_start_to_feed_visible`, `reel_swipe_first_frame`, `message_local_visible`, etc.
+- Stack: `https://maroonbroccoli500.grafana.net/`
+- Data source: **Matterya Metrics** (Infinity, not the provisioned `grafanacloud-infinity`)
+- Auth: `x-cron-secret` = `METRICS_SUMMARY_SECRET`
+
+---
+
+## Step 3 — First dashboard (YOU — follow exactly)
+
+### 3a. Create dashboard
+
+1. Open `https://maroonbroccoli500.grafana.net/`
+2. Left menu → **Dashboards**
+3. **New** → **New dashboard**
+4. **Add visualization** (or **Add** → **Visualization**)
+
+### 3b. Wire Infinity to Matterya summary
+
+1. Top data source dropdown → **Matterya Metrics** (your custom one)
+2. Query type: **JSON** (or **UQL** if shown; prefer JSON)
+3. **URL**: `https://api.matterya.com/v1/metrics/summary`  
+   (full URL; do not use relative path only)
+4. Method: **GET**
+5. Parser / Root:
+   - Parsing options → **Rows/Root** (or “Root selector”): `rows`
+6. Format: **Table**
+7. **Run query** / refresh
+
+**Expected:** table with columns like `name`, `count`, `p50`, `p95`, `p99`  
+If empty: use the iOS app for 30–60s (feed, hubs, messages), then refresh the panel.
+
+### 3c. Panel settings
+
+1. Visualization type (right): **Table**
+2. Title: `Client milestones p50/p95/p99 (ms)`
+3. **Apply** (top right)
+
+### 3d. Optional second panel — single milestone
+
+1. **Add** → **Visualization** again  
+2. Same data source + URL + root `rows`  
+3. Visualization: **Stat** or **Bar gauge**  
+4. Transform (if available): **Filter data by values** → Field `name` → equal `app_start_to_feed_visible`  
+5. Show field: `p95`  
+6. Title: `Feed visible p95 (ms)`  
+7. Apply  
+
+Repeat for: `app_start_to_shell`, `reel_swipe_first_frame`, `message_local_visible`, `message_server_ack` when those names appear in the table.
+
+### 3e. Save
+
+1. **Save dashboard** (top right)  
+2. Name: `Matterya Butter-Smooth SLOs`  
+3. Save  
+
+### 3f. Auto-refresh
+
+Dashboard settings (gear) → **Auto refresh** → `30s` or `1m` → Save  
+
+---
+
+## Notes
+
+- Metrics live **in API memory** until we add long-term storage: Render redeploy **clears** samples.  
+- Multiple Render instances would split memory (fine for early SLOs).  
+- Empty `rows` until the **new iOS build** uploads milestones.
 
 ---
 
