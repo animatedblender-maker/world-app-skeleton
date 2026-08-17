@@ -4,16 +4,16 @@ import UIKit
 /// Full-screen host that **only** receives touches inside `interactiveRectGlobal` (window coords).
 /// Touches outside return `nil` from `hitTest` so views underneath (ScrollView / mini chrome) work.
 ///
-/// **Performance:** Re-host **only** when `contentID` (post) changes.
-/// Geometry morph (mini ↔ stage ↔ FS) is driven by an `ObservableObject` *inside* the hosted
-/// tree — never by reassigning `rootView` every drag frame (that paused the film).
+/// Updates `rootView` when `contentID` **or** `layoutSignature` changes so mini↔stage↔FS
+/// geometry/chrome stay live. `MatteryaHubPlayerView` keeps a stable `.id(post)` so AVPlayer
+/// is not torn down on morph (configure same-URL is a no-op restart).
 struct HubPassThroughContainer<Content: View>: UIViewControllerRepresentable {
     /// Interactive region in **global / window** coordinates.
     var interactiveRectGlobal: CGRect
     var interactiveRect: CGRect = .zero
-    /// New post → full rebuild. Morph must NOT change this.
+    /// New post → full rebuild.
     var contentID: String = ""
-    /// Deprecated — ignored. Kept so call sites compile during transition.
+    /// Coarse morph fingerprint (not sub-pixel). Hit-rect-only ticks must not change this.
     var layoutSignature: String = ""
     @ViewBuilder var content: () -> Content
 
@@ -25,8 +25,8 @@ struct HubPassThroughContainer<Content: View>: UIViewControllerRepresentable {
         let vc = HubPassThroughViewController(rootView: content())
         vc.interactiveRectGlobal = resolvedGlobalRect()
         vc.hostedContentID = contentID
-        vc.layoutSignature = contentID
-        context.coordinator.lastContentID = contentID
+        vc.layoutSignature = layoutSignature
+        context.coordinator.lastSignature = contentID + "|" + layoutSignature
         return vc
     }
 
@@ -36,12 +36,12 @@ struct HubPassThroughContainer<Content: View>: UIViewControllerRepresentable {
             controller.interactiveRectGlobal = nextRect
         }
 
-        // Only swap the SwiftUI tree when the *video identity* changes.
-        // Morph / dock / chrome live on HubMorphState and update without rehost.
-        guard context.coordinator.lastContentID != contentID else { return }
-        context.coordinator.lastContentID = contentID
+        let sig = contentID + "|" + layoutSignature
+        // Hit-rect-only updates must not rebuild the tree (preference spam).
+        guard context.coordinator.lastSignature != sig else { return }
+        context.coordinator.lastSignature = sig
         controller.hostedContentID = contentID
-        controller.layoutSignature = contentID
+        controller.layoutSignature = layoutSignature
         controller.rootView = content()
     }
 
@@ -53,7 +53,7 @@ struct HubPassThroughContainer<Content: View>: UIViewControllerRepresentable {
     }
 
     final class Coordinator {
-        var lastContentID: String = ""
+        var lastSignature: String = ""
     }
 }
 

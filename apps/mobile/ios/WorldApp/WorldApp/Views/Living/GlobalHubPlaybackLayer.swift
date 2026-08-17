@@ -119,12 +119,23 @@ struct GlobalHubPlaybackLayer: View {
         return Double(1 - min(1, max(0, collapse)))
     }
 
-    /// Mini must **fill** the strip — aspect-fit letterbox reads as black.
-    /// Only switch gravity at the mini end-state (not mid-morph) so expand/minimize never hitch.
+    /// Mini (and mid-collapse) must **fill** the strip — aspect-fit letterbox reads as black.
     private var filmFillsFrame: Bool {
         if fsProgress > 0.5 { return false } // FS: fit full picture
         if !expanded { return true }
-        return collapse > 0.88
+        return collapse > 0.25
+    }
+
+    /// Morph signature — fine while dragging (finger 1:1), coarser when settling.
+    private var morphLayoutSignature: String {
+        let mode: Int
+        if fsProgress > 0.5 { mode = 2 }
+        else if !expanded || collapse > 0.85 { mode = 1 }
+        else { mode = 0 }
+        let steps: CGFloat = (isDragging || isFSDragging) ? 24 : 8
+        let c = Int((collapse * steps).rounded())
+        let f = Int((fsProgress * steps).rounded())
+        return "\(mode)_\(c)_\(f)_\(filmFillsFrame ? 1 : 0)_\(showTransportChrome ? 1 : 0)_\(showMiniChromeOverlay ? 1 : 0)"
     }
 
     private var mutedBinding: Binding<Bool> {
@@ -194,48 +205,27 @@ struct GlobalHubPlaybackLayer: View {
         Group {
             if let post = appState.hubPlaybackPost {
                 // OUTERMOST = pass-through gated on global film rect.
-                // GeometryReader lives *inside* so it can never claim comment / feed / mini taps.
-                // GeometryReader outside pass-through so we can fingerprint layout without
-                // re-hosting the AVPlayer tree every preference tick.
-                // Geometry outside the host: SwiftUI moves the UIView frame (mini↔stage↔FS)
-                // without reassigning rootView — AVPlayer keeps playing (YouTube-smooth).
+                // Full-window host; film frame is offset *inside* so mini↔stage↔FS morphs
+                // without clipping the player into a tiny UIView hole (that broke expand/mini).
                 GeometryReader { geo in
                     let layout = playerLayout(in: geo)
-                    let filmW = (useLandscapeLayout && isHubFullscreen)
-                        ? max(geo.size.width, geo.size.height) : layout.width
-                    let filmH = (useLandscapeLayout && isHubFullscreen)
-                        ? min(geo.size.width, geo.size.height) : layout.height
-                    ZStack(alignment: .topLeading) {
-                        if fsProgress > 0.02 {
-                            Color.black
-                                .opacity(Double(min(1, max(0, fsProgress))))
-                                .frame(width: geo.size.width, height: geo.size.height)
-                                .allowsHitTesting(false)
+                    HubPassThroughContainer(
+                        interactiveRectGlobal: interactiveHitGlobal,
+                        contentID: post.id,
+                        layoutSignature: morphLayoutSignature
+                    ) {
+                        ZStack {
+                            if fsProgress > 0.02 {
+                                Color.black
+                                    .opacity(Double(min(1, max(0, fsProgress))))
+                                    .ignoresSafeArea(.all)
+                                    .allowsHitTesting(false)
+                            }
+                            videoStack(post: post, layout: layout, containerSize: geo.size)
+                                .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
                         }
-                        HubPassThroughContainer(
-                            interactiveRectGlobal: interactiveHitGlobal,
-                            contentID: post.id,
-                            layoutSignature: post.id
-                        ) {
-                            // Full-bleed film inside the moving hole — identity stable per post.
-                            videoStack(
-                                post: post,
-                                layout: PlayerLayout(x: 0, y: 0, width: filmW, height: filmH),
-                                containerSize: CGSize(width: filmW, height: filmH)
-                            )
-                        }
-                        .frame(width: safePositive(layout.width), height: safePositive(layout.height))
-                        .offset(x: safeOffset(layout.x), y: safeOffset(layout.y))
-                        .animation(interactiveAnimation, value: collapse)
-                        .animation(interactiveAnimation, value: fsProgress)
-                        .clipShape(
-                            RoundedRectangle(
-                                cornerRadius: cornerRadius(for: layout),
-                                style: .continuous
-                            )
-                        )
+                        .frame(width: geo.size.width, height: geo.size.height)
                     }
-                    .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .ignoresSafeArea(.all)
@@ -276,14 +266,27 @@ struct GlobalHubPlaybackLayer: View {
                 if appState.hubPlaybackPullProgress > 0.5 {
                     appState.hubPlaybackPullProgress = 0
                 }
-                // Mini handoff: keep film playing — do NOT multi-beat rehost/reassert (that paused).
+                // Mini handoff: keep film playing.
                 appState.hubPlaybackPlaying = true
                 MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
                     userMuted: appState.hubPlaybackMuted
                 )
+                NotificationCenter.default.post(
+                    name: .matteryaResumePlaybackAfterInterrupt,
+                    object: nil
+                )
                 if collapse < 0.99 { collapse = 1 }
                 if fsProgress > 0.001 { fsProgress = 0 }
                 pushMorphState()
+                // One delayed re-assert — covers tab/layout settle without multi-beat thrash.
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    guard appState.hubPlaybackPost != nil, !appState.hubPlaybackExpanded else { return }
+                    appState.hubPlaybackPlaying = true
+                    MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
+                        userMuted: appState.hubPlaybackMuted
+                    )
+                }
             }
         }
         .onChange(of: appState.hubPlaybackPost?.id) { _, _ in
@@ -410,14 +413,24 @@ struct GlobalHubPlaybackLayer: View {
             }
             .frame(width: safePositive(filmW), height: safePositive(filmH))
             .background(filmFillsFrame ? Theme.ink : Color.black)
+            .clipShape(
+                RoundedRectangle(
+                    cornerRadius: cornerRadius(for: layout),
+                    style: .continuous
+                )
+            )
             .clipped()
             .rotationEffect(contentRotation)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(width: safePositive(layout.width), height: safePositive(layout.height))
+            .offset(x: safeOffset(layout.x), y: safeOffset(layout.y))
+            .animation(interactiveAnimation, value: collapse)
+            .animation(interactiveAnimation, value: fsProgress)
             .simultaneousGesture(playerDragGesture)
             // Stable identity — never remount across stage / FS / mini.
             .id("global-hub-continuous-\(post.id)")
         }
         .frame(width: screenW, height: screenH, alignment: .topLeading)
+        .background(fsProgress > 0.5 ? Color.black : Color.clear)
         .statusBarHidden(isHubFullscreen)
         .persistentSystemOverlays(isHubFullscreen ? .hidden : .automatic)
     }
@@ -668,14 +681,13 @@ struct GlobalHubPlaybackLayer: View {
             MatteryaHubPlayerView(
                 url: url,
                 posterURL: post.posterImageURL,
-                // Continuous surface stays active across mini/stage/FS morph — never pause.
-                // User pause goes through HubMiniPlayerChrome → continuous notifications.
-                isActive: true,
+                // Stay active while hubs session is open; intentional pause uses mini chrome.
+                isActive: appState.hubPlaybackPlaying || showMiniChromeOverlay || expanded,
                 startTime: resumeAt,
                 postID: post.id,
                 showsControls: showControls,
                 loops: false,
-                // YT: aspect-fit on stage + FS. Mini **must fill** or letterbox = black.
+                // YT: aspect-fit on stage + FS. Mini / collapse must fill.
                 fillsFrame: filmFillsFrame,
                 chromeOpacity: chromeOpacity,
                 isMuted: mutedBinding,
