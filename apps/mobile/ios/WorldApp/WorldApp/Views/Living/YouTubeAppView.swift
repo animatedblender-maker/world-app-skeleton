@@ -1791,10 +1791,7 @@ struct YouTubeAppView: View {
             watchPost = post
         }
         EngagementTracker.shared.hubVideoOpened(watchPost)
-        // Warm AV **before** route/player remount so claim hits a buffered slot.
-        if let url = watchPost.playableVideoURL {
-            SparkWarmPool.shared.warmSingle(postID: watchPost.id, url: url)
-        }
+        // Continuous layer owns AV — no warm-pool on open (froze mini/max).
         appState.startHubPlayback(watchPost, expanded: true)
         // No easeInOut on the whole hubs tree — that lagged related taps + minimize.
         // .id(watchPost.id) on YouTubeWatchView resets scroll to title/comments (not related).

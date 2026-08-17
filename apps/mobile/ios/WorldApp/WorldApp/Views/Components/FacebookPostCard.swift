@@ -309,7 +309,7 @@ struct FacebookPostCard: View {
                     .padding(.top, 8)
 
                 PostCommentsView(
-                    postID: post.id,
+                    postID: commentsThreadID,
                     comments: $inlineComments,
                     showsComposer: true,
                     maxVisibleComments: visibleCommentLimit,
@@ -369,8 +369,12 @@ struct FacebookPostCard: View {
             if commentsInitiallyExpanded {
                 commentsExpanded = true
             }
-            // Soft-hydrate count for shares that still report 0 (origin has the R2 thread).
-            if post.displayCommentCount == 0, post.isSparkFeedShare || post.sharedPostID != nil {
+            // Soft-hydrate count for shares / hubs that still report 0 (origin holds the thread).
+            if post.displayCommentCount == 0,
+               post.isSparkFeedShare
+                || post.sharedPostID != nil
+                || PlayPlatformBridge.isHubOriginShare(post)
+                || isHubOriginShareCard {
                 Task { await hydrateCommentCountIfNeeded() }
             }
         }
@@ -809,9 +813,10 @@ struct FacebookPostCard: View {
             Button {
                 // Prefetch before expand so comments don't load *after* the user taps.
                 if !commentsExpanded {
-                    CommentsWarmCache.shared.warm(post.id)
+                    let threadID = commentsThreadID
+                    CommentsWarmCache.shared.warm(threadID)
                     if inlineComments.isEmpty,
-                       let warm = CommentsWarmCache.shared.cached(post.id) {
+                       let warm = CommentsWarmCache.shared.cached(threadID) {
                         inlineComments = warm
                     }
                 }
@@ -872,9 +877,10 @@ struct FacebookPostCard: View {
             // Survives Hubs ↔ Feed tab hops because count comes from model + hydrate, not expand state alone.
             if effectiveCommentCount > 0, !commentsExpanded {
                 Button {
-                    CommentsWarmCache.shared.warm(post.id)
+                    let threadID = commentsThreadID
+                    CommentsWarmCache.shared.warm(threadID)
                     if inlineComments.isEmpty,
-                       let warm = CommentsWarmCache.shared.cached(post.id) {
+                       let warm = CommentsWarmCache.shared.cached(threadID) {
                         inlineComments = warm
                     }
                     withAnimation(.easeInOut(duration: 0.2)) {
@@ -999,18 +1005,28 @@ struct FacebookPostCard: View {
         appState.openPublicProfile(username: creator.username, userID: creator.authorID)
     }
 
+    /// Share/hub cards: comments live on the **origin** post id when stamped.
+    private var commentsThreadID: String {
+        PostsService.commentThreadOriginID(for: post.id, post: post) ?? post.id
+    }
+
     /// Pull thread size without expanding — keeps “View N comments” on share cards after tab switches.
     private func hydrateCommentCountIfNeeded() async {
+        let threadID = commentsThreadID
         // Always idle-warm so the first Chat tap is filled.
-        CommentsWarmCache.shared.warm(post.id)
-        if let warm = CommentsWarmCache.shared.cached(post.id), !warm.isEmpty {
+        CommentsWarmCache.shared.warm(threadID)
+        if threadID != post.id {
+            CommentsWarmCache.shared.warm(post.id)
+        }
+        if let warm = CommentsWarmCache.shared.cached(threadID) ?? CommentsWarmCache.shared.cached(post.id),
+           !warm.isEmpty {
             await MainActor.run {
                 loadedCommentCount = max(loadedCommentCount, warm.count)
                 if inlineComments.isEmpty { inlineComments = warm }
             }
         }
         guard loadedCommentCount == 0, effectiveCommentCount == 0 else { return }
-        let loaded = await CommentsWarmCache.shared.load(post.id)
+        let loaded = await CommentsWarmCache.shared.load(threadID)
         guard !loaded.isEmpty else { return }
         await MainActor.run {
             loadedCommentCount = max(loadedCommentCount, loaded.count)

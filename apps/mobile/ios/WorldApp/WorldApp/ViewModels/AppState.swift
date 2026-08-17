@@ -1387,9 +1387,7 @@ final class AppState {
     func expandHubPlayback() {
         guard hubPlaybackPost != nil else { return }
         rememberHubPlaybackChatReturnIfNeeded()
-        // Silence feed/Sparks only — continuous hubs stays protected and must not pause.
-        MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
-        MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(userMuted: hubPlaybackMuted)
+        // Keep continuous hubs solo — do NOT silenceAll (that froze mini→max on main thread).
         hubPlaybackPlaying = true
         hubWatchScrollCollapse = 0
         hubPlaybackPullProgress = 0
@@ -1410,6 +1408,7 @@ final class AppState {
         }
         // Bump token so GlobalHubPlaybackLayer re-runs expand even if expanded was already true.
         hubExpandToken &+= 1
+        MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(userMuted: hubPlaybackMuted)
         NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
     }
 

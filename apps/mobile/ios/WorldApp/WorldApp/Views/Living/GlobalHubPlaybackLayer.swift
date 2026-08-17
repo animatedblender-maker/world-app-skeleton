@@ -534,19 +534,26 @@ struct GlobalHubPlaybackLayer: View {
     }
 
     /// Mirror local @State into the morph driver (hosted film can observe without rehost).
+    /// Skip no-op writes — every @Published assign was freezing mini↔max morph.
     private func pushMorphState() {
-        morph.collapse = collapse
-        morph.fsProgress = fsProgress
-        morph.expanded = expanded
-        morph.dockGlobal = dockSlotGlobal
-        morph.stageGlobal = watchStageGlobal
-        morph.videoAspect = appState.hubPlaybackVideoAspect
-        morph.pathEmpty = appState.navigationPath.isEmpty
-        morph.playing = appState.hubPlaybackPlaying
-        morph.contentRotation = contentRotation
-        morph.useLandscapeLayout = useLandscapeLayout
-        morph.isDragging = isDragging
-        morph.isFSDragging = isFSDragging
+        if abs(morph.collapse - collapse) > 0.002 { morph.collapse = collapse }
+        if abs(morph.fsProgress - fsProgress) > 0.002 { morph.fsProgress = fsProgress }
+        if morph.expanded != expanded { morph.expanded = expanded }
+        if morph.dockGlobal != dockSlotGlobal { morph.dockGlobal = dockSlotGlobal }
+        if morph.stageGlobal != watchStageGlobal { morph.stageGlobal = watchStageGlobal }
+        let aspect = appState.hubPlaybackVideoAspect
+        if abs(morph.videoAspect - aspect) > 0.01 { morph.videoAspect = aspect }
+        let pathEmpty = appState.navigationPath.isEmpty
+        if morph.pathEmpty != pathEmpty { morph.pathEmpty = pathEmpty }
+        if morph.playing != appState.hubPlaybackPlaying {
+            morph.playing = appState.hubPlaybackPlaying
+        }
+        if morph.contentRotation != contentRotation { morph.contentRotation = contentRotation }
+        if morph.useLandscapeLayout != useLandscapeLayout {
+            morph.useLandscapeLayout = useLandscapeLayout
+        }
+        if morph.isDragging != isDragging { morph.isDragging = isDragging }
+        if morph.isFSDragging != isFSDragging { morph.isFSDragging = isFSDragging }
     }
 
     /// Coarse layout fingerprint — 4pt / 5% buckets so sub-pixel preference noise

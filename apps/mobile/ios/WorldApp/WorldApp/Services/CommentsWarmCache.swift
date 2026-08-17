@@ -15,7 +15,10 @@ final class CommentsWarmCache {
     func cached(_ postID: String) -> [PostComment]? {
         let key = normalized(postID)
         guard !key.isEmpty else { return nil }
-        return cache[key]
+        // Never treat empty as a warm hit — that permanently blocked feed comments
+        // after a failed/thin resolve (share id with no origin in cache).
+        guard let hit = cache[key], !hit.isEmpty else { return nil }
+        return hit
     }
 
     /// Fire-and-forget warm (tap Chat, idle on active Spark, feed card appear).
@@ -24,7 +27,7 @@ final class CommentsWarmCache {
     func warm(_ postID: String, limit: Int = 48) {
         let key = normalized(postID)
         guard !key.isEmpty else { return }
-        if cache[key] != nil { return }
+        if let hit = cache[key], !hit.isEmpty { return }
         if inflight[key] != nil { return }
         let task = Task { [weak self] in
             let loaded = (try? await PostsService.shared.listComments(
@@ -33,7 +36,10 @@ final class CommentsWarmCache {
                 resolveOrigin: true
             )) ?? []
             await MainActor.run {
-                self?.store(key, comments: loaded)
+                // Only persist non-empty — empty must allow retry (origin resolve may land later).
+                if !loaded.isEmpty {
+                    self?.store(key, comments: loaded)
+                }
                 self?.inflight[key] = nil
             }
             return loaded
@@ -48,7 +54,7 @@ final class CommentsWarmCache {
     ) async -> [PostComment] {
         let key = normalized(postID)
         guard !key.isEmpty else { return [] }
-        if let hit = cache[key] { return hit }
+        if let hit = cache[key], !hit.isEmpty { return hit }
         if let task = inflight[key] {
             return await task.value
         }
