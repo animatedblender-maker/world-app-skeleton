@@ -2022,15 +2022,12 @@ struct InFrameVideoPlayer: View {
                 framesReady = false
                 return
             }
-            // Shared Hubs / Archive on feed: one deep warm when focus *wins* (not on every cell appear).
-            // Matches Hubs slug open — edge buffer ready before first frame.
-            if usesArchivePath || ArchiveVideoPlayback.isArchiveURL(url) {
-                if let postID {
-                    SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: true)
-                }
-                if usesArchivePath {
-                    ArchiveVideoPlayback.warmResolve(url)
-                }
+            // Focus winner only: light warm (never deep — deep freezes feed when hubs shares win).
+            if let postID {
+                SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: false)
+            }
+            if usesArchivePath {
+                ArchiveVideoPlayback.warmResolve(url)
             }
             if !isMuted {
                 activatePlaybackAudioIfNeeded(unmuted: true)

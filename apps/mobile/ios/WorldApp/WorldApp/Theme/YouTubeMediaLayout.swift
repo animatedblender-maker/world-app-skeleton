@@ -446,10 +446,10 @@ struct PlayFeedLinkCard: View {
                     ?? MediaURLResolver.videoURL(for: shared.asCountryPost)
             }) {
             let poster = playPost.posterImageURL ?? post.posterImageURL
-            // Archive + R2 long-form → same Archive/edge player path as Hubs tab.
+            // Feed: only Archive CDN needs the UIKit archive path. R2 long-form uses the
+            // light VideoPlayerView path — mounting MatteryaHubPlayer on every hub share
+            // froze the feed (AV + warm storms).
             let useArchivePath = ArchiveVideoPlayback.isArchiveURL(url)
-                || PlayPlatformBridge.isR2LongFormMedia(playPost)
-                || PlayPlatformBridge.isHubCatalogContent(playPost)
             ZStack {
                 // Soft floor under film — never pure black while poster/CDN loads.
                 LinearGradient(
@@ -504,15 +504,10 @@ struct PlayFeedLinkCard: View {
                 )
             )
             .onAppear {
-                // Same slug/edge warm path as Hubs shelves — snappy first frame on shared hubs.
-                if useArchivePath || ArchiveVideoPlayback.isArchiveURL(url) {
+                // Poster only on cell appear — never AV warm / playback-batch (freezes feed scroll).
+                // Focus-winner path inside InFrameVideoPlayer does a single light warm.
+                if useArchivePath {
                     ArchiveVideoPlayback.warmResolve(url)
-                }
-                if !ScrollBudget.isFlinging {
-                    SparkWarmPool.shared.warmSingle(postID: playPost.id, url: url, deep: true)
-                    Task(priority: .utility) {
-                        await RecommendationClient.warmPlaybackURLs([playPost.id, post.id])
-                    }
                 }
             }
             .onTapGesture { onOpen() }

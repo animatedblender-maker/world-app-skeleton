@@ -566,53 +566,24 @@ final class HomeFeedStore {
             hasMore = true
         }
 
-        // Media: fling = thumbs only; settled = **2–4 deep** AVPlayers (device-capped).
-        // Never mount 8–14 players per scroll tick — that is the memory spike vs IG.
-        let ahead = fling ? 4 : SparkWarmPool.MediaBudget.playerAheadFeed + 2
+        // Media: fling = thumbs only. Settled = light image prefetch + at most 1 light warm.
+        // Deep hub AV warm + playback/batch on every row froze the feed.
+        let ahead = fling ? 3 : 4
         let end = min(displayedPosts.count, index + ahead)
         if index < end {
             let window = Array(displayedPosts[index..<end])
             ImageCache.shared.prefetchFeedMedia(window, maxPixelSize: fling ? 280 : 360)
-            let videoPosts = window.filter {
-                $0.isSparkFeedShare || $0.isReel || PlayPlatformBridge.isSparkFeedCard($0)
-                    || PlayPlatformBridge.isHubFeedCardVideo($0)
-                    || $0.hasVideo || $0.playableVideoURL != nil
-            }
-            if !videoPosts.isEmpty, !fling {
-                SparkWarmPool.shared.prepareFeedWindow(posts: videoPosts, around: 0)
-            }
-            // Hubs shares + Sparks: deep preroll like Hubs slug open (instant first frame).
-            let warmCount = fling ? 1 : 4
-            var hubWarmIDs: [String] = []
-            for (i, p) in window.prefix(warmCount).enumerated() {
-                let playPost = PlayPlatformBridge.hubWatchPresentation(for: p)
-                guard let url = playPost.playableVideoURL ?? p.playableVideoURL else { continue }
-                let isHub = ArchiveVideoPlayback.isArchiveURL(url)
-                    || PlayPlatformBridge.isHubFeedCardVideo(p)
-                    || PlayPlatformBridge.isHubOriginShare(p)
-                    || PlayPlatformBridge.isHubCatalogContent(p)
-                    || PlayPlatformBridge.isR2LongFormMedia(playPost)
-                let isSpark = p.isSpark || p.isReel || PlayPlatformBridge.isSparkFeedCard(p)
-                if isHub || isSpark {
-                    if isHub || ArchiveVideoPlayback.isArchiveURL(url) {
+            // Skip all AV warm mid-fling. Settled: only the *current* row, light (not deep).
+            if !fling, let url = post.playableVideoURL {
+                let isSpark = post.isSpark || post.isReel || PlayPlatformBridge.isSparkFeedCard(post)
+                let isHub = PlayPlatformBridge.isHubFeedCardVideo(post)
+                    || PlayPlatformBridge.isHubOriginShare(post)
+                if isSpark || isHub {
+                    if ArchiveVideoPlayback.isArchiveURL(url) {
                         ArchiveVideoPlayback.warmResolve(url)
                     }
-                    // Only the next 1–2 deep — more than that thrash CPU on mid/low devices.
-                    SparkWarmPool.shared.warmSingle(
-                        postID: playPost.id,
-                        url: url,
-                        deep: !fling && i < 2
-                    )
-                    if isHub {
-                        hubWarmIDs.append(playPost.id)
-                        if playPost.id != p.id { hubWarmIDs.append(p.id) }
-                    }
-                }
-            }
-            // Edge /v1/playback/batch for shared hubs in the window (CDN near user).
-            if !fling, !hubWarmIDs.isEmpty {
-                Task(priority: .utility) {
-                    await RecommendationClient.warmPlaybackURLs(hubWarmIDs)
+                    // Light buffer only — deep preroll on scroll is what froze hubs-on-feed.
+                    SparkWarmPool.shared.warmSingle(postID: post.id, url: url, deep: false)
                 }
             }
         }
@@ -896,21 +867,18 @@ final class HomeFeedStore {
         nextCursor = pageNextCursor ?? Self.cursor(from: posts.last)
         hasMore = true
         ContentCache.shared.setPosts(Array(posts.prefix(ContentCache.maxCachedPosts)), for: .homeFeed)
+        // Thumbs only on page append — no prepareFeedWindow / deep hub AV (freezes feed).
         ImageCache.shared.prefetchFeedMedia(Array(appended.prefix(8)), maxPixelSize: 360)
-        let videoPosts = Array(appended.filter {
-            $0.isSparkFeedShare || $0.isReel || PlayPlatformBridge.isSparkFeedCard($0)
-                || PlayPlatformBridge.isHubFeedCardVideo($0)
-                || $0.hasVideo || $0.playableVideoURL != nil
-        }.prefix(SparkWarmPool.MediaBudget.playerAheadFeed + 1))
-        if !videoPosts.isEmpty {
-            SparkWarmPool.shared.prepareFeedWindow(posts: videoPosts, around: 0)
-        }
-        for (i, p) in appended.prefix(SparkWarmPool.MediaBudget.deepPrerollFeed).enumerated() {
+        for p in appended.prefix(2) {
             guard let url = p.playableVideoURL else { continue }
-            if ArchiveVideoPlayback.isArchiveURL(url) || PlayPlatformBridge.isHubFeedCardVideo(p) {
+            let isSpark = p.isSpark || p.isReel || PlayPlatformBridge.isSparkFeedCard(p)
+            let isHub = PlayPlatformBridge.isHubFeedCardVideo(p)
+                || PlayPlatformBridge.isHubOriginShare(p)
+            guard isSpark || isHub else { continue }
+            if ArchiveVideoPlayback.isArchiveURL(url) {
                 ArchiveVideoPlayback.warmResolve(url)
-                SparkWarmPool.shared.warmSingle(postID: p.id, url: url, deep: i < 2)
             }
+            SparkWarmPool.shared.warmSingle(postID: p.id, url: url, deep: false)
         }
         #if DEBUG
         print("[HomeFeed] loadMore +\(appended.count) pool=\(posts.count) window=\(windowLimit) recycle=\(recyclePass)")
@@ -950,47 +918,27 @@ final class HomeFeedStore {
     }
 
     private func warmHead() {
-        // First screen thumbs + **2–4 deep** AVPlayers (device tier). Poster covers the rest.
+        // First screen: thumbs + at most 2 *light* AV warms. No prepareFeedWindow —
+        // deep multi-player preroll on hubs shares froze the home feed.
         let head = Array(posts.prefix(max(firstWindow + 2, 16)))
         ImageCache.shared.prefetchFeedMedia(head, maxPixelSize: 360)
-        let videoPosts = head.filter {
-            $0.isSparkFeedShare || $0.isReel || PlayPlatformBridge.isSparkFeedCard($0)
-                || PlayPlatformBridge.isHubFeedCardVideo($0)
-                || $0.hasVideo || $0.playableVideoURL != nil
-        }
-        if !videoPosts.isEmpty {
-            SparkWarmPool.shared.prepareFeedWindow(
-                posts: Array(videoPosts.prefix(SparkWarmPool.MediaBudget.playerAheadFeed + 1)),
-                around: 0
-            )
-        }
-        // Hubs shares + Sparks head: deep-preroll like Hubs slug open (instant first frame).
-        var hubIDs: [String] = []
-        for (i, post) in head.prefix(8).enumerated() {
-            let playPost = PlayPlatformBridge.hubWatchPresentation(for: post)
-            guard let url = playPost.playableVideoURL ?? post.playableVideoURL else { continue }
-            let isHub = ArchiveVideoPlayback.isArchiveURL(url)
-                || PlayPlatformBridge.isHubFeedCardVideo(post)
-                || PlayPlatformBridge.isHubOriginShare(post)
-                || PlayPlatformBridge.isHubCatalogContent(post)
-                || PlayPlatformBridge.isR2LongFormMedia(playPost)
+        var lightWarmed = 0
+        for post in head {
+            guard lightWarmed < 2 else { break }
+            guard let url = post.playableVideoURL else { continue }
             let isSpark = post.isSpark || post.isReel || PlayPlatformBridge.isSparkFeedCard(post)
-            if isHub || isSpark {
-                if isHub || ArchiveVideoPlayback.isArchiveURL(url) {
-                    ArchiveVideoPlayback.warmResolve(url)
-                }
-                SparkWarmPool.shared.warmSingle(postID: playPost.id, url: url, deep: i < 3)
-                if isHub {
-                    hubIDs.append(playPost.id)
-                    if playPost.id != post.id { hubIDs.append(post.id) }
-                }
+            let isHub = PlayPlatformBridge.isHubFeedCardVideo(post)
+                || PlayPlatformBridge.isHubOriginShare(post)
+            guard isSpark || isHub else { continue }
+            if ArchiveVideoPlayback.isArchiveURL(url) {
+                ArchiveVideoPlayback.warmResolve(url)
             }
+            SparkWarmPool.shared.warmSingle(postID: post.id, url: url, deep: false)
+            lightWarmed += 1
         }
-        // Edge: freshen playback URLs for head + shared hubs origins (CDN / presign).
+        // One edge warm for first 3 ids only (utility) — not every hub in the head.
         Task(priority: .utility) {
-            var ids = Array(head.prefix(10).map(\.id))
-            ids.append(contentsOf: hubIDs)
-            await RecommendationClient.warmPlaybackURLs(ids)
+            await RecommendationClient.warmPlaybackURLs(Array(head.prefix(3).map(\.id)))
         }
     }
 

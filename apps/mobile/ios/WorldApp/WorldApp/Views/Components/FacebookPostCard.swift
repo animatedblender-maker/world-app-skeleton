@@ -769,6 +769,9 @@ struct FacebookPostCard: View {
             || PlayPlatformBridge.isHubFeedCardVideo(post)
             || isHubOriginShareCard
             || ArchiveVideoPlayback.isArchiveURL(url)
+        // Feed: only Archive CDN needs MatteryaHubPlayer. R2 hubs use light AV path —
+        // mounting the hub UIKit player on every cell froze scroll.
+        let useArchivePath = ArchiveVideoPlayback.isArchiveURL(url)
         InFrameVideoPlayer(
             url: url,
             posterURL: post.posterImageURL,
@@ -778,7 +781,7 @@ struct FacebookPostCard: View {
             postID: post.id,
             muted: false,
             loops: true,
-            preferArchivePlayer: isHub,
+            preferArchivePlayer: useArchivePath,
             showsControls: true,
             // Hubs long-form: always fit (never crop). Sparks/short may fill.
             fillsFrame: !isHub,
@@ -787,9 +790,10 @@ struct FacebookPostCard: View {
         )
         .background(isHub ? Theme.ink : Color.clear)
         .onAppear {
-            // Shared hubs + long-form feed: buffer before ≥28% focus wins.
-            if isHub { ArchiveVideoPlayback.warmResolve(url) }
-            SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
+            // Poster path only — no AV warm on every cell (focus winner warms light).
+            if useArchivePath {
+                ArchiveVideoPlayback.warmResolve(url)
+            }
         }
     }
 
