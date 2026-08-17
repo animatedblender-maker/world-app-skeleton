@@ -2,34 +2,46 @@ import SwiftUI
 import UIKit
 
 /// Full-screen host that **only** receives touches inside `interactiveRectGlobal` (window coords).
-/// Touches outside return `nil` from `hitTest` so views underneath (comments ScrollView, feed,
-/// mini play/mute/close) receive them.
+/// Touches outside return `nil` from `hitTest` so views underneath (ScrollView / mini chrome) work.
 ///
-/// MUST be the outermost view of the continuous player. A full-size SwiftUI `GeometryReader`
-/// *above* this host claims every touch (returns `self` when children return nil) and kills
-/// comment scroll + mini chrome.
+/// **Performance:** Do **not** assign `host.rootView` every SwiftUI tick — that re-hosted the
+/// continuous AVPlayer stack and made Hubs unusable. Only push the tree when `contentID` or
+/// `layoutSignature` changes.
 struct HubPassThroughContainer<Content: View>: UIViewControllerRepresentable {
-    /// Interactive region in **global / window** coordinates (same space as PreferenceKey frames).
+    /// Interactive region in **global / window** coordinates.
     var interactiveRectGlobal: CGRect
-    /// Legacy local-rect API — prefer `interactiveRectGlobal`.
     var interactiveRect: CGRect = .zero
-    /// Bumped only when hosted identity must fully rebuild (new post).
+    /// New post → full rebuild.
     var contentID: String = ""
+    /// Rounded geometry / morph fingerprint — changes only when layout actually moves.
+    var layoutSignature: String = ""
     @ViewBuilder var content: () -> Content
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
 
     func makeUIViewController(context: Context) -> HubPassThroughViewController<Content> {
         let vc = HubPassThroughViewController(rootView: content())
         vc.interactiveRectGlobal = resolvedGlobalRect()
         vc.hostedContentID = contentID
+        vc.layoutSignature = layoutSignature
+        context.coordinator.lastSignature = contentID + "|" + layoutSignature
         return vc
     }
 
     func updateUIViewController(_ controller: HubPassThroughViewController<Content>, context: Context) {
-        let next = resolvedGlobalRect()
-        if controller.interactiveRectGlobal != next {
-            controller.interactiveRectGlobal = next
+        let nextRect = resolvedGlobalRect()
+        if controller.interactiveRectGlobal != nextRect {
+            controller.interactiveRectGlobal = nextRect
         }
-        // Always push latest tree so morph offset/size stay live — never force layout.
+
+        let sig = contentID + "|" + layoutSignature
+        // Hit-rect-only updates must not rebuild the SwiftUI/AVPlayer tree.
+        guard context.coordinator.lastSignature != sig else { return }
+        context.coordinator.lastSignature = sig
+        controller.hostedContentID = contentID
+        controller.layoutSignature = layoutSignature
         controller.rootView = content()
     }
 
@@ -38,6 +50,10 @@ struct HubPassThroughContainer<Content: View>: UIViewControllerRepresentable {
             return interactiveRectGlobal
         }
         return interactiveRect
+    }
+
+    final class Coordinator {
+        var lastSignature: String = ""
     }
 }
 
@@ -49,6 +65,7 @@ final class HubPassThroughViewController<Content: View>: UIViewController {
         }
     }
     var hostedContentID: String = ""
+    var layoutSignature: String = ""
 
     private let host: UIHostingController<Content>
 
@@ -79,7 +96,6 @@ final class HubPassThroughViewController<Content: View>: UIViewController {
         host.view.backgroundColor = .clear
         host.view.isOpaque = false
         host.view.isUserInteractionEnabled = true
-        // Never clip film when mini dock sits at the bottom of the window.
         host.view.clipsToBounds = false
         view.clipsToBounds = false
         addChild(host)
@@ -96,12 +112,10 @@ final class HubPassThroughViewController<Content: View>: UIViewController {
 }
 
 final class HubPassThroughUIView: UIView {
-    /// Film / stage / mini hole in **global** coordinates.
     var interactiveRectGlobal: CGRect = .zero
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard interactiveRectGlobal.width > 1, interactiveRectGlobal.height > 1 else { return nil }
-        // Convert touch into global space and gate before any child sees it.
         let globalPoint = convert(point, to: nil)
         guard interactiveRectGlobal.insetBy(dx: -1, dy: -1).contains(globalPoint) else {
             return nil

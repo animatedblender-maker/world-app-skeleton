@@ -116,8 +116,8 @@ struct YouTubeAppView: View {
                 ^ UInt64(Date().timeIntervalSince1970 * 1_000)
         }
 
-        // Cap rank input — ranking 2k+ posts on MainActor freezes Hubs open.
-        let rankInput = home.count > 240 ? Array(home.prefix(240)) : home
+        // Cap rank input hard — ranking hundreds on MainActor freezes Hubs scroll.
+        let rankInput = home.count > 96 ? Array(home.prefix(96)) : home
         let following = appState.followingIDs
         let myID = appState.currentProfile?.userID ?? AuthService.shared.currentUser?.id
         let seed = hubsSessionSeed
@@ -440,14 +440,16 @@ struct YouTubeAppView: View {
                     meta: ["source": "session_or_cache"]
                 )
             }
-            // App open: reshuffle once without thrashing if we already remounted this gen.
-            if !allVideos.isEmpty {
-                refreshHubsVisitShuffle(remountList: true)
+            // Never remount LazyVStack on every content generation — that froze Hubs scroll.
+            // Soft re-window only; pull-to-refresh / hubsFreshSessionToken still remount.
+            if !allVideos.isEmpty, stableDiscoverVideos.isEmpty {
+                rebuildStableHomeLists(shuffle: false, remountList: false)
             }
             // 2) Fast network only if still thin — keeps open snappy.
-            if allVideos.filter({ !$0.isReel }).count < 8 {
+            let longForm = allVideos.filter { !$0.isReel }.count
+            if longForm < 8 {
                 await loadVideos(forceRefresh: false, mode: .fast)
-                refreshHubsVisitShuffle(remountList: false)
+                rebuildStableHomeLists(shuffle: false, remountList: false)
             } else {
                 isLoading = false
             }
@@ -458,7 +460,7 @@ struct YouTubeAppView: View {
                 meta: ["longForm": "\(allVideos.filter { !$0.isReel }.count)"]
             )
             await consumePendingRoutingIfNeeded()
-            // 3) Deep catalog only while parked on Hubs — never compete with feed open.
+            // 3) Light warm only — never full-catalog rank on open.
             scheduleDeferredFullCatalogWarm()
         }
         .onAppear {
@@ -1246,14 +1248,14 @@ struct YouTubeAppView: View {
     /// Idle top-up — warm **neighbor slug only** (never download full catalog).
     private func scheduleDeferredFullCatalogWarm() {
         Task(priority: .utility) {
-            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            try? await Task.sleep(nanoseconds: 3_500_000_000)
             guard appState.selectedTab == .hubs else { return }
-            // Prefetch next shelf for the active chip / For you diversity.
+            // Skip heavy warm while a hubs video is open/minimized — keeps morph smooth.
+            guard appState.hubPlaybackPost == nil else { return }
             let active = homeFilter.hubSlug
             SlugShelfStore.shared.warmNeighbor(of: active)
-            // If still thin after first slug page, pull one more page (not 500/channel).
             let longForm = allVideos.filter { PlayPlatformBridge.isHubsForYouLongForm($0) }.count
-            if longForm < 16 {
+            if longForm < 12 {
                 await loadMoreActiveShelf()
             }
         }

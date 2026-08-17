@@ -289,10 +289,11 @@ struct MainTabView: View {
         case (nil, nil): return false
         case (nil, _), (_, nil): return true
         case let (a?, b?):
-            return abs(a.minX - b.minX) > 1.5
-                || abs(a.minY - b.minY) > 1.5
-                || abs(a.width - b.width) > 1.5
-                || abs(a.height - b.height) > 1.5
+            // Larger epsilon — sub-pixel preference spam was thrashing continuous layout.
+            return abs(a.minX - b.minX) > 4
+                || abs(a.minY - b.minY) > 4
+                || abs(a.width - b.width) > 4
+                || abs(a.height - b.height) > 4
         }
     }
 }

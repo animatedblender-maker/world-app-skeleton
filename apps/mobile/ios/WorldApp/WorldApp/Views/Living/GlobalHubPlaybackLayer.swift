@@ -158,29 +158,38 @@ struct GlobalHubPlaybackLayer: View {
             if let post = appState.hubPlaybackPost {
                 // OUTERMOST = pass-through gated on global film rect.
                 // GeometryReader lives *inside* so it can never claim comment / feed / mini taps.
-                HubPassThroughContainer(
-                    interactiveRectGlobal: interactiveHitGlobal,
-                    contentID: post.id
-                ) {
-                    ZStack {
-                        if fsProgress > 0.02 {
-                            Color.black
-                                .opacity(Double(min(1, max(0, fsProgress))))
-                                .ignoresSafeArea(.all)
-                                .allowsHitTesting(false)
-                        }
-
-                        GeometryReader { geo in
-                            let layout = playerLayout(in: geo)
+                // GeometryReader outside pass-through so we can fingerprint layout without
+                // re-hosting the AVPlayer tree every preference tick.
+                GeometryReader { geo in
+                    let layout = playerLayout(in: geo)
+                    let layoutSig = Self.layoutSignature(
+                        layout: layout,
+                        collapse: collapse,
+                        fsProgress: fsProgress,
+                        fills: filmFillsFrame,
+                        showChrome: showTransportChrome,
+                        playing: appState.hubPlaybackPlaying
+                    )
+                    HubPassThroughContainer(
+                        interactiveRectGlobal: interactiveHitGlobal,
+                        contentID: post.id,
+                        layoutSignature: layoutSig
+                    ) {
+                        ZStack {
+                            if fsProgress > 0.02 {
+                                Color.black
+                                    .opacity(Double(min(1, max(0, fsProgress))))
+                                    .ignoresSafeArea(.all)
+                                    .allowsHitTesting(false)
+                            }
                             videoStack(post: post, layout: layout, containerSize: geo.size)
                                 .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
                         }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                        .ignoresSafeArea(.all)
+                        .frame(width: geo.size.width, height: geo.size.height)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .ignoresSafeArea(.all)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .ignoresSafeArea(.all)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .ignoresSafeArea(.all)
                 .zIndex(fsProgress > 0.15 ? 500 : 0)
@@ -220,23 +229,21 @@ struct GlobalHubPlaybackLayer: View {
                     name: .matteryaResumePlaybackAfterInterrupt,
                     object: nil
                 )
-                // Dock hole often measures one frame late — force fill gravity + audio again.
+                // One delayed re-assert only — multi-beat collapse snaps re-hosted the player
+                // and made Hubs feel frozen.
                 Task { @MainActor in
-                    for delay in [16_000_000, 80_000_000, 200_000_000, 400_000_000] as [UInt64] {
-                        try? await Task.sleep(nanoseconds: delay)
-                        guard appState.hubPlaybackPost != nil, !appState.hubPlaybackExpanded else { return }
-                        // Snap layout state hard to mini every beat (no stuck mid-collapse).
-                        collapse = 1
-                        fsProgress = 0
-                        appState.hubPlaybackPlaying = true
-                        MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
-                            userMuted: appState.hubPlaybackMuted
-                        )
-                        NotificationCenter.default.post(
-                            name: .matteryaResumePlaybackAfterInterrupt,
-                            object: nil
-                        )
-                    }
+                    try? await Task.sleep(nanoseconds: 120_000_000)
+                    guard appState.hubPlaybackPost != nil, !appState.hubPlaybackExpanded else { return }
+                    if collapse < 0.99 { collapse = 1 }
+                    if fsProgress > 0.001 { fsProgress = 0 }
+                    appState.hubPlaybackPlaying = true
+                    MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
+                        userMuted: appState.hubPlaybackMuted
+                    )
+                    NotificationCenter.default.post(
+                        name: .matteryaResumePlaybackAfterInterrupt,
+                        object: nil
+                    )
                 }
             }
         }
@@ -506,6 +513,25 @@ struct GlobalHubPlaybackLayer: View {
         }
         // bounds in window space → global
         return window.convert(window.bounds, to: nil)
+    }
+
+    /// Coarse layout fingerprint — 4pt / 5% buckets so sub-pixel preference noise
+    /// does not re-host the continuous player every frame.
+    private static func layoutSignature(
+        layout: PlayerLayout,
+        collapse: CGFloat,
+        fsProgress: CGFloat,
+        fills: Bool,
+        showChrome: Bool,
+        playing: Bool
+    ) -> String {
+        let x = Int((layout.x / 4).rounded())
+        let y = Int((layout.y / 4).rounded())
+        let w = Int((layout.width / 4).rounded())
+        let h = Int((layout.height / 4).rounded())
+        let c = Int((collapse * 20).rounded())
+        let f = Int((fsProgress * 20).rounded())
+        return "\(x)_\(y)_\(w)_\(h)_\(c)_\(f)_\(fills ? 1 : 0)_\(showChrome ? 1 : 0)_\(playing ? 1 : 0)"
     }
 
     private func playerLayout(in geo: GeometryProxy) -> PlayerLayout {
