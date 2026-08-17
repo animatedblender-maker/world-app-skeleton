@@ -75,7 +75,22 @@ struct MessagesView: View {
             isAuthenticated: appState.isAuthenticated
         )) {
             guard appState.isAuthenticated, appState.isSessionReady else { return }
+            PerformanceTelemetry.markIfAbsent("messages_task_start")
+            if !conversations.isEmpty {
+                PerformanceTelemetry.milestone(
+                    "messages_inbox_visible",
+                    surface: "messages",
+                    from: "messages_task_start",
+                    meta: ["source": "cache"]
+                )
+            }
             await loadConversations()
+            PerformanceTelemetry.milestone(
+                "messages_inbox_interactive",
+                surface: "messages",
+                from: "messages_task_start",
+                meta: ["count": "\(conversations.count)"]
+            )
             if let conversationID = appState.pendingConversationID {
                 await openPendingConversation(conversationID)
             }

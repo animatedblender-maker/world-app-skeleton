@@ -428,9 +428,18 @@ struct YouTubeAppView: View {
             refreshHubsVisitShuffle(remountList: true)
         }
         .task(id: appState.contentLoadGeneration) {
+            PerformanceTelemetry.markIfAbsent("hubs_task_start")
             await consumePendingLivingVideoIfNeeded()
             // 1) Instant paint (session / disk) — never blocks.
             paintInstantHubsIfPossible()
+            if !allVideos.isEmpty {
+                PerformanceTelemetry.milestone(
+                    "hubs_first_useful",
+                    surface: "hubs",
+                    from: "hubs_task_start",
+                    meta: ["source": "session_or_cache"]
+                )
+            }
             // App open: reshuffle once without thrashing if we already remounted this gen.
             if !allVideos.isEmpty {
                 refreshHubsVisitShuffle(remountList: true)
@@ -442,6 +451,12 @@ struct YouTubeAppView: View {
             } else {
                 isLoading = false
             }
+            PerformanceTelemetry.milestone(
+                "hubs_interactive",
+                surface: "hubs",
+                from: "hubs_task_start",
+                meta: ["longForm": "\(allVideos.filter { !$0.isReel }.count)"]
+            )
             await consumePendingRoutingIfNeeded()
             // 3) Deep catalog only while parked on Hubs — never compete with feed open.
             scheduleDeferredFullCatalogWarm()

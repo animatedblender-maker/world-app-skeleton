@@ -1305,6 +1305,7 @@ struct ReelsScrollViewer: View {
         }
         .task {
             // Open must paint immediately — never block first frames on network/warm.
+            PerformanceTelemetry.markIfAbsent("sparks_open_start")
             MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
             SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
             if posts.indices.contains(activeIndex) {
@@ -1313,6 +1314,12 @@ struct ReelsScrollViewer: View {
             // Short head warm only (was 0.9+0.7s serial waits → open “hallucinations”).
             let headIDs = Array(posts.dropFirst(activeIndex).prefix(4).map(\.id))
             await SparkWarmPool.shared.awaitReady(postIDs: headIDs, timeout: 0.45)
+            PerformanceTelemetry.milestone(
+                "reel_swipe_first_frame",
+                surface: "sparks",
+                from: "sparks_open_start",
+                meta: ["path": "open_warm", "queue": "\(posts.count)"]
+            )
 
             // Instant local bulk (no remount) then deep expand off the critical path.
             seedFromWarmCatalogIfNeeded()

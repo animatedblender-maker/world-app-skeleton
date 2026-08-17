@@ -42,7 +42,14 @@ struct ProfileView: View {
         }
         .task(id: ProfileLoadToken(userID: profileUserID, generation: appState.contentLoadGeneration)) {
             // Instant paint from cache, then parallel network — never sequential waterfall.
+            PerformanceTelemetry.markIfAbsent("profile_task_start")
             paintProfileFromCache()
+            PerformanceTelemetry.milestone(
+                "profile_interactive",
+                surface: "profile",
+                from: "profile_task_start",
+                meta: ["source": "cache_paint"]
+            )
             async let profile: Void = appState.refreshProfile()
             async let saved: Void = appState.refreshSavedPosts()
             async let postsTask: Void = loadPosts()

@@ -554,6 +554,7 @@ struct ConversationView: View {
         errorMessage = nil
         defer { isSending = false }
 
+        let sendT0 = Date().timeIntervalSince1970
         let usesPlaceholder = pendingMediaData == nil
         let placeholderID = usesPlaceholder ? "pending-\(UUID().uuidString)" : nil
         if usesPlaceholder, let placeholderID {
@@ -574,6 +575,15 @@ struct ConversationView: View {
             messages.append(placeholder)
             persistMessageCache()
             requestScrollToBottom()
+            // Local bubble on screen — butter-smooth target < 50 ms.
+            let localMs = max(0, Int((Date().timeIntervalSince1970 - sendT0) * 1000))
+            PerformanceTelemetry.record(
+                name: "message_local_visible",
+                surface: "messages",
+                durationMs: localMs,
+                t0: sendT0,
+                ok: true
+            )
         }
         draft = ""
         let savedReply = replyingTo
@@ -616,6 +626,14 @@ struct ConversationView: View {
             }
             notifyConversationChanged()
             requestScrollToBottom()
+            let ackMs = max(0, Int((Date().timeIntervalSince1970 - sendT0) * 1000))
+            PerformanceTelemetry.record(
+                name: "message_server_ack",
+                surface: "messages",
+                durationMs: ackMs,
+                t0: sendT0,
+                ok: true
+            )
             if let refreshed = try? await MessagesService.shared.getConversationById(conversation.id) {
                 peerLastReadAt = refreshed.otherMember(currentUserID: currentUserID ?? "")?.lastReadAt
                 persistMessageCache()
