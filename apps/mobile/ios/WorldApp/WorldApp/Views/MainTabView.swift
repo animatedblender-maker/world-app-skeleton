@@ -167,13 +167,11 @@ struct MainTabView: View {
     }
 
     /// Play / mute / close above continuous film (z 110) so controls stay visible + tappable.
-    /// Covers floating mini and chat dock (any !expanded hubs session).
     @ViewBuilder
     private var miniChromeAboveFilm: some View {
-        let miniSession = appState.hubPlaybackPost != nil
-            && !appState.hubPlaybackExpanded
-            && !hubsImmersiveFullscreen
-        if miniSession {
+        if appState.hubPlaybackPost != nil,
+           !appState.hubPlaybackExpanded,
+           !hubsImmersiveFullscreen {
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
                 HubMiniPlayerChrome(
@@ -189,7 +187,6 @@ struct MainTabView: View {
                 )
                 .frame(height: YouTubeMiniPlayerBar.barHeight)
                 .frame(maxWidth: .infinity)
-                // Buttons keep their hits; empty area expands.
                 .background {
                     Color.clear
                         .contentShape(Rectangle())

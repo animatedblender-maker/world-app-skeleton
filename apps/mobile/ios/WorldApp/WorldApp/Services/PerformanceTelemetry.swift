@@ -1,8 +1,7 @@
 import Foundation
 
-/// User-perceived performance milestones (butter-smooth program).
-/// **Never blocks the UI thread** — no MainActor network, no token refresh.
-@MainActor
+/// User-perceived performance milestones.
+/// Fully off the hot path: never blocks UI, never refreshes tokens, never traps on bad floats.
 enum PerformanceTelemetry {
     struct Event: Sendable {
         var name: String
@@ -17,18 +16,16 @@ enum PerformanceTelemetry {
 
     private static let store = MetricsStore.shared
 
-    static func newSession() {
-        store.newSession()
-    }
+    @MainActor
+    static func newSession() { store.newSession() }
 
-    static func mark(_ name: String) {
-        store.mark(name)
-    }
+    @MainActor
+    static func mark(_ name: String) { store.mark(name) }
 
-    static func markIfAbsent(_ name: String) {
-        store.markIfAbsent(name)
-    }
+    @MainActor
+    static func markIfAbsent(_ name: String) { store.markIfAbsent(name) }
 
+    @MainActor
     static func milestoneFromLaunch(
         _ name: String,
         surface: String,
@@ -38,6 +35,7 @@ enum PerformanceTelemetry {
         store.milestoneFromLaunch(name, surface: surface, ok: ok, meta: meta)
     }
 
+    @MainActor
     static func milestone(
         _ name: String,
         surface: String,
@@ -48,6 +46,7 @@ enum PerformanceTelemetry {
         store.milestone(name, surface: surface, from: markName, ok: ok, meta: meta)
     }
 
+    @MainActor
     static func record(
         name: String,
         surface: String,
@@ -69,16 +68,10 @@ enum PerformanceTelemetry {
             meta: meta
         )
     }
-
-    static func flushNow() async {
-        await store.flushNow()
-    }
 }
 
-// MARK: - Background store (never MainActor)
+// MARK: - Background store
 
-/// Thread-safe queue + background URLSession flush.
-/// Critical: do **not** call AuthService.ensureValidToken (MainActor refresh stalls UI).
 private final class MetricsStore: @unchecked Sendable {
     static let shared = MetricsStore()
 
@@ -87,14 +80,11 @@ private final class MetricsStore: @unchecked Sendable {
     private var processStart = Date().timeIntervalSince1970
     private var pending: [PerformanceTelemetry.Event] = []
     private var marks: [String: TimeInterval] = [:]
-    /// One sample per milestone name per session (avoids spam + work storms).
     private var emittedNames = Set<String>()
     private var flushScheduled = false
     private var isFlushing = false
-    private lazy var deviceClassCached: String = Self.computeDeviceClass()
-    private lazy var appVersion: String = {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-    }()
+    private var deviceClassCached: String = "unknown"
+    private var appVersion: String = "?"
 
     private let session: URLSession = {
         let c = URLSessionConfiguration.ephemeral
@@ -104,6 +94,11 @@ private final class MetricsStore: @unchecked Sendable {
         c.requestCachePolicy = .reloadIgnoringLocalCacheData
         return URLSession(configuration: c)
     }()
+
+    private init() {
+        deviceClassCached = Self.computeDeviceClass()
+        appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+    }
 
     func newSession() {
         lock.lock()
@@ -140,16 +135,8 @@ private final class MetricsStore: @unchecked Sendable {
         lock.lock()
         let t0 = processStart
         lock.unlock()
-        let duration = max(0, Int(((t1 - t0) * 1000).rounded()))
-        record(
-            name: name,
-            surface: surface,
-            durationMs: duration,
-            t0: t0,
-            t1: t1,
-            ok: ok,
-            meta: meta
-        )
+        let duration = Self.safeMs(t1 - t0)
+        record(name: name, surface: surface, durationMs: duration, t0: t0, t1: t1, ok: ok, meta: meta)
     }
 
     func milestone(
@@ -163,16 +150,8 @@ private final class MetricsStore: @unchecked Sendable {
         lock.lock()
         let t0 = marks[markName] ?? processStart
         lock.unlock()
-        let duration = max(0, Int(((t1 - t0) * 1000).rounded()))
-        record(
-            name: name,
-            surface: surface,
-            durationMs: duration,
-            t0: t0,
-            t1: t1,
-            ok: ok,
-            meta: meta
-        )
+        let duration = Self.safeMs(t1 - t0)
+        record(name: name, surface: surface, durationMs: duration, t0: t0, t1: t1, ok: ok, meta: meta)
     }
 
     func record(
@@ -186,10 +165,9 @@ private final class MetricsStore: @unchecked Sendable {
         meta: [String: String]
     ) {
         let end = t1 ?? Date().timeIntervalSince1970
-        let start = t0 ?? (end - Double(durationMs) / 1000)
+        let start = t0 ?? (end - Double(max(0, durationMs)) / 1000)
 
         lock.lock()
-        // Dedupe one-shot launch/surface milestones only (not per-action metrics).
         let oncePerSession =
             name.hasPrefix("app_")
             || name.hasPrefix("hubs_")
@@ -203,9 +181,8 @@ private final class MetricsStore: @unchecked Sendable {
             }
             emittedNames.insert(name)
         }
-        // Cap queue so a runaway emitter cannot grow unbounded.
         if pending.count >= 80 {
-            pending.removeFirst(pending.count - 40)
+            pending.removeFirst(min(40, pending.count))
         }
         pending.append(
             PerformanceTelemetry.Event(
@@ -221,27 +198,21 @@ private final class MetricsStore: @unchecked Sendable {
         )
         let shouldSchedule = !flushScheduled && !isFlushing
         if shouldSchedule { flushScheduled = true }
-        let count = pending.count
         lock.unlock()
 
-        guard shouldSchedule else {
-            if count >= 20 { scheduleFlush(delaySec: 0.05) }
-            return
+        if shouldSchedule {
+            scheduleFlush(delaySec: 8)
         }
-        // Debounce: never flush mid-frame / mid-bootstrap.
-        scheduleFlush(delaySec: 8)
     }
 
     private func scheduleFlush(delaySec: Double) {
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + delaySec) { [weak self] in
-            guard let self else { return }
-            Task.detached(priority: .utility) {
-                await self.flushNow()
-            }
+            self?.flushNowSync()
         }
     }
 
-    func flushNow() async {
+    /// Fully synchronous background flush — no Task/MainActor hops that can re-enter UI.
+    private func flushNowSync() {
         lock.lock()
         flushScheduled = false
         guard !isFlushing, !pending.isEmpty else {
@@ -267,18 +238,11 @@ private final class MetricsStore: @unchecked Sendable {
 
         guard let url = URL(string: "\(AppConfig.apiBaseURL)/v1/metrics/batch") else { return }
 
-        // Cached token only — never refresh here (MainActor refresh freezes UI under load).
-        let token = await MainActor.run {
-            AuthService.shared.accessToken()
-        }
-
+        // Do not touch AuthService from background (MainActor). Metrics accept unauthenticated.
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.timeoutInterval = 3
-        if let token, !token.isEmpty {
-            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
 
         let events: [[String: Any]] = batch.map { e in
             var row: [String: Any] = [
@@ -302,19 +266,35 @@ private final class MetricsStore: @unchecked Sendable {
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: body) else { return }
         req.httpBody = data
-        _ = try? await session.data(for: req)
+        let sem = DispatchSemaphore(value: 0)
+        session.dataTask(with: req) { _, _, _ in
+            sem.signal()
+        }.resume()
+        _ = sem.wait(timeout: .now() + 4)
+    }
+
+    private static func safeMs(_ seconds: TimeInterval) -> Int {
+        guard seconds.isFinite, !seconds.isNaN else { return 0 }
+        let ms = seconds * 1000
+        guard ms.isFinite, !ms.isNaN else { return 0 }
+        return max(0, min(Int(ms.rounded()), 600_000))
     }
 
     private static func computeDeviceClass() -> String {
         var sys = utsname()
         uname(&sys)
         let mirror = Mirror(reflecting: sys.machine)
-        let id = mirror.children.reduce("") { acc, el in
-            guard let v = el.value as? Int8, v != 0 else { return acc }
-            return acc + String(UnicodeScalar(UInt8(v)))
+        var id = ""
+        id.reserveCapacity(32)
+        for child in mirror.children {
+            guard let v = child.value as? Int8, v != 0 else { break }
+            // bitPattern avoids trap on negative Int8
+            let u = UInt8(bitPattern: v)
+            if u < 32 || u > 126 { continue }
+            id.append(Character(UnicodeScalar(u)))
         }
         if id.hasPrefix("iPhone12") || id.hasPrefix("iPhone11") { return "iphone11_class" }
-        if id.hasPrefix("iPhone1") { return "iphone_legacy" }
-        return id.isEmpty ? "unknown" : id
+        if id.hasPrefix("iPhone") { return "iphone" }
+        return id.isEmpty ? "unknown" : String(id.prefix(32))
     }
 }

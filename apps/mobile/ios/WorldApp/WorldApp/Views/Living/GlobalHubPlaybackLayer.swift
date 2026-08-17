@@ -357,7 +357,7 @@ struct GlobalHubPlaybackLayer: View {
                         contentMode: .fill,
                         placeholder: AnyView(Theme.ink)
                     )
-                    .frame(width: max(1, filmW), height: max(1, filmH))
+                    .frame(width: safePositive(filmW), height: safePositive(filmH))
                     .clipped()
                     .allowsHitTesting(false)
                 }
@@ -366,10 +366,10 @@ struct GlobalHubPlaybackLayer: View {
                     showControls: showTransportChrome,
                     chromeOpacity: transportChromeOpacity
                 )
-                .frame(width: max(1, filmW), height: max(1, filmH))
+                .frame(width: safePositive(filmW), height: safePositive(filmH))
                 .clipped()
             }
-            .frame(width: max(1, filmW), height: max(1, filmH))
+            .frame(width: safePositive(filmW), height: safePositive(filmH))
             .background(filmFillsFrame ? Theme.ink : Color.black)
             .clipShape(
                 RoundedRectangle(
@@ -379,8 +379,8 @@ struct GlobalHubPlaybackLayer: View {
             )
             .clipped()
             .rotationEffect(contentRotation)
-            .frame(width: max(1, layout.width), height: max(1, layout.height))
-            .offset(x: layout.x, y: layout.y)
+            .frame(width: safePositive(layout.width), height: safePositive(layout.height))
+            .offset(x: safeOffset(layout.x), y: safeOffset(layout.y))
             // Finger 1:1 while dragging; YT spring only on settle.
             .animation(interactiveAnimation, value: collapse)
             .animation(interactiveAnimation, value: fsProgress)
@@ -517,6 +517,7 @@ struct GlobalHubPlaybackLayer: View {
 
     /// Coarse layout fingerprint — 4pt / 5% buckets so sub-pixel preference noise
     /// does not re-host the continuous player every frame.
+    /// Never call `Int` on NaN/Inf (that traps and crashes the app).
     private static func layoutSignature(
         layout: PlayerLayout,
         collapse: CGFloat,
@@ -525,12 +526,22 @@ struct GlobalHubPlaybackLayer: View {
         showChrome: Bool,
         playing: Bool
     ) -> String {
-        let x = Int((layout.x / 4).rounded())
-        let y = Int((layout.y / 4).rounded())
-        let w = Int((layout.width / 4).rounded())
-        let h = Int((layout.height / 4).rounded())
-        let c = Int((collapse * 20).rounded())
-        let f = Int((fsProgress * 20).rounded())
+        func bucket(_ v: CGFloat, div: CGFloat) -> Int {
+            guard v.isFinite, !v.isNaN, div.isFinite, div != 0 else { return 0 }
+            let q = v / div
+            guard q.isFinite, !q.isNaN else { return 0 }
+            let r = q.rounded()
+            guard r.isFinite, !r.isNaN else { return 0 }
+            // Clamp to avoid Int overflow traps on absurd values.
+            let clamped = min(max(r, -1_000_000), 1_000_000)
+            return Int(clamped)
+        }
+        let x = bucket(layout.x, div: 4)
+        let y = bucket(layout.y, div: 4)
+        let w = bucket(layout.width, div: 4)
+        let h = bucket(layout.height, div: 4)
+        let c = bucket(collapse, div: 0.05)
+        let f = bucket(fsProgress, div: 0.05)
         return "\(x)_\(y)_\(w)_\(h)_\(c)_\(f)_\(fills ? 1 : 0)_\(showChrome ? 1 : 0)_\(playing ? 1 : 0)"
     }
 
@@ -565,8 +576,19 @@ struct GlobalHubPlaybackLayer: View {
 
     /// Smooth hermite ease — YouTube-like settle without linear stiffness.
     private func smoothstep(_ t: CGFloat) -> CGFloat {
+        guard t.isFinite, !t.isNaN else { return 0 }
         let x = min(1, max(0, t))
         return x * x * (3 - 2 * x)
+    }
+
+    private func safePositive(_ v: CGFloat) -> CGFloat {
+        guard v.isFinite, !v.isNaN else { return 1 }
+        return max(1, v)
+    }
+
+    private func safeOffset(_ v: CGFloat) -> CGFloat {
+        guard v.isFinite, !v.isNaN else { return 0 }
+        return v
     }
 
     // MARK: - Player (same instance always)
