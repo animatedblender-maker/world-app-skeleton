@@ -2022,8 +2022,16 @@ struct InFrameVideoPlayer: View {
                 framesReady = false
                 return
             }
-            // No SparkWarmPool.warmSingle here — deep warm on every focus blip freezes scroll.
-            // Player itself buffers; poster stays until framesReady.
+            // Shared Hubs / Archive on feed: one deep warm when focus *wins* (not on every cell appear).
+            // Matches Hubs slug open — edge buffer ready before first frame.
+            if usesArchivePath || ArchiveVideoPlayback.isArchiveURL(url) {
+                if let postID {
+                    SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: true)
+                }
+                if usesArchivePath {
+                    ArchiveVideoPlayback.warmResolve(url)
+                }
+            }
             if !isMuted {
                 activatePlaybackAudioIfNeeded(unmuted: true)
             }

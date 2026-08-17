@@ -1579,11 +1579,23 @@ final class AppState {
     func openPost(_ post: CountryPost) {
         if post.isReel {
             openReelsViewer(startingPost: post)
-        } else if PlayPlatformBridge.isHubCatalogContent(post), post.hasVideo {
-            // Resolve catalog channel async (Archive hub clips must not show the sharer).
+        } else if PlayPlatformBridge.isHubFeedCardVideo(post)
+            || PlayPlatformBridge.isHubOriginShare(post)
+            || (PlayPlatformBridge.isHubCatalogContent(post) && post.hasVideo) {
+            // Shared Hubs on feed → same continuous player as Hubs tab (instant, no await).
+            let quick = PlayPlatformBridge.hubWatchPresentation(for: post)
+            startHubPlayback(quick, expanded: true)
+            // Background: upgrade to full catalog identity (sharer → channel) without stalling first frame.
             Task { @MainActor in
                 let presentation = await PlayPlatformBridge.resolveHubWatchPresentation(for: post)
-                openLivingVideo(postID: presentation.id, tab: .home, post: presentation)
+                guard hubPlaybackPost?.id == quick.id
+                    || hubPlaybackPost?.id == post.id
+                    || hubPlaybackPost?.id == presentation.id
+                else { return }
+                if presentation.id != hubPlaybackPost?.id
+                    || presentation.playableVideoURL != nil && hubPlaybackPost?.playableVideoURL == nil {
+                    startHubPlayback(presentation, expanded: hubPlaybackExpanded)
+                }
             }
         } else {
             // Plain feed videos (no channel / no hub marker) → post detail only.

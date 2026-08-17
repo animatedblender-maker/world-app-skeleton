@@ -436,13 +436,20 @@ struct PlayFeedLinkCard: View {
 
     @ViewBuilder
     private var hubFeedPlayerSurface: some View {
-        // Same autoplay path as Sparks — single focus probe inside InFrameVideoPlayer.
-        if let url = post.playableVideoURL
-            ?? MediaURLResolver.videoURL(for: post)
+        // Prefer origin catalog media (share stamps) so feed plays the real Hubs file, not a dead stamp.
+        let presentation = PlayPlatformBridge.hubWatchPresentation(for: post)
+        let playPost = presentation.playableVideoURL != nil ? presentation : post
+        if let url = playPost.playableVideoURL
+            ?? MediaURLResolver.videoURL(for: playPost)
             ?? post.sharedPost.flatMap({ shared in
                 shared.asCountryPost.playableVideoURL
                     ?? MediaURLResolver.videoURL(for: shared.asCountryPost)
             }) {
+            let poster = playPost.posterImageURL ?? post.posterImageURL
+            // Archive + R2 long-form → same Archive/edge player path as Hubs tab.
+            let useArchivePath = ArchiveVideoPlayback.isArchiveURL(url)
+                || PlayPlatformBridge.isR2LongFormMedia(playPost)
+                || PlayPlatformBridge.isHubCatalogContent(playPost)
             ZStack {
                 // Soft floor under film — never pure black while poster/CDN loads.
                 LinearGradient(
@@ -451,7 +458,7 @@ struct PlayFeedLinkCard: View {
                     endPoint: .bottomTrailing
                 )
                 // Poster stays under the player so we never flash pure black while buffering.
-                if let poster = post.posterImageURL {
+                if let poster {
                     CachedAsyncImage(
                         url: poster,
                         maxPixelSize: 480,
@@ -471,14 +478,14 @@ struct PlayFeedLinkCard: View {
 
                 InFrameVideoPlayer(
                     url: url,
-                    posterURL: post.posterImageURL,
+                    posterURL: poster,
                     placement: nil,
-                    countryCode: post.countryCode,
-                    contentCountryCode: post.countryCode,
-                    postID: post.id,
+                    countryCode: playPost.countryCode ?? post.countryCode,
+                    contentCountryCode: playPost.countryCode ?? post.countryCode,
+                    postID: playPost.id,
                     muted: appState.feedVideosMuted,
                     loops: true,
-                    preferArchivePlayer: ArchiveVideoPlayback.isArchiveURL(url),
+                    preferArchivePlayer: useArchivePath,
                     showsControls: true,
                     muteOnlyControls: false,
                     // Fill the 16:9 feed box — aspect-fit left black letterbox slabs.
@@ -488,7 +495,7 @@ struct PlayFeedLinkCard: View {
                     onViewed: { Task { await PostsService.shared.recordView(post) } }
                 )
             }
-            .id("hub-feed-\(post.id)")
+            .id("hub-feed-\(playPost.id)")
             .background(
                 LinearGradient(
                     colors: [Theme.canvasMuted, Theme.canvasDeep],
@@ -497,9 +504,18 @@ struct PlayFeedLinkCard: View {
                 )
             )
             .onAppear {
-                // Resolve CDN only — do not spin AVPlayers for every feed row (jank + black).
-                ArchiveVideoPlayback.warmResolve(url)
+                // Same slug/edge warm path as Hubs shelves — snappy first frame on shared hubs.
+                if useArchivePath || ArchiveVideoPlayback.isArchiveURL(url) {
+                    ArchiveVideoPlayback.warmResolve(url)
+                }
+                if !ScrollBudget.isFlinging {
+                    SparkWarmPool.shared.warmSingle(postID: playPost.id, url: url, deep: true)
+                    Task(priority: .utility) {
+                        await RecommendationClient.warmPlaybackURLs([playPost.id, post.id])
+                    }
+                }
             }
+            .onTapGesture { onOpen() }
         } else {
             YouTubeVideoThumbnail(
                 post: post,

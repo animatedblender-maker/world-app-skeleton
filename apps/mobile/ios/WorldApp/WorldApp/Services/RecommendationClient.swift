@@ -125,6 +125,8 @@ enum RecommendationClient {
 
     /// Ask the API to freshen R2 / signed play URLs for a head of posts.
     /// Client still warms AVPlayers; this cuts media latency on cold CDN edges.
+    /// Edge-warm play URLs (POST /v1/playback/batch) — same path Hubs slug open relies on.
+    /// Never blocks on token refresh (that made shared hubs on feed feel “years” slow).
     static func warmPlaybackURLs(_ postIDs: [String]) async {
         let ids = Array(
             Set(
@@ -134,18 +136,16 @@ enum RecommendationClient {
             )
         ).prefix(12)
         guard !ids.isEmpty else { return }
-        let token: String
-        do {
-            token = try await AuthService.shared.ensureValidToken()
-        } catch {
-            return
-        }
+        // Cached token only — never ensureValidToken (that stalled shared hubs on feed).
+        let token = await MainActor.run { AuthService.shared.accessToken() }
         guard let url = URL(string: "\(AppConfig.apiBaseURL)/v1/playback/batch") else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.timeoutInterval = 4
+        if let token {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        req.timeoutInterval = 3.5
         let body: [String: Any] = ["postIds": Array(ids)]
         guard let data = try? JSONSerialization.data(withJSONObject: body) else { return }
         req.httpBody = data
@@ -161,6 +161,7 @@ enum RecommendationClient {
             // Fire-and-forget ranged GET so CDN edge holds the object near the user.
             for row in items {
                 guard let play = row["url"] as? String, let playURL = URL(string: play) else { continue }
+                let postID = row["id"] as? String
                 Task.detached(priority: .utility) {
                     var head = URLRequest(url: playURL)
                     head.httpMethod = "GET"
@@ -170,6 +171,12 @@ enum RecommendationClient {
                 }
                 if ArchiveVideoPlayback.isArchiveURL(playURL) {
                     ArchiveVideoPlayback.warmResolve(playURL)
+                }
+                // Seed warm pool with the freshened edge URL (shared hubs on feed).
+                if let postID, !postID.isEmpty {
+                    await MainActor.run {
+                        SparkWarmPool.shared.warmSingle(postID: postID, url: playURL, deep: false)
+                    }
                 }
             }
         } catch {

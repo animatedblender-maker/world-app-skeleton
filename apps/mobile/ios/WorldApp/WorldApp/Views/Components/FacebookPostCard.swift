@@ -961,9 +961,17 @@ struct FacebookPostCard: View {
     private func openPlayVideo() {
         if let onOpenVideo {
             onOpenVideo()
-        } else {
-            appState.openPost(post)
+            return
         }
+        // Shared Hubs long-form → continuous Hubs player immediately (same as Hubs tab).
+        if PlayPlatformBridge.isHubFeedCardVideo(post)
+            || PlayPlatformBridge.isHubOriginShare(post)
+            || PlayPlatformBridge.isHubCatalogContent(post) {
+            let quick = PlayPlatformBridge.hubWatchPresentation(for: post)
+            appState.startHubPlayback(quick, expanded: true)
+            return
+        }
+        appState.openPost(post)
     }
 
     private func openAuthorProfile() {

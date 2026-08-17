@@ -581,22 +581,38 @@ final class HomeFeedStore {
             if !videoPosts.isEmpty, !fling {
                 SparkWarmPool.shared.prepareFeedWindow(posts: videoPosts, around: 0)
             }
-            // Hubs shares: Sparks-class deep preroll for the next few cards (instant first frame).
-            let warmCount = fling ? 1 : 3
+            // Hubs shares + Sparks: deep preroll like Hubs slug open (instant first frame).
+            let warmCount = fling ? 1 : 4
+            var hubWarmIDs: [String] = []
             for (i, p) in window.prefix(warmCount).enumerated() {
-                guard let url = p.playableVideoURL else { continue }
+                let playPost = PlayPlatformBridge.hubWatchPresentation(for: p)
+                guard let url = playPost.playableVideoURL ?? p.playableVideoURL else { continue }
                 let isHub = ArchiveVideoPlayback.isArchiveURL(url)
                     || PlayPlatformBridge.isHubFeedCardVideo(p)
+                    || PlayPlatformBridge.isHubOriginShare(p)
                     || PlayPlatformBridge.isHubCatalogContent(p)
+                    || PlayPlatformBridge.isR2LongFormMedia(playPost)
                 let isSpark = p.isSpark || p.isReel || PlayPlatformBridge.isSparkFeedCard(p)
                 if isHub || isSpark {
-                    ArchiveVideoPlayback.warmResolve(url)
+                    if isHub || ArchiveVideoPlayback.isArchiveURL(url) {
+                        ArchiveVideoPlayback.warmResolve(url)
+                    }
                     // Only the next 1–2 deep — more than that thrash CPU on mid/low devices.
                     SparkWarmPool.shared.warmSingle(
-                        postID: p.id,
+                        postID: playPost.id,
                         url: url,
                         deep: !fling && i < 2
                     )
+                    if isHub {
+                        hubWarmIDs.append(playPost.id)
+                        if playPost.id != p.id { hubWarmIDs.append(p.id) }
+                    }
+                }
+            }
+            // Edge /v1/playback/batch for shared hubs in the window (CDN near user).
+            if !fling, !hubWarmIDs.isEmpty {
+                Task(priority: .utility) {
+                    await RecommendationClient.warmPlaybackURLs(hubWarmIDs)
                 }
             }
         }
@@ -948,22 +964,33 @@ final class HomeFeedStore {
                 around: 0
             )
         }
-        // Hubs + Sparks head: deep-preroll like Sparks player open (instant first frame).
-        // Head: deep only first 2 playable videos (CPU budget).
-        for (i, post) in head.prefix(6).enumerated() {
-            guard let url = post.playableVideoURL else { continue }
+        // Hubs shares + Sparks head: deep-preroll like Hubs slug open (instant first frame).
+        var hubIDs: [String] = []
+        for (i, post) in head.prefix(8).enumerated() {
+            let playPost = PlayPlatformBridge.hubWatchPresentation(for: post)
+            guard let url = playPost.playableVideoURL ?? post.playableVideoURL else { continue }
             let isHub = ArchiveVideoPlayback.isArchiveURL(url)
                 || PlayPlatformBridge.isHubFeedCardVideo(post)
+                || PlayPlatformBridge.isHubOriginShare(post)
                 || PlayPlatformBridge.isHubCatalogContent(post)
+                || PlayPlatformBridge.isR2LongFormMedia(playPost)
             let isSpark = post.isSpark || post.isReel || PlayPlatformBridge.isSparkFeedCard(post)
             if isHub || isSpark {
-                ArchiveVideoPlayback.warmResolve(url)
-                SparkWarmPool.shared.warmSingle(postID: post.id, url: url, deep: i < 2)
+                if isHub || ArchiveVideoPlayback.isArchiveURL(url) {
+                    ArchiveVideoPlayback.warmResolve(url)
+                }
+                SparkWarmPool.shared.warmSingle(postID: playPost.id, url: url, deep: i < 3)
+                if isHub {
+                    hubIDs.append(playPost.id)
+                    if playPost.id != post.id { hubIDs.append(post.id) }
+                }
             }
         }
-        // Edge: ask API to freshen playback URLs for the head (CDN / presign).
+        // Edge: freshen playback URLs for head + shared hubs origins (CDN / presign).
         Task(priority: .utility) {
-            await RecommendationClient.warmPlaybackURLs(Array(head.prefix(8).map(\.id)))
+            var ids = Array(head.prefix(10).map(\.id))
+            ids.append(contentsOf: hubIDs)
+            await RecommendationClient.warmPlaybackURLs(ids)
         }
     }
 
