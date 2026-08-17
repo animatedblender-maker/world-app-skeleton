@@ -273,6 +273,8 @@ struct YouTubeVideoListRow: View {
         .buttonStyle(.plain)
         .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear {
+            // Track fling so parents can skip network/AV work mid-scroll.
+            ScrollBudget.noteCellAppear()
             onAppearRow?()
         }
     }
@@ -442,19 +444,29 @@ struct PlayFeedLinkCard: View {
                     ?? MediaURLResolver.videoURL(for: shared.asCountryPost)
             }) {
             ZStack {
+                // Soft floor under film — never pure black while poster/CDN loads.
+                LinearGradient(
+                    colors: [Theme.canvasMuted, Theme.canvasDeep],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
                 // Poster stays under the player so we never flash pure black while buffering.
                 if let poster = post.posterImageURL {
                     CachedAsyncImage(
                         url: poster,
                         maxPixelSize: 480,
                         contentMode: .fill,
-                        placeholder: AnyView(Theme.ink)
+                        placeholder: AnyView(
+                            LinearGradient(
+                                colors: [Theme.canvasMuted, Theme.canvasDeep],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .clipped()
                     .allowsHitTesting(false)
-                } else {
-                    Theme.ink
                 }
 
                 InFrameVideoPlayer(
@@ -477,7 +489,13 @@ struct PlayFeedLinkCard: View {
                 )
             }
             .id("hub-feed-\(post.id)")
-            .background(Theme.ink)
+            .background(
+                LinearGradient(
+                    colors: [Theme.canvasMuted, Theme.canvasDeep],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
             .onAppear {
                 // Resolve CDN only — do not spin AVPlayers for every feed row (jank + black).
                 ArchiveVideoPlayback.warmResolve(url)
@@ -615,8 +633,8 @@ struct HubsShelfThumbCard: View {
     /// When true, show a one-line meta row under the title (channel · views).
     var showsMetadata: Bool = false
     var titleFont: Font = .caption.weight(.semibold)
-    /// Frame extract is expensive — off on feed rails for scroll smoothness.
-    var extractFrameIfNeeded: Bool = true
+    /// Frame extract is expensive — default off so Hubs shelves never freeze scroll.
+    var extractFrameIfNeeded: Bool = false
     var onTap: () -> Void
 
     private var thumbHeight: CGFloat { (width / YouTubeMediaLayout.aspect).rounded() }

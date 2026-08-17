@@ -288,7 +288,8 @@ private struct SparksTileChrome: View {
                 contentMode: .fill,
                 showsPlayIcon: false,
                 playIconSize: playIconSize,
-                extractFrameIfNeeded: true,
+                // Never extract frames on Sparks rails — freezes Hubs / feed scroll.
+                extractFrameIfNeeded: false,
                 placeholder: AnyView(
                     LinearGradient(
                         colors: [Theme.canvasMuted, Theme.canvasDeep],

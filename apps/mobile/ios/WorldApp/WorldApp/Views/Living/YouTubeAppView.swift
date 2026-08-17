@@ -846,8 +846,8 @@ struct YouTubeAppView: View {
             var t = Transaction()
             t.disablesAnimations = true
             withTransaction(t) { sparksStrip = next }
-            ImageCache.shared.prefetchFeedMedia(Array(next.prefix(16)), maxPixelSize: 320)
-            SparkWarmPool.shared.prepare(posts: Array(next.prefix(12)), around: 0, ahead: 3, behind: 0)
+            // Thumbs only — no AV warm on Hubs Sparks strip (freezes For you scroll).
+            ImageCache.shared.prefetchFeedMedia(Array(next.prefix(8)), maxPixelSize: 320)
         }
     }
 
@@ -1200,12 +1200,24 @@ struct YouTubeAppView: View {
             merged.append(s)
         }
         allVideos = merged
-        PostsService.shared.rememberHubsSessionCatalog(merged)
-        ContentCache.shared.setPosts(
-            Array(merged.prefix(ContentCache.maxCachedPosts)),
-            for: .livingVideos
-        )
-        rebuildChannels()
+        // Defer disk + channel rebuild so scroll never freezes on merge.
+        let cacheSlice = Array(merged.prefix(ContentCache.maxCachedPosts))
+        Task.detached(priority: .utility) {
+            await MainActor.run {
+                PostsService.shared.rememberHubsSessionCatalog(merged)
+                ContentCache.shared.setPosts(cacheSlice, for: .livingVideos)
+            }
+        }
+        // Skip channel rebuild mid-fling — list only needs long-form pool growth.
+        if !ScrollBudget.isFlinging {
+            rebuildChannels()
+        } else {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                guard !ScrollBudget.isFlinging else { return }
+                rebuildChannels()
+            }
+        }
         if added > 0 {
             if ScrollBudget.isFlinging {
                 Task { @MainActor in

@@ -106,24 +106,32 @@ final class VideoFrameCache {
         defer { inflightKeys.remove(key) }
 
         let playback = await MediaURLResolver.playbackConfiguration(for: videoURL)
-        let asset: AVURLAsset
-        if let headers = playback.headers {
-            asset = AVURLAsset(
-                url: playback.url,
-                options: ["AVURLAssetHTTPHeaderFieldsKey": headers]
-            )
-        } else {
-            asset = AVURLAsset(url: playback.url)
-        }
+        let playURL = playback.url
+        let headers = playback.headers
 
-        let generator = AVAssetImageGenerator(asset: asset)
-        generator.appliesPreferredTrackTransform = true
-        generator.maximumSize = CGSize(width: 640, height: 640)
-        generator.requestedTimeToleranceBefore = .zero
-        generator.requestedTimeToleranceAfter = CMTime(seconds: 0.25, preferredTimescale: 600)
+        // Never block MainActor with AVAssetImageGenerator (Hubs freeze root cause).
+        let image: UIImage? = await Task.detached(priority: .utility) {
+            let asset: AVURLAsset
+            if let headers {
+                asset = AVURLAsset(
+                    url: playURL,
+                    options: ["AVURLAssetHTTPHeaderFieldsKey": headers]
+                )
+            } else {
+                asset = AVURLAsset(url: playURL)
+            }
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: 640, height: 640)
+            generator.requestedTimeToleranceBefore = .zero
+            generator.requestedTimeToleranceAfter = CMTime(seconds: 0.25, preferredTimescale: 600)
+            guard let cgImage = try? generator.copyCGImage(at: .zero, actualTime: nil) else {
+                return nil
+            }
+            return UIImage(cgImage: cgImage)
+        }.value
 
-        guard let cgImage = try? generator.copyCGImage(at: .zero, actualTime: nil) else { return nil }
-        let image = UIImage(cgImage: cgImage)
+        guard let image else { return nil }
         memory[key] = image
         saveToDisk(image: image, key: key)
         return image

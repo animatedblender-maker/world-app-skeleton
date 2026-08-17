@@ -29,6 +29,8 @@ struct VideoPlayerView: View {
     var onViewed: (() -> Void)? = nil
     /// Progress callback for Sparks timeline scrubber: (currentSeconds, durationSeconds).
     var onProgress: ((Double, Double) -> Void)? = nil
+    /// Fired once when the first painted frames replace the poster (IG/YT handoff).
+    var onFramesReady: (() -> Void)? = nil
     /// Natural presentation size (for Sparks smart fill vs letterbox).
     var onVideoSize: ((CGSize) -> Void)? = nil
     /// When set to a non-nil value, seek there once then clear via `onSeekConsumed`.
@@ -228,22 +230,11 @@ struct VideoPlayerView: View {
                     showPosterCover = false
                     return
                 }
-                // Warm / ready items already have a decoded frame — never slam poster (blink).
-                if player?.currentItem?.status == .readyToPlay {
-                    showPosterCover = false
-                } else if player != nil {
-                    // Feed focus won while still buffering — poll briefly so we don't stay on thumb.
-                    Task { @MainActor in
-                        for _ in 0..<25 {
-                            if player?.currentItem?.status == .readyToPlay {
-                                showPosterCover = false
-                                return
-                            }
-                            try? await Task.sleep(nanoseconds: 40_000_000)
-                        }
-                        // Fallback: reveal anyway so we never stick on thumbnail forever.
-                        showPosterCover = false
-                    }
+                // IG/YT: readyToPlay ≠ first painted frame. Keep poster until rate/frames.
+                if let player, playerHasPaintedFrames(player) {
+                    markPosterCoverReady()
+                } else if let player {
+                    revealPlayerWhenFramesReady(player)
                 }
                 // Re-bind progress + ensure observer is alive after focus (preload path).
                 if let player {
@@ -445,39 +436,54 @@ struct VideoPlayerView: View {
         isPlaying = true
         isRestartSeeking = false
         reportViewIfNeeded()
-        // Warm / ready: drop poster *now* — no poll delay (that felt like a refresh).
-        let itemReady = player.currentItem?.status == .readyToPlay
-        let alreadyHasRate = player.rate > 0.01
-            || player.timeControlStatus == .playing
-            || player.timeControlStatus == .waitingToPlayAtSpecifiedRate
-        if itemReady || alreadyHasRate {
-            showPosterCover = false
+        // IG/YT: never drop poster on readyToPlay alone — black AV layer until first frames.
+        if playerHasPaintedFrames(player) {
+            markPosterCoverReady()
         } else {
             revealPlayerWhenFramesReady(player)
         }
     }
 
-    /// Drop poster cover only after AVPlayer is producing frames (cold path only).
+    /// True only when the layer is likely painting pixels (not a black ready buffer).
+    private func playerHasPaintedFrames(_ player: AVPlayer) -> Bool {
+        if player.rate > 0.05 { return true }
+        if player.timeControlStatus == .playing { return true }
+        // Progress already advanced past the cold start (warm reclaim).
+        let t = player.currentTime().seconds
+        if t.isFinite, t > 0.05, player.currentItem?.status == .readyToPlay {
+            return true
+        }
+        return false
+    }
+
+    @MainActor
+    private func markPosterCoverReady() {
+        guard showPosterCover else { return }
+        showPosterCover = false
+        onFramesReady?()
+    }
+
+    /// Drop poster cover only after AVPlayer is producing frames (never on readyToPlay alone).
     @MainActor
     private func revealPlayerWhenFramesReady(_ player: AVPlayer) {
         Task { @MainActor in
-            for _ in 0..<16 {
-                try? await Task.sleep(nanoseconds: 16_000_000) // ~1 frame @60fps
+            // ~2s max — stay on poster the whole time (Instagram/YT), never flash black.
+            for _ in 0..<50 {
+                try? await Task.sleep(nanoseconds: 40_000_000)
                 guard liveGate.isActive, !liveGate.userWantsPause else { return }
-                let rateOK = player.rate > 0.01
-                let statusOK = player.timeControlStatus == .playing
-                    || player.timeControlStatus == .waitingToPlayAtSpecifiedRate
-                let itemOK = player.currentItem?.status == .readyToPlay
-                if rateOK || (statusOK && itemOK) {
+                if playerHasPaintedFrames(player) {
                     isRestartSeeking = false
-                    showPosterCover = false
+                    markPosterCoverReady()
                     return
                 }
             }
-            // Fallback: reveal anyway so we never stick on poster forever.
-            if liveGate.isActive {
+            // Last resort: only if item is ready AND we still intend to play.
+            // Prefer sticking on poster over a black hole.
+            if liveGate.isActive,
+               player.currentItem?.status == .readyToPlay,
+               player.timeControlStatus == .playing || player.rate > 0.01 {
                 isRestartSeeking = false
-                showPosterCover = false
+                markPosterCoverReady()
             }
         }
     }
@@ -948,6 +954,10 @@ struct VideoPlayerView: View {
                     updateDuration(from: item)
                 }
                 isPlaying = player.rate > 0.01
+                // First real progress while active ⇒ frames are on screen; drop poster cover.
+                if gate.isActive, !gate.userWantsPause, showPosterCover, player.rate > 0.01 {
+                    markPosterCoverReady()
+                }
                 trackPlaybackPositionIfNeeded()
                 // Always publish — parent decides whether to paint the rail.
                 // Prefer liveGate so we never call a stale View-struct capture.
@@ -1723,6 +1733,8 @@ struct InFrameVideoPlayer: View {
     @State private var isFocusWinner = false
     /// Debounced play gate — brief focus blips must not hard-pause mid-clip.
     @State private var playGate = false
+    /// Instagram/YT: keep poster until AV is producing frames (never flash black).
+    @State private var framesReady = false
     @State private var deactivateTask: Task<Void, Never>?
     @State private var lastReportedRatio: CGFloat = -1
 
@@ -1814,7 +1826,13 @@ struct InFrameVideoPlayer: View {
                             }
                         ),
                         allowsFullscreen: false,
-                        onReady: { onViewed?() }
+                        onReady: {
+                            // Ready ≠ painted — wait for onPlayingChange / progress.
+                            onViewed?()
+                        },
+                        onPlayingChange: { playing in
+                            if playing, playGate { framesReady = true }
+                        }
                     )
                 } else {
                     VideoPlayerView(
@@ -1834,25 +1852,46 @@ struct InFrameVideoPlayer: View {
                         fillsFrame: fillsFrame,
                         // Only the focus winner should build a heavy buffer — neighbors stay light.
                         preloadsWhenInactive: false,
-                        onViewed: onViewed
+                        onViewed: onViewed,
+                        onProgress: { current, _ in
+                            // Advanced playhead while gated ⇒ frames are on screen (not cold 0).
+                            if playGate, !framesReady, current > 0.04 {
+                                framesReady = true
+                            }
+                        },
+                        onFramesReady: {
+                            if playGate { framesReady = true }
+                        }
                     )
                 }
             }
 
-            // Cover black AV layer until this card actually wins focus + plays.
-            if !playGate {
+            // IG/YT: poster stays until real frames — never black between thumb and play.
+            // Also re-cover when playGate drops so recycled cells never flash black.
+            if !framesReady || !playGate {
                 if let posterURL {
                     CachedAsyncImage(
                         url: posterURL,
                         maxPixelSize: 480,
                         contentMode: .fill,
-                        placeholder: AnyView(Theme.ink)
+                        placeholder: AnyView(
+                            LinearGradient(
+                                colors: [Theme.canvasMuted, Theme.canvasDeep],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .clipped()
                     .allowsHitTesting(false)
                 } else {
-                    Theme.ink.allowsHitTesting(false)
+                    LinearGradient(
+                        colors: [Theme.canvasMuted, Theme.canvasDeep],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    .allowsHitTesting(false)
                 }
             }
 
@@ -1924,6 +1963,13 @@ struct InFrameVideoPlayer: View {
             FeedVideoFocus.shared.clear(id: focusID)
             isFocusWinner = false
             playGate = false
+            framesReady = false
+        }
+        .onChange(of: url) { _, _ in
+            framesReady = false
+        }
+        .onChange(of: postID) { _, _ in
+            framesReady = false
         }
         .onChange(of: appState.hubPlaybackPost?.id) { _, postID in
             syncPlayGate(immediate: postID != nil)
@@ -1960,24 +2006,18 @@ struct InFrameVideoPlayer: View {
         .onChange(of: shouldPlay) { _, play in
             // Start immediately; delay pause so layout noise never kills a fully visible card.
             syncPlayGate(immediate: play)
-            if play {
-                if let postID {
-                    SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: true)
-                }
-                if !isMuted {
-                    activatePlaybackAudioIfNeeded(unmuted: true)
-                }
+            if play, !isMuted {
+                activatePlaybackAudioIfNeeded(unmuted: true)
             }
         }
         .onChange(of: playGate) { _, active in
-            // Focus won — ensure warm pool is deep-ready so first frames aren't a frozen poster.
-            guard active else { return }
-            if let postID {
-                SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: true)
-                Task {
-                    await SparkWarmPool.shared.awaitReady(postIDs: [postID], timeout: 0.5)
-                }
+            if !active {
+                // Leaving focus — re-arm poster so next win never flashes black AV layer.
+                framesReady = false
+                return
             }
+            // No SparkWarmPool.warmSingle here — deep warm on every focus blip freezes scroll.
+            // Player itself buffers; poster stays until framesReady.
             if !isMuted {
                 activatePlaybackAudioIfNeeded(unmuted: true)
             }

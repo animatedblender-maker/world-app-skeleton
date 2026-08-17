@@ -2174,7 +2174,8 @@ final class ArchiveVideoPlayerController: UIViewController {
                 self.posterView.isHidden = false
                 return
             }
-            self.posterView.isHidden = true
+            // IG/YT: keep poster until rate is real — never hide before first paint.
+            self.posterView.isHidden = false
             _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
                 keeping: claimed,
                 pageEpoch: self.activePageEpoch
@@ -2183,7 +2184,7 @@ final class ArchiveVideoPlayerController: UIViewController {
             claimed.volume = muted ? 0 : 1
             claimed.safePlayImmediately(atRate: 1.0)
             self.didKickPlayback = true
-            self.onPlayingChanged?(true)
+            self.revealPosterWhenFramesReady(claimed)
             self.reportVideoSizeIfNeeded(from: claimed.currentItem)
             self.onReady?()
         }
@@ -2214,7 +2215,8 @@ final class ArchiveVideoPlayerController: UIViewController {
                     switch item.status {
                     case .readyToPlay:
                         if !self.didKickPlayback, self.userWantsPlayback {
-                            self.posterView.isHidden = true
+                            // Keep poster until rate — readyToPlay still paints black briefly.
+                            self.posterView.isHidden = false
                             self.didKickPlayback = true
                             _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
                                 keeping: claimed,
@@ -2223,7 +2225,7 @@ final class ArchiveVideoPlayerController: UIViewController {
                             claimed.isMuted = self.mutedFlag
                             claimed.volume = self.mutedFlag ? 0 : 1
                             claimed.safePlayImmediately(atRate: 1.0)
-                            self.onPlayingChanged?(true)
+                            self.revealPosterWhenFramesReady(claimed)
                             self.onReady?()
                         } else if !self.userWantsPlayback {
                             // Warm buffer ready while scrolling — keep poster, no black flash.
@@ -2268,8 +2270,38 @@ final class ArchiveVideoPlayerController: UIViewController {
                     // Always publish — parent must not rely on stale isActive captures.
                     self.onProgress?(current, dur)
                     self.onPlayingChanged?(playing)
+                    // Drop poster only once frames are actually advancing (IG/YT).
+                    if playing, self.userWantsPlayback, !self.posterView.isHidden {
+                        self.posterView.isHidden = true
+                    }
                     self.maybeLoopNearEnd(current: current, duration: dur, player: observed)
                 }
+            }
+        }
+    }
+
+    /// Keep poster until AVPlayer is producing frames — never black hole after thumb.
+    private func revealPosterWhenFramesReady(_ player: AVPlayer) {
+        if player.rate > 0.05 || player.timeControlStatus == .playing {
+            posterView.isHidden = true
+            onPlayingChanged?(true)
+            return
+        }
+        Task { @MainActor [weak self] in
+            for _ in 0..<50 {
+                try? await Task.sleep(nanoseconds: 40_000_000)
+                guard let self else { return }
+                guard self.userWantsPlayback else { return }
+                if player.rate > 0.05 || player.timeControlStatus == .playing {
+                    self.posterView.isHidden = true
+                    self.onPlayingChanged?(true)
+                    return
+                }
+            }
+            // Prefer poster over black if still not painting.
+            if let self = self, self.userWantsPlayback, player.rate > 0.01 {
+                self.posterView.isHidden = true
+                self.onPlayingChanged?(true)
             }
         }
     }
@@ -2558,13 +2590,14 @@ final class ArchiveVideoPlayerController: UIViewController {
                                keeping: newPlayer,
                                pageEpoch: self.activePageEpoch
                            ) {
-                            self.posterView.isHidden = true
+                            // Keep poster until rate — never black flash after thumb.
+                            self.posterView.isHidden = false
                             self.didKickPlayback = true
                             newPlayer.isMuted = self.mutedFlag
                             newPlayer.volume = self.mutedFlag ? 0 : 1
                             newPlayer.safePlayImmediately(atRate: 1.0)
+                            self.revealPosterWhenFramesReady(newPlayer)
                             DispatchQueue.main.async { [weak self] in
-                                self?.onPlayingChanged?(true)
                                 self?.onReady?()
                             }
                         } else {
@@ -2580,7 +2613,7 @@ final class ArchiveVideoPlayerController: UIViewController {
                             }
                         }
                     } else if self.userWantsPlayback {
-                        self.posterView.isHidden = true
+                        self.revealPosterWhenFramesReady(newPlayer)
                     } else {
                         self.posterView.isHidden = false
                     }
