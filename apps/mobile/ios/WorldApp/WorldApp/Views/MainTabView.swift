@@ -25,11 +25,11 @@ struct MainTabView: View {
         ZStack(alignment: .bottom) {
             mainNavigationStack
             miniInkPlateUnderlay
-            // Order for mini: plate (100) → continuous film+chrome (110).
-            // Chrome is drawn ON the continuous film (GlobalHubPlaybackLayer) so UIKit
-            // never covers the buttons (sibling SwiftUI chrome was invisible/untappable).
+            // Order: plate → tab/mini hole → continuous film (110) → mini chrome (120).
+            // Chrome must stay ABOVE the UIKit film and never rehost with morph.
             floatingMiniAndTabChrome
             continuousHubsPlayerLayer
+            floatingMiniChromeAboveFilm
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(hubsImmersiveFullscreen ? Color.black : Color.clear)
@@ -146,7 +146,7 @@ struct MainTabView: View {
                         onExpand: { appState.expandHubPlayback() },
                         onClose: { appState.stopHubPlayback() },
                         embedsVideo: false,
-                        // Chrome is on the continuous film surface.
+                        // Buttons drawn in floatingMiniChromeAboveFilm (z 120).
                         showsChrome: false,
                         isPlaying: Binding(
                             get: { appState.hubPlaybackPlaying },
@@ -166,9 +166,55 @@ struct MainTabView: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            // Sit on the safe-area floor so mini is clearly above the tab icons / home bar.
             .ignoresSafeArea(.keyboard)
             .zIndex(100)
+        }
+    }
+
+    /// Close / mute / play — always above continuous UIKit film, never inside morph rehost.
+    @ViewBuilder
+    private var floatingMiniChromeAboveFilm: some View {
+        if showsFloatingMiniBar, appState.hubPlaybackPost != nil, !hubsImmersiveFullscreen {
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                HubMiniPlayerChrome(
+                    isPlaying: Binding(
+                        get: { appState.hubPlaybackPlaying },
+                        set: { want in
+                            appState.hubPlaybackPlaying = want
+                            NotificationCenter.default.post(
+                                name: .matteryaHubContinuousSetPlaying,
+                                object: nil,
+                                userInfo: ["playing": want]
+                            )
+                        }
+                    ),
+                    isMuted: Binding(
+                        get: { appState.hubPlaybackMuted },
+                        set: { muted in
+                            appState.hubPlaybackMuted = muted
+                            NotificationCenter.default.post(
+                                name: .matteryaHubContinuousSetMuted,
+                                object: nil,
+                                userInfo: ["muted": muted]
+                            )
+                        }
+                    ),
+                    onClose: { appState.stopHubPlayback() }
+                )
+                .frame(height: YouTubeMiniPlayerBar.barHeight)
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
+                .onTapGesture { appState.expandHubPlayback() }
+
+                if appState.navigationPath.isEmpty {
+                    Color.clear
+                        .frame(height: Theme.tabBarHeight)
+                        .allowsHitTesting(false)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .zIndex(120)
         }
     }
 

@@ -4,16 +4,16 @@ import UIKit
 /// Full-screen host that **only** receives touches inside `interactiveRectGlobal` (window coords).
 /// Touches outside return `nil` from `hitTest` so views underneath (ScrollView / mini chrome) work.
 ///
-/// Updates `rootView` when `contentID` **or** `layoutSignature` changes so mini↔stage↔FS
-/// geometry/chrome stay live. `MatteryaHubPlayerView` keeps a stable `.id(post)` so AVPlayer
-/// is not torn down on morph (configure same-URL is a no-op restart).
+/// **Critical:** Re-assign `rootView` only when `contentID` (post) changes.
+/// Morph geometry is applied by resizing/offsetting this UIView from the parent — never by
+/// rebuilding the SwiftUI/AVPlayer tree (that made mini buttons vanish and film snap to a thumb).
 struct HubPassThroughContainer<Content: View>: UIViewControllerRepresentable {
     /// Interactive region in **global / window** coordinates.
     var interactiveRectGlobal: CGRect
     var interactiveRect: CGRect = .zero
-    /// New post → full rebuild.
+    /// New post → full rebuild only.
     var contentID: String = ""
-    /// Coarse morph fingerprint (not sub-pixel). Hit-rect-only ticks must not change this.
+    /// Ignored for rehost (kept for call-site compatibility).
     var layoutSignature: String = ""
     @ViewBuilder var content: () -> Content
 
@@ -25,8 +25,7 @@ struct HubPassThroughContainer<Content: View>: UIViewControllerRepresentable {
         let vc = HubPassThroughViewController(rootView: content())
         vc.interactiveRectGlobal = resolvedGlobalRect()
         vc.hostedContentID = contentID
-        vc.layoutSignature = layoutSignature
-        context.coordinator.lastSignature = contentID + "|" + layoutSignature
+        context.coordinator.lastContentID = contentID
         return vc
     }
 
@@ -36,12 +35,10 @@ struct HubPassThroughContainer<Content: View>: UIViewControllerRepresentable {
             controller.interactiveRectGlobal = nextRect
         }
 
-        let sig = contentID + "|" + layoutSignature
-        // Hit-rect-only updates must not rebuild the tree (preference spam).
-        guard context.coordinator.lastSignature != sig else { return }
-        context.coordinator.lastSignature = sig
+        // ONLY rebuild when the video identity changes.
+        guard context.coordinator.lastContentID != contentID else { return }
+        context.coordinator.lastContentID = contentID
         controller.hostedContentID = contentID
-        controller.layoutSignature = layoutSignature
         controller.rootView = content()
     }
 
@@ -53,7 +50,7 @@ struct HubPassThroughContainer<Content: View>: UIViewControllerRepresentable {
     }
 
     final class Coordinator {
-        var lastSignature: String = ""
+        var lastContentID: String = ""
     }
 }
 
