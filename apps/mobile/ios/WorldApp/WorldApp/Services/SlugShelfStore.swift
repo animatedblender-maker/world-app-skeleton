@@ -264,8 +264,10 @@ final class SlugShelfStore {
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
         req.setValue("application/json", forHTTPHeaderField: "Accept")
-        req.timeoutInterval = 6
-        if let token = try? await AuthService.shared.ensureValidToken() {
+        // Snappy first paint — never await token refresh (that made hubs “take years”).
+        req.timeoutInterval = 4
+        // Cached access token only (public shelves work without auth too).
+        if let token = AuthService.shared.accessToken() {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
 
@@ -289,6 +291,16 @@ final class SlugShelfStore {
             #if DEBUG
             print("[SlugShelf] \(url.path) items=\(posts.count) next=\(next != nil)")
             #endif
+            // Edge-fast open: warm first 2 play URLs only (not whole page — scroll must stay light).
+            Task(priority: .utility) {
+                for post in posts.prefix(2) {
+                    guard let u = post.playableVideoURL else { continue }
+                    if ArchiveVideoPlayback.isArchiveURL(u) {
+                        ArchiveVideoPlayback.warmResolve(u)
+                    }
+                    SparkWarmPool.shared.warmSingle(postID: post.id, url: u, deep: false)
+                }
+            }
             return Page(items: posts, nextCursor: next, slugsUsed: slugsUsed, session: session)
         } catch {
             #if DEBUG

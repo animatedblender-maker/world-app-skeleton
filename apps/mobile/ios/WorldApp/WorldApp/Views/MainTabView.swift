@@ -99,7 +99,7 @@ struct MainTabView: View {
     }
 
     /// Soft plate under the mini strip so paper never flashes through a clear hole.
-    /// Must stay *below* continuous film (z60). Not pure black — ink matches brand.
+    /// Must stay *below* continuous film. Includes home-indicator gap so plate aligns with film.
     @ViewBuilder
     private var miniInkPlateUnderlay: some View {
         if showsFloatingMiniBar {
@@ -108,10 +108,14 @@ struct MainTabView: View {
                 Theme.ink
                     .frame(height: YouTubeMiniPlayerBar.barHeight)
                     .frame(maxWidth: .infinity)
+                // Match BottomTabBar: content height + safe-area bed (home indicator).
                 if appState.navigationPath.isEmpty {
-                    Color.clear.frame(height: Theme.tabBarHeight)
+                    Color.clear
+                        .frame(height: Theme.tabBarHeight)
+                        .padding(.bottom, 0)
                 }
             }
+            .safeAreaPadding(.bottom, 0)
             .allowsHitTesting(false)
             .zIndex(44)
         }
@@ -131,7 +135,7 @@ struct MainTabView: View {
         .allowsHitTesting(appState.hubPlaybackPost != nil)
     }
 
-    /// Mini strip + tab bar (plate / poster / dock measure / expand). Below continuous film.
+    /// Mini strip flush **above** the tab bar (never under it). Continuous film docks here.
     @ViewBuilder
     private var floatingMiniAndTabChrome: some View {
         if !hubsImmersiveFullscreen, showsFloatingMiniBar || appState.navigationPath.isEmpty {
@@ -142,7 +146,7 @@ struct MainTabView: View {
                         onExpand: { appState.expandHubPlayback() },
                         onClose: { appState.stopHubPlayback() },
                         embedsVideo: false,
-                        // Chrome drawn in `miniChromeAboveFilm` so it sits above continuous video.
+                        // Chrome is on the continuous film surface.
                         showsChrome: false,
                         isPlaying: Binding(
                             get: { appState.hubPlaybackPlaying },
@@ -162,6 +166,8 @@ struct MainTabView: View {
                 }
             }
             .frame(maxWidth: .infinity)
+            // Sit on the safe-area floor so mini is clearly above the tab icons / home bar.
+            .ignoresSafeArea(.keyboard)
             .zIndex(100)
         }
     }

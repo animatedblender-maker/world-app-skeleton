@@ -1392,8 +1392,9 @@ final class AppState {
     func expandHubPlayback() {
         guard hubPlaybackPost != nil else { return }
         rememberHubPlaybackChatReturnIfNeeded()
-        // Kill feed/Sparks audio so only continuous Hubs is heard.
+        // Silence feed/Sparks only — continuous hubs stays protected and must not pause.
         MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
+        MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(userMuted: hubPlaybackMuted)
         hubPlaybackPlaying = true
         hubWatchScrollCollapse = 0
         hubPlaybackPullProgress = 0
