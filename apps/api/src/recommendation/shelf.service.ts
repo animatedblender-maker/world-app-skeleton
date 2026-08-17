@@ -298,13 +298,16 @@ async function queryVideoPage(opts: {
 
   const slugSelect = hasCol ? 'p.hub_slug' : 'null::text as hub_slug';
   const params: unknown[] = [];
+  // Hubs shelves = long-form first. Keep reel/spark out of thin Hubs pages
+  // (Sparks have their own surface). Still allow video rows that are long-form.
   let where = `
     p.visibility = 'public'
-    and lower(coalesce(p.media_type, '')) in ('video', 'reel', 'spark')
+    and lower(coalesce(p.media_type, '')) = 'video'
     and p.media_url is not null
     and length(trim(p.media_url)) > 8
     and lower(coalesce(p.body, '')) not like '%__story__%'
-    and lower(coalesce(p.media_type, '')) not in ('story', 'moment')
+    and lower(coalesce(p.body, '')) not like '%__spark__%'
+    and lower(coalesce(p.media_type, '')) not in ('story', 'moment', 'reel', 'spark')
   `;
 
   if (hasCol && opts.sqlSlug) {
@@ -375,17 +378,29 @@ export async function fetchShelfPage(input: {
   const items: ThinShelfCard[] = [];
   let cursor = input.cursor ?? null;
   let guard = 0;
+  // SQL filter only helps when hub_slug is filled. If column exists but is empty,
+  // SQL returns zero rows forever — fall back to classify scan (pre-migration path).
+  let useSqlSlug = hasCol;
+  let didClassifyFallback = false;
 
   while (items.length < want && guard < 8) {
     guard += 1;
     // Over-fetch so classification still fills the page when SQL can't filter.
-    const batchSize = hasCol ? want * 2 : Math.max(want * 4, 48);
+    const batchSize = useSqlSlug ? want * 2 : Math.max(want * 4, 48);
     const rows = await queryVideoPage({
       limit: batchSize,
       cursor,
-      sqlSlug: hasCol ? slug : null,
+      sqlSlug: useSqlSlug ? slug : null,
     });
     if (rows.length === 0) {
+      if (useSqlSlug && !didClassifyFallback && items.length === 0 && !input.cursor) {
+        // Column present but unfilled / wrong density — classify path.
+        useSqlSlug = false;
+        didClassifyFallback = true;
+        cursor = null;
+        guard = 0;
+        continue;
+      }
       cursor = null;
       break;
     }
@@ -396,6 +411,21 @@ export async function fetchShelfPage(input: {
       if (rowSlug !== slug) continue;
       items.push(rowToCard(row, rowSlug));
       if (items.length >= want) break;
+    }
+
+    // SQL path returned rows but none matched parent after classify → also fall back once.
+    if (
+      useSqlSlug &&
+      !didClassifyFallback &&
+      items.length === 0 &&
+      !input.cursor &&
+      guard >= 2
+    ) {
+      useSqlSlug = false;
+      didClassifyFallback = true;
+      cursor = null;
+      guard = 0;
+      continue;
     }
 
     if (rows.length < batchSize) break;

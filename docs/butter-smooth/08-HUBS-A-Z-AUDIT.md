@@ -44,6 +44,16 @@ Hubs tab open
 
 ---
 
+## P0 — Empty chip shelves when `hub_slug` column empty (fixed this commit)
+
+If migration applied but nothing writes `posts.hub_slug`, SQL filter
+`hub_slug = :slug` returns **zero rows** for every chip. iOS shows empty shelves.
+
+**Fix:** shelf page falls back to unfiltered + classify when SQL path is empty.
+Also hubs SQL prefers `media_type = video` (not reel/spark).
+
+---
+
 ## P0 — Broken play URLs (fixed this commit)
 
 ### Evidence
