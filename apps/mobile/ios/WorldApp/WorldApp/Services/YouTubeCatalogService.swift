@@ -411,7 +411,7 @@ final class YouTubeCatalogService {
     }
 
     /// Parent hub slug for a long-form row (explicit hub_slug → classifier).
-    static func parentHubSlug(for post: CountryPost) -> String {
+    nonisolated static func parentHubSlug(for post: CountryPost) -> String {
         if let raw = (post.hubSlug ?? post.externalRefID)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased(),
@@ -435,6 +435,23 @@ final class YouTubeCatalogService {
         sessionSeed: UInt64,
         focusSlug: String?
     ) -> [CountryPost] {
+        Self.rankForYouBySlugsPure(
+            videos,
+            followingIDs: followingIDs,
+            myUserID: myUserID,
+            sessionSeed: sessionSeed,
+            focusSlug: focusSlug
+        )
+    }
+
+    /// Pure ranking for background threads (no MainActor).
+    nonisolated static func rankForYouBySlugsPure(
+        _ videos: [CountryPost],
+        followingIDs: Set<String>,
+        myUserID: String?,
+        sessionSeed: UInt64,
+        focusSlug: String?
+    ) -> [CountryPost] {
         let longForm = videos.filter { PlayPlatformBridge.isHubsForYouLongForm($0) }
         guard !longForm.isEmpty else { return [] }
 
@@ -442,12 +459,10 @@ final class YouTubeCatalogService {
         func isFollow(_ p: CountryPost) -> Bool { followingIDs.contains(p.authorID) }
         func isMine(_ p: CountryPost) -> Bool { !me.isEmpty && p.authorID == me }
 
-        // Per-slug queues: unviewed follow/mine first, then other unviewed, then viewed last.
         var buckets: [String: [CountryPost]] = [:]
         for post in longForm {
-            let slug = Self.parentHubSlug(for: post)
+            let slug = parentHubSlug(for: post)
             if let focusSlug, slug != focusSlug, !focusSlug.isEmpty {
-                // Chip filter: also accept prefix matches (travel_cities → travel).
                 let parent = HubCategoryClassifier.parentCategory(of: focusSlug)
                 if slug != focusSlug && slug != parent { continue }
             }
@@ -471,9 +486,7 @@ final class YouTubeCatalogService {
             func newest(_ a: [CountryPost]) -> [CountryPost] {
                 a.sorted { ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast) }
             }
-            // Light session salt so each open feels fresh without full shuffle cost.
-            let others = salt == 0 ? newest(otherFresh) : seededInterleave(newest(otherFresh), seed: salt)
-            // Viewed only as last resort for this slug.
+            let others = salt == 0 ? newest(otherFresh) : seededInterleavePure(newest(otherFresh), seed: salt)
             return newest(mineFresh) + newest(followFresh) + others + newest(viewed)
         }
 
@@ -481,7 +494,6 @@ final class YouTubeCatalogService {
         if let focus = focusSlug?.lowercased(), !focus.isEmpty {
             slugOrder = [HubCategoryClassifier.parentCategory(of: focus)]
         } else {
-            // Hub shelf order, then any unknown slugs — rotated by session seed for variety.
             var order = HubVideoSeedService.hubOrder
             if sessionSeed != 0, order.count > 1 {
                 let rot = Int(sessionSeed % UInt64(order.count))
@@ -497,7 +509,6 @@ final class YouTubeCatalogService {
             queues[slug] = rankSlugQueue(raw, salt: sessionSeed &+ UInt64(i) &* 0x9E37)
         }
 
-        // Round-robin across slugs (YouTube diversity) — O(n), smooth scroll fuel.
         var out: [CountryPost] = []
         out.reserveCapacity(longForm.count)
         var seen = Set<String>()
@@ -517,15 +528,13 @@ final class YouTubeCatalogService {
         return out
     }
 
-    /// Tiny deterministic interleave (not a full Fisher–Yates) for open-to-open variety.
-    private func seededInterleave(_ items: [CountryPost], seed: UInt64) -> [CountryPost] {
+    nonisolated private static func seededInterleavePure(_ items: [CountryPost], seed: UInt64) -> [CountryPost] {
         guard items.count > 2 else { return items }
         var arr = items
         var state = seed == 0 ? 0xC0FFEE : seed
-        // Partial swaps — cheaper than full shuffle, enough variety per open.
         let swaps = min(arr.count, 8)
         for i in 0..<swaps {
-            state = state &* 6364136223846793005 &+ 1
+            state = state &* 1_103_515_245 &+ 12_345
             let j = Int(state % UInt64(arr.count))
             arr.swapAt(i % arr.count, j)
         }

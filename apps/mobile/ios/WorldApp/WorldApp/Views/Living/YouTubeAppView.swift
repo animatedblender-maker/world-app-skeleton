@@ -94,10 +94,8 @@ struct YouTubeAppView: View {
         Task { await reshuffleSparksStrip() }
     }
 
-    /// Build home/discover lists with **slug-shelf algorithm** (YouTube-light):
-    /// round-robin hub slugs, unviewed-first inside each slug, small display window.
-    /// - Parameter remountList: only true for intentional reshuffles — background merges must
-    ///   NOT remount the LazyVStack (that caused multi-second lag after open).
+    /// Build home/discover lists with **slug-shelf algorithm** (YouTube-light).
+    /// Ranking runs **off MainActor** so Hubs scroll never freezes on open/chip change.
     private func rebuildStableHomeLists(shuffle: Bool = true, remountList: Bool = true) {
         // Strict long-form only — Sparks live on the Sparks strip, never For you / chips.
         var home = catalog.filterVideos(
@@ -116,35 +114,66 @@ struct YouTubeAppView: View {
                 ^ UInt64(Date().timeIntervalSince1970 * 1_000)
         }
 
-        // Cap rank input hard — ranking hundreds on MainActor freezes Hubs scroll.
-        let rankInput = home.count > 96 ? Array(home.prefix(96)) : home
+        // Small cap — UI only needs a window; endless scroll pages more later.
+        let rankInput = home.count > 64 ? Array(home.prefix(64)) : home
         let following = appState.followingIDs
         let myID = appState.currentProfile?.userID ?? AuthService.shared.currentUser?.id
         let seed = hubsSessionSeed
         let focus = homeFilter.hubSlug
-        // Slug-first rank (chip → single slug; For you → round-robin all slugs).
-        let ranked = catalog.rankForYouBySlugs(
-            rankInput,
-            followingIDs: following,
-            myUserID: myID,
-            sessionSeed: seed,
-            focusSlug: focus
-        )
-        hubsForYouPool = ranked
+        let displayLimit = hubsDisplayLimit
+        let firstWindow = Self.hubsFirstWindow
 
-        if shuffle || hubsDisplayLimit < Self.hubsFirstWindow {
-            hubsDisplayLimit = min(Self.hubsFirstWindow, max(ranked.count, 0))
-        } else {
-            hubsDisplayLimit = min(max(hubsDisplayLimit, Self.hubsFirstWindow), ranked.count)
+        // Fast path for tiny lists (no Task hop).
+        if rankInput.count <= 12 {
+            let ranked = catalog.rankForYouBySlugs(
+                rankInput,
+                followingIDs: following,
+                myUserID: myID,
+                sessionSeed: seed,
+                focusSlug: focus
+            )
+            applyRankedHome(ranked, shuffle: shuffle, remountList: remountList, displayLimit: displayLimit, firstWindow: firstWindow)
+            return
         }
-        let window = Array(ranked.prefix(hubsDisplayLimit))
+
+        Task { @MainActor in
+            let ranked = await Task.detached(priority: .userInitiated) {
+                // Catalog service is MainActor — call parentHubSlug-free path via pure copy rank.
+                // Use a local pure rank on Sendable posts to avoid MainActor hop inside detach.
+                return YouTubeCatalogService.rankForYouBySlugsPure(
+                    rankInput,
+                    followingIDs: following,
+                    myUserID: myID,
+                    sessionSeed: seed,
+                    focusSlug: focus
+                )
+            }.value
+            applyRankedHome(ranked, shuffle: shuffle, remountList: remountList, displayLimit: displayLimit, firstWindow: firstWindow)
+        }
+    }
+
+    private func applyRankedHome(
+        _ ranked: [CountryPost],
+        shuffle: Bool,
+        remountList: Bool,
+        displayLimit: Int,
+        firstWindow: Int
+    ) {
+        hubsForYouPool = ranked
+        var limit = displayLimit
+        if shuffle || limit < firstWindow {
+            limit = min(firstWindow, max(ranked.count, 0))
+        } else {
+            limit = min(max(limit, firstWindow), ranked.count)
+        }
+        hubsDisplayLimit = limit
+        let window = Array(ranked.prefix(limit))
         var txn = Transaction()
         txn.disablesAnimations = true
         withTransaction(txn) {
             stableHomeVideos = window
             stableDiscoverVideos = window
         }
-        // Remount only when explicitly requested (pull / session) — not soft fills.
         if remountList {
             homeListEpoch &+= 1
         }
@@ -658,27 +687,18 @@ struct YouTubeAppView: View {
                                     openVideo(post)
                                 }, onAppearRow: {
                                     ScrollBudget.noteCellAppear()
-                                    let fling = ScrollBudget.isFlinging
-                                    // Settled: warm a few thumbs + next video buffers for instant open.
-                                    if !fling {
+                                    // Thumbs only — never warm AVPlayers mid-scroll (that froze Hubs).
+                                    // Full warm happens on openVideo.
+                                    if !ScrollBudget.isFlinging, index % 3 == 0 {
                                         ImageCache.shared.prefetchHubsWindow(
                                             posts: stableDiscoverVideos,
                                             around: index,
-                                            behind: 1,
-                                            ahead: 5,
+                                            behind: 0,
+                                            ahead: 2,
                                             maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel
                                         )
-                                        // Pre-buffer the next couple of long-form clips (claim on open).
-                                        let end = min(stableDiscoverVideos.count, index + 3)
-                                        if index < end {
-                                            for p in stableDiscoverVideos[index..<end] {
-                                                if let u = p.playableVideoURL {
-                                                    SparkWarmPool.shared.warmSingle(postID: p.id, url: u)
-                                                }
-                                            }
-                                        }
                                     }
-                                    // Endless For you — local window grow always; network only when settled.
+                                    // Endless For you — grow window; network only when settled.
                                     ensureMoreForYou(around: index)
                                 })
                                 .padding(.bottom, 18)
@@ -1441,20 +1461,16 @@ struct YouTubeAppView: View {
         let head = stableDiscoverVideos.isEmpty
             ? videos.filter { !$0.isReel && $0.playableVideoURL != nil }
             : stableDiscoverVideos
-        // First screen only — was flooding downloads and lagging open.
+        // First screen only — never warm AVPlayers here.
         ImageCache.shared.prefetchPostThumbnails(
-            Array(head.prefix(8)),
-            maxPixelSize: thumbPx,
-            aggressive: false
-        )
-        ImageCache.shared.prefetchPostThumbnails(
-            Array(catalog.historyVideos(from: videos).prefix(4)),
+            Array(head.prefix(6)),
             maxPixelSize: thumbPx,
             aggressive: false
         )
         // Sparks strip thumbs later — never compete with For you.
         Task(priority: .background) {
-            try? await Task.sleep(nanoseconds: 800_000_000)
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            guard appState.selectedTab == .hubs, appState.hubPlaybackPost == nil else { return }
             let sparks = videos.filter(\.isReel)
             if !sparks.isEmpty {
                 ImageCache.shared.prefetchPostThumbnails(
