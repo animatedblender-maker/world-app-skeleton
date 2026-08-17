@@ -220,11 +220,14 @@ struct GlobalHubPlaybackLayer: View {
                     name: .matteryaResumePlaybackAfterInterrupt,
                     object: nil
                 )
-                // Dock hole often measures one frame late — force gravity fill + audio again.
+                // Dock hole often measures one frame late — force fill gravity + audio again.
                 Task { @MainActor in
-                    for delay in [40_000_000, 120_000_000, 280_000_000] as [UInt64] {
+                    for delay in [16_000_000, 80_000_000, 200_000_000, 400_000_000] as [UInt64] {
                         try? await Task.sleep(nanoseconds: delay)
                         guard appState.hubPlaybackPost != nil, !appState.hubPlaybackExpanded else { return }
+                        // Snap layout state hard to mini every beat (no stuck mid-collapse).
+                        collapse = 1
+                        fsProgress = 0
                         appState.hubPlaybackPlaying = true
                         MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
                             userMuted: appState.hubPlaybackMuted
@@ -458,21 +461,31 @@ struct GlobalHubPlaybackLayer: View {
 
     private func miniFrame(in geo: GeometryProxy) -> PlayerLayout {
         let container = geo.frame(in: .global)
-
-        // Prefer live measured mini hole (floating bar or chat dock).
-        if let dock = dockSlotGlobal, dock.width > 20, dock.height > 20 {
-            return PlayerLayout(
-                x: dock.minX - container.minX,
-                y: dock.minY - container.minY,
-                width: max(1, dock.width),
-                height: max(1, dock.height)
-            )
-        }
-
-        // Fallback: bottom strip of the window (matches MainTabView mini + tab bar stack).
         let full = Self.windowGlobalFrame()
         let barH = YouTubeMiniPlayerBar.barHeight
         let tabH: CGFloat = appState.navigationPath.isEmpty ? Theme.tabBarHeight : 0
+
+        // Prefer live measured mini hole (floating bar or chat dock).
+        if let dock = dockSlotGlobal, dock.width > 20, dock.height > 20 {
+            var x = dock.minX - container.minX
+            var y = dock.minY - container.minY
+            // If coordinate spaces disagree (hosting vs window), fall back to window bottom.
+            let looksOffScreen =
+                y + dock.height < -20
+                || y > geo.size.height + 20
+                || x + dock.width < -20
+                || x > geo.size.width + 20
+            if !looksOffScreen {
+                return PlayerLayout(
+                    x: x,
+                    y: y,
+                    width: max(1, dock.width),
+                    height: max(1, min(dock.height, barH + 8))
+                )
+            }
+        }
+
+        // Fallback: bottom strip of the window (matches MainTabView mini + tab bar stack).
         let yGlobal = full.maxY - tabH - barH
         return PlayerLayout(
             x: full.minX - container.minX,

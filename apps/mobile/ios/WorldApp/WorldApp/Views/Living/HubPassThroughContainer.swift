@@ -79,6 +79,9 @@ final class HubPassThroughViewController<Content: View>: UIViewController {
         host.view.backgroundColor = .clear
         host.view.isOpaque = false
         host.view.isUserInteractionEnabled = true
+        // Never clip film when mini dock sits at the bottom of the window.
+        host.view.clipsToBounds = false
+        view.clipsToBounds = false
         addChild(host)
         view.addSubview(host.view)
         host.view.translatesAutoresizingMaskIntoConstraints = false

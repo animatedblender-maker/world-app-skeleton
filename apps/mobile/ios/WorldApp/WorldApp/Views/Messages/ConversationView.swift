@@ -165,6 +165,8 @@ struct ConversationView: View {
                         appState.stopHubPlayback()
                     },
                     embedsVideo: false,
+                    // Chrome is drawn in MainTabView above continuous film (z 120).
+                    showsChrome: false,
                     isPlaying: Binding(
                         get: { appState.hubPlaybackPlaying },
                         set: { appState.hubPlaybackPlaying = $0 }

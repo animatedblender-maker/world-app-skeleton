@@ -459,6 +459,8 @@ struct YouTubeMiniPlayerBar: View {
     let onClose: () -> Void
     /// When false, parent draws a continuous player over this clear video slot (no restart).
     var embedsVideo: Bool = true
+    /// When false, chrome is drawn by parent above continuous film (z-order).
+    var showsChrome: Bool = true
     @Binding var isPlaying: Bool
     @Binding var isMuted: Bool
 
@@ -562,37 +564,46 @@ struct YouTubeMiniPlayerBar: View {
                         .allowsHitTesting(false)
                     }
                 } else {
-                    // Transparent video hole — continuous GlobalHubPlaybackLayer paints *under*
-                    // this bar (lower zIndex). NEVER use compositingGroup here: it flattens
-                    // the layer and turns the hole into a solid black plate.
-                    Color.clear
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .allowsHitTesting(false)
-                        .background(
-                            GeometryReader { g in
-                                Color.clear.preference(
-                                    key: HubContinuousVideoSlotKey.self,
-                                    value: g.frame(in: .global)
-                                )
-                            }
+                    // Poster floor + dock measure. Continuous film paints ABOVE this bar
+                    // (MainTabView z 110) so UIKit is never trapped under a clear SwiftUI hole
+                    // (that path painted solid black/ink). If film is late, poster still shows.
+                    ZStack {
+                        Theme.ink
+                        YouTubeVideoThumbnail(
+                            post: post,
+                            maxPixelSize: 720,
+                            showsPlayIcon: false,
+                            frameStyle: .card
                         )
+                        .allowsHitTesting(false)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+                    .allowsHitTesting(false)
+                    .background(
+                        GeometryReader { g in
+                            Color.clear.preference(
+                                key: HubContinuousVideoSlotKey.self,
+                                value: g.frame(in: .global)
+                            )
+                        }
+                    )
                 }
 
-                // Always on top so play / mute / close receive taps + stay visible over film.
-                HubMiniPlayerChrome(
-                    isPlaying: $isPlaying,
-                    isMuted: $isMuted,
-                    onClose: onClose
-                )
-                .zIndex(20)
+                if showsChrome {
+                    HubMiniPlayerChrome(
+                        isPlaying: $isPlaying,
+                        isMuted: $isMuted,
+                        onClose: onClose
+                    )
+                    .zIndex(20)
+                }
             }
             .frame(width: geo.size.width, height: geo.size.height)
         }
         .frame(maxWidth: .infinity)
         .frame(height: Self.barHeight)
-        // Clear when continuous paints through; ink only when this bar owns its own player.
-        // drawingGroup/compositingGroup forbidden — they black-out the clear hole.
-        .background(embedsVideo ? Theme.ink : Color.clear)
+        .background(Theme.ink)
         .shadow(color: Theme.ink.opacity(0.22), radius: 10, y: -2)
         .overlay(alignment: .top) {
             Rectangle()

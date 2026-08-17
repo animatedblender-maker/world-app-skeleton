@@ -25,8 +25,10 @@ struct MainTabView: View {
         ZStack(alignment: .bottom) {
             mainNavigationStack
             miniInkPlateUnderlay
-            continuousHubsPlayerLayer
+            // Order for mini: plate (100) → continuous film (110) → chrome (120).
             floatingMiniAndTabChrome
+            continuousHubsPlayerLayer
+            miniChromeAboveFilm
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(hubsImmersiveFullscreen ? Color.black : Color.clear)
@@ -90,7 +92,10 @@ struct MainTabView: View {
     private var continuousPlayerZIndex: Double {
         if hubsImmersiveFullscreen { return 200 }
         if appState.hubPlaybackExpanded { return 55 }
-        return 60
+        // Mini: paint ABOVE the mini bar plate/poster (100) so UIKit film is not
+        // swallowed under a clear SwiftUI hole (that read as solid black).
+        // Chrome chips sit at 120 so buttons stay tappable and visible.
+        return 110
     }
 
     /// Soft plate under the mini strip so paper never flashes through a clear hole.
@@ -126,7 +131,7 @@ struct MainTabView: View {
         .allowsHitTesting(appState.hubPlaybackPost != nil)
     }
 
-    /// Mini strip + tab bar. z 100 so play/mute/close sit above continuous film (z 60).
+    /// Mini strip + tab bar (plate / poster / dock measure / expand). Below continuous film.
     @ViewBuilder
     private var floatingMiniAndTabChrome: some View {
         if !hubsImmersiveFullscreen, showsFloatingMiniBar || appState.navigationPath.isEmpty {
@@ -137,6 +142,8 @@ struct MainTabView: View {
                         onExpand: { appState.expandHubPlayback() },
                         onClose: { appState.stopHubPlayback() },
                         embedsVideo: false,
+                        // Chrome drawn in `miniChromeAboveFilm` so it sits above continuous video.
+                        showsChrome: false,
                         isPlaying: Binding(
                             get: { appState.hubPlaybackPlaying },
                             set: { appState.hubPlaybackPlaying = $0 }
@@ -148,16 +155,55 @@ struct MainTabView: View {
                     )
                     .frame(height: YouTubeMiniPlayerBar.barHeight)
                     .frame(maxWidth: .infinity)
-                    .zIndex(2)
                 }
                 if appState.navigationPath.isEmpty {
                     BottomTabBar()
                         .frame(maxWidth: .infinity)
-                        .zIndex(1)
                 }
             }
             .frame(maxWidth: .infinity)
             .zIndex(100)
+        }
+    }
+
+    /// Play / mute / close above continuous film (z 110) so controls stay visible + tappable.
+    /// Covers floating mini and chat dock (any !expanded hubs session).
+    @ViewBuilder
+    private var miniChromeAboveFilm: some View {
+        let miniSession = appState.hubPlaybackPost != nil
+            && !appState.hubPlaybackExpanded
+            && !hubsImmersiveFullscreen
+        if miniSession {
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                HubMiniPlayerChrome(
+                    isPlaying: Binding(
+                        get: { appState.hubPlaybackPlaying },
+                        set: { appState.hubPlaybackPlaying = $0 }
+                    ),
+                    isMuted: Binding(
+                        get: { appState.hubPlaybackMuted },
+                        set: { appState.hubPlaybackMuted = $0 }
+                    ),
+                    onClose: { appState.stopHubPlayback() }
+                )
+                .frame(height: YouTubeMiniPlayerBar.barHeight)
+                .frame(maxWidth: .infinity)
+                // Buttons keep their hits; empty area expands.
+                .background {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture { appState.expandHubPlayback() }
+                }
+
+                if showsFloatingMiniBar, appState.navigationPath.isEmpty {
+                    Color.clear
+                        .frame(height: Theme.tabBarHeight)
+                        .allowsHitTesting(false)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .zIndex(120)
         }
     }
 
