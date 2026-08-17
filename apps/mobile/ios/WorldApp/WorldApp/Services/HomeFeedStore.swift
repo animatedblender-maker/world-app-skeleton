@@ -750,7 +750,7 @@ final class HomeFeedStore {
         defer { if showSpinner { isLoadingMore = false } }
 
         let cursor = nextCursor
-        let seenIDs = Set(posts.map(\.id))
+        let existingIDs = Set(posts.map(\.id))
         let seenContent = Set(posts.map(\.homeFeedContentKey))
 
         // Prefer thin /v1/feed page (light); GraphQL only if thin fails.
@@ -768,7 +768,7 @@ final class HomeFeedStore {
                 limit: pageSize,
                 feedSessionId: feedSessionId,
                 preferCache: false,
-                excludingIDs: seenIDs
+                excludingIDs: existingIDs
             )
             pageNextCursor = page.nextCursor
             nextCursor = page.nextCursor
@@ -778,7 +778,7 @@ final class HomeFeedStore {
         guard gen == generation, !Task.isCancelled else { return }
 
         var appended: [CountryPost] = []
-        var seen = seenIDs
+        var seen = existingIDs
         var contentKeys = seenContent
         for post in pageItems.dedupeHomeFeedContent() {
             // Already watched (any identity) → never re-inject while unviewed remain.
