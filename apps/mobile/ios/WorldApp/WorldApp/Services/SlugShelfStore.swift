@@ -291,16 +291,12 @@ final class SlugShelfStore {
             #if DEBUG
             print("[SlugShelf] \(url.path) items=\(posts.count) next=\(next != nil)")
             #endif
-            // Edge-fast open: warm first 2 play URLs only (not whole page — scroll must stay light).
-            Task(priority: .utility) {
-                for post in posts.prefix(2) {
-                    guard let u = post.playableVideoURL else { continue }
-                    if ArchiveVideoPlayback.isArchiveURL(u) {
-                        ArchiveVideoPlayback.warmResolve(u)
-                    }
-                    SparkWarmPool.shared.warmSingle(postID: post.id, url: u, deep: false)
-                }
-            }
+            // Media session 09: shelf list = posters only. Continuous player warms on open.
+            ImageCache.shared.prefetchPostThumbnails(
+                Array(posts.prefix(8)),
+                maxPixelSize: 360,
+                aggressive: false
+            )
             return Page(items: posts, nextCursor: next, slugsUsed: slugsUsed, session: session)
         } catch {
             #if DEBUG

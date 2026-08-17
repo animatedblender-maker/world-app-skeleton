@@ -103,11 +103,7 @@ struct SparkFeedCard: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Theme.ink)
                 .clipped()
-                .onAppear {
-                    ArchiveVideoPlayback.warmResolve(url)
-                    // Light on mount; InFrame deep-warms when focus wins.
-                    SparkWarmPool.shared.warmSingle(postID: post.id, url: url, deep: false)
-                }
+                // Media session 09: poster only on mount — winner path installs the player.
             } else {
                 VideoThumbnailView(
                     post: post,

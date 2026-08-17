@@ -11,9 +11,8 @@ enum FeedAutoplaySurface: String, Equatable, Sendable {
     @MainActor
     func isLive(appState: AppState) -> Bool {
         guard appState.reelsViewerContext == nil else { return false }
-        // Expanded Hubs watch owns the surface. Mini hubs may coexist — feed can still autoplay
-        // (muted if needed) so Sparks/Hubs cards don't stick on thumbnails.
-        if appState.hubPlaybackPost != nil, appState.hubPlaybackExpanded { return false }
+        // Media session 09: any continuous Hubs (mini or expanded) owns AV — feed autoplay off.
+        if appState.hubPlaybackPost != nil { return false }
 
         switch self {
         case .home:

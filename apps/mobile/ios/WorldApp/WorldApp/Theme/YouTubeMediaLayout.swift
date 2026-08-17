@@ -503,13 +503,7 @@ struct PlayFeedLinkCard: View {
                     endPoint: .bottomTrailing
                 )
             )
-            .onAppear {
-                // Poster only on cell appear — never AV warm / playback-batch (freezes feed scroll).
-                // Focus-winner path inside InFrameVideoPlayer does a single light warm.
-                if useArchivePath {
-                    ArchiveVideoPlayback.warmResolve(url)
-                }
-            }
+            // Media session 09: no warm/resolve on appear — focus winner installs player.
             .onTapGesture { onOpen() }
         } else {
             YouTubeVideoThumbnail(

@@ -176,6 +176,8 @@ struct FeedView: View {
                         .id(post.id)
                         .onAppear {
                             store.onRowAppear(post: post)
+                            // Media session 09: mid-fling skip engagement/network (scroll budget).
+                            guard !ScrollBudget.isFlinging else { return }
                             EngagementTracker.shared.feedPostAppeared(
                                 post,
                                 surface: RecommendationSurface.homeForYou.rawValue

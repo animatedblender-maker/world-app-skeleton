@@ -1709,6 +1709,9 @@ private struct MatteryaScrubber: View {
 }
 
 /// Plays video when it wins feed focus (highest on-screen ratio). Only one plays at a time.
+///
+/// **Media session (butter-smooth 09):** non-winners are **poster only** — no AVPlayer,
+/// no MatteryaHubPlayer, no warm pool. Mount the heavy player stack only while `playGate`.
 /// In-feed chrome: scrub, pause, mute — does not navigate away.
 struct InFrameVideoPlayer: View {
     @Environment(AppState.self) private var appState
@@ -1791,12 +1794,12 @@ struct InFrameVideoPlayer: View {
     }
 
     /// Winner of FeedVideoFocus + allowed surface.
-    /// Mini or expanded Hubs continuous player → no feed/profile autoplay.
+    /// Any continuous Hubs session (mini or expanded) owns media — feed autoplay stays off.
     private var shouldPlay: Bool {
         isFocusWinner
             && surfaceLive
             && appState.reelsViewerContext == nil
-            && !(appState.hubPlaybackPost != nil && appState.hubPlaybackExpanded)
+            && appState.hubPlaybackPost == nil
     }
 
     private var usesArchivePath: Bool {
@@ -1807,101 +1810,106 @@ struct InFrameVideoPlayer: View {
         showsControls && !muteOnlyControls && playGate
     }
 
-    var body: some View {
-        ZStack {
-            Group {
-                if usesArchivePath {
-                    // Keep player mounted so CDN resolve happens before focus wins.
-                    // isActive uses debounced playGate so brief focus flaps don't pause mid-clip.
-                    MatteryaHubPlayerView(
-                        url: url,
-                        posterURL: posterURL,
-                        isActive: playGate,
-                        startTime: 0,
-                        postID: postID,
-                        showsControls: transportChrome,
-                        loops: loops,
-                        fillsFrame: fillsFrame,
-                        isMuted: Binding(
-                            get: { isMuted },
-                            set: { newValue in
-                                isMuted = newValue
-                                if sharesFeedMute {
-                                    appState.feedVideosMuted = newValue
-                                }
-                            }
-                        ),
-                        allowsFullscreen: false,
-                        onReady: {
-                            // Ready ≠ painted — wait for onPlayingChange / progress.
-                            onViewed?()
-                        },
-                        onPlayingChange: { playing in
-                            if playing, playGate { framesReady = true }
-                        }
-                    )
-                } else {
-                    VideoPlayerView(
-                        url: url,
-                        posterURL: posterURL,
-                        placement: placement,
-                        countryCode: countryCode,
-                        contentCountryCode: contentCountryCode,
-                        postID: postID,
-                        adsEnabled: false,
-                        isActive: playGate,
-                        loops: loops,
-                        muted: isMuted,
-                        showsControls: transportChrome,
-                        allowsFullscreen: false,
-                        sharesFeedMute: sharesFeedMute,
-                        fillsFrame: fillsFrame,
-                        // Only the focus winner should build a heavy buffer — neighbors stay light.
-                        preloadsWhenInactive: false,
-                        onViewed: onViewed,
-                        onProgress: { current, _ in
-                            // Advanced playhead while gated ⇒ frames are on screen (not cold 0).
-                            if playGate, !framesReady, current > 0.04 {
-                                framesReady = true
-                            }
-                        },
-                        onFramesReady: {
-                            if playGate { framesReady = true }
-                        }
-                    )
-                }
-            }
-
-            // IG/YT: poster stays until real frames — never black between thumb and play.
-            // Also re-cover when playGate drops so recycled cells never flash black.
-            if !framesReady || !playGate {
-                if let posterURL {
-                    CachedAsyncImage(
-                        url: posterURL,
-                        maxPixelSize: 480,
-                        contentMode: .fill,
-                        placeholder: AnyView(
-                            LinearGradient(
-                                colors: [Theme.canvasMuted, Theme.canvasDeep],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipped()
-                    .allowsHitTesting(false)
-                } else {
+    /// Soft floor under film — never pure black while poster loads.
+    @ViewBuilder
+    private var posterFloor: some View {
+        if let posterURL {
+            CachedAsyncImage(
+                url: posterURL,
+                maxPixelSize: 480,
+                contentMode: .fill,
+                placeholder: AnyView(
                     LinearGradient(
                         colors: [Theme.canvasMuted, Theme.canvasDeep],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
-                    .allowsHitTesting(false)
+                )
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+            .allowsHitTesting(false)
+        } else {
+            LinearGradient(
+                colors: [Theme.canvasMuted, Theme.canvasDeep],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .allowsHitTesting(false)
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            // Always poster base (neighbors never mount AV — media session 09).
+            posterFloor
+
+            // ONE winner mounts a player. Leaving focus unmounts → frees AVPlayer.
+            if playGate {
+                Group {
+                    if usesArchivePath {
+                        MatteryaHubPlayerView(
+                            url: url,
+                            posterURL: posterURL,
+                            isActive: true,
+                            startTime: 0,
+                            postID: postID,
+                            showsControls: transportChrome,
+                            loops: loops,
+                            fillsFrame: fillsFrame,
+                            isMuted: Binding(
+                                get: { isMuted },
+                                set: { newValue in
+                                    isMuted = newValue
+                                    if sharesFeedMute {
+                                        appState.feedVideosMuted = newValue
+                                    }
+                                }
+                            ),
+                            allowsFullscreen: false,
+                            onReady: {
+                                onViewed?()
+                            },
+                            onPlayingChange: { playing in
+                                if playing { framesReady = true }
+                            }
+                        )
+                    } else {
+                        VideoPlayerView(
+                            url: url,
+                            posterURL: posterURL,
+                            placement: placement,
+                            countryCode: countryCode,
+                            contentCountryCode: contentCountryCode,
+                            postID: postID,
+                            adsEnabled: false,
+                            isActive: true,
+                            loops: loops,
+                            muted: isMuted,
+                            showsControls: transportChrome,
+                            allowsFullscreen: false,
+                            sharesFeedMute: sharesFeedMute,
+                            fillsFrame: fillsFrame,
+                            preloadsWhenInactive: false,
+                            onViewed: onViewed,
+                            onProgress: { current, _ in
+                                if !framesReady, current > 0.04 {
+                                    framesReady = true
+                                }
+                            },
+                            onFramesReady: {
+                                framesReady = true
+                            }
+                        )
+                    }
+                }
+                // Cover film until first frames (no black flash).
+                if !framesReady {
+                    posterFloor
                 }
             }
 
-            if muteOnlyControls {
+            if muteOnlyControls, playGate {
                 VStack {
                     HStack {
                         Spacer(minLength: 0)
@@ -1934,19 +1942,14 @@ struct InFrameVideoPlayer: View {
         }
         .background(visibilityProbe)
         .onAppear {
-            // Sync to global feed mute so every card matches.
             if sharesFeedMute {
                 isMuted = appState.feedVideosMuted
             } else {
                 isMuted = muted
             }
-            // CDN resolve only — never warm AVPlayers for every feed/hubs cell (freezes scroll).
-            if usesArchivePath {
-                ArchiveVideoPlayback.warmResolve(url)
-            }
+            // Poster only on appear — no Archive warm, no SparkWarmPool (freezes feed scroll).
             refreshFocusWinner()
             syncPlayGate(immediate: true)
-            // Never auto-activate audible session while still muted.
             if playGate, !isMuted {
                 activatePlaybackAudioIfNeeded(unmuted: true)
             }
@@ -1977,17 +1980,12 @@ struct InFrameVideoPlayer: View {
         .onChange(of: postID) { _, _ in
             framesReady = false
         }
-        .onChange(of: appState.hubPlaybackPost?.id) { _, postID in
-            syncPlayGate(immediate: postID != nil)
-            if shouldPlay, !isMuted {
-                activatePlaybackAudioIfNeeded(unmuted: true)
-            }
+        .onChange(of: appState.hubPlaybackPost?.id) { _, _ in
+            // Continuous hubs owns media — hard-stop feed autoplay (mini or expanded).
+            syncPlayGate(immediate: true)
         }
         .onChange(of: appState.hubPlaybackExpanded) { _, _ in
-            syncPlayGate(immediate: appState.hubPlaybackPost != nil)
-            if shouldPlay, !isMuted {
-                activatePlaybackAudioIfNeeded(unmuted: true)
-            }
+            syncPlayGate(immediate: true)
         }
         .onChange(of: appState.selectedTab) { _, _ in
             lastReportedRatio = -1
@@ -2010,7 +2008,6 @@ struct InFrameVideoPlayer: View {
             }
         }
         .onChange(of: shouldPlay) { _, play in
-            // Start immediately; delay pause so layout noise never kills a fully visible card.
             syncPlayGate(immediate: play)
             if play, !isMuted {
                 activatePlaybackAudioIfNeeded(unmuted: true)
@@ -2018,14 +2015,11 @@ struct InFrameVideoPlayer: View {
         }
         .onChange(of: playGate) { _, active in
             if !active {
-                // Leaving focus — re-arm poster so next win never flashes black AV layer.
+                // Unmount player (body) + re-arm poster for next win.
                 framesReady = false
                 return
             }
-            // Focus winner only: light warm (never deep — deep freezes feed when hubs shares win).
-            if let postID {
-                SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: false)
-            }
+            // Winner only: resolve Archive CDN if needed. No SparkWarmPool (player cold-starts once).
             if usesArchivePath {
                 ArchiveVideoPlayback.warmResolve(url)
             }
@@ -2052,11 +2046,11 @@ struct InFrameVideoPlayer: View {
             playGate = true
             return
         }
-        // Hard stop when leaving feed surface, opening Sparks, or any Hubs mini/expanded player.
+        // Hard stop when leaving feed surface, Sparks open, or continuous Hubs (mini/expanded).
         let leftAutoplaySurface =
             !surfaceLive
             || appState.reelsViewerContext != nil
-            || (appState.hubPlaybackPost != nil && appState.hubPlaybackExpanded)
+            || appState.hubPlaybackPost != nil
         if leftAutoplaySurface {
             deactivateTask?.cancel()
             deactivateTask = nil

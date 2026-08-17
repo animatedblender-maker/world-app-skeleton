@@ -566,26 +566,13 @@ final class HomeFeedStore {
             hasMore = true
         }
 
-        // Media: fling = thumbs only. Settled = light image prefetch + at most 1 light warm.
-        // Deep hub AV warm + playback/batch on every row froze the feed.
+        // Media session 09: feed scroll = thumbs only. Zero AV warm / resolve / playback batch.
+        // Focus winner mounts the only player inside InFrameVideoPlayer.
         let ahead = fling ? 3 : 4
         let end = min(displayedPosts.count, index + ahead)
         if index < end {
             let window = Array(displayedPosts[index..<end])
             ImageCache.shared.prefetchFeedMedia(window, maxPixelSize: fling ? 280 : 360)
-            // Skip all AV warm mid-fling. Settled: only the *current* row, light (not deep).
-            if !fling, let url = post.playableVideoURL {
-                let isSpark = post.isSpark || post.isReel || PlayPlatformBridge.isSparkFeedCard(post)
-                let isHub = PlayPlatformBridge.isHubFeedCardVideo(post)
-                    || PlayPlatformBridge.isHubOriginShare(post)
-                if isSpark || isHub {
-                    if ArchiveVideoPlayback.isArchiveURL(url) {
-                        ArchiveVideoPlayback.warmResolve(url)
-                    }
-                    // Light buffer only — deep preroll on scroll is what froze hubs-on-feed.
-                    SparkWarmPool.shared.warmSingle(postID: post.id, url: url, deep: false)
-                }
-            }
         }
 
         // Don't kick network load-more mid-fling (causes hitch + image storms).
@@ -867,19 +854,8 @@ final class HomeFeedStore {
         nextCursor = pageNextCursor ?? Self.cursor(from: posts.last)
         hasMore = true
         ContentCache.shared.setPosts(Array(posts.prefix(ContentCache.maxCachedPosts)), for: .homeFeed)
-        // Thumbs only on page append — no prepareFeedWindow / deep hub AV (freezes feed).
+        // Media session 09: page append = thumbs only (no AV pool).
         ImageCache.shared.prefetchFeedMedia(Array(appended.prefix(8)), maxPixelSize: 360)
-        for p in appended.prefix(2) {
-            guard let url = p.playableVideoURL else { continue }
-            let isSpark = p.isSpark || p.isReel || PlayPlatformBridge.isSparkFeedCard(p)
-            let isHub = PlayPlatformBridge.isHubFeedCardVideo(p)
-                || PlayPlatformBridge.isHubOriginShare(p)
-            guard isSpark || isHub else { continue }
-            if ArchiveVideoPlayback.isArchiveURL(url) {
-                ArchiveVideoPlayback.warmResolve(url)
-            }
-            SparkWarmPool.shared.warmSingle(postID: p.id, url: url, deep: false)
-        }
         #if DEBUG
         print("[HomeFeed] loadMore +\(appended.count) pool=\(posts.count) window=\(windowLimit) recycle=\(recyclePass)")
         #endif
@@ -918,28 +894,9 @@ final class HomeFeedStore {
     }
 
     private func warmHead() {
-        // First screen: thumbs + at most 2 *light* AV warms. No prepareFeedWindow —
-        // deep multi-player preroll on hubs shares froze the home feed.
+        // Media session 09: first screen posters only — never SparkWarmPool / Archive resolve.
         let head = Array(posts.prefix(max(firstWindow + 2, 16)))
         ImageCache.shared.prefetchFeedMedia(head, maxPixelSize: 360)
-        var lightWarmed = 0
-        for post in head {
-            guard lightWarmed < 2 else { break }
-            guard let url = post.playableVideoURL else { continue }
-            let isSpark = post.isSpark || post.isReel || PlayPlatformBridge.isSparkFeedCard(post)
-            let isHub = PlayPlatformBridge.isHubFeedCardVideo(post)
-                || PlayPlatformBridge.isHubOriginShare(post)
-            guard isSpark || isHub else { continue }
-            if ArchiveVideoPlayback.isArchiveURL(url) {
-                ArchiveVideoPlayback.warmResolve(url)
-            }
-            SparkWarmPool.shared.warmSingle(postID: post.id, url: url, deep: false)
-            lightWarmed += 1
-        }
-        // One edge warm for first 3 ids only (utility) — not every hub in the head.
-        Task(priority: .utility) {
-            await RecommendationClient.warmPlaybackURLs(Array(head.prefix(3).map(\.id)))
-        }
     }
 
     /// Opaque cursor for GraphQL `before` (created_at timestamptz).
