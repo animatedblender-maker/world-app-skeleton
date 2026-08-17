@@ -25,10 +25,11 @@ struct MainTabView: View {
         ZStack(alignment: .bottom) {
             mainNavigationStack
             miniInkPlateUnderlay
-            // Order for mini: plate (100) → continuous film (110) → chrome (120).
+            // Order for mini: plate (100) → continuous film+chrome (110).
+            // Chrome is drawn ON the continuous film (GlobalHubPlaybackLayer) so UIKit
+            // never covers the buttons (sibling SwiftUI chrome was invisible/untappable).
             floatingMiniAndTabChrome
             continuousHubsPlayerLayer
-            miniChromeAboveFilm
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(hubsImmersiveFullscreen ? Color.black : Color.clear)
@@ -93,8 +94,7 @@ struct MainTabView: View {
         if hubsImmersiveFullscreen { return 200 }
         if appState.hubPlaybackExpanded { return 55 }
         // Mini: paint ABOVE the mini bar plate/poster (100) so UIKit film is not
-        // swallowed under a clear SwiftUI hole (that read as solid black).
-        // Chrome chips sit at 120 so buttons stay tappable and visible.
+        // swallowed under a clear SwiftUI hole. Mini chrome is drawn inside this layer.
         return 110
     }
 
@@ -163,44 +163,6 @@ struct MainTabView: View {
             }
             .frame(maxWidth: .infinity)
             .zIndex(100)
-        }
-    }
-
-    /// Play / mute / close above continuous film (z 110) so controls stay visible + tappable.
-    @ViewBuilder
-    private var miniChromeAboveFilm: some View {
-        if appState.hubPlaybackPost != nil,
-           !appState.hubPlaybackExpanded,
-           !hubsImmersiveFullscreen {
-            VStack(spacing: 0) {
-                Spacer(minLength: 0)
-                HubMiniPlayerChrome(
-                    isPlaying: Binding(
-                        get: { appState.hubPlaybackPlaying },
-                        set: { appState.hubPlaybackPlaying = $0 }
-                    ),
-                    isMuted: Binding(
-                        get: { appState.hubPlaybackMuted },
-                        set: { appState.hubPlaybackMuted = $0 }
-                    ),
-                    onClose: { appState.stopHubPlayback() }
-                )
-                .frame(height: YouTubeMiniPlayerBar.barHeight)
-                .frame(maxWidth: .infinity)
-                .background {
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .onTapGesture { appState.expandHubPlayback() }
-                }
-
-                if showsFloatingMiniBar, appState.navigationPath.isEmpty {
-                    Color.clear
-                        .frame(height: Theme.tabBarHeight)
-                        .allowsHitTesting(false)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-            .zIndex(120)
         }
     }
 

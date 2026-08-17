@@ -239,6 +239,9 @@ struct MatteryaHubPlayerView: View {
     var isContinuousHubPlayer: Bool = false
     /// Continuous layer is already full-screen (icon becomes exit, no second cover).
     var isFullscreenActive: Bool = false
+    /// Mini strip: draw close/mute/play on the film (must be in this tree, not under UIKit).
+    var showsMiniChrome: Bool = false
+    var onMiniClose: (() -> Void)? = nil
 
     @StateObject private var bridge = ArchivePlayerBridge()
     @State private var showChrome = false
@@ -265,6 +268,8 @@ struct MatteryaHubPlayerView: View {
         onRequestFullscreen: (() -> Void)? = nil,
         isContinuousHubPlayer: Bool = false,
         isFullscreenActive: Bool = false,
+        showsMiniChrome: Bool = false,
+        onMiniClose: (() -> Void)? = nil,
         onReady: (() -> Void)? = nil,
         onPlayingChange: ((Bool) -> Void)? = nil,
         onProgress: ((Double, Double) -> Void)? = nil,
@@ -287,6 +292,8 @@ struct MatteryaHubPlayerView: View {
         self.onRequestFullscreen = onRequestFullscreen
         self.isContinuousHubPlayer = isContinuousHubPlayer
         self.isFullscreenActive = isFullscreenActive
+        self.showsMiniChrome = showsMiniChrome
+        self.onMiniClose = onMiniClose
         self.onReady = onReady
         self.onPlayingChange = onPlayingChange
         self.onProgress = onProgress
@@ -395,6 +402,56 @@ struct MatteryaHubPlayerView: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.9)))
                     .zIndex(40)
                 }
+            }
+
+            // Continuous mini: chrome must live here (same host as film). Sibling SwiftUI
+            // chrome under the pass-through UIView was invisible and untappable.
+            if showsMiniChrome, isContinuousHubPlayer {
+                HubMiniPlayerChrome(
+                    isPlaying: Binding(
+                        get: { bridge.isPlaying || isActive },
+                        set: { want in
+                            if want {
+                                bridge.controller?.setMuted(isMuted)
+                                bridge.controller?.setActive(true)
+                                bridge.controller?.ensureContinuingPlayback()
+                                bridge.isPlaying = true
+                                onPlayingChange?(true)
+                                NotificationCenter.default.post(
+                                    name: .matteryaHubContinuousSetPlaying,
+                                    object: nil,
+                                    userInfo: ["playing": true]
+                                )
+                            } else {
+                                bridge.controller?.pauseKeepingFrame()
+                                bridge.isPlaying = false
+                                onPlayingChange?(false)
+                                NotificationCenter.default.post(
+                                    name: .matteryaHubContinuousSetPlaying,
+                                    object: nil,
+                                    userInfo: ["playing": false]
+                                )
+                            }
+                        }
+                    ),
+                    isMuted: Binding(
+                        get: { isMuted },
+                        set: { newValue in
+                            isMuted = newValue
+                            bridge.controller?.setMuted(newValue)
+                            NotificationCenter.default.post(
+                                name: .matteryaHubContinuousSetMuted,
+                                object: nil,
+                                userInfo: ["muted": newValue]
+                            )
+                        }
+                    ),
+                    onClose: {
+                        onMiniClose?()
+                    }
+                )
+                .allowsHitTesting(true)
+                .zIndex(60)
             }
         }
         .fullScreenCover(isPresented: $showFullscreen) {
@@ -1534,6 +1591,8 @@ final class ArchiveVideoPlayerController: UIViewController {
     /// Epoch captured when this surface last became active (invalidated on page change).
     private var activePageEpoch: UInt64 = 0
     private var interruptResumeObserver: NSObjectProtocol?
+    private var continuousPlayObserver: NSObjectProtocol?
+    private var continuousMuteObserver: NSObjectProtocol?
 
     var isPlaying: Bool {
         (player?.rate ?? 0) > 0.01
@@ -1597,11 +1656,41 @@ final class ArchiveVideoPlayerController: UIViewController {
         ) { [weak self] _ in
             self?.ensureContinuingPlayback()
         }
+        // Mini chrome lives in SwiftUI above/with film; play/mute must not re-host the tree.
+        continuousPlayObserver = NotificationCenter.default.addObserver(
+            forName: .matteryaHubContinuousSetPlaying,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let self, self.isContinuousHubPlayer else { return }
+            let playing = (note.userInfo?["playing"] as? Bool) ?? true
+            if playing {
+                self.setActive(true)
+                self.ensureContinuingPlayback()
+            } else {
+                self.pauseKeepingFrame()
+            }
+        }
+        continuousMuteObserver = NotificationCenter.default.addObserver(
+            forName: .matteryaHubContinuousSetMuted,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let self, self.isContinuousHubPlayer else { return }
+            let muted = (note.userInfo?["muted"] as? Bool) ?? false
+            self.setMuted(muted)
+        }
     }
 
     deinit {
         if let interruptResumeObserver {
             NotificationCenter.default.removeObserver(interruptResumeObserver)
+        }
+        if let continuousPlayObserver {
+            NotificationCenter.default.removeObserver(continuousPlayObserver)
+        }
+        if let continuousMuteObserver {
+            NotificationCenter.default.removeObserver(continuousMuteObserver)
         }
     }
 
@@ -1738,7 +1827,10 @@ final class ArchiveVideoPlayerController: UIViewController {
                     playerLayer?.opacity = 1
                     playerLayer?.isHidden = false
                 }
-                posterView.isHidden = true
+                // Already playing continuous film — never re-cover with poster (mini freeze).
+                if isContinuousHubPlayer || didKickPlayback {
+                    posterView.isHidden = true
+                }
                 if player.currentItem != nil {
                     player.play()
                     player.safePlayImmediately(atRate: 1.0)
@@ -1762,14 +1854,13 @@ final class ArchiveVideoPlayerController: UIViewController {
             }
         } else {
             isScrubbing = false
-            // Continuous Hubs: SwiftUI thrash during mini/tab morph used to clear
-            // userWantsPlayback → ensureContinuingPlayback no-ops → silent mini forever.
-            // Intentional pause still goes through pauseKeepingFrame / togglePlayPause.
+            // Continuous Hubs: layout thrash during mini/tab morph must not kill audio.
+            // Intentional pause uses pauseKeepingFrame / continuous play notification only.
             if isContinuousHubPlayer {
-                // Stay warm + protected; do not clear play intent or mute the film.
                 if let player {
                     MediaPlaybackCoordinator.shared.protectContinuous(player)
                 }
+                // Keep last frame visible — never flash poster/black mid-mini.
                 posterView.isHidden = true
                 spinner.stopAnimating()
                 return

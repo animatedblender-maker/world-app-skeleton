@@ -106,8 +106,21 @@ struct GlobalHubPlaybackLayer: View {
     private var mutedBinding: Binding<Bool> {
         Binding(
             get: { appState.hubPlaybackMuted },
-            set: { appState.hubPlaybackMuted = $0 }
+            set: { newValue in
+                appState.hubPlaybackMuted = newValue
+                // Drive continuous AVPlayer without re-hosting the pass-through tree.
+                NotificationCenter.default.post(
+                    name: .matteryaHubContinuousSetMuted,
+                    object: nil,
+                    userInfo: ["muted": newValue]
+                )
+            }
         )
+    }
+
+    /// Mini session (or mid-collapse to mini): show close / mute / play on the film.
+    private var showMiniChromeOverlay: Bool {
+        fsProgress < 0.35 && (!expanded || collapse > 0.55)
     }
 
     /// Global film rect for hit-testing — **only** this region intercepts touches.
@@ -162,13 +175,13 @@ struct GlobalHubPlaybackLayer: View {
                 // re-hosting the AVPlayer tree every preference tick.
                 GeometryReader { geo in
                     let layout = playerLayout(in: geo)
+                    // Never fingerprint play/mute — re-hosting on those freezes mini film + kills chrome.
                     let layoutSig = Self.layoutSignature(
                         layout: layout,
                         collapse: collapse,
                         fsProgress: fsProgress,
                         fills: filmFillsFrame,
-                        showChrome: showTransportChrome,
-                        playing: appState.hubPlaybackPlaying
+                        showChrome: showTransportChrome
                     )
                     HubPassThroughContainer(
                         interactiveRectGlobal: interactiveHitGlobal,
@@ -523,8 +536,7 @@ struct GlobalHubPlaybackLayer: View {
         collapse: CGFloat,
         fsProgress: CGFloat,
         fills: Bool,
-        showChrome: Bool,
-        playing: Bool
+        showChrome: Bool
     ) -> String {
         func bucket(_ v: CGFloat, div: CGFloat) -> Int {
             guard v.isFinite, !v.isNaN, div.isFinite, div != 0 else { return 0 }
@@ -542,7 +554,8 @@ struct GlobalHubPlaybackLayer: View {
         let h = bucket(layout.height, div: 4)
         let c = bucket(collapse, div: 0.05)
         let f = bucket(fsProgress, div: 0.05)
-        return "\(x)_\(y)_\(w)_\(h)_\(c)_\(f)_\(fills ? 1 : 0)_\(showChrome ? 1 : 0)_\(playing ? 1 : 0)"
+        // Geometry + chrome visibility only — never play/mute (those freezes mini).
+        return "\(x)_\(y)_\(w)_\(h)_\(c)_\(f)_\(fills ? 1 : 0)_\(showChrome ? 1 : 0)"
     }
 
     private func playerLayout(in geo: GeometryProxy) -> PlayerLayout {
@@ -628,6 +641,9 @@ struct GlobalHubPlaybackLayer: View {
                 },
                 isContinuousHubPlayer: true,
                 isFullscreenActive: isHubFullscreen,
+                // Mini close/mute/play drawn on the film (not under UIKit as a sibling).
+                showsMiniChrome: showMiniChromeOverlay,
+                onMiniClose: { appState.stopHubPlayback() },
                 onReady: {
                     Task { await PostsService.shared.recordView(post) }
                     // Re-assert solo after ready so tab silence always has a keep target.
@@ -644,7 +660,10 @@ struct GlobalHubPlaybackLayer: View {
                 onPlayingChange: { playing in
                     // Continuous: stalls no longer emit false (see MatteryaHubPlayerView).
                     // true → keep AppState playing; false → intentional chrome pause.
-                    appState.hubPlaybackPlaying = playing
+                    // Only write when changed — avoid Observable thrash / mini freezes.
+                    if appState.hubPlaybackPlaying != playing {
+                        appState.hubPlaybackPlaying = playing
+                    }
                 },
                 onProgress: { current, duration in
                     // Throttle @State — 4Hz is enough for mini chrome; 0.25s ticks re-bodied the layer.

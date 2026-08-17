@@ -338,4 +338,9 @@ final class MediaPlaybackCoordinator {
 extension Notification.Name {
     /// Posted after screenshot / Control Center / brief resign — controllers should keep playing.
     static let matteryaResumePlaybackAfterInterrupt = Notification.Name("matterya.resumePlaybackAfterInterrupt")
+    /// Mini chrome → continuous Hubs AVPlayer without re-hosting the SwiftUI tree.
+    /// userInfo: `playing` (Bool).
+    static let matteryaHubContinuousSetPlaying = Notification.Name("matterya.hub.continuous.setPlaying")
+    /// Mini chrome mute without re-host. userInfo: `muted` (Bool).
+    static let matteryaHubContinuousSetMuted = Notification.Name("matterya.hub.continuous.setMuted")
 }
