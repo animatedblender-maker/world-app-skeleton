@@ -98,9 +98,10 @@ actor R2PlaybackResolver {
         }
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
-        req.timeoutInterval = 8
+        req.timeoutInterval = 5
         req.setValue("application/json", forHTTPHeaderField: "Accept")
-        if let token = try? await AuthService.shared.ensureValidToken() {
+        // Cached token only — ensureValidToken on every play made Hubs feel stuck.
+        if let token = await MainActor.run(body: { AuthService.shared.accessToken() }) {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         let (data, response) = try await URLSession.shared.data(for: req)

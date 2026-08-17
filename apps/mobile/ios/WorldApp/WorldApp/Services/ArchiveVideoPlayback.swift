@@ -2186,12 +2186,15 @@ final class ArchiveVideoPlayerController: UIViewController {
                 SparkWarmPool.shared.markInUse(postID: postID)
             }
 
-            // Public R2 / non-Archive: skip CDN chase.
+            // Resolve live play URL: Archive CDN hop, or R2 re-presign (pub-*.r2.dev often 403).
             let playURL: URL
             if ArchiveVideoPlayback.isArchiveURL(url) {
                 playURL = await ArchiveVideoPlayback.resolvedPlaybackURL(for: url)
+            } else if MediaURLResolver.looksLikeR2HostedURL(url), let postID, !postID.isEmpty {
+                // Never hand AVPlayer a dead public R2 link — always ask API for a signed GET.
+                playURL = await R2PlaybackResolver.shared.playURL(postID: postID, fallback: url) ?? url
             } else {
-                playURL = url
+                playURL = await MediaURLResolver.playbackConfiguration(for: url, postID: postID).url
             }
             guard !Task.isCancelled else { return }
             await self.installPlayer(url: playURL, original: url, muted: muted, startTime: startTime)

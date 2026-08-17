@@ -9,6 +9,7 @@
  * Full post bodies / comments load only on open.
  */
 import { pool } from '../db.js';
+import { freshenMediaUrlString } from '../media/r2-playback.js';
 
 export const HUB_PARENT_SLUGS = [
   'comedy',
@@ -209,6 +210,45 @@ function toIso(v: Date | string): string {
   return Number.isFinite(d.getTime()) ? d.toISOString() : String(v);
 }
 
+/** LongForm/<Country>/<youtubeId>/video.mp4 → YouTube CDN poster (shelves had null thumbs). */
+/** Re-presign media_url on shelf pages so clients never open a 403 public r2.dev link. */
+async function freshenCardMedia(items: ThinShelfCard[]): Promise<ThinShelfCard[]> {
+  if (!items.length) return items;
+  const concurrency = 6;
+  const out: ThinShelfCard[] = new Array(items.length);
+  let idx = 0;
+  async function worker() {
+    while (idx < items.length) {
+      const i = idx++;
+      const card = items[i];
+      const fresh = await freshenMediaUrlString(card.media_url);
+      out[i] = fresh && fresh !== card.media_url ? { ...card, media_url: fresh } : card;
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
+  return out;
+}
+
+function synthesizeThumbFromMedia(mediaUrl: string | null | undefined): string | null {
+  if (!mediaUrl) return null;
+  const raw = String(mediaUrl);
+  const patterns = [
+    /[Ll]ong[Ff]orm\/[^/"'\\]+\/([A-Za-z0-9_-]{6,20})(?:\/|\.mp4|"|'|\?|$)/,
+    /[Ll]ong[Ff]orm%2F[^/%]+%2F([A-Za-z0-9_-]{6,20})/,
+  ];
+  for (const re of patterns) {
+    const m = raw.match(re);
+    if (!m?.[1]) continue;
+    const id = m[1];
+    // TikTok spark folders are long pure digit ids — not YouTube posters.
+    if (id.length >= 15 && /^\d+$/.test(id)) continue;
+    if (id.length >= 6 && id.length <= 20) {
+      return `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+    }
+  }
+  return null;
+}
+
 function rowToCard(row: RawPostRow, slug: HubParentSlug): ThinShelfCard {
   // Strip internal markers from body for thin cards (keep short).
   let body = row.body ?? '';
@@ -221,6 +261,11 @@ function rowToCard(row: RawPostRow, slug: HubParentSlug): ThinShelfCard {
   }
   if (body.length > 180) body = body.slice(0, 177) + '…';
 
+  const thumb =
+    (row.thumb_url && String(row.thumb_url).trim()) ||
+    synthesizeThumbFromMedia(row.media_url) ||
+    null;
+
   return {
     id: row.id,
     slug,
@@ -228,7 +273,7 @@ function rowToCard(row: RawPostRow, slug: HubParentSlug): ThinShelfCard {
     body: body || null,
     media_type: row.media_type || 'video',
     media_url: row.media_url,
-    thumb_url: row.thumb_url,
+    thumb_url: thumb,
     like_count: Number(row.like_count) || 0,
     comment_count: Number(row.comment_count) || 0,
     created_at: toIso(row.created_at),
@@ -363,12 +408,13 @@ export async function fetchShelfPage(input: {
         ? cursor
         : null;
 
-  // If we didn't fill a full page, still return cursor only when more rows likely.
+  // Live signed media_url so iOS never opens a 403 public r2.dev link from shelves.
+  const liveItems = await freshenCardMedia(items);
   return {
     slug,
-    items,
+    items: liveItems,
     nextCursor: items.length > 0 ? nextCursor : null,
-    count: items.length,
+    count: liveItems.length,
   };
 }
 
@@ -437,12 +483,13 @@ export async function fetchForYouPage(input: {
     }
   }
 
+  const liveItems = await freshenCardMedia(items);
   return {
     surface: 'hubs_for_you',
-    items,
+    items: liveItems,
     nextCursor: lastCursor,
     slugsUsed: [...slugsUsed],
-    count: items.length,
+    count: liveItems.length,
     session,
   };
 }

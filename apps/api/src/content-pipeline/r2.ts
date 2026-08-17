@@ -52,11 +52,10 @@ export function createR2Client(): S3Client {
 }
 
 export async function presignGet(client: S3Client, key: string): Promise<string> {
-  // Prefer permanent public CDN/custom domain when configured — never expires.
-  const publicBase = process.env.R2_PUBLIC_BASE_URL?.trim().replace(/\/+$/, '');
-  if (publicBase) {
-    return `${publicBase}/${key.replace(/^\/+/, '')}`;
-  }
+  // Always mint a real AWS/R2 signed GET when credentials exist.
+  // Do NOT short-circuit to R2_PUBLIC_BASE_URL here — public r2.dev bases often 403
+  // when bucket ACL is private (that made Hubs "never play" while shelves looked fine).
+  // Callers that want a permanent public URL should use publicObjectUrl explicitly.
   const cmd = new GetObjectCommand({ Bucket: getBucket(), Key: key });
   return getSignedUrl(client, cmd, { expiresIn: PRESIGN_SECONDS });
 }

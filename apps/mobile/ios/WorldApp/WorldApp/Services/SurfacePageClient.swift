@@ -51,8 +51,9 @@ enum SurfacePageClient {
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
         req.setValue("application/json", forHTTPHeaderField: "Accept")
-        req.timeoutInterval = 6
-        if let token = try? await AuthService.shared.ensureValidToken() {
+        req.timeoutInterval = 4
+        // Cached token only — never stall first paint on token refresh.
+        if let token = await MainActor.run(body: { AuthService.shared.accessToken() }) {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
 

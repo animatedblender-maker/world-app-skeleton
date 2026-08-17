@@ -249,12 +249,22 @@ enum MediaURLResolver {
             return MediaPlaybackConfiguration(url: url, headers: nil)
         }
 
-        // R2 presign: use the URL as-is when still fresh. Re-resolve only when dying/dead.
-        if isPresignedObjectURL(url),
-           let postID, !postID.isEmpty,
-           isPresignExpiredOrNearExpiry(url, slackSeconds: 3600) {
-            if let live = await R2PlaybackResolver.shared.playURL(postID: postID, fallback: url) {
-                return MediaPlaybackConfiguration(url: live, headers: nil)
+        // R2: always live-resolve when we have a post id and the URL is unsigned public
+        // (pub-*.r2.dev often 403) or a dying presign. Never hand AVPlayer a dead public link.
+        if looksLikeR2HostedURL(url), let postID, !postID.isEmpty {
+            let needsLive =
+                !isPresignedObjectURL(url)
+                || isPresignExpiredOrNearExpiry(url, slackSeconds: 3600)
+            if needsLive {
+                if let live = await R2PlaybackResolver.shared.playURL(postID: postID, fallback: nil) {
+                    // Prefer live only when it is actually signed / different host — avoid
+                    // caching the same 403 public URL forever.
+                    if live != url || isPresignedObjectURL(live) {
+                        return MediaPlaybackConfiguration(url: live, headers: nil)
+                    }
+                }
+            } else if isPresignedObjectURL(url) {
+                return MediaPlaybackConfiguration(url: url, headers: nil)
             }
         }
 
@@ -267,7 +277,7 @@ enum MediaURLResolver {
         }
 
         guard SupabaseStorageAccess.isPostsBucketURL(url) else {
-            // R2 / public HTTPS / still-valid presign — play direct (no network hop).
+            // Still-valid HTTPS — play direct.
             return MediaPlaybackConfiguration(url: url, headers: nil)
         }
 

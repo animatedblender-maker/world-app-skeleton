@@ -4,9 +4,9 @@
  * Objects live forever in the bucket. What used to expire were *presigned GET links*
  * baked into posts.media_url. This module always returns a *currently valid* play URL:
  *
- * 1) If R2_PUBLIC_BASE_URL is set → stable public URL (no expiry) — preferred.
- * 2) Else mint a fresh presigned GET (cached in-process for most of its lifetime).
- * 3) Rewrite media_url JSON so clients never keep a dead X-Amz-Signature.
+ * 1) Mint a fresh **signed** GET when R2 credentials exist (preferred — public r2.dev often 403).
+ * 2) Fall back to R2_PUBLIC_BASE_URL only if presign unavailable or R2_FORCE_PUBLIC=1.
+ * 3) Rewrite media_url JSON so clients never keep a dead X-Amz-Signature / dead public link.
  */
 import {
   createR2Client,
@@ -61,37 +61,45 @@ export function publicObjectUrl(key: string): string | null {
 
 /**
  * Resolve a durable play URL for an R2 object key.
- * Public base wins (never expires). Else cached presign.
+ * Prefer **real presigned GET** when credentials exist (public r2.dev often 403).
+ * Public base is last-resort only (or when R2_FORCE_PUBLIC=1).
  */
 export async function resolvePlayUrlForKey(key: string): Promise<string | null> {
   const clean = key.replace(/^\/+/, '').trim();
   if (!clean) return null;
 
-  const permanent = publicObjectUrl(clean);
-  if (permanent) return permanent;
+  const forcePublic = process.env.R2_FORCE_PUBLIC === '1' || process.env.R2_FORCE_PUBLIC === 'true';
+  if (forcePublic) {
+    const permanent = publicObjectUrl(clean);
+    if (permanent) return permanent;
+  }
 
   const now = Date.now();
   const hit = urlCache.get(clean);
   if (hit && hit.staleAt > now) return hit.url;
 
   const c = getClient();
-  if (!c) return null;
-
-  try {
-    const url = await presignGet(c, clean);
-    // Consider stale 12h before actual expiry so clients always get headroom.
-    const ttlMs = Math.max(60_000, (PRESIGN_SECONDS - RESIGN_SLACK_SECONDS) * 1000);
-    urlCache.set(clean, { url, staleAt: now + ttlMs });
-    // Bound memory (28k+ keys possible over time).
-    if (urlCache.size > 50_000) {
-      const first = urlCache.keys().next().value;
-      if (first) urlCache.delete(first);
+  if (c) {
+    try {
+      const url = await presignGet(c, clean);
+      // Consider stale 12h before actual expiry so clients always get headroom.
+      const ttlMs = Math.max(60_000, (PRESIGN_SECONDS - RESIGN_SLACK_SECONDS) * 1000);
+      urlCache.set(clean, { url, staleAt: now + ttlMs });
+      // Bound memory (28k+ keys possible over time).
+      if (urlCache.size > 50_000) {
+        const first = urlCache.keys().next().value;
+        if (first) urlCache.delete(first);
+      }
+      return url;
+    } catch (err) {
+      console.warn('[r2-playback] presign failed', clean.slice(0, 80), err);
+      if (hit?.url) return hit.url;
+      // Fall through to public base only if presign failed.
     }
-    return url;
-  } catch (err) {
-    console.warn('[r2-playback] presign failed', clean.slice(0, 80), err);
-    return hit?.url ?? null;
   }
+
+  // No credentials / presign failed → try public base (may 403 if bucket private).
+  return publicObjectUrl(clean);
 }
 
 /** Extract R2 object key from media_url JSON / path / plain signed URL path. */
@@ -154,13 +162,17 @@ function existingPlayUrlStillFresh(mediaUrl: string | null | undefined): string 
   if (!candidate) return null;
   try {
     const u = new URL(candidate);
-    // Public CDN / non-signed — always fine.
+    // Unsigned R2 hosts are NOT trustworthy — pub-*.r2.dev often 403 when ACL is private.
+    // Force re-presign so Hubs/feed always get a live signed GET.
     if (!u.searchParams.has('X-Amz-Signature') && !u.searchParams.has('X-Amz-Algorithm')) {
       if (
         u.hostname.includes('r2.dev') ||
-        u.hostname.includes('supabase') ||
-        !u.hostname.includes('r2.cloudflarestorage.com')
+        u.hostname.includes('r2.cloudflarestorage.com')
       ) {
+        return null;
+      }
+      // Non-R2 public (supabase / custom CDN) — keep.
+      if (u.hostname.includes('supabase') || u.hostname.includes('matterya.com')) {
         return candidate;
       }
     }
