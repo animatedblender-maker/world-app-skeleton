@@ -836,7 +836,7 @@ struct YouTubeAppView: View {
         let next = Self.pureShuffle(pool)
         await MainActor.run {
             if !next.isEmpty {
-                var byID = Dictionary(uniqueKeysWithValues: allVideos.map { ($0.id, $0) })
+                var byID = Dictionary(allVideos.map { ($0.id, $0) }, uniquingKeysWith: { _, n in n })
                 for post in next { byID[post.id] = post }
                 let merged = Array(byID.values)
                 allVideos = merged
@@ -1180,7 +1180,8 @@ struct YouTubeAppView: View {
     /// Keeps **all** long-form (endless For you). Only sparks are lightly capped.
     private func softMergeHubCatalog(_ videos: [CountryPost]) {
         guard !videos.isEmpty else { return }
-        var byID = Dictionary(uniqueKeysWithValues: allVideos.map { ($0.id, $0) })
+        // Catalog can hold dups after soft-merge / seed — never uniqueKeysWithValues (fatal).
+        var byID = Dictionary(allVideos.map { ($0.id, $0) }, uniquingKeysWith: { _, n in n })
         var added = 0
         for post in videos {
             if byID[post.id] == nil { added += 1 }
@@ -1362,7 +1363,8 @@ struct YouTubeAppView: View {
         }
 
         var byID: [String: CountryPost] = Dictionary(
-            uniqueKeysWithValues: allVideos.map { ($0.id, $0) }
+            allVideos.map { ($0.id, $0) },
+            uniquingKeysWith: { _, n in n }
         )
 
         // Cap legacy pull — never 500×N channels for first paint.

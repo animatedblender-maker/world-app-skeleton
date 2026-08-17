@@ -843,7 +843,10 @@ final class HomeFeedStore {
 
         // Rank new batch (unviewed only; follows first), then append without reordering the live head.
         let orderedAppend = await rankForSessionAsync(appended)
-        posts.append(contentsOf: orderedAppend)
+        // Never allow duplicate ids (uniqueKeysWithValues fatal + ForEach identity bugs).
+        var poolIDs = Set(posts.map(\.id))
+        let dedupedAppend = orderedAppend.filter { poolIDs.insert($0.id).inserted }
+        posts.append(contentsOf: dedupedAppend)
         // Grow window so new rows appear without waiting for another appear cycle.
         var t = Transaction()
         t.disablesAnimations = true
@@ -872,7 +875,10 @@ final class HomeFeedStore {
     private func applyPosts(_ next: [CountryPost], replace: Bool, sessionId: String, alreadyRanked: Bool = false) {
         feedSessionId = sessionId
         // Prefer caller-provided rank (off-main). Sync re-rank only for small/legacy paths.
-        let ordered = alreadyRanked ? next : rankForSessionSync(next)
+        let ranked = alreadyRanked ? next : rankForSessionSync(next)
+        // Stable unique by id — duplicate keys crash Dictionary(uniqueKeysWithValues) on rank/open.
+        var seen = Set<String>()
+        let ordered = ranked.filter { seen.insert($0.id).inserted }
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) {

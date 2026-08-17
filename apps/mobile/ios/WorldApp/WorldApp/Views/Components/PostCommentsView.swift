@@ -34,7 +34,10 @@ enum CommentThreadBuilder {
 
     /// Top-level comment that anchors a flat reply thread.
     static func threadRootID<T: CommentThreadNode>(for comment: T, in comments: [T]) -> String {
-        let byID = Dictionary(uniqueKeysWithValues: comments.map { (normalizedID($0.id) ?? $0.id, $0) })
+        let byID = Dictionary(
+            comments.map { (normalizedID($0.id) ?? $0.id, $0) },
+            uniquingKeysWith: { _, n in n }
+        )
         var current = comment
         var visited = Set<String>()
         while let parentID = normalizedID(current.parentID),

@@ -1218,7 +1218,7 @@ final class AppState {
             if ArchiveVideoPlayback.isArchiveURL(url) {
                 ArchiveVideoPlayback.warmResolve(url)
             }
-            SparkWarmPool.shared.warmSingle(postID: quick.id, url: url)
+            SparkWarmPool.shared.warmSingle(postID: quick.id, url: url, deep: false)
         }
         applyHubPlayback(quick, expanded: expanded)
         // Background: upgrade to full catalog identity if needed (sharer → channel).
@@ -1228,7 +1228,7 @@ final class AppState {
             if resolved.authorID != hubPlaybackPost?.authorID
                 || resolved.playableVideoURL != nil && hubPlaybackPost?.playableVideoURL == nil {
                 if let url = resolved.playableVideoURL {
-                    SparkWarmPool.shared.warmSingle(postID: resolved.id, url: url)
+                    SparkWarmPool.shared.warmSingle(postID: resolved.id, url: url, deep: false)
                 }
                 applyHubPlayback(resolved, expanded: hubPlaybackExpanded)
             }
@@ -1288,11 +1288,11 @@ final class AppState {
             if ArchiveVideoPlayback.isArchiveURL(url) {
                 ArchiveVideoPlayback.warmResolve(url)
             }
-            // Pre-warm AV buffer immediately (same runloop as open).
-            SparkWarmPool.shared.warmSingle(postID: watchPost.id, url: url)
+            // One light warm for the open target only — no related AV storm on open (freeze/crash).
+            SparkWarmPool.shared.warmSingle(postID: watchPost.id, url: url, deep: false)
         }
         ImageCache.shared.prefetchPostThumbnails([watchPost], maxPixelSize: 720)
-        // Prefetch next related long-form so related taps / auto-next feel instant.
+        // Related: posters only (media session 09). Continuous player owns AV for this open.
         Task(priority: .utility) {
             let related = YouTubeCatalogService.shared.relatedVideos(
                 to: watchPost,
@@ -1304,13 +1304,8 @@ final class AppState {
                 maxPixelSize: 480,
                 aggressive: false
             )
-            // Warm more related players — next tap should claim, not cold-start.
-            for post in related.prefix(5) {
-                if let u = post.playableVideoURL {
-                    SparkWarmPool.shared.warmSingle(postID: post.id, url: u)
-                }
-            }
         }
+        MediaPlaybackCoordinator.shared.ensurePlaybackAudioSession()
         // Kick continuous surface if it was paused.
         NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
     }

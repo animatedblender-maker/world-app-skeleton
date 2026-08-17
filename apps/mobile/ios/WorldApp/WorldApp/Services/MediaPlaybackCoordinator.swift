@@ -33,6 +33,9 @@ final class MediaPlaybackCoordinator {
     private weak var soloPlayingThroughInterrupt: AVPlayer?
     /// Bumps on every Sparks page change so late observers from the previous page cannot re-solo.
     private(set) var sparkPageEpoch: UInt64 = 0
+    /// Debounce AVAudioSession activation — main-thread setActive freezes UI (SessionCore).
+    private var audioSessionArmed = false
+    private var audioArmTask: Task<Void, Never>?
 
     private init() {
         let center = NotificationCenter.default
@@ -93,10 +96,7 @@ final class MediaPlaybackCoordinator {
         }
         // Solo again in case a warm-pool buffer leaked rate while we were away.
         soloSparkAudio(keeping: player)
-        let session = AVAudioSession.sharedInstance()
-        // Never mixWithOthers — other app audio can sit under Sparks; other players must stay muted.
-        try? session.setCategory(.playback, mode: .moviePlayback, options: [])
-        try? session.setActive(true, options: [])
+        ensurePlaybackAudioSession()
         if player.rate < 0.01 {
             player.play()
             player.safePlayImmediately(atRate: 1.0)
@@ -170,15 +170,34 @@ final class MediaPlaybackCoordinator {
         guard let keep = protectedContinuousPlayer, keep.currentItem != nil else { return }
         soloPlayer = keep
         register(keep)
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .moviePlayback, options: [])
-        try? session.setActive(true, options: [])
+        ensurePlaybackAudioSession()
         keep.isMuted = userMuted
         keep.volume = userMuted ? 0 : 1
         if keep.rate < 0.05 {
             keep.play()
             keep.safePlayImmediately(atRate: 1.0)
         }
+    }
+
+    /// Activate playback audio session **off the main thread** (Apple: setActive on main freezes UI).
+    /// Safe to call often — debounced / one-shot until stopAll.
+    func ensurePlaybackAudioSession() {
+        if audioSessionArmed { return }
+        audioArmTask?.cancel()
+        audioArmTask = Task.detached(priority: .userInitiated) {
+            let session = AVAudioSession.sharedInstance()
+            try? session.setCategory(.playback, mode: .moviePlayback, options: [])
+            try? session.setActive(true, options: [])
+            await MainActor.run {
+                MediaPlaybackCoordinator.shared.audioSessionArmed = true
+            }
+        }
+    }
+
+    private func markAudioSessionInactive() {
+        audioSessionArmed = false
+        audioArmTask?.cancel()
+        audioArmTask = nil
     }
 
     /// Pause and mute every known player, then release the audio session.
@@ -207,8 +226,11 @@ final class MediaPlaybackCoordinator {
             protectedContinuousPlayer = nil
             players.removeAllObjects()
             soloPlayingThroughInterrupt = nil
-            let session = AVAudioSession.sharedInstance()
-            try? session.setActive(false, options: [.notifyOthersOnDeactivation])
+            markAudioSessionInactive()
+            Task.detached(priority: .utility) {
+                let session = AVAudioSession.sharedInstance()
+                try? session.setActive(false, options: [.notifyOthersOnDeactivation])
+            }
         }
     }
 

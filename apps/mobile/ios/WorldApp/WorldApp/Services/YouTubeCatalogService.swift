@@ -607,7 +607,7 @@ final class YouTubeCatalogService {
     func historyVideos(from catalog: [CountryPost]) -> [CountryPost] {
         let ids = historyIDs()
         guard !ids.isEmpty else { return [] }
-        let map = Dictionary(uniqueKeysWithValues: catalog.map { ($0.id, $0) })
+        let map = Dictionary(catalog.map { ($0.id, $0) }, uniquingKeysWith: { _, n in n })
         return ids.compactMap { map[$0] }
     }
 

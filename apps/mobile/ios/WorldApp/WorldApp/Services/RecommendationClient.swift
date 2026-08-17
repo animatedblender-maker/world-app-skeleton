@@ -36,7 +36,8 @@ enum RecommendationClient {
             return posts
         }
 
-        let byId = Dictionary(uniqueKeysWithValues: posts.map { ($0.id, $0) })
+        // Feed/hubs pools can contain the same id twice — uniqueKeysWithValues traps.
+        let byId = Dictionary(posts.map { ($0.id, $0) }, uniquingKeysWith: { _, newest in newest })
         var out: [CountryPost] = []
         var used = Set<String>()
         for item in ranked.items {

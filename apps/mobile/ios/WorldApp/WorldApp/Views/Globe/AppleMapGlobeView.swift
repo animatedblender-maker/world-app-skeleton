@@ -160,7 +160,7 @@ struct AppleMapGlobeRepresentable: UIViewRepresentable {
         func syncDotAnnotations() {
             guard let mapView else { return }
 
-            let incoming = Dictionary(uniqueKeysWithValues: dots.map { ($0.id, $0) })
+            let incoming = Dictionary(dots.map { ($0.id, $0) }, uniquingKeysWith: { _, n in n })
             let removedIDs = Set(dotAnnotations.keys).subtracting(incoming.keys)
             for id in removedIDs {
                 if let annotation = dotAnnotations.removeValue(forKey: id) {

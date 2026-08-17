@@ -1167,10 +1167,8 @@ struct VideoPlayerView: View {
     }
 
     private func configureAudioSession() {
-        let session = AVAudioSession.sharedInstance()
-        // Do not mixWithOthers — Sparks/DB video audio must stop when leaving the screen.
-        try? session.setCategory(.playback, mode: .moviePlayback, options: [])
-        try? session.setActive(true)
+        // Off main + debounced — main-thread setActive freezes feed/hubs open.
+        MediaPlaybackCoordinator.shared.ensurePlaybackAudioSession()
     }
 
     private func teardownPlayerObservers() {
@@ -2120,8 +2118,6 @@ struct InFrameVideoPlayer: View {
 
     private func activatePlaybackAudioIfNeeded(unmuted: Bool) {
         guard unmuted else { return }
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .moviePlayback, options: [])
-        try? session.setActive(true)
+        MediaPlaybackCoordinator.shared.ensurePlaybackAudioSession()
     }
 }

@@ -2812,9 +2812,10 @@ final class ArchiveVideoPlayerController: UIViewController {
     }
 
     private func configureAudioSession() {
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .moviePlayback, options: [])
-        try? session.setActive(true, options: [])
+        // Off main + debounced — main-thread setActive freezes hubs open (SessionCore).
+        Task { @MainActor in
+            MediaPlaybackCoordinator.shared.ensurePlaybackAudioSession()
+        }
     }
 
     private func loadPoster(_ url: URL?) {

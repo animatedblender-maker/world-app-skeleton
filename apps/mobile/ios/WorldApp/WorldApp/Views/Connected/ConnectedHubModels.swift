@@ -133,7 +133,7 @@ enum ConnectedHubContent {
     ]
 
     static func mergedAccounts(_ remote: [ConnectedAccount]) -> [ConnectedAccount] {
-        let remoteByPlatform = Dictionary(uniqueKeysWithValues: remote.map { ($0.platform, $0) })
+        let remoteByPlatform = Dictionary(remote.map { ($0.platform, $0) }, uniquingKeysWith: { _, n in n })
         return StreamingPlatform.allCases.map { platform in
             if let account = remoteByPlatform[platform] {
                 return account
