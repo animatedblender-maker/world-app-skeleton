@@ -199,7 +199,11 @@ final class AppState {
         registerPushInBackground()
         flushPendingPushRoute()
         Task { await finishSessionWarmup() }
-        Task { await RemoteConfigClient.refreshIfNeeded() }
+        // Config is non-critical — delay so it never races first feed paint / auth.
+        Task(priority: .utility) {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            await RemoteConfigClient.refreshIfNeeded()
+        }
     }
 
     func handleBecameActive() async {

@@ -44,8 +44,9 @@ enum RemoteConfigClient {
         guard let url = comps?.url else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
-        req.timeoutInterval = 4
-        if let token = try? await AuthService.shared.ensureValidToken() {
+        req.timeoutInterval = 3
+        // Cached token only — never ensureValidToken (refresh on MainActor freezes UI).
+        if let token = AuthService.shared.accessToken(), !token.isEmpty {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         do {
