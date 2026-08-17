@@ -144,7 +144,7 @@ export class HubsCatalogService {
     followingIDs?: string[];
     viewerCountry?: string | null;
   }): Promise<CountryPost[]> {
-    // CRITICAL: seed first, never block Hubs on feed/demo listRecent (that was emptying Hubs).
+    // Seed catalog only when Archive is enabled (see HubsSeedService.ARCHIVE_CONTENT_ENABLED).
     const [seedSparks, seedLong] = await Promise.all([
       this.seed.sparkSeedVideos().catch(() => [] as CountryPost[]),
       this.seed.longFormVideos(8).catch(() => [] as CountryPost[]),
@@ -153,21 +153,23 @@ export class HubsCatalogService {
     let networkReels: CountryPost[] = [];
     let networkLong: CountryPost[] = [];
     try {
-      // Recent network posts only (seed catalog already covers offline / demo hubs).
+      // Recent network posts only (seed catalog covers offline hubs when Archive is on).
       const recent = await this.posts.listRecent(40).catch(() => [] as CountryPost[]);
-      const networkVideos = (recent || []).filter((p: CountryPost) => this.isPlayEligible(p));
+      const networkVideos = (recent || [])
+        .filter((p: CountryPost) => this.isPlayEligible(p))
+        .filter((p: CountryPost) => this.allowArchiveMedia(p));
       networkReels = networkVideos.filter((p: CountryPost) => this.isReel(p));
       networkLong = networkVideos.filter((p: CountryPost) => !this.isReel(p));
     } catch {
-      // seed-only catalog is fine
+      // network optional — seed-only when Archive is on
     }
 
-    // Merge order matches iOS: seed sparks → network reels → long-form (seed + real)
+    // Network first when Archive is off; seed only when gate is on.
     const merged = this.dedupeById([
-      ...seedSparks,
       ...networkReels,
-      ...seedLong,
       ...networkLong,
+      ...seedSparks,
+      ...seedLong,
     ]);
 
     this.catalog = this.applyLocalEngagement(merged);
@@ -641,6 +643,19 @@ export class HubsCatalogService {
       url.includes('/download/') ||
       url.includes('archive.org')
     );
+  }
+
+  /** Drop Internet Archive rows while ARCHIVE_CONTENT_ENABLED is false. */
+  private allowArchiveMedia(post: CountryPost): boolean {
+    if (HubsSeedService.ARCHIVE_CONTENT_ENABLED) return true;
+    const id = String(post.id || '').toLowerCase();
+    if (id.startsWith('ia_') || id.startsWith('hub_spark_') || id.startsWith('hub_')) return false;
+    const author = String(post.author_id || '').toLowerCase();
+    if (author.startsWith('hub_') || author.startsWith('ia_') || author.startsWith('archive_')) return false;
+    const media = this.mediaUrl(post).toLowerCase();
+    const thumb = String(post.thumb_url || '').toLowerCase();
+    if (media.includes('archive.org') || thumb.includes('archive.org')) return false;
+    return true;
   }
 
   private rankForYou(

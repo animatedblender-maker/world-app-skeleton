@@ -5,6 +5,9 @@ import Foundation
 // Heavy ranker scores items independently; this optimizes the *list*:
 // creator diversity, novelty, exploration budget, hard eligibility.
 // Greedy constrained re-rank from the recommendation roadmap §10.
+//
+// **Off-main safe:** pure value transforms + SparkDiscoveryEngine (NSLock).
+// Called from `HomeFeedStore.rankForSessionAsync` via `Task.detached`.
 
 enum FeedCompositionEngine {
     /// Assemble a page from ranked candidates under surface policy.
@@ -20,7 +23,8 @@ enum FeedCompositionEngine {
         blockedAuthorIDs: Set<String> = [],
         alreadyServedIDs: Set<String> = [],
         followingIDs: Set<String> = [],
-        limit: Int? = nil
+        limit: Int? = nil,
+        sessionSeed: UInt64 = 0
     ) -> [CountryPost] {
         let pageLimit = max(1, limit ?? policy.pageSize)
         let scored = scoreCandidates(
@@ -28,7 +32,8 @@ enum FeedCompositionEngine {
             policy: policy,
             blockedAuthorIDs: blockedAuthorIDs,
             alreadyServedIDs: alreadyServedIDs,
-            followingIDs: followingIDs
+            followingIDs: followingIDs,
+            sessionSeed: sessionSeed
         )
         return greedyRerank(scored, policy: policy, limit: pageLimit).map(\.post)
     }
@@ -40,7 +45,8 @@ enum FeedCompositionEngine {
         blockedAuthorIDs: Set<String> = [],
         alreadyServedIDs: Set<String> = [],
         followingIDs: Set<String> = [],
-        limit: Int? = nil
+        limit: Int? = nil,
+        sessionSeed: UInt64 = 0
     ) -> [RecommendationCandidate] {
         let pageLimit = max(1, limit ?? policy.pageSize)
         let scored = scoreCandidates(
@@ -48,7 +54,8 @@ enum FeedCompositionEngine {
             policy: policy,
             blockedAuthorIDs: blockedAuthorIDs,
             alreadyServedIDs: alreadyServedIDs,
-            followingIDs: followingIDs
+            followingIDs: followingIDs,
+            sessionSeed: sessionSeed
         )
         return greedyRerank(scored, policy: policy, limit: pageLimit)
     }
@@ -60,7 +67,8 @@ enum FeedCompositionEngine {
         policy: RecommendationSurfacePolicy,
         blockedAuthorIDs: Set<String>,
         alreadyServedIDs: Set<String>,
-        followingIDs: Set<String>
+        followingIDs: Set<String>,
+        sessionSeed: UInt64 = 0
     ) -> [RecommendationCandidate] {
         var out: [RecommendationCandidate] = []
         var seen = Set<String>()
@@ -96,7 +104,12 @@ enum FeedCompositionEngine {
 
             if followingIDs.contains(post.authorID) {
                 sources.append(.following)
-                score += 2.5
+                // Soft boost — hard +2.5 pinned every follow to the same head forever.
+                score += 1.35
+            }
+            // Per-session jitter so the same candidate pool never freezes into one order.
+            if sessionSeed != 0 {
+                score += sessionJitter(postID: post.id, seed: sessionSeed)
             }
             if let created = post.createdDate {
                 let ageHours = max(0, now - created.timeIntervalSince1970) / 3600
@@ -244,5 +257,17 @@ enum FeedCompositionEngine {
 
     private static func limitHint(_ policy: RecommendationSurfacePolicy) -> Int {
         max(1, policy.pageSize - max(1, Int(Double(policy.pageSize) * policy.explorationBudget)))
+    }
+
+    /// Deterministic 0…~1.8 noise from post id + session seed (stable within open, new each open).
+    private static func sessionJitter(postID: String, seed: UInt64) -> Double {
+        var h: UInt64 = seed ^ 0x9E3779B97F4A7C15
+        for b in postID.utf8 {
+            h = h &* 1_099_511_628_211 &+ UInt64(b)
+        }
+        h ^= h >> 33
+        h &*= 0xFF51AFD7ED558CCD
+        h ^= h >> 33
+        return Double(h % 1_800) / 1_000.0
     }
 }

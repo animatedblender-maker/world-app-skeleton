@@ -59,23 +59,45 @@ struct FeedView: View {
             await refreshStrips(network: true)
         }
         .task(id: "\(appState.contentLoadGeneration)-\(appState.feedFreshSessionToken)") {
-            // App open: paint rails from cache instantly, boot feed first, then light strip network.
-            // Never run beginFreshSparksSession here — that deep catalog freeze lagged the top of the feed.
+            // App open / away: reshape. contentLoadGeneration also fires on share — still reshape
+            // but rank is off-main. Strips network is deferred so first scroll stays smooth.
+            PerformanceTelemetry.markIfAbsent("feed_task_start")
             paintStripsFromCache()
-            await store.beginFreshSession()
+            if store.didPaint || !store.displayedPosts.isEmpty || hasAnyStrip {
+                PerformanceTelemetry.milestoneFromLaunch(
+                    "app_start_to_feed_visible",
+                    surface: "feed",
+                    meta: ["source": "cache_or_strip"]
+                )
+            }
+            await store.beginFreshSession(forceReplace: true)
             paintStripsFromCache()
-            // Defer strip network so first posts can scroll immediately.
+            PerformanceTelemetry.milestoneFromLaunch(
+                "app_start_to_feed_interactive",
+                surface: "feed",
+                meta: [
+                    "posts": "\(store.displayedPosts.count)",
+                    "didPaint": store.didPaint ? "1" : "0",
+                ]
+            )
+            // Defer strip network — competing with feed warm caused intermittent jank.
+            try? await Task.sleep(nanoseconds: 350_000_000)
             await refreshStrips(network: true)
         }
         .onAppear {
             paintStripsFromCache()
+            PerformanceTelemetry.markIfAbsent("feed_on_appear")
         }
         .onReceive(NotificationCenter.default.publisher(for: .userPostsDidChange)) { notification in
             guard let changed = notification.userInfo?["post"] as? CountryPost else { return }
             if changed.isStory { return }
-            if changed.isSpark, !changed.isSparkFeedShare { return }
-            store.insertNewPost(changed)
-            if changed.isSparkFeedShare || changed.hasVideo {
+            // Update in place when an existing card got a fresher media URL (was thumbnail-only).
+            if store.posts.contains(where: { $0.id == changed.id }) {
+                store.applyLocalUpdate(changed)
+            } else if !(changed.isSpark && !changed.isSparkFeedShare) {
+                store.insertNewPost(changed)
+            }
+            if changed.isSparkFeedShare || changed.hasVideo || changed.isSpark {
                 Task { await refreshFeedReels(network: true) }
             }
         }

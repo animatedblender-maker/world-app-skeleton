@@ -7,7 +7,11 @@ import UserNotifications
 @MainActor
 @Observable
 final class AppState {
+    /// True when a persisted Auth session exists (Keychain/disk). Set **synchronously**
+    /// in `init` so cold launch never paints AuthView for a returning user.
     var isAuthenticated = false
+    /// True when the main shell may appear. Returning users get this in `init`
+    /// so they land on Feed immediately; bootstrap only warms data in background.
     var isSessionReady = false
     var contentLoadGeneration = 0
     var needsProfileSetup = false
@@ -133,23 +137,59 @@ final class AppState {
         var username: String?
     }
 
+    init() {
+        // Cold launch: restore session **before** first RootView body so login never flashes.
+        hydrateFromPersistedSession()
+    }
+
+    /// Sync restore from disk/Keychain. Must stay free of network / permissions.
+    private func hydrateFromPersistedSession() {
+        if ScreenshotMode.isActive {
+            // Screenshot path is applied fully in bootstrap.
+            return
+        }
+        reelPresentationSavedIDs = loadReelPresentationSavedIDs()
+        isAuthenticated = auth.isAuthenticated
+        guard isAuthenticated else {
+            // Logged out / new install → Auth is the correct first screen.
+            isSessionReady = true
+            needsProfileSetup = false
+            currentProfile = nil
+            return
+        }
+        // Returning user: enter the app shell immediately.
+        YouTubeCatalogService.shared.bindToUser(auth.currentUser?.id)
+        restoreCachedProfile()
+        isSessionReady = true
+    }
+
     func bootstrap() async {
         if ScreenshotMode.isActive {
             await applyScreenshotMode()
             return
         }
 
-        // NEVER request mic/camera/location/push before login — that freezes the auth screen.
-        reelPresentationSavedIDs = loadReelPresentationSavedIDs()
+        // Re-read session (init already hydrated; this re-syncs after process reuse).
+        let wasAuthed = isAuthenticated
         isAuthenticated = auth.isAuthenticated
+
         guard isAuthenticated else {
+            // Explicit logout or expired session wiped from disk.
             isSessionReady = true
+            needsProfileSetup = false
+            if wasAuthed {
+                currentProfile = nil
+            }
             return
         }
 
+        // NEVER request mic/camera/location/push before we know who the user is.
+        reelPresentationSavedIDs = loadReelPresentationSavedIDs()
+        YouTubeCatalogService.shared.bindToUser(auth.currentUser?.id)
         restoreCachedProfile()
         markSessionReady()
-        // Permissions + VoIP only after we know who the user is.
+
+        // Background only — UI already on MainTab for returning users.
         Task(priority: .utility) {
             await AppPermissionsService.shared.requestEssentialPermissionsOnLaunch()
         }
@@ -159,6 +199,7 @@ final class AppState {
         registerPushInBackground()
         flushPendingPushRoute()
         Task { await finishSessionWarmup() }
+        Task { await RemoteConfigClient.refreshIfNeeded() }
     }
 
     func handleBecameActive() async {
@@ -1298,6 +1339,8 @@ final class AppState {
         hubPlaybackPlaying = true
         hubWatchScrollCollapse = 0
         hubPlaybackPullProgress = 1
+        // Never leave immersive FS pull stuck — that hid mini chrome (play/mute/close).
+        hubFullscreenPullProgress = 0
         // Layer already at mini frame — flip with zero animation to avoid a second jump.
         var t = Transaction()
         t.disablesAnimations = true
@@ -1350,6 +1393,7 @@ final class AppState {
         hubPlaybackPlaying = true
         hubWatchScrollCollapse = 0
         hubPlaybackPullProgress = 0
+        hubFullscreenPullProgress = 0
 
         // Navigation first so Hubs watch route can mount under the expanding player.
         if !navigationPath.isEmpty {
@@ -1628,6 +1672,7 @@ final class AppState {
     /// Shared open path for feed + chat: multi-seed queue + warm pool + deep expand later.
     private func presentGlobalSparks(starting start: CountryPost) {
         // Large instant bulk so the player never waits on network for the first ~dozen swipes.
+        // Same path for feed card, hubs strip, **and chat share** — endless from open.
         let seeds = Self.instantSparksSeedQueue(starting: start, limit: 72)
         openReelsViewer(startingPost: start, seedPosts: seeds)
         if let url = start.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) {
@@ -1641,12 +1686,16 @@ final class AppState {
                 timeout: 0.35
             )
         }
-        // Always kick catalog fuel in the background so expandFeed has bulk ready.
+        // Always kick catalog fuel + discovery session so chat-entry never stays single-clip.
         Task { @MainActor in
             _ = await PostsService.shared.loadSparksDiscoveryCatalog(
                 forceRefresh: seeds.count < 24,
-                deep: seeds.count < 40
+                deep: true
             )
+            if seeds.count < 16 {
+                // Force a full discovery fill so GlobalSparksViewer.expandFeed has bulk ready.
+                _ = await PostsService.shared.beginFreshSparksSession(preferStart: start)
+            }
         }
     }
 
@@ -1671,6 +1720,10 @@ final class AppState {
         absorb(PostsService.shared.sparksCatalogSnapshot())
         if out.count < limit {
             absorb(PostsService.shared.hubsSessionCatalog)
+        }
+        // Feed / home cache often holds fresh Sparks when catalog is still cold (chat open).
+        if out.count < limit, let home = ContentCache.shared.posts(for: .homeFeed) {
+            absorb(home)
         }
         return out
     }

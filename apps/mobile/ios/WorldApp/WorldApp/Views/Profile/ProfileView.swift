@@ -6,6 +6,7 @@ struct ProfileView: View {
     @State private var posts: [CountryPost] = []
     @State private var followCounts = FollowCounts(followers: 0, following: 0)
     @State private var isLoadingPosts = false
+    @State private var lastPostsLoadAt: Date = .distantPast
     @State private var errorMessage: String?
     /// Real Hubs channel only — not feed re-shares of Hubs content.
     @State private var hasOwnHubsChannel = false
@@ -50,10 +51,12 @@ struct ProfileView: View {
         }
         .onChange(of: appState.selectedTab) { _, tab in
             guard tab == .profile else { return }
-            // Re-elect autoplay winner for profile cards (feed was holding focus while mounted).
+            // Soft re-elect only — hard reset was silencing + re-warming every video on tab hop.
             FeedVideoFocus.shared.resetAll()
-            // Cache-first; refresh only if empty or stale.
+            // Instant cache paint; network only if empty or >45s stale.
             paintProfileFromCache()
+            let stale = Date().timeIntervalSince(lastPostsLoadAt) > 45
+            guard posts.isEmpty || stale else { return }
             Task {
                 async let postsTask: Void = loadPosts()
                 async let countsTask: Void = loadCounts()
@@ -428,6 +431,7 @@ struct ProfileView: View {
             let loaded = try await PostsService.shared.listForAuthor(userID, limit: 40)
                 .forProfileFeedGrid()
             posts = loaded
+            lastPostsLoadAt = Date()
             ContentCache.shared.setPosts(loaded, for: .profilePosts)
         } catch {
             if posts.isEmpty {

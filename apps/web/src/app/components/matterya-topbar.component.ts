@@ -116,6 +116,37 @@ import { Router } from '@angular/router';
       .topbar-icon svg {
         display: block;
       }
+      /* Desktop: Facebook-style content header over the feed column */
+      @media (min-width: 900px) {
+        .matterya-topbar {
+          min-height: 56px;
+          padding: 0 16px;
+          background: var(--m-surface, #fefdfb);
+          border-bottom: 0.5px solid var(--m-divider, #e2ded8);
+        }
+        .topbar-title {
+          font-size: 20px;
+          line-height: 56px;
+          text-align: left;
+          padding-left: 4px;
+        }
+        /* Left menu is the rail — hide hamburger on desktop */
+        .topbar-icon[aria-label='Menu'] {
+          display: none;
+        }
+        .topbar-actions {
+          min-width: 0;
+        }
+        .topbar-icon {
+          width: 40px;
+          height: 40px;
+          border-radius: 999px;
+          background: var(--m-canvas-muted, #f2f0ec);
+        }
+        .topbar-icon:hover {
+          background: var(--m-canvas-deep, #edeae5);
+        }
+      }
       .topbar-badge {
         position: absolute;
         top: 10px;

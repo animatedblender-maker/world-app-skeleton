@@ -7,6 +7,9 @@ final class MessagesService {
     private let gql = GraphQLService.shared
     private var cachedConversations: [Conversation] = []
     private var cacheUserID: String?
+    /// Skip network thrash when inbox was just fetched (tab hop / call-log spam).
+    private var lastConversationsFetchAt: Date = .distantPast
+    private let conversationsFreshTTL: TimeInterval = 12
     /// Keeps chat threads warm so re-opening a conversation paints instantly.
     private var cachedMessagesByConversation: [String: [Message]] = [:]
     private var cachedPeerReadByConversation: [String: String] = [:]
@@ -30,6 +33,91 @@ final class MessagesService {
         let id = conversationID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !id.isEmpty else { return nil }
         return cachedConversations.first { $0.id == id }
+    }
+
+    /// Inbox paint-first (profile-style): return memory cache without touching the network.
+    func cachedConversationsSnapshot() -> [Conversation] {
+        if let userID = AuthService.shared.currentUser?.id {
+            if cacheUserID == nil || cacheUserID == userID {
+                return cachedConversations
+            }
+            return []
+        }
+        return cachedConversations
+    }
+
+    /// Immediate call-log row after hangup / miss — UI updates before GraphQL round-trip.
+    @discardableResult
+    func appendOptimisticCallLog(conversationID: String, body: String) -> Message {
+        let id = conversationID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let now = ISO8601DateFormatter().string(from: Date())
+        let me = AuthService.shared.currentUser
+        let profile = ContentCache.shared.cachedProfile()
+        let sender: PostAuthor? = {
+            guard let me else { return nil }
+            return PostAuthor(
+                userID: me.id,
+                displayName: profile?.displayName,
+                username: profile?.username,
+                avatarURL: profile?.avatarURL,
+                countryName: profile?.countryName,
+                countryCode: profile?.countryCode,
+                lastReadAt: nil
+            )
+        }()
+        let message = Message(
+            id: "local-call-\(UUID().uuidString)",
+            conversationID: id,
+            senderID: me?.id ?? "",
+            body: body,
+            mediaType: nil,
+            mediaPath: nil,
+            mediaURL: nil,
+            mediaName: nil,
+            createdAt: now,
+            updatedAt: now,
+            sender: sender
+        )
+        var msgs = cachedMessagesByConversation[id] ?? []
+        // Avoid stacking duplicates if hangup fires twice.
+        if !msgs.contains(where: { $0.body == body && $0.id.hasPrefix("local-call-") }) {
+            msgs.append(message)
+            storeMessages(msgs, for: id)
+        }
+        // Bump conversation preview so the inbox row updates instantly.
+        if let idx = cachedConversations.firstIndex(where: { $0.id == id }) {
+            let prev = cachedConversations[idx]
+            cachedConversations[idx] = Conversation(
+                id: prev.id,
+                isDirect: prev.isDirect,
+                createdAt: prev.createdAt,
+                updatedAt: now,
+                lastMessageAt: now,
+                members: prev.members,
+                lastMessage: message
+            )
+            // Newest activity to top.
+            let bumped = cachedConversations.remove(at: idx)
+            cachedConversations.insert(bumped, at: 0)
+        }
+        return message
+    }
+
+    /// Swap local-call-* / pending-* with the server-confirmed message.
+    func replaceLocalMessage(id localID: String, with server: Message, conversationID: String) {
+        let cid = conversationID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard var msgs = cachedMessagesByConversation[cid] else {
+            storeMessages([server], for: cid)
+            return
+        }
+        if let idx = msgs.firstIndex(where: { $0.id == localID }) {
+            msgs[idx] = server
+        } else if !msgs.contains(where: { $0.id == server.id }) {
+            msgs.append(server)
+        }
+        // Drop any other local twin with same call body.
+        msgs.removeAll { $0.id.hasPrefix("local-call-") && $0.body == server.body && $0.id != server.id }
+        storeMessages(msgs, for: cid)
     }
 
     /// Seed / update a single conversation so `ConversationRouteView` can paint immediately.
@@ -80,20 +168,30 @@ final class MessagesService {
     }
 
     /// Warm the first few threads so tapping a chat is instant (messages already local).
-    func prefetchRecentThreads(limit: Int = 4) {
+    func prefetchRecentThreads(limit: Int = 2) {
         let ids = cachedConversations.prefix(limit).map(\.id)
         guard !ids.isEmpty else { return }
-        Task { @MainActor in
+        Task(priority: .utility) { @MainActor in
             for id in ids {
                 if cachedMessages(for: id) != nil { continue }
-                _ = try? await listMessages(conversationID: id, limit: 40)
+                // Thin hydrate — enough for open, not a full thread dump on inbox paint.
+                _ = try? await listMessages(conversationID: id, limit: 24)
             }
         }
     }
 
-    func listConversations(limit: Int = 40) async throws -> [Conversation] {
+    func listConversations(limit: Int = 40, forceNetwork: Bool = false) async throws -> [Conversation] {
         if ScreenshotMode.isActive {
             return Array(ScreenshotMode.demoConversations.prefix(limit))
+        }
+
+        // Fresh memory cache — return instantly (Messages tab hop must not re-hit GraphQL).
+        if !forceNetwork,
+           let userID = AuthService.shared.currentUser?.id,
+           cacheUserID == userID,
+           !cachedConversations.isEmpty,
+           Date().timeIntervalSince(lastConversationsFetchAt) < conversationsFreshTTL {
+            return cachedConversations
         }
 
         _ = try await AuthService.shared.ensureValidToken()
@@ -104,8 +202,9 @@ final class MessagesService {
                 cacheUserID = userID
                 cachedConversations = conversations
             }
-            // Warm top threads in the background — open chat without "Opening chat…".
-            prefetchRecentThreads(limit: 4)
+            lastConversationsFetchAt = Date()
+            // Warm only 2 top threads — was 4 × full hydrate and lagged the tab.
+            prefetchRecentThreads(limit: 2)
             return conversations
         } catch {
             if let userID = AuthService.shared.currentUser?.id,
@@ -178,15 +277,32 @@ final class MessagesService {
             variables: ["conversationId": conversationID, "limit": limit]
         )
         var messages = result.messagesByConversation.map(\.toModel)
-        await withTaskGroup(of: (Int, Message).self) { group in
-            for index in messages.indices {
-                let message = messages[index]
-                group.addTask { [self] in
-                    (index, await hydrateMedia(message))
+        // Only hydrate media rows (images/video) — text/call logs need no signed URL work.
+        // Cap concurrency so opening a chat never fires 50 parallel GraphQL media signs.
+        let mediaIndices = messages.indices.filter { idx in
+            let m = messages[idx]
+            return m.mediaPath != nil && !(m.mediaPath ?? "").isEmpty
+        }
+        if !mediaIndices.isEmpty {
+            await withTaskGroup(of: (Int, Message).self) { group in
+                var inFlight = 0
+                var next = 0
+                let maxConcurrent = 4
+                while next < mediaIndices.count || inFlight > 0 {
+                    while inFlight < maxConcurrent, next < mediaIndices.count {
+                        let index = mediaIndices[next]
+                        next += 1
+                        inFlight += 1
+                        let message = messages[index]
+                        group.addTask { [self] in
+                            (index, await hydrateMedia(message))
+                        }
+                    }
+                    if let (index, hydrated) = await group.next() {
+                        inFlight -= 1
+                        messages[index] = hydrated
+                    }
                 }
-            }
-            for await (index, hydrated) in group {
-                messages[index] = hydrated
             }
         }
         storeMessages(messages, for: conversationID)

@@ -81,17 +81,26 @@ struct GlobalHubPlaybackLayer: View {
     }
 
     private var showTransportChrome: Bool {
+        // Mini strip never shows transport (HubMiniPlayerChrome owns play/mute/close).
+        if !expanded || collapse > 0.55 { return false }
         if fsProgress > 0.5 { return true }
-        return expanded && collapse < 0.55
+        return true
     }
 
     private var transportChromeOpacity: Double {
+        // Mini: fully hide player chrome so no black dim / scrubber slab paints over film.
+        if !expanded || collapse > 0.55 { return 0 }
         if fsProgress > 0.01 {
-            // Fade chrome in as we enter FS; full at 1.
             return Double(min(1, max(0.35, fsProgress)))
         }
-        if !expanded { return 1 }
         return Double(1 - min(1, max(0, collapse)))
+    }
+
+    /// Mini (and mid-collapse) must **fill** the strip — aspect-fit letterbox reads as black.
+    private var filmFillsFrame: Bool {
+        if fsProgress > 0.5 { return false } // FS: fit full picture
+        if !expanded { return true }
+        return collapse > 0.2
     }
 
     private var mutedBinding: Binding<Bool> {
@@ -101,39 +110,79 @@ struct GlobalHubPlaybackLayer: View {
         )
     }
 
+    /// Global film rect for hit-testing — **only** this region intercepts touches.
+    /// Comments under the video, feed above mini, and mini chrome buttons sit outside
+    /// and must receive events (pass-through returns nil).
+    private var interactiveHitGlobal: CGRect {
+        let full = Self.windowGlobalFrame()
+
+        // Immersive FS — whole window is the player.
+        if fsProgress > 0.5 {
+            return full
+        }
+
+        // Mini session — dock hole only (never the full bar chrome buttons region if
+        // preference is late; still clamp to bottom strip so we don't eat the whole screen).
+        if !expanded || collapse > 0.85 {
+            if let dock = dockSlotGlobal, dock.width > 20, dock.height > 20 {
+                // Inset slightly so play/mute/close chips on the bar edge stay hittable
+                // even if z-order races the continuous film for one frame.
+                return dock.insetBy(dx: 0, dy: 0)
+            }
+            let barH = YouTubeMiniPlayerBar.barHeight
+            let tabH: CGFloat = appState.navigationPath.isEmpty ? Theme.tabBarHeight : 0
+            return CGRect(
+                x: full.minX,
+                y: full.maxY - tabH - barH,
+                width: full.width,
+                height: barH
+            )
+        }
+
+        // Expanded watch stage — measured hole only (never full window).
+        if let stage = watchStageGlobal, stage.width > 40, stage.height > 80 {
+            return stage
+        }
+
+        // Fallback: top stage strip (16:9-ish) — still leaves comments free.
+        let stageH = YouTubeMediaLayout.hubsExpandedStageHeight(
+            containerWidth: full.width,
+            videoAspect: appState.hubPlaybackVideoAspect
+        )
+        let top = YouTubeMediaLayout.keyWindowSafeTop
+        return CGRect(x: full.minX, y: full.minY + top, width: full.width, height: stageH)
+    }
+
     var body: some View {
         Group {
             if let post = appState.hubPlaybackPost {
-                // Edge-to-edge black bed first so notch + home indicator never flash paper white.
-                ZStack {
-                    if fsProgress > 0.02 {
-                        Color.black
-                            .opacity(Double(min(1, max(0, fsProgress))))
-                            .ignoresSafeArea(.all)
-                            .allowsHitTesting(false)
-                    }
+                // OUTERMOST = pass-through gated on global film rect.
+                // GeometryReader lives *inside* so it can never claim comment / feed / mini taps.
+                HubPassThroughContainer(
+                    interactiveRectGlobal: interactiveHitGlobal,
+                    contentID: post.id
+                ) {
+                    ZStack {
+                        if fsProgress > 0.02 {
+                            Color.black
+                                .opacity(Double(min(1, max(0, fsProgress))))
+                                .ignoresSafeArea(.all)
+                                .allowsHitTesting(false)
+                        }
 
-                    GeometryReader { geo in
-                        let layout = playerLayout(in: geo)
-                        let hitRect = fsProgress > 0.5
-                            ? CGRect(origin: .zero, size: geo.size)
-                            : CGRect(
-                                x: layout.x,
-                                y: layout.y,
-                                width: layout.width,
-                                height: layout.height
-                            )
-
-                        HubPassThroughContainer(interactiveRect: hitRect) {
+                        GeometryReader { geo in
+                            let layout = playerLayout(in: geo)
                             videoStack(post: post, layout: layout, containerSize: geo.size)
                                 .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
                         }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        .ignoresSafeArea(.all)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    // FS must measure the full window (including safe areas), not the inset stage.
-                    .ignoresSafeArea(fsProgress > 0.5 ? .all : [])
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .ignoresSafeArea(.all)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea(.all)
                 .zIndex(fsProgress > 0.15 ? 500 : 0)
             }
         }
@@ -158,6 +207,7 @@ struct GlobalHubPlaybackLayer: View {
                     collapse = 1
                     fsProgress = 0
                 }
+                appState.hubFullscreenPullProgress = 0
                 if appState.hubPlaybackPullProgress > 0.5 {
                     appState.hubPlaybackPullProgress = 0
                 }
@@ -170,6 +220,21 @@ struct GlobalHubPlaybackLayer: View {
                     name: .matteryaResumePlaybackAfterInterrupt,
                     object: nil
                 )
+                // Dock hole often measures one frame late — force gravity fill + audio again.
+                Task { @MainActor in
+                    for delay in [40_000_000, 120_000_000, 280_000_000] as [UInt64] {
+                        try? await Task.sleep(nanoseconds: delay)
+                        guard appState.hubPlaybackPost != nil, !appState.hubPlaybackExpanded else { return }
+                        appState.hubPlaybackPlaying = true
+                        MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
+                            userMuted: appState.hubPlaybackMuted
+                        )
+                        NotificationCenter.default.post(
+                            name: .matteryaResumePlaybackAfterInterrupt,
+                            object: nil
+                        )
+                    }
+                }
             }
         }
         .onChange(of: appState.hubPlaybackPost?.id) { _, _ in
@@ -266,17 +331,36 @@ struct GlobalHubPlaybackLayer: View {
             }
 
             ZStack {
-                Color.black
+                // Mini: ink only as last resort under poster/film — never a solid black plate
+                // that reads as “black overlay” when gravity is late.
+                if filmFillsFrame {
+                    Theme.ink
+                } else {
+                    Color.black
+                }
+                // Always keep poster under film in mini / collapse so a 1-frame dock lag
+                // never shows empty ink.
+                if filmFillsFrame || collapse > 0.2, let poster = post.posterImageURL {
+                    CachedAsyncImage(
+                        url: poster,
+                        maxPixelSize: 900,
+                        contentMode: .fill,
+                        placeholder: AnyView(Theme.ink)
+                    )
+                    .frame(width: max(1, filmW), height: max(1, filmH))
+                    .clipped()
+                    .allowsHitTesting(false)
+                }
                 playerSurface(
                     for: post,
                     showControls: showTransportChrome,
                     chromeOpacity: transportChromeOpacity
                 )
-                .frame(width: filmW, height: filmH)
+                .frame(width: max(1, filmW), height: max(1, filmH))
                 .clipped()
             }
-            .frame(width: filmW, height: filmH)
-            .background(Color.black)
+            .frame(width: max(1, filmW), height: max(1, filmH))
+            .background(filmFillsFrame ? Theme.ink : Color.black)
             .clipShape(
                 RoundedRectangle(
                     cornerRadius: cornerRadius(for: layout),
@@ -285,7 +369,7 @@ struct GlobalHubPlaybackLayer: View {
             )
             .clipped()
             .rotationEffect(contentRotation)
-            .frame(width: layout.width, height: layout.height)
+            .frame(width: max(1, layout.width), height: max(1, layout.height))
             .offset(x: layout.x, y: layout.y)
             // Finger 1:1 while dragging; YT spring only on settle.
             .animation(interactiveAnimation, value: collapse)
@@ -350,33 +434,65 @@ struct GlobalHubPlaybackLayer: View {
     }
 
     private func fullscreenFrame(in geo: GeometryProxy) -> PlayerLayout {
-        PlayerLayout(x: 0, y: 0, width: geo.size.width, height: geo.size.height)
+        // Prefer the GeometryReader's own size when it already spans the key window
+        // (layer uses ignoresSafeArea). Mapping window→local with a mismatched container
+        // was pushing the film down and cropping bottom transport chrome.
+        let full = Self.windowGlobalFrame()
+        let container = geo.frame(in: .global)
+        let sizeMatch =
+            abs(container.width - full.width) < 4
+            && abs(container.height - full.height) < 4
+            && abs(geo.size.width - full.width) < 4
+            && abs(geo.size.height - full.height) < 4
+        if sizeMatch {
+            return PlayerLayout(x: 0, y: 0, width: geo.size.width, height: geo.size.height)
+        }
+        // Fallback: map full window into this container's local space.
+        return PlayerLayout(
+            x: full.minX - container.minX,
+            y: full.minY - container.minY,
+            width: full.width,
+            height: full.height
+        )
     }
 
     private func miniFrame(in geo: GeometryProxy) -> PlayerLayout {
-        let barW = max(1, geo.size.width)
-        let size = YouTubeMiniPlayerBar.videoSize(forBarWidth: barW)
-        var x: CGFloat = 0
-        var y = max(0, geo.size.height - floatingBottomClearance - size.height)
-        var w = size.width
-        var h = size.height
+        let container = geo.frame(in: .global)
 
-        // Dock continuous film to the real mini hole (floating bar or chat).
-        if hasMiniDockSlot, let global = dockSlotGlobal {
-            let containerGlobal = geo.frame(in: .global)
-            let dockX = global.minX - containerGlobal.minX
-            let dockY = global.minY - containerGlobal.minY
-            let dockW = global.width
-            let dockH = global.height
-            if dockW > 40, dockH > 40, dockH < 320,
-               dockY > -40, dockY + dockH <= geo.size.height + 80 {
-                x = dockX
-                y = dockY
-                w = dockW
-                h = dockH
-            }
+        // Prefer live measured mini hole (floating bar or chat dock).
+        if let dock = dockSlotGlobal, dock.width > 20, dock.height > 20 {
+            return PlayerLayout(
+                x: dock.minX - container.minX,
+                y: dock.minY - container.minY,
+                width: max(1, dock.width),
+                height: max(1, dock.height)
+            )
         }
-        return PlayerLayout(x: x, y: y, width: max(1, w), height: max(1, h))
+
+        // Fallback: bottom strip of the window (matches MainTabView mini + tab bar stack).
+        let full = Self.windowGlobalFrame()
+        let barH = YouTubeMiniPlayerBar.barHeight
+        let tabH: CGFloat = appState.navigationPath.isEmpty ? Theme.tabBarHeight : 0
+        let yGlobal = full.maxY - tabH - barH
+        return PlayerLayout(
+            x: full.minX - container.minX,
+            y: yGlobal - container.minY,
+            width: max(1, full.width),
+            height: barH
+        )
+    }
+
+    /// Full key-window frame in global coordinates.
+    private static func windowGlobalFrame() -> CGRect {
+        guard let window = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .flatMap(\.windows)
+            .first(where: { $0.isKeyWindow })
+        else {
+            return UIScreen.main.bounds
+        }
+        // bounds in window space → global
+        return window.convert(window.bounds, to: nil)
     }
 
     private func playerLayout(in geo: GeometryProxy) -> PlayerLayout {
@@ -386,6 +502,11 @@ struct GlobalHubPlaybackLayer: View {
             let b = fullscreenFrame(in: geo)
             let t = smoothstep(fsProgress)
             return lerp(a, b, t: t)
+        }
+
+        // Snap hard to mini when mostly collapsed or already mini session.
+        if !expanded || collapse > 0.92 {
+            return miniFrame(in: geo)
         }
 
         let t = smoothstep(min(1, max(0, collapse)))
@@ -430,8 +551,8 @@ struct GlobalHubPlaybackLayer: View {
                 postID: post.id,
                 showsControls: showControls,
                 loops: false,
-                // YT: aspect-fit on stage + FS. Mini strip **must fill** or letterbox reads as black.
-                fillsFrame: !isHubFullscreen && (collapse > 0.45 || !expanded),
+                // YT: aspect-fit on stage + FS. Mini / collapse **must fill** or letterbox = black.
+                fillsFrame: filmFillsFrame,
                 chromeOpacity: chromeOpacity,
                 isMuted: mutedBinding,
                 allowsFullscreen: expanded && collapse < 0.4,
@@ -465,8 +586,13 @@ struct GlobalHubPlaybackLayer: View {
                     appState.hubPlaybackPlaying = playing
                 },
                 onProgress: { current, duration in
-                    miniCurrentSeconds = current
-                    if duration > 0.25 { miniDurationSeconds = duration }
+                    // Throttle @State — 4Hz is enough for mini chrome; 0.25s ticks re-bodied the layer.
+                    if abs(current - miniCurrentSeconds) >= 0.35 {
+                        miniCurrentSeconds = current
+                    }
+                    if duration > 0.25, abs(duration - miniDurationSeconds) > 0.5 {
+                        miniDurationSeconds = duration
+                    }
                 },
                 onVideoSize: { size in
                     appState.noteHubPlaybackVideoSize(size)
@@ -512,13 +638,14 @@ struct GlobalHubPlaybackLayer: View {
                     return
                 }
 
-                // ── Expanded stage ──
+                // ── Expanded stage (gesture only fires inside film hit-rect) ──
                 if expanded, collapse < 0.98 {
-                    if y < 0, collapse < 0.08 {
-                        // Swipe up → live fullscreen morph (YT).
+                    if y < 0, collapse < 0.08, fsProgress < 0.08 {
+                        // Swipe up on **video only** → live fullscreen morph (YT).
+                        // Never armed from comments — pass-through keeps meta pans off this gesture.
                         isFSDragging = true
                         isDragging = false
-                        let p = min(1, max(0, -y / 200))
+                        let p = min(1, max(0, -y / 220))
                         setFSProgress(p, animated: false)
                         return
                     }
@@ -576,8 +703,8 @@ struct GlobalHubPlaybackLayer: View {
                     return
                 }
 
-                // ── Stage: swipe up → fullscreen ──
-                if y < -28 || predicted < -100 {
+                // ── Stage: swipe up on video → fullscreen ──
+                if y < -36 || predicted < -120 {
                     openFullscreenSeamless()
                     return
                 }
@@ -605,13 +732,16 @@ struct GlobalHubPlaybackLayer: View {
         if animated {
             withAnimation(MatteryaMotion.ytMorph) {
                 fsProgress = clamped
-                appState.hubFullscreenPullProgress = clamped
             }
+            appState.hubFullscreenPullProgress = clamped
         } else {
             var t = Transaction()
             t.disablesAnimations = true
             withTransaction(t) {
                 fsProgress = clamped
+            }
+            // Sparse FS pull publish (meta grab already throttled in AppState setter).
+            if abs(clamped - appState.hubFullscreenPullProgress) > 0.05 {
                 appState.hubFullscreenPullProgress = clamped
             }
         }
@@ -622,15 +752,31 @@ struct GlobalHubPlaybackLayer: View {
         if animated {
             withAnimation(MatteryaMotion.ytMorph) {
                 collapse = p
-                appState.hubPlaybackPullProgress = p
             }
+            // Threshold publish only — continuous AppState writes re-bodyed whole home+watch.
+            publishPullProgressIfNeeded(p)
         } else {
             var t = Transaction()
             t.disablesAnimations = true
             withTransaction(t) {
                 collapse = p
-                appState.hubPlaybackPullProgress = p
             }
+            publishPullProgressIfNeeded(p)
+        }
+    }
+
+    /// Publish pull progress sparsely so YouTubeAppView opacity doesn't rebuild 60×/s.
+    private func publishPullProgressIfNeeded(_ p: CGFloat) {
+        let published = appState.hubPlaybackPullProgress
+        // Buckets: 0, ~0.15 (start hide home), ~0.5, ~0.85, 1
+        let bucket: CGFloat
+        if p < 0.08 { bucket = 0 }
+        else if p < 0.35 { bucket = 0.2 }
+        else if p < 0.65 { bucket = 0.5 }
+        else if p < 0.92 { bucket = 0.85 }
+        else { bucket = 1 }
+        if abs(bucket - published) > 0.04 {
+            appState.hubPlaybackPullProgress = bucket
         }
     }
 
@@ -677,6 +823,9 @@ struct GlobalHubPlaybackLayer: View {
             t.disablesAnimations = true
             withTransaction(t) { finish() }
         }
+        // Always clear AppState FS pull so MainTabView doesn't keep immersive chrome hidden
+        // (that was wiping mini play/mute/close after exit).
+        appState.hubFullscreenPullProgress = 0
         lockPortraitAfterFullscreen()
         appState.hubPlaybackPlaying = true
         NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
@@ -757,6 +906,9 @@ struct GlobalHubPlaybackLayer: View {
     /// Animate collapse → 1, then flip session to mini without a second layout jump.
     private func commitMinimize() {
         if fsProgress > 0.01 { closeFullscreen(animated: false) }
+        // Belt-and-suspenders: never leave immersive FS flags stuck over mini chrome.
+        fsProgress = 0
+        appState.hubFullscreenPullProgress = 0
         // Audio must keep running through the morph.
         appState.hubPlaybackPlaying = true
         MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(

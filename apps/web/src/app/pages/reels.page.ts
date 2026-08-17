@@ -1074,7 +1074,9 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
           !this.postsService.isSpark(post) &&
           !!this.reelMediaSrc(post)
       );
-      this.videoPosts = sparks.length ? sparks : videos;
+      // No recommender yet — reshuffle every open so Sparks always feel new.
+      const pool = sparks.length ? sparks : videos;
+      this.videoPosts = this.shufflePosts(pool);
       this.countryName =
         this.posts.find((post) => post.country_name)?.country_name || this.countryCode;
       this.tryScrollToPending();
@@ -1112,12 +1114,24 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
     const seedPosts = Array.isArray(state.seedPosts) ? state.seedPosts : [];
     const videos = seedPosts.filter((post) => !!this.reelMediaSrc(post));
     if (!videos.length) return false;
-    this.videoPosts = videos;
+    // Keep first seed (opened clip) first; shuffle the rest.
+    const [head, ...rest] = videos;
+    this.videoPosts = head ? [head, ...this.shufflePosts(rest)] : this.shufflePosts(videos);
     this.countryName = state.countryName || this.countryName;
     this.loading = false;
     this.error = '';
     this.paint();
     return true;
+  }
+
+  /** Stand-in until recommender: random order every open. */
+  private shufflePosts(posts: CountryPost[]): CountryPost[] {
+    const next = posts.slice();
+    for (let i = next.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [next[i], next[j]] = [next[j], next[i]];
+    }
+    return next;
   }
 
   private tryScrollToPending(): void {

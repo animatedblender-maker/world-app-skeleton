@@ -409,6 +409,30 @@ async function ingestOriginal(
 
   if (dryRun) return 'ok';
 
+  // Never re-seed a clip the author already deleted (pipeline used to resurrect under new UUID).
+  try {
+    const { rows: delHits } = await pool.query<{ n: string }>(
+      `
+      select 1::text as n
+      from public.post_deletes
+      where author_id = $1::uuid
+        and (
+          ($2::text <> '' and media_path is not null and media_path = $2)
+          or (
+            $3::text <> ''
+            and media_url is not null
+            and position($3 in media_url) > 0
+          )
+        )
+      limit 1
+      `,
+      [author.userId, pack.mediaPath || '', pack.videoKey || '']
+    );
+    if (delHits.length) return 'skip';
+  } catch {
+    /* post_deletes may be missing in some envs */
+  }
+
   // DB check allows none|image|video|link — Sparks are media_type=video + body/JSON reel markers.
   const mediaType = 'video';
   // Always store real caption in title too (feed cards / search).
@@ -633,6 +657,26 @@ async function createHubOriginShare(opts: {
   }
 
   const createdAt = new Date().toISOString();
+  // Skip share if this user already deleted this media (or origin).
+  try {
+    const { rows: delHits } = await pool.query<{ n: string }>(
+      `
+      select 1::text as n
+      from public.post_deletes
+      where deleted_by = $1::uuid
+        and (
+          ($2::text <> '' and media_path is not null and (
+            media_path = $2 or position($2 in coalesce(media_path,'')) > 0
+          ))
+          or ($3::uuid is not null and original_post_id = $3::uuid)
+        )
+      limit 1
+      `,
+      [sharer.userId, opts.seed || '', opts.originId || null]
+    );
+    if (delHits.length) return false;
+  } catch { /* ignore */ }
+
   const { rows } = await pool.query<{ id: string }>(
     `
     insert into public.posts

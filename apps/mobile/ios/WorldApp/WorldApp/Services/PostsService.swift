@@ -2268,6 +2268,9 @@ final class PostsService {
         let id = postID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !id.isEmpty else { return false }
 
+        // Resolve full post so we can tombstone media / share / origin keys (not only row id).
+        let known = resolvePostForDelete(id)
+
         // Seed / Archive / non-UUID rows never live in public.posts — treat as local delete.
         let localOnly = Self.isLocalOnlyPostID(id)
 
@@ -2288,18 +2291,54 @@ final class PostsService {
             }
         }
 
-        // Hide when server deleted OR local-only seed. Ownership reject → false (no tombstone).
-        let shouldHide = localOnly || serverDeleted
+        // Hide when server deleted OR local-only seed.
+        // Also hide optimistically when we know the current user authored it (server lag / race).
+        let isMine: Bool = {
+            guard let known else { return false }
+            let me = AuthService.shared.currentUser?.id
+                ?? ContentCache.shared.cachedProfile()?.userID
+            guard let me, !me.isEmpty else { return false }
+            return known.authorID == me
+        }()
+        let shouldHide = localOnly || serverDeleted || isMine
         guard shouldHide else { return false }
 
-        DeletedPostsStore.shared.markDeleted(id)
-        purgePostFromLocalCaches(id)
+        if let known {
+            DeletedPostsStore.shared.markDeleted(post: known)
+        } else {
+            DeletedPostsStore.shared.markDeleted(id)
+        }
+        purgePostFromLocalCaches(id, post: known)
+        HomeFeedStore.shared.removePost(id: id, post: known)
         NotificationCenter.default.post(
             name: .userPostDidDelete,
             object: nil,
             userInfo: ["postID": id]
         )
         return true
+    }
+
+    /// Best-effort post lookup for delete tombstones (cache / feed / hubs / network).
+    private func resolvePostForDelete(_ postID: String) -> CountryPost? {
+        let id = postID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let hit = HomeFeedStore.shared.posts.first(where: { $0.id == id || $0.sharedPostID == id }) {
+            return hit
+        }
+        for key: ContentCacheKey in [.homeFeed, .profilePosts, .livingVideos, .savedPosts] {
+            if let hit = ContentCache.shared.posts(for: key)?.first(where: {
+                $0.id == id || $0.sharedPostID == id
+            }) {
+                return hit
+            }
+        }
+        if let hit = hubsSessionCatalog.first(where: { $0.id == id || $0.sharedPostID == id }) {
+            return hit
+        }
+        if let hit = sparksCatalogSnapshot().first(where: { $0.id == id || $0.sharedPostID == id }) {
+            return hit
+        }
+        // Last resort: network (don't block delete on failure).
+        return nil
     }
 
     /// Non-UUID / seed / hub catalog ids are not server rows.
@@ -2316,18 +2355,22 @@ final class PostsService {
     }
 
     /// Drop a deleted post from every in-memory / disk surface so it cannot reappear on relaunch.
-    func purgePostFromLocalCaches(_ postID: String) {
+    func purgePostFromLocalCaches(_ postID: String, post: CountryPost? = nil) {
         let id = postID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !id.isEmpty else { return }
+        let store = DeletedPostsStore.shared
 
         for key: ContentCacheKey in [.homeFeed, .profilePosts, .livingVideos, .savedPosts] {
             if let cached = ContentCache.shared.posts(for: key) {
-                let next = cached.filter { $0.id != id && $0.sharedPostID != id }
+                let next = cached.filter { !store.isDeleted(post: $0) && $0.id != id && $0.sharedPostID != id }
                 ContentCache.shared.setPosts(next, for: key)
             }
         }
 
-        hubsSessionCatalog.removeAll { $0.id == id || $0.sharedPostID == id }
+        hubsSessionCatalog.removeAll { store.isDeleted(post: $0) || $0.id == id || $0.sharedPostID == id }
+        // Sparks session catalogs (if present as properties).
+        sparksSessionCatalog.removeAll { store.isDeleted(post: $0) || $0.id == id || $0.sharedPostID == id }
+        homeFeedSparkOrder.removeAll { store.isDeleted(post: $0) || $0.id == id || $0.sharedPostID == id }
     }
 
     func reportPost(_ postID: String, reason: String) async throws -> Bool {
@@ -2912,25 +2955,72 @@ enum SparkDiscoveryEngine {
             items.sorted { ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast) }
         }
 
-        // Following unviewed = hard priority, newest first (new post from a follow jumps the feed).
-        let followFresh = newestFirst(followUnviewed)
+        // Following unviewed = priority, but **not a sticky chronological block**.
+        // Light session-shuffle within recency so every open feels different.
+        let followFresh = sessionSeed == 0
+            ? newestFirst(followUnviewed)
+            : seededShuffle(newestFirst(followUnviewed), seed: sessionSeed ^ 0xA11CE)
         let mineFresh = newestFirst(mineUnviewed)
-        // Global shares / discovery: reshuffle every open so the feed never feels frozen.
+        // Global shares / discovery: full session shuffle.
         let otherFresh = sessionSeed == 0
             ? newestFirst(otherUnviewed)
             : seededShuffle(otherUnviewed, seed: sessionSeed)
 
         // HARD: never append already-seen posts while any unviewed remain.
-        let fresh = mineFresh + followFresh + otherFresh
+        // Weave discovery into the head (IG-style mix) — not mine→follows→explore forever.
+        let fresh = weaveHomeFeed(
+            primary: mineFresh + followFresh,
+            discovery: otherFresh,
+            seed: sessionSeed
+        )
         if !fresh.isEmpty {
             return fresh
         }
 
-        // Last resort only (library exhausted): oldest impression first so recycled
-        // items are the ones not seen for the longest time — still not "same as last open".
-        return viewedPool
+        // Last resort only (library exhausted): least-recently-viewed, then rotate by seed
+        // so two opens never show the exact same recycle order.
+        let recycled = viewedPool
             .sorted { $0.1 < $1.1 }
             .map(\.0)
+        guard recycled.count > 1, sessionSeed != 0 else { return recycled }
+        let rot = Int(sessionSeed % UInt64(recycled.count))
+        return Array(recycled[rot...]) + Array(recycled[..<rot])
+    }
+
+    /// Interleave relationship posts with discovery so the top of feed is not a frozen follow-timeline.
+    private static func weaveHomeFeed(
+        primary: [CountryPost],
+        discovery: [CountryPost],
+        seed: UInt64
+    ) -> [CountryPost] {
+        guard !discovery.isEmpty else { return primary }
+        guard !primary.isEmpty else { return discovery }
+        var out: [CountryPost] = []
+        out.reserveCapacity(primary.count + discovery.count)
+        var p = primary
+        var d = discovery
+        var rng = FeedSeededRNG(seed: seed == 0 ? 0xFEED : seed ^ 0xC0FFEE)
+        // First card: slight bias to a follow / own post when available.
+        if !p.isEmpty, rng.next() % 5 != 0 {
+            out.append(p.removeFirst())
+        }
+        while !p.isEmpty || !d.isEmpty {
+            let takeDiscovery: Bool
+            if p.isEmpty {
+                takeDiscovery = true
+            } else if d.isEmpty {
+                takeDiscovery = false
+            } else {
+                // ~40% discovery slots so explore breaks chronological follow monotony.
+                takeDiscovery = (rng.next() % 5) < 2
+            }
+            if takeDiscovery, !d.isEmpty {
+                out.append(d.removeFirst())
+            } else if !p.isEmpty {
+                out.append(p.removeFirst())
+            }
+        }
+        return out
     }
 
     private static func seededShuffle(_ items: [CountryPost], seed: UInt64) -> [CountryPost] {

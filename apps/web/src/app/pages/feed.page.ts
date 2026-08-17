@@ -3,8 +3,8 @@ import { ChangeDetectorRef, Component, OnInit } from '@angular/core';
 import { Router } from '@angular/router';
 
 import { BottomTabsComponent } from '../components/bottom-tabs.component';
+import { MatteryaPostCardComponent } from '../components/matterya-post-card.component';
 import { MatteryaTopbarComponent } from '../components/matterya-topbar.component';
-import { VideoPlayerComponent } from '../components/video-player.component';
 import { AuthService } from '../core/services/auth.service';
 import { FollowService } from '../core/services/follow.service';
 import { LocationService } from '../core/services/location.service';
@@ -16,7 +16,7 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
 @Component({
   selector: 'app-feed-page',
   standalone: true,
-  imports: [CommonModule, BottomTabsComponent, MatteryaTopbarComponent, VideoPlayerComponent],
+  imports: [CommonModule, BottomTabsComponent, MatteryaTopbarComponent, MatteryaPostCardComponent],
   template: `
     <div class="feed-shell">
       <app-matterya-topbar
@@ -40,48 +40,13 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
           Your feed is quiet. Posts from everywhere will show up here as people share.
         </div>
 
-        <article class="post-card" *ngFor="let post of posts; trackBy: trackById">
-          <div class="post-head" (click)="openAuthor(post)">
-            <div class="avatar">
-              <img *ngIf="avatarFor(post)" [src]="avatarFor(post)" alt="" />
-              <span *ngIf="!avatarFor(post)">{{ initialsFor(post) }}</span>
-            </div>
-            <div class="meta">
-              <div class="name">{{ displayName(post) }}</div>
-              <div class="sub">
-                <span *ngIf="post.country_name || post.country_code">{{ post.country_name || post.country_code }} · </span>
-                {{ post.created_at | date: 'mediumDate' }}
-              </div>
-            </div>
-          </div>
-
-          <div class="post-title" *ngIf="post.title">{{ post.title }}</div>
-          <p class="post-body-text" *ngIf="displayBody(post)">{{ displayBody(post) }}</p>
-
-          <div class="post-media" *ngIf="post.media_url && post.media_type !== 'none'">
-            <img *ngIf="isImage(post)" [src]="mediaUrl(post)" alt="" />
-            <app-video-player
-              *ngIf="isVideo(post)"
-              [src]="mediaUrl(post)"
-              [poster]="post.thumb_url || null"
-              adPlacement="video"
-              [adCountryCode]="post.country_code || null"
-              [adPostId]="post.id"
-            ></app-video-player>
-          </div>
-
-          <div class="post-actions">
-            <button type="button" class="action" (click)="toggleLike(post)" [class.on]="post.liked_by_me">
-              {{ post.liked_by_me ? '♥' : '♡' }} {{ post.like_count || 0 }}
-            </button>
-            <button type="button" class="action" (click)="openPost(post)">
-              💬 {{ post.comment_count || 0 }}
-            </button>
-            <button type="button" class="action muted" (click)="openCountry(post)" *ngIf="post.country_code">
-              Globe
-            </button>
-          </div>
-        </article>
+        <!-- iOS FacebookPostCard parity — Hubs badge lives on the card media -->
+        <app-matterya-post-card
+          *ngFor="let post of posts; trackBy: trackById"
+          [post]="post"
+          [edgeToEdge]="false"
+          (changed)="onPostChanged($event)"
+        ></app-matterya-post-card>
       </main>
 
       <app-bottom-tabs></app-bottom-tabs>
@@ -103,17 +68,18 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
           var(--m-paper, #f8f6f2);
       }
       .feed-body {
-        /* Normal social-feed column (~FB/X width), not stretched wall-to-wall */
-        max-width: 680px;
+        /* ~60% of content pane on desktop; full width on small screens */
+        max-width: 100%;
         margin: 0 auto;
-        padding: 0 0 24px;
+        padding: 0 8px 24px;
         width: 100%;
         box-sizing: border-box;
+        --m-feed-card-gap: 0px;
       }
       .sparks-entry {
-        margin: 12px 16px;
-        padding: 14px 16px;
-        border-radius: 14px;
+        margin: 12px 0;
+        padding: 12px 16px;
+        border-radius: 8px;
         background: var(--m-surface, #fefdfb);
         border: 0.5px solid var(--m-border, #ddd8d1);
         display: flex;
@@ -152,133 +118,24 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
       .feed-state.error {
         color: var(--m-danger, #ea000b);
       }
-      .post-card {
-        background: var(--m-surface, #fefdfb);
-        border-bottom: 0.5px solid var(--m-divider, #e2ded8);
-        padding: 14px 16px 10px;
-      }
-      .post-head {
-        display: flex;
-        gap: 12px;
-        align-items: center;
-        cursor: pointer;
-        margin-bottom: 10px;
-      }
-      .avatar {
-        width: 40px;
-        height: 40px;
-        border-radius: 999px;
-        overflow: hidden;
-        background: var(--m-canvas-muted, #f2f0ec);
-        display: grid;
-        place-items: center;
-        font-size: 12px;
-        font-weight: 700;
-        color: var(--m-ink-secondary, #6b645d);
-        flex-shrink: 0;
-      }
-      .avatar img {
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-      }
-      .name {
-        font-weight: 650;
-        font-size: 15px;
-        color: var(--m-ink, #2c2825);
-      }
-      .sub {
-        font-size: 12px;
-        color: var(--m-ink-muted, #948b82);
-        margin-top: 2px;
-      }
-      .post-title {
-        font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
-        font-size: 18px;
-        line-height: 1.3;
-        margin: 0 0 6px;
-        color: var(--m-ink, #2c2825);
-      }
-      .post-body-text {
-        margin: 0 0 10px;
-        font-size: 15px;
-        line-height: 1.45;
-        white-space: pre-wrap;
-        color: var(--m-ink, #2c2825);
-      }
-      .post-media {
-        border-radius: 12px;
-        overflow: hidden;
-        background: #0a0a0a;
-        margin-bottom: 8px;
-      }
-      .post-media img {
-        display: block;
-        width: 100%;
-        max-height: 560px;
-        object-fit: cover;
-      }
-      .post-media app-video-player,
-      .post-media ::ng-deep .video-shell {
-        max-height: 560px;
-      }
-      .post-media ::ng-deep video {
-        max-height: 560px;
-        object-fit: contain;
-        background: #000;
-      }
-      .post-actions {
-        display: flex;
-        gap: 8px;
-        padding-top: 4px;
-      }
-      .action {
-        border: 0;
-        background: transparent;
-        color: var(--m-ink-secondary, #6b645d);
-        font-size: 13px;
-        font-weight: 600;
-        padding: 8px 10px;
-        border-radius: 10px;
-        cursor: pointer;
-      }
-      .action:hover {
-        background: rgba(44, 40, 37, 0.05);
-      }
-      .action.on {
-        color: var(--m-danger, #ea000b);
-      }
-      .action.muted {
-        margin-left: auto;
-        color: var(--m-ink-muted, #948b82);
-      }
-      /* Desktop: keep standard card column centered in the content pane */
+      /* Desktop: posts column = 60% of content pane, centered */
       @media (min-width: 900px) {
         .feed-shell {
-          padding-bottom: 32px;
+          padding-bottom: 40px;
           background: var(--m-canvas-muted, #f2f0ec);
+          min-height: 100dvh;
         }
         .feed-body {
-          max-width: 680px;
+          width: 60%;
+          max-width: 60%;
+          min-width: min(100%, 520px);
           margin: 0 auto;
-          padding: 16px 0 40px;
+          padding: 16px 0 48px;
+          --m-feed-card-gap: 0px;
         }
         .sparks-entry {
           margin: 0 0 12px;
-        }
-        .post-card {
-          margin: 0 0 12px;
-          padding: 14px 16px 12px;
-          border: 0.5px solid var(--m-border, #ddd8d1);
-          border-radius: 12px;
-          border-bottom: 0.5px solid var(--m-border, #ddd8d1);
-          background: var(--m-surface, #fefdfb);
-        }
-        .post-media {
-          border-radius: 10px;
-        }
-        .post-media img {
-          max-height: 560px;
+          border-radius: 8px;
         }
       }
     `,
@@ -322,6 +179,13 @@ export class FeedPageComponent implements OnInit {
     return post.id;
   }
 
+  onPostChanged(post: CountryPost): void {
+    const i = this.posts.findIndex((p) => p.id === post.id);
+    if (i >= 0) {
+      this.posts[i] = post;
+      this.paint();
+    }
+  }
 
   displayName(post: CountryPost): string {
     return post.author?.display_name || post.author?.username || 'Member';

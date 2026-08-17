@@ -5,27 +5,24 @@ struct RootView: View {
 
     var body: some View {
         Group {
-            if !appState.isAuthenticated {
-                // Auth only — do not touch CallSessionManager (LiveKit/VoIP) here.
-                AuthView()
-            } else if appState.needsProfileSetup {
+            // Order matters: never show Auth when a persisted session exists.
+            // Returning users hydrate isAuthenticated + isSessionReady in AppState.init.
+            if appState.isAuthenticated, appState.needsProfileSetup {
                 ProfileSetupView()
-            } else if !appState.isSessionReady {
-                VStack(spacing: 12) {
-                    ProgressView()
-                        .tint(Theme.accent)
-                    Text("Loading Matterya…")
-                        .font(.subheadline)
-                        .foregroundStyle(Theme.inkMuted)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .screenBackground()
-            } else {
+            } else if appState.isAuthenticated, appState.isSessionReady {
                 authenticatedShell
+            } else if appState.isAuthenticated {
+                // Rare: session known but shell not marked ready yet (e.g. mid-login).
+                sessionRestoringSplash
+            } else {
+                // Logged out or brand-new install only.
+                AuthView()
             }
         }
-        .animation(.easeInOut(duration: 0.25), value: appState.isAuthenticated)
-        .animation(.easeInOut(duration: 0.25), value: appState.needsProfileSetup)
+        // Animate real login/logout only — not cold-launch restore (already correct state).
+        .animation(.easeInOut(duration: 0.22), value: appState.isAuthenticated)
+        .animation(.easeInOut(duration: 0.22), value: appState.needsProfileSetup)
+        .animation(.easeInOut(duration: 0.18), value: appState.isSessionReady)
         .onChange(of: appState.isSessionReady) { _, ready in
             if ready { appState.flushPendingPushRoute() }
         }
@@ -59,6 +56,19 @@ struct RootView: View {
                 username: username
             )
         }
+    }
+
+    /// Brief splash only while a known session finishes marking the shell ready.
+    private var sessionRestoringSplash: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+                .tint(Theme.accent)
+            Text("Loading Matterya…")
+                .font(.subheadline)
+                .foregroundStyle(Theme.inkMuted)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .screenBackground()
     }
 
     /// Call stack only exists once signed in — keeps login typing responsive.

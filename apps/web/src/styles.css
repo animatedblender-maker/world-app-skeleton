@@ -118,42 +118,38 @@ body::before{
 
 /*
  * DESKTOP LAYOUT (≥900px)
- * Same Matterya UI language as Android/iOS — different placement for large screens:
- *  - Left navigation rail (primary tabs + Create)
- *  - Full-width main canvas
- *  - Comfortable content columns / multi-column hubs grid
- *  - Messages already uses two panes; widen list + thread
- */
-/*
- * Hubs watch: expand Matterya left menu to fill the open space
- * left of the player (set via html.hubs-watch-desktop on that route).
+ * Compact left rail + wide main content (no huge empty side gutters).
+ * Post media still uses FB ratios (4:5 / 16:9) inside full-width cards.
+ * Hubs watch can widen the left rail for player balance.
  */
 @media (min-width: 900px) {
   html.hubs-watch-desktop {
-    --m-sidebar-w: clamp(280px, 20vw, 360px);
+    --m-sidebar-w: clamp(240px, 18vw, 320px);
   }
 }
 @media (min-width: 1280px) {
   html.hubs-watch-desktop {
-    --m-sidebar-w: clamp(300px, 18vw, 380px);
+    --m-sidebar-w: clamp(260px, 16vw, 340px);
   }
 }
 @media (min-width: 1600px) {
   html.hubs-watch-desktop {
-    --m-sidebar-w: clamp(320px, 16vw, 400px);
+    --m-sidebar-w: clamp(280px, 14vw, 360px);
   }
 }
 
 @media (min-width: 900px) {
   :root {
-    --m-sidebar-w: 200px;
-    --m-page-padding: 16px;
-    --m-feed-gutter: 14px;
-    /* Full-bleed content: no artificial narrow columns */
-    --m-content-max: 100%;
-    --m-content-max-wide: 100%;
-    --m-content-max-xl: 100%;
-    --m-feed-col: 100%;
+    /* Compact left nav — leave room for the feed */
+    --m-sidebar-w: 220px;
+    --m-page-padding: 12px;
+    --m-feed-gutter: 8px;
+    --m-card-radius: 8px;
+    /* Feed / main column ≈ 60% of the content pane (not full-stretch) */
+    --m-feed-col: 60%;
+    --m-content-max: 60%;
+    --m-content-max-wide: 72%;
+    --m-content-max-xl: 85%;
     --m-hubs-cols: 3;
     --m-text-base: 15px;
     --m-text-md: 16px;
@@ -161,6 +157,8 @@ body::before{
     --m-text-xl: 24px;
     --m-text-display: 32px;
     --m-control-h: 48px;
+    --m-avatar-sm: 40px;
+    --m-avatar-md: 48px;
     --m-avatar-lg: 96px;
     /* Bottom tab bar becomes side rail — free bottom safe area */
     --tabs-height: 0px;
@@ -244,16 +242,17 @@ body::before{
 
 @media (min-width: 1280px) {
   :root {
-    --m-sidebar-w: 220px;
+    --m-sidebar-w: 240px;
     --m-hubs-cols: 4;
-    --m-page-padding: 18px;
+    --m-page-padding: 12px;
   }
 }
 
 @media (min-width: 1600px) {
   :root {
+    --m-sidebar-w: 260px;
     --m-hubs-cols: 5;
-    --m-page-padding: 20px;
+    --m-page-padding: 16px;
   }
 }
 

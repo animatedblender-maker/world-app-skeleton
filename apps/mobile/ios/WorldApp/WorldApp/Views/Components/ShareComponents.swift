@@ -62,28 +62,40 @@ struct SparkFeedCard: View {
         FacebookMediaLayout.dominantFeedVideoHeight()
     }
 
+    /// Best playable URL: post → resolver → shared original (feed shares often only stamp origin).
+    private var playURL: URL? {
+        if let u = post.playableVideoURL ?? MediaURLResolver.videoURL(for: post) { return u }
+        if let origin = post.sharedPost?.asCountryPost {
+            return origin.playableVideoURL ?? MediaURLResolver.videoURL(for: origin)
+        }
+        return nil
+    }
+
+    private var posterURL: URL? {
+        post.posterImageURL
+            ?? post.sharedPost?.asCountryPost.posterImageURL
+    }
+
     var body: some View {
         ZStack(alignment: .topLeading) {
             Theme.ink
 
-            if let url = post.playableVideoURL ?? MediaURLResolver.videoURL(for: post) {
+            if let url = playURL {
                 // Facebook: size the box, then **fill** it — no letterbox that shrinks the picture.
+                // Prefer the **fast Sparks path** (VideoPlayerView + warm pool). Archive only for archive.org.
                 InFrameVideoPlayer(
                     url: url,
-                    posterURL: post.posterImageURL,
+                    posterURL: posterURL,
                     placement: "reel",
                     countryCode: post.countryCode,
                     contentCountryCode: post.countryCode,
                     postID: post.id,
                     muted: appState.feedVideosMuted,
                     loops: true,
-                    preferArchivePlayer: post.isHubSeedVideo || ArchiveVideoPlayback.isArchiveURL(url)
-                        || PlayPlatformBridge.isHubCatalogContent(post),
+                    preferArchivePlayer: ArchiveVideoPlayback.isArchiveURL(url),
                     showsControls: false,
                     muteOnlyControls: true,
-                    // Hub long-form: fit full picture (no crop).
-                    fillsFrame: !(post.isHubSeedVideo || PlayPlatformBridge.isHubCatalogContent(post)
-                        || ArchiveVideoPlayback.isArchiveURL(url)),
+                    fillsFrame: true,
                     sharesFeedMute: true,
                     autoplaySurface: autoplaySurface,
                     onViewed: { Task { await PostsService.shared.recordView(post) } }
@@ -93,7 +105,8 @@ struct SparkFeedCard: View {
                 .clipped()
                 .onAppear {
                     ArchiveVideoPlayback.warmResolve(url)
-                    SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
+                    // Light on mount; InFrame deep-warms when focus wins.
+                    SparkWarmPool.shared.warmSingle(postID: post.id, url: url, deep: false)
                 }
             } else {
                 VideoThumbnailView(
@@ -108,6 +121,14 @@ struct SparkFeedCard: View {
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
+                .task {
+                    // Expired / missing media — try a live post fetch so the card can play.
+                    guard let remote = try? await PostsService.shared.getPostByID(post.id),
+                          remote.playableVideoURL != nil
+                    else { return }
+                    // Soft publish so feed re-renders with a playable URL.
+                    PostsService.shared.publishPostChange(remote)
+                }
             }
 
             SparksOriginBadge(compact: true)

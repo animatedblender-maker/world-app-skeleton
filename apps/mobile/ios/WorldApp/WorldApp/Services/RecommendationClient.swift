@@ -73,7 +73,8 @@ enum RecommendationClient {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.timeoutInterval = 8
+        // Hard cap — client Phase-0 already painted; server is soft re-order only.
+        req.timeoutInterval = 4
 
         let body: [String: Any] = [
             "surface": surface.rawValue,
@@ -106,7 +107,7 @@ enum RecommendationClient {
             }
             return RankResult(
                 requestId: json["requestId"] as? String ?? "",
-                policyVersion: json["policyVersion"] as? String ?? "server.v1",
+                policyVersion: json["policyVersion"] as? String ?? "server.v2",
                 items: items,
                 latencyMs: (json["latencyMs"] as? Int)
                     ?? (json["latencyMs"] as? NSNumber)?.intValue
@@ -117,6 +118,64 @@ enum RecommendationClient {
             print("[Recsys] rank failed: \(error.localizedDescription)")
             #endif
             return nil
+        }
+    }
+
+    // MARK: - CDN edge warm (batch playback)
+
+    /// Ask the API to freshen R2 / signed play URLs for a head of posts.
+    /// Client still warms AVPlayers; this cuts media latency on cold CDN edges.
+    static func warmPlaybackURLs(_ postIDs: [String]) async {
+        let ids = Array(
+            Set(
+                postIDs
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+            )
+        ).prefix(12)
+        guard !ids.isEmpty else { return }
+        let token: String
+        do {
+            token = try await AuthService.shared.ensureValidToken()
+        } catch {
+            return
+        }
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/v1/playback/batch") else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.timeoutInterval = 4
+        let body: [String: Any] = ["postIds": Array(ids)]
+        guard let data = try? JSONSerialization.data(withJSONObject: body) else { return }
+        req.httpBody = data
+        do {
+            let (respData, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                return
+            }
+            guard
+                let json = try JSONSerialization.jsonObject(with: respData) as? [String: Any],
+                let items = json["items"] as? [[String: Any]]
+            else { return }
+            // Fire-and-forget ranged GET so CDN edge holds the object near the user.
+            for row in items {
+                guard let play = row["url"] as? String, let playURL = URL(string: play) else { continue }
+                Task.detached(priority: .utility) {
+                    var head = URLRequest(url: playURL)
+                    head.httpMethod = "GET"
+                    head.setValue("bytes=0-1023", forHTTPHeaderField: "Range")
+                    head.timeoutInterval = 3
+                    _ = try? await URLSession.shared.data(for: head)
+                }
+                if ArchiveVideoPlayback.isArchiveURL(playURL) {
+                    ArchiveVideoPlayback.warmResolve(playURL)
+                }
+            }
+        } catch {
+            #if DEBUG
+            print("[Recsys] playback batch warm failed: \(error.localizedDescription)")
+            #endif
         }
     }
 }

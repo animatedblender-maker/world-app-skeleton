@@ -320,24 +320,23 @@ type TabKey = 'feed' | 'globe' | 'hubs' | 'messages' | 'profile';
         color: var(--m-ink-muted, #948b82);
       }
 
-      /* —— Desktop: left navigation rail (same destinations as Android tabs) —— */
+      /* —— Desktop: compact left nav (~220–260px) so feed can fill the rest —— */
       @media (min-width: 900px) {
         :host {
           top: 0;
           bottom: 0;
           left: 0;
           right: auto;
-          width: var(--m-sidebar-w, 212px);
+          width: var(--m-sidebar-w, 220px);
           transform: none !important;
           opacity: 1 !important;
           pointer-events: auto;
           border-right: 0.5px solid var(--m-divider, #e2ded8);
-          background: rgba(254, 253, 251, 0.98);
-          box-shadow: 8px 0 28px rgba(44, 40, 37, 0.04);
+          background: var(--m-paper, #f8f6f2);
+          box-shadow: none;
         }
         :host.hidden {
-          /* Still hide on full-screen reels if desired */
-          transform: translateX(calc(-1 * var(--m-sidebar-w, 212px) - 8px)) !important;
+          transform: translateX(calc(-1 * var(--m-sidebar-w, 220px) - 8px)) !important;
           opacity: 0 !important;
           pointer-events: none;
         }
@@ -345,10 +344,10 @@ type TabKey = 'feed' | 'globe' | 'hubs' | 'messages' | 'profile';
           display: flex;
           flex-direction: column;
           align-content: stretch;
-          gap: 4px;
+          gap: 2px;
           height: 100%;
           min-height: 100%;
-          padding: 18px 12px 20px;
+          padding: 12px 10px 16px;
           border-top: 0;
           box-shadow: none;
           background: transparent;
@@ -357,6 +356,7 @@ type TabKey = 'feed' | 'globe' | 'hubs' | 'messages' | 'profile';
           margin: 0;
           border-radius: 0;
           grid-template-columns: none;
+          box-sizing: border-box;
         }
         .bottom-tabs.globe-mode {
           background: transparent;
@@ -364,36 +364,39 @@ type TabKey = 'feed' | 'globe' | 'hubs' | 'messages' | 'profile';
         .rail-brand {
           display: block;
           font-family: 'Iowan Old Style', Palatino, Georgia, serif;
-          font-size: 26px;
+          font-size: 22px;
           font-weight: 400;
           letter-spacing: 0.02em;
           color: var(--m-ink, #2c2825);
-          padding: 6px 12px 18px;
-          margin-bottom: 4px;
+          padding: 6px 12px 14px;
+          margin-bottom: 2px;
         }
         .tab-label {
           display: inline;
           font-size: 15px;
-          font-weight: 650;
-          letter-spacing: 0.01em;
+          font-weight: 600;
+          letter-spacing: 0;
         }
         .tab-btn {
           display: flex;
           flex-direction: row;
           align-items: center;
           justify-content: flex-start;
-          gap: 14px;
+          gap: 12px;
           width: 100%;
-          min-height: 48px;
-          padding: 10px 14px;
-          border-radius: 14px;
+          min-height: 44px;
+          padding: 10px 12px;
+          border-radius: 999px;
           place-items: unset;
         }
         .tab-btn:hover {
-          background: rgba(44, 40, 37, 0.05);
+          background: rgba(44, 40, 37, 0.06);
         }
         .tab-btn.active {
-          background: rgba(107, 88, 65, 0.10);
+          background: rgba(107, 88, 65, 0.12);
+        }
+        .tab-btn.active .tab-label {
+          font-weight: 700;
         }
         .tab-svg {
           width: 22px;
@@ -402,7 +405,7 @@ type TabKey = 'feed' | 'globe' | 'hubs' | 'messages' | 'profile';
         }
         .tab-dot {
           top: 50%;
-          right: 14px;
+          right: 12px;
           transform: translateY(-50%);
         }
         .create-btn {
@@ -410,14 +413,14 @@ type TabKey = 'feed' | 'globe' | 'hubs' | 'messages' | 'profile';
           flex-direction: row;
           align-items: center;
           justify-content: flex-start;
-          gap: 14px;
+          gap: 12px;
           width: 100%;
           height: auto;
-          min-height: 48px;
-          padding: 10px 14px;
-          margin: 8px 0 10px;
+          min-height: 44px;
+          padding: 10px 12px;
+          margin: 6px 0 8px;
           transform: none;
-          border-radius: 14px;
+          border-radius: 999px;
           background: var(--m-ink, #2c2825);
           color: var(--m-surface, #fefdfb);
         }
@@ -425,9 +428,9 @@ type TabKey = 'feed' | 'globe' | 'hubs' | 'messages' | 'profile';
           filter: brightness(1.08);
         }
         .create-plus {
-          width: 28px;
-          height: 28px;
-          font-size: 22px;
+          width: 26px;
+          height: 26px;
+          font-size: 20px;
           border-radius: 8px;
           color: inherit;
           background: rgba(255, 255, 255, 0.08);
@@ -440,20 +443,20 @@ type TabKey = 'feed' | 'globe' | 'hubs' | 'messages' | 'profile';
         }
         .profile-avatar,
         .profile-avatar.selected {
-          width: 28px;
-          height: 28px;
+          width: 26px;
+          height: 26px;
         }
         .create-backdrop {
-          left: var(--m-sidebar-w, 212px);
+          left: var(--m-sidebar-w, 220px);
         }
         .create-sheet {
-          left: calc(var(--m-sidebar-w, 212px) + 24px);
+          left: calc(var(--m-sidebar-w, 220px) + 12px);
           right: auto;
           bottom: auto;
           top: 50%;
           transform: translateY(-50%);
-          width: min(420px, calc(100vw - var(--m-sidebar-w, 212px) - 48px));
-          border-radius: 18px;
+          width: min(420px, calc(100vw - var(--m-sidebar-w, 220px) - 32px));
+          border-radius: 12px;
           border: 0.5px solid var(--m-border, #ddd8d1);
           box-shadow: 0 24px 60px rgba(44, 40, 37, 0.18);
           padding-bottom: 12px;

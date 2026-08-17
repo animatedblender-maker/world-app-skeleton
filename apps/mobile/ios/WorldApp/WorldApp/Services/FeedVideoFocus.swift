@@ -11,8 +11,9 @@ enum FeedAutoplaySurface: String, Equatable, Sendable {
     @MainActor
     func isLive(appState: AppState) -> Bool {
         guard appState.reelsViewerContext == nil else { return false }
-        // Mini or expanded Hubs continuous player owns audio — no feed/profile autoplay.
-        if appState.hubPlaybackPost != nil { return false }
+        // Expanded Hubs watch owns the surface. Mini hubs may coexist — feed can still autoplay
+        // (muted if needed) so Sparks/Hubs cards don't stick on thumbnails.
+        if appState.hubPlaybackPost != nil, appState.hubPlaybackExpanded { return false }
 
         switch self {
         case .home:
@@ -58,17 +59,20 @@ final class FeedVideoFocus {
     private var silenceWhenEmptyTask: Task<Void, Never>?
 
     /// Must be at least this visible to *start* (or take over) autoplay.
-    private let minVisibleToPlay: CGFloat = 0.28
-    /// Keep current winner until it drops below this (same as start — 70% off-screen rule).
-    private let minVisibleToKeep: CGFloat = 0.25
+    /// Tall Spark cards rarely hit 50%+ of screen height — 0.22 still means "in frame".
+    private let minVisibleToPlay: CGFloat = 0.22
+    /// Keep current winner until it drops below this (more than ~78% off-screen).
+    private let minVisibleToKeep: CGFloat = 0.18
     /// Challenger must beat the current winner by this much to steal focus.
-    private let stealEpsilon: CGFloat = 0.12
+    private let stealEpsilon: CGFloat = 0.08
     /// Ignore this many consecutive near-zero layout reports before clearing a candidate.
     private let zeroGlitchTolerance = 6
 
     private init() {}
 
     /// Report geometry for a candidate. `ratio` is 0…1 (share of the player height on screen).
+    private var recomputeScheduled = false
+
     func report(id: String, visibleRatio: CGFloat) {
         let clamped = max(0, min(1, visibleRatio))
 
@@ -78,28 +82,45 @@ final class FeedVideoFocus {
             let streak = (zeroStreak[id] ?? 0) + 1
             zeroStreak[id] = streak
             if streak < zeroGlitchTolerance, let sticky = stickyRatios[id], sticky >= minVisibleToKeep {
-                ratios[id] = sticky
-                recompute()
+                if abs((ratios[id] ?? -1) - sticky) > 0.02 {
+                    ratios[id] = sticky
+                    scheduleRecompute()
+                }
                 return
             }
             ratios.removeValue(forKey: id)
             stickyRatios.removeValue(forKey: id)
             zeroStreak.removeValue(forKey: id)
-            recompute()
+            scheduleRecompute()
             return
         }
 
         zeroStreak[id] = 0
+        // Skip no-op ratio noise (was recomputing every GeometryReader tick).
+        if let prev = ratios[id], abs(prev - clamped) < 0.04 {
+            stickyRatios[id] = clamped
+            return
+        }
         ratios[id] = clamped
         stickyRatios[id] = clamped
-        recompute()
+        scheduleRecompute()
+    }
+
+    /// One election per runloop — not per GeometryReader axis change.
+    private func scheduleRecompute() {
+        guard !recomputeScheduled else { return }
+        recomputeScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            self?.recomputeScheduled = false
+            self?.recompute()
+        }
     }
 
     func clear(id: String) {
         ratios.removeValue(forKey: id)
         stickyRatios.removeValue(forKey: id)
         zeroStreak.removeValue(forKey: id)
-        recompute()
+        scheduleRecompute()
     }
 
     /// Drop every candidate (tab switch / push). Cards re-report when their surface is live.
@@ -178,36 +199,43 @@ final class FeedVideoFocus {
         NotificationCenter.default.post(name: .feedVideoFocusDidChange, object: winner)
     }
 
-    /// Visible height of `frame` inside the **usable viewport** (screen minus typical
-    /// top safe area + tab bar), divided by the frame’s own height.
+    private static var cachedViewport: CGRect = .zero
+    private static var cachedViewportAt: TimeInterval = 0
+
+    /// Visible height of `frame` inside the usable viewport / frame height.
     static func visibleRatio(for frame: CGRect, in screen: CGRect? = nil) -> CGFloat {
-        let full = screen ?? UIScreen.main.bounds
         guard frame.height > 1, frame.width > 1 else { return 0 }
 
-        // Prefer the key window's layout bounds (handles split / Mac Catalyst better).
-        let viewport: CGRect
-        if let window = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene })
-            .flatMap(\.windows)
-            .first(where: { $0.isKeyWindow }) {
-            let bounds = window.bounds
-            let safe = window.safeAreaInsets
-            // Exclude status/island band + home indicator; keep tab bar in the math
-            // only loosely so tall video cards aren't "half off" while fully readable.
-            viewport = CGRect(
-                x: bounds.minX,
-                y: bounds.minY + safe.top,
-                width: bounds.width,
-                height: max(1, bounds.height - safe.top - safe.bottom)
-            )
-        } else {
-            viewport = full
+        let now = Date().timeIntervalSinceReferenceDate
+        var viewport = cachedViewport
+        if screen != nil || viewport.width < 1 || now - cachedViewportAt > 0.5 {
+            let full = screen ?? UIScreen.main.bounds
+            if let window = UIApplication.shared.connectedScenes
+                .compactMap({ $0 as? UIWindowScene })
+                .flatMap(\.windows)
+                .first(where: { $0.isKeyWindow }) {
+                let bounds = window.bounds
+                let safe = window.safeAreaInsets
+                viewport = CGRect(
+                    x: bounds.minX,
+                    y: bounds.minY + safe.top,
+                    width: bounds.width,
+                    height: max(1, bounds.height - safe.top - safe.bottom)
+                )
+            } else {
+                viewport = full
+            }
+            if screen == nil {
+                cachedViewport = viewport
+                cachedViewportAt = now
+            }
         }
 
         let intersection = frame.intersection(viewport)
         guard !intersection.isNull, intersection.height > 0 else { return 0 }
         return min(1, max(0, intersection.height / frame.height))
     }
+
 }
 
 extension Notification.Name {

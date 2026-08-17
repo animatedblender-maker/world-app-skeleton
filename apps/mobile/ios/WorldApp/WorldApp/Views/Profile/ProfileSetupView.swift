@@ -21,23 +21,23 @@ struct ProfileSetupView: View {
         NavigationStack {
             Form {
                 Section("Profile photo") {
+                    let profileAvatar = avatarURL ?? appState.currentProfile?.avatarURL
+                    let profileSeed = appState.currentProfile?.userID
+                        ?? AuthService.shared.currentUser?.id
+                        ?? "me"
+                    let profileName = displayName.isEmpty
+                        ? appState.currentProfile?.displayName
+                        : displayName
+                    let photoButtonTitle = profileAvatar == nil ? "Upload photo" : "Change photo"
                     HStack(spacing: 16) {
                         ExpandableProfileAvatar(
-                            url: avatarURL ?? appState.currentProfile?.avatarURL,
-                            seed: appState.currentProfile?.userID
-                                ?? AuthService.shared.currentUser?.id
-                                ?? "me",
+                            url: profileAvatar,
+                            seed: profileSeed,
                             size: 72,
-                            displayName: displayName.isEmpty
-                                ? appState.currentProfile?.displayName
-                                : displayName
+                            displayName: profileName
                         )
                         PhotosPicker(selection: $selectedPhoto, matching: .images) {
-                            Text(
-                                (avatarURL ?? appState.currentProfile?.avatarURL) == nil
-                                    ? "Upload photo"
-                                    : "Change photo"
-                            )
+                            Text(photoButtonTitle)
                         }
                         .onChange(of: selectedPhoto) { _, item in
                             Task { await uploadAvatar(item) }

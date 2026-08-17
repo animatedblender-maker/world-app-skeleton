@@ -25,38 +25,52 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       <div class="card">
         <div class="layout" [class.thread-only]="mobileThreadOnly">
           <aside class="panel">
+            <!-- iOS MessagesView top bar -->
             <div class="panel-title">
-              <span>Messages</span>
-              <button class="panel-backlink" type="button" (click)="goBack()">Back</button>
+              <button class="panel-icon-btn" type="button" (click)="goBack()" aria-label="Back">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8">
+                  <path d="M15 5l-7 7 7 7" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
+              <span class="panel-heading">Messages</span>
+              <button class="panel-icon-btn" type="button" (click)="goPeople()" aria-label="New message">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7">
+                  <path d="M5 19l1.5-5.5L16.5 3.5a2.1 2.1 0 0 1 3 3L9.5 16.5 4 18z" stroke-linejoin="round"/>
+                  <path d="M13.5 6.5l4 4" stroke-linecap="round"/>
+                </svg>
+              </button>
             </div>
-            <div class="status" *ngIf="loadingConversations">Loading conversations...</div>
+            <div class="status" *ngIf="loadingConversations">Loading conversations…</div>
             <div class="status error" *ngIf="conversationError">{{ conversationError }}</div>
-            <div class="status" *ngIf="!loadingConversations && !conversations.length">
-              No conversations yet.
+            <div class="status empty" *ngIf="!loadingConversations && !conversations.length">
+              No conversations yet. Start chatting from a profile.
             </div>
             <button
               class="conversation"
               type="button"
               *ngFor="let convo of conversations"
               [class.active]="convo.id === activeConversationId"
+              [class.unread]="isConversationUnread(convo)"
               (click)="selectConversation(convo, true)"
             >
               <div class="avatar">
                 <img
                   *ngIf="otherMember(convo)?.avatar_url"
                   [src]="otherMember(convo)?.avatar_url"
-                  alt="avatar"
+                  alt=""
                 />
                 <div class="initials" *ngIf="!otherMember(convo)?.avatar_url">
                   {{ initialsFor(otherMember(convo)) }}
                 </div>
               </div>
               <div class="meta">
-                <div class="name">{{ displayNameFor(otherMember(convo)) }}</div>
+                <div class="name-row">
+                  <div class="name">{{ displayNameFor(otherMember(convo)) }}</div>
+                  <div class="time">{{ formatTime(convo.last_message_at || convo.updated_at) }}</div>
+                </div>
                 <div class="snippet">{{ conversationSnippet(convo) }}</div>
               </div>
-              <div class="time">{{ formatTime(convo.last_message_at || convo.updated_at) }}</div>
-              <span class="conversation-unread" *ngIf="isConversationUnread(convo)"></span>
+              <span class="conversation-unread" *ngIf="isConversationUnread(convo)" aria-hidden="true"></span>
             </button>
           </aside>
 
@@ -67,14 +81,17 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
                 type="button"
                 *ngIf="mobileThreadOnly"
                 (click)="showConversationList()"
+                aria-label="Back to chats"
               >
-                Chats
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8">
+                  <path d="M15 5l-7 7 7 7" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
               </button>
               <div class="avatar large">
                 <img
                   *ngIf="otherMember(activeConversation)?.avatar_url"
                   [src]="otherMember(activeConversation)?.avatar_url"
-                  alt="avatar"
+                  alt=""
                 />
                 <div class="initials" *ngIf="!otherMember(activeConversation)?.avatar_url">
                   {{ initialsFor(otherMember(activeConversation)) }}
@@ -90,34 +107,42 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
                 </div>
               </div>
               <div class="thread-actions">
-                <button class="thread-backlink" type="button" (click)="goBack()">Back</button>
                 <button
                   class="call-btn"
                   type="button"
                   [disabled]="!canStartCall()"
                   (click)="startCall('audio')"
-                  aria-label="Start voice call"
+                  aria-label="Voice call"
                 >
-                  <img class="call-icon" src="assets/phonecall.svg" alt="" aria-hidden="true" />
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
+                    <path d="M6.6 3.8c.5-.5 1.3-.5 1.8 0l1.7 1.7c.5.5.5 1.2.1 1.7l-1 1.3c.8 1.6 2 2.9 3.6 3.6l1.3-1c.5-.4 1.2-.4 1.7.1l1.7 1.7c.5.5.5 1.3 0 1.8l-1.1 1.1c-.5.5-1.2.7-1.9.5-3.3-.9-6.1-3.7-7-7-.2-.7 0-1.4.5-1.9l1.1-1.1z"/>
+                  </svg>
                 </button>
                 <button
                   class="call-btn"
                   type="button"
                   [disabled]="!canStartCall()"
                   (click)="startCall('video')"
-                  aria-label="Start video call"
+                  aria-label="Video call"
                 >
-                  <img class="call-icon" src="assets/videocall.svg" alt="" aria-hidden="true" />
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
+                    <path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h7A2.5 2.5 0 0 1 16 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-7A2.5 2.5 0 0 1 4 16.5v-9z"/>
+                    <path d="M17 10.2l3.2-2.1a.8.8 0 0 1 1.3.7v6.4a.8.8 0 0 1-1.3.7L17 13.8v-3.6z"/>
+                  </svg>
                 </button>
               </div>
             </div>
 
             <ng-template #emptyThread>
-              <div class="thread-empty">Select a conversation to start chatting.</div>
+              <div class="thread-empty">
+                <div class="thread-empty-icon" aria-hidden="true">💬</div>
+                <div class="thread-empty-title">Your messages</div>
+                <div class="thread-empty-sub">Select a conversation to start chatting.</div>
+              </div>
             </ng-template>
 
             <div class="messages" *ngIf="activeConversation">
-              <div class="status" *ngIf="loadingMessages">Loading messages...</div>
+              <div class="status" *ngIf="loadingMessages">Loading messages…</div>
               <div class="status error" *ngIf="messageError">{{ messageError }}</div>
               <div class="message-list" *ngIf="!loadingMessages" #messageList>
                 <ng-container *ngFor="let message of messages; let i = index; trackBy: trackMessageById">
@@ -125,96 +150,129 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
                     <div class="message-day" *ngIf="showDaySeparatorVisible(i)">
                       {{ formatDayLabel(message.created_at) }}
                     </div>
-                    <div class="message" [class.me]="message.sender_id === meId" [class.call-log]="isCallLogMessage(message)" [attr.id]="'msg-' + message.id">
-                    <div class="msg-avatar">
-                      <img
-                        *ngIf="senderAvatarUrl(message)"
-                        [src]="senderAvatarUrl(message)"
-                        alt="avatar"
-                      />
-                      <div class="initials" *ngIf="!senderAvatarUrl(message)">
-                        {{ initialsFor(senderInfo(message)) }}
-                      </div>
+
+                    <!-- iOS call log pill -->
+                    <div
+                      class="call-log-row"
+                      *ngIf="isCallLogMessage(message); else chatBubble"
+                      [attr.id]="'msg-' + message.id"
+                    >
+                      <span class="call-log-line"></span>
+                      <span class="call-log-pill">{{ messageText(message) }}</span>
+                      <span class="call-log-line"></span>
+                      <div class="call-log-time">{{ formatTimestamp(message.created_at) }}</div>
                     </div>
-                    <div class="bubble">
-                      <div class="reply-preview" *ngIf="replyPreview(message) as reply" (click)="scrollToMessage(reply.id)">
-                        <div class="reply-meta">Replying to {{ reply.name }}</div>
-                        <div class="reply-text">{{ reply.text }}</div>
+
+                    <ng-template #chatBubble>
+                      <!-- iOS MessageBubble: no per-message avatar, stacked content -->
+                      <div
+                        class="message"
+                        [class.me]="message.sender_id === meId"
+                        [attr.id]="'msg-' + message.id"
+                      >
+                        <div class="bubble-col">
+                          <div
+                            class="reply-preview"
+                            *ngIf="replyPreview(message) as reply"
+                            (click)="scrollToMessage(reply.id)"
+                          >
+                            <div class="reply-meta">Replying to {{ reply.name }}</div>
+                            <div class="reply-text">{{ reply.text }}</div>
+                          </div>
+
+                          <div class="message-media" *ngIf="message.media_type && message.media_url">
+                            <img
+                              *ngIf="message.media_type === 'image'"
+                              [src]="message.media_url"
+                              alt=""
+                              (click)="openImageLightbox(message.media_url)"
+                            />
+                            <app-video-player
+                              *ngIf="message.media_type === 'video'"
+                              [src]="message.media_url"
+                            ></app-video-player>
+                          </div>
+
+                          <div class="bubble" *ngIf="messageText(message) as text">
+                            <div class="body">{{ text }}</div>
+                          </div>
+
+                          <div class="reaction-strip" *ngIf="messageLikeCount(message) > 0">
+                            <span class="reaction-chip">❤️ {{ messageLikeCount(message) }}</span>
+                          </div>
+
+                          <div class="message-meta">
+                            <span class="message-time">{{ formatTimestamp(message.created_at) }}</span>
+                            <span class="message-edited" *ngIf="isEdited(message)">Edited</span>
+                            <span class="message-read" *ngIf="isLastReadOwn(message)">Read</span>
+                          </div>
+
+                          <div class="message-tools" *ngIf="!isEditing(message)">
+                            <button type="button" class="tool" (click)="startReply(message)">Reply</button>
+                            <button
+                              type="button"
+                              class="tool"
+                              [class.on]="isMessageLikedByMe(message)"
+                              (click)="toggleMessageLike(message)"
+                            >
+                              {{ isMessageLikedByMe(message) ? 'Liked' : 'Like' }}
+                            </button>
+                            <button
+                              type="button"
+                              class="tool"
+                              *ngIf="message.sender_id === meId"
+                              (click)="startEditMessage(message)"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              class="tool danger"
+                              *ngIf="message.sender_id === meId"
+                              (click)="deleteMessage(message)"
+                            >
+                              Unsend
+                            </button>
+                          </div>
+
+                          <div class="message-edit" *ngIf="isEditing(message)">
+                            <textarea class="message-edit-input" [(ngModel)]="editingDraft" rows="2"></textarea>
+                            <div class="message-edit-actions">
+                              <button type="button" class="ghost" (click)="cancelEditMessage()">Cancel</button>
+                              <button type="button" class="save" (click)="saveEditMessage(message)" [disabled]="editBusy">
+                                {{ editBusy ? 'Saving…' : 'Save' }}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
                       </div>
-                      <div class="body" *ngIf="messageText(message) as text" [class.call-log]="isCallLogMessage(message)">
-                        {{ text }}
-                      </div>
-                      <div class="message-media" *ngIf="message.media_type && message.media_url">
-                        <img
-                          *ngIf="message.media_type === 'image'"
-                          [src]="message.media_url"
-                          alt="message media"
-                          (click)="openImageLightbox(message.media_url)"
-                        />
-                        <app-video-player
-                          *ngIf="message.media_type === 'video'"
-                          [src]="message.media_url"
-                        ></app-video-player>
-                        <a
-                          class="media-download"
-                          [href]="message.media_url"
-                          [attr.download]="message.media_name || 'message-media'"
-                          target="_blank"
-                          rel="noopener"
-                        >
-                          Download
-                        </a>
-                      </div>
-                      <div class="message-meta">
-                        <span class="message-time">
-                          {{ formatTimestamp(message.created_at) }}
-                          <span class="message-date">{{ formatDayLabel(message.created_at) }}</span>
-                        </span>
-                        <span class="message-edited" *ngIf="isEdited(message)">edited</span>
-                        <span class="message-status" *ngIf="messageStatus(message) as status" [class.read]="status === 'read'" [innerHTML]="statusGlyph(status)"></span>
-                      </div>
-                      <div class="message-reactions">
-                        <button
-                          class="message-reply"
-                          type="button"
-                          (click)="startReply(message)"
-                          title="Reply"
-                        >↩ Reply</button>
-                        <button
-                          class="message-like"
-                          type="button"
-                          [class.active]="isMessageLikedByMe(message)"
-                          (click)="toggleMessageLike(message)"
-                          title="Like"
-                        ><span class="heart">{{ isMessageLikedByMe(message) ? '❤' : '♡' }}</span> {{ messageLikeCount(message) }}</button>
-                      </div>
-                      <div class="message-actions" *ngIf="message.sender_id === meId && !isEditing(message) && !isCallLogMessage(message)">
-                        <button class="message-action" type="button" (click)="startEditMessage(message)">Edit</button>
-                        <button class="message-action danger" type="button" (click)="deleteMessage(message)">Delete</button>
-                      </div>
-<div class="message-edit" *ngIf="isEditing(message)">
-  <textarea class="message-edit-input" [(ngModel)]="editingDraft" rows="2"></textarea>
-  <div class="message-edit-actions">
-    <button type="button" class="ghost" (click)="cancelEditMessage()">Cancel</button>
-    <button type="button" class="save" (click)="saveEditMessage(message)" [disabled]="editBusy">
-      {{ editBusy ? 'Saving...' : 'Save' }}
-    </button>
-  </div>
-</div>
-                    </div>
-                  </div>
+                    </ng-template>
                   </ng-container>
                 </ng-container>
               </div>
             </div>
 
+            <!-- iOS composerBar: photo + field + paperplane circle -->
             <form class="composer" *ngIf="activeConversation" (ngSubmit)="sendMessage()">
               <div class="composer-reply" *ngIf="replyingTo">
-                <div>
-                  Replying to <strong>{{ displayNameFor(senderInfo(replyingTo)) }}</strong>
+                <div class="composer-reply-bar" aria-hidden="true"></div>
+                <div class="composer-reply-copy">
+                  <div class="composer-reply-title">
+                    Replying to {{ displayNameFor(senderInfo(replyingTo)) }}
+                  </div>
+                  <div class="composer-reply-text">{{ replySnippet(replyingTo) }}</div>
                 </div>
-                <div class="composer-reply-text">{{ replySnippet(replyingTo) }}</div>
-                <button type="button" class="composer-reply-close" (click)="cancelReply()">×</button>
+                <button type="button" class="composer-reply-close" (click)="cancelReply()">Cancel</button>
+              </div>
+              <div class="composer-preview" *ngIf="messageMediaPreview">
+                <img *ngIf="messageMediaType === 'image'" [src]="messageMediaPreview" alt="" />
+                <video
+                  *ngIf="messageMediaType === 'video'"
+                  [src]="messageMediaPreview"
+                  muted
+                  playsinline
+                ></video>
+                <button class="composer-clear" type="button" (click)="clearMedia()">Remove</button>
               </div>
               <div class="composer-row">
                 <input
@@ -224,33 +282,33 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
                   hidden
                   (change)="onMediaSelected($event)"
                 />
-                <div class="composer-field">
-                  <button class="composer-attach" type="button" (click)="triggerMediaPicker()" title="Add media">
-                    +
-                  </button>
-                  <textarea
-                    #messageInput
-                    class="composer-input"
-                    name="message"
-                    [(ngModel)]="messageDraft"
-                    placeholder="Write a message..."
-                    maxlength="2000"
-                    rows="1"
-                    (input)="onMessageInput($event)"
-                  ></textarea>
-                  <div class="composer-preview" *ngIf="messageMediaPreview">
-                    <img *ngIf="messageMediaType === 'image'" [src]="messageMediaPreview" alt="preview" />
-                    <video
-                      *ngIf="messageMediaType === 'video'"
-                      [src]="messageMediaPreview"
-                      muted
-                      playsinline
-                    ></video>
-                    <button class="composer-clear" type="button" (click)="clearMedia()">Remove</button>
-                  </div>
-                </div>
-                <button class="composer-send" type="submit" [disabled]="messageBusy || !canSendMessage()">
-                  {{ messageBusy ? 'Sending...' : 'Send' }}
+                <button class="composer-attach" type="button" (click)="triggerMediaPicker()" aria-label="Add photo">
+                  <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7">
+                    <rect x="3.5" y="5.5" width="17" height="13" rx="2.2"/>
+                    <circle cx="9" cy="10.5" r="1.6"/>
+                    <path d="M7.5 16.5l3.2-3.4 2.4 2.2 3.1-3.6 3.3 4.8" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </button>
+                <textarea
+                  #messageInput
+                  class="composer-input"
+                  name="message"
+                  [(ngModel)]="messageDraft"
+                  [placeholder]="replyingTo ? 'Write a reply…' : 'Message…'"
+                  maxlength="2000"
+                  rows="1"
+                  (input)="onMessageInput($event)"
+                ></textarea>
+                <button
+                  class="composer-send"
+                  type="submit"
+                  [disabled]="messageBusy || !canSendMessage()"
+                  aria-label="Send"
+                >
+                  <svg *ngIf="!messageBusy" viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
+                    <path d="M3.4 20.6 21 12 3.4 3.4l.1 6.7L15 12 3.5 13.9z"/>
+                  </svg>
+                  <span *ngIf="messageBusy" class="send-busy">…</span>
                 </button>
               </div>
               <div class="status error" *ngIf="messageMediaError">{{ messageMediaError }}</div>
@@ -387,79 +445,83 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
     .panel{
       display:flex;
       flex-direction:column;
-      gap:10px;
-      background:transparent;
+      gap:4px;
+      background:var(--m-paper, #f8f6f2);
       border-radius:0;
-      padding:14px;
+      padding:0 0 8px;
       border:0;
+      border-right:0.5px solid var(--m-divider, #e2ded8);
       min-height:0;
       overflow:auto;
     }
     .panel-title{
-      font-family:'Iowan Old Style', Palatino, Georgia, serif;
-      font-weight:500;
-      letter-spacing:0.02em;
-      text-transform:none;
-      font-size:22px;
-      color:var(--m-ink, #2c2825);
-      margin-bottom:6px;
-      display:flex;
+      position:sticky;
+      top:0;
+      z-index:2;
+      min-height:44px;
+      padding:0 8px;
+      display:grid;
+      grid-template-columns:44px 1fr 44px;
       align-items:center;
-      justify-content:space-between;
-      gap:10px;
+      gap:4px;
+      background:var(--m-surface, #fefdfb);
+      border-bottom:0.5px solid var(--m-divider, #e2ded8);
     }
-    .panel-backlink{
+    .panel-heading{
+      text-align:center;
+      font-size:17px;
+      font-weight:650;
+      color:var(--m-ink, #2c2825);
+    }
+    .panel-icon-btn{
+      width:44px;
+      height:44px;
       border:0;
       background:transparent;
-      color:var(--m-ink-secondary, #6b645d);
-      letter-spacing:0;
-      font-size:13px;
-      font-weight:650;
-      text-transform:none;
+      color:var(--m-ink, #2c2825);
+      display:grid;
+      place-items:center;
       cursor:pointer;
-      padding:4px 6px;
+      border-radius:12px;
+      padding:0;
     }
+    .panel-icon-btn:hover{ background:rgba(44,40,37,0.05); }
     .status{
-      font-size:13px;
-      opacity:0.7;
-      padding:6px 0;
+      font-size:14px;
+      color:var(--m-ink-muted, #948b82);
+      padding:16px 16px 8px;
     }
-    .status.error{
-      color:#c55c5c;
-    }
+    .status.error{ color:var(--m-danger, #ea000b); }
+    .status.empty{ text-align:center; padding:40px 20px; line-height:1.45; }
     .conversation{
       display:flex;
       align-items:center;
-      gap:10px;
-      padding:10px;
+      gap:12px;
+      padding:10px 14px;
+      margin:0 6px;
       border-radius:14px;
-      border:0.5px solid transparent;
+      border:0;
       background:transparent;
       cursor:pointer;
       text-align:left;
-      transition: border 160ms ease, background 160ms ease;
+      color:inherit;
+      width:calc(100% - 12px);
+      box-sizing:border-box;
     }
-    .conversation:hover{
-      border-color:var(--m-divider, #e2ded8);
-      background:rgba(44,40,37,0.04);
-      transform: none;
-    }
-    .conversation.active{
-      border-color:var(--m-border, #ddd8d1);
-      background:var(--m-surface, #fefdfb);
-    }
+    .conversation:hover{ background:rgba(44,40,37,0.04); }
+    .conversation.active{ background:var(--m-surface, #fefdfb); box-shadow:inset 0 0 0 0.5px var(--m-border, #ddd8d1); }
+    .conversation.unread .name{ font-weight:750; }
+    .conversation.unread .snippet{ color:var(--m-ink, #2c2825); opacity:0.85; }
     .conversation-unread{
-      width:8px;
-      height:8px;
+      width:9px;
+      height:9px;
       border-radius:999px;
       background:var(--m-danger, #ea000b);
-      border:0;
       flex:0 0 auto;
-      margin-left:6px;
     }
     .avatar{
-      width:40px;
-      height:40px;
+      width:48px;
+      height:48px;
       border-radius:50%;
       overflow:hidden;
       background:var(--m-canvas-muted, #f2f0ec);
@@ -467,42 +529,40 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       align-items:center;
       justify-content:center;
       font-weight:700;
+      font-size:13px;
       color:var(--m-ink-secondary, #6b645d);
       flex-shrink:0;
     }
-    .avatar img{
-      width:100%;
-      height:100%;
-      object-fit:cover;
-    }
-    .avatar.large{
-      width:48px;
-      height:48px;
-    }
-    .meta{
-      flex:1;
-      min-width:0;
+    .avatar img{ width:100%; height:100%; object-fit:cover; }
+    .avatar.large{ width:40px; height:40px; font-size:12px; }
+    .meta{ flex:1; min-width:0; }
+    .name-row{
+      display:flex;
+      align-items:baseline;
+      justify-content:space-between;
+      gap:10px;
     }
     .name{
-      font-weight:700;
-      font-size:14px;
-      color:rgba(6,16,30,0.9);
+      font-weight:650;
+      font-size:15px;
+      color:var(--m-ink, #2c2825);
       white-space:nowrap;
       overflow:hidden;
       text-overflow:ellipsis;
     }
     .snippet{
-      font-size:12px;
-      opacity:0.6;
+      margin-top:3px;
+      font-size:13px;
+      color:var(--m-ink-muted, #948b82);
       white-space:nowrap;
       overflow:hidden;
       text-overflow:ellipsis;
     }
     .time{
       font-size:11px;
-      opacity:0.5;
-      margin-left:auto;
+      color:var(--m-ink-muted, #948b82);
       white-space:nowrap;
+      flex-shrink:0;
     }
     .thread{
       display:flex;
@@ -515,51 +575,39 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
     }
     .thread-back{
       border:0;
-      background:none;
-      color:var(--m-ink-secondary, #6b645d);
-      font-size:13px;
-      letter-spacing:0;
-      text-transform:none;
-      font-weight:650;
+      background:transparent;
+      color:var(--m-ink, #2c2825);
+      width:40px;
+      height:40px;
+      border-radius:12px;
+      display:grid;
+      place-items:center;
       cursor:pointer;
-      margin-right:8px;
+      padding:0;
+      flex-shrink:0;
     }
     .thread-header{
       display:flex;
       align-items:center;
-      gap:12px;
-      padding:14px;
+      gap:10px;
+      padding:8px 12px;
+      min-height:52px;
       border-bottom:0.5px solid var(--m-divider, #e2ded8);
-      background:rgba(253, 252, 250, 0.94);
+      background:var(--m-canvas, #f8f6f2);
       min-width:0;
     }
-    .thread-backlink{
-      margin-left:auto;
-      border:0;
-      background:transparent;
-      color:var(--m-ink-secondary, #6b645d);
-      letter-spacing:0;
-      font-size:13px;
-      text-transform:none;
-      font-weight:650;
-      cursor:pointer;
-      padding:6px 10px;
-    }
-    .thread-meta{
-      min-width:0;
-      flex:1;
-    }
+    .thread-meta{ min-width:0; flex:1; }
     .thread-name{
-      font-weight:800;
+      font-weight:650;
       font-size:16px;
-      color:rgba(7,16,28,0.9);
+      color:var(--m-ink, #2c2825);
       white-space:nowrap;
       overflow:hidden;
       text-overflow:ellipsis;
     }
     .thread-sub{
       font-size:12px;
-      opacity:0.6;
+      color:var(--m-ink-muted, #948b82);
       white-space:nowrap;
       overflow:hidden;
       text-overflow:ellipsis;
@@ -567,37 +615,37 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
     .thread-actions{
       margin-left:auto;
       display:flex;
-      gap:8px;
+      gap:4px;
       flex-shrink:0;
     }
     .call-btn{
-      width:34px;
-      height:34px;
-      border-radius:10px;
-      border:1px solid rgba(7,20,40,0.15);
-      background:rgba(7,28,42,0.06);
-      color:rgba(7,20,40,0.9);
-      font-size:16px;
+      width:40px;
+      height:40px;
+      border-radius:12px;
+      border:0;
+      background:transparent;
+      color:var(--m-ink, #2c2825);
       cursor:pointer;
       display:grid;
       place-items:center;
+      padding:0;
     }
-    .call-icon{
-      width:18px;
-      height:18px;
-      display:block;
-      object-fit:contain;
-      filter: invert(14%) sepia(10%) saturate(380%) hue-rotate(178deg) brightness(92%) contrast(92%);
-    }
-    .call-btn:disabled{
-      opacity:0.45;
-      cursor:not-allowed;
-    }
+    .call-btn:hover{ background:rgba(44,40,37,0.05); }
+    .call-btn:disabled{ opacity:0.4; cursor:not-allowed; }
     .thread-empty{
-      padding:24px;
-      font-size:14px;
-      opacity:0.6;
+      flex:1;
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      justify-content:center;
+      gap:6px;
+      padding:40px 24px;
+      text-align:center;
+      color:var(--m-ink-muted, #948b82);
     }
+    .thread-empty-icon{ font-size:36px; line-height:1; margin-bottom:8px; opacity:0.7; }
+    .thread-empty-title{ font-size:17px; font-weight:650; color:var(--m-ink, #2c2825); }
+    .thread-empty-sub{ font-size:14px; }
     .messages{
       flex:1;
       display:flex;
@@ -617,53 +665,33 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
     }
     .message-day{
       align-self:center;
-      font-size:11px;
-      letter-spacing:0.06em;
-      text-transform:uppercase;
+      font-size:12px;
       font-weight:650;
       color:var(--m-ink-muted, #948b82);
       background:var(--m-canvas-muted, #f2f0ec);
       border:0.5px solid var(--m-border, #ddd8d1);
       border-radius:999px;
-      padding:6px 12px;
+      padding:5px 12px;
+      margin:6px 0;
     }
+    /* —— iOS MessageBubble —— */
     .message{
       display:flex;
-      align-items:flex-end;
-      gap:10px;
       width:100%;
+      justify-content:flex-start;
     }
-    .message.me{
-      justify-content:flex-end;
-    }
-    .message.me .msg-avatar{
-      order:2;
-    }
-    .message.me .bubble{
-      order:1;
-    }
-    .msg-avatar{
-      width:28px;
-      height:28px;
-      border-radius:50%;
-      overflow:hidden;
-      background:rgba(7,20,40,0.1);
-      border:1px solid rgba(7,20,40,0.12);
+    .message.me{ justify-content:flex-end; }
+    .bubble-col{
       display:flex;
-      align-items:center;
-      justify-content:center;
-      font-size:11px;
-      font-weight:800;
-      color:rgba(7,20,40,0.75);
-      flex-shrink:0;
+      flex-direction:column;
+      align-items:flex-start;
+      gap:4px;
+      max-width:min(78%, 340px);
+      min-width:0;
     }
-    .msg-avatar img{
-      width:100%;
-      height:100%;
-      object-fit:cover;
-    }
+    .message.me .bubble-col{ align-items:flex-end; }
     .bubble{
-      max-width:min(78%, 420px);
+      max-width:100%;
       background:var(--m-surface, #fefdfb);
       border:0.5px solid var(--m-border, #ddd8d1);
       border-radius:18px;
@@ -671,182 +699,153 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       font-size:15px;
       line-height:1.4;
       color:var(--m-ink, #2c2825);
-      box-shadow:none;
     }
-    /* iOS MessageBubble: mine = accentBright, peer = surface + border */
     .message.me .bubble{
       background:var(--m-accent-bright, #7b6347);
       border-color:transparent;
       color:#fff;
     }
-    .message.me .bubble .body,
-    .message.me .bubble .message-time,
-    .message.me .bubble .message-date,
-    .message.me .bubble .message-edited,
-    .message.me .bubble .message-status{
-      color:rgba(255,255,255,0.92);
-    }
-    .message.me .bubble .message-reply,
-    .message.me .bubble .message-like{
-      color:rgba(255,255,255,0.88);
-    }
-    .message.me .msg-avatar{
-      display:none;
-    }
     .body{
       white-space:pre-wrap;
       word-break:break-word;
     }
-    .message.call-log .bubble{
-      background:rgba(7,20,40,0.06);
-      border:1px dashed rgba(7,20,40,0.2);
-      box-shadow:none;
+    .call-log-row{
+      display:flex;
+      flex-wrap:wrap;
+      align-items:center;
+      justify-content:center;
+      gap:10px;
+      width:100%;
+      padding:8px 0;
     }
-    .message.call-log .body{
-      font-style:italic;
-      color:rgba(7,20,40,0.7);
+    .call-log-line{
+      flex:1;
+      height:0.5px;
+      background:var(--m-border, #ddd8d1);
+      min-width:24px;
+    }
+    .call-log-pill{
+      font-size:12px;
+      font-weight:650;
+      color:var(--m-ink-muted, #948b82);
+      background:var(--m-canvas-muted, #f2f0ec);
+      border-radius:999px;
+      padding:6px 12px;
+      max-width:70%;
       text-align:center;
-      letter-spacing:0.02em;
     }
-    .message.call-log.me .bubble{
-      background:rgba(8,40,70,0.08);
+    .call-log-time{
+      width:100%;
+      text-align:center;
+      font-size:11px;
+      color:var(--m-ink-muted, #948b82);
     }
     .message-media{
-      margin-top:8px;
       display:flex;
       flex-direction:column;
-      gap:8px;
+      gap:6px;
+      max-width:220px;
     }
-    .message-media img,
-    .message-media app-video-player{
-      width:100%;
-      border-radius:14px;
-      overflow:hidden;
-      border:1px solid rgba(7,20,40,0.12);
-      background:#000;
-    }
+    .message.me .message-media{ align-items:flex-end; }
     .message-media img{
       display:block;
+      width:100%;
+      max-height:280px;
+      min-height:120px;
       object-fit:cover;
+      border-radius:14px;
       cursor:pointer;
+      background:#0c0a09;
     }
     .message-media app-video-player{
-      width:100%;
+      width:220px;
+      max-width:100%;
+      border-radius:12px;
+      overflow:hidden;
+      background:#000;
     }
-    .message-media app-video-player ::ng-deep .video-shell{
-      max-height:none;
-    }
+    .message-media app-video-player ::ng-deep .video-shell{ max-height:none; }
     .message-media app-video-player ::ng-deep video{
-      height:100%;
       width:100%;
+      height:100%;
       object-fit:contain;
     }
-    .media-download{
-      font-size:11px;
-      letter-spacing:0.08em;
-      text-transform:uppercase;
-      font-weight:700;
-      color:rgba(7,20,40,0.65);
-      text-decoration:none;
-    }
-    .message-time{
-      font-size:10px;
-      opacity:0.6;
+    .reaction-strip{ display:flex; gap:6px; }
+    .reaction-chip{
+      font-size:12px;
+      padding:4px 8px;
+      border-radius:999px;
+      background:var(--m-canvas-muted, #f2f0ec);
+      color:var(--m-ink, #2c2825);
     }
     .message-meta{
       display:flex;
       align-items:center;
-      justify-content:flex-end;
-      gap:8px;
-      margin-top:6px;
-    }
-    .message-reactions{
-      display:flex;
-      justify-content:flex-end;
-      gap:8px;
-      margin-top:6px;
-    }
-    .message-like,
-    .message-reply{
-      border:0;
-      background:rgba(255,255,255,0.65);
-      color:rgba(7,20,40,0.9);
-      font-size:10px;
-      letter-spacing:0.08em;
-      text-transform:uppercase;
-      padding:4px 8px;
-      border-radius:999px;
-      cursor:pointer;
-    }
-    .message-like .heart{
-      color:rgba(7,20,40,0.95);
-    }
-    .message-like.active{
-      color:#ff6b8a;
-      background:rgba(255,107,138,0.18);
-    }
-    .message-like.active .heart{
-      color:#ff6b8a;
-    }
-    .message-date{
-      margin-left:6px;
-      font-size:10px;
-      opacity:0.6;
-    }
-    .message-edited{
-      font-size:10px;
-      text-transform:uppercase;
-      letter-spacing:0.12em;
-      color:rgba(7,20,40,0.55);
-    }
-    .message-status{
+      gap:6px;
       font-size:11px;
-      letter-spacing:0.08em;
-      opacity:0.7;
-      color:rgba(7,20,40,0.6);
+      color:var(--m-ink-muted, #948b82);
+      padding:0 2px;
     }
-    .message-status.read{
-      color:rgba(0,155,220,0.95);
-      opacity:1;
+    .message-time{ font-size:11px; }
+    .message-edited{ font-weight:650; }
+    .message-read{
+      font-weight:500;
+      color:var(--m-ink-muted, #948b82);
     }
-    .message-actions{
+    .message-tools{
       display:flex;
-      justify-content:flex-end;
+      flex-wrap:wrap;
       gap:10px;
-      margin-top:6px;
-    }
-    .reply-preview{
-      border-left:2px solid rgba(120,210,255,0.6);
-      padding-left:10px;
-      margin-bottom:8px;
-      font-size:12px;
-      opacity:0.9;
-    }
-    .reply-meta{
-      font-weight:700;
-      font-size:10px;
-      text-transform:uppercase;
-      letter-spacing:0.12em;
-      opacity:0.7;
-    }
-    .reply-text{
-      margin-top:4px;
+      padding:0 2px;
       opacity:0.85;
     }
-    .message-action{
+    .message-tools .tool{
       border:0;
-      background:none;
-      font-size:10px;
-      letter-spacing:0.12em;
-      text-transform:uppercase;
-      color:rgba(7,20,40,0.65);
+      background:transparent;
+      padding:0;
+      font-size:12px;
+      font-weight:650;
+      color:var(--m-ink-muted, #948b82);
       cursor:pointer;
     }
-    .message-action.danger{
-      color:rgba(200,70,70,0.9);
+    .message-tools .tool.on{ color:var(--m-ink, #2c2825); }
+    .message-tools .tool.danger{ color:var(--m-danger, #ea000b); }
+    .reply-preview{
+      width:100%;
+      max-width:220px;
+      box-sizing:border-box;
+      padding:8px 12px 8px 14px;
+      border-radius:12px;
+      background:var(--m-canvas-muted, #f2f0ec);
+      position:relative;
+      cursor:pointer;
+    }
+    .reply-preview::before{
+      content:'';
+      position:absolute;
+      left:0;
+      top:6px;
+      bottom:6px;
+      width:3px;
+      border-radius:2px;
+      background:var(--m-accent, #6b5841);
+    }
+    .reply-meta{
+      font-size:11px;
+      font-weight:650;
+      color:var(--m-ink-muted, #948b82);
+    }
+    .reply-text{
+      margin-top:2px;
+      font-size:13px;
+      color:var(--m-ink-secondary, #6b645d);
+      display:-webkit-box;
+      -webkit-line-clamp:2;
+      -webkit-box-orient:vertical;
+      overflow:hidden;
     }
     .message-edit{
-      margin-top:8px;
+      width:100%;
       display:flex;
       flex-direction:column;
       gap:8px;
@@ -854,75 +853,47 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
     .message-edit-input{
       width:100%;
       border-radius:12px;
-      border:1px solid rgba(7,20,40,0.18);
-      padding:8px 10px;
-      font-family:inherit;
-      font-size:13px;
+      border:0.5px solid var(--m-border, #ddd8d1);
+      padding:10px 12px;
+      font:inherit;
+      font-size:14px;
       resize:vertical;
       min-height:60px;
+      background:var(--m-surface, #fefdfb);
+      color:var(--m-ink, #2c2825);
+      box-sizing:border-box;
     }
     .message-edit-actions{
       display:flex;
       justify-content:flex-end;
-      gap:8px;
-    }
-    .composer-reply{
-      position:relative;
-      padding:8px 10px;
-      border-radius:12px;
-      background:rgba(255,255,255,0.08);
-      margin:0 0 8px;
-      font-size:12px;
-      color:#eef6ff;
-    }
-    .composer-reply-text{
-      margin-top:4px;
-      opacity:0.8;
-      white-space:nowrap;
-      overflow:hidden;
-      text-overflow:ellipsis;
-    }
-    .composer-reply-close{
-      position:absolute;
-      right:8px;
-      top:6px;
-      border:0;
-      background:transparent;
-      color:#fff;
-      font-size:16px;
-      cursor:pointer;
-    }
-    .message-highlight .bubble{
-      box-shadow:0 0 0 2px rgba(120,210,255,0.55), 0 0 20px rgba(120,210,255,0.35);
+      gap:10px;
     }
     .message-edit-actions .ghost{
       border:0;
       background:none;
-      font-size:10px;
-      letter-spacing:0.12em;
-      text-transform:uppercase;
-      color:rgba(7,20,40,0.6);
+      font-size:13px;
+      font-weight:650;
+      color:var(--m-ink-muted, #948b82);
       cursor:pointer;
     }
     .message-edit-actions .save{
       border:0;
       border-radius:999px;
-      padding:6px 14px;
-      background:rgba(0,155,220,0.9);
+      padding:8px 14px;
+      background:var(--m-accent-bright, #7b6347);
       color:#fff;
-      font-size:11px;
-      letter-spacing:0.08em;
-      text-transform:uppercase;
+      font-size:13px;
+      font-weight:650;
       cursor:pointer;
     }
-    @media (max-width: 600px){
-      .message-media app-video-player ::ng-deep .video-shell{
-        max-height:240px;
-      }
-      .message-media app-video-player ::ng-deep video{
-        max-height:240px;
-      }
+    .message-highlight .bubble{
+      box-shadow:0 0 0 2px color-mix(in srgb, var(--m-accent-bright, #7b6347) 45%, transparent);
     }
+    @media (max-width: 600px){
+      .message-media app-video-player ::ng-deep .video-shell{ max-height:240px; }
+      .message-media app-video-player ::ng-deep video{ max-height:240px; }
+    }
+    /* —— iOS composerBar —— */
     .composer{
       position:sticky;
       bottom:0;
@@ -930,89 +901,109 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       display:flex;
       flex-direction:column;
       gap:10px;
-      padding:16px;
+      padding:12px 16px;
       border-top:0.5px solid var(--m-border, #ddd8d1);
       background:var(--m-surface, #fefdfb);
-      padding-bottom:calc(16px + env(safe-area-inset-bottom));
+      padding-bottom:calc(12px + env(safe-area-inset-bottom));
+    }
+    .composer-reply{
+      display:flex;
+      align-items:flex-start;
+      gap:10px;
+      padding:0 2px;
+    }
+    .composer-reply-bar{
+      width:2px;
+      align-self:stretch;
+      border-radius:1px;
+      background:color-mix(in srgb, var(--m-accent, #6b5841) 45%, transparent);
+      flex-shrink:0;
+    }
+    .composer-reply-copy{ flex:1; min-width:0; }
+    .composer-reply-title{
+      font-size:12px;
+      font-weight:650;
+      color:var(--m-ink, #2c2825);
+    }
+    .composer-reply-text{
+      margin-top:2px;
+      font-size:12px;
+      color:var(--m-ink-secondary, #6b645d);
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+    }
+    .composer-reply-close{
+      border:0;
+      background:transparent;
+      color:var(--m-accent, #6b5841);
+      font-size:12px;
+      font-weight:650;
+      cursor:pointer;
+      padding:0;
+      flex-shrink:0;
     }
     .composer-row{
       display:flex;
       gap:10px;
       align-items:flex-end;
     }
-    .composer-field{
-      flex:1;
-      display:flex;
-      flex-direction:column;
-      gap:8px;
-      border-radius:8px;
-      border:0.5px solid var(--m-border, #ddd8d1);
-      background:var(--m-surface, #fefdfb);
-      padding:10px 12px 10px 44px;
-      min-height:48px;
-      position:relative;
-    }
-    .composer-input{
-      width:100%;
-      border:0;
-      padding:4px 0;
-      font-size:15px;
-      font-family:inherit;
-      background:transparent;
-      color:var(--m-ink, #2c2825);
-      min-height:28px;
-      max-height:160px;
-      line-height:1.4;
-      resize:none;
-      overflow-y:hidden;
-    }
     .composer-attach{
-      position:absolute;
-      left:10px;
-      top:10px;
-      width:26px;
-      height:26px;
-      border-radius:50%;
+      width:36px;
+      height:36px;
       border:0;
+      border-radius:10px;
       background:transparent;
-      font-weight:900;
-      font-size:20px;
-      line-height:1;
-      cursor:pointer;
       color:var(--m-accent-bright, #7b6347);
+      cursor:pointer;
       display:grid;
       place-items:center;
+      flex-shrink:0;
+      padding:0;
+    }
+    .composer-input{
+      flex:1;
+      min-width:0;
+      border:0.5px solid var(--m-border, #ddd8d1);
+      border-radius:8px;
+      padding:12px;
+      font-size:15px;
+      font-family:inherit;
+      background:var(--m-surface, #fefdfb);
+      color:var(--m-ink, #2c2825);
+      min-height:44px;
+      max-height:120px;
+      line-height:1.35;
+      resize:none;
+      overflow-y:auto;
+      box-sizing:border-box;
     }
     .composer-send{
-      display:inline-flex;
-      align-items:center;
-      justify-content:center;
-      min-width:44px;
+      width:44px;
       height:44px;
-      min-height:44px;
+      min-width:44px;
       border:0;
       border-radius:999px;
-      padding:0 16px;
+      padding:0;
       background:var(--m-accent-bright, #7b6347);
       color:#fff;
-      font-weight:700;
-      font-size:14px;
       cursor:pointer;
-      box-shadow:none;
+      display:grid;
+      place-items:center;
       flex-shrink:0;
     }
     .composer-send:disabled{
       background:var(--m-ink-muted, #948b82);
       opacity:0.85;
       cursor:not-allowed;
-      box-shadow:none;
     }
+    .send-busy{ font-size:16px; line-height:1; }
     .composer-preview{
       display:flex;
       align-items:center;
       gap:12px;
-      background:rgba(7,20,40,0.04);
-      border:1px solid rgba(7,20,40,0.12);
+      background:var(--m-canvas-muted, #f2f0ec);
+      border:0.5px solid var(--m-border, #ddd8d1);
       border-radius:12px;
       padding:8px;
     }
@@ -1023,16 +1014,13 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       object-fit:cover;
       border-radius:10px;
       background:#000;
-      border:1px solid rgba(7,20,40,0.1);
     }
     .composer-clear{
       border:0;
       background:none;
-      color:rgba(7,20,40,0.6);
-      font-weight:700;
-      letter-spacing:0.12em;
-      text-transform:uppercase;
-      font-size:10px;
+      color:var(--m-danger, #ea000b);
+      font-weight:650;
+      font-size:14px;
       cursor:pointer;
     }
     .lightbox{
@@ -1208,20 +1196,15 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       color:#fff;
     }
     @media (min-width: 901px){
-      /* Full-height two-pane like a desktop Messages app — iOS visual language */
-      :host{
-        height:100svh;
-      }
+      :host{ height:100svh; }
       .wrap{
         padding:0;
         height:100%;
         background:var(--m-paper, #f8f6f2);
       }
-      .card{
-        height:100%;
-      }
+      .card{ height:100%; }
       .layout{
-        grid-template-columns:minmax(300px, 34vw) minmax(0, 1fr);
+        grid-template-columns:minmax(300px, 32vw) minmax(0, 1fr);
         max-width:none;
         width:100%;
         margin:0;
@@ -1232,165 +1215,45 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       .panel{
         border-right:0.5px solid var(--m-divider, #e2ded8);
         background:var(--m-paper, #f8f6f2);
-        padding:12px 10px 16px;
-        gap:6px;
+        padding:0 0 12px;
+        gap:2px;
       }
-      .panel-title{
-        font-size:20px;
-        font-weight:600;
-        font-family:system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-        letter-spacing:0;
-        padding:8px 8px 10px;
-        border-bottom:0.5px solid var(--m-divider, #e2ded8);
-        margin-bottom:4px;
-      }
-      .panel-backlink{
-        display:none;
-      }
-      .conversation{
-        border-radius:12px;
-        padding:12px 10px;
-        gap:12px;
-        background:var(--m-surface, #fefdfb);
-        border:0.5px solid transparent;
-        margin-bottom:2px;
-      }
-      .conversation:hover{
-        background:var(--m-surface, #fefdfb);
-        border-color:var(--m-divider, #e2ded8);
-      }
-      .conversation.active{
-        background:var(--m-surface, #fefdfb);
-        border-color:var(--m-border, #ddd8d1);
-        box-shadow:0 1px 0 rgba(44,40,37,0.04);
-      }
-      .avatar{
-        width:48px;
-        height:48px;
-      }
-      .name{
-        font-size:15px;
-        font-weight:650;
-        color:var(--m-ink, #2c2825);
-      }
-      .snippet{
-        font-size:13px;
-        color:var(--m-ink-muted, #948b82);
-        opacity:1;
-      }
-      .time{
-        font-size:12px;
-        color:var(--m-ink-muted, #948b82);
-        opacity:1;
-      }
-      .thread{
-        background:var(--m-paper, #f8f6f2);
-        min-height:0;
-      }
+      .thread{ background:var(--m-paper, #f8f6f2); min-height:0; }
       .thread-header{
-        background:var(--m-surface, #fefdfb);
+        background:var(--m-canvas, #f8f6f2);
         border-bottom:0.5px solid var(--m-divider, #e2ded8);
-        padding:10px 16px;
-        min-height:56px;
+        padding:8px 16px;
+        min-height:52px;
       }
-      .thread-backlink{
-        display:none;
-      }
-      .thread-name{
-        font-size:16px;
-        font-weight:650;
-        color:var(--m-ink, #2c2825);
-      }
-      .thread-sub{
-        color:var(--m-ink-muted, #948b82);
-        opacity:1;
-      }
-      .call-btn{
-        width:40px;
-        height:40px;
-        border-radius:10px;
-        border:0;
-        background:transparent;
-      }
-      .call-btn:hover{
-        background:rgba(44,40,37,0.05);
-      }
-      .message-list{
-        padding:16px 20px 20px;
-        gap:12px;
-      }
-      .bubble{
-        max-width:min(62%, 480px);
-      }
-      .composer{
-        padding:16px 20px calc(16px + env(safe-area-inset-bottom));
-      }
-      .thread-empty{
-        display:grid;
-        place-items:center;
-        flex:1;
-        font-size:15px;
-        color:var(--m-ink-muted, #948b82);
-        opacity:1;
-      }
+      .message-list{ padding:16px 20px 20px; gap:12px; }
+      .bubble-col{ max-width:min(62%, 420px); }
+      .composer{ padding:12px 20px calc(12px + env(safe-area-inset-bottom)); }
     }
     @media (max-width: 900px){
-      .wrap{
-        padding:0;
-      }
+      .wrap{ padding:0; }
       .layout{
         grid-template-columns:1fr;
         height:100%;
-        gap:12px;
+        gap:0;
       }
       .panel{
-        max-height:240px;
+        max-height:none;
         overflow:auto;
+        border-right:0;
       }
-      .layout.thread-only{
-        height:100%;
-      }
-      .thread{
-        min-height:0;
-        height:100%;
-      }
-      .messages{
-        min-height:0;
-      }
-      .message-list{
-        min-height:0;
-      }
-      .thread-header{
-        flex-wrap:wrap;
-      }
-      .thread-actions{
-        align-items:center;
-      }
+      .layout.thread-only .panel{ display:none; }
+      .layout.thread-only{ height:100%; }
+      .thread{ min-height:0; height:100%; }
+      .messages, .message-list{ min-height:0; }
     }
     @media (max-width: 600px){
-      .wrap{
-        padding:0;
-      }
-      .card{
-        padding:0;
-      }
-      .bubble{
-        max-width:86%;
-      }
+      .wrap{ padding:0; }
+      .card{ padding:0; }
+      .bubble-col{ max-width:min(86%, 340px); }
       .composer-send{
-        width:100%;
-      }
-      .composer-row{
-        flex-direction:column;
-        align-items:stretch;
-      }
-      .composer-attach{
-        left:8px;
-        top:8px;
-        width:24px;
-        height:24px;
-        font-size:15px;
-        border-radius:50%;
+        width:44px;
+        min-width:44px;
+        height:44px;
       }
       .call-card{
         height:min(80svh, 600px);
@@ -3368,8 +3231,40 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     void this.router.navigate(['/globe']);
   }
 
+  /** iOS MessagesView compose → People */
+  goPeople(): void {
+    void this.router.navigate(['/people']);
+  }
+
   goHome(): void {
     void this.router.navigate(['/globe']);
+  }
+
+  /**
+   * iOS: show the word “Read” only under the latest of my messages
+   * the peer has read — no tick glyphs.
+   */
+  isLastReadOwn(message: Message): boolean {
+    if (!this.meId || message.sender_id !== this.meId) return false;
+    if (this.isCallLogMessage(message)) return false;
+    if (String(message.id || '').startsWith('pending-')) return false;
+    const other = this.otherMember(this.activeConversation);
+    const lastRead = other?.last_read_at
+      ? this.parseTimestamp(other.last_read_at).getTime()
+      : 0;
+    if (!lastRead) return false;
+    const created = this.parseTimestamp(message.created_at).getTime();
+    if (!created || lastRead + 2000 < created) return false;
+
+    let lastId: string | null = null;
+    for (const m of this.messages) {
+      if (this.isReactionMessage(m) || this.isCallLogMessage(m)) continue;
+      if (m.sender_id !== this.meId) continue;
+      if (String(m.id || '').startsWith('pending-')) continue;
+      const t = this.parseTimestamp(m.created_at).getTime();
+      if (t && lastRead + 2000 >= t) lastId = m.id;
+    }
+    return lastId === message.id;
   }
 
   openNotifications(): void {

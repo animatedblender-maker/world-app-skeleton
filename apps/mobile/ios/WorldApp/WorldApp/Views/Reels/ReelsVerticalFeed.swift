@@ -1180,6 +1180,13 @@ private struct SparksTopChrome: View {
     }
 }
 
+/// Nonisolated queue budgets (default args cannot reference MainActor-isolated statics).
+private enum SparksQueueBudget {
+    static let minQueueAhead = 28
+    static let bulkBatchSize = 80
+}
+
+
 struct ReelsScrollViewer: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
@@ -1196,10 +1203,7 @@ struct ReelsScrollViewer: View {
     @State private var recyclePass = 0
     @State private var commentsPostID: String?
 
-    /// How many unplayed pages we always try to keep ahead of the focused Spark.
-    private static let minQueueAhead = 28
-    /// Catalog bulk size per load-more (R2 library is large — fetch in chunks).
-    private static let bulkBatchSize = 80
+    // Budget constants live on SparksQueueBudget (nonisolated) so default args compile under Swift 6.
 
     init(context: ReelsViewerContext) {
         self.context = context
@@ -1312,21 +1316,19 @@ struct ReelsScrollViewer: View {
 
             // Instant local bulk (no remount) then deep expand off the critical path.
             seedFromWarmCatalogIfNeeded()
-            // Thin seed from “Sparks for you” — force catalog fuel immediately.
-            if posts.count < 12 {
-                await ensureBulkQueueAhead(target: 24)
-            }
+            // Always top-up queue on open (chat share often arrives with a single seed).
+            await ensureBulkQueueAhead(target: max(24, SparksQueueBudget.minQueueAhead))
             SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
 
             // Catalog expand + bulk top-up in background — swipe never waits.
             Task { @MainActor in
                 await expandFeed()
-                await ensureBulkQueueAhead(target: Self.minQueueAhead)
+                await ensureBulkQueueAhead(target: SparksQueueBudget.minQueueAhead)
                 SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
-                // Second pass if still thin (cold catalog).
-                if posts.count < Self.minQueueAhead {
+                // Second pass if still thin (cold catalog / chat entry).
+                if posts.count < SparksQueueBudget.minQueueAhead {
                     await loadMoreReels()
-                    await ensureBulkQueueAhead(target: Self.minQueueAhead)
+                    await ensureBulkQueueAhead(target: SparksQueueBudget.minQueueAhead)
                 }
             }
         }
@@ -1397,7 +1399,7 @@ struct ReelsScrollViewer: View {
     }
 
     /// Keep at least `target` unplayed Sparks after the focused index.
-    private func ensureBulkQueueAhead(target: Int = Self.minQueueAhead) async {
+    private func ensureBulkQueueAhead(target: Int = SparksQueueBudget.minQueueAhead) async {
         var guardPasses = 0
         while guardPasses < 5 {
             guardPasses += 1
@@ -1422,7 +1424,7 @@ struct ReelsScrollViewer: View {
 
     /// Instant neighbors from memory — **unviewed discovery order**, append only.
     private func seedFromWarmCatalogIfNeeded() {
-        guard posts.count < Self.minQueueAhead else { return }
+        guard posts.count < SparksQueueBudget.minQueueAhead else { return }
         var seen = Set(posts.map(\.id))
         var toAppend: [CountryPost] = []
         let warm = SparkDiscoveryEngine.rankForDiscovery(
@@ -1477,7 +1479,20 @@ struct ReelsScrollViewer: View {
         let aheadBefore = max(0, posts.count - liveIndexBefore - 1)
 
         // Full discovery session: unviewed first + random library samples.
-        let fresh = await PostsService.shared.beginFreshSparksSession(preferStart: rankingAnchor)
+        var fresh = await PostsService.shared.beginFreshSparksSession(preferStart: rankingAnchor)
+        // Server rank (scale path) — soft reorder; never blocks first paint (already open).
+        if fresh.count >= 6 {
+            let ranked = await RecommendationClient.rankPosts(
+                fresh,
+                surface: .sparks,
+                sessionId: context.id.uuidString,
+                followingIDs: Set<String>(),
+                limit: min(fresh.count, 100)
+            )
+            if ranked.count >= 2 {
+                fresh = ranked
+            }
+        }
 
         // Re-read live id after await (swipe during load).
         let keepID = posts.indices.contains(activeIndex)
@@ -1599,7 +1614,7 @@ struct ReelsScrollViewer: View {
 
         let existingIDs = Set(posts.map(\.id))
         let tail = Array(posts.suffix(8))
-        let bulk = Self.bulkBatchSize
+        let bulk = SparksQueueBudget.bulkBatchSize
 
         // Parallel bulk sources — catalog + random library sample at once.
         async let catalogTask = PostsService.shared.loadSparksDiscoveryCatalog(
@@ -1694,11 +1709,24 @@ struct ReelsScrollViewer: View {
             return
         }
 
+        // Thin /v1/sparks first (light pages) — GraphQL catalog only if empty.
+        if let thin = await SurfacePageClient.fetchSparks(limit: min(bulk, 24), cursor: feedCursor),
+           !thin.items.isEmpty {
+            let fresh = thin.items.filter { !existingIDs.contains($0.id) }
+            if !fresh.isEmpty {
+                applyExpandedFeed(ReelsRankingEngine.sessionFreshOrder(fresh))
+                feedCursor = thin.nextCursor ?? feedCursor
+                hasMorePages = thin.nextCursor != nil || !fresh.isEmpty
+                SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
+                return
+            }
+        }
+
         let page = await PostsService.shared.loadReelsFeedPage(
             excludingIDs: existingIDs,
             cursor: feedCursor,
             batchSize: bulk / 2,
-            fetchLimit: 120,
+            fetchLimit: 80,
             viewerCountry: appState.currentProfile?.countryCode,
             followingIDs: appState.followingIDs,
             tail: tail,
@@ -1743,7 +1771,7 @@ struct ReelsScrollViewer: View {
             let far = Array(posts.prefix(max(0, liveIndex - 8)))
             for p in far.shuffled() where p.id != liveID && seen.insert(p.id).inserted {
                 upcoming.append(p)
-                if upcoming.count >= Self.bulkBatchSize { break }
+                if upcoming.count >= SparksQueueBudget.bulkBatchSize { break }
             }
         }
         guard upcoming.count >= 4 else {

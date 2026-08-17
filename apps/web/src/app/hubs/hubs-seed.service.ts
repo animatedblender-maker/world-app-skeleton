@@ -11,9 +11,20 @@ export type HubVideoMeta = {
   durationSeconds: number | null;
 };
 
-/** Internet Archive / hub_videos.jsonl loader — ports iOS HubVideoSeedService. */
+/**
+ * Internet Archive / hub_videos.jsonl loader — ports iOS HubVideoSeedService.
+ *
+ * Gated by ARCHIVE_CONTENT_ENABLED (mirrors iOS AppConfig.archiveContentEnabled).
+ * When false, all APIs return empty and the JSONL is never fetched — code stays for re-enable.
+ */
 @Injectable({ providedIn: 'root' })
 export class HubsSeedService {
+  /**
+   * Flip to `true` to restore Internet Archive seed catalog in Hubs/Sparks.
+   * Keep in sync with iOS `AppConfig.archiveContentEnabled`.
+   */
+  static readonly ARCHIVE_CONTENT_ENABLED = false;
+
   static readonly sparkMaxDurationSeconds = 60;
   static readonly hubOrder = [
     'social',
@@ -75,11 +86,13 @@ export class HubsSeedService {
   }
 
   async allVideos(): Promise<CountryPost[]> {
+    if (!HubsSeedService.ARCHIVE_CONTENT_ENABLED) return [];
     await this.loadIfNeeded();
     return this.videos.slice();
   }
 
   async longFormVideos(perHubCap = 8): Promise<CountryPost[]> {
+    if (!HubsSeedService.ARCHIVE_CONTENT_ENABLED) return [];
     await this.loadIfNeeded();
     const long = this.videos.filter((p) => !this.isReel(p));
     if (perHubCap <= 0) return long;
@@ -96,6 +109,7 @@ export class HubsSeedService {
   }
 
   async sparkSeedVideos(limit?: number, shuffleSeed?: number): Promise<CountryPost[]> {
+    if (!HubsSeedService.ARCHIVE_CONTENT_ENABLED) return [];
     await this.loadIfNeeded();
     let result = this.sparkVideos.slice();
     if (shuffleSeed != null) {
@@ -108,11 +122,13 @@ export class HubsSeedService {
   }
 
   async videosForHub(slug: string): Promise<CountryPost[]> {
+    if (!HubsSeedService.ARCHIVE_CONTENT_ENABLED) return [];
     await this.loadIfNeeded();
     return (this.videosByHub.get(slug.toLowerCase()) ?? []).slice();
   }
 
   async postById(id: string): Promise<CountryPost | null> {
+    if (!HubsSeedService.ARCHIVE_CONTENT_ENABLED) return null;
     await this.loadIfNeeded();
     return this.videosByID.get(id) ?? null;
   }
@@ -137,6 +153,7 @@ export class HubsSeedService {
   }
 
   private async loadIfNeeded(): Promise<void> {
+    if (!HubsSeedService.ARCHIVE_CONTENT_ENABLED) return;
     if (this.videos.length) return;
     if (!this.loadPromise) {
       this.loadPromise = this.loadFromPublic().finally(() => {
@@ -147,6 +164,7 @@ export class HubsSeedService {
   }
 
   private async loadFromPublic(): Promise<void> {
+    if (!HubsSeedService.ARCHIVE_CONTENT_ENABLED) return;
     const urls = [
       '/hub_video_seed/hub_videos.jsonl',
       // fallback if base href / deploy path differs

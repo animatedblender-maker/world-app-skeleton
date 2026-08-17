@@ -1,7 +1,7 @@
 # Matterya iOS — Pre-Release Sprint Report
 
 **Branch:** `ios-native`  
-**Date:** 2026-08-17  
+**Date:** 2026-08-17 (perf/recsys pass same day)  
 **Audience:** Founder / release gate  
 **Scope:** Butter-smooth functionality, messaging mastery, recsys integrity, no layout redesign  
 **Commits (this sprint window):** `68bd53c` → `f895260` → `acf8532` (plus earlier feed/FS work `8e5118f`, `bf260b7`, `a23a499`, …)
@@ -163,26 +163,46 @@ Feed expand + Hubs watch use the same `PostsService` path → both benefit.
 
 ---
 
-## 4. Architecture notes for “why IG still feels lighter”
+## 4. Architecture notes — **shipped performance sprint** (IG-class)
 
-1. **Native list virtualization** — we use SwiftUI `LazyVStack` (good) but still over-warm AVPlayers on feed.  
-2. **Server rank** — IG does heavy ranking server-side; we do Phase-0 client + optional rank API.  
-3. **CDN edge** — media latency dominates “hubs load time”; warm pool is the right client countermeasure.  
-4. **MainActor ranking** — still ranks large pools on main; post-ship: off-main compose.
+| Layer | Was | Now (this pass) |
+|--------|-----|-----------------|
+| **Native list virtualization** | LazyVStack + over-warm 8–32 AVPlayers | LazyVStack + **device-tier warm**: feed deep preroll **2–4**, max slots 8/14/18, light outer ring |
+| **Server rank** | Optional soft re-order | **Required soft path**: home + Sparks call `POST /v1/recommendation/rank` (`server.v2` + 20s cache) |
+| **CDN edge** | Client warm pool only | **`POST /v1/playback/batch`** freshen + ranged GET edge warm for feed head |
+| **MainActor ranking** | Full compose on main | **`rankForSessionAsync`** → `Task.detached` compose; applyPosts skips double-rank |
 
-None of these block a tester build; they define the next performance sprint.
+### 4.1 Device media budget (`SparkWarmPool.MediaBudget`)
+
+| RAM | Deep preroll (feed) | Deep (Sparks) | Max parked slots | Player ahead (feed) |
+|-----|---------------------|---------------|------------------|---------------------|
+| &lt; ~3.5 GB | 2 | 3 | 8 | 3 |
+| &lt; ~5.5 GB | 3 | 5 | 14 | 5 |
+| Higher | 4 | 6 | 18 | 6 |
+
+Fling: thumbs only (no deep AV warm). Focus win: deep-preroll **that card only**.
+
+### 4.2 Backend contracts
+
+| Endpoint | Role |
+|----------|------|
+| `POST /v1/recommendation/rank` | Multi-source score + diversity; **v2** weights + short TTL cache |
+| `POST /v1/playback/batch` | Up to 12 post IDs → live play URLs for CDN edge warm |
+| `POST /v1/recommendation/refresh-item-stats` | Cron item quality (unchanged) |
+
+Client still paints **first** from Phase-0 local order; server re-order never blocks open.
 
 ---
 
-## 5. Remaining risks (honest)
+## 5. Remaining risks (honest) — status after performance pass
 
-| Risk | Severity | Mitigation / next |
-|------|----------|-------------------|
-| No custom message `.caf` | Low | System default + chime; add branded sound later |
-| Hubs endless recycle can re-show watched deep in session | Low | Expected after exhaustion |
-| Feed warm may still spike memory on low devices | Med | Cap deep preroll to 2–4 after beta metrics |
-| Flip camera / forward message | Low | Backlog |
-| Full automated UI tests | Med | Manual QA checklist below |
+| Risk | Severity | Status / mitigation |
+|------|----------|---------------------|
+| No custom message `.caf` | Low | **Accepted for ship** — APNs `default` + foreground chime `1003`. Backlog: `MatteryaMessage.caf` |
+| Hubs endless recycle can re-show watched deep in session | Low | **By design** after unviewed exhaustion; discovery still demotes viewed first |
+| Feed warm memory on low devices | Med → **Low** | **Mitigated**: deep preroll capped 2–4 by RAM tier; max slots 8 on constrained |
+| Flip camera / forward message | Low | **Backlog** — not release-blocking |
+| Full automated UI tests | Med | **Manual QA checklist below** remains gate; XCUITest suite still backlog |
 
 ---
 
@@ -190,11 +210,14 @@ None of these block a tester build; they define the next performance sprint.
 
 ### Feed
 - [ ] Scroll 50+ cards without long spinner
-- [ ] Hubs card starts without multi-second black
+- [ ] Hubs card starts without multi-second black (poster while buffering)
+- [ ] Hubs **controls only after tap** (not while scrolling)
 - [ ] No random pause while card fully on screen
 - [ ] No `sid=` text under any video
 - [ ] Watched Spark does not reappear as share
 - [ ] Delete post → gone on profile + after force quit
+- [ ] Low-memory device (or sim): no jetsam after 2 min aggressive scroll
+- [ ] Memory: deep warm only next 2–4 videos (Instruments optional)
 
 ### Hubs
 - [ ] Minimize → **video visible** in mini (not black)
@@ -205,12 +228,15 @@ None of these block a tester build; they define the next performance sprint.
 - [ ] Related shelf mostly unwatched first
 
 ### Messages
+- [ ] Conversations list paints **instantly** (cache) then soft-refreshes
 - [ ] Long-press: Reply, Like, React, Copy, Unsend, Remove
-- [ ] Message push while background → banner + sound
+- [ ] Message push while background → banner + sound (system default OK)
 - [ ] Open chat → no banner for that thread
 - [ ] Audio call: mute, **speaker**, end
 - [ ] Video call: mute, speaker, camera off, end
+- [ ] Hangup / no-answer → **call log appears immediately** in thread + inbox preview
 - [ ] CallKit ring uses Matterya tone
+- [ ] Spark share open → endless swipe queue (not single clip)
 
 ### Sparks
 - [ ] Swipe past 20 → no recent watched repeats
@@ -236,8 +262,15 @@ None of these block a tester build; they define the next performance sprint.
 
 **Ship a TestFlight / internal distribute build from `ios-native` HEAD after the QA checklist.**  
 
-This is the right “last run before distribute”: correctness of engagement, unviewed discovery, messaging parity, and continuous playback are in place. The remaining items are **polish and scale** (custom message sound, camera flip, feed warm budget), not core product holes.
+Correctness (engagement, unviewed, messaging, continuous playback) plus **IG-class performance controls** (memory-capped warm, off-main compose, server rank v2, CDN batch warm) are in place.
+
+**Still backlog (not blocking):** branded message `.caf`, flip camera, forward message, XCUITest suite.
+
+### Deploy notes (API)
+1. Deploy `apps/api` with `server.v2` rank + `POST /v1/playback/batch`.
+2. Confirm `POST /v1/recommendation/rank` returns `policyVersion: "server.v2"`.
+3. Optional: cron `POST /v1/recommendation/refresh-item-stats` for quality scores.
 
 ---
 
-*Report generated as part of the pre-release engineering sprint. Team: Grok coding agent + parallel explore audits.*
+*Report generated as part of the pre-release engineering sprint. Team: Grok coding agent + performance / recsys pass.*

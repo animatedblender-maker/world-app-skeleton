@@ -13,15 +13,29 @@ struct WorldAppApp: App {
                 .preferredColorScheme(.light)
                 .tint(Theme.accentBright)
                 .onAppear {
+                    PerformanceTelemetry.markIfAbsent("process_start")
                     // Install after first frame so AuthView text fields stay responsive.
                     DispatchQueue.main.async {
                         Keyboard.installDismissOnOutsideTap()
+                        PerformanceTelemetry.markIfAbsent("shell_first_frame")
+                        PerformanceTelemetry.milestoneFromLaunch(
+                            "app_start_to_shell",
+                            surface: "app"
+                        )
                     }
                 }
                 .task {
-                    // Yield so login UI paints before any session work.
-                    await Task.yield()
+                    // Session already hydrated in AppState.init (no login flash).
+                    // Bootstrap only warms feed / push / VoIP for returning users.
                     await appState.bootstrap()
+                    PerformanceTelemetry.milestoneFromLaunch(
+                        "app_bootstrap_complete",
+                        surface: "app",
+                        meta: [
+                            "authed": appState.isAuthenticated ? "1" : "0",
+                            "ready": appState.isSessionReady ? "1" : "0",
+                        ]
+                    )
                 }
                 .onOpenURL { url in
                     appState.handleDeepLink(url)

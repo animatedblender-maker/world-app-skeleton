@@ -47,7 +47,19 @@ export type RankResponse = {
   };
 };
 
-const POLICY_VERSION = 'server.v1';
+const POLICY_VERSION = 'server.v2';
+
+/** Short-lived rank cache — same candidate set within ~20s reuses work (feed soft-rerank). */
+const RANK_CACHE_TTL_MS = 20_000;
+const rankCache = new Map<
+  string,
+  { at: number; response: RankResponse }
+>();
+
+function rankCacheKey(input: RankRequest): string {
+  const ids = (input.candidateIds ?? []).slice(0, 120).join(',');
+  return `${input.entityId}|${input.surface}|${input.limit ?? 48}|${ids}`;
+}
 
 const POSITIVE_TYPES = new Set([
   'EngagementLiked',
@@ -115,6 +127,24 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
     };
   }
 
+  // Cache hit — IG-class: soft re-rank must be sub-50ms when candidates unchanged.
+  const ck = rankCacheKey({
+    entityId,
+    surface,
+    candidateIds,
+    sessionId,
+    followingIds: input.followingIds,
+    limit,
+  });
+  const cached = rankCache.get(ck);
+  if (cached && Date.now() - cached.at < RANK_CACHE_TTL_MS) {
+    return {
+      ...cached.response,
+      requestId,
+      latencyMs: Date.now() - started,
+    };
+  }
+
   const following = new Set(
     (input.followingIds ?? []).map((x) => String(x).trim()).filter(Boolean)
   );
@@ -157,10 +187,10 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
       sources.push('affinity');
     }
 
-    // Global item quality (cold start / social proof)
+    // Global item quality (cold start / social proof) — stronger weight in v2
     const st = itemStats.get(id);
     if (st) {
-      score += Math.max(-1.5, Math.min(2.5, st));
+      score += Math.max(-1.5, Math.min(3.2, st * 1.15));
       sources.push('item_stats');
     }
 
@@ -183,8 +213,12 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
         score += 1;
       }
     }
-    if (surface === 'sparks' && meta?.isSpark === false) {
-      score -= 2;
+    if (surface === 'sparks') {
+      if (meta?.isSpark === false) score -= 2.5;
+      else if (meta?.isSpark === true) {
+        score += 0.6;
+        sources.push('surface_fit');
+      }
     }
     if ((surface === 'hubs_for_you' || surface.includes('hubs')) && meta?.isSpark) {
       score -= 1.5;
@@ -217,7 +251,7 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
     void refreshUserFeatures(entityId).catch(() => {});
   }
 
-  return {
+  const response: RankResponse = {
     requestId,
     policyVersion: POLICY_VERSION,
     surface,
@@ -233,6 +267,15 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
       personality: affinityMap.size > 0,
     },
   };
+
+  rankCache.set(ck, { at: Date.now(), response });
+  // Bound memory
+  if (rankCache.size > 500) {
+    const first = rankCache.keys().next().value;
+    if (first) rankCache.delete(first);
+  }
+
+  return response;
 }
 
 function greedyDiversity(

@@ -1840,6 +1840,58 @@ export class PostsService {
     const client = await pool.connect();
     try {
       await client.query('begin');
+
+      // Snapshot media fingerprints so cascade + re-seed skip work.
+      const { rows: metaRows } = await client.query<{
+        media_path: string | null;
+        media_url: string | null;
+      }>(
+        `
+        select media_path, media_url
+        from public.posts
+        where id = $1::uuid
+          and (
+            author_id = $2::uuid
+            or (
+              channel_id is not null
+              and public.is_channel_admin_or_owner(channel_id, $2::uuid)
+            )
+          )
+        limit 1
+        `,
+        [postId, authorId]
+      );
+      if (!metaRows.length) {
+        await client.query('rollback');
+        return false;
+      }
+      const mediaPath = (metaRows[0].media_path || '').trim();
+      const mediaUrl = (metaRows[0].media_url || '').trim();
+
+      // All same-media rows owned by this author (original + accidental re-seeds + shares).
+      const siblingIds: string[] = [postId];
+      if (mediaPath || mediaUrl) {
+        const { rows: siblings } = await client.query<{ id: string }>(
+          `
+          select id::text
+          from public.posts
+          where author_id = $1::uuid
+            and id <> $2::uuid
+            and (
+              ($3::text <> '' and media_path is not null and media_path = $3)
+              or (
+                $4::text <> ''
+                and media_url is not null
+                and left(media_url, 200) = left($4, 200)
+              )
+            )
+          limit 40
+          `,
+          [authorId, postId, mediaPath, mediaUrl]
+        );
+        for (const s of siblings) siblingIds.push(s.id);
+      }
+
       const archived = await client.query(
         `
         insert into public.post_deletes (
@@ -1884,7 +1936,7 @@ export class PostsService {
           p.media_path,
           p.thumb_path
         from public.posts p
-        where p.id = $1
+        where p.id = any($1::uuid[])
           and (
             p.author_id = $2
             or (
@@ -1894,10 +1946,12 @@ export class PostsService {
           )
         returning original_post_id
         `,
-        [postId, authorId]
+        [siblingIds, authorId]
       );
 
       if (!archived.rowCount) {
+        // post_deletes may lack unique on original_post_id — fall back without ON CONFLICT
+        // If still empty, ownership failed.
         await client.query('rollback');
         return false;
       }
@@ -1905,7 +1959,7 @@ export class PostsService {
       await client.query(
         `
         delete from public.posts
-        where id = $1
+        where id = any($1::uuid[])
           and (
             author_id = $2
             or (
@@ -1914,7 +1968,7 @@ export class PostsService {
             )
           )
         `,
-        [postId, authorId]
+        [siblingIds, authorId]
       );
       await client.query('commit');
       return true;

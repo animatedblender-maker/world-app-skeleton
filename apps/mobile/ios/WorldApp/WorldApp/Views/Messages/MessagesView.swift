@@ -9,20 +9,29 @@ private struct MessagesLoadToken: Equatable {
 struct MessagesView: View {
     @Environment(AppState.self) private var appState
 
-    @State private var conversations: [Conversation] = []
-    @State private var isLoading = true
+    @State private var conversations: [Conversation]
+    @State private var isLoading: Bool
     @State private var errorMessage: String?
+
+    init() {
+        // Profile-style paint-first: show last inbox instantly, soft-refresh in background.
+        let cached = MessagesService.shared.cachedConversationsSnapshot()
+            .filter { !ConversationInboxStore.isHidden($0.id) }
+        _conversations = State(initialValue: cached)
+        _isLoading = State(initialValue: cached.isEmpty)
+        _errorMessage = State(initialValue: nil)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             messagesTopBar
 
             Group {
-                if isLoading {
+                if isLoading && conversations.isEmpty {
                     ProgressView("Loading conversations…")
                         .tint(Theme.accentBright)
                         .frame(maxHeight: .infinity)
-                } else if let errorMessage {
+                } else if let errorMessage, conversations.isEmpty {
                     ContentUnavailableView("Messages unavailable", systemImage: "bubble.left.and.bubble.right", description: Text(errorMessage))
                 } else if conversations.isEmpty {
                     ContentUnavailableView("No conversations", systemImage: "bubble.left.and.bubble.right", description: Text("Start chatting from a profile."))
@@ -59,7 +68,7 @@ struct MessagesView: View {
         }
         .screenBackground()
         .toolbar(.hidden, for: .navigationBar)
-        .refreshable { await loadConversations() }
+        .refreshable { await loadConversations(forceNetwork: true) }
         .task(id: MessagesLoadToken(
             generation: appState.contentLoadGeneration,
             isReady: appState.isSessionReady,
@@ -79,7 +88,15 @@ struct MessagesView: View {
             Task { await openPendingConversation(conversationID) }
         }
         .onReceive(NotificationCenter.default.publisher(for: .conversationMessagesDidChange)) { _ in
-            Task { await loadConversations() }
+            // Instant inbox preview from memory — soft network only if cache is stale.
+            let cached = MessagesService.shared.cachedConversationsSnapshot()
+                .filter { !ConversationInboxStore.isHidden($0.id) }
+            if !cached.isEmpty {
+                conversations = cached
+                isLoading = false
+            }
+            // TTL inside listConversations skips GraphQL when we just fetched.
+            Task { await loadConversations(forceNetwork: false) }
         }
     }
 
@@ -165,20 +182,27 @@ struct MessagesView: View {
         }
     }
 
-    private func loadConversations() async {
+    private func loadConversations(forceNetwork: Bool = false) async {
+        // Always re-paint from memory first (instant), then soft network.
+        let cached = MessagesService.shared.cachedConversationsSnapshot()
+            .filter { !ConversationInboxStore.isHidden($0.id) }
+        if !cached.isEmpty {
+            conversations = cached
+            isLoading = false
+            errorMessage = nil
+        }
+
         let showSpinner = conversations.isEmpty
         if showSpinner {
             isLoading = true
         }
         errorMessage = nil
         defer {
-            if showSpinner {
-                isLoading = false
-            }
+            isLoading = false
         }
 
         do {
-            conversations = try await MessagesService.shared.listConversations()
+            conversations = try await MessagesService.shared.listConversations(forceNetwork: forceNetwork)
                 .filter { !ConversationInboxStore.isHidden($0.id) }
             if let pendingID = appState.pendingConversationID {
                 await openPendingConversation(pendingID)

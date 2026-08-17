@@ -225,6 +225,25 @@ type CountryTab = 'posts' | 'following' | 'media' | 'stats' | 'news';
       }
       .body {
         padding-top: 8px;
+        max-width: 100%;
+        margin: 0 auto;
+        width: 100%;
+        padding-left: 8px;
+        padding-right: 8px;
+        box-sizing: border-box;
+        --m-feed-card-gap: 0px;
+      }
+      @media (min-width: 900px) {
+        .shell {
+          background: var(--m-canvas-muted, #f2f0ec);
+        }
+        .body {
+          width: 60%;
+          max-width: 60%;
+          min-width: min(100%, 520px);
+          margin: 0 auto;
+          padding: 12px 0 24px;
+        }
       }
       .body.pad {
         padding: 12px var(--m-page-padding, 16px) 24px;

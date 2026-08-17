@@ -255,6 +255,11 @@ struct ConversationView: View {
             guard let conversationID = notification.userInfo?["conversationId"] as? String,
                   conversationID == conversation.id
             else { return }
+            // Instant paint from memory (call log after hangup lands here before network).
+            if let cached = MessagesService.shared.cachedMessages(for: conversationID), !cached.isEmpty {
+                messages = cached
+                requestScrollToBottom()
+            }
             Task {
                 await loadMessages()
                 await refreshPeerReadReceipt()
@@ -284,7 +289,7 @@ struct ConversationView: View {
     private func pollPeerReadReceipts() async {
         while !Task.isCancelled {
             // Gentle interval — aggressive polling made chat feel laggy.
-            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            try? await Task.sleep(nanoseconds: 15_000_000_000)
             guard !Task.isCancelled else { return }
             await refreshPeerReadReceipt()
         }
@@ -448,28 +453,52 @@ struct ConversationView: View {
             await MainActor.run { isLoading = true }
         }
         do {
+            // Keep optimistic call logs / pending sends while network confirms.
+            let localHold = await MainActor.run { () -> [Message] in
+                var hold = messages.filter {
+                    $0.id.hasPrefix("pending-") || $0.id.hasPrefix("local-call-")
+                }
+                if let cached = MessagesService.shared.cachedMessages(for: conversation.id) {
+                    for m in cached where m.id.hasPrefix("local-call-") || m.id.hasPrefix("pending-") {
+                        if !hold.contains(where: { $0.id == m.id }) {
+                            hold.append(m)
+                        }
+                    }
+                }
+                return hold
+            }
             async let loadedTask = MessagesService.shared.listMessages(conversationID: conversation.id)
             async let refreshedTask = MessagesService.shared.getConversationById(conversation.id)
             let loaded = try await loadedTask
             let refreshed = try? await refreshedTask
             let peerRead = refreshed?.otherMember(currentUserID: currentUserID ?? "")?.lastReadAt
             await MainActor.run {
-                messages = loaded
+                var next = loaded
+                for local in localHold {
+                    let already = next.contains(where: { $0.id == local.id })
+                        || (local.isCallLog && next.contains(where: {
+                            $0.isCallLog
+                                && $0.body == local.body
+                                && $0.senderID == local.senderID
+                        }))
+                    if !already {
+                        next.append(local)
+                    }
+                }
+                messages = next
                 if let peerRead { peerLastReadAt = peerRead }
                 errorMessage = nil
                 isLoading = false
                 MessagesService.shared.storeMessages(
-                    loaded,
+                    next,
                     peerReadAt: peerRead,
                     for: conversation.id
                 )
                 // Always land on the latest message when opening / refreshing this chat.
                 requestScrollToBottom()
             }
-            // Second pass after LazyVStack lays out the full network list.
-            try? await Task.sleep(nanoseconds: 80_000_000)
-            await MainActor.run { requestScrollToBottom() }
-            try? await Task.sleep(nanoseconds: 200_000_000)
+            // One deferred pin after layout — triple scroll was hitching chat open.
+            try? await Task.sleep(nanoseconds: 90_000_000)
             await MainActor.run { requestScrollToBottom() }
             _ = hadLocalMessages
             // listMessages updates last_read_at server-side — drop banners + tab badge for this chat.

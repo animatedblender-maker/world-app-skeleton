@@ -12,8 +12,8 @@ final class ImageCache: @unchecked Sendable {
 
     private let memoryCache = NSCache<NSString, UIImage>()
     private let inflight = InflightTable()
-    /// High concurrency so Hubs For you thumbs keep filling while scrolling far.
-    private let downloadGate = DownloadGate(maxConcurrent: 20)
+    /// Cap concurrent image loads — 20 flooded the network and hitching the main runloop.
+    private let downloadGate = DownloadGate(maxConcurrent: 8)
     private let session: URLSession
     private let diskDirectory: URL
     private let ioQueue = DispatchQueue(label: "com.matterya.imagecache.io", qos: .utility)
@@ -21,14 +21,14 @@ final class ImageCache: @unchecked Sendable {
     private static let sizeBuckets: [CGFloat] = [240, 280, 320, 360, 420, 480, 720]
 
     private init() {
-        memoryCache.countLimit = 900
-        memoryCache.totalCostLimit = 180 * 1024 * 1024
+        memoryCache.countLimit = 400
+        memoryCache.totalCostLimit = 96 * 1024 * 1024
 
         let configuration = URLSessionConfiguration.default
         // Short timeouts — fail fast and fall back to services/img rather than hang on .thumbs.
         configuration.timeoutIntervalForRequest = 6
         configuration.timeoutIntervalForResource = 10
-        configuration.httpMaximumConnectionsPerHost = 12
+        configuration.httpMaximumConnectionsPerHost = 6
         configuration.waitsForConnectivity = false
         configuration.urlCache = URLCache(
             memoryCapacity: 80 * 1024 * 1024,

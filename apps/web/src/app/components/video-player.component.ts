@@ -482,8 +482,11 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
       .video-shell.matterya-chrome.is-playing:not(.chrome-visible) .video-overlay.subtle {
         opacity: 0.15;
       }
-      /* —— MatteryaVideoControls (iOS / Android golden chrome) —— */
+      /* —— MatteryaVideoControls (pixel-match iOS VideoPlayerView) —— */
       .matterya-controls {
+        --m-accent-bright: #7b6347; /* Theme.accentBright 0.482,0.388,0.278 */
+        --m-ink: #2c2825;
+        --m-paper: #f8f6f2;
         position: absolute;
         inset: 0;
         z-index: 30;
@@ -516,6 +519,10 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
       }
       .mc-icon:hover {
         background: rgba(44, 40, 37, 0.65);
+      }
+      .mc-icon .icon-svg {
+        width: 16px;
+        height: 16px;
       }
       .mc-bottom {
         display: flex;
@@ -551,6 +558,7 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
       .mc-time {
         font-size: 12px;
         font-variant-numeric: tabular-nums;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
         color: rgba(255, 255, 255, 0.9);
         min-width: 36px;
         flex-shrink: 0;
@@ -564,15 +572,29 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
         height: 20px;
         margin: 0;
         appearance: none;
-        background: transparent;
+        -webkit-appearance: none;
         cursor: pointer;
+        --scrub-pct: 0%;
+        /* iOS MatteryaScrubber: gold fill + white track */
+        background: linear-gradient(
+          to right,
+          var(--m-accent-bright, #7b6347) 0%,
+          var(--m-accent-bright, #7b6347) var(--scrub-pct, 0%),
+          rgba(255, 255, 255, 0.22) var(--scrub-pct, 0%),
+          rgba(255, 255, 255, 0.22) 100%
+        );
+        background-size: 100% 4px;
+        background-repeat: no-repeat;
+        background-position: center;
+        border-radius: 999px;
       }
       .mc-scrub::-webkit-slider-runnable-track {
         height: 4px;
         border-radius: 999px;
-        background: rgba(255, 255, 255, 0.22);
+        background: transparent;
       }
       .mc-scrub::-webkit-slider-thumb {
+        -webkit-appearance: none;
         appearance: none;
         width: 14px;
         height: 14px;
@@ -599,20 +621,6 @@ import { AdsService, type AdSlotModel } from '../core/services/ads.service';
         background: var(--m-paper, #f8f6f2);
         border: 0;
         box-shadow: 0 1px 3px rgba(44, 40, 37, 0.25);
-      }
-      /* golden progress fill for webkit via layered background */
-      .mc-scrub {
-        background: linear-gradient(
-          to right,
-          var(--m-accent-bright, #7b6347) 0%,
-          var(--m-accent-bright, #7b6347) var(--scrub-pct, 0%),
-          rgba(255, 255, 255, 0.22) var(--scrub-pct, 0%),
-          rgba(255, 255, 255, 0.22) 100%
-        );
-        background-size: 100% 4px;
-        background-repeat: no-repeat;
-        background-position: center;
-        border-radius: 999px;
       }
       .video-shell.matterya-chrome:not(.chrome-visible) .matterya-controls {
         opacity: 0;
@@ -906,7 +914,8 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
   }
 
   get adsEnabled(): boolean {
-    return !!this.adPlacement;
+    // Temporarily disabled app-wide — re-enable by returning !!this.adPlacement.
+    return false;
   }
 
   @HostListener('click', ['$event'])
@@ -1146,10 +1155,12 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
   }
 
   private syncScrubCssVar(): void {
-    const el = this.videoRef?.nativeElement?.closest?.('.video-shell') as HTMLElement | null;
-    if (el) {
-      el.style.setProperty('--scrub-pct', `${this.progressPercent || 0}%`);
-    }
+    const shell = this.videoRef?.nativeElement?.closest?.('.video-shell') as HTMLElement | null;
+    const pct = `${this.progressPercent || 0}%`;
+    if (shell) shell.style.setProperty('--scrub-pct', pct);
+    // Also set on the range input (does not inherit custom props in all engines)
+    const scrub = shell?.querySelector?.('.mc-scrub') as HTMLElement | null;
+    if (scrub) scrub.style.setProperty('--scrub-pct', pct);
   }
 
   onPlay(): void {

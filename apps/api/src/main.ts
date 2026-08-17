@@ -49,6 +49,19 @@ import {
   refreshUserFeatures,
 } from './recommendation/rank.service.js';
 import {
+  fetchForYouPage,
+  fetchHomeFeedPage,
+  fetchShelfPage,
+  fetchSparksPage,
+  HUB_PARENT_SLUGS,
+  neighborSlug,
+} from './recommendation/shelf.service.js';
+import { getRemoteConfig } from './recommendation/remote-config.js';
+import {
+  ingestMetricBatch,
+  metricsSummary,
+} from './recommendation/metrics-ingest.js';
+import {
   handleReportsDataGet,
   handleReportsGet,
   handleReportsLogin,
@@ -283,6 +296,9 @@ app.get('/health', (_req: Request, res: Response) =>
       r2PlaybackResolve: true,
       recsysRank: true,
       recsysWarehouse: true,
+      hubsSlugShelves: true,
+      performanceMetrics: true,
+      remoteConfig: true,
     },
     apnsConfigured: apns.isConfigured(),
     authMail: authMailStatus(),
@@ -305,6 +321,49 @@ app.get('/v1/playback/:postId', async (req: Request, res: Response) => {
   } catch (err: any) {
     console.error('[playback]', err?.message ?? err);
     return res.status(500).json({ error: 'playback_failed', message: err?.message ?? 'error' });
+  }
+});
+
+/**
+ * Batch freshen play URLs for feed head / Sparks window (CDN edge warm).
+ * POST /v1/playback/batch  body: { postIds: string[] }  max 12
+ * Returns currently-valid play URLs so clients can Range-GET the first KB.
+ */
+app.post('/v1/playback/batch', async (req: Request, res: Response) => {
+  try {
+    const user = await getUserFromRequest(req);
+    if (!user?.id) return res.status(401).json({ error: 'unauthenticated' });
+    const raw: unknown[] = Array.isArray(req.body?.postIds) ? req.body.postIds : [];
+    const postIds: string[] = [
+      ...new Set(
+        raw
+          .map((x) => String(x ?? '').trim())
+          .filter((s): s is string => s.length > 0)
+      ),
+    ].slice(0, 12);
+    if (postIds.length === 0) return res.json({ ok: true, items: [] });
+
+    const { PostsService } = await import('./graphql/modules/posts/posts.service.js');
+    const svc = new PostsService();
+    const items = await Promise.all(
+      postIds.map(async (id) => {
+        try {
+          const media = await svc.playbackMedia(id, user.id);
+          if (!media?.url) return null;
+          return { id, url: media.url as string, r2_key: (media as any).r2_key ?? null };
+        } catch {
+          return null;
+        }
+      })
+    );
+    return res.json({
+      ok: true,
+      items: items.filter(Boolean),
+      count: items.filter(Boolean).length,
+    });
+  } catch (err: any) {
+    console.error('[playback/batch]', err?.message ?? err);
+    return res.status(500).json({ error: 'playback_batch_failed', message: err?.message ?? 'error' });
   }
 });
 
@@ -629,6 +688,149 @@ app.post('/v1/engagement/batch', async (req: Request, res: Response) => {
     return res.json({ ok: true, ...result });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message ?? 'engagement_ingest_failed' });
+  }
+});
+
+// ─── Hubs slug shelves (thin cards — light client) ───────────────────────────
+// GET /v1/hubs/for-you?limit=20&cursor=&session=
+// GET /v1/hubs/shelves/:slug?limit=20&cursor=
+// GET /v1/hubs/slugs
+
+app.get('/v1/hubs/slugs', (_req: Request, res: Response) => {
+  res.json({
+    ok: true,
+    slugs: [...HUB_PARENT_SLUGS],
+    neighbors: Object.fromEntries(
+      HUB_PARENT_SLUGS.map((s) => [s, neighborSlug(s)])
+    ),
+  });
+});
+
+app.get('/v1/hubs/for-you', async (req: Request, res: Response) => {
+  try {
+    await getUserFromRequest(req).catch(() => null);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 40);
+    const cursor = req.query.cursor ? String(req.query.cursor) : null;
+    const session = req.query.session ? String(req.query.session) : null;
+    const page = await fetchForYouPage({ limit, cursor, session });
+    return res.json({ ok: true, ...page });
+  } catch (err: any) {
+    console.error('[hubs/for-you]', err?.message ?? err);
+    return res.status(500).json({
+      error: 'hubs_for_you_failed',
+      message: err?.message ?? 'error',
+    });
+  }
+});
+
+app.get('/v1/hubs/shelves/:slug', async (req: Request, res: Response) => {
+  try {
+    await getUserFromRequest(req).catch(() => null);
+    const slug = String(req.params.slug || '').trim();
+    if (!slug) return res.status(400).json({ error: 'slug_required' });
+    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 40);
+    const cursor = req.query.cursor ? String(req.query.cursor) : null;
+    const page = await fetchShelfPage({ slug, limit, cursor });
+    return res.json({ ok: true, ...page });
+  } catch (err: any) {
+    console.error('[hubs/shelves]', err?.message ?? err);
+    return res.status(500).json({
+      error: 'hubs_shelf_failed',
+      message: err?.message ?? 'error',
+    });
+  }
+});
+
+// ─── Butter-smooth: metrics + remote config ─────────────────────────────────
+// POST /v1/metrics/batch
+// GET  /v1/metrics/summary  (ops; protect later with cron secret if public abuse)
+// GET  /v1/config?v=
+
+app.post('/v1/metrics/batch', async (req: Request, res: Response) => {
+  try {
+    // Auth optional — cold start may fire before token.
+    await getUserFromRequest(req).catch(() => null);
+    const result = ingestMetricBatch(req.body ?? {});
+    return res.json({ ok: true, ...result });
+  } catch (err: any) {
+    console.error('[metrics/batch]', err?.message ?? err);
+    return res.status(500).json({ error: 'metrics_ingest_failed' });
+  }
+});
+
+app.get('/v1/metrics/summary', async (req: Request, res: Response) => {
+  try {
+    // Prefer authenticated ops; allow cron secret for scrape.
+    const secret = process.env.CONTENT_CRON_SECRET || process.env.METRICS_SUMMARY_SECRET;
+    const header = String(req.headers['x-cron-secret'] ?? '');
+    const user = await getUserFromRequest(req).catch(() => null);
+    if (!user?.id && (!secret || header !== secret)) {
+      return res.status(401).json({ error: 'unauthorized' });
+    }
+    return res.json({ ok: true, ...metricsSummary() });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'summary_failed' });
+  }
+});
+
+app.get('/v1/config', async (req: Request, res: Response) => {
+  try {
+    const clientV = req.query.v != null ? String(req.query.v) : null;
+    const cfg = getRemoteConfig(clientV);
+    if (cfg.unchanged) {
+      return res.json({
+        ok: true,
+        unchanged: true,
+        version: cfg.version,
+        ttlSec: cfg.ttlSec,
+      });
+    }
+    return res.json({
+      ok: true,
+      unchanged: false,
+      version: cfg.version,
+      ttlSec: cfg.ttlSec,
+      flags: cfg.flags,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'config_failed' });
+  }
+});
+
+// ─── App-wide thin surfaces (same card shape as Hubs shelves) ────────────────
+// GET /v1/feed?limit=24&cursor=
+// GET /v1/sparks?limit=20&cursor=&slug=
+
+app.get('/v1/feed', async (req: Request, res: Response) => {
+  try {
+    await getUserFromRequest(req).catch(() => null);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 24, 1), 48);
+    const cursor = req.query.cursor ? String(req.query.cursor) : null;
+    const page = await fetchHomeFeedPage({ limit, cursor });
+    return res.json({ ok: true, ...page });
+  } catch (err: any) {
+    console.error('[feed]', err?.message ?? err);
+    return res.status(500).json({
+      error: 'feed_page_failed',
+      message: err?.message ?? 'error',
+    });
+  }
+});
+
+app.get('/v1/sparks', async (req: Request, res: Response) => {
+  try {
+    await getUserFromRequest(req).catch(() => null);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 40);
+    const cursor = req.query.cursor ? String(req.query.cursor) : null;
+    const slug = req.query.slug ? String(req.query.slug) : null;
+    const page = await fetchSparksPage({ limit, cursor, slug });
+    return res.json({ ok: true, ...page });
+  } catch (err: any) {
+    console.error('[sparks]', err?.message ?? err);
+    return res.status(500).json({
+      error: 'sparks_page_failed',
+      message: err?.message ?? 'error',
+    });
   }
 });
 

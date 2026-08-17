@@ -58,7 +58,7 @@ struct VideoPlayerView: View {
     @State private var isMuted = false
     @State private var currentSeconds: Double = 0
     @State private var durationSeconds: Double = 0
-    @State private var showChrome = true
+    @State private var showChrome = false
     @State private var chromeTask: Task<Void, Never>?
     @State private var lastNotedPlaybackSecond: Int = -1
     /// When the user pauses via chrome, do not auto-resume until they press play or leave the slot.
@@ -193,7 +193,7 @@ struct VideoPlayerView: View {
             configureAudioSession()
             // Buffer the moment the cell mounts (feed + Sparks) — don't wait for focus.
             handleActivationOrMount(forceRebuild: player?.currentItem == nil)
-            if showsControls { scheduleChromeHide() }
+            // Chrome starts hidden — only a tap reveals transport (no scroll noise).
             reportVideoSizeIfNeeded(from: player?.currentItem)
         }
         // Screenshot / Control Center must not leave video paused.
@@ -231,6 +231,19 @@ struct VideoPlayerView: View {
                 // Warm / ready items already have a decoded frame — never slam poster (blink).
                 if player?.currentItem?.status == .readyToPlay {
                     showPosterCover = false
+                } else if player != nil {
+                    // Feed focus won while still buffering — poll briefly so we don't stay on thumb.
+                    Task { @MainActor in
+                        for _ in 0..<25 {
+                            if player?.currentItem?.status == .readyToPlay {
+                                showPosterCover = false
+                                return
+                            }
+                            try? await Task.sleep(nanoseconds: 40_000_000)
+                        }
+                        // Fallback: reveal anyway so we never stick on thumbnail forever.
+                        showPosterCover = false
+                    }
                 }
                 // Re-bind progress + ensure observer is alive after focus (preload path).
                 if let player {
@@ -535,7 +548,7 @@ struct VideoPlayerView: View {
                 }
                 return
             }
-            if preloadsWhenInactive || postID != nil || liveGate.isActive {
+            if preloadsWhenInactive || liveGate.isActive {
                 player.pause()
                 player.isMuted = true
                 player.volume = 0
@@ -639,7 +652,7 @@ struct VideoPlayerView: View {
     @MainActor
     private func ensurePlayer(forceRebuild: Bool = false) async {
         // Always preload when we have a post id (feed Sparks / hubs shares / reels pager).
-        let shouldPreload = preloadsWhenInactive || postID != nil
+        let shouldPreload = preloadsWhenInactive || liveGate.isActive
         // Inactive + no preload → hard silence and bail.
         if !isActive, !shouldPreload {
             player?.pause()
@@ -680,7 +693,7 @@ struct VideoPlayerView: View {
                     postID: postID
                 )
                 // After await: user may have swiped away — never install audible on a dead page.
-                guard liveGate.isActive || preloadsWhenInactive || postID != nil else {
+                guard liveGate.isActive || preloadsWhenInactive else {
                     if let postID { SparkWarmPool.shared.release(postID: postID) }
                     return
                 }
@@ -827,7 +840,7 @@ struct VideoPlayerView: View {
     private func installPlayer(using configuration: MediaPlaybackConfiguration) {
         let item = makePlayerItem(for: configuration)
         // Deep forward buffer so scroll-back / next-page feel instant.
-        item.preferredForwardBufferDuration = (preloadsWhenInactive || fillsFrame || postID != nil) ? 8 : 4
+        item.preferredForwardBufferDuration = (liveGate.isActive || preloadsWhenInactive) ? 6 : 3
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         let newPlayer = AVPlayer(playerItem: item)
         newPlayer.isMuted = liveGate.isActive ? liveGate.isMuted : true
@@ -1024,7 +1037,7 @@ struct VideoPlayerView: View {
         // Pass 2: brief pause + hard re-resolve (network flake).
         if playbackRecoveryPasses == 2 {
             try? await Task.sleep(nanoseconds: 400_000_000)
-            guard liveGate.isActive || preloadsWhenInactive || postID != nil else {
+            guard liveGate.isActive || preloadsWhenInactive else {
                 loadFailed = true
                 return
             }
@@ -1765,7 +1778,7 @@ struct InFrameVideoPlayer: View {
         isFocusWinner
             && surfaceLive
             && appState.reelsViewerContext == nil
-            && appState.hubPlaybackPost == nil
+            && !(appState.hubPlaybackPost != nil && appState.hubPlaybackExpanded)
     }
 
     private var usesArchivePath: Bool {
@@ -1819,8 +1832,8 @@ struct InFrameVideoPlayer: View {
                         allowsFullscreen: false,
                         sharesFeedMute: sharesFeedMute,
                         fillsFrame: fillsFrame,
-                        // Always buffer while mounted — scroll away/back must be instant.
-                        preloadsWhenInactive: true,
+                        // Only the focus winner should build a heavy buffer — neighbors stay light.
+                        preloadsWhenInactive: false,
                         onViewed: onViewed
                     )
                 }
@@ -1869,9 +1882,9 @@ struct InFrameVideoPlayer: View {
             if usesArchivePath {
                 ArchiveVideoPlayback.warmResolve(url)
             }
-            // Pre-warm into the pool the moment the card mounts (R2 + hubs shares).
+            // Light mount warm — deep preroll only when this card wins focus (avoids CPU thrash).
             if let postID {
-                SparkWarmPool.shared.warmSingle(postID: postID, url: url)
+                SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: false)
             }
             refreshFocusWinner()
             syncPlayGate(immediate: true)
@@ -1934,7 +1947,25 @@ struct InFrameVideoPlayer: View {
         .onChange(of: shouldPlay) { _, play in
             // Start immediately; delay pause so layout noise never kills a fully visible card.
             syncPlayGate(immediate: play)
-            if play, !isMuted {
+            if play {
+                if let postID {
+                    SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: true)
+                }
+                if !isMuted {
+                    activatePlaybackAudioIfNeeded(unmuted: true)
+                }
+            }
+        }
+        .onChange(of: playGate) { _, active in
+            // Focus won — ensure warm pool is deep-ready so first frames aren't a frozen poster.
+            guard active else { return }
+            if let postID {
+                SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: true)
+                Task {
+                    await SparkWarmPool.shared.awaitReady(postIDs: [postID], timeout: 0.5)
+                }
+            }
+            if !isMuted {
                 activatePlaybackAudioIfNeeded(unmuted: true)
             }
         }
@@ -1961,7 +1992,7 @@ struct InFrameVideoPlayer: View {
         let leftAutoplaySurface =
             !surfaceLive
             || appState.reelsViewerContext != nil
-            || appState.hubPlaybackPost != nil
+            || (appState.hubPlaybackPost != nil && appState.hubPlaybackExpanded)
         if leftAutoplaySurface {
             deactivateTask?.cancel()
             deactivateTask = nil
@@ -1993,19 +2024,11 @@ struct InFrameVideoPlayer: View {
             let frame = proxy.frame(in: .global)
             Color.clear
                 .onAppear { reportVisibility(proxy.frame(in: .global)) }
-                .onChange(of: frame.minY) { _, _ in
-                    reportVisibility(proxy.frame(in: .global))
-                }
+                // One axis only — minY+midY+height was 3× FeedVideoFocus elections per layout.
                 .onChange(of: frame.midY) { _, _ in
                     reportVisibility(proxy.frame(in: .global))
                 }
-                .onChange(of: frame.height) { _, _ in
-                    reportVisibility(proxy.frame(in: .global))
-                }
                 .onChange(of: appState.selectedTab) { _, _ in
-                    reportVisibility(proxy.frame(in: .global))
-                }
-                .onChange(of: appState.navigationPath.count) { _, _ in
                     reportVisibility(proxy.frame(in: .global))
                 }
         }

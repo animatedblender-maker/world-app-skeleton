@@ -1043,7 +1043,8 @@ extension Array where Element == CountryPost {
     /// Moments / demo fakes / archive seeds stay out. Never drop the R2 library.
     func forHomeFeed() -> [CountryPost] {
         filter { post in
-            if DeletedPostsStore.shared.isDeleted(post.id) { return false }
+            // Content-key tombstone (id + share + r2/media) so re-seeds never return.
+            if DeletedPostsStore.shared.isDeleted(post: post) { return false }
             if post.isStory { return false }
             if post.authorID.hasPrefix("user_") { return false }
             if post.id.hasPrefix("post_") || post.id.hasPrefix("demo_") { return false }

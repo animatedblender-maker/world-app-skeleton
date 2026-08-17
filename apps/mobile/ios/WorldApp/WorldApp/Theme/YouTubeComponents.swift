@@ -562,11 +562,13 @@ struct YouTubeMiniPlayerBar: View {
                         .allowsHitTesting(false)
                     }
                 } else {
-                    // Clear hole — continuous layer paints through. Ink underlay lives in
-                    // MainTabView *below* the continuous layer so home paper never shows.
+                    // Transparent video hole — continuous GlobalHubPlaybackLayer paints *under*
+                    // this bar (lower zIndex). NEVER use compositingGroup here: it flattens
+                    // the layer and turns the hole into a solid black plate.
                     Color.clear
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .allowsHitTesting(false)
-                        .overlay(
+                        .background(
                             GeometryReader { g in
                                 Color.clear.preference(
                                     key: HubContinuousVideoSlotKey.self,
@@ -576,26 +578,28 @@ struct YouTubeMiniPlayerBar: View {
                         )
                 }
 
-                // Always on top so play / mute / close receive taps.
+                // Always on top so play / mute / close receive taps + stay visible over film.
                 HubMiniPlayerChrome(
                     isPlaying: $isPlaying,
                     isMuted: $isMuted,
                     onClose: onClose
                 )
+                .zIndex(20)
             }
             .frame(width: geo.size.width, height: geo.size.height)
         }
         .frame(maxWidth: .infinity)
         .frame(height: Self.barHeight)
-        // Clear when continuous paints through; ink when this bar owns its own player.
+        // Clear when continuous paints through; ink only when this bar owns its own player.
+        // drawingGroup/compositingGroup forbidden — they black-out the clear hole.
         .background(embedsVideo ? Theme.ink : Color.clear)
-        .shadow(color: Theme.ink.opacity(0.28), radius: 12, y: -3)
+        .shadow(color: Theme.ink.opacity(0.22), radius: 10, y: -2)
         .overlay(alignment: .top) {
             Rectangle()
                 .fill(Color.white.opacity(0.08))
                 .frame(height: 0.5)
+                .allowsHitTesting(false)
         }
-        .clipped()
     }
 }
 
@@ -612,26 +616,27 @@ struct HubMiniPlayerChrome: View {
     private var btn: CGFloat { YouTubeMiniPlayerBar.controlButtonSize }
     private var playSize: CGFloat { YouTubeMiniPlayerBar.playButtonSize }
     private let pad: CGFloat = 10
-    private let chipFill = Color.white.opacity(0.18)
-    private let chipStroke = Color.white.opacity(0.28)
+    // Readable chips without a heavy black veil over the film.
+    private let chipFill = Color.black.opacity(0.42)
+    private let chipStroke = Color.white.opacity(0.45)
 
     var body: some View {
         ZStack {
-            // Gradients never steal expand taps.
+            // Light edge fades only — never a full black overlay on the mini video.
             VStack(spacing: 0) {
                 LinearGradient(
-                    colors: [.black.opacity(0.22), .clear],
+                    colors: [.black.opacity(0.28), .clear],
                     startPoint: .top,
                     endPoint: .bottom
                 )
-                .frame(height: 40)
+                .frame(height: 36)
                 Spacer(minLength: 0)
                 LinearGradient(
-                    colors: [.clear, .black.opacity(0.32)],
+                    colors: [.clear, .black.opacity(0.3)],
                     startPoint: .top,
                     endPoint: .bottom
                 )
-                .frame(height: 56)
+                .frame(height: 44)
             }
             .allowsHitTesting(false)
 
@@ -643,10 +648,10 @@ struct HubMiniPlayerChrome: View {
                     Button(action: onClose) {
                         Image(systemName: "xmark")
                             .font(.system(size: btn * 0.38, weight: .bold))
-                            .foregroundStyle(.white.opacity(0.95))
+                            .foregroundStyle(.white)
                             .frame(width: btn, height: btn)
                             .background(chipFill, in: Circle())
-                            .overlay(Circle().stroke(chipStroke, lineWidth: 0.5))
+                            .overlay(Circle().stroke(chipStroke, lineWidth: 0.75))
                             .contentShape(Circle())
                     }
                     .buttonStyle(.plain)
@@ -666,10 +671,10 @@ struct HubMiniPlayerChrome: View {
                     } label: {
                         Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                             .font(.system(size: btn * 0.4, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.95))
+                            .foregroundStyle(.white)
                             .frame(width: btn, height: btn)
                             .background(chipFill, in: Circle())
-                            .overlay(Circle().stroke(chipStroke, lineWidth: 0.5))
+                            .overlay(Circle().stroke(chipStroke, lineWidth: 0.75))
                             .contentShape(Circle())
                     }
                     .buttonStyle(.plain)
@@ -680,12 +685,13 @@ struct HubMiniPlayerChrome: View {
                     } label: {
                         ZStack {
                             Circle()
-                                .fill(Theme.accentBright.opacity(0.72))
+                                .fill(Theme.accentBright)
                                 .frame(width: playSize, height: playSize)
-                                .overlay(Circle().stroke(Color.white.opacity(0.35), lineWidth: 0.5))
+                                .overlay(Circle().stroke(Color.white.opacity(0.45), lineWidth: 0.75))
+                                .shadow(color: .black.opacity(0.35), radius: 6, y: 2)
                             Image(systemName: isPlaying ? "pause.fill" : "play.fill")
                                 .font(.system(size: playSize * 0.34, weight: .bold))
-                                .foregroundStyle(Theme.paper.opacity(0.95))
+                                .foregroundStyle(Theme.paper)
                                 .offset(x: isPlaying ? 0 : 1)
                         }
                         .contentShape(Circle())

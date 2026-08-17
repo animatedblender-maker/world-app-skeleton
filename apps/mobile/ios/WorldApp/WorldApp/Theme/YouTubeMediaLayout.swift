@@ -388,36 +388,6 @@ struct PlayFeedLinkCard: View {
     /// Home feed vs profile — same ≥50% autoplay rules on both.
     var autoplaySurface: FeedAutoplaySurface = .home
 
-    /// Bound to app-wide feed mute — one mute/unmute affects every feed video.
-    private var feedMutedBinding: Binding<Bool> {
-        Binding(
-            get: { appState.feedVideosMuted },
-            set: { appState.feedVideosMuted = $0 }
-        )
-    }
-
-    @State private var isFocusWinner = false
-    @State private var playGate = false
-    @State private var lastReportedRatio: CGFloat = -1
-    @State private var deactivateTask: Task<Void, Never>?
-
-    private var focusID: String { "\(autoplaySurface.rawValue):\(post.id)" }
-
-    private var surfaceLive: Bool {
-        autoplaySurface.isLive(appState: appState)
-    }
-
-    /// Winner of FeedVideoFocus + allowed surface.
-    /// Mini or expanded Hubs continuous player → no feed autoplay.
-    private var shouldPlay: Bool {
-        isFocusWinner
-            && surfaceLive
-            && appState.reelsViewerContext == nil
-            && appState.hubPlaybackPost == nil
-    }
-
-    private var feedPlayerActive: Bool { playGate }
-
     private var horizontalPadding: CGFloat {
         edgeToEdge ? Theme.feedGutter : Theme.pagePadding
     }
@@ -457,188 +427,69 @@ struct PlayFeedLinkCard: View {
         }
         .padding(.horizontal, edgeToEdge ? 0 : horizontalPadding)
         .padding(.top, edgeToEdge ? 0 : 8)
-        .background(visibilityProbe)
-        .onReceive(NotificationCenter.default.publisher(for: .feedVideoFocusDidChange)) { _ in
-            refreshFocusWinner()
-        }
         .onAppear {
-            if !appState.feedVideosMuted {
-                let session = AVAudioSession.sharedInstance()
-                try? session.setCategory(.playback, mode: .moviePlayback, options: [])
-                try? session.setActive(true, options: [])
-            }
             YouTubeCatalogService.shared.recordWatch(post.id)
-            refreshFocusWinner()
-            syncPlayGate(immediate: true)
-        }
-        .onDisappear {
-            deactivateTask?.cancel()
-            deactivateTask = nil
-            FeedVideoFocus.shared.clear(id: focusID)
-            isFocusWinner = false
-            playGate = false
-        }
-        .onChange(of: appState.hubPlaybackPost?.id) { _, postID in
-            // Miniplayer on → hard-stop feed cards immediately.
-            syncPlayGate(immediate: postID != nil)
-        }
-        .onChange(of: appState.hubPlaybackExpanded) { _, _ in
-            syncPlayGate(immediate: appState.hubPlaybackPost != nil)
-        }
-        .onChange(of: appState.selectedTab) { _, _ in
-            lastReportedRatio = -1
-            syncPlayGate(immediate: true)
-        }
-        .onChange(of: appState.navigationPath.count) { _, _ in
-            lastReportedRatio = -1
-            syncPlayGate(immediate: true)
-        }
-        .onChange(of: appState.reelsViewerContext?.id) { _, ctx in
-            // Sparks closed → force re-eval so feed video paints (not audio-only).
-            if ctx == nil {
-                lastReportedRatio = -1
-                refreshFocusWinner()
-                syncPlayGate(immediate: true)
-            } else {
-                syncPlayGate(immediate: true)
-            }
-        }
-        .onChange(of: shouldPlay) { _, play in
-            syncPlayGate(immediate: play)
         }
     }
 
     @ViewBuilder
     private var hubFeedPlayerSurface: some View {
-        if let url = post.playableVideoURL {
-            // Always aspect-fit — never crop hubs cards (letterbox bars OK, full picture).
-            // Feed: loop + start near 0 so cards never "end and freeze" mid-scroll.
-            MatteryaHubPlayerView(
-                url: url,
-                posterURL: post.posterImageURL,
-                isActive: feedPlayerActive,
-                startTime: 0,
-                postID: post.id,
-                showsControls: true,
-                loops: true,
-                fillsFrame: false,
-                isMuted: feedMutedBinding,
-                allowsFullscreen: false,
-                onReady: {
-                    Task { await PostsService.shared.recordView(post) }
+        // Same autoplay path as Sparks — single focus probe inside InFrameVideoPlayer.
+        if let url = post.playableVideoURL
+            ?? MediaURLResolver.videoURL(for: post)
+            ?? post.sharedPost.flatMap({ shared in
+                shared.asCountryPost.playableVideoURL
+                    ?? MediaURLResolver.videoURL(for: shared.asCountryPost)
+            }) {
+            ZStack {
+                if let poster = post.posterImageURL {
+                    CachedAsyncImage(
+                        url: poster,
+                        maxPixelSize: 480,
+                        contentMode: .fit,
+                        placeholder: AnyView(Theme.ink)
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+                    .allowsHitTesting(false)
+                } else {
+                    Theme.ink
                 }
-            )
+
+                InFrameVideoPlayer(
+                    url: url,
+                    posterURL: post.posterImageURL,
+                    placement: nil,
+                    countryCode: post.countryCode,
+                    contentCountryCode: post.countryCode,
+                    postID: post.id,
+                    muted: appState.feedVideosMuted,
+                    loops: true,
+                    preferArchivePlayer: ArchiveVideoPlayback.isArchiveURL(url),
+                    showsControls: true,
+                    muteOnlyControls: false,
+                    fillsFrame: false,
+                    sharesFeedMute: true,
+                    autoplaySurface: autoplaySurface,
+                    onViewed: { Task { await PostsService.shared.recordView(post) } }
+                )
+            }
             .id("hub-feed-\(post.id)")
             .background(Theme.ink)
             .onAppear {
-                // Pre-warm aggressively so feed hubs shares start without a long black wait.
                 ArchiveVideoPlayback.warmResolve(url)
-                SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
-            }
-            .onChange(of: feedPlayerActive) { _, active in
-                // When we win focus, re-warm so first paint isn't a cold AVPlayer.
-                if active {
-                    ArchiveVideoPlayback.warmResolve(url)
-                    SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
-                }
+                SparkWarmPool.shared.warmSingle(postID: post.id, url: url, deep: false)
             }
         } else {
             YouTubeVideoThumbnail(
                 post: post,
-                maxPixelSize: 900,
+                maxPixelSize: 480,
                 showsPlayIcon: true,
                 frameStyle: .feed,
                 embedsFrame: false
             )
             .contentShape(Rectangle())
             .onTapGesture { onOpen() }
-        }
-    }
-
-    private var visibilityProbe: some View {
-        // Zero-size probe — GeometryReader must never expand the feed card.
-        GeometryReader { proxy in
-            let frame = proxy.frame(in: .global)
-            Color.clear
-                .onAppear { reportVisibility(proxy.frame(in: .global)) }
-                .onChange(of: frame.minY) { _, _ in
-                    reportVisibility(proxy.frame(in: .global))
-                }
-                .onChange(of: frame.midY) { _, _ in
-                    reportVisibility(proxy.frame(in: .global))
-                }
-                .onChange(of: frame.height) { _, _ in
-                    reportVisibility(proxy.frame(in: .global))
-                }
-                .onChange(of: appState.selectedTab) { _, _ in
-                    reportVisibility(proxy.frame(in: .global))
-                }
-                .onChange(of: appState.navigationPath.count) { _, _ in
-                    reportVisibility(proxy.frame(in: .global))
-                }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-
-    private func reportVisibility(_ frame: CGRect) {
-        guard surfaceLive else {
-            if lastReportedRatio >= 0 {
-                lastReportedRatio = -1
-                FeedVideoFocus.shared.clear(id: focusID)
-            }
-            if isFocusWinner { isFocusWinner = false }
-            syncPlayGate(immediate: true)
-            return
-        }
-
-        let ratio = FeedVideoFocus.visibleRatio(for: frame)
-        if abs(ratio - lastReportedRatio) < 0.03, lastReportedRatio >= 0 {
-            refreshFocusWinner()
-            return
-        }
-        lastReportedRatio = ratio
-        FeedVideoFocus.shared.report(id: focusID, visibleRatio: ratio)
-        refreshFocusWinner()
-    }
-
-    private func refreshFocusWinner() {
-        let win = surfaceLive && FeedVideoFocus.shared.isActive(id: focusID)
-        if win != isFocusWinner {
-            isFocusWinner = win
-        }
-        // Win → play now. Lose → soft pause (debounced).
-        syncPlayGate(immediate: win)
-    }
-
-    private func syncPlayGate(immediate: Bool) {
-        if shouldPlay {
-            deactivateTask?.cancel()
-            deactivateTask = nil
-            playGate = true
-            return
-        }
-        let leaveSurface =
-            !surfaceLive
-            || appState.reelsViewerContext != nil
-            || appState.hubPlaybackPost != nil
-        if leaveSurface {
-            deactivateTask?.cancel()
-            deactivateTask = nil
-            playGate = false
-            return
-        }
-        // Focus lost — long debounce so layout glitches never pause a fully visible card.
-        guard playGate else { return }
-        deactivateTask?.cancel()
-        let delay: UInt64 = immediate ? 180_000_000 : 480_000_000
-        deactivateTask = Task {
-            try? await Task.sleep(nanoseconds: delay)
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                if !shouldPlay { playGate = false }
-            }
         }
     }
 }

@@ -6,7 +6,7 @@
   "description": "Native only: Swift iOS (ios/WorldApp) + Kotlin Android (android-app). No Capacitor.",
   "scripts": {
     "ios:open": "open ios/WorldApp/WorldApp.xcodeproj",
-    "android:open": "echo Open apps/mobile/android-app in Android Studio",
-    "android:run": "cd android-app && ./gradlew :app:installDebug"
+    "android:open": "open -a 'Android Studio' android-app",
+    "android:run": "cd android-app && ./gradlew :app:installDebug && adb shell am start -n com.matterya.matterya/.MainActivity"
   }
 }

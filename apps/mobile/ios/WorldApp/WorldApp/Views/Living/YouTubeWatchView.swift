@@ -142,27 +142,23 @@ struct YouTubeWatchView: View {
                     .clipped()
                     .zIndex(2)
 
-                // Title + Like/Send/Keep OUTSIDE ScrollView — always at "top" for FS pull.
+                // Title + Like/Send/Keep OUTSIDE ScrollView — only non-scroll FS grab surface
+                // (plus continuous player swipe-up on the film). Never attach FS drag to comments.
                 titleAndActionsChrome
                     .background(watchChromeBackground)
                     .opacity(chromeOpacity)
                     .allowsHitTesting(chromeOpacity > 0.25)
-                    .simultaneousGesture(titleFullscreenDragGesture)
+                    // Drag **down** on title only → FS. Comments ScrollView has zero FS gesture.
+                    .highPriorityGesture(titleFullscreenDragGesture)
 
                 // Scroll from top (channel → comments). Related is below — never land there
                 // when opening a new video from "More on Matterya".
                 ScrollViewReader { proxy in
                     ScrollView {
                         VStack(alignment: .leading, spacing: 0) {
-                            GeometryReader { g in
-                                Color.clear
-                                    .preference(
-                                        key: HubWatchMetaScrollOffsetKey.self,
-                                        value: g.frame(in: .named("hub-watch-meta-scroll")).minY
-                                    )
-                            }
-                            .frame(height: 0)
-                            .id(Self.watchScrollTopID)
+                            Color.clear
+                                .frame(height: 1)
+                                .id(Self.watchScrollTopID)
 
                             channelSection
                                 .padding(.top, 10)
@@ -198,6 +194,16 @@ struct YouTubeWatchView: View {
                             }
                         }
                         .padding(.bottom, 28)
+                        // Full-content minY is reliable; zero-height top probes often stick at 0
+                        // and permanently steal the pan gesture from comments.
+                        .background {
+                            GeometryReader { g in
+                                Color.clear.preference(
+                                    key: HubWatchMetaScrollOffsetKey.self,
+                                    value: g.frame(in: .named("hub-watch-meta-scroll")).minY
+                                )
+                            }
+                        }
                     }
                     .coordinateSpace(name: "hub-watch-meta-scroll")
                     .onPreferenceChange(HubWatchMetaScrollOffsetKey.self) { y in
@@ -213,11 +219,9 @@ struct YouTubeWatchView: View {
                     .background(watchChromeBackground.opacity(chromeOpacity))
                     .opacity(chromeOpacity)
                     .allowsHitTesting(chromeOpacity > 0.25)
-                    // FS pull only when at top (or mid-pull). Otherwise .subviews → pure scroll.
-                    .simultaneousGesture(
-                        scrollMetaFullscreenDragGesture,
-                        including: metaScrollAllowsFSPull ? .all : .subviews
-                    )
+                    // CRITICAL: no DragGesture / simultaneousGesture on this ScrollView.
+                    // Continuous player pass-through only claims the video stage rect, so
+                    // comment pans never open fullscreen.
                     .onAppear {
                         scrollMetaToTop(proxy)
                     }
@@ -431,12 +435,17 @@ struct YouTubeWatchView: View {
     /// True when meta ScrollView cannot scroll up any further (YouTube gate for FS pull).
     private var isMetaAtScrollTop: Bool {
         // Content top ≈ 0 when pinned; scrolled content is clearly negative.
-        metaScrollOffset >= -4
+        // Slightly looser than before so rubber-band bounce doesn't arm FS mid-thread.
+        metaScrollOffset >= -2
     }
 
     /// Allow FS gesture on the scroll view only at top or while an armed pull is in flight.
     private var metaScrollAllowsFSPull: Bool {
-        isMetaAtScrollTop || metaFSPullArmed || fullscreenPullProgress > 0.01
+        // Never leave FS drag armed once we've left the top — pure comments scroll.
+        if metaFSPullArmed || fullscreenPullProgress > 0.02 {
+            return isMetaAtScrollTop || fullscreenPullProgress > 0.02
+        }
+        return isMetaAtScrollTop
     }
 
     /// Title/actions sit outside the ScrollView — always eligible for pull-to-fullscreen.
@@ -452,7 +461,7 @@ struct YouTubeWatchView: View {
     /// YouTube-style: drag **down** → fullscreen **only** when there is no more scroll-up.
     /// Mid-thread (comments / More on Matterya): normal scroll only.
     private func metaFullscreenDragGesture(requiresScrollTop: Bool) -> some Gesture {
-        DragGesture(minimumDistance: requiresScrollTop ? 16 : 10, coordinateSpace: .local)
+        DragGesture(minimumDistance: requiresScrollTop ? 28 : 10, coordinateSpace: .local)
             .onChanged { value in
                 guard appState.hubPlaybackPost != nil, appState.hubPlaybackExpanded else { return }
                 guard !isMinimizingGrab else { return }
@@ -465,8 +474,8 @@ struct YouTubeWatchView: View {
                     if requiresScrollTop {
                         // Must already be at top — otherwise this drag is pure scroll.
                         guard isMetaAtScrollTop else { return }
-                        // Need a clear downward pull (not a horizontal flick).
-                        guard y > 12, y > x * 0.9 else { return }
+                        // Clear downward pull only (finger down). Upward = comments scroll.
+                        guard y > 22, y > x * 1.1 else { return }
                         metaFSPullArmed = true
                     } else {
                         // Title chrome — arm on clear downward pull.
@@ -891,5 +900,20 @@ struct YouTubeWatchView: View {
 private extension CountryPost {
     func withCommentCount(_ count: Int) -> CountryPost {
         withEngagement(likedByMe: likedByMe, likeCount: likeCount, commentCount: count)
+    }
+}
+
+/// Attaches FS pull **only** when enabled — detaching fully restores comments scroll.
+private struct HubMetaFSPullModifier<G: Gesture>: ViewModifier {
+    let enabled: Bool
+    let gesture: G
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if enabled {
+            content.simultaneousGesture(gesture)
+        } else {
+            content
+        }
     }
 }

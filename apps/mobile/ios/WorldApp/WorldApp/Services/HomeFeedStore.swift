@@ -119,12 +119,75 @@ final class HomeFeedStore {
 
     /// Session order + hard hide of already-viewed posts (open / reload / app open / load-more).
     /// Phase-0 recsys: unviewed → following first → discovery, then constrained re-rank.
+    /// Heavy compose runs **off MainActor** when the pool is large (IG-class: never block scroll).
     private func rankForSession(_ posts: [CountryPost]) -> [CountryPost] {
+        // Tiny pools stay sync (first paint / empty). Large pools should use `rankForSessionAsync`.
+        if posts.count > 48 {
+            // Fallback sync path if caller forgot async — still correct, just heavier.
+            // Prefer `rankForSessionAsync` from load paths.
+        }
+        return rankForSessionSync(posts)
+    }
+
+    /// Off-main compose for network / load-more paths (never freezes UI on 80–200 candidates).
+    private func rankForSessionAsync(_ posts: [CountryPost]) async -> [CountryPost] {
+        let cleaned = FeedFeedbackStore.shared.filterOutFeedback(posts.dedupeHomeFeedContent())
+        let surface = homeSurface
+        let policy = surface.policy
+        let following = sessionFollowingIDs
+        let myUser = sessionMyUserID
+        let seed = sessionRankSeed
+        let blocked = Set(BlockService.shared.blocked.map(\.userID))
+        let penalizedAuthors = Set(
+            FeedFeedbackStore.shared.authorPenalties
+                .filter { $0.value >= 0.85 }
+                .map(\.key)
+        )
+        let blockedUnion = blocked.union(penalizedAuthors)
+        let sessionId = feedSessionId
+        let pageSize = policy.pageSize
+
+        let local: [CountryPost] = await Task.detached(priority: .userInitiated) {
+            let baseline = SparkDiscoveryEngine.sessionHomeFeedOrder(
+                cleaned,
+                followingIDs: following,
+                myUserID: myUser,
+                sessionSeed: seed
+            )
+            let composed = FeedCompositionEngine.compose(
+                candidates: baseline,
+                policy: policy,
+                blockedAuthorIDs: blockedUnion,
+                alreadyServedIDs: [],
+                followingIDs: following,
+                limit: max(baseline.count, pageSize),
+                sessionSeed: seed
+            )
+            return composed.isEmpty ? baseline : composed
+        }.value
+
+        if !local.isEmpty {
+            RecommendationDecisionLog.shared.logServedPage(
+                surface: surface,
+                requestID: sessionId,
+                items: local.prefix(pageSize).enumerated().map { i, post in
+                    RecommendationDecisionLog.ServedItem(
+                        postID: post.id,
+                        authorID: post.authorID,
+                        sources: following.contains(post.authorID) ? ["following"] : ["explore"],
+                        position: i
+                    )
+                }
+            )
+        }
+        return local
+    }
+
+    private func rankForSessionSync(_ posts: [CountryPost]) -> [CountryPost] {
         let cleaned = FeedFeedbackStore.shared.filterOutFeedback(posts.dedupeHomeFeedContent())
         let surface = homeSurface
         let policy = surface.policy
 
-        // One stream: your posts + people you follow (newest) + discovery (session shuffle).
         let baseline = SparkDiscoveryEngine.sessionHomeFeedOrder(
             cleaned,
             followingIDs: sessionFollowingIDs,
@@ -133,7 +196,6 @@ final class HomeFeedStore {
         )
 
         let blocked = Set(BlockService.shared.blocked.map(\.userID))
-        // Author penalties from “Not interested” act as soft blocks when strong.
         let penalizedAuthors = Set(
             FeedFeedbackStore.shared.authorPenalties
                 .filter { $0.value >= 0.85 }
@@ -145,10 +207,10 @@ final class HomeFeedStore {
             blockedAuthorIDs: blocked.union(penalizedAuthors),
             alreadyServedIDs: [],
             followingIDs: sessionFollowingIDs,
-            limit: max(baseline.count, policy.pageSize)
+            limit: max(baseline.count, policy.pageSize),
+            sessionSeed: sessionRankSeed
         )
         let local = composed.isEmpty ? baseline : composed
-        // Client decision log (always) — server logs again when rank API is hit.
         if !local.isEmpty {
             RecommendationDecisionLog.shared.logServedPage(
                 surface: surface,
@@ -180,22 +242,19 @@ final class HomeFeedStore {
             limit: min(snapshot.count, 100)
         )
         guard ranked.map(\.id) != snapshot.map(\.id) else { return }
-        // Don't yank the head if user is mid-scroll on the first screen.
-        if userEngagedThisSession, let first = snapshot.first, ranked.first?.id != first.id {
-            // Keep first few stable; reorder the rest.
-            let headCount = min(3, snapshot.count)
-            let headIDs = Set(snapshot.prefix(headCount).map(\.id))
-            let head = Array(snapshot.prefix(headCount))
-            let tail = ranked.filter { !headIDs.contains($0.id) }
-            let merged = head + tail
-            var t = Transaction()
-            t.disablesAnimations = true
-            withTransaction(t) { posts = merged }
-            return
-        }
+        // Soft blend only — never wipe the session-shuffled head (that made every open identical).
+        let headCount = min(userEngagedThisSession ? 4 : 6, snapshot.count)
+        let head = Array(snapshot.prefix(headCount))
+        let headIDs = Set(head.map(\.id))
+        let tail = ranked.filter { !headIDs.contains($0.id) }
+        // Keep any local-only ids (non-UUID seeds) that server dropped.
+        var used = headIDs.union(tail.map(\.id))
+        let orphans = snapshot.filter { used.insert($0.id).inserted }
+        let merged = head + tail + orphans
+        guard merged.map(\.id) != snapshot.map(\.id) else { return }
         var t = Transaction()
         t.disablesAnimations = true
-        withTransaction(t) { posts = ranked }
+        withTransaction(t) { posts = merged }
     }
 
     var displayedPosts: [CountryPost] {
@@ -224,6 +283,9 @@ final class HomeFeedStore {
         if forceReplace {
             userEngagedThisSession = false
             feedSessionId = UUID().uuidString
+            recyclePass = 0
+            // Remount list from top with a brand-new order (no sticky window tail).
+            windowLimit = firstWindow
             await refreshSessionRankingContext()
         } else if posts.isEmpty {
             feedSessionId = UUID().uuidString
@@ -236,15 +298,20 @@ final class HomeFeedStore {
         // 1) Instant paint from cache only when empty or forced reshape.
         let paintedBefore = didPaint && !posts.isEmpty
         if forceReplace || posts.isEmpty {
-            var pool: [CountryPost] = posts
-            if pool.isEmpty, let cached = ContentCache.shared.posts(for: .homeFeed) {
-                pool = Self.liveOnlyPosts(cached)
+            // Force reshape: pool = previous posts + disk cache, then **re-rank with new seed**.
+            var pool: [CountryPost] = forceReplace ? posts : []
+            if let cached = ContentCache.shared.posts(for: .homeFeed) {
+                pool.append(contentsOf: Self.liveOnlyPosts(cached))
+            }
+            if pool.isEmpty {
+                pool = posts
             }
             pool = Self.liveOnlyPosts(
                 BlockService.shared.filterPosts(pool.excludingMoments().forHomeFeed())
             )
             if !pool.isEmpty {
-                applyPosts(Array(rankForSession(pool).prefix(80)), replace: true, sessionId: feedSessionId)
+                let rankedPool = await rankForSessionAsync(pool)
+                applyPosts(Array(rankedPool.prefix(80)), replace: true, sessionId: feedSessionId, alreadyRanked: true)
                 isBootstrapping = false
                 didPaint = true
                 warmHead()
@@ -253,15 +320,21 @@ final class HomeFeedStore {
             }
         }
 
-        // 2) Network — never hard-replace a feed the user is already watching.
-        let live = Self.liveOnlyPosts(await PostsService.shared.fetchFirstPaintHomePosts(limit: 72))
+        // 2) Network — thin /v1/feed first, GraphQL fallback. Never hard-replace while watching.
+        let live: [CountryPost]
+        if let thin = await SurfacePageClient.fetchHomeFeed(limit: 28, cursor: nil), !thin.items.isEmpty {
+            nextCursor = thin.nextCursor
+            live = Self.liveOnlyPosts(thin.items)
+        } else {
+            live = Self.liveOnlyPosts(await PostsService.shared.fetchFirstPaintHomePosts(limit: 48))
+        }
         guard gen == generation else { return }
 
         let preserveHead = !forceReplace
             && (paintedBefore || userEngagedThisSession || (didPaint && !posts.isEmpty))
 
         if preserveHead {
-            softMergePreservingHead(live)
+            await softMergePreservingHead(live)
             isBootstrapping = false
             didPaint = true
             hasMore = true
@@ -271,10 +344,10 @@ final class HomeFeedStore {
             #endif
         } else {
             let realBatch = Self.liveOnlyPosts(live + posts)
-            let capped = Array(rankForSession(realBatch).prefix(min(realBatch.count, 90)))
+            let capped = Array((await rankForSessionAsync(realBatch)).prefix(min(realBatch.count, 90)))
 
             if !capped.isEmpty {
-                applyPosts(capped, replace: true, sessionId: feedSessionId)
+                applyPosts(capped, replace: true, sessionId: feedSessionId, alreadyRanked: true)
                 ContentCache.shared.setPosts(posts, for: .homeFeed)
                 didPaint = true
                 warmHead()
@@ -310,7 +383,7 @@ final class HomeFeedStore {
     }
 
     /// Append / weave network rows **under** the visible head — never remounts what the user is watching.
-    private func softMergePreservingHead(_ incoming: [CountryPost]) {
+    private func softMergePreservingHead(_ incoming: [CountryPost]) async {
         let clean = Self.liveOnlyPosts(
             BlockService.shared.filterPosts(incoming.excludingMoments().forHomeFeed())
         )
@@ -323,7 +396,7 @@ final class HomeFeedStore {
         var contentKeys = Set(head.map(\.homeFeedContentKey))
 
         // Rank the rest of the library for the tail only.
-        let ranked = rankForSession(clean + posts)
+        let ranked = await rankForSessionAsync(clean + posts)
         var tail: [CountryPost] = []
         tail.reserveCapacity(ranked.count)
         for post in ranked {
@@ -380,27 +453,34 @@ final class HomeFeedStore {
             if clean.isEmpty {
                 ContentCache.shared.invalidate(.homeFeed)
             } else {
-                applyPosts(
-                    BlockService.shared.filterPosts(
-                        clean.excludingMoments().forHomeFeed()
-                    ),
-                    replace: true,
-                    sessionId: feedSessionId
+                // Off-main rank — sync compose on MainActor was first-paint hitch.
+                let filtered = BlockService.shared.filterPosts(
+                    clean.excludingMoments().forHomeFeed()
                 )
+                let ranked = await rankForSessionAsync(filtered)
+                applyPosts(ranked, replace: true, sessionId: feedSessionId, alreadyRanked: true)
                 isBootstrapping = false
                 didPaint = true
                 warmHead()
             }
         }
 
-        // 2) Light network first paint ONLY — never await full Sparks catalog here
-        // (that blocked @MainActor for minutes and froze the feed).
-        let live = Self.liveOnlyPosts(await PostsService.shared.fetchFirstPaintHomePosts(limit: 72))
+        // 2) Thin surface page first (slug/light path) — fall back to GraphQL first-paint.
+        let live: [CountryPost]
+        if let thin = await SurfacePageClient.fetchHomeFeed(limit: 28, cursor: nil), !thin.items.isEmpty {
+            nextCursor = thin.nextCursor
+            live = Self.liveOnlyPosts(thin.items)
+            #if DEBUG
+            print("[HomeFeed] thin /v1/feed firstPaint=\(live.count)")
+            #endif
+        } else {
+            live = Self.liveOnlyPosts(await PostsService.shared.fetchFirstPaintHomePosts(limit: 48))
+        }
         guard gen == generation else { return }
 
         // If cache already painted (or user started watching), soft-merge only.
         if didPaint && !posts.isEmpty {
-            softMergePreservingHead(live)
+            await softMergePreservingHead(live)
             isBootstrapping = false
             hasMore = true
             recyclePass = 0
@@ -410,10 +490,10 @@ final class HomeFeedStore {
         } else {
             let existingLive = posts.filter { !$0.isStory }
             let realBatch = Self.liveOnlyPosts(live + existingLive)
-            let capped = Array(rankForSession(realBatch).prefix(min(realBatch.count, 90)))
+            let capped = Array((await rankForSessionAsync(realBatch)).prefix(min(realBatch.count, 90)))
 
             if !capped.isEmpty {
-                applyPosts(capped, replace: true, sessionId: feedSessionId)
+                applyPosts(capped, replace: true, sessionId: feedSessionId, alreadyRanked: true)
                 ContentCache.shared.setPosts(posts, for: .homeFeed)
                 didPaint = true
                 warmHead()
@@ -486,33 +566,37 @@ final class HomeFeedStore {
             hasMore = true
         }
 
-        // Media: fling = small ahead buffer; settled = deep warm so hubs/sparks land on time.
-        let ahead = fling ? 6 : 14
+        // Media: fling = thumbs only; settled = **2–4 deep** AVPlayers (device-capped).
+        // Never mount 8–14 players per scroll tick — that is the memory spike vs IG.
+        let ahead = fling ? 4 : SparkWarmPool.MediaBudget.playerAheadFeed + 2
         let end = min(displayedPosts.count, index + ahead)
         if index < end {
             let window = Array(displayedPosts[index..<end])
             ImageCache.shared.prefetchFeedMedia(window, maxPixelSize: fling ? 280 : 360)
-            // Pre-buffer upcoming feed Sparks + hubs long-form so first frame is almost instant.
             let videoPosts = window.filter {
                 $0.isSparkFeedShare || $0.isReel || PlayPlatformBridge.isSparkFeedCard($0)
                     || PlayPlatformBridge.isHubFeedCardVideo($0)
                     || $0.hasVideo || $0.playableVideoURL != nil
             }
-            if !videoPosts.isEmpty {
-                SparkWarmPool.shared.prepare(
-                    posts: videoPosts,
-                    around: 0,
-                    ahead: max(0, videoPosts.count - 1),
-                    behind: 0
-                )
+            if !videoPosts.isEmpty, !fling {
+                SparkWarmPool.shared.prepareFeedWindow(posts: videoPosts, around: 0)
             }
-            // Always warm a few hubs URLs even mid-fling (resolve is cheap; cold play is not).
-            let warmCount = fling ? 3 : 8
-            for p in window.prefix(warmCount) {
+            // Hubs shares: Sparks-class deep preroll for the next few cards (instant first frame).
+            let warmCount = fling ? 1 : 3
+            for (i, p) in window.prefix(warmCount).enumerated() {
                 guard let url = p.playableVideoURL else { continue }
-                if ArchiveVideoPlayback.isArchiveURL(url) || PlayPlatformBridge.isHubFeedCardVideo(p) {
+                let isHub = ArchiveVideoPlayback.isArchiveURL(url)
+                    || PlayPlatformBridge.isHubFeedCardVideo(p)
+                    || PlayPlatformBridge.isHubCatalogContent(p)
+                let isSpark = p.isSpark || p.isReel || PlayPlatformBridge.isSparkFeedCard(p)
+                if isHub || isSpark {
                     ArchiveVideoPlayback.warmResolve(url)
-                    SparkWarmPool.shared.warmSingle(postID: p.id, url: url)
+                    // Only the next 1–2 deep — more than that thrash CPU on mid/low devices.
+                    SparkWarmPool.shared.warmSingle(
+                        postID: p.id,
+                        url: url,
+                        deep: !fling && i < 2
+                    )
                 }
             }
         }
@@ -623,11 +707,21 @@ final class HomeFeedStore {
         pendingUploads.removeAll { $0.id == id }
     }
 
-    func removePost(id: String) {
-        posts.removeAll { $0.id == id || $0.sharedPostID == id }
+    func removePost(id: String, post: CountryPost? = nil) {
+        if let post {
+            DeletedPostsStore.shared.markDeleted(post: post)
+        } else {
+            DeletedPostsStore.shared.markDeleted(id)
+        }
+        let store = DeletedPostsStore.shared
+        posts.removeAll {
+            store.isDeleted(post: $0) || $0.id == id || $0.sharedPostID == id
+        }
         // Keep disk cache in sync so relaunch does not resurrect the card.
         if var cached = ContentCache.shared.posts(for: .homeFeed) {
-            cached.removeAll { $0.id == id || $0.sharedPostID == id }
+            cached.removeAll {
+                store.isDeleted(post: $0) || $0.id == id || $0.sharedPostID == id
+            }
             ContentCache.shared.setPosts(cached, for: .homeFeed)
         }
     }
@@ -645,8 +739,8 @@ final class HomeFeedStore {
         let live = Self.liveOnlyPosts(await PostsService.shared.fetchNetworkHomePosts(limit: 100))
         guard gen == generation else { return }
 
-        let filtered = rankForSession(live)
-        applyPosts(filtered, replace: true, sessionId: feedSessionId)
+        let filtered = await rankForSessionAsync(live)
+        applyPosts(filtered, replace: true, sessionId: feedSessionId, alreadyRanked: true)
         nextCursor = Self.cursor(from: filtered.last)
         // Always more — R2 library + network continue after this head.
         hasMore = true
@@ -684,19 +778,35 @@ final class HomeFeedStore {
         let cursor = nextCursor
         let seenIDs = Set(posts.map(\.id))
         let seenContent = Set(posts.map(\.homeFeedContentKey))
-        let page = await PostsService.shared.loadHomeFeedPage(
-            after: cursor,
-            limit: pageSize,
-            feedSessionId: feedSessionId,
-            preferCache: false,
-            excludingIDs: seenIDs
-        )
+
+        // Prefer thin /v1/feed page (light); GraphQL only if thin fails.
+        let pageItems: [CountryPost]
+        let pageNextCursor: String?
+        if let thin = await SurfacePageClient.fetchHomeFeed(limit: pageSize, cursor: cursor),
+           !thin.items.isEmpty {
+            pageNextCursor = thin.nextCursor
+            nextCursor = thin.nextCursor
+            hasMore = thin.nextCursor != nil
+            pageItems = thin.items
+        } else {
+            let page = await PostsService.shared.loadHomeFeedPage(
+                after: cursor,
+                limit: pageSize,
+                feedSessionId: feedSessionId,
+                preferCache: false,
+                excludingIDs: seenIDs
+            )
+            pageNextCursor = page.nextCursor
+            nextCursor = page.nextCursor
+            hasMore = page.hasMore
+            pageItems = page.items
+        }
         guard gen == generation, !Task.isCancelled else { return }
 
         var appended: [CountryPost] = []
         var seen = seenIDs
         var contentKeys = seenContent
-        for post in page.items.dedupeHomeFeedContent() {
+        for post in pageItems.dedupeHomeFeedContent() {
             // Already watched (any identity) → never re-inject while unviewed remain.
             guard !SparkDiscoveryEngine.isViewed(post) else { continue }
             guard seen.insert(post.id).inserted else { continue }
@@ -751,14 +861,14 @@ final class HomeFeedStore {
             // Keep trying on next scroll — never set hasMore false permanently.
             hasMore = true
             // Advance cursor from network even when items filtered as dups.
-            if let next = page.nextCursor, next != cursor {
+            if let next = pageNextCursor, next != cursor {
                 nextCursor = next
             }
             return
         }
 
         // Rank new batch (unviewed only; follows first), then append without reordering the live head.
-        let orderedAppend = rankForSession(appended)
+        let orderedAppend = await rankForSessionAsync(appended)
         posts.append(contentsOf: orderedAppend)
         // Grow window so new rows appear without waiting for another appear cycle.
         var t = Transaction()
@@ -767,28 +877,23 @@ final class HomeFeedStore {
             windowLimit = min(posts.count, max(windowLimit + appended.count, windowLimit + windowPageSize))
         }
         // Prefer network cursor (not spark top-up dates) so we don't re-walk the head.
-        nextCursor = page.nextCursor ?? Self.cursor(from: posts.last)
+        nextCursor = pageNextCursor ?? Self.cursor(from: posts.last)
         hasMore = true
         ContentCache.shared.setPosts(Array(posts.prefix(ContentCache.maxCachedPosts)), for: .homeFeed)
-        ImageCache.shared.prefetchFeedMedia(Array(appended.prefix(12)), maxPixelSize: 360)
-        let videoPosts = appended.filter {
+        ImageCache.shared.prefetchFeedMedia(Array(appended.prefix(8)), maxPixelSize: 360)
+        let videoPosts = Array(appended.filter {
             $0.isSparkFeedShare || $0.isReel || PlayPlatformBridge.isSparkFeedCard($0)
                 || PlayPlatformBridge.isHubFeedCardVideo($0)
                 || $0.hasVideo || $0.playableVideoURL != nil
-        }
+        }.prefix(SparkWarmPool.MediaBudget.playerAheadFeed + 1))
         if !videoPosts.isEmpty {
-            SparkWarmPool.shared.prepare(
-                posts: videoPosts,
-                around: 0,
-                ahead: max(0, videoPosts.count - 1),
-                behind: 0
-            )
+            SparkWarmPool.shared.prepareFeedWindow(posts: videoPosts, around: 0)
         }
-        for p in appended.prefix(10) {
+        for (i, p) in appended.prefix(SparkWarmPool.MediaBudget.deepPrerollFeed).enumerated() {
             guard let url = p.playableVideoURL else { continue }
             if ArchiveVideoPlayback.isArchiveURL(url) || PlayPlatformBridge.isHubFeedCardVideo(p) {
                 ArchiveVideoPlayback.warmResolve(url)
-                SparkWarmPool.shared.warmSingle(postID: p.id, url: url)
+                SparkWarmPool.shared.warmSingle(postID: p.id, url: url, deep: i < 2)
             }
         }
         #if DEBUG
@@ -804,10 +909,10 @@ final class HomeFeedStore {
         }
     }
 
-    private func applyPosts(_ next: [CountryPost], replace: Bool, sessionId: String) {
+    private func applyPosts(_ next: [CountryPost], replace: Bool, sessionId: String, alreadyRanked: Bool = false) {
         feedSessionId = sessionId
-        // Dedupe + session rank: unviewed only (following first). Seen posts never re-enter.
-        let ordered = rankForSession(next)
+        // Prefer caller-provided rank (off-main). Sync re-rank only for small/legacy paths.
+        let ordered = alreadyRanked ? next : rankForSessionSync(next)
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) {
@@ -829,8 +934,8 @@ final class HomeFeedStore {
     }
 
     private func warmHead() {
-        // First ~2 screens + next rows so sparks/hubs paint on time (not after scroll).
-        let head = Array(posts.prefix(max(firstWindow + 6, 24)))
+        // First screen thumbs + **2–4 deep** AVPlayers (device tier). Poster covers the rest.
+        let head = Array(posts.prefix(max(firstWindow + 2, 16)))
         ImageCache.shared.prefetchFeedMedia(head, maxPixelSize: 360)
         let videoPosts = head.filter {
             $0.isSparkFeedShare || $0.isReel || PlayPlatformBridge.isSparkFeedCard($0)
@@ -838,22 +943,27 @@ final class HomeFeedStore {
                 || $0.hasVideo || $0.playableVideoURL != nil
         }
         if !videoPosts.isEmpty {
-            SparkWarmPool.shared.prepare(
-                posts: Array(videoPosts.prefix(14)),
-                around: 0,
-                ahead: min(12, max(0, videoPosts.count - 1)),
-                behind: 0
+            SparkWarmPool.shared.prepareFeedWindow(
+                posts: Array(videoPosts.prefix(SparkWarmPool.MediaBudget.playerAheadFeed + 1)),
+                around: 0
             )
         }
-        // Hubs long-form: resolve + warm players for the whole head (cold start was the black wait).
-        for post in head.prefix(12) {
+        // Hubs + Sparks head: deep-preroll like Sparks player open (instant first frame).
+        // Head: deep only first 2 playable videos (CPU budget).
+        for (i, post) in head.prefix(6).enumerated() {
             guard let url = post.playableVideoURL else { continue }
-            if ArchiveVideoPlayback.isArchiveURL(url)
+            let isHub = ArchiveVideoPlayback.isArchiveURL(url)
                 || PlayPlatformBridge.isHubFeedCardVideo(post)
-                || PlayPlatformBridge.isHubCatalogContent(post) {
+                || PlayPlatformBridge.isHubCatalogContent(post)
+            let isSpark = post.isSpark || post.isReel || PlayPlatformBridge.isSparkFeedCard(post)
+            if isHub || isSpark {
                 ArchiveVideoPlayback.warmResolve(url)
-                SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
+                SparkWarmPool.shared.warmSingle(postID: post.id, url: url, deep: i < 2)
             }
+        }
+        // Edge: ask API to freshen playback URLs for the head (CDN / presign).
+        Task(priority: .utility) {
+            await RecommendationClient.warmPlaybackURLs(Array(head.prefix(8).map(\.id)))
         }
     }
 

@@ -6,6 +6,7 @@ import { PostEventsService } from './post-events.service';
 import { DemoDatasetService } from './demo-dataset.service';
 import { SUPABASE_URL } from '../../config/supabase.config';
 import { resolveAvatarUrl as resolveAvatarMediaUrl } from '../utils/media-url.util';
+import { HubsSeedService } from '../../hubs/hubs-seed.service';
 
 @Injectable({ providedIn: 'root' })
 export class PostsService {
@@ -186,12 +187,30 @@ export class PostsService {
         'recentPosts'
       );
       // Moments must never appear as regular feed posts (also strip markers in mapPost).
+      // Archive seed / archive.org media is gated off (see HubsSeedService.ARCHIVE_CONTENT_ENABLED).
       return (recentPosts ?? [])
         .map((row) => this.mapPost(row))
-        .filter((p) => !this.isMoment(p));
+        .filter((p) => !this.isMoment(p))
+        .filter((p) => this.allowArchiveMedia(p));
     } catch {
       return [];
     }
+  }
+
+  /**
+   * Drop Internet Archive rows while ARCHIVE_CONTENT_ENABLED is false.
+   * Mirrors iOS AppConfig.archiveContentEnabled / excludingArchiveContent().
+   */
+  allowArchiveMedia(post: CountryPost | null | undefined): boolean {
+    if (HubsSeedService.ARCHIVE_CONTENT_ENABLED || !post) return true;
+    const id = String(post.id || '').toLowerCase();
+    if (id.startsWith('ia_') || id.startsWith('hub_spark_') || id.startsWith('hub_')) return false;
+    const author = String(post.author_id || '').toLowerCase();
+    if (author.startsWith('hub_') || author.startsWith('ia_') || author.startsWith('archive_')) return false;
+    const media = String(post.media_url || '').toLowerCase();
+    const thumb = String(post.thumb_url || '').toLowerCase();
+    if (media.includes('archive.org') || thumb.includes('archive.org')) return false;
+    return true;
   }
 
   isMoment(post: CountryPost | null | undefined): boolean {
@@ -612,7 +631,7 @@ export class PostsService {
       }
     `;
 
-    const payload = {
+    const payload: Record<string, unknown> = {
       title: input.title?.trim() || null,
       body: input.body.trim(),
       country_name: input.countryName,
@@ -624,6 +643,9 @@ export class PostsService {
       thumb_url: input.thumbUrl ?? null,
       shared_post_id: input.sharedPostId ?? null,
     };
+    // Optional hub stamps (server may ignore unknown fields)
+    if (input.externalRefType) payload['external_ref_type'] = input.externalRefType;
+    if (input.externalRefId) payload['external_ref_id'] = input.externalRefId;
 
     const { createPost } = await this.gql.request<{ createPost: any }>(mutation, {
       input: payload,
@@ -1194,20 +1216,30 @@ export class PostsService {
     const deduped: CountryPost[] = [];
     for (const post of combined) {
       if (!post?.id || seen.has(post.id)) continue;
+      if (!this.allowArchiveMedia(post)) continue;
       seen.add(post.id);
       deduped.push(post);
     }
+    // No recommender yet — always reshuffle so feed feels new every load.
     if (real.length) {
       const realIds = new Set(real.map((post) => post.id));
-      const realOrdered = real
-        .filter((post) => realIds.has(post.id))
-        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-      const demoOrdered = deduped.filter((post) => !realIds.has(post.id));
+      const realOrdered = this.shufflePosts(
+        real.filter((post) => realIds.has(post.id) && this.allowArchiveMedia(post))
+      );
+      const demoOrdered = this.shufflePosts(deduped.filter((post) => !realIds.has(post.id)));
       return [...realOrdered, ...demoOrdered].slice(0, Math.max(1, limit));
     }
-    return deduped
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-      .slice(0, Math.max(1, limit));
+    return this.shufflePosts(deduped).slice(0, Math.max(1, limit));
+  }
+
+  /** Temporary stand-in for a recommender: Fisher–Yates shuffle. */
+  private shufflePosts(posts: CountryPost[]): CountryPost[] {
+    const next = posts.slice();
+    for (let i = next.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [next[i], next[j]] = [next[j], next[i]];
+    }
+    return next;
   }
 
   private estimateViewCount(id: string | null | undefined, likeCount: any, commentCount: any): number {

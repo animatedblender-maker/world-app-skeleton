@@ -500,7 +500,7 @@ final class CallSessionManager: NSObject {
             try session.setCategory(
                 .playAndRecord,
                 mode: .voiceChat,
-                options: isSpeakerOn ? [.defaultToSpeaker, .allowBluetooth] : [.allowBluetooth]
+                options: isSpeakerOn ? [.defaultToSpeaker, .allowBluetoothHFP] : [.allowBluetoothHFP]
             )
             try session.setActive(true, options: [])
             if isSpeakerOn {
@@ -863,16 +863,45 @@ final class CallSessionManager: NSObject {
 
     private func sendCallLog(status: String) async {
         guard !callLogSent, let conversationID, let kind = callKind else { return }
+        callLogSent = true
         let duration = callStartAt.map { max(0, Int(Date().timeIntervalSince($0))) } ?? 0
         let body = Message.callLogBody(status: status, kind: kind.rawValue, durationSeconds: duration)
-        if let _ = try? await MessagesService.shared.sendMessage(conversationID: conversationID, body: body) {
+
+        // Optimistic: paint call log in the thread + inbox *immediately* after hangup / miss.
+        let local = MessagesService.shared.appendOptimisticCallLog(
+            conversationID: conversationID,
+            body: body
+        )
+        NotificationCenter.default.post(
+            name: .conversationMessagesDidChange,
+            object: nil,
+            userInfo: [
+                "conversationId": conversationID,
+                "localMessageId": local.id,
+            ]
+        )
+
+        // Confirm with server; keep the optimistic row if the network is slow/fails.
+        do {
+            let sent = try await MessagesService.shared.sendMessage(
+                conversationID: conversationID,
+                body: body
+            )
+            MessagesService.shared.replaceLocalMessage(
+                id: local.id,
+                with: sent,
+                conversationID: conversationID
+            )
             NotificationCenter.default.post(
                 name: .conversationMessagesDidChange,
                 object: nil,
                 userInfo: ["conversationId": conversationID]
             )
+        } catch {
+            #if DEBUG
+            print("[CallLog] send failed (kept local): \(error.localizedDescription)")
+            #endif
         }
-        callLogSent = true
     }
 
     func handleIncomingPushCall(
