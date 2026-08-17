@@ -104,20 +104,66 @@ export function ingestMetricBatch(body: MetricBatchIn): { accepted: number; reje
   return { accepted, rejected };
 }
 
-/** Snapshot for ops / future Grafana scrape. */
+export type MetricNameStats = {
+  name: string;
+  count: number;
+  p50: number;
+  p95: number;
+  p99: number;
+};
+
+/** Snapshot for ops / Grafana Infinity JSON. */
 export function metricsSummary(): {
   samples: number;
   byName: Record<string, { count: number; p50: number; p95: number; p99: number }>;
+  /** Flat rows — easiest for Grafana Infinity table panels. */
+  rows: MetricNameStats[];
 } {
   const out: Record<string, { count: number; p50: number; p95: number; p99: number }> = {};
+  const rows: MetricNameStats[] = [];
   for (const [name, arr] of byName) {
     const sorted = [...arr].sort((a, b) => a - b);
-    out[name] = {
+    const stats = {
       count: sorted.length,
       p50: percentile(sorted, 50),
       p95: percentile(sorted, 95),
       p99: percentile(sorted, 99),
     };
+    out[name] = stats;
+    rows.push({ name, ...stats });
   }
-  return { samples: ring.length, byName: out };
+  rows.sort((a, b) => a.name.localeCompare(b.name));
+  return { samples: ring.length, byName: out, rows };
+}
+
+/** Prometheus text exposition for Grafana Cloud / scrapers. */
+export function metricsPrometheusText(): string {
+  const lines: string[] = [
+    '# HELP matterya_client_milestone_duration_ms Client milestone latency (rolling window)',
+    '# TYPE matterya_client_milestone_duration_ms summary',
+    '# HELP matterya_client_milestone_samples Rolling sample count in API memory',
+    '# TYPE matterya_client_milestone_samples gauge',
+  ];
+  const summary = metricsSummary();
+  lines.push(`matterya_client_milestone_samples ${summary.samples}`);
+  for (const row of summary.rows) {
+    const n = sanitizePromLabel(row.name);
+    lines.push(
+      `matterya_client_milestone_duration_ms{name="${n}",quantile="0.5"} ${row.p50}`
+    );
+    lines.push(
+      `matterya_client_milestone_duration_ms{name="${n}",quantile="0.95"} ${row.p95}`
+    );
+    lines.push(
+      `matterya_client_milestone_duration_ms{name="${n}",quantile="0.99"} ${row.p99}`
+    );
+    lines.push(
+      `matterya_client_milestone_duration_ms_count{name="${n}"} ${row.count}`
+    );
+  }
+  return lines.join('\n') + '\n';
+}
+
+function sanitizePromLabel(s: string): string {
+  return s.replace(/[^a-zA-Z0-9_:.-]/g, '_').slice(0, 80);
 }

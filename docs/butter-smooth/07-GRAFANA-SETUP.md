@@ -33,13 +33,65 @@ Wait for Step 2 instructions after you confirm.
 
 ---
 
-## Step 2 — (later, agent will guide)
+## Step 1 status
 
-- Add a data source that can poll or receive metrics  
-- Or use Infinity plugin + JSON from `https://api.matterya.com/v1/metrics/summary`  
-  (needs auth: Bearer or `x-cron-secret`)  
+- Stack: `https://maroonbroccoli500.grafana.net/` (product owner)
 
-## Step 3 — (later)
+---
+
+## Step 2 — Secret on Render + Infinity data source (YOU)
+
+### 2a. Add a secret on Render (API service)
+
+1. Open [Render Dashboard](https://dashboard.render.com) → service that serves **api.matterya.com**  
+2. **Environment** → **Add Environment Variable**  
+3. Key: `METRICS_SUMMARY_SECRET`  
+4. Value: invent a long random string (example format):  
+   `matterya_metrics_$(openssl rand -hex 16)`  
+   or any password-like string **you will not share publicly**  
+5. **Save** → wait for redeploy to finish  
+
+### 2b. Confirm the API accepts the secret
+
+In Terminal (replace `YOUR_SECRET`):
+
+```bash
+curl -sS -H "x-cron-secret: YOUR_SECRET" \
+  "https://api.matterya.com/v1/metrics/summary" | head -c 400
+```
+
+You should see `"ok":true` (even if `rows` is empty until the app sends metrics).
+
+### 2c. Install **Infinity** plugin in Grafana
+
+1. Open `https://maroonbroccoli500.grafana.net/`  
+2. Left menu → **Connections** (or **Administration** → **Plugins**)  
+3. Search **Infinity**  
+4. **Install** / enable (Grafana Cloud free includes it)  
+
+### 2d. Add Infinity data source
+
+1. **Connections** → **Data sources** → **Add data source**  
+2. Choose **Infinity**  
+3. Name: `Matterya Metrics`  
+4. Under **Authentication** / **HTTP headers** (wording varies):  
+   - Header name: `x-cron-secret`  
+   - Header value: same as `METRICS_SUMMARY_SECRET`  
+5. **Save & test**
+
+### 2e. Quick Explore (optional)
+
+1. **Explore** → data source **Matterya Metrics**  
+2. Type: **JSON**  
+3. URL: `https://api.matterya.com/v1/metrics/summary`  
+4. Parser: root → path `rows`  
+5. You should see columns like `name`, `p50`, `p95`, `p99` after the app has uploaded events  
+
+Reply: **`grafana step2 done`** when 2a–2d work (or paste any error text).
+
+---
+
+## Step 3 — Dashboard panels (agent guides after step2)
 
 - Panels for: `app_start_to_feed_visible`, `reel_swipe_first_frame`, `message_local_visible`, etc.
 

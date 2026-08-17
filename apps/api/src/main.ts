@@ -59,6 +59,7 @@ import {
 import { getRemoteConfig } from './recommendation/remote-config.js';
 import {
   ingestMetricBatch,
+  metricsPrometheusText,
   metricsSummary,
 } from './recommendation/metrics-ingest.js';
 import {
@@ -758,18 +759,40 @@ app.post('/v1/metrics/batch', async (req: Request, res: Response) => {
   }
 });
 
+function metricsReadAuthorized(req: Request): boolean {
+  const secret =
+    process.env.METRICS_SUMMARY_SECRET?.trim() ||
+    process.env.CONTENT_CRON_SECRET?.trim() ||
+    '';
+  const header = String(req.headers['x-cron-secret'] ?? '').trim();
+  const queryKey = String(req.query.key ?? '').trim();
+  if (secret && (header === secret || queryKey === secret)) return true;
+  return false;
+}
+
 app.get('/v1/metrics/summary', async (req: Request, res: Response) => {
   try {
-    // Prefer authenticated ops; allow cron secret for scrape.
-    const secret = process.env.CONTENT_CRON_SECRET || process.env.METRICS_SUMMARY_SECRET;
-    const header = String(req.headers['x-cron-secret'] ?? '');
     const user = await getUserFromRequest(req).catch(() => null);
-    if (!user?.id && (!secret || header !== secret)) {
+    if (!user?.id && !metricsReadAuthorized(req)) {
       return res.status(401).json({ error: 'unauthorized' });
     }
     return res.json({ ok: true, ...metricsSummary() });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message ?? 'summary_failed' });
+  }
+});
+
+/** Prometheus text — Grafana Cloud / Infinity / scrape. Same auth as summary. */
+app.get('/v1/metrics/prometheus', async (req: Request, res: Response) => {
+  try {
+    const user = await getUserFromRequest(req).catch(() => null);
+    if (!user?.id && !metricsReadAuthorized(req)) {
+      return res.status(401).json({ error: 'unauthorized' });
+    }
+    res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
+    return res.status(200).send(metricsPrometheusText());
+  } catch (err: any) {
+    return res.status(500).type('text').send(`# error ${err?.message ?? 'failed'}\n`);
   }
 });
 
