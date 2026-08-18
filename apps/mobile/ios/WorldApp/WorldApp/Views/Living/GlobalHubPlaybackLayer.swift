@@ -351,8 +351,8 @@ struct GlobalHubPlaybackLayer: View {
             let h = safePositive(g.size.height)
             ZStack {
                 Theme.ink
-                // Poster only under film — AV layer stays mounted; never swap to list thumb.
-                if let poster = post.posterImageURL {
+                // Poster only while not playing — once AV paints, never cover with thumb.
+                if let poster = post.posterImageURL, !appState.hubPlaybackPlaying {
                     CachedAsyncImage(
                         url: poster,
                         maxPixelSize: 900,
@@ -363,7 +363,9 @@ struct GlobalHubPlaybackLayer: View {
                     .clipped()
                     .allowsHitTesting(false)
                 }
-                playerSurface(for: post, showControls: false, chromeOpacity: 0)
+                // Controls come from AppState inside MatteryaHubPlayerView (pass-through
+                // freezes SwiftUI props — never bake showControls:false forever).
+                playerSurface(for: post, showControls: true, chromeOpacity: 1)
                     .frame(width: w, height: h)
                     .clipped()
             }

@@ -2017,7 +2017,10 @@ struct InFrameVideoPlayer: View {
                 framesReady = false
                 return
             }
-            // Winner only: resolve Archive CDN if needed. No SparkWarmPool (player cold-starts once).
+            // Focus winner: light warm + claim so first frame is instant (slug/edge feel).
+            if let postID {
+                SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: false)
+            }
             if usesArchivePath {
                 ArchiveVideoPlayback.warmResolve(url)
             }

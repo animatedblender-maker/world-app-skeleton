@@ -1346,8 +1346,15 @@ final class AppState {
         withTransaction(t) {
             hubPlaybackExpanded = false
         }
-        // One reassert only — do NOT FeedVideoFocus.resetAll / silenceAll (froze mini morph).
+        // Keep continuous AV painting in the mini hole (never freeze on poster/thumb).
+        hubPlaybackPlaying = true
         MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(userMuted: hubPlaybackMuted)
+        NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
+        NotificationCenter.default.post(
+            name: .matteryaHubContinuousSetPlaying,
+            object: nil,
+            userInfo: ["playing": true]
+        )
 
         // Defer side-effects so they never hitch the release / morph frame.
         let shouldReturn = returnToChat
@@ -1358,6 +1365,10 @@ final class AppState {
             if !hubPlaybackExpanded {
                 hubPlaybackPullProgress = 0
             }
+            // Second beat: dock preference + chrome may land a frame late.
+            hubPlaybackPlaying = true
+            MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(userMuted: hubPlaybackMuted)
+            NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
             syncHubPlaybackChatReturnWithPath()
             if shouldReturn, let conversationID {
                 try? await Task.sleep(nanoseconds: 40_000_000)

@@ -204,6 +204,8 @@ final class ArchivePlayerBridge: ObservableObject {
 /// Matterya-styled controls over the Archive player: play/pause, mute, scrub, ±10s.
 /// Used in Hubs watch, mini handoff, and feed — keep this as the single hub video surface.
 struct MatteryaHubPlayerView: View {
+    @Environment(AppState.self) private var appState
+
     let url: URL
     var posterURL: URL? = nil
     var isActive: Bool = true
@@ -251,6 +253,27 @@ struct MatteryaHubPlayerView: View {
     /// YouTube-style double-tap skip flash (negative = back, positive = forward).
     @State private var skipFlash: Int = 0
     @State private var skipFlashTask: Task<Void, Never>?
+
+    /// Pass-through host freezes `showsControls` at first mount — read AppState live instead.
+    private var effectiveShowsControls: Bool {
+        if isContinuousHubPlayer {
+            guard appState.hubPlaybackExpanded else { return false }
+            if appState.hubPlaybackPullProgress > 0.55 { return false }
+            return true
+        }
+        return showsControls
+    }
+
+    private var effectiveChromeOpacity: Double {
+        if isContinuousHubPlayer {
+            guard appState.hubPlaybackExpanded else { return 0 }
+            let pull = appState.hubPlaybackPullProgress
+            if pull > 0.55 { return 0 }
+            if isFullscreenActive { return 1 }
+            return Double(1 - min(1, max(0, pull)))
+        }
+        return chromeOpacity
+    }
 
     init(
         url: URL,
@@ -359,29 +382,29 @@ struct MatteryaHubPlayerView: View {
                 isContinuousHubPlayer: isContinuousHubPlayer
             )
 
-            if showsControls {
+            if effectiveShowsControls {
                 // Spinner only while this slot is actively trying to play (never mid-scroll).
                 if !bridge.isReady, isActive {
                     ProgressView()
                         .progressViewStyle(.circular)
                         .tint(.white)
                         .scaleEffect(1.15)
-                        .opacity(chromeOpacity)
+                        .opacity(effectiveChromeOpacity)
                         .zIndex(2)
                 }
 
-                // Buttons only after the user taps the video — never while scrolling.
+                // Buttons after tap — continuous expanded starts with chrome visible once.
                 if showChrome {
                     hubChrome
-                        .opacity(chromeOpacity)
-                        .allowsHitTesting(chromeOpacity > 0.2)
+                        .opacity(effectiveChromeOpacity)
+                        .allowsHitTesting(effectiveChromeOpacity > 0.2)
                         .transition(.opacity)
                         .zIndex(3)
                 } else {
                     // Capture taps + double-tap skip without drawing transport chrome.
                     youtubeHiddenChromeHitLayer
-                        .opacity(chromeOpacity)
-                        .allowsHitTesting(chromeOpacity > 0.2)
+                        .opacity(max(0.01, effectiveChromeOpacity))
+                        .allowsHitTesting(effectiveChromeOpacity > 0.05 || isContinuousHubPlayer)
                         .zIndex(3)
                 }
 
@@ -398,7 +421,7 @@ struct MatteryaHubPlayerView: View {
                     }
                     .padding(.horizontal, 28)
                     .allowsHitTesting(false)
-                    .opacity(chromeOpacity)
+                    .opacity(effectiveChromeOpacity)
                     .transition(.opacity.combined(with: .scale(scale: 0.9)))
                     .zIndex(40)
                 }
@@ -497,6 +520,9 @@ struct MatteryaHubPlayerView: View {
                     bridge.controller?.setMuted(isMuted)
                     bridge.controller?.setActive(true)
                     bridge.controller?.ensureContinuingPlayback()
+                    if let p = bridge.controller?.avPlayer {
+                        MediaPlaybackCoordinator.shared.protectContinuous(p)
+                    }
                     bridge.isPlaying = true
                 } else {
                     bridge.controller?.pauseKeepingFrame()
@@ -564,6 +590,35 @@ struct MatteryaHubPlayerView: View {
                 scheduleChromeHide()
             }
         }
+        .onChange(of: appState.hubPlaybackExpanded) { _, expanded in
+            guard isContinuousHubPlayer else { return }
+            if expanded {
+                // Maximized: show transport buttons (pass-through froze showsControls=false).
+                showChrome = true
+                scheduleChromeHide()
+                bridge.controller?.setMuted(isMuted)
+                bridge.controller?.setActive(true)
+                bridge.controller?.ensureContinuingPlayback()
+                if let p = bridge.controller?.avPlayer {
+                    MediaPlaybackCoordinator.shared.protectContinuous(p)
+                }
+                bridge.isPlaying = true
+                onPlayingChange?(true)
+            } else {
+                // Mini: hide transport; keep AV painting (never fall back to poster/thumb).
+                chromeHideTask?.cancel()
+                showChrome = false
+                bridge.controller?.setMuted(isMuted)
+                bridge.controller?.setActive(true)
+                bridge.controller?.ensureContinuingPlayback()
+                if let p = bridge.controller?.avPlayer {
+                    MediaPlaybackCoordinator.shared.protectContinuous(p)
+                }
+                MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(userMuted: isMuted)
+                bridge.isPlaying = true
+                onPlayingChange?(true)
+            }
+        }
         .onChange(of: isMuted) { _, muted in
             bridge.controller?.setMuted(muted)
             bridge.publishMuted(muted)
@@ -587,6 +642,15 @@ struct MatteryaHubPlayerView: View {
             bridge.controller?.setMuted(isMuted)
             if isActive {
                 bridge.controller?.setActive(true)
+                bridge.controller?.ensureContinuingPlayback()
+                if isContinuousHubPlayer, let p = bridge.controller?.avPlayer {
+                    MediaPlaybackCoordinator.shared.protectContinuous(p)
+                }
+            }
+            // Continuous expanded: reveal transport (props were frozen showControls=false).
+            if isContinuousHubPlayer, appState.hubPlaybackExpanded {
+                showChrome = true
+                scheduleChromeHide()
             }
         }
         .onDisappear {
@@ -610,10 +674,19 @@ struct MatteryaHubPlayerView: View {
         let safeBottom = isFullscreenActive ? max(12, YouTubeMediaLayout.keyWindowSafeBottom + 6) : 10
 
         return ZStack {
-            // Soft dim when paused — keep transparent enough to avoid “black bar” slabs.
+            // Never full-bleed black dim — that read as a bar cutting the maximized film.
+            // Paused: tiny vignette only at the bottom scrubber band.
             if !bridge.isPlaying {
-                Color.black.opacity(0.18)
-                    .allowsHitTesting(false)
+                VStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    LinearGradient(
+                        colors: [.clear, Color.black.opacity(0.35)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: 72)
+                }
+                .allowsHitTesting(false)
             }
 
             // Single tap empty area → hide chrome when playing; double-tap L/R → ±10s.
@@ -735,13 +808,14 @@ struct MatteryaHubPlayerView: View {
                     .padding(.horizontal, 14)
                     .padding(.bottom, safeBottom)
                 }
-                .padding(.top, 20)
+                .padding(.top, 16)
+                // Soft fade only — heavy ink slab was cutting the maximized film.
                 .background(
                     LinearGradient(
                         colors: [
                             .clear,
-                            Theme.ink.opacity(0.5),
-                            Theme.ink.opacity(0.88),
+                            Theme.ink.opacity(0.22),
+                            Theme.ink.opacity(0.45),
                         ],
                         startPoint: .top,
                         endPoint: .bottom

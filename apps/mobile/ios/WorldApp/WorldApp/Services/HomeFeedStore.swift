@@ -900,9 +900,21 @@ final class HomeFeedStore {
     }
 
     private func warmHead() {
-        // Media session 09: first screen posters only — never SparkWarmPool / Archive resolve.
+        // Thumbs + at most 2 *light* AV warms so the first focus winner claims instantly
+        // (slug/edge feel — no black/thumb stall). Never deep / prepareFeedWindow.
         let head = Array(posts.prefix(max(firstWindow + 2, 16)))
         ImageCache.shared.prefetchFeedMedia(head, maxPixelSize: 360)
+        var warmed = 0
+        for post in head {
+            guard warmed < 2 else { break }
+            guard let url = post.playableVideoURL else { continue }
+            let isSpark = post.isSpark || post.isReel || PlayPlatformBridge.isSparkFeedCard(post)
+            let isHub = PlayPlatformBridge.isHubFeedCardVideo(post)
+                || PlayPlatformBridge.isHubOriginShare(post)
+            guard isSpark || isHub || post.hasVideo else { continue }
+            SparkWarmPool.shared.warmSingle(postID: post.id, url: url, deep: false)
+            warmed += 1
+        }
     }
 
     /// Opaque cursor for GraphQL `before` (created_at timestamptz).
