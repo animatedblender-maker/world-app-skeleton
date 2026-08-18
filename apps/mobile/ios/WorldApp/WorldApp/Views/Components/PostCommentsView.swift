@@ -296,7 +296,10 @@ struct PostCommentsView: View {
                     resolveOrigin: true
                 )
                 comments = fresh
-                CommentsWarmCache.shared.store(postID, comments: fresh)
+                // Never persist empty — that blocked retries after thin-feed origin miss.
+                if !fresh.isEmpty {
+                    CommentsWarmCache.shared.store(postID, comments: fresh)
+                }
             }
             // Top up fuller thread without spinner; only replace if we got more rows.
             let capturedCount = comments.count
@@ -311,12 +314,15 @@ struct PostCommentsView: View {
                 CommentsWarmCache.shared.store(postID, comments: more)
             }
         } catch {
-            // Seed / offline fallback — never surface GraphQL "Unexpected error".
+            // Seed / offline fallback — surface real errors when local is also empty.
             if comments.isEmpty {
                 comments = HubEngagementStore.shared.listComments(
                     postID,
                     limit: PostsService.commentsFirstPageLimit
                 )
+            }
+            if comments.isEmpty {
+                onError?(error.localizedDescription)
             }
         }
     }

@@ -1398,6 +1398,7 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
         var lastURL: URL?
         var lastActive: Bool?
         var lastMuted: Bool?
+        var lastGravity: AVLayerVideoGravity?
         var lastSeekToken: Double?
         var lastRestartToken: UInt = 0
         var lastUserPaused: Bool = false
@@ -1427,6 +1428,7 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
         context.coordinator.lastURL = url
         context.coordinator.lastActive = isActive
         context.coordinator.lastMuted = muted
+        context.coordinator.lastGravity = videoGravity
         context.coordinator.lastRestartToken = restartFromBeginningToken
         // Gravity BEFORE configure/install — never play one frame at fill then snap to fit.
         vc.applyVideoGravity(videoGravity)
@@ -1440,8 +1442,30 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ vc: ArchiveVideoPlayerController, context: Context) {
-        // Gravity first on every update so install paths never see the wrong default.
-        vc.applyVideoGravity(videoGravity)
+        let urlChanged = context.coordinator.lastURL != url
+        let activeChanged = context.coordinator.lastActive != isActive
+        let mutedChanged = context.coordinator.lastMuted != muted
+        let restartChanged = context.coordinator.lastRestartToken != restartFromBeginningToken
+        let pauseChanged = context.coordinator.lastUserPaused != isPausedByUser
+        let gravityChanged = context.coordinator.lastGravity != videoGravity
+
+        // Continuous hubs mini↔max morph resizes the host every frame.
+        // Never re-apply gravity / mute / callbacks on no-op SwiftUI updates (main-thread freeze).
+        let anyChange = urlChanged || activeChanged || mutedChanged || restartChanged
+            || pauseChanged || gravityChanged
+        guard anyChange || seekToSeconds != nil else {
+            // Cheap bookkeeping only — no AV work.
+            if vc.postID != postID { vc.postID = postID }
+            if vc.isContinuousHubPlayer != isContinuousHubPlayer {
+                vc.isContinuousHubPlayer = isContinuousHubPlayer
+            }
+            return
+        }
+
+        if gravityChanged {
+            context.coordinator.lastGravity = videoGravity
+            vc.applyVideoGravity(videoGravity)
+        }
         vc.loops = loops
         vc.postID = postID
         vc.isContinuousHubPlayer = isContinuousHubPlayer
@@ -1456,12 +1480,6 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
             bridge?.publishPlaying(playing)
         }
         bridge?.controller = vc
-
-        let urlChanged = context.coordinator.lastURL != url
-        let activeChanged = context.coordinator.lastActive != isActive
-        let mutedChanged = context.coordinator.lastMuted != muted
-        let restartChanged = context.coordinator.lastRestartToken != restartFromBeginningToken
-        let pauseChanged = context.coordinator.lastUserPaused != isPausedByUser
 
         if urlChanged {
             context.coordinator.lastURL = url
@@ -1522,9 +1540,6 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
             } else {
                 vc.setActive(false)
             }
-        } else if isActive {
-            // Keep mute in sync even when only coordinator paused/muted us.
-            vc.setMuted(muted)
         }
 
         // Sparks timeline scrub — apply once per request, then clear token so re-seeks work.

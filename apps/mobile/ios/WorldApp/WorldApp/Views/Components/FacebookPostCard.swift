@@ -793,12 +793,6 @@ struct FacebookPostCard: View {
             onViewed: { Task { await PostsService.shared.recordView(post) } }
         )
         .background(isHub ? Theme.ink : Color.clear)
-        .onAppear {
-            // Poster path only — no AV warm on every cell (focus winner warms light).
-            if useArchivePath {
-                ArchiveVideoPlayback.warmResolve(url)
-            }
-        }
     }
 
     private var actions: some View {

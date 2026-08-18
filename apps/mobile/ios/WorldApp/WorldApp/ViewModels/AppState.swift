@@ -1346,9 +1346,8 @@ final class AppState {
         withTransaction(t) {
             hubPlaybackExpanded = false
         }
-        // Immediate audio re-assert (tab auto-mini used to lose sound here).
+        // One reassert only — do NOT FeedVideoFocus.resetAll / silenceAll (froze mini morph).
         MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(userMuted: hubPlaybackMuted)
-        NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
 
         // Defer side-effects so they never hitch the release / morph frame.
         let shouldReturn = returnToChat
@@ -1358,11 +1357,6 @@ final class AppState {
             try? await Task.sleep(nanoseconds: 40_000_000)
             if !hubPlaybackExpanded {
                 hubPlaybackPullProgress = 0
-            }
-            FeedVideoFocus.shared.resetAll()
-            // Feed focus reset may silence others — keep continuous solo.
-            if hubPlaybackPost != nil, hubPlaybackPlaying {
-                MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(userMuted: hubPlaybackMuted)
             }
             syncHubPlaybackChatReturnWithPath()
             if shouldReturn, let conversationID {

@@ -115,6 +115,14 @@ enum SurfacePageClient {
         let created = (row["created_at"] as? String) ?? ISO8601DateFormatter().string(from: Date())
         let body = (row["body"] as? String) ?? ""
         let isHubSurface = mediaType == "video" || mediaType == "reel" || mediaType == "spark"
+        // Thin feed used to strip stamps — API now sends shared_post_id / origin_sid for comments.
+        let sharedRaw = (row["shared_post_id"] as? String)
+            ?? (row["origin_sid"] as? String)
+        let sharedPostID: String? = {
+            guard let s = sharedRaw?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !s.isEmpty, s != id else { return nil }
+            return s
+        }()
 
         return CountryPost(
             id: id,
@@ -123,6 +131,7 @@ enum SurfacePageClient {
             mediaType: mediaType,
             mediaURL: mediaURL,
             thumbURL: thumb,
+            sharedPostID: sharedPostID,
             visibility: .public,
             likeCount: intValue(row["like_count"]),
             commentCount: intValue(row["comment_count"]),

@@ -76,6 +76,10 @@ export type ThinShelfCard = {
   author_name: string | null;
   author_username: string | null;
   author_avatar: string | null;
+  /** Share → origin post id for comments (hub/spark stamps or DB shared_post_id). */
+  shared_post_id: string | null;
+  /** Alias of shared_post_id for clients that read origin_sid. */
+  origin_sid: string | null;
 };
 
 export type ShelfPage = {
@@ -108,10 +112,21 @@ type RawPostRow = {
   country_name: string | null;
   author_id: string;
   hub_slug: string | null;
+  shared_post_id: string | null;
   author_name: string | null;
   author_username: string | null;
   author_avatar: string | null;
 };
+
+/** Extract origin post id from hub/spark share stamps before body scrub. */
+function originSidFromBody(body: string | null | undefined): string | null {
+  if (!body) return null;
+  const hub = body.match(/__hub_origin__\|(?:[^|\n]*\|)*sid=([^|\n]+)/i);
+  if (hub?.[1]?.trim()) return hub[1].trim();
+  const spark = body.match(/__spark_share__\|(?:[^|\n]*\|)*sid=([^|\n]+)/i);
+  if (spark?.[1]?.trim()) return spark[1].trim();
+  return null;
+}
 
 /** Whether posts.hub_slug exists (migration may lag deploy). */
 let hubSlugColumnReady: boolean | null = null;
@@ -250,6 +265,19 @@ function synthesizeThumbFromMedia(mediaUrl: string | null | undefined): string |
 }
 
 function rowToCard(row: RawPostRow, slug: HubParentSlug): ThinShelfCard {
+  // Capture origin BEFORE stripping stamps — feed comments need this.
+  const stampSid = originSidFromBody(row.body);
+  const dbShared =
+    row.shared_post_id && String(row.shared_post_id).trim()
+      ? String(row.shared_post_id).trim()
+      : null;
+  const originSid =
+    stampSid && stampSid !== row.id
+      ? stampSid
+      : dbShared && dbShared !== row.id
+        ? dbShared
+        : null;
+
   // Strip internal markers from body for thin cards (keep short).
   let body = row.body ?? '';
   if (body.includes('__')) {
@@ -283,6 +311,8 @@ function rowToCard(row: RawPostRow, slug: HubParentSlug): ThinShelfCard {
     author_name: row.author_name,
     author_username: row.author_username,
     author_avatar: row.author_avatar,
+    shared_post_id: originSid,
+    origin_sid: originSid,
   };
 }
 
@@ -338,6 +368,7 @@ async function queryVideoPage(opts: {
       p.country_code,
       p.country_name,
       p.author_id,
+      p.shared_post_id,
       ${slugSelect},
       pr.display_name as author_name,
       pr.username as author_username,
@@ -566,7 +597,7 @@ export async function fetchHomeFeedPage(input: {
     select
       p.id, p.title, p.body, p.media_type, p.media_url, p.thumb_url,
       p.like_count, p.comment_count, p.created_at, p.country_code, p.country_name,
-      p.author_id, ${slugSelect},
+      p.author_id, p.shared_post_id, ${slugSelect},
       pr.display_name as author_name, pr.username as author_username, pr.avatar_url as author_avatar
     from public.posts p
     left join public.profiles pr on pr.user_id = p.author_id
@@ -630,7 +661,7 @@ export async function fetchSparksPage(input: {
     select
       p.id, p.title, p.body, p.media_type, p.media_url, p.thumb_url,
       p.like_count, p.comment_count, p.created_at, p.country_code, p.country_name,
-      p.author_id, ${slugSelect},
+      p.author_id, p.shared_post_id, ${slugSelect},
       pr.display_name as author_name, pr.username as author_username, pr.avatar_url as author_avatar
     from public.posts p
     left join public.profiles pr on pr.user_id = p.author_id

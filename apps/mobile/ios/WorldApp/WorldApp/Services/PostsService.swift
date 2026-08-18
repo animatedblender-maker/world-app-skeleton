@@ -1327,8 +1327,28 @@ final class PostsService {
     }
 
     private func cachedPost(id: String) -> CountryPost? {
+        let needle = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return nil }
+        // Live feed / hubs / sparks first — ContentCache alone misses deep rows + thin poison.
+        if let hit = HomeFeedStore.shared.posts.first(where: {
+            $0.id == needle || $0.sharedPostID == needle
+        }) {
+            return hit
+        }
+        if let hit = hubsSessionCatalog.first(where: {
+            $0.id == needle || $0.sharedPostID == needle
+        }) {
+            return hit
+        }
+        if let hit = sparksCatalogSnapshot().first(where: {
+            $0.id == needle || $0.sharedPostID == needle
+        }) {
+            return hit
+        }
         for key in [ContentCacheKey.livingVideos, .homeFeed, .savedPosts, .profilePosts] {
-            if let match = ContentCache.shared.posts(for: key)?.first(where: { $0.id == id }) {
+            if let match = ContentCache.shared.posts(for: key)?.first(where: {
+                $0.id == needle || $0.sharedPostID == needle
+            }) {
                 return match
             }
         }
@@ -1369,8 +1389,15 @@ final class PostsService {
             return HubEngagementStore.shared.listComments(postID, limit: limit)
         }
 
-        // Resolve origin from cache / body markers first — never await getPostByID on the hot path.
-        let originID: String? = resolveOrigin ? Self.commentThreadOriginID(for: postID) : nil
+        // Resolve origin from cache / body markers first.
+        var originID: String? = resolveOrigin ? Self.commentThreadOriginID(for: postID) : nil
+        // Thin feed often strips stamps — one soft hydrate when origin still unknown.
+        if resolveOrigin, originID == nil, !Self.isLocalOnlyPostID(postID) {
+            if let rich = try? await getPostByID(postID) {
+                HomeFeedStore.shared.applyLocalUpdate(rich)
+                originID = Self.commentThreadOriginID(for: postID, post: rich)
+            }
+        }
 
         if let originID, originID != postID {
             // Local origin (ia_*) + remote share, or both remote.

@@ -262,27 +262,10 @@ struct GlobalHubPlaybackLayer: View {
                 if appState.hubPlaybackPullProgress > 0.5 {
                     appState.hubPlaybackPullProgress = 0
                 }
-                // Mini handoff: keep film playing.
-                appState.hubPlaybackPlaying = true
-                MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
-                    userMuted: appState.hubPlaybackMuted
-                )
-                NotificationCenter.default.post(
-                    name: .matteryaResumePlaybackAfterInterrupt,
-                    object: nil
-                )
+                // Geometry only — finishMinimize already reasserted audio once.
                 if collapse < 0.99 { collapse = 1 }
                 if fsProgress > 0.001 { fsProgress = 0 }
                 pushMorphState()
-                // One delayed re-assert — covers tab/layout settle without multi-beat thrash.
-                Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 100_000_000)
-                    guard appState.hubPlaybackPost != nil, !appState.hubPlaybackExpanded else { return }
-                    appState.hubPlaybackPlaying = true
-                    MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
-                        userMuted: appState.hubPlaybackMuted
-                    )
-                }
             }
         }
         .onChange(of: appState.hubPlaybackPost?.id) { _, _ in
@@ -1011,11 +994,8 @@ struct GlobalHubPlaybackLayer: View {
         // Belt-and-suspenders: never leave immersive FS flags stuck over mini chrome.
         fsProgress = 0
         appState.hubFullscreenPullProgress = 0
-        // Audio must keep running through the morph.
+        // Keep intent playing through morph — single reassert happens in finishMinimize.
         appState.hubPlaybackPlaying = true
-        MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
-            userMuted: appState.hubPlaybackMuted
-        )
         let returnToChat = appState.hubMinimizeReturnToChat
         withAnimation(MatteryaMotion.ytMorph) {
             collapse = 1
@@ -1028,21 +1008,8 @@ struct GlobalHubPlaybackLayer: View {
             withTransaction(t) {
                 collapse = 1
             }
+            // One session flip + one reassert inside finishMinimize — no cascade.
             appState.finishMinimizeHubPlayback(returnToChat: returnToChat)
-            var t2 = Transaction()
-            t2.disablesAnimations = true
-            withTransaction(t2) {
-                collapse = 1
-            }
-            // After chrome mounts: re-solo (tab/feed may have stolen focus mid-morph).
-            appState.hubPlaybackPlaying = true
-            MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
-                userMuted: appState.hubPlaybackMuted
-            )
-            NotificationCenter.default.post(
-                name: .matteryaResumePlaybackAfterInterrupt,
-                object: nil
-            )
         }
     }
 }

@@ -26,7 +26,7 @@ struct PostCardView: View {
 
             if commentsExpanded {
                 PostCommentsView(
-                    postID: post.id,
+                    postID: PostsService.commentThreadOriginID(for: post.id, post: post) ?? post.id,
                     comments: $inlineComments,
                     onError: { commentError = $0 }
                 )
