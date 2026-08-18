@@ -808,18 +808,19 @@ struct MatteryaHubPlayerView: View {
                     .padding(.horizontal, 14)
                     .padding(.bottom, safeBottom)
                 }
-                .padding(.top, 16)
-                // Soft fade only — heavy ink slab was cutting the maximized film.
+                .padding(.top, 10)
+                // Hairline fade under scrubber only — never a slab over the timeline.
                 .background(
                     LinearGradient(
                         colors: [
                             .clear,
-                            Theme.ink.opacity(0.22),
-                            Theme.ink.opacity(0.45),
+                            Theme.ink.opacity(0.12),
+                            Theme.ink.opacity(0.28),
                         ],
                         startPoint: .top,
                         endPoint: .bottom
                     )
+                    .allowsHitTesting(false)
                 )
             }
             .zIndex(4)
@@ -1791,7 +1792,13 @@ final class ArchiveVideoPlayerController: UIViewController {
         playerLayer?.frame = view.bounds
         playerLayer?.videoGravity = preferredVideoGravity
         playerLayer?.opacity = 1
+        playerLayer?.isHidden = false
+        // Continuous mini: never leave UIKit poster covering a live film (audio-only thumb).
+        if isContinuousHubPlayer, userWantsPlayback, (player?.rate ?? 0) > 0.01 {
+            posterView.isHidden = true
+        }
         CATransaction.commit()
+        posterView.frame = view.bounds
     }
 
     /// Default fill (FB/IG); landscape Sparks may switch to fit when crop would be hard.
@@ -2364,8 +2371,9 @@ final class ArchiveVideoPlayerController: UIViewController {
                 self.posterView.isHidden = false
                 return
             }
-            // IG/YT: keep poster until rate is real — never hide before first paint.
-            self.posterView.isHidden = false
+            // Continuous: never cover live film with poster (mini became thumb+audio).
+            // Sparks/feed: keep poster until rate is real.
+            self.posterView.isHidden = self.isContinuousHubPlayer
             _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
                 keeping: claimed,
                 pageEpoch: self.activePageEpoch
@@ -2470,6 +2478,14 @@ final class ArchiveVideoPlayerController: UIViewController {
 
     /// Keep poster until AVPlayer is producing frames — never black hole after thumb.
     private func revealPosterWhenFramesReady(_ player: AVPlayer) {
+        // Continuous hubs: hide poster as soon as we intend to play — keeping it up
+        // caused mini “thumbnail + audio only” (UIKit poster over AVPlayerLayer).
+        if isContinuousHubPlayer, userWantsPlayback {
+            posterView.isHidden = true
+            if player.rate > 0.01 || player.timeControlStatus == .playing {
+                onPlayingChanged?(true)
+            }
+        }
         if player.rate > 0.05 || player.timeControlStatus == .playing {
             posterView.isHidden = true
             onPlayingChanged?(true)
@@ -2480,13 +2496,15 @@ final class ArchiveVideoPlayerController: UIViewController {
                 try? await Task.sleep(nanoseconds: 40_000_000)
                 guard let self else { return }
                 guard self.userWantsPlayback else { return }
+                if self.isContinuousHubPlayer {
+                    self.posterView.isHidden = true
+                }
                 if player.rate > 0.05 || player.timeControlStatus == .playing {
                     self.posterView.isHidden = true
                     self.onPlayingChanged?(true)
                     return
                 }
             }
-            // Prefer poster over black if still not painting.
             if let self = self, self.userWantsPlayback, player.rate > 0.01 {
                 self.posterView.isHidden = true
                 self.onPlayingChanged?(true)

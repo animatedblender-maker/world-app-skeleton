@@ -565,30 +565,20 @@ struct YouTubeMiniPlayerBar: View {
                         .allowsHitTesting(false)
                     }
                 } else {
-                    // Poster floor + dock measure. Continuous film paints ABOVE this bar
-                    // (MainTabView z 110) so UIKit is never trapped under a clear SwiftUI hole
-                    // (that path painted solid black/ink). If film is late, poster still shows.
-                    ZStack {
-                        Theme.ink
-                        YouTubeVideoThumbnail(
-                            post: post,
-                            maxPixelSize: 720,
-                            showsPlayIcon: false,
-                            frameStyle: .card
-                        )
+                    // Clear dock hole only — NEVER a thumbnail here.
+                    // Thumbnail under continuous film looked like “audio + thumb” when the
+                    // AV layer was late/misaligned. Continuous UIKit film paints this rect.
+                    Theme.ink
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .allowsHitTesting(false)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipped()
-                    .allowsHitTesting(false)
-                    .background(
-                        GeometryReader { g in
-                            Color.clear.preference(
-                                key: HubContinuousVideoSlotKey.self,
-                                value: g.frame(in: .global)
-                            )
-                        }
-                    )
+                        .background(
+                            GeometryReader { g in
+                                Color.clear.preference(
+                                    key: HubContinuousVideoSlotKey.self,
+                                    value: g.frame(in: .global)
+                                )
+                            }
+                        )
                 }
 
                 if showsChrome {

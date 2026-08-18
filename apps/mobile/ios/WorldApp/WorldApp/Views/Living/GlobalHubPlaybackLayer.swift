@@ -202,24 +202,31 @@ struct GlobalHubPlaybackLayer: View {
                                 .frame(width: geo.size.width, height: geo.size.height)
                                 .allowsHitTesting(false)
                         }
-                        HubPassThroughContainer(
-                            interactiveRectGlobal: interactiveHitGlobal,
-                            contentID: post.id,
-                            layoutSignature: post.id
-                        ) {
-                            // Fills host bounds; outer frame/offset morphs stage↔mini without rehost.
-                            continuousFilm(post: post)
+                        Group {
+                            let film = HubPassThroughContainer(
+                                interactiveRectGlobal: interactiveHitGlobal,
+                                contentID: post.id,
+                                layoutSignature: post.id
+                            ) {
+                                continuousFilm(post: post)
+                            }
+                            .frame(width: safePositive(layout.width), height: safePositive(layout.height))
+                            .offset(x: safeOffset(layout.x), y: safeOffset(layout.y))
+                            .animation(interactiveAnimation, value: collapse)
+                            .animation(interactiveAnimation, value: fsProgress)
+
+                            // Clip only in mini — expanded clip cut the timeline scrubber.
+                            if !expanded || collapse > 0.55 {
+                                film.clipShape(
+                                    RoundedRectangle(
+                                        cornerRadius: cornerRadius(for: layout),
+                                        style: .continuous
+                                    )
+                                )
+                            } else {
+                                film
+                            }
                         }
-                        .frame(width: safePositive(layout.width), height: safePositive(layout.height))
-                        .offset(x: safeOffset(layout.x), y: safeOffset(layout.y))
-                        .animation(interactiveAnimation, value: collapse)
-                        .animation(interactiveAnimation, value: fsProgress)
-                        .clipShape(
-                            RoundedRectangle(
-                                cornerRadius: cornerRadius(for: layout),
-                                style: .continuous
-                            )
-                        )
                     }
                     .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
                 }
