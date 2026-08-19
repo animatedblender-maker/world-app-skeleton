@@ -1928,8 +1928,10 @@ final class ArchiveVideoPlayerController: UIViewController {
             ]
         )
 
-        // Don't block first frame on duration metadata (slow on Archive CDN).
-        asset.loadValuesAsynchronously(forKeys: ["playable", "duration"]) {}
+        // Kick playable/duration off the hot path (don’t await — Archive CDN is slow).
+        Task(priority: .utility) {
+            _ = try? await asset.load(.isPlayable, .duration)
+        }
 
         guard !Task.isCancelled else { return }
 
