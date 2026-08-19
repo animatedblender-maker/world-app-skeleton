@@ -81,12 +81,16 @@ You should see:
 | Topic | Events | Consumer |
 |-------|--------|----------|
 | `matterya.messages` | `MessageSent`, `MessageEdited`, `MessageDeleted` | Push for `MessageSent` |
-| `matterya.posts` | reserved | — |
-| `matterya.engagement` | reserved | — |
+| `matterya.posts` | `ContentPosted`, … | reports / analytics |
+| `matterya.engagement` | likes, watch, … | engagement consumer |
+| `matterya.r2.ingest` | `R2IngestRequested`, … | catalog flood (not media) |
+| `matterya.media` | `media.upload.completed`, `MediaProcessRequested`, `MediaReady`, `MediaFailed` | **Frame 0** worker (in-process) — see `docs/MEDIA_FRAME0.md` |
 | `matterya.follows` | reserved | — |
 | `matterya.calls` | reserved | — |
 | `matterya.notifications` | reserved | — |
 | `matterya.dlq` | reserved | — |
+
+Create `matterya.media` in your Kafka provider UI if auto-create is blocked. Poster rule: **first displayed frame only**.
 
 ## Tables
 

@@ -1,6 +1,7 @@
 import type { S3Client } from '@aws-sdk/client-s3';
 import { pool } from '../db.js';
 import { emitContentPosted } from '../engagement/engagement.service.js';
+import { enqueueMediaProcessJob } from '../media/enqueue.js';
 import {
   createR2Client,
   discoverPacks,
@@ -530,6 +531,23 @@ async function ingestOriginal(
     destination: pack.kind === 'spark' ? 'sparks' : 'hubs',
     surface: pack.kind === 'spark' ? 'sparks' : 'hubs',
     mediaUrl,
+  });
+
+  // Frame 0 poster job (non-blocking). Poster = first displayed video frame only.
+  void enqueueMediaProcessJob({
+    postId,
+    r2Key: pack.videoKey,
+    mediaPath: pack.mediaPath,
+    source: 'catalog',
+    requestedOutputs: 'frame0',
+    requestedBy: 'content-pipeline',
+    asUploadCompleted: true,
+  }).then((r) => {
+    if (r.enqueued) {
+      pipelineLog(`  frame0 enqueued event=${r.eventId}`, 'ok');
+    } else if (r.error && r.error !== 'kafka_disabled') {
+      pipelineLog(`  frame0 enqueue skipped: ${r.error}`, 'warn');
+    }
   });
 
   // Immediate feed share for density — same original caption.

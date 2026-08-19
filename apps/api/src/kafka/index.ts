@@ -1,6 +1,7 @@
 import { disconnectKafka, ensureTopics, getProducer } from './client.js';
 import { kafkaEnabled } from './config.js';
 import { startEngagementConsumer } from './consumers/engagement.consumer.js';
+import { startMediaConsumer } from './consumers/media.consumer.js';
 import { startMessagesConsumer } from './consumers/messages.consumer.js';
 import { startR2IngestConsumer } from './consumers/r2-ingest.consumer.js';
 import { startOutboxPublisher, stopOutboxPublisher } from './publisher.js';
@@ -27,6 +28,8 @@ export async function startKafkaPipeline(): Promise<void> {
       await startMessagesConsumer();
       await startEngagementConsumer();
       await startR2IngestConsumer();
+      // Frame 0 posters (in-process until dedicated Render media worker is approved).
+      await startMediaConsumer();
     } else {
       console.warn(
         '⚠️ Kafka consumers not started: DATABASE_URL is not set. ' +
@@ -36,6 +39,7 @@ export async function startKafkaPipeline(): Promise<void> {
     console.log('✅ Kafka broker connected (outbox/consumer need DATABASE_URL for full pipeline)');
     console.log('   Live engagement: topic matterya.engagement');
     console.log('   R2 ingest jobs: topic matterya.r2.ingest');
+    console.log('   Media Frame 0: topic matterya.media');
   } catch (err) {
     started = false;
     console.error('❌ Kafka pipeline failed to start — API continues without it', err);
@@ -59,6 +63,7 @@ export {
   EngagementEventTypes,
   ContentEventTypes,
   R2IngestEventTypes,
+  MediaEventTypes,
 } from './types.js';
 export type {
   MessageSentPayload,
@@ -67,4 +72,7 @@ export type {
   EngagementPayload,
   ContentPostedPayload,
   R2IngestRequestedPayload,
+  MediaProcessPayload,
+  MediaReadyPayload,
+  MediaFailedPayload,
 } from './types.js';

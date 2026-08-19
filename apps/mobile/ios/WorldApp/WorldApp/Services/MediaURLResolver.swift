@@ -92,11 +92,49 @@ enum MediaURLResolver {
         // Internet Archive: always prefer services/img — nested `.thumbs/` paths are
         // slower and flakier on mobile (often 1–2s+). services/img is the snappy poster.
         if let ia = archiveServicesImgURL(for: post) { return ia }
+        // Server Frame 0 (first displayed video frame) — prefer over any CDN fallback.
+        if let frame0 = frame0PosterURL(for: post) { return frame0 }
         if let thumb = resolve(post.thumbURL), !isVideoURL(thumb) { return thumb }
-        // R2 LongForm packs are YouTube ids under LongForm/<Country>/<id>/video.mp4
-        // — use YouTube's CDN poster so Hubs isn't a wall of empty film icons.
+        // Last resort only while Frame 0 backfill catches up. YouTube hqdefault is NOT
+        // video frame 0 — demote once thumb_url / posters.512 exist.
         if let yt = r2LongformYouTubePosterURL(for: post) { return yt }
         return imageURL(for: post)
+    }
+
+    /// Prefer server `frame0_*.webp` / media JSON `posters.512` (true t=0 pixels).
+    static func frame0PosterURL(for post: CountryPost) -> URL? {
+        if let thumb = resolve(post.thumbURL), !isVideoURL(thumb), looksLikeFrame0Poster(thumb) {
+            return thumb
+        }
+        if let embedded = embeddedFrame0PosterURL(from: post.mediaURL) {
+            return embedded
+        }
+        return nil
+    }
+
+    static func looksLikeFrame0Poster(_ url: URL) -> Bool {
+        let s = url.absoluteString.lowercased()
+        return s.contains("frame0_512.webp")
+            || s.contains("frame0_256.webp")
+            || s.contains("frame0_1080.webp")
+            || s.contains("frame0_")
+    }
+
+    /// media_url JSON may include `posters: { "256"|"512"|"1080": url }` after MediaReady.
+    static func embeddedFrame0PosterURL(from mediaURL: String?) -> URL? {
+        guard let raw = mediaURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+              raw.hasPrefix("{"),
+              let data = raw.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        if let posters = obj["posters"] as? [String: Any] {
+            for key in ["512", "1080", "256"] {
+                if let s = posters[key] as? String, let u = resolve(s), !isVideoURL(u) {
+                    return u
+                }
+            }
+        }
+        return nil
     }
 
     /// Best poster for Hubs lists / prefetch (same URL as posterURL; kept explicit for call sites).

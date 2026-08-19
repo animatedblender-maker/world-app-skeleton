@@ -8,7 +8,9 @@
     "start": "node dist/main.js",
     "render-build": "npm ci --no-workspaces --include=dev && npm run build",
     "content-pipeline": "tsx src/content-pipeline/cli.ts",
-    "content-pipeline:dry": "tsx src/content-pipeline/cli.ts --dry-run"
+    "content-pipeline:dry": "tsx src/content-pipeline/cli.ts --dry-run",
+    "media:frame0-backfill": "tsx src/media/frame0-backfill.ts",
+    "media:frame0-backfill:dry": "tsx src/media/frame0-backfill.ts --dry-run"
   },
   "engines": {
     "node": "22.x"

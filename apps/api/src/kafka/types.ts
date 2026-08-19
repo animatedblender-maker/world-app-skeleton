@@ -19,8 +19,71 @@ export const KafkaTopics = {
   NOTIFICATIONS: 'matterya.notifications',
   /** R2 catalog ingest jobs (discover → create owned posts + shares). */
   R2_INGEST: 'matterya.r2.ingest',
+  /**
+   * Per-object media lifecycle (Frame 0 posters → ABR/HLS later).
+   * Do NOT overload R2_INGEST — that topic is catalog flood, not media jobs.
+   */
+  MEDIA: 'matterya.media',
   DLQ: 'matterya.dlq',
 } as const;
+
+/**
+ * Media pipeline on matterya.media.
+ * Hard rule: poster = video's first displayed frame (t=0), never a later “meaningful” frame.
+ * @see docs/MEDIA_FRAME0.md
+ */
+export const MediaEventTypes = {
+  /** Object landed in R2 (user resumable upload or catalog pack video). */
+  UploadCompleted: 'media.upload.completed',
+  /** Internal enqueue / backfill / reprocess. */
+  ProcessRequested: 'MediaProcessRequested',
+  /** Worker finished Frame 0 (and later ABR/HLS) successfully. */
+  Ready: 'MediaReady',
+  /** Worker failed validation or extract/transcode. */
+  Failed: 'MediaFailed',
+} as const;
+
+export type MediaRequestedOutputs = 'frame0' | 'frame0+abr+hls';
+
+export type MediaSourceKind = 'user' | 'catalog' | 'backfill';
+
+/** Payload for media.upload.completed and MediaProcessRequested. */
+export type MediaProcessPayload = {
+  /** Post that owns the original video (catalog original or user post). */
+  postId: string;
+  r2Bucket: string;
+  /** Object key of the source video, e.g. LongForm/Germany/abc123/video.mp4 */
+  r2Key: string;
+  source: MediaSourceKind;
+  /** What the worker should produce. Default frame0 until ABR lands. */
+  requestedOutputs?: MediaRequestedOutputs;
+  /** Durable media_path if known (r2:bucket/key). */
+  mediaPath?: string | null;
+  requestedBy?: string;
+  requestedAt: string;
+};
+
+export type MediaReadyPayload = {
+  postId: string;
+  r2Bucket: string;
+  r2Key: string;
+  /** Keys written: frame0_256.webp, frame0_512.webp, frame0_1080.webp, … */
+  outputs: string[];
+  /** Default list poster URL (frame0_512). */
+  thumbUrl: string;
+  thumbPath: string;
+  /** frame0 | frame0+abr+hls */
+  completedOutputs: MediaRequestedOutputs;
+  completedAt: string;
+};
+
+export type MediaFailedPayload = {
+  postId: string;
+  r2Bucket: string;
+  r2Key: string;
+  error: string;
+  failedAt: string;
+};
 
 /** Jobs on matterya.r2.ingest */
 export const R2IngestEventTypes = {
