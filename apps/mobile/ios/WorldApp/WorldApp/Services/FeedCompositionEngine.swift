@@ -121,6 +121,13 @@ enum FeedCompositionEngine {
             if post.isSparkFeedShare || post.isReel || PlayPlatformBridge.isSparkFeedCard(post) {
                 sources.append(.sparksShare)
             }
+            // Hubs-badge cards must compete with Sparks density on Home.
+            if PlayPlatformBridge.isHubFeedCardVideo(post)
+                || PlayPlatformBridge.isHubOriginShare(post)
+                || post.isHubOriginFeedShare {
+                sources.append(.hubsShare)
+                score += 0.95
+            }
             if sources.isEmpty {
                 sources.append(.explore)
             }
@@ -255,6 +262,24 @@ enum FeedCompositionEngine {
         // Novelty vs recently viewed (session / origin key).
         if SparkDiscoveryEngine.isViewed(c.post) {
             s -= 2.5
+        }
+
+        // Format diversity: after a Spark streak, prefer a Hubs-badge card (and vice versa).
+        if policy.surface == .homeForYou {
+            let recent = selected.suffix(4)
+            let sparkStreak = recent.filter {
+                PlayPlatformBridge.isSparkFeedCard($0.post) || $0.post.isReel
+            }.count
+            let hubStreak = recent.filter {
+                PlayPlatformBridge.isHubFeedCardVideo($0.post)
+                    || PlayPlatformBridge.isHubOriginShare($0.post)
+            }.count
+            let isHub = PlayPlatformBridge.isHubFeedCardVideo(c.post)
+                || PlayPlatformBridge.isHubOriginShare(c.post)
+            let isSpark = PlayPlatformBridge.isSparkFeedCard(c.post) || c.post.isReel
+            if isHub, sparkStreak >= 3 { s += 2.8 }
+            if isSpark, hubStreak >= 2 { s += 1.2 }
+            if isSpark, sparkStreak >= 3 { s -= 1.4 }
         }
 
         return s

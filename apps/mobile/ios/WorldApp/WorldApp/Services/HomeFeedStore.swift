@@ -867,12 +867,35 @@ final class HomeFeedStore {
                 )
             }
             let viewedExclude = Set(SparkDiscoveryEngine.viewedIDList(limit: 2_000))
-            let topUp = await PostsService.shared.homeFeedSparkTopUp(
-                excluding: seen.union(viewedExclude),
-                limit: pageSize,
+            let exclude = seen.union(viewedExclude)
+            // Mix Sparks + Hubs-badge cards (~2:1) so Home isn't spark-only.
+            let hubLimit = max(2, pageSize / 3)
+            let sparkLimit = max(1, pageSize - hubLimit)
+            async let sparkTop = PostsService.shared.homeFeedSparkTopUp(
+                excluding: exclude,
+                limit: sparkLimit,
                 forceRefresh: recyclePass > 2
             )
-            for post in topUp {
+            async let hubTop = PostsService.shared.homeFeedHubTopUp(
+                excluding: exclude,
+                limit: hubLimit,
+                forceRefresh: recyclePass > 2
+            )
+            let sparks = await sparkTop
+            let hubs = await hubTop
+            var mixed: [CountryPost] = []
+            var si = 0
+            var hi = 0
+            while mixed.count < pageSize, si < sparks.count || hi < hubs.count {
+                if hi < hubs.count, mixed.count % 3 == 2 || si >= sparks.count {
+                    mixed.append(hubs[hi]); hi += 1
+                } else if si < sparks.count {
+                    mixed.append(sparks[si]); si += 1
+                } else if hi < hubs.count {
+                    mixed.append(hubs[hi]); hi += 1
+                }
+            }
+            for post in mixed {
                 guard !SparkDiscoveryEngine.isViewed(post) else { continue }
                 guard seen.insert(post.id).inserted else { continue }
                 guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }

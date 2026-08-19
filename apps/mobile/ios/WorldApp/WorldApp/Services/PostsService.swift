@@ -629,6 +629,46 @@ final class PostsService {
     private var homeFeedSparkOffset: Int = 0
     private var homeFeedSparkOrder: [CountryPost] = []
 
+    /// Draw Hubs-badge long-form / `__hub_origin__|` shares for Home (not Sparks).
+    /// Keeps 16:9 Hubs cards in the mix when Spark top-up would otherwise dominate.
+    func homeFeedHubTopUp(excluding: Set<String>, limit: Int, forceRefresh: Bool = false) async -> [CountryPost] {
+        guard limit > 0 else { return [] }
+        var seen = excluding.union(Set(SparkDiscoveryEngine.viewedIDList(limit: 800)))
+        var out: [CountryPost] = []
+
+        let longform = await fetchFocusMarketHubLongform(
+            limitPerCountry: forceRefresh ? 120 : 60,
+            topUpRecent: true
+        )
+        let ranked = SparkDiscoveryEngine.rankForDiscovery(longform, excluding: seen)
+        for post in ranked {
+            guard !SparkDiscoveryEngine.isViewed(post) else { continue }
+            guard PlayPlatformBridge.isHubFeedCardVideo(post)
+                || PlayPlatformBridge.isHubOriginShare(post)
+                || post.isHubOriginFeedShare
+            else { continue }
+            guard post.playableVideoURL != nil || post.hasVideo else { continue }
+            guard seen.insert(post.id).inserted else { continue }
+            out.append(post)
+            if out.count >= limit { break }
+        }
+
+        if out.count < limit {
+            // Recent feed walk often has `__hub_origin__|` shares the channel catalog misses.
+            let recent = await fetchRecentFeedPosts(limit: 120, preferSparkShares: false)
+            for post in SparkDiscoveryEngine.rankForDiscovery(recent, excluding: seen) {
+                guard !SparkDiscoveryEngine.isViewed(post) else { continue }
+                guard PlayPlatformBridge.isHubFeedCardVideo(post)
+                    || PlayPlatformBridge.isHubOriginShare(post)
+                else { continue }
+                guard seen.insert(post.id).inserted else { continue }
+                out.append(post)
+                if out.count >= limit { break }
+            }
+        }
+        return out
+    }
+
     /// Draw the next slice of R2 Sparks for the main feed (SparkFeedCard).
     /// Prefers **unseen random samples** from the full library over reshuffling the same head.
     func homeFeedSparkTopUp(excluding: Set<String>, limit: Int, forceRefresh: Bool = false) async -> [CountryPost] {
@@ -2988,16 +3028,17 @@ enum SparkDiscoveryEngine {
             ? newestFirst(followUnviewed)
             : seededShuffle(newestFirst(followUnviewed), seed: sessionSeed ^ 0xA11CE)
         let mineFresh = newestFirst(mineUnviewed)
-        // Global shares / discovery: full session shuffle.
+        // Global shares / discovery: full session shuffle, then Sparks↔Hubs format weave.
         let otherFresh = sessionSeed == 0
             ? newestFirst(otherUnviewed)
             : seededShuffle(otherUnviewed, seed: sessionSeed)
+        let discoveryMixed = weaveSparkAndHubFormats(otherFresh, seed: sessionSeed)
 
         // Prefer unviewed, but never starve first paint to 1–2 cards (API pages are mostly viewed).
         // Weave discovery into the head (IG-style mix) — not mine→follows→explore forever.
         let fresh = weaveHomeFeed(
             primary: mineFresh + followFresh,
-            discovery: otherFresh,
+            discovery: discoveryMixed,
             seed: sessionSeed
         )
         let minHead = 12
@@ -3024,6 +3065,46 @@ enum SparkDiscoveryEngine {
         guard recycled.count > 1, sessionSeed != 0 else { return recycled }
         let rot = Int(sessionSeed % UInt64(recycled.count))
         return Array(recycled[rot...]) + Array(recycled[..<rot])
+    }
+
+    /// Interleave Sparks and Hubs-badge cards so Home isn't spark-only.
+    private static func weaveSparkAndHubFormats(_ posts: [CountryPost], seed: UInt64) -> [CountryPost] {
+        guard posts.count > 1 else { return posts }
+        var sparks: [CountryPost] = []
+        var hubs: [CountryPost] = []
+        var other: [CountryPost] = []
+        for p in posts {
+            if PlayPlatformBridge.isHubFeedCardVideo(p) || PlayPlatformBridge.isHubOriginShare(p) {
+                hubs.append(p)
+            } else if PlayPlatformBridge.isSparkFeedCard(p) || p.isReel || p.isSpark {
+                sparks.append(p)
+            } else {
+                other.append(p)
+            }
+        }
+        guard !hubs.isEmpty, !sparks.isEmpty else { return posts }
+        var out: [CountryPost] = []
+        out.reserveCapacity(posts.count)
+        var s = sparks
+        var h = hubs
+        var rng = FeedSeededRNG(seed: seed == 0 ? 0xBEEF : seed ^ 0xA0B511)
+        // Roughly 1 Hubs card per ~3 Sparks when both pools have fuel.
+        var sinceHub = 0
+        while !s.isEmpty || !h.isEmpty {
+            let wantHub = !h.isEmpty && (s.isEmpty || sinceHub >= 3 || (rng.next() % 4) == 0)
+            if wantHub, !h.isEmpty {
+                out.append(h.removeFirst())
+                sinceHub = 0
+            } else if !s.isEmpty {
+                out.append(s.removeFirst())
+                sinceHub += 1
+            } else if !h.isEmpty {
+                out.append(h.removeFirst())
+                sinceHub = 0
+            }
+        }
+        out.append(contentsOf: other)
+        return out
     }
 
     /// Interleave relationship posts with discovery so the top of feed is not a frozen follow-timeline.

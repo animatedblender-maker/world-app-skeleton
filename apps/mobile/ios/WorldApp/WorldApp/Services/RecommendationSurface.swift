@@ -40,7 +40,7 @@ enum RecommendationSurface: String, Codable, CaseIterable, Sendable {
             return RecommendationSurfacePolicy(
                 surface: self,
                 primaryIntent: "relationship + discovery",
-                candidateSources: [.following, .fresh, .explore, .sparksShare, .exploration],
+                candidateSources: [.following, .fresh, .explore, .sparksShare, .hubsShare, .exploration],
                 pageSize: 24,
                 prefetchThreshold: 0.65,
                 explorationBudget: 0.06,
@@ -145,6 +145,8 @@ enum RecommendationCandidateSource: String, Codable, Sendable {
     case explore
     case trending
     case sparksShare
+    /// Home feed Hubs long-form / `__hub_origin__|` shares (16:9 + Hubs badge).
+    case hubsShare
     case exploration
     case socialProof
     case editorial
