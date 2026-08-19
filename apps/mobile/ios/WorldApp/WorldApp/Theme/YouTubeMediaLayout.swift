@@ -494,8 +494,9 @@ struct PlayFeedLinkCard: View {
                     preferArchivePlayer: useArchivePath,
                     showsControls: true,
                     muteOnlyControls: false,
-                    // Fit 16:9 film in the taller chrome-padded box (timeline stays visible).
-                    fillsFrame: false,
+                    // Fill the 16:9 film zone; chrome pad below keeps timeline/buttons uncropped.
+                    fillsFrame: true,
+                    bottomChromeReserve: FacebookMediaLayout.hubFeedTimelineChromePad,
                     sharesFeedMute: true,
                     autoplaySurface: autoplaySurface,
                     onViewed: { Task { await PostsService.shared.recordView(post) } }

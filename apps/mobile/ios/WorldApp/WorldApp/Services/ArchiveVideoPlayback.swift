@@ -212,8 +212,10 @@ struct MatteryaHubPlayerView: View {
     /// When false (mini player), hide chrome but keep the same AVPlayer alive.
     var showsControls: Bool = true
     var loops: Bool = false
-    /// When true, crop to fill (Sparks). Hubs long-form should pass **false** (aspectFit, no crop).
+    /// When true, crop to fill (Sparks / feed hubs film). Expanded watch uses false.
     var fillsFrame: Bool = false
+    /// Bottom strip for feed timeline so fill doesn’t crop scrubber/buttons.
+    var bottomChromeReserve: CGFloat = 0
     @Binding var isMuted: Bool
     var onReady: (() -> Void)? = nil
     /// Keeps AppState.hubPlaybackPlaying in sync when chrome play/pause is used.
@@ -236,6 +238,7 @@ struct MatteryaHubPlayerView: View {
         showsControls: Bool = true,
         loops: Bool = false,
         fillsFrame: Bool = false,
+        bottomChromeReserve: CGFloat = 0,
         isMuted: Binding<Bool> = .constant(false),
         allowsFullscreen: Bool = true,
         onReady: (() -> Void)? = nil,
@@ -249,6 +252,7 @@ struct MatteryaHubPlayerView: View {
         self.showsControls = showsControls
         self.loops = loops
         self.fillsFrame = fillsFrame
+        self.bottomChromeReserve = bottomChromeReserve
         self._isMuted = isMuted
         self.allowsFullscreen = allowsFullscreen
         self.onReady = onReady
@@ -257,39 +261,49 @@ struct MatteryaHubPlayerView: View {
 
     var body: some View {
         ZStack {
-            ArchiveVideoPlayerView(
-                url: url,
-                posterURL: posterURL,
-                // Stay active under fullscreen cover so resume is reliable after dismiss.
-                isActive: isActive && !showFullscreen,
-                muted: isMuted,
-                startTime: startTime,
-                loops: loops,
-                fillsFrame: fillsFrame,
-                bridge: bridge,
-                onReady: {
-                    bridge.publishReady(playing: true)
-                    DispatchQueue.main.async {
-                        onReady?()
-                        if showsControls {
-                            showChrome = true
-                            scheduleChromeHide()
+            VStack(spacing: 0) {
+                ArchiveVideoPlayerView(
+                    url: url,
+                    posterURL: posterURL,
+                    // Stay active under fullscreen cover so resume is reliable after dismiss.
+                    isActive: isActive && !showFullscreen,
+                    muted: isMuted,
+                    startTime: startTime,
+                    loops: loops,
+                    fillsFrame: fillsFrame,
+                    bridge: bridge,
+                    onReady: {
+                        bridge.publishReady(playing: true)
+                        DispatchQueue.main.async {
+                            onReady?()
+                            if showsControls {
+                                showChrome = true
+                                scheduleChromeHide()
+                            }
+                        }
+                    },
+                    onProgress: { current, duration in
+                        guard !isScrubbing else { return }
+                        let playing = bridge.controller?.isPlaying
+                        bridge.publishProgress(current: current, duration: duration, playing: playing)
+                        if let postID, current >= 0.5 {
+                            YouTubeCatalogService.shared.notePlaybackPosition(
+                                current,
+                                for: postID,
+                                duration: duration > 0 ? duration : nil
+                            )
                         }
                     }
-                },
-                onProgress: { current, duration in
-                    guard !isScrubbing else { return }
-                    let playing = bridge.controller?.isPlaying
-                    bridge.publishProgress(current: current, duration: duration, playing: playing)
-                    if let postID, current >= 0.5 {
-                        YouTubeCatalogService.shared.notePlaybackPosition(
-                            current,
-                            for: postID,
-                            duration: duration > 0 ? duration : nil
-                        )
-                    }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+
+                if bottomChromeReserve > 0 {
+                    Theme.canvasDeep
+                        .frame(height: bottomChromeReserve)
+                        .allowsHitTesting(false)
                 }
-            )
+            }
 
             if showsControls {
                 // Chrome / tap-to-reveal first (under transport).

@@ -37,10 +37,10 @@ enum FacebookMediaLayout {
         return min(max(raw, minFeedMediaHeight), maxFeedMediaHeight + 20)
     }
 
-    /// Extra height under the 16:9 film so the in-feed timeline scrubber isn’t clipped.
-    static let hubFeedTimelineChromePad: CGFloat = 64
+    /// Reserved strip under the 16:9 film for timeline + transport (not cropped by fill).
+    static let hubFeedTimelineChromePad: CGFloat = 72
 
-    /// Hubs long-form feed card — 16:9 film + timeline chrome pad.
+    /// Hubs long-form feed card — 16:9 film (aspect-fill) + chrome pad for scrubber/buttons.
     /// Photos and Sparks must **not** use this.
     static func hubFeedVideoHeight(
         forWidth width: CGFloat = UIScreen.main.bounds.width
@@ -49,6 +49,14 @@ enum FacebookMediaLayout {
         let film = w / feedVideoAspect
         let h = film + hubFeedTimelineChromePad
         return min(max(h, minFeedMediaHeight), maxFeedMediaHeight + hubFeedTimelineChromePad)
+    }
+
+    /// Pure 16:9 film height (video fill zone above the chrome pad).
+    static func hubFeedFilmHeight(
+        forWidth width: CGFloat = UIScreen.main.bounds.width
+    ) -> CGFloat {
+        let w = max(200, width.isFinite ? width : UIScreen.main.bounds.width)
+        return min(max(w / feedVideoAspect, minFeedMediaHeight), maxFeedMediaHeight)
     }
 
     /// Clamp aspect ratios so a bad media metadata value can't blow out the card.

@@ -24,6 +24,8 @@ struct VideoPlayerView: View {
     var sharesFeedMute: Bool = false
     /// When true, crop to fill the card — no black bars. Always preferred for Hubs / feed video.
     var fillsFrame: Bool = true
+    /// Bottom inset reserved for timeline/transport so fill doesn’t cover controls.
+    var bottomChromeReserve: CGFloat = 0
     /// When true, build/buffer a silent player even while `isActive` is false (feed Sparks).
     var preloadsWhenInactive: Bool = false
     var onViewed: (() -> Void)? = nil
@@ -112,81 +114,93 @@ struct VideoPlayerView: View {
         ZStack {
             softVideoFloor
 
-            // Poster matches video gravity (fill/fit) so there is no framing jump.
-            if let posterURL {
-                CachedAsyncImage(
-                    url: posterURL,
-                    maxPixelSize: 900,
-                    contentMode: fillsFrame ? .fill : .fit,
-                    placeholder: AnyView(softVideoFloor)
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
-                .allowsHitTesting(false)
-            }
-
-            if shouldShowAd, let placement {
-                AdPrerollView(
-                    placement: placement,
-                    countryCode: countryCode,
-                    contentCountryCode: contentCountryCode,
-                    postID: postID,
-                    onComplete: { adFinished = true }
-                )
-            } else if let player {
-                MatteryaVideoSurface(player: player, fillsFrame: fillsFrame)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipped()
-                    // Always keep the layer visible once mounted. Hiding it on swipe
-                    // (opacity ~0) caused the black "refresh" even when the item was ready.
-                    .opacity(1)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        guard showsControls else { return }
-                        withAnimation(.easeInOut(duration: 0.18)) {
-                            showChrome.toggle()
-                        }
-                        scheduleChromeHide()
+            // Film zone — padded from bottom when feed hubs reserve timeline chrome.
+            VStack(spacing: 0) {
+                ZStack {
+                    // Poster matches video gravity (fill/fit) so there is no framing jump.
+                    if let posterURL {
+                        CachedAsyncImage(
+                            url: posterURL,
+                            maxPixelSize: 900,
+                            contentMode: fillsFrame ? .fill : .fit,
+                            placeholder: AnyView(softVideoFloor)
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .clipped()
+                        .allowsHitTesting(false)
                     }
 
-                if shouldShowChrome {
-                    MatteryaVideoControls(
-                        isPlaying: isPlaying,
-                        isMuted: isMuted,
-                        currentSeconds: currentSeconds,
-                        durationSeconds: durationSeconds,
-                        showsFullscreen: allowsFullscreen,
-                        isFullscreen: false,
-                        onPlayPause: { togglePlayback() },
-                        onMuteToggle: { toggleMute() },
-                        onSeek: { seek(to: $0) },
-                        onFullscreen: allowsFullscreen ? { openFullscreen() } : nil,
-                        onExitFullscreen: nil
-                    )
-                    .transition(.opacity)
-                }
-            } else if loadFailed {
-                unavailableState
-            } else if posterURL == nil {
-                ProgressView().tint(Theme.accentBright)
-            }
+                    if shouldShowAd, let placement {
+                        AdPrerollView(
+                            placement: placement,
+                            countryCode: countryCode,
+                            contentCountryCode: contentCountryCode,
+                            postID: postID,
+                            onComplete: { adFinished = true }
+                        )
+                    } else if let player {
+                        MatteryaVideoSurface(player: player, fillsFrame: fillsFrame)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .clipped()
+                            .opacity(1)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                guard showsControls else { return }
+                                withAnimation(.easeInOut(duration: 0.18)) {
+                                    showChrome.toggle()
+                                }
+                                scheduleChromeHide()
+                            }
+                    } else if loadFailed {
+                        unavailableState
+                    } else if posterURL == nil {
+                        ProgressView().tint(Theme.accentBright)
+                    }
 
-            // Poster cover only while cold — same gravity as video.
-            if shouldShowPosterCover {
-                if let posterURL {
-                    CachedAsyncImage(
-                        url: posterURL,
-                        maxPixelSize: 900,
-                        contentMode: fillsFrame ? .fill : .fit,
-                        placeholder: AnyView(softVideoFloor)
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipped()
-                    .allowsHitTesting(false)
-                } else {
+                    // Poster cover only while cold — same gravity as video.
+                    if shouldShowPosterCover {
+                        if let posterURL {
+                            CachedAsyncImage(
+                                url: posterURL,
+                                maxPixelSize: 900,
+                                contentMode: fillsFrame ? .fill : .fit,
+                                placeholder: AnyView(softVideoFloor)
+                            )
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .clipped()
+                            .allowsHitTesting(false)
+                        } else {
+                            softVideoFloor
+                                .allowsHitTesting(false)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+
+                if bottomChromeReserve > 0 {
                     softVideoFloor
+                        .frame(height: bottomChromeReserve)
                         .allowsHitTesting(false)
                 }
+            }
+
+            // Transport/timeline overlays the full card (scrubber sits in the reserve strip).
+            if shouldShowChrome {
+                MatteryaVideoControls(
+                    isPlaying: isPlaying,
+                    isMuted: isMuted,
+                    currentSeconds: currentSeconds,
+                    durationSeconds: durationSeconds,
+                    showsFullscreen: allowsFullscreen,
+                    isFullscreen: false,
+                    onPlayPause: { togglePlayback() },
+                    onMuteToggle: { toggleMute() },
+                    onSeek: { seek(to: $0) },
+                    onFullscreen: allowsFullscreen ? { openFullscreen() } : nil,
+                    onExitFullscreen: nil
+                )
+                .transition(.opacity)
             }
         }
         .background(softVideoFloor)
@@ -1745,6 +1759,8 @@ struct InFrameVideoPlayer: View {
     var muteOnlyControls: Bool = false
     /// Full-bleed fill — never black bars on sides/top.
     var fillsFrame: Bool = true
+    /// Bottom strip reserved for timeline/buttons (hubs feed) so fill doesn’t crop chrome.
+    var bottomChromeReserve: CGFloat = 0
     /// When true, mute chip drives app-wide feed mute (all feed videos stay in sync).
     var sharesFeedMute: Bool = true
     /// Home feed vs profile — prevents opacity-0 feed cards from stealing profile autoplay.
@@ -1773,6 +1789,7 @@ struct InFrameVideoPlayer: View {
         showsControls: Bool = true,
         muteOnlyControls: Bool = false,
         fillsFrame: Bool = true,
+        bottomChromeReserve: CGFloat = 0,
         forceSilentUntilUnmute: Bool = false,
         sharesFeedMute: Bool = true,
         autoplaySurface: FeedAutoplaySurface = .home,
@@ -1790,6 +1807,7 @@ struct InFrameVideoPlayer: View {
         self.showsControls = showsControls
         self.muteOnlyControls = muteOnlyControls
         self.fillsFrame = fillsFrame
+        self.bottomChromeReserve = bottomChromeReserve
         self.sharesFeedMute = sharesFeedMute
         self.autoplaySurface = autoplaySurface
         self.onViewed = onViewed
@@ -1870,6 +1888,7 @@ struct InFrameVideoPlayer: View {
                             showsControls: transportChrome,
                             loops: loops,
                             fillsFrame: fillsFrame,
+                            bottomChromeReserve: bottomChromeReserve,
                             isMuted: Binding(
                                 get: { isMuted },
                                 set: { newValue in
@@ -1903,6 +1922,7 @@ struct InFrameVideoPlayer: View {
                             allowsFullscreen: false,
                             sharesFeedMute: sharesFeedMute,
                             fillsFrame: fillsFrame,
+                            bottomChromeReserve: bottomChromeReserve,
                             preloadsWhenInactive: false,
                             onViewed: onViewed,
                             onProgress: { current, _ in
