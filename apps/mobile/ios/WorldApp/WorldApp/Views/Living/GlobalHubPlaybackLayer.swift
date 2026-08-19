@@ -122,70 +122,71 @@ struct GlobalHubPlaybackLayer: View {
                 .frame(width: geo.size.width, height: geo.size.height)
                 .allowsHitTesting(false)
 
-            // Continuous video surface — stable id across expand/mini/dock.
-            // Full-bleed mini: film fills the strip; chrome overlays ON the film (same layer).
-            playerSurface(for: post, showControls: expanded && !isPullingMinimize)
-                .frame(width: layout.width, height: layout.height)
-                // Ink only under expanded stage (16:9 letterbox); mini hole stays transparent.
-                .background(expanded ? Theme.ink : Color.clear)
-                .clipShape(
-                    RoundedRectangle(
-                        cornerRadius: expanded ? (isPullingMinimize ? 12 : 0) : 0,
-                        style: .continuous
+            // Film + mini chrome in ONE box, then offset together.
+            // Chrome must not be `.overlay` after `.offset` — that left chips at y≈0 (top of screen).
+            ZStack {
+                playerSurface(for: post, showControls: expanded && !isPullingMinimize)
+                    .frame(width: layout.width, height: layout.height)
+                    // Ink only under expanded stage (16:9 letterbox); mini hole stays transparent.
+                    .background(expanded ? Theme.ink : Color.clear)
+
+                if !expanded {
+                    YouTubeMiniPlayerChrome(
+                        isPlaying: playingBinding,
+                        isMuted: mutedBinding,
+                        onClose: { stop() }
                     )
-                )
-                .shadow(
-                    color: expanded
-                        ? Theme.ink.opacity(isPullingMinimize ? 0.22 : 0)
-                        : .clear,
-                    radius: expanded ? (isPullingMinimize ? 16 : 0) : 0,
-                    y: expanded ? (isPullingMinimize ? 8 : 0) : 0
-                )
-                // Live pull: shrink + slide toward mini as the finger moves.
-                .scaleEffect(
-                    expanded ? pullScale : 1,
-                    anchor: .top
-                )
-                .offset(x: layout.x, y: layout.y + (expanded ? dragOffset * 0.92 : 0))
-                .opacity(expanded && isPullingMinimize ? Double(1 - min(dragProgress * 0.12, 0.12)) : 1)
-                .overlay {
-                    if expanded, isPullingMinimize, dragOffset > 28 {
-                        VStack {
-                            Spacer()
-                            Label(
-                                dragProgress > 0.55 ? "Release for mini player" : "Pull down for mini",
-                                systemImage: "rectangle.bottomhalf.inset.filled"
-                            )
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(Theme.paper)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(Theme.ink.opacity(0.55), in: Capsule())
-                            .padding(.bottom, 16)
-                            .transition(.opacity.combined(with: .move(edge: .bottom)))
-                        }
-                        .allowsHitTesting(false)
-                    }
+                    .frame(width: layout.width, height: layout.height)
                 }
-                // Mini/dock chrome on top of film (MainTab bar chrome was under this layer).
-                .overlay {
-                    if !expanded {
-                        YouTubeMiniPlayerChrome(
-                            isPlaying: playingBinding,
-                            isMuted: mutedBinding,
-                            onClose: { stop() }
+
+                if expanded, isPullingMinimize, dragOffset > 28 {
+                    VStack {
+                        Spacer()
+                        Label(
+                            dragProgress > 0.55 ? "Release for mini player" : "Pull down for mini",
+                            systemImage: "rectangle.bottomhalf.inset.filled"
                         )
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.paper)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(Theme.ink.opacity(0.55), in: Capsule())
+                        .padding(.bottom, 16)
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
                     }
+                    .frame(width: layout.width, height: layout.height)
+                    .allowsHitTesting(false)
                 }
-                .simultaneousGesture(minimizeGesture)
-                .onTapGesture {
-                    // Mini / dock: tap video → maximize. Expanded: transport owns taps.
-                    guard !expanded else { return }
-                    expand()
-                }
-                .id("global-hub-continuous-\(post.id)")
-                .allowsHitTesting(true)
-                .zIndex(5)
+            }
+            .frame(width: layout.width, height: layout.height)
+            .clipShape(
+                RoundedRectangle(
+                    cornerRadius: expanded ? (isPullingMinimize ? 12 : 0) : 0,
+                    style: .continuous
+                )
+            )
+            .shadow(
+                color: expanded
+                    ? Theme.ink.opacity(isPullingMinimize ? 0.22 : 0)
+                    : .clear,
+                radius: expanded ? (isPullingMinimize ? 16 : 0) : 0,
+                y: expanded ? (isPullingMinimize ? 8 : 0) : 0
+            )
+            .scaleEffect(
+                expanded ? pullScale : 1,
+                anchor: .top
+            )
+            .offset(x: layout.x, y: layout.y + (expanded ? dragOffset * 0.92 : 0))
+            .opacity(expanded && isPullingMinimize ? Double(1 - min(dragProgress * 0.12, 0.12)) : 1)
+            .simultaneousGesture(minimizeGesture)
+            .onTapGesture {
+                // Mini / dock: tap video → maximize. Expanded: transport owns taps.
+                guard !expanded else { return }
+                expand()
+            }
+            .id("global-hub-continuous-\(post.id)")
+            .allowsHitTesting(true)
+            .zIndex(5)
         }
         .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
         // Only the video rect receives hits — mini chrome is outside this layer now.
