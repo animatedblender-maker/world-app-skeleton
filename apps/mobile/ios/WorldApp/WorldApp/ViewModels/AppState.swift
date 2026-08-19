@@ -17,14 +17,14 @@ final class AppState {
     var needsProfileSetup = false
     var currentProfile: Profile?
     var selectedTab: AppTab = .feed
-    /// Bumped when feed should reshuffle strips (app open / 3+ min away).
+    /// Bumped when feed should reshuffle strips (app open / 5+ min away).
     var feedFreshSessionToken: Int = 0
     /// Bumped when Hubs For you should reshuffle (app open / open Hubs tab).
     var hubsFreshSessionToken: Int = 0
     /// When user left the feed tab (nil = currently on feed or never left).
     private var feedLeftAt: Date?
-    /// Away from feed longer than this → reload a new mix on return.
-    private let feedStaleAwayInterval: TimeInterval = 3 * 60
+    /// Away from feed longer than this → reload a new mix on return (hide watched).
+    private let feedStaleAwayInterval: TimeInterval = 5 * 60
     var selectedCountry: Country?
     var countryTab: CountryTab = .posts
     var globePanel: GlobePanel?
@@ -215,7 +215,7 @@ final class AppState {
             return
         }
         await prepareSession()
-        // Returning from background after 3+ min off feed → new mix.
+        // Returning from background after 5+ min off feed → new mix (watched stay gone).
         if selectedTab != .feed, let left = feedLeftAt,
            Date().timeIntervalSince(left) >= feedStaleAwayInterval {
             // Still away; keep timer. When they return to feed, noteSelectedTabChanged reloads.
@@ -269,7 +269,7 @@ final class AppState {
     }
 
     /// Call from MainTabView when the selected tab changes.
-    /// Leave feed / return after 3+ minutes → new feed session.
+    /// Leave feed / return after 5+ minutes → new feed session (watched excluded).
     func noteSelectedTabChanged(from old: AppTab, to new: AppTab) {
         if old == .feed, new != .feed {
             feedLeftAt = Date()
@@ -278,9 +278,9 @@ final class AppState {
         if new == .feed, old != .feed {
             if let left = feedLeftAt, Date().timeIntervalSince(left) >= feedStaleAwayInterval {
                 #if DEBUG
-                print("[Feed] away \(Int(Date().timeIntervalSince(left)))s ≥ 3m → fresh session")
+                print("[Feed] away \(Int(Date().timeIntervalSince(left)))s ≥ 5m → fresh session")
                 #endif
-                requestFreshFeedSession(reason: "away_3m")
+                requestFreshFeedSession(reason: "away_5m")
             }
             feedLeftAt = nil
         }
@@ -290,7 +290,7 @@ final class AppState {
         }
     }
 
-    /// Reshuffle feed posts + strips (3+ min off feed). App open uses contentLoadGeneration.
+    /// Reshuffle feed posts + strips (5+ min off feed). App open uses contentLoadGeneration.
     func requestFreshFeedSession(reason: String) {
         feedLeftAt = nil
         feedFreshSessionToken += 1

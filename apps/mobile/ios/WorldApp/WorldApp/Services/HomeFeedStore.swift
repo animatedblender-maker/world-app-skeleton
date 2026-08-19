@@ -524,13 +524,10 @@ final class HomeFeedStore {
     /// Drop offline Reddit / catalog fakes; keep real UUID-backed posts only
     /// (includes DE Million Post Corpus seeds + their comments).
     /// **Keeps R2 Sparks** — they render as SparkFeedCard on the main feed.
+    /// **Hard hide watched** — never re-surface after watch / relaunch / 5min away.
     private static func liveOnlyPosts(_ posts: [CountryPost]) -> [CountryPost] {
-        // Drop deleted + already-watched Sparks/clips (origin+share collapse) while unviewed remain.
         let base = posts.excludingDeletedPosts().forHomeFeed()
-        let unviewed = base.filter { !SparkDiscoveryEngine.isViewed($0) }
-        if !unviewed.isEmpty { return unviewed }
-        // Library exhausted — keep list (rankers still put least-recent first).
-        return base
+        return base.filter { !SparkDiscoveryEngine.isViewed($0) }
     }
 
     // MARK: - Scroll / prefetch
@@ -566,13 +563,36 @@ final class HomeFeedStore {
             hasMore = true
         }
 
-        // Media session 09: feed scroll = thumbs only. Zero AV warm / resolve / playback batch.
-        // Focus winner mounts the only player inside InFrameVideoPlayer.
-        let ahead = fling ? 3 : 4
+        // Thumbs + light AV warm for the next spark/hub so focus claim is instant.
+        let ahead = fling ? 3 : 5
         let end = min(displayedPosts.count, index + ahead)
         if index < end {
             let window = Array(displayedPosts[index..<end])
             ImageCache.shared.prefetchFeedMedia(window, maxPixelSize: fling ? 280 : 360)
+            if !fling {
+                var warmed = 0
+                var warmIDs: [String] = []
+                for post in window {
+                    guard warmed < 3 else { break }
+                    guard let url = post.playableVideoURL else { continue }
+                    let isSpark = post.isSpark || post.isReel || PlayPlatformBridge.isSparkFeedCard(post)
+                    let isHub = PlayPlatformBridge.isHubFeedCardVideo(post)
+                        || PlayPlatformBridge.isHubOriginShare(post)
+                    guard isSpark || isHub || post.hasVideo else { continue }
+                    warmIDs.append(post.id)
+                    SparkWarmPool.shared.warmSingle(
+                        postID: post.id,
+                        url: url,
+                        deep: warmed == 0
+                    )
+                    warmed += 1
+                }
+                if !warmIDs.isEmpty {
+                    Task(priority: .utility) {
+                        await RecommendationClient.warmPlaybackURLs(warmIDs)
+                    }
+                }
+            }
         }
 
         // Don't kick network load-more mid-fling (causes hitch + image storms).
@@ -810,25 +830,7 @@ final class HomeFeedStore {
                 guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
                 appended.append(post)
             }
-            // Soft recycle ONLY when unviewed library is truly exhausted (deep session).
-            // Still prefer least-recently-viewed via rankForDiscovery — never dump random watched.
-            if appended.isEmpty, posts.count >= 100, recyclePass >= 6 {
-                let tailIDs = Set(posts.suffix(24).map(\.id))
-                let tailKeys = Set(posts.suffix(24).map(\.homeFeedContentKey))
-                let recycled = await PostsService.shared.homeFeedSparkTopUp(
-                    excluding: tailIDs,
-                    limit: pageSize,
-                    forceRefresh: true
-                )
-                let ordered = SparkDiscoveryEngine.rankForDiscovery(recycled, excluding: tailIDs)
-                for post in ordered {
-                    if tailIDs.contains(post.id) { continue }
-                    if tailKeys.contains(post.homeFeedContentKey) { continue }
-                    guard seen.insert(post.id).inserted else { continue }
-                    appended.append(post)
-                    if appended.count >= pageSize / 2 { break }
-                }
-            }
+            // Never recycle watched — keep paging / R2 for fresh only.
         }
 
         if appended.isEmpty {
@@ -900,20 +902,31 @@ final class HomeFeedStore {
     }
 
     private func warmHead() {
-        // Thumbs + at most 2 *light* AV warms so the first focus winner claims instantly
-        // (slug/edge feel — no black/thumb stall). Never deep / prepareFeedWindow.
-        let head = Array(posts.prefix(max(firstWindow + 2, 16)))
+        // Slug/edge path: CDN batch + deep AV preroll on the first videos so the
+        // focus winner claims a decoded first frame (no thumb / black stall).
+        let head = Array(posts.prefix(max(firstWindow + 4, 20)))
         ImageCache.shared.prefetchFeedMedia(head, maxPixelSize: 360)
+        var videoIDs: [String] = []
         var warmed = 0
         for post in head {
-            guard warmed < 2 else { break }
+            guard warmed < 6 else { break }
             guard let url = post.playableVideoURL else { continue }
             let isSpark = post.isSpark || post.isReel || PlayPlatformBridge.isSparkFeedCard(post)
             let isHub = PlayPlatformBridge.isHubFeedCardVideo(post)
                 || PlayPlatformBridge.isHubOriginShare(post)
             guard isSpark || isHub || post.hasVideo else { continue }
-            SparkWarmPool.shared.warmSingle(postID: post.id, url: url, deep: false)
+            videoIDs.append(post.id)
+            // First two: deep preroll (first-frame ready). Rest: light warm.
+            SparkWarmPool.shared.warmSingle(postID: post.id, url: url, deep: warmed < 2)
+            if ArchiveVideoPlayback.isArchiveURL(url) {
+                ArchiveVideoPlayback.warmResolve(url)
+            }
             warmed += 1
+        }
+        if !videoIDs.isEmpty {
+            Task(priority: .utility) {
+                await RecommendationClient.warmPlaybackURLs(videoIDs)
+            }
         }
     }
 

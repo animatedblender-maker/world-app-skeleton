@@ -2017,9 +2017,13 @@ struct InFrameVideoPlayer: View {
                 framesReady = false
                 return
             }
-            // Focus winner: light warm + claim so first frame is instant (slug/edge feel).
+            // Focus winner: claim warm first-frame when ready — never flash thumb/black.
             if let postID {
-                SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: false)
+                if SparkWarmPool.shared.isReadyAtStart(postID: postID) {
+                    framesReady = true
+                } else {
+                    SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: true)
+                }
             }
             if usesArchivePath {
                 ArchiveVideoPlayback.warmResolve(url)
@@ -2044,6 +2048,10 @@ struct InFrameVideoPlayer: View {
         if shouldPlay {
             deactivateTask?.cancel()
             deactivateTask = nil
+            // Warm claim ready → skip poster/black entirely on first paint.
+            if let postID, SparkWarmPool.shared.isReadyAtStart(postID: postID) {
+                framesReady = true
+            }
             playGate = true
             return
         }
@@ -2109,6 +2117,14 @@ struct InFrameVideoPlayer: View {
         }
 
         let ratio = FeedVideoFocus.visibleRatio(for: frame)
+        // Approaching focus → deep-warm so claim lands on a decoded first frame.
+        if ratio >= 0.28, let postID,
+           !SparkWarmPool.shared.hasWarmOrInflight(postID: postID) {
+            SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: true)
+            if usesArchivePath {
+                ArchiveVideoPlayback.warmResolve(url)
+            }
+        }
         // Skip tiny noise; still re-check winner (pause only when >70% off-screen).
         if abs(ratio - lastReportedRatio) < 0.03, lastReportedRatio >= 0 {
             refreshFocusWinner()

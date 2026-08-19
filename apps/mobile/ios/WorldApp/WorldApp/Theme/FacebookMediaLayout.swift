@@ -37,15 +37,18 @@ enum FacebookMediaLayout {
         return min(max(raw, minFeedMediaHeight), maxFeedMediaHeight + 20)
     }
 
-    /// Compact Hubs long-form feed card — true 16:9 of card width.
-    /// Hubs use aspect-fit (no crop); a tall FB box would show black letterbox bands.
+    /// Extra height under the 16:9 film so the in-feed timeline scrubber isn’t clipped.
+    static let hubFeedTimelineChromePad: CGFloat = 64
+
+    /// Hubs long-form feed card — 16:9 film + timeline chrome pad.
     /// Photos and Sparks must **not** use this.
     static func hubFeedVideoHeight(
         forWidth width: CGFloat = UIScreen.main.bounds.width
     ) -> CGFloat {
         let w = max(200, width.isFinite ? width : UIScreen.main.bounds.width)
-        let h = w / feedVideoAspect
-        return min(max(h, minFeedMediaHeight), maxFeedMediaHeight)
+        let film = w / feedVideoAspect
+        let h = film + hubFeedTimelineChromePad
+        return min(max(h, minFeedMediaHeight), maxFeedMediaHeight + hubFeedTimelineChromePad)
     }
 
     /// Clamp aspect ratios so a bad media metadata value can't blow out the card.

@@ -124,23 +124,23 @@ struct GlobalHubPlaybackLayer: View {
 
             // Continuous video surface — stable id across expand/mini/dock.
             // Mini chrome is owned by MainTabView’s bottom stack (flush on the tab bar).
-            // This layer only draws into the video hole — never a full-width black bar.
+            // Full-bleed mini: film fills the entire strip under the glass chips.
             playerSurface(for: post, showControls: expanded && !isPullingMinimize)
                 .frame(width: layout.width, height: layout.height)
                 // Ink only under expanded stage (16:9 letterbox); mini hole stays transparent.
                 .background(expanded ? Theme.ink : Color.clear)
                 .clipShape(
                     RoundedRectangle(
-                        cornerRadius: expanded ? (isPullingMinimize ? 12 : 0) : 8,
+                        cornerRadius: expanded ? (isPullingMinimize ? 12 : 0) : 0,
                         style: .continuous
                     )
                 )
                 .shadow(
                     color: expanded
                         ? Theme.ink.opacity(isPullingMinimize ? 0.22 : 0)
-                        : Theme.ink.opacity(0.18),
-                    radius: expanded ? (isPullingMinimize ? 16 : 0) : 8,
-                    y: expanded ? (isPullingMinimize ? 8 : 0) : 3
+                        : .clear,
+                    radius: expanded ? (isPullingMinimize ? 16 : 0) : 0,
+                    y: expanded ? (isPullingMinimize ? 8 : 0) : 0
                 )
                 // Live pull: shrink + slide toward mini as the finger moves.
                 .scaleEffect(
@@ -220,11 +220,11 @@ struct GlobalHubPlaybackLayer: View {
             let containerGlobal = geo.frame(in: .global)
             let x = global.minX - containerGlobal.minX
             let y = global.minY - containerGlobal.minY
-            // Accept lower-half slots (bar can be ~¼ screen tall).
-            let looksLikeMiniSlot = y > geo.size.height * 0.28
-                && global.height < geo.size.height * 0.40
-                && global.width < geo.size.width * 0.85
-            if looksLikeMiniSlot,
+            // Full-bleed mini is ~full width × ¼ screen; chat dock is a side slot.
+            let looksLikeMiniOrDock = y > geo.size.height * 0.22
+                && global.height < geo.size.height * 0.42
+                && global.width > 40
+            if looksLikeMiniOrDock,
                y > -20, y < geo.size.height + 20,
                x > -20, x < geo.size.width + 20 {
                 return PlayerLayout(
@@ -236,12 +236,11 @@ struct GlobalHubPlaybackLayer: View {
             }
         }
 
-        // Fallback before preference publishes — full bar height video (no white bands).
+        // Fallback before preference publishes — full-bleed strip under chrome chips.
         let barW = geo.size.width
         let size = YouTubeMiniPlayerBar.videoSize(forBarWidth: barW)
         let x = YouTubeMiniPlayerBar.barContentLeading
         let barTop = geo.size.height - floatingBottomClearance - miniStripHeight
-        // Align to top of video slot (hairline inset), not vertically centered in bar.
         let y = barTop + YouTubeMiniPlayerBar.videoEdgeInset
         return PlayerLayout(x: x, y: y, width: size.width, height: size.height)
     }
@@ -279,8 +278,8 @@ struct GlobalHubPlaybackLayer: View {
                 postID: post.id,
                 showsControls: showControls,
                 loops: false,
-                // Aspect-fit on a true 16:9 stage — never crop hub long-form.
-                fillsFrame: false,
+                // Expanded: aspect-fit 16:9 (no crop). Mini: fill the full-bleed strip.
+                fillsFrame: !expanded,
                 isMuted: mutedBinding,
                 allowsFullscreen: showControls,
                 onReady: {

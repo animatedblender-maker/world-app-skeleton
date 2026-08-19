@@ -137,7 +137,7 @@ struct YouTubeVideoFrame<Content: View>: View {
                     }
                     .clipShape(Rectangle())
             case .feed:
-                // Compact true 16:9 — Hubs aspect-fit fills the box (no tall black letterbox).
+                // 16:9 film + timeline chrome pad so the scrubber isn’t cropped.
                 // Sparks use SparkFeedCard + dominantFeedVideoHeight, not this frame.
                 Color.clear
                     .frame(maxWidth: .infinity)
@@ -488,8 +488,8 @@ struct PlayFeedLinkCard: View {
                     preferArchivePlayer: useArchivePath,
                     showsControls: true,
                     muteOnlyControls: false,
-                    // Fill the 16:9 feed box — aspect-fit left black letterbox slabs.
-                    fillsFrame: true,
+                    // Fit 16:9 film in the taller chrome-padded box (timeline stays visible).
+                    fillsFrame: false,
                     sharesFeedMute: true,
                     autoplaySurface: autoplaySurface,
                     onViewed: { Task { await PostsService.shared.recordView(post) } }
