@@ -299,7 +299,7 @@ struct MatteryaHubPlayerView: View {
                 .clipped()
 
                 if bottomChromeReserve > 0 {
-                    Theme.canvasDeep
+                    Color.black
                         .frame(height: bottomChromeReserve)
                         .allowsHitTesting(false)
                 }
@@ -556,13 +556,9 @@ struct MatteryaHubPlayerView: View {
 
     private func scheduleChromeHide() {
         chromeHideTask?.cancel()
-        // Feed / in-frame (no fullscreen): keep timeline visible.
-        guard allowsFullscreen else {
-            showChrome = true
-            return
-        }
         // Stay up while paused so center play / ±10s never vanish mid-pause.
         guard bridge.isPlaying else { return }
+        // Tap anywhere on film toggles chrome; idle auto-hides (feed + watch).
         chromeHideTask = Task {
             try? await Task.sleep(nanoseconds: 3_200_000_000)
             guard !Task.isCancelled, !isScrubbing else { return }
@@ -1121,8 +1117,8 @@ final class ArchiveVideoPlayerController: UIViewController {
         return lastKnownSeconds
     }
 
-    /// Soft floor matching Theme.canvasDeep — never flash pure black before first frame.
-    private static let softFloor = UIColor(red: 0.929, green: 0.918, blue: 0.898, alpha: 1)
+    /// Letterbox / empty AV floor — black (IG/YT), never paper-white.
+    private static let softFloor = UIColor.black
 
     override func viewDidLoad() {
         super.viewDidLoad()

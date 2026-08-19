@@ -137,17 +137,11 @@ struct YouTubeVideoFrame<Content: View>: View {
                     }
                     .clipShape(Rectangle())
             case .feed:
-                // True 16:9 — hubs film fits (no picture crop); chrome overlays inside.
+                // 16:9 film + chrome pad; black letterbox (never paper-white).
                 Color.clear
                     .frame(maxWidth: .infinity)
                     .frame(height: FacebookMediaLayout.hubFeedVideoHeight())
-                    .background(
-                        LinearGradient(
-                            colors: [Theme.canvasMuted, Theme.canvasDeep],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
+                    .background(Color.black)
                     .overlay {
                         content()
                     }
@@ -456,25 +450,14 @@ struct PlayFeedLinkCard: View {
             // froze the feed (AV + warm storms).
             let useArchivePath = ArchiveVideoPlayback.isArchiveURL(url)
             ZStack {
-                // Soft floor under film — never pure black while poster/CDN loads.
-                LinearGradient(
-                    colors: [Theme.canvasMuted, Theme.canvasDeep],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                // Poster stays under the player so we never flash pure black while buffering.
+                Color.black
+                // Poster under film until first frames.
                 if let poster {
                     CachedAsyncImage(
                         url: poster,
                         maxPixelSize: 480,
                         contentMode: .fill,
-                        placeholder: AnyView(
-                            LinearGradient(
-                                colors: [Theme.canvasMuted, Theme.canvasDeep],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
+                        placeholder: AnyView(Color.black)
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .clipped()
@@ -493,23 +476,17 @@ struct PlayFeedLinkCard: View {
                     preferArchivePlayer: useArchivePath,
                     showsControls: true,
                     muteOnlyControls: false,
-                    // Exact 16:9 box + aspect-fit = full picture, no crop; chrome overlays film.
-                    fillsFrame: false,
-                    bottomChromeReserve: 0,
+                    // Fill the 16:9 film zone; black chrome pad keeps timeline uncropped.
+                    fillsFrame: true,
+                    bottomChromeReserve: FacebookMediaLayout.hubFeedTimelineChromePad,
                     sharesFeedMute: true,
                     autoplaySurface: autoplaySurface,
                     onViewed: { Task { await PostsService.shared.recordView(post) } }
                 )
             }
             .id("hub-feed-\(playPost.id)")
-            .background(
-                LinearGradient(
-                    colors: [Theme.canvasMuted, Theme.canvasDeep],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            )
-            // Don’t steal taps from timeline/transport — open Hubs via badge / poster only.
+            .background(Color.black)
+            // Open Hubs via badge; taps on film toggle chrome inside the player.
         } else {
             YouTubeVideoThumbnail(
                 post: post,

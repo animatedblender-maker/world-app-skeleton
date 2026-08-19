@@ -1644,33 +1644,28 @@ final class AppState {
     /// Shared open path for feed + chat: paint now, warm handoff, expand later.
     private func presentGlobalSparks(starting start: CountryPost, fromFeedPost: CountryPost? = nil) {
         // Tiny instant queue — first paint never waits on ranking 70+ clips.
-        let seeds = Self.instantSparksSeedQueue(starting: start, limit: 20)
-        // Pre-warm destination id before UI mounts (feed may still hold share-id slot).
+        let seeds = Self.instantSparksSeedQueue(starting: start, limit: 16)
         if let url = start.playableVideoURL {
             SparkWarmPool.shared.warmSingle(postID: start.id, url: url, deep: true)
             if let from = fromFeedPost, from.id != start.id {
                 SparkWarmPool.shared.warmSingle(postID: from.id, url: url, deep: true)
+                // Re-key before mount so Sparks claim hits the feed’s warm slot.
+                SparkWarmPool.shared.rekey(from: from.id, to: start.id)
             }
             if ArchiveVideoPlayback.isArchiveURL(url) {
                 ArchiveVideoPlayback.warmResolve(url)
             }
         }
-        // Paint Sparks UI immediately (no await).
-        openReelsViewer(startingPost: start, seedPosts: seeds)
         SparkWarmPool.shared.preparePlayerWindow(posts: seeds, around: 0)
-        // After feed parks its player into the pool, re-key share → origin for claim hit.
-        Task { @MainActor in
-            await Task.yield()
-            try? await Task.sleep(nanoseconds: 24_000_000)
+        // Paint Sparks UI immediately — no sleeps / awaits on the open path.
+        openReelsViewer(startingPost: start, seedPosts: seeds)
+        // Catalog expand off the critical path.
+        Task(priority: .utility) { @MainActor in
+            // Feed may park under share id one frame later — re-key again cheaply.
             if let from = fromFeedPost, from.id != start.id {
                 SparkWarmPool.shared.rekey(from: from.id, to: start.id)
             }
             SparkWarmPool.shared.preparePlayerWindow(posts: seeds, around: 0)
-            // Nudge Sparks focus to reclaim if it cold-started one frame early.
-            NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
-        }
-        // Catalog / deep queue off the critical path.
-        Task(priority: .utility) { @MainActor in
             _ = await PostsService.shared.loadSparksDiscoveryCatalog(
                 forceRefresh: seeds.count < 12,
                 deep: false

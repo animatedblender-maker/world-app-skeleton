@@ -787,19 +787,13 @@ struct FacebookPostCard: View {
             loops: true,
             preferArchivePlayer: useArchivePath,
             showsControls: true,
-            // Hubs: aspect-fit in 16:9 (no crop). Sparks/short may fill.
-            fillsFrame: !isHub,
-            bottomChromeReserve: 0,
+            // Hubs: fill film + black chrome pad. Sparks: fill tall box.
+            fillsFrame: true,
+            bottomChromeReserve: isHub ? FacebookMediaLayout.hubFeedTimelineChromePad : 0,
             autoplaySurface: autoplaySurface,
             onViewed: { Task { await PostsService.shared.recordView(post) } }
         )
-        .background(
-            LinearGradient(
-                colors: [Theme.canvasMuted, Theme.canvasDeep],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
+        .background(Color.black)
     }
 
     private var actions: some View {

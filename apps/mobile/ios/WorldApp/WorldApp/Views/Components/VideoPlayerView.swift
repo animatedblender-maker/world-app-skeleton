@@ -101,13 +101,9 @@ struct VideoPlayerView: View {
         return showPosterCover
     }
 
-    /// Soft floor — never flash pure black while AV paints the first frame (IG-style).
+    /// Video letterbox / cold floor — always black (Sparks / Hubs), never paper-white.
     private var softVideoFloor: some View {
-        LinearGradient(
-            colors: [Theme.canvasMuted, Theme.canvasDeep],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
+        Color.black
     }
 
     var body: some View {
@@ -186,25 +182,35 @@ struct VideoPlayerView: View {
                 }
             }
 
-            // Transport/timeline overlays the full card (scrubber sits in the reserve strip).
+            // Transport/timeline — tap empty film (not buttons) toggles chrome.
             if shouldShowChrome {
-                MatteryaVideoControls(
-                    isPlaying: isPlaying,
-                    isMuted: isMuted,
-                    currentSeconds: currentSeconds,
-                    durationSeconds: durationSeconds,
-                    showsFullscreen: allowsFullscreen,
-                    isFullscreen: false,
-                    onPlayPause: { togglePlayback() },
-                    onMuteToggle: { toggleMute() },
-                    onSeek: { seek(to: $0) },
-                    onFullscreen: allowsFullscreen ? { openFullscreen() } : nil,
-                    onExitFullscreen: nil
-                )
+                ZStack {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                showChrome = false
+                            }
+                            chromeTask?.cancel()
+                        }
+                    MatteryaVideoControls(
+                        isPlaying: isPlaying,
+                        isMuted: isMuted,
+                        currentSeconds: currentSeconds,
+                        durationSeconds: durationSeconds,
+                        showsFullscreen: allowsFullscreen,
+                        isFullscreen: false,
+                        onPlayPause: { togglePlayback() },
+                        onMuteToggle: { toggleMute() },
+                        onSeek: { seek(to: $0) },
+                        onFullscreen: allowsFullscreen ? { openFullscreen() } : nil,
+                        onExitFullscreen: nil
+                    )
+                }
                 .transition(.opacity)
             }
         }
-        .background(softVideoFloor)
+        .background(Color.black)
         .onAppear {
             liveGate.isActive = isActive
             liveGate.userWantsPause = userWantsPause
@@ -670,12 +676,8 @@ struct VideoPlayerView: View {
 
     private func scheduleChromeHide() {
         guard showsControls else { return }
-        // Feed / in-frame: keep timeline + transport visible. Auto-hide only in fullscreen watch.
-        guard allowsFullscreen else {
-            showChrome = true
-            return
-        }
         chromeTask?.cancel()
+        // Tap video → show; idle → hide (feed hubs + fullscreen).
         chromeTask = Task {
             try? await Task.sleep(nanoseconds: 3_500_000_000)
             guard !Task.isCancelled else { return }
@@ -1488,8 +1490,8 @@ private final class MatteryaPlayerUIView: UIView {
     private var gravityLocked = false
     private var pendingPlayer: AVPlayer?
 
-    /// Soft floor (Theme.canvasDeep) — never flash pure black while the first frame decodes.
-    private static let softFloor = UIColor(red: 0.929, green: 0.918, blue: 0.898, alpha: 1)
+    /// Letterbox / empty AV floor — black (IG/YT), never paper-white.
+    private static let softFloor = UIColor.black
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -1873,7 +1875,7 @@ struct InFrameVideoPlayer: View {
         showsControls && !muteOnlyControls && playGate
     }
 
-    /// Soft floor under film — never pure black while poster loads.
+    /// Poster / letterbox floor — black when no poster (Sparks/Hubs), never paper-white.
     @ViewBuilder
     private var posterFloor: some View {
         if let posterURL {
@@ -1881,24 +1883,14 @@ struct InFrameVideoPlayer: View {
                 url: posterURL,
                 maxPixelSize: 480,
                 contentMode: .fill,
-                placeholder: AnyView(
-                    LinearGradient(
-                        colors: [Theme.canvasMuted, Theme.canvasDeep],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
+                placeholder: AnyView(Color.black)
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
             .allowsHitTesting(false)
         } else {
-            LinearGradient(
-                colors: [Theme.canvasMuted, Theme.canvasDeep],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .allowsHitTesting(false)
+            Color.black
+                .allowsHitTesting(false)
         }
     }
 
