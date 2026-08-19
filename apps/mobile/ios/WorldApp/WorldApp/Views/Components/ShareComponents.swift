@@ -57,9 +57,9 @@ struct SparkFeedCard: View {
 
     private var corner: CGFloat { edgeToEdge ? 0 : 12 }
 
-    /// Facebook-style: full-width tall media area (same as other feed video posts).
+    /// Near-9:16 feed stage — same immersion as full Sparks, not a short 4:5 crop box.
     private var cardHeight: CGFloat {
-        FacebookMediaLayout.dominantFeedVideoHeight()
+        FacebookMediaLayout.sparkFeedCardHeight()
     }
 
     /// Best playable URL: post → resolver → shared original (feed shares often only stamp origin).
@@ -76,20 +76,23 @@ struct SparkFeedCard: View {
             ?? post.sharedPost.flatMap { MediaURLResolver.posterURL(for: $0.asCountryPost) }
     }
 
+    /// Match full Sparks player: fill portrait; fit wide clips so they aren't hard-cropped.
+    @State private var stageSize: CGSize = .zero
+    @State private var useFill = true
+
     var body: some View {
         ZStack(alignment: .topLeading) {
-            Theme.ink
+            Color.black
 
             if let url = playURL {
-                // Facebook: size the box, then **fill** it — no letterbox that shrinks the picture.
-                // Same Sparks full-player stack: Frame 0 underlay + hold until frames paint.
+                // Same Sparks full-player stack: Frame 0 underlay + gravity from natural size.
                 ZStack {
                     Color.black
                     if let posterURL {
                         CachedAsyncImage(
                             url: posterURL,
-                            maxPixelSize: 720,
-                            contentMode: .fill,
+                            maxPixelSize: 900,
+                            contentMode: useFill ? .fill : .fit,
                             placeholder: AnyView(Color.black)
                         )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -108,15 +111,27 @@ struct SparkFeedCard: View {
                         preferArchivePlayer: ArchiveVideoPlayback.isArchiveURL(url),
                         showsControls: false,
                         muteOnlyControls: true,
-                        fillsFrame: true,
+                        fillsFrame: useFill,
                         sharesFeedMute: true,
                         autoplaySurface: autoplaySurface,
-                        onViewed: { Task { await PostsService.shared.recordView(post) } }
+                        onViewed: { Task { await PostsService.shared.recordView(post) } },
+                        onVideoSize: { size in
+                            guard size.width > 2, size.height > 2 else { return }
+                            let stage = stageSize.width > 2 ? stageSize : CGSize(
+                                width: UIScreen.main.bounds.width,
+                                height: cardHeight
+                            )
+                            useFill = SparksStageLayout.shouldFillWithoutCrop(
+                                videoSize: size,
+                                stageSize: stage
+                            )
+                        }
                     )
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Theme.ink)
+                .background(Color.black)
                 .clipped()
+                .animation(nil, value: useFill)
                 // Media session 09: poster only on mount — winner path installs the player.
             } else {
                 VideoThumbnailView(
@@ -157,6 +172,15 @@ struct SparkFeedCard: View {
         }
         .frame(minWidth: 0, maxWidth: .infinity)
         .frame(height: cardHeight)
+        .background {
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { stageSize = geo.size }
+                    .onChange(of: geo.size) { _, size in
+                        stageSize = size
+                    }
+            }
+        }
         .clipped()
         .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
         .contentShape(Rectangle())

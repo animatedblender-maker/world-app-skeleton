@@ -501,7 +501,7 @@ struct VideoPlayerView: View {
         // so dropping the cover never reveals a still-black AVPlayerLayer (the blink).
         let player = self.player
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 120_000_000)
+            try? await Task.sleep(nanoseconds: 64_000_000)
             guard showPosterCover else { return }
             guard liveGate.isActive, !liveGate.userWantsPause else { return }
             if let player, !playerHasPaintedFrames(player) { return }
@@ -1840,6 +1840,8 @@ struct InFrameVideoPlayer: View {
     /// Home feed vs profile — prevents opacity-0 feed cards from stealing profile autoplay.
     var autoplaySurface: FeedAutoplaySurface = .home
     var onViewed: (() -> Void)? = nil
+    /// Natural video size — Spark feed cards use this for SparksStageLayout fill vs fit.
+    var onVideoSize: ((CGSize) -> Void)? = nil
 
     @State private var isMuted: Bool
     @State private var isFocusWinner = false
@@ -1867,7 +1869,8 @@ struct InFrameVideoPlayer: View {
         forceSilentUntilUnmute: Bool = false,
         sharesFeedMute: Bool = true,
         autoplaySurface: FeedAutoplaySurface = .home,
-        onViewed: (() -> Void)? = nil
+        onViewed: (() -> Void)? = nil,
+        onVideoSize: ((CGSize) -> Void)? = nil
     ) {
         self.url = url
         self.posterURL = posterURL
@@ -1885,6 +1888,7 @@ struct InFrameVideoPlayer: View {
         self.sharesFeedMute = sharesFeedMute
         self.autoplaySurface = autoplaySurface
         self.onViewed = onViewed
+        self.onVideoSize = onVideoSize
         // Initial mute: prefer global feed mute when sharing; else constructor flag.
         _isMuted = State(initialValue: muted || forceSilentUntilUnmute)
     }
@@ -1915,7 +1919,8 @@ struct InFrameVideoPlayer: View {
         showsControls && !muteOnlyControls && playGate
     }
 
-    /// Poster / letterbox floor — same as Sparks full player: remote thumb, else Frame 0 extract, else black.
+    /// Poster / letterbox floor — remote thumb, else black.
+    /// Frame 0 extract only while `playGate` (winner) — extracting on every neighbor kills scroll.
     @ViewBuilder
     private var posterFloor: some View {
         if let posterURL {
@@ -1928,8 +1933,7 @@ struct InFrameVideoPlayer: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
             .allowsHitTesting(false)
-        } else if let postID {
-            // Copy Sparks: when no thumb_url, hold first decoded frame (t=0) — never empty black.
+        } else if playGate, let postID {
             FrameZeroFallbackPoster(postID: postID, videoURL: url, fillsFrame: fillsFrame)
                 .allowsHitTesting(false)
         } else {
@@ -2007,6 +2011,7 @@ struct InFrameVideoPlayer: View {
                             sharesFeedMute: sharesFeedMute,
                             fillsFrame: fillsFrame,
                             bottomChromeReserve: bottomChromeReserve,
+                            // Claim warm buffer when approaching — butter-smooth start.
                             preloadsWhenInactive: false,
                             onViewed: onViewed,
                             onProgress: { current, _ in
@@ -2017,17 +2022,16 @@ struct InFrameVideoPlayer: View {
                             onFramesReady: {
                                 // Player already settled its own cover — lift outer after a beat.
                                 markInFrameFramesReady()
-                            }
+                            },
+                            onVideoSize: onVideoSize
                         )
                     }
                 }
-                // Sparks pattern: keep Frame 0 poster ON TOP until AV is painting (framesReady).
-                // Without this, feed/hubs flash black while readyToPlay ≠ first frame.
-                if !framesReady {
-                    posterFloor
-                        .transition(.identity)
-                        .animation(nil, value: framesReady)
-                }
+                // Keep cover mounted; fade with opacity (remounting CachedAsyncImage stutters).
+                posterFloor
+                    .opacity(framesReady ? 0 : 1)
+                    .allowsHitTesting(false)
+                    .animation(nil, value: framesReady)
             } else {
                 posterFloor
             }
@@ -2169,7 +2173,7 @@ struct InFrameVideoPlayer: View {
     private func markInFrameFramesReady() {
         guard !framesReady else { return }
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 80_000_000)
+            try? await Task.sleep(nanoseconds: 48_000_000)
             guard playGate, shouldPlay else { return }
             framesReady = true
         }

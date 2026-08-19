@@ -54,12 +54,19 @@ enum FacebookMediaLayout {
         return min(max(aspect, 0.45), 2.4)
     }
 
-    /// Spark share on feed — same Facebook tall media box as other video posts.
+    /// Spark on feed — near **9:16** immersion (not flat 4:5). Filling a short 4:5 box
+    /// crops vertical Sparks hard; full Sparks player uses the whole screen.
     static func sparkFeedCardHeight(
         forWidth width: CGFloat = UIScreen.main.bounds.width,
         screenHeight: CGFloat = UIScreen.main.bounds.height
     ) -> CGFloat {
-        dominantFeedVideoHeight(forWidth: width, screenHeight: screenHeight)
+        let w = max(200, width.isFinite ? width : UIScreen.main.bounds.width)
+        let h = max(400, screenHeight.isFinite ? screenHeight : UIScreen.main.bounds.height)
+        let reelH = w / reelAspect
+        // Tall like IG Reels-in-feed; cap so the card doesn't eat the whole scroll view.
+        let maxH = min(h * 0.70, 680)
+        let minH = min(h * 0.52, 520)
+        return min(max(min(reelH, maxH), minH), maxH)
     }
 
     static func mediaHeight(for width: CGFloat, post: CountryPost, context: MediaContext = .feed) -> CGFloat {

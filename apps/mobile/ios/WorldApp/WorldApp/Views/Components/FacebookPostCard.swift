@@ -936,7 +936,7 @@ struct FacebookPostCard: View {
                     maxPixelSize: 420,
                     frameStyle: .feed,
                     embedsFrame: false,
-                    extractFrameIfNeeded: true
+                    extractFrameIfNeeded: false
                 )
             } else {
                 VideoThumbnailView(
@@ -944,7 +944,8 @@ struct FacebookPostCard: View {
                     maxPixelSize: 420,
                     contentMode: .fill,
                     showsPlayIcon: false,
-                    extractFrameIfNeeded: true,
+                    // Never extract while scrolling — butter-smooth 09 (posters only).
+                    extractFrameIfNeeded: false,
                     placeholder: AnyView(mediaPlaceholder)
                 )
             }

@@ -1774,7 +1774,7 @@ final class ArchiveVideoPlayerController: UIViewController {
                 let moving = player.rate > 0.05
                     || (player.timeControlStatus == .playing && player.rate > 0.01)
                 if moving, advanced {
-                    try? await Task.sleep(nanoseconds: 120_000_000)
+                    try? await Task.sleep(nanoseconds: 64_000_000)
                     guard self.player === player else { return }
                     self.posterView.isHidden = true
                     self.spinner.stopAnimating()
