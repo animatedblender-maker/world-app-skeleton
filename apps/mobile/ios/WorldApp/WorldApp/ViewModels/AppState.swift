@@ -1218,7 +1218,7 @@ final class AppState {
             if ArchiveVideoPlayback.isArchiveURL(url) {
                 ArchiveVideoPlayback.warmResolve(url)
             }
-            SparkWarmPool.shared.warmSingle(postID: quick.id, url: url, deep: false)
+            SparkWarmPool.shared.warmSingle(postID: quick.id, url: url)
         }
         applyHubPlayback(quick, expanded: expanded)
         // Background: upgrade to full catalog identity if needed (sharer → channel).
@@ -1228,7 +1228,7 @@ final class AppState {
             if resolved.authorID != hubPlaybackPost?.authorID
                 || resolved.playableVideoURL != nil && hubPlaybackPost?.playableVideoURL == nil {
                 if let url = resolved.playableVideoURL {
-                    SparkWarmPool.shared.warmSingle(postID: resolved.id, url: url, deep: false)
+                    SparkWarmPool.shared.warmSingle(postID: resolved.id, url: url)
                 }
                 applyHubPlayback(resolved, expanded: hubPlaybackExpanded)
             }
@@ -1288,11 +1288,11 @@ final class AppState {
             if ArchiveVideoPlayback.isArchiveURL(url) {
                 ArchiveVideoPlayback.warmResolve(url)
             }
-            // One light warm for the open target only — no related AV storm on open (freeze/crash).
-            SparkWarmPool.shared.warmSingle(postID: watchPost.id, url: url, deep: false)
+            // Pre-warm AV buffer immediately (same runloop as open).
+            SparkWarmPool.shared.warmSingle(postID: watchPost.id, url: url)
         }
         ImageCache.shared.prefetchPostThumbnails([watchPost], maxPixelSize: 720)
-        // Related: posters only (media session 09). Continuous player owns AV for this open.
+        // Prefetch next related long-form so related taps / auto-next feel instant.
         Task(priority: .utility) {
             let related = YouTubeCatalogService.shared.relatedVideos(
                 to: watchPost,
@@ -1304,32 +1304,56 @@ final class AppState {
                 maxPixelSize: 480,
                 aggressive: false
             )
+            // Warm more related players — next tap should claim, not cold-start.
+            for post in related.prefix(5) {
+                if let u = post.playableVideoURL {
+                    SparkWarmPool.shared.warmSingle(postID: post.id, url: u)
+                }
+            }
         }
-        MediaPlaybackCoordinator.shared.ensurePlaybackAudioSession()
         // Kick continuous surface if it was paused.
         NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
     }
 
     /// Collapse to mini — **playback keeps running** (same continuous AVPlayer, only layout changes).
-    /// Geometry morph is owned by `GlobalHubPlaybackLayer` (`collapse` 0→1).
-    /// - Parameter animated: when true and currently expanded, layer morphs first then flips session.
-    ///   When false, layer already finished the morph — flip flags only (no second jump / white hole).
+    /// Geometry morph is owned by `GlobalHubPlaybackLayer` (`collapse` 0→1). This only flips session flags.
+    /// - Parameter animated: when false, layer already finished the morph — no second animation.
     func minimizeHubPlayback(returnToChat: Bool = true, animated: Bool = true) {
         guard hubPlaybackPost != nil else { return }
         // Never stop/pause mini — GlobalHubPlaybackLayer only resizes the stage.
         hubPlaybackPlaying = true
         hubWatchScrollCollapse = 0
-
-        // Morph-first path: video must reach the mini strip **before** the clear mini chrome
-        // mounts, or the hole shows home paper (white placeholder).
-        if animated, hubPlaybackExpanded {
+        // Hold pull at 1 so watch chrome stays fully faded through the handoff.
+        if hubPlaybackExpanded {
             hubPlaybackPullProgress = 1
-            hubMinimizeReturnToChat = returnToChat
-            hubMinimizeMorphToken &+= 1
-            return
+        }
+        if animated {
+            withAnimation(MatteryaMotion.minimize) {
+                hubPlaybackExpanded = false
+            }
+        } else {
+            // Layer already at mini frame — flip with zero animation to avoid a second jump.
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) {
+                hubPlaybackExpanded = false
+            }
         }
 
-        finishMinimizeHubPlayback(returnToChat: returnToChat)
+        // Defer side-effects so they never hitch the release / morph frame.
+        let shouldReturn = returnToChat
+        let conversationID = hubPlaybackReturnConversationID
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            FeedVideoFocus.shared.resetAll()
+            syncHubPlaybackChatReturnWithPath()
+            if shouldReturn, let conversationID {
+                try? await Task.sleep(nanoseconds: 60_000_000)
+                guard hubPlaybackPost != nil, !hubPlaybackExpanded else { return }
+                selectedTab = .messages
+                navigationPath = [.conversation(conversationID)]
+            }
+        }
     }
 
     /// Called by `GlobalHubPlaybackLayer` after collapse≈1 (or for non-animated minimize).
@@ -1383,33 +1407,20 @@ final class AppState {
 
     /// Tap miniplayer (from chat dock or floating bar) → full Hubs watch with comments.
     /// Same continuous player — expand only grows the stage; audio/video never restart.
-    /// Instant flag flip; layer springs geometry (no hubs reshuffle stall).
+    /// YouTube-style: spring expand (handled in GlobalHubPlaybackLayer via collapse 1→0).
     func expandHubPlayback() {
         guard hubPlaybackPost != nil else { return }
         rememberHubPlaybackChatReturnIfNeeded()
-        // Silence feed/Sparks only — continuous hubs stays protected and must not pause.
-        MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
-        MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(userMuted: hubPlaybackMuted)
+        // Always leave chat / other pushes so Hubs watch (player + comments) is the real screen.
+        navigationPath.removeAll()
+        selectedTab = .hubs
         hubPlaybackPlaying = true
         hubWatchScrollCollapse = 0
+        // Clear pull so watch chrome is fully visible during expand.
         hubPlaybackPullProgress = 0
-        hubFullscreenPullProgress = 0
-
-        // Navigation first so Hubs watch route can mount under the expanding player.
-        if !navigationPath.isEmpty {
-            navigationPath.removeAll()
-        }
-        if selectedTab != .hubs {
-            selectedTab = .hubs
-        }
-        // Always force expanded (even if already true — re-assert collapse spring).
-        var t = Transaction()
-        t.disablesAnimations = true
-        withTransaction(t) {
+        withAnimation(MatteryaMotion.expand) {
             hubPlaybackExpanded = true
         }
-        // Bump token so GlobalHubPlaybackLayer re-runs expand even if expanded was already true.
-        hubExpandToken &+= 1
         NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
     }
 

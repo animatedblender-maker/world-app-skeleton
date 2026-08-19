@@ -1,74 +1,38 @@
 import SwiftUI
 import UIKit
 
-/// Full-screen host that **only** receives touches inside `interactiveRectGlobal` (window coords).
-/// Touches outside return `nil` from `hitTest` so views underneath (ScrollView / mini chrome) work.
-///
-/// **Critical:** Re-assign `rootView` only when `contentID` (post) changes.
-/// Morph geometry is applied by resizing/offsetting this UIView from the parent — never by
-/// rebuilding the SwiftUI/AVPlayer tree (that made mini buttons vanish and film snap to a thumb).
+/// Full-screen host that **only** receives touches inside `interactiveRect`.
+/// Touches outside return `nil` from `hitTest` so views underneath (ScrollView) scroll normally.
 struct HubPassThroughContainer<Content: View>: UIViewControllerRepresentable {
-    /// Interactive region in **global / window** coordinates.
-    var interactiveRectGlobal: CGRect
-    var interactiveRect: CGRect = .zero
-    /// New post → full rebuild only.
-    var contentID: String = ""
-    /// Ignored for rehost (kept for call-site compatibility).
-    var layoutSignature: String = ""
+    /// Hit-testable region in the container’s bounds (same as GeometryReader local space).
+    var interactiveRect: CGRect
     @ViewBuilder var content: () -> Content
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-
     func makeUIViewController(context: Context) -> HubPassThroughViewController<Content> {
-        let vc = HubPassThroughViewController(rootView: content())
-        vc.interactiveRectGlobal = resolvedGlobalRect()
-        vc.hostedContentID = contentID
-        context.coordinator.lastContentID = contentID
-        return vc
+        HubPassThroughViewController(rootView: content())
     }
 
     func updateUIViewController(_ controller: HubPassThroughViewController<Content>, context: Context) {
-        let nextRect = resolvedGlobalRect()
-        if controller.interactiveRectGlobal != nextRect {
-            controller.interactiveRectGlobal = nextRect
-        }
-
-        // ONLY rebuild when the video identity changes.
-        guard context.coordinator.lastContentID != contentID else { return }
-        context.coordinator.lastContentID = contentID
-        controller.hostedContentID = contentID
+        controller.interactiveRect = interactiveRect
         controller.rootView = content()
-    }
-
-    private func resolvedGlobalRect() -> CGRect {
-        if interactiveRectGlobal.width > 1, interactiveRectGlobal.height > 1 {
-            return interactiveRectGlobal
-        }
-        return interactiveRect
-    }
-
-    final class Coordinator {
-        var lastContentID: String = ""
     }
 }
 
 final class HubPassThroughViewController<Content: View>: UIViewController {
-    var interactiveRectGlobal: CGRect = .zero {
+    var interactiveRect: CGRect = .zero {
         didSet {
-            guard oldValue != interactiveRectGlobal else { return }
-            (view as? HubPassThroughUIView)?.interactiveRectGlobal = interactiveRectGlobal
+            (view as? HubPassThroughUIView)?.interactiveRect = interactiveRect
         }
     }
-    var hostedContentID: String = ""
-    var layoutSignature: String = ""
 
     private let host: UIHostingController<Content>
 
     var rootView: Content {
         get { host.rootView }
-        set { host.rootView = newValue }
+        set {
+            host.rootView = newValue
+            host.view.setNeedsLayout()
+        }
     }
 
     init(rootView: Content) {
@@ -83,18 +47,16 @@ final class HubPassThroughViewController<Content: View>: UIViewController {
         let pass = HubPassThroughUIView()
         pass.backgroundColor = .clear
         pass.isOpaque = false
-        pass.isUserInteractionEnabled = true
-        pass.interactiveRectGlobal = interactiveRectGlobal
+        pass.interactiveRect = interactiveRect
         view = pass
     }
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        // Host fills the pass-through view; SwiftUI layout uses safe-area y for expanded
+        // Hubs video (below Dynamic Island). Do not cancel top safe area here.
         host.view.backgroundColor = .clear
         host.view.isOpaque = false
-        host.view.isUserInteractionEnabled = true
-        host.view.clipsToBounds = false
-        view.clipsToBounds = false
         addChild(host)
         view.addSubview(host.view)
         host.view.translatesAutoresizingMaskIntoConstraints = false
@@ -108,21 +70,19 @@ final class HubPassThroughViewController<Content: View>: UIViewController {
     }
 }
 
+/// Returns `nil` for hit tests outside `interactiveRect` → touches pass through to SwiftUI below.
 final class HubPassThroughUIView: UIView {
-    var interactiveRectGlobal: CGRect = .zero
+    var interactiveRect: CGRect = .zero
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        guard interactiveRectGlobal.width > 1, interactiveRectGlobal.height > 1 else { return nil }
-        let globalPoint = convert(point, to: nil)
-        guard interactiveRectGlobal.insetBy(dx: -1, dy: -1).contains(globalPoint) else {
-            return nil
-        }
+        // Empty / invalid rect → never steal touches (e.g. mid-layout).
+        guard interactiveRect.width > 1, interactiveRect.height > 1 else { return nil }
+        guard interactiveRect.contains(point) else { return nil }
         return super.hitTest(point, with: event)
     }
 
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-        guard interactiveRectGlobal.width > 1, interactiveRectGlobal.height > 1 else { return false }
-        let globalPoint = convert(point, to: nil)
-        return interactiveRectGlobal.insetBy(dx: -1, dy: -1).contains(globalPoint)
+        guard interactiveRect.width > 1, interactiveRect.height > 1 else { return false }
+        return interactiveRect.contains(point)
     }
 }

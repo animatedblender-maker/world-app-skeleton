@@ -9,78 +9,244 @@ struct MainTabView: View {
     @State private var hubWatchStageGlobal: CGRect?
 
     var body: some View {
-        rootShell
-            .modifier(MainTabLifecycleModifier(
-                appState: appState,
-                hubContinuousDockSlotGlobal: $hubContinuousDockSlotGlobal,
-                hubWatchStageGlobal: $hubWatchStageGlobal,
-                postToOpenAfterCreate: $postToOpenAfterCreate,
-                hubsImmersiveFullscreen: hubsImmersiveFullscreen
-            ))
-    }
-
-    /// Mini player lives OUTSIDE NavigationStack so chat / search / profile pushes
-    /// cannot cover continuous Hubs playback.
-    private var rootShell: some View {
+        // Mini player lives OUTSIDE NavigationStack so chat / search / profile pushes
+        // cannot cover continuous Hubs playback.
         ZStack(alignment: .bottom) {
-            mainNavigationStack
-            miniInkPlateUnderlay
-            // Order: plate → tab/mini hole → continuous film (110) → mini chrome (120).
-            // Chrome must stay ABOVE the UIKit film and never rehost with morph.
-            floatingMiniAndTabChrome
-            continuousHubsPlayerLayer
-            floatingMiniChromeAboveFilm
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(hubsImmersiveFullscreen ? Color.black : Color.clear)
-    }
+            NavigationStack(path: Binding(
+                get: { appState.navigationPath },
+                set: { appState.navigationPath = $0 }
+            )) {
+                ZStack(alignment: .bottom) {
+                    // Feed + Hubs stay mounted so strips / continuous watch survive tab switches.
+                    persistentTab(.feed) { FeedView() }
+                    persistentTab(.hubs) { MatteryaHubsView() }
 
-    private var mainNavigationStack: some View {
-        NavigationStack(path: Binding(
-            get: { appState.navigationPath },
-            set: { appState.navigationPath = $0 }
-        )) {
-            ZStack(alignment: .bottom) {
-                // Keep heavy tabs mounted — remounting Messages/Profile re-ran GraphQL +
-                // rebuilt lists every hop (multi-hundred-ms lag). Globe still lazy (heavy 3D).
-                persistentTab(.feed) { FeedView() }
-                persistentTab(.hubs) { MatteryaHubsView() }
-                persistentTab(.messages) { MessagesView() }
-                persistentTab(.profile) { ProfileView() }
-
-                if appState.selectedTab == .globe {
-                    GlobeView()
+                    // Other tabs remount (lighter than keeping globe live off-screen).
+                    if appState.selectedTab != .feed && appState.selectedTab != .hubs {
+                        Group {
+                            switch appState.selectedTab {
+                            case .globe:
+                                GlobeView()
+                            case .messages:
+                                MessagesView()
+                            case .profile:
+                                ProfileView()
+                            default:
+                                EmptyView()
+                            }
+                        }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .safeAreaPadding(.bottom, tabContentBottomInset)
                         .zIndex(1)
+                        .id(appState.selectedTab.rawValue)
+                    }
+
+                    // Tab bar is drawn in the OUTER ZStack (below) so the mini player
+                    // can sit above it without covering the menu icons.
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .sharePostSheet(appState: appState)
+                .overlay {
+                    ZStack {
+                        AppMenuOverlay()
+                        NotificationsOverlay()
+                    }
+                }
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar(appState.navigationPath.isEmpty ? .hidden : .visible, for: .navigationBar)
+                .toolbarBackground(.hidden, for: .navigationBar)
+                .navigationDestination(for: AppDestination.self) { destination in
+                    destinationView(destination)
+                        // Explicit size so pushed screens (public profiles, chat) fill the
+                        // window on My Mac (Designed for iPad) — root ZStack tabs underneath
+                        // otherwise steal layout and cards can measure as zero height.
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        // Leave room for the floating mini player above the home indicator.
+                        .safeAreaPadding(.bottom, miniPlayerContentInset)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .sharePostSheet(appState: appState)
-            .overlay {
-                ZStack {
-                    AppMenuOverlay()
-                    NotificationsOverlay()
+
+            // Continuous AVPlayer.
+            // Expanded: above page content so the watch stage is visible.
+            // Mini: *below* the mini-bar chrome (z70) so the **clear** hole reveals video;
+            // never put an opaque ink fill in that hole (that made a black miniplayer).
+            GlobalHubPlaybackLayer(
+                dockSlotGlobal: hubContinuousDockSlotGlobal,
+                watchStageGlobal: hubWatchStageGlobal
+            )
+            .zIndex(appState.hubPlaybackExpanded ? 55 : 45)
+
+            // One bottom stack: mini strip (if any) then tab bar — YouTube order, no overlap.
+            if showsFloatingMiniBar || appState.navigationPath.isEmpty {
+                VStack(spacing: 0) {
+                    if showsFloatingMiniBar, let post = appState.hubPlaybackPost {
+                        YouTubeMiniPlayerBar(
+                            post: post,
+                            onExpand: { appState.expandHubPlayback() },
+                            onClose: { appState.stopHubPlayback() },
+                            embedsVideo: false,
+                            isPlaying: Binding(
+                                get: { appState.hubPlaybackPlaying },
+                                set: { appState.hubPlaybackPlaying = $0 }
+                            ),
+                            isMuted: Binding(
+                                get: { appState.hubPlaybackMuted },
+                                set: { appState.hubPlaybackMuted = $0 }
+                            )
+                        )
+                        .frame(height: YouTubeMiniPlayerBar.barHeight)
+                        .frame(maxWidth: .infinity)
+                    }
+                    if appState.navigationPath.isEmpty {
+                        BottomTabBar()
+                            .frame(maxWidth: .infinity)
+                    }
                 }
-            }
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar(appState.navigationPath.isEmpty ? .hidden : .visible, for: .navigationBar)
-            .toolbarBackground(.hidden, for: .navigationBar)
-            .navigationDestination(for: AppDestination.self) { destination in
-                destinationView(destination)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .safeAreaPadding(.bottom, miniPlayerContentInset)
+                .frame(maxWidth: .infinity)
+                .zIndex(70)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    /// Continuous player is in immersive fullscreen (notch + bottom must be black).
-    /// Requires expanded watch — never hide mini chrome because a stale FS pull flag stuck.
-    private var hubsImmersiveFullscreen: Bool {
-        appState.hubPlaybackPost != nil
-            && appState.hubPlaybackExpanded
-            && appState.hubFullscreenPullProgress > 0.85
+        .onPreferenceChange(HubContinuousVideoSlotKey.self) { frame in
+            hubContinuousDockSlotGlobal = frame
+        }
+        .onPreferenceChange(HubWatchStageFrameKey.self) { frame in
+            hubWatchStageGlobal = frame
+        }
+        // Keyboard dismiss is window-level (cancelsTouchesInView = false).
+        // Root dismissKeyboardOnTap() blocked Settings List taps.
+        .onAppear {
+            Keyboard.installDismissOnOutsideTap()
+            appState.ensureHubPlaybackMinimizedIfNeeded()
+            EngagementTracker.shared.screenOpened(appState.selectedTab.rawValue)
+            if appState.selectedTab == .hubs {
+                EngagementTracker.shared.hubsOpened()
+            }
+        }
+        .onChange(of: appState.selectedTab) { oldTab, tab in
+            // Off Hubs → mini player; do not force-return to a chat (only pull-down / minimize does).
+            if tab != .hubs {
+                appState.minimizeHubPlayback(returnToChat: false)
+                EngagementTracker.shared.hubsLeft()
+            } else {
+                EngagementTracker.shared.hubsOpened()
+            }
+            EngagementTracker.shared.screenOpened(tab.rawValue)
+            // Feed stays mounted under Profile — clear focus so profile can elect its own winner.
+            FeedVideoFocus.shared.resetAll()
+            // 3+ min off feed → new feed mix; Hubs open → new For you order.
+            appState.noteSelectedTabChanged(from: oldTab, to: tab)
+        }
+        .onChange(of: appState.navigationPath.count) { _, count in
+            // Opening chat (or any push) while expanded → collapse to mini, keep playing.
+            // returnToChat: false — path already has the destination (including chat).
+            if count > 0, appState.hubPlaybackExpanded {
+                appState.minimizeHubPlayback(returnToChat: false)
+            }
+            // Left the pinned chat while mini → never force-return there on next minimize.
+            appState.syncHubPlaybackChatReturnWithPath()
+            // Push/pop (e.g. public profile over feed) — re-elect autoplay on the live surface.
+            FeedVideoFocus.shared.resetAll()
+        }
+        .onChange(of: appState.navigationPath) { _, _ in
+            appState.syncHubPlaybackChatReturnWithPath()
+        }
+        .onChange(of: appState.activeCreateSheet) { _, sheet in
+            if sheet != nil {
+                postToOpenAfterCreate = nil
+            }
+        }
+        .sheet(item: Binding(
+            get: { appState.activeCreateSheet },
+            set: { appState.activeCreateSheet = $0 }
+        ), onDismiss: {
+            guard let post = postToOpenAfterCreate else { return }
+            postToOpenAfterCreate = nil
+            appState.openPost(post)
+        }) { sheet in
+            Group {
+            if sheet == .channelSetup {
+                ChannelSetupView {
+                    // After first channel create → hubs video or spark composer.
+                    Task { await appState.completeChannelSetupAndContinue() }
+                }
+            } else if let country = appState.composerCountry {
+                switch sheet {
+                case .post:
+                    PostComposerView(country: country) { post in
+                        NotificationCenter.default.post(
+                            name: .userPostsDidChange,
+                            object: nil,
+                            userInfo: ["post": post]
+                        )
+                        appState.reloadContent()
+                        Task { await appState.refreshStories() }
+                    }
+                case .video:
+                    // Feed video: composer dismisses early; shadow card + feed top handled inside.
+                    ReelComposerView(country: country, publishAsReel: false, publishToHubChannel: false) { _ in
+                        appState.goToFeedTop(scroll: true)
+                    }
+                case .hubVideo:
+                    // Hubs long-form also lands on feed with shadow card (channel video as post).
+                    ReelComposerView(country: country, publishAsReel: false, publishToHubChannel: true) { _ in
+                        appState.goToFeedTop(scroll: true)
+                    }
+                case .channelSetup:
+                    EmptyView()
+                case .reel:
+                    // Sparks from + menu are always Hubs-bound (channel already gated).
+                    ReelComposerView(country: country, publishAsReel: true, publishToHubChannel: true) { post in
+                        NotificationCenter.default.post(
+                            name: .userPostsDidChange,
+                            object: nil,
+                            userInfo: ["post": post]
+                        )
+                        appState.reloadContent()
+                        postToOpenAfterCreate = post
+                    }
+                case .story:
+                    // Moments removed from product — keep sheet case for legacy data only.
+                    EmptyView()
+                }
+            }
+            }
+            .withAppState(appState)
+        }
+        .fullScreenCover(item: Binding(
+            get: { appState.storyViewerContext },
+            set: { appState.storyViewerContext = $0 }
+        )) { context in
+            // Moments viewer kept for legacy data but not linked from feed.
+            StoriesViewerView(context: context)
+                .withAppState(appState)
+        }
+        .fullScreenCover(item: Binding(
+            get: { appState.reelsViewerContext },
+            set: { newValue in
+                if newValue == nil {
+                    // Dismiss Sparks → hard-stop any DB/Archive players immediately.
+                    MediaPlaybackCoordinator.shared.stopAllPlayback()
+                }
+                appState.reelsViewerContext = newValue
+            }
+        )) { context in
+            ReelsScrollViewer(context: context)
+                .withAppState(appState)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea(.all)
+                .statusBarHidden(true)
+                .persistentSystemOverlays(.hidden)
+                .presentationBackground(.black)
+        }
+        // Hubs is a real tab — never present it as a fullScreenCover (that hid the tab bar).
+        .onChange(of: appState.isPlayPresented) { _, presented in
+            if presented {
+                appState.isPlayPresented = false
+                appState.openPlay(tab: .home)
+            }
+        }
     }
 
     /// Floating mini above the tab bar (not docked into chat).
@@ -88,134 +254,6 @@ struct MainTabView: View {
         appState.hubPlaybackPost != nil
             && !appState.hubPlaybackExpanded
             && !appState.hubPlaybackDockInChat
-    }
-
-    private var continuousPlayerZIndex: Double {
-        if hubsImmersiveFullscreen { return 200 }
-        if appState.hubPlaybackExpanded { return 55 }
-        // Mini: paint ABOVE the mini bar plate/poster (100) so UIKit film is not
-        // swallowed under a clear SwiftUI hole. Mini chrome is drawn inside this layer.
-        return 110
-    }
-
-    /// Soft plate under the mini strip so paper never flashes through a clear hole.
-    /// Must stay *below* continuous film. Includes home-indicator gap so plate aligns with film.
-    @ViewBuilder
-    private var miniInkPlateUnderlay: some View {
-        if showsFloatingMiniBar {
-            VStack(spacing: 0) {
-                Spacer(minLength: 0)
-                Theme.ink
-                    .frame(height: YouTubeMiniPlayerBar.barHeight)
-                    .frame(maxWidth: .infinity)
-                // Match BottomTabBar: content height + safe-area bed (home indicator).
-                if appState.navigationPath.isEmpty {
-                    Color.clear
-                        .frame(height: Theme.tabBarHeight)
-                        .padding(.bottom, 0)
-                }
-            }
-            .safeAreaPadding(.bottom, 0)
-            .allowsHitTesting(false)
-            .zIndex(44)
-        }
-    }
-
-    /// Single continuous AVPlayer — pass-through only claims the film rect.
-    /// z 60: above ink (44), below mini chrome (100) so film shows through the clear hole.
-    private var continuousHubsPlayerLayer: some View {
-        GlobalHubPlaybackLayer(
-            dockSlotGlobal: hubContinuousDockSlotGlobal,
-            watchStageGlobal: hubWatchStageGlobal
-        )
-        .zIndex(continuousPlayerZIndex)
-        .ignoresSafeArea(.all)
-        // When mini mounts, dock preference may be nil for a frame — keep layer alive.
-        .opacity(1)
-        .allowsHitTesting(appState.hubPlaybackPost != nil)
-    }
-
-    /// Mini strip flush **above** the tab bar (never under it). Continuous film docks here.
-    @ViewBuilder
-    private var floatingMiniAndTabChrome: some View {
-        if !hubsImmersiveFullscreen, showsFloatingMiniBar || appState.navigationPath.isEmpty {
-            VStack(spacing: 0) {
-                if showsFloatingMiniBar, let post = appState.hubPlaybackPost {
-                    YouTubeMiniPlayerBar(
-                        post: post,
-                        onExpand: { appState.expandHubPlayback() },
-                        onClose: { appState.stopHubPlayback() },
-                        embedsVideo: false,
-                        // Buttons drawn in floatingMiniChromeAboveFilm (z 120).
-                        showsChrome: false,
-                        isPlaying: Binding(
-                            get: { appState.hubPlaybackPlaying },
-                            set: { appState.hubPlaybackPlaying = $0 }
-                        ),
-                        isMuted: Binding(
-                            get: { appState.hubPlaybackMuted },
-                            set: { appState.hubPlaybackMuted = $0 }
-                        )
-                    )
-                    .frame(height: YouTubeMiniPlayerBar.barHeight)
-                    .frame(maxWidth: .infinity)
-                }
-                if appState.navigationPath.isEmpty {
-                    BottomTabBar()
-                        .frame(maxWidth: .infinity)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .ignoresSafeArea(.keyboard)
-            .zIndex(100)
-        }
-    }
-
-    /// Close / mute / play — always above continuous UIKit film, never inside morph rehost.
-    @ViewBuilder
-    private var floatingMiniChromeAboveFilm: some View {
-        if showsFloatingMiniBar, appState.hubPlaybackPost != nil, !hubsImmersiveFullscreen {
-            VStack(spacing: 0) {
-                Spacer(minLength: 0)
-                HubMiniPlayerChrome(
-                    isPlaying: Binding(
-                        get: { appState.hubPlaybackPlaying },
-                        set: { want in
-                            appState.hubPlaybackPlaying = want
-                            NotificationCenter.default.post(
-                                name: .matteryaHubContinuousSetPlaying,
-                                object: nil,
-                                userInfo: ["playing": want]
-                            )
-                        }
-                    ),
-                    isMuted: Binding(
-                        get: { appState.hubPlaybackMuted },
-                        set: { muted in
-                            appState.hubPlaybackMuted = muted
-                            NotificationCenter.default.post(
-                                name: .matteryaHubContinuousSetMuted,
-                                object: nil,
-                                userInfo: ["muted": muted]
-                            )
-                        }
-                    ),
-                    onClose: { appState.stopHubPlayback() }
-                )
-                .frame(height: YouTubeMiniPlayerBar.barHeight)
-                .frame(maxWidth: .infinity)
-                .contentShape(Rectangle())
-                .onTapGesture { appState.expandHubPlayback() }
-
-                if appState.navigationPath.isEmpty {
-                    Color.clear
-                        .frame(height: Theme.tabBarHeight)
-                        .allowsHitTesting(false)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-            .zIndex(120)
-        }
     }
 
     private var tabContentBottomInset: CGFloat {
@@ -293,220 +331,6 @@ struct MainTabView: View {
             .allowsHitTesting(selected)
             .accessibilityHidden(!selected)
             .zIndex(selected ? 1 : 0)
-    }
-
-    static func frameMeaningfullyChanged(_ old: CGRect?, _ new: CGRect?) -> Bool {
-        switch (old, new) {
-        case (nil, nil): return false
-        case (nil, _), (_, nil): return true
-        case let (a?, b?):
-            // Larger epsilon — sub-pixel preference spam was thrashing continuous layout.
-            return abs(a.minX - b.minX) > 4
-                || abs(a.minY - b.minY) > 4
-                || abs(a.width - b.width) > 4
-                || abs(a.height - b.height) > 4
-        }
-    }
-}
-
-/// Lifecycle / sheets extracted so MainTabView.body type-checks quickly.
-private struct MainTabLifecycleModifier: ViewModifier {
-    @Bindable var appState: AppState
-    @Binding var hubContinuousDockSlotGlobal: CGRect?
-    @Binding var hubWatchStageGlobal: CGRect?
-    @Binding var postToOpenAfterCreate: CountryPost?
-    var hubsImmersiveFullscreen: Bool
-
-    func body(content: Content) -> some View {
-        content
-            .onPreferenceChange(HubContinuousVideoSlotKey.self) { frame in
-                if MainTabView.frameMeaningfullyChanged(hubContinuousDockSlotGlobal, frame) {
-                    hubContinuousDockSlotGlobal = frame
-                }
-            }
-            .onPreferenceChange(HubWatchStageFrameKey.self) { frame in
-                if MainTabView.frameMeaningfullyChanged(hubWatchStageGlobal, frame) {
-                    hubWatchStageGlobal = frame
-                }
-            }
-            .onAppear {
-                Keyboard.installDismissOnOutsideTap()
-                appState.ensureHubPlaybackMinimizedIfNeeded()
-                EngagementTracker.shared.screenOpened(appState.selectedTab.rawValue)
-                if appState.selectedTab == .hubs {
-                    EngagementTracker.shared.hubsOpened()
-                }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .userPostDidDelete)) { notification in
-                guard let id = notification.userInfo?["postID"] as? String else { return }
-                appState.applyPostDeleted(id: id)
-            }
-            .onChange(of: appState.selectedTab) { oldTab, tab in
-                handleSelectedTabChange(from: oldTab, to: tab)
-            }
-            .onChange(of: appState.navigationPath.count) { _, count in
-                handleNavigationCountChange(count)
-            }
-            .onChange(of: appState.navigationPath) { _, _ in
-                appState.syncHubPlaybackChatReturnWithPath()
-            }
-            .onChange(of: appState.activeCreateSheet) { _, sheet in
-                if sheet != nil { postToOpenAfterCreate = nil }
-            }
-            .sheet(
-                item: Binding(
-                    get: { appState.activeCreateSheet },
-                    set: { appState.activeCreateSheet = $0 }
-                ),
-                onDismiss: {
-                    guard let post = postToOpenAfterCreate else { return }
-                    postToOpenAfterCreate = nil
-                    appState.openPost(post)
-                },
-                content: createSheetContent
-            )
-            .fullScreenCover(
-                item: Binding(
-                    get: { appState.storyViewerContext },
-                    set: { appState.storyViewerContext = $0 }
-                )
-            ) { context in
-                StoriesViewerView(context: context)
-                    .withAppState(appState)
-            }
-            .fullScreenCover(
-                item: Binding(
-                    get: { appState.reelsViewerContext },
-                    set: { newValue in
-                        handleReelsContextChange(newValue)
-                    }
-                )
-            ) { context in
-                ReelsScrollViewer(context: context)
-                    .withAppState(appState)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .ignoresSafeArea(.all)
-                    .statusBarHidden(true)
-                    .persistentSystemOverlays(.hidden)
-                    .presentationBackground(.black)
-            }
-            .onChange(of: appState.isPlayPresented) { _, presented in
-                if presented {
-                    appState.isPlayPresented = false
-                    appState.openPlay(tab: .home)
-                }
-            }
-    }
-
-    private func handleSelectedTabChange(from oldTab: AppTab, to tab: AppTab) {
-        if tab != .hubs, appState.hubPlaybackExpanded {
-            appState.minimizeHubPlayback(returnToChat: false, animated: false)
-        }
-        FeedVideoFocus.shared.resetAll()
-        if appState.hubPlaybackPost == nil {
-            MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
-        } else {
-            appState.hubPlaybackPlaying = true
-            MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
-                userMuted: appState.hubPlaybackMuted
-            )
-        }
-        if tab != .hubs {
-            EngagementTracker.shared.hubsLeft()
-        } else {
-            EngagementTracker.shared.hubsOpened()
-        }
-        EngagementTracker.shared.screenOpened(tab.rawValue)
-        appState.noteSelectedTabChanged(from: oldTab, to: tab)
-    }
-
-    private func handleNavigationCountChange(_ count: Int) {
-        if count > 0, appState.hubPlaybackExpanded {
-            appState.minimizeHubPlayback(returnToChat: false, animated: false)
-            appState.hubPlaybackPlaying = true
-            MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
-                userMuted: appState.hubPlaybackMuted
-            )
-            NotificationCenter.default.post(
-                name: .matteryaResumePlaybackAfterInterrupt,
-                object: nil
-            )
-        }
-        appState.syncHubPlaybackChatReturnWithPath()
-        FeedVideoFocus.shared.resetAll()
-        if count == 0, appState.hubPlaybackPost != nil, appState.hubPlaybackPlaying {
-            MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
-                userMuted: appState.hubPlaybackMuted
-            )
-        }
-    }
-
-    private func handleReelsContextChange(_ newValue: ReelsViewerContext?) {
-        if newValue == nil {
-            MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
-            SparkWarmPool.shared.silenceAllBuffered()
-            FeedVideoFocus.shared.resetAll()
-            if appState.hubPlaybackPost != nil {
-                appState.hubPlaybackPlaying = true
-                NotificationCenter.default.post(
-                    name: .matteryaResumePlaybackAfterInterrupt,
-                    object: nil
-                )
-            } else {
-                NotificationCenter.default.post(
-                    name: .feedVideoFocusDidChange,
-                    object: nil
-                )
-            }
-        }
-        appState.reelsViewerContext = newValue
-    }
-
-    @ViewBuilder
-    private func createSheetContent(_ sheet: CreateContentSheet) -> some View {
-        Group {
-            if sheet == .channelSetup {
-                ChannelSetupView {
-                    Task { await appState.completeChannelSetupAndContinue() }
-                }
-            } else if let country = appState.composerCountry {
-                switch sheet {
-                case .post:
-                    PostComposerView(country: country) { post in
-                        NotificationCenter.default.post(
-                            name: .userPostsDidChange,
-                            object: nil,
-                            userInfo: ["post": post]
-                        )
-                        appState.reloadContent()
-                        Task { await appState.refreshStories() }
-                    }
-                case .video:
-                    ReelComposerView(country: country, publishAsReel: false, publishToHubChannel: false) { _ in
-                        appState.goToFeedTop(scroll: true)
-                    }
-                case .hubVideo:
-                    ReelComposerView(country: country, publishAsReel: false, publishToHubChannel: true) { _ in
-                        appState.goToFeedTop(scroll: true)
-                    }
-                case .channelSetup:
-                    EmptyView()
-                case .reel:
-                    ReelComposerView(country: country, publishAsReel: true, publishToHubChannel: true) { post in
-                        NotificationCenter.default.post(
-                            name: .userPostsDidChange,
-                            object: nil,
-                            userInfo: ["post": post]
-                        )
-                        appState.reloadContent()
-                        postToOpenAfterCreate = post
-                    }
-                case .story:
-                    EmptyView()
-                }
-            }
-        }
-        .withAppState(appState)
     }
 }
 

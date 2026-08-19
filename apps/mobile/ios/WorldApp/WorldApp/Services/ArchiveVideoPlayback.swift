@@ -232,19 +232,9 @@ struct MatteryaHubPlayerView: View {
     var allowsFullscreen: Bool = false
     /// External trigger (e.g. swipe-up on player) — set true to open fullscreen, cleared after present.
     @Binding var presentFullscreen: Bool
-    /// When set, parent owns fullscreen presentation (required when nested under
-    /// HubPassThroughContainer — SwiftUI fullScreenCover inside that host fails silently).
-    var onRequestFullscreen: (() -> Void)? = nil
-    /// Global continuous Hubs surface — protected from tab-switch silence.
-    var isContinuousHubPlayer: Bool = false
-    /// Continuous layer is already full-screen (icon becomes exit, no second cover).
-    var isFullscreenActive: Bool = false
-    /// Mini strip: draw close/mute/play on the film (must be in this tree, not under UIKit).
-    var showsMiniChrome: Bool = false
-    var onMiniClose: (() -> Void)? = nil
 
     @StateObject private var bridge = ArchivePlayerBridge()
-    @State private var showChrome = false
+    @State private var showChrome = true
     @State private var chromeHideTask: Task<Void, Never>?
     @State private var isScrubbing = false
     @State private var showFullscreen = false
@@ -265,11 +255,6 @@ struct MatteryaHubPlayerView: View {
         isMuted: Binding<Bool> = .constant(false),
         allowsFullscreen: Bool = false,
         presentFullscreen: Binding<Bool> = .constant(false),
-        onRequestFullscreen: (() -> Void)? = nil,
-        isContinuousHubPlayer: Bool = false,
-        isFullscreenActive: Bool = false,
-        showsMiniChrome: Bool = false,
-        onMiniClose: (() -> Void)? = nil,
         onReady: (() -> Void)? = nil,
         onPlayingChange: ((Bool) -> Void)? = nil,
         onProgress: ((Double, Double) -> Void)? = nil,
@@ -289,11 +274,6 @@ struct MatteryaHubPlayerView: View {
         self._isMuted = isMuted
         self.allowsFullscreen = allowsFullscreen
         self._presentFullscreen = presentFullscreen
-        self.onRequestFullscreen = onRequestFullscreen
-        self.isContinuousHubPlayer = isContinuousHubPlayer
-        self.isFullscreenActive = isFullscreenActive
-        self.showsMiniChrome = showsMiniChrome
-        self.onMiniClose = onMiniClose
         self.onReady = onReady
         self.onPlayingChange = onPlayingChange
         self.onProgress = onProgress
@@ -302,39 +282,26 @@ struct MatteryaHubPlayerView: View {
         self.onSeekConsumed = onSeekConsumed
     }
 
-    /// Prefer parent-owned fullscreen (continuous Hubs layer); fall back to local cover.
-    private func enterFullscreen() {
-        guard allowsFullscreen else { return }
-        if let onRequestFullscreen {
-            onRequestFullscreen()
-        } else if !isFullscreenActive {
-            showFullscreen = true
-        }
-        scheduleChromeHide()
-    }
-
     var body: some View {
         ZStack {
             ArchiveVideoPlayerView(
                 url: url,
                 posterURL: posterURL,
-                // Keep buffering/playing under parent-owned fullscreen so handoff never freezes.
-                // Local cover still deactivates to avoid dual audio when this view owns FS.
-                isActive: isActive && (onRequestFullscreen != nil || !showFullscreen),
+                // Stay active under fullscreen cover so resume is reliable after dismiss.
+                isActive: isActive && !showFullscreen,
                 muted: isMuted,
                 startTime: startTime,
                 loops: loops,
                 fillsFrame: fillsFrame,
                 bridge: bridge,
                 onReady: {
-                    // Ready ≠ playing chrome. Buttons only appear after an intentional tap.
-                    let playing = bridge.controller?.isPlaying == true || isActive
-                    bridge.publishReady(playing: playing && isActive)
-                    if isContinuousHubPlayer, let p = bridge.controller?.avPlayer {
-                        MediaPlaybackCoordinator.shared.protectContinuous(p)
-                    }
+                    bridge.publishReady(playing: true)
                     DispatchQueue.main.async {
                         onReady?()
+                        if showsControls {
+                            showChrome = true
+                            scheduleChromeHide()
+                        }
                     }
                 },
                 onProgress: { current, duration in
@@ -354,14 +321,12 @@ struct MatteryaHubPlayerView: View {
                     onVideoSize?(size)
                 },
                 seekToSeconds: seekToSeconds,
-                onSeekConsumed: onSeekConsumed,
-                // Must follow callbacks (memberwise property order on ArchiveVideoPlayerView).
-                isContinuousHubPlayer: isContinuousHubPlayer
+                onSeekConsumed: onSeekConsumed
             )
 
             if showsControls {
-                // Spinner only while this slot is actively trying to play (never mid-scroll).
-                if !bridge.isReady, isActive {
+                // Loading / buffering spinner (YouTube center ring).
+                if !bridge.isReady {
                     ProgressView()
                         .progressViewStyle(.circular)
                         .tint(.white)
@@ -370,15 +335,14 @@ struct MatteryaHubPlayerView: View {
                         .zIndex(2)
                 }
 
-                // Buttons only after the user taps the video — never while scrolling.
-                if showChrome {
+                if showChrome || !bridge.isPlaying {
                     hubChrome
                         .opacity(chromeOpacity)
                         .allowsHitTesting(chromeOpacity > 0.2)
                         .transition(.opacity)
                         .zIndex(3)
                 } else {
-                    // Capture taps + double-tap skip without drawing transport chrome.
+                    // Chrome hidden while playing — still capture taps + double-tap skip.
                     youtubeHiddenChromeHitLayer
                         .opacity(chromeOpacity)
                         .allowsHitTesting(chromeOpacity > 0.2)
@@ -402,56 +366,6 @@ struct MatteryaHubPlayerView: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.9)))
                     .zIndex(40)
                 }
-            }
-
-            // Continuous mini: chrome must live here (same host as film). Sibling SwiftUI
-            // chrome under the pass-through UIView was invisible and untappable.
-            if showsMiniChrome, isContinuousHubPlayer {
-                HubMiniPlayerChrome(
-                    isPlaying: Binding(
-                        get: { bridge.isPlaying || isActive },
-                        set: { want in
-                            if want {
-                                bridge.controller?.setMuted(isMuted)
-                                bridge.controller?.setActive(true)
-                                bridge.controller?.ensureContinuingPlayback()
-                                bridge.isPlaying = true
-                                onPlayingChange?(true)
-                                NotificationCenter.default.post(
-                                    name: .matteryaHubContinuousSetPlaying,
-                                    object: nil,
-                                    userInfo: ["playing": true]
-                                )
-                            } else {
-                                bridge.controller?.pauseKeepingFrame()
-                                bridge.isPlaying = false
-                                onPlayingChange?(false)
-                                NotificationCenter.default.post(
-                                    name: .matteryaHubContinuousSetPlaying,
-                                    object: nil,
-                                    userInfo: ["playing": false]
-                                )
-                            }
-                        }
-                    ),
-                    isMuted: Binding(
-                        get: { isMuted },
-                        set: { newValue in
-                            isMuted = newValue
-                            bridge.controller?.setMuted(newValue)
-                            NotificationCenter.default.post(
-                                name: .matteryaHubContinuousSetMuted,
-                                object: nil,
-                                userInfo: ["muted": newValue]
-                            )
-                        }
-                    ),
-                    onClose: {
-                        onMiniClose?()
-                    }
-                )
-                .allowsHitTesting(true)
-                .zIndex(60)
             }
         }
         .fullScreenCover(isPresented: $showFullscreen) {
@@ -484,26 +398,6 @@ struct MatteryaHubPlayerView: View {
             )
         }
         .onChange(of: isActive) { _, active in
-            if !active, !isContinuousHubPlayer {
-                // Leaving the focused feed slot — hide noisy transport chrome immediately.
-                chromeHideTask?.cancel()
-                showChrome = false
-            }
-            if isContinuousHubPlayer {
-                // Continuous mini/watch: play/pause only from AppState / chrome intent.
-                // setActive(false) is ignored on the controller (layout thrash safe);
-                // intentional pause uses pauseKeepingFrame so audio stops cleanly.
-                if active {
-                    bridge.controller?.setMuted(isMuted)
-                    bridge.controller?.setActive(true)
-                    bridge.controller?.ensureContinuingPlayback()
-                    bridge.isPlaying = true
-                } else {
-                    bridge.controller?.pauseKeepingFrame()
-                    bridge.isPlaying = false
-                }
-                return
-            }
             // Always setActive so userWantsPlayback + audio output are restored after pause.
             bridge.controller?.setActive(active)
             if !active {
@@ -522,46 +416,21 @@ struct MatteryaHubPlayerView: View {
                 return
             }
             presentFullscreen = false
-            enterFullscreen()
+            showFullscreen = true
         }
         .onChange(of: showsControls) { _, visible in
             if visible {
-                // Keep chrome hidden until the user taps — feed scroll must stay clean.
-                // Continuous / FS surfaces still reveal chrome on their own enter events.
-                if isContinuousHubPlayer || isFullscreenActive {
-                    showChrome = true
-                    scheduleChromeHide()
-                } else {
-                    showChrome = false
-                    chromeHideTask?.cancel()
-                }
+                showChrome = true
+                scheduleChromeHide()
             } else {
                 // Mini player: hide chrome but keep the AVPlayer actively rendering.
                 chromeHideTask?.cancel()
                 showChrome = false
             }
-            // Expand ↔ mini / stage ↔ FS only toggles chrome — never pause or remount.
-            // Continuous hubs: skip re-solo on every chrome flip (keeps YT-smooth morph).
-            if isActive, !isContinuousHubPlayer {
+            // Expand ↔ mini only toggles chrome — never pause or remount.
+            if isActive {
                 bridge.controller?.setActive(true)
                 bridge.controller?.ensureContinuingPlayback()
-            }
-        }
-        .onChange(of: fillsFrame) { _, fill in
-            // Gravity update only — never reconfigure the item (would hitch mid-morph).
-            // Mini must fill immediately or letterbox reads as a black overlay.
-            bridge.controller?.applyVideoGravity(fill ? .resizeAspectFill : .resizeAspect)
-        }
-        .onChange(of: isContinuousHubPlayer) { _, continuous in
-            guard continuous else { return }
-            // Continuous mini/stage: re-assert gravity when ownership flips.
-            bridge.controller?.applyVideoGravity(fillsFrame ? .resizeAspectFill : .resizeAspect)
-        }
-        .onChange(of: isFullscreenActive) { _, full in
-            // YT: reveal chrome on FS enter; auto-hide after a beat while playing.
-            if full {
-                showChrome = true
-                scheduleChromeHide()
             }
         }
         .onChange(of: isMuted) { _, muted in
@@ -572,14 +441,6 @@ struct MatteryaHubPlayerView: View {
             // Never push "paused" while scrubbing — that cleared hubPlaybackPlaying and
             // left the clip frozen after the timeline seek.
             guard !isScrubbing else { return }
-            if isContinuousHubPlayer {
-                // Buffer stalls / layout reflow briefly set rate=0 — do NOT clear
-                // AppState.hubPlaybackPlaying or mini goes silent after tab minimize.
-                if playing {
-                    onPlayingChange?(true)
-                }
-                return
-            }
             // Chrome play/pause must update hubPlaybackPlaying so mini bar + isActive stay aligned.
             onPlayingChange?(playing)
         }
@@ -604,12 +465,7 @@ struct MatteryaHubPlayerView: View {
 
     /// Matterya-styled chrome, YouTube behaviors (tap hide, double-tap ±10s, auto-hide, scrub).
     private var hubChrome: some View {
-        // Edge-to-edge FS film still needs chrome inset for notch + home indicator,
-        // otherwise bottom transport is cropped out of frame.
-        let safeTop = isFullscreenActive ? max(8, YouTubeMediaLayout.keyWindowSafeTop) : 10
-        let safeBottom = isFullscreenActive ? max(12, YouTubeMediaLayout.keyWindowSafeBottom + 6) : 10
-
-        return ZStack {
+        ZStack {
             // Soft dim when paused — keep transparent enough to avoid “black bar” slabs.
             if !bridge.isPlaying {
                 Color.black.opacity(0.18)
@@ -620,7 +476,7 @@ struct MatteryaHubPlayerView: View {
             youtubeGestureLayer
                 .zIndex(0)
 
-            // Top tools — mute only (fullscreen lives once, on the bottom scrubber row).
+            // Top tools — mute + fullscreen (YouTube-style).
             VStack {
                 HStack(spacing: 10) {
                     Spacer(minLength: 0)
@@ -633,9 +489,18 @@ struct MatteryaHubPlayerView: View {
                         bridge.publishMuted(isMuted)
                         scheduleChromeHide()
                     }
+                    if allowsFullscreen {
+                        youtubeTopIcon(
+                            systemName: "arrow.up.left.and.arrow.down.right",
+                            label: "Full screen"
+                        ) {
+                            showFullscreen = true
+                            scheduleChromeHide()
+                        }
+                    }
                 }
                 .padding(.horizontal, 12)
-                .padding(.top, safeTop)
+                .padding(.top, 10)
                 Spacer(minLength: 0)
             }
             .zIndex(5)
@@ -718,22 +583,21 @@ struct MatteryaHubPlayerView: View {
 
                         if allowsFullscreen {
                             Button {
-                                enterFullscreen()
+                                showFullscreen = true
+                                scheduleChromeHide()
                             } label: {
-                                Image(systemName: isFullscreenActive
-                                      ? "arrow.down.right.and.arrow.up.left"
-                                      : "arrow.up.left.and.arrow.down.right")
+                                Image(systemName: "arrow.up.left.and.arrow.down.right")
                                     .font(.system(size: 13, weight: .semibold))
                                     .foregroundStyle(Theme.paper.opacity(0.95))
                                     .frame(width: 32, height: 28)
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
-                            .accessibilityLabel(isFullscreenActive ? "Exit full screen" : "Full screen")
+                            .accessibilityLabel("Full screen")
                         }
                     }
                     .padding(.horizontal, 14)
-                    .padding(.bottom, safeBottom)
+                    .padding(.bottom, 10)
                 }
                 .padding(.top, 20)
                 .background(
@@ -924,7 +788,8 @@ struct MatteryaHubPlayerView: View {
     }
 
     private func formatTime(_ seconds: Double) -> String {
-        let total = SafeNumeric.int(SafeNumeric.nonNegativeSeconds(seconds), max: 359_999)
+        guard seconds.isFinite, seconds >= 0 else { return "0:00" }
+        let total = Int(seconds.rounded(.down))
         let h = total / 3600
         let m = (total % 3600) / 60
         let s = total % 60
@@ -956,16 +821,10 @@ struct MatteryaLandscapeFullscreenPlayer: View {
     @State private var isScrubbing = false
     /// YouTube drag-down dismiss offset (no scale/zoom).
     @State private var dismissDrag: CGFloat = 0
-    /// When Control Center orientation lock blocks UIKit rotation, rotate content like YT.
-    @State private var contentRotation: Angle = .zero
-    @State private var useLandscapeLayout = false
 
     var body: some View {
         GeometryReader { geo in
-            let portraitSize = geo.size
-            // When UI stays portrait under lock, swap axes so video still lays out landscape.
-            let layoutW = useLandscapeLayout ? max(portraitSize.width, portraitSize.height) : portraitSize.width
-            let layoutH = useLandscapeLayout ? min(portraitSize.width, portraitSize.height) : portraitSize.height
+            let size = geo.size
             ZStack {
                 Color.black.ignoresSafeArea()
                     .opacity(max(0.4, 1 - Double(dismissDrag / 480)))
@@ -985,8 +844,6 @@ struct MatteryaLandscapeFullscreenPlayer: View {
                         bridge.publishReady(playing: true)
                         // Re-assert fit after first frame (configure must not force fill).
                         bridge.controller?.applyVideoGravity(.resizeAspect)
-                        bridge.controller?.setActive(true)
-                        bridge.controller?.ensureContinuingPlayback()
                         scheduleChromeHide()
                     },
                     onProgress: { current, duration in
@@ -995,9 +852,7 @@ struct MatteryaLandscapeFullscreenPlayer: View {
                         bridge.publishProgress(current: current, duration: duration, playing: playing)
                     }
                 )
-                .frame(width: layoutW, height: layoutH)
-                .rotationEffect(contentRotation)
-                .frame(width: portraitSize.width, height: portraitSize.height)
+                .frame(width: size.width, height: size.height)
                 .offset(y: max(0, dismissDrag))
                 .contentShape(Rectangle())
                 .onTapGesture {
@@ -1010,12 +865,11 @@ struct MatteryaLandscapeFullscreenPlayer: View {
 
                 if (showChrome || !bridge.isPlaying), dismissDrag < 24 {
                     fullscreenChrome
-                        .frame(width: portraitSize.width, height: portraitSize.height)
-                        .rotationEffect(contentRotation)
+                        .frame(width: size.width, height: size.height)
                         .transition(.opacity)
                 }
             }
-            .frame(width: portraitSize.width, height: portraitSize.height)
+            .frame(width: size.width, height: size.height)
         }
         .ignoresSafeArea()
         .statusBarHidden(true)
@@ -1023,16 +877,10 @@ struct MatteryaLandscapeFullscreenPlayer: View {
         // Rotate with the device while fullscreen (portrait + landscape).
         .onAppear {
             isMuted = initialMuted
-            // Unlock rotation — free axes only (no force-landscape-then-revert flip-flops).
             AppDelegate.orientationLock = .allButUpsideDown
-            UIDevice.current.beginGeneratingDeviceOrientationNotifications()
             Self.refreshSupportedOrientations()
+            // Prefer current physical orientation instead of forcing landscape.
             Self.requestGeometryUpdateIfNeeded()
-            applyContentOrientationFromDevice()
-            bridge.controller?.setMuted(isMuted)
-            bridge.controller?.setActive(true)
-            bridge.controller?.ensureContinuingPlayback()
-            bridge.controller?.applyVideoGravity(.resizeAspect)
             scheduleChromeHide()
         }
         .onDisappear {
@@ -1040,77 +888,32 @@ struct MatteryaLandscapeFullscreenPlayer: View {
             AppDelegate.orientationLock = .portrait
             Self.refreshSupportedOrientations()
             Self.requestGeometryUpdateIfNeeded()
-            UIDevice.current.endGeneratingDeviceOrientationNotifications()
         }
         .onChange(of: isMuted) { _, muted in
             bridge.controller?.setMuted(muted)
             bridge.publishMuted(muted)
         }
         .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
-            // Keep aspect-fit; content rotation covers system orientation lock.
-            // Do NOT force landscape geometry then flip back — that caused FS hallucinations.
+            // Keep aspect-fit after rotation (layer frame updates in viewDidLayoutSubviews).
             bridge.controller?.applyVideoGravity(.resizeAspect)
-            AppDelegate.orientationLock = .allButUpsideDown
             Self.refreshSupportedOrientations()
-            Self.requestGeometryUpdateIfNeeded()
-            withAnimation(.easeInOut(duration: 0.2)) {
-                applyContentOrientationFromDevice()
-            }
-        }
-    }
-
-    /// Rotate video content when UIKit cannot leave portrait (system orientation lock).
-    private func applyContentOrientationFromDevice() {
-        let o = UIDevice.current.orientation
-        switch o {
-        case .landscapeLeft:
-            contentRotation = .degrees(90)
-            useLandscapeLayout = true
-        case .landscapeRight:
-            contentRotation = .degrees(-90)
-            useLandscapeLayout = true
-        case .portraitUpsideDown:
-            contentRotation = .degrees(180)
-            useLandscapeLayout = false
-        case .portrait, .faceUp, .faceDown, .unknown:
-            // If interface already landscape, don't fight it.
-            if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
-                switch scene.interfaceOrientation {
-                case .landscapeLeft:
-                    contentRotation = .degrees(90)
-                    useLandscapeLayout = true
-                    return
-                case .landscapeRight:
-                    contentRotation = .degrees(-90)
-                    useLandscapeLayout = true
-                    return
-                default:
-                    break
-                }
-            }
-            contentRotation = .degrees(0)
-            useLandscapeLayout = false
-        @unknown default:
-            contentRotation = .degrees(0)
-            useLandscapeLayout = false
         }
     }
 
     private var fullscreenDismissGesture: some Gesture {
-        // Swipe **up** to exit fullscreen (matches continuous Hubs layer).
         DragGesture(minimumDistance: 12, coordinateSpace: .local)
             .onChanged { value in
                 guard !isScrubbing else { return }
                 let y = value.translation.height
                 let x = abs(value.translation.width)
-                guard y < 0, -y > x * 0.6 else { return }
-                dismissDrag = -y
+                guard y > 0, y > x * 0.6 else { return }
+                dismissDrag = y
                 showChrome = false
             }
             .onEnded { value in
                 let y = value.translation.height
                 let predicted = value.predictedEndTranslation.height
-                if y < -140 || predicted < -280 {
+                if y > 140 || predicted > 280 {
                     close()
                 } else {
                     withAnimation(MatteryaMotion.fullscreen) {
@@ -1267,7 +1070,8 @@ struct MatteryaLandscapeFullscreenPlayer: View {
     }
 
     private func formatTime(_ seconds: Double) -> String {
-        let total = SafeNumeric.int(SafeNumeric.nonNegativeSeconds(seconds), max: 359_999)
+        guard seconds.isFinite, seconds >= 0 else { return "0:00" }
+        let total = Int(seconds.rounded(.down))
         let h = total / 3600
         let m = (total % 3600) / 60
         let s = total % 60
@@ -1281,21 +1085,18 @@ struct MatteryaLandscapeFullscreenPlayer: View {
     private static func refreshSupportedOrientations() {
         guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
         for window in scene.windows {
-            // Walk presented stack (fullScreenCover) so landscape unlock applies to FS VC.
-            var vc: UIViewController? = window.rootViewController
-            while let current = vc {
-                current.setNeedsUpdateOfSupportedInterfaceOrientations()
-                vc = current.presentedViewController
-            }
+            window.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
         }
     }
 
     /// Ask the window scene to re-evaluate orientation so portrait↔landscape follows the phone.
     private static func requestGeometryUpdateIfNeeded() {
         guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
-        // Free axes only — never snap landscape then revert (double-rotate hallucination).
+        // iOS 16+: update geometry preferences so rotate-to-landscape works while unlocked.
         scene.requestGeometryUpdate(.iOS(interfaceOrientations: AppDelegate.orientationLock)) { _ in }
-        refreshSupportedOrientations()
+        for window in scene.windows {
+            window.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+        }
     }
 }
 
@@ -1391,8 +1192,6 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
     var restartFromBeginningToken: UInt = 0
     /// User pause while page is still focused — freeze frame, don't deactivate / seek to 0.
     var isPausedByUser: Bool = false
-    /// Global continuous Hubs player — protected from tab-switch silence.
-    var isContinuousHubPlayer: Bool = false
 
     final class Coordinator {
         var lastURL: URL?
@@ -1413,7 +1212,6 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
         let vc = ArchiveVideoPlayerController()
         vc.loops = loops
         vc.postID = postID
-        vc.isContinuousHubPlayer = isContinuousHubPlayer
         vc.restartsFromBeginningOnFocus = restartFromBeginningToken > 0
         vc.onReady = onReady
         vc.onFailed = onFailed
@@ -1444,7 +1242,6 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
         vc.applyVideoGravity(videoGravity)
         vc.loops = loops
         vc.postID = postID
-        vc.isContinuousHubPlayer = isContinuousHubPlayer
         vc.restartsFromBeginningOnFocus = restartFromBeginningToken > 0
         vc.onReady = onReady
         vc.onFailed = onFailed
@@ -1589,8 +1386,6 @@ final class ArchiveVideoPlayerController: UIViewController {
     /// Epoch captured when this surface last became active (invalidated on page change).
     private var activePageEpoch: UInt64 = 0
     private var interruptResumeObserver: NSObjectProtocol?
-    private var continuousPlayObserver: NSObjectProtocol?
-    private var continuousMuteObserver: NSObjectProtocol?
 
     var isPlaying: Bool {
         (player?.rate ?? 0) > 0.01
@@ -1654,42 +1449,11 @@ final class ArchiveVideoPlayerController: UIViewController {
         ) { [weak self] _ in
             self?.ensureContinuingPlayback()
         }
-        // Mini chrome lives in SwiftUI above/with film; play/mute must not re-host the tree.
-        continuousPlayObserver = NotificationCenter.default.addObserver(
-            forName: .matteryaHubContinuousSetPlaying,
-            object: nil,
-            queue: .main
-        ) { [weak self] note in
-            // Only the live continuous hubs surface — never feed/archive cells.
-            guard let self, self.isContinuousHubPlayer, self.player != nil else { return }
-            let playing = (note.userInfo?["playing"] as? Bool) ?? true
-            if playing {
-                self.setActive(true)
-                self.ensureContinuingPlayback()
-            } else {
-                self.pauseKeepingFrame()
-            }
-        }
-        continuousMuteObserver = NotificationCenter.default.addObserver(
-            forName: .matteryaHubContinuousSetMuted,
-            object: nil,
-            queue: .main
-        ) { [weak self] note in
-            guard let self, self.isContinuousHubPlayer, self.player != nil else { return }
-            let muted = (note.userInfo?["muted"] as? Bool) ?? false
-            self.setMuted(muted)
-        }
     }
 
     deinit {
         if let interruptResumeObserver {
             NotificationCenter.default.removeObserver(interruptResumeObserver)
-        }
-        if let continuousPlayObserver {
-            NotificationCenter.default.removeObserver(continuousPlayObserver)
-        }
-        if let continuousMuteObserver {
-            NotificationCenter.default.removeObserver(continuousMuteObserver)
         }
     }
 
@@ -1783,11 +1547,6 @@ final class ArchiveVideoPlayerController: UIViewController {
 
     /// When true (Sparks player), becoming focused always seeks to t=0.
     var restartsFromBeginningOnFocus = false
-    /// Continuous Hubs mini/watch — protected from tab-switch silence.
-    var isContinuousHubPlayer = false
-
-    /// Exposed for continuous-hub protection registration.
-    var avPlayer: AVPlayer? { player }
 
     func setActive(_ active: Bool) {
         if active {
@@ -1796,40 +1555,8 @@ final class ArchiveVideoPlayerController: UIViewController {
             // Do NOT restart-from-0 here. Sparks focus restarts only via
             // `restartFromBeginningAndPlay()` (token). Calling both caused
             // play → re-layout → play (video “jumps to center” and restarts).
-            //
-            // After Sparks dismiss, stopAllPlayback may have nil'd currentItem while
-            // the AVPlayer shell remains → audio-only / black until reconfigure.
-            if let player, player.currentItem == nil, let sourceURL {
-                let resume = restartsFromBeginningOnFocus
-                    ? 0
-                    : max(lastKnownSeconds, currentSeconds)
-                startPlayback(
-                    url: sourceURL,
-                    muted: mutedFlag,
-                    startTime: resume > 0.5 ? resume : 0,
-                    autoplay: true
-                )
-                return
-            }
             if let player {
-                if isContinuousHubPlayer {
-                    MediaPlaybackCoordinator.shared.protectContinuous(player)
-                }
                 applyUserAudioOutput(on: player)
-                _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
-                    keeping: player,
-                    pageEpoch: isContinuousHubPlayer ? nil : activePageEpoch
-                )
-                // Re-assert layer geometry so video paints (not audio-only black).
-                if view.bounds.width > 2, view.bounds.height > 2 {
-                    playerLayer?.frame = view.bounds
-                    playerLayer?.opacity = 1
-                    playerLayer?.isHidden = false
-                }
-                // Already playing continuous film — never re-cover with poster (mini freeze).
-                if isContinuousHubPlayer || didKickPlayback {
-                    posterView.isHidden = true
-                }
                 if player.currentItem != nil {
                     player.play()
                     player.safePlayImmediately(atRate: 1.0)
@@ -1852,25 +1579,14 @@ final class ArchiveVideoPlayerController: UIViewController {
                 )
             }
         } else {
-            isScrubbing = false
-            // Continuous Hubs: layout thrash during mini/tab morph must not kill audio.
-            // Intentional pause uses pauseKeepingFrame / continuous play notification only.
-            if isContinuousHubPlayer {
-                if let player {
-                    MediaPlaybackCoordinator.shared.protectContinuous(player)
-                }
-                // Keep last frame visible — never flash poster/black mid-mini.
-                posterView.isHidden = true
-                spinner.stopAnimating()
-                return
-            }
             userWantsPlayback = false
+            isScrubbing = false
             // Silence inactive pages — prevents stacked audio. mutedFlag stays as user choice.
             player?.pause()
             player?.isMuted = true
             player?.volume = 0
-            // Keep last frame only if we already painted one; otherwise show poster (no black).
-            posterView.isHidden = didKickPlayback
+            // Keep last frame painted (no poster) so a fast swipe-back never blacks out.
+            posterView.isHidden = true
             spinner.stopAnimating()
             // Pre-seek to start while off-screen so next focus is a pure play().
             if restartsFromBeginningOnFocus {
@@ -1980,18 +1696,12 @@ final class ArchiveVideoPlayerController: UIViewController {
     /// Never **steal** solo from another Spark (comments overlay used to wake older pages).
     func ensureContinuingPlayback() {
         guard userWantsPlayback, !isScrubbing, let player else { return }
-        // Continuous Hubs always reclaims solo (tab switch may have reassigned).
-        if isContinuousHubPlayer {
-            MediaPlaybackCoordinator.shared.protectContinuous(player)
-            _ = MediaPlaybackCoordinator.shared.soloSparkAudio(keeping: player)
-        } else {
-            // Only the current solo may resume. Off-screen / previous Sparks stay silent.
-            guard MediaPlaybackCoordinator.shared.isSolo(player) else {
-                player.pause()
-                player.isMuted = true
-                player.volume = 0
-                return
-            }
+        // Only the current solo may resume. Off-screen / previous Sparks stay silent.
+        guard MediaPlaybackCoordinator.shared.isSolo(player) else {
+            player.pause()
+            player.isMuted = true
+            player.volume = 0
+            return
         }
         applyUserAudioOutput(on: player)
         if player.rate < 0.05 {
@@ -2186,21 +1896,10 @@ final class ArchiveVideoPlayerController: UIViewController {
                 SparkWarmPool.shared.markInUse(postID: postID)
             }
 
-            // Resolve live play URL without stalling when the shelf already gave a fresh signed link.
+            // Public R2 / non-Archive: skip CDN chase.
             let playURL: URL
             if ArchiveVideoPlayback.isArchiveURL(url) {
                 playURL = await ArchiveVideoPlayback.resolvedPlaybackURL(for: url)
-            } else if MediaURLResolver.looksLikeR2HostedURL(url) {
-                let signedFresh = MediaURLResolver.isPresignedObjectURL(url)
-                    && !MediaURLResolver.isPresignExpiredOrNearExpiry(url, slackSeconds: 3600)
-                if signedFresh {
-                    // Shelf/API already freshened — play immediately (no /v1/playback round-trip).
-                    playURL = url
-                } else if let postID, !postID.isEmpty {
-                    playURL = await R2PlaybackResolver.shared.playURL(postID: postID, fallback: url) ?? url
-                } else {
-                    playURL = await MediaURLResolver.playbackConfiguration(for: url, postID: postID).url
-                }
             } else {
                 playURL = url
             }
@@ -2264,19 +1963,15 @@ final class ArchiveVideoPlayerController: UIViewController {
         let needsExactStart = restartsFromBeginningOnFocus || startTime < 0.5
 
         let playNow = {
+            self.posterView.isHidden = true
             if self.view.bounds.width > 2 {
                 self.playerLayer?.frame = self.view.bounds
             }
             guard autoplay, self.userWantsPlayback else {
-                // Prebuffer / off-screen: keep poster so scroll never paints a black layer.
                 claimed.isMuted = true
                 claimed.volume = 0
-                claimed.pause()
-                self.posterView.isHidden = false
                 return
             }
-            // IG/YT: keep poster until rate is real — never hide before first paint.
-            self.posterView.isHidden = false
             _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
                 keeping: claimed,
                 pageEpoch: self.activePageEpoch
@@ -2285,7 +1980,7 @@ final class ArchiveVideoPlayerController: UIViewController {
             claimed.volume = muted ? 0 : 1
             claimed.safePlayImmediately(atRate: 1.0)
             self.didKickPlayback = true
-            self.revealPosterWhenFramesReady(claimed)
+            self.onPlayingChanged?(true)
             self.reportVideoSizeIfNeeded(from: claimed.currentItem)
             self.onReady?()
         }
@@ -2315,9 +2010,8 @@ final class ArchiveVideoPlayerController: UIViewController {
                     guard let self else { return }
                     switch item.status {
                     case .readyToPlay:
+                        self.posterView.isHidden = true
                         if !self.didKickPlayback, self.userWantsPlayback {
-                            // Keep poster until rate — readyToPlay still paints black briefly.
-                            self.posterView.isHidden = false
                             self.didKickPlayback = true
                             _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
                                 keeping: claimed,
@@ -2326,11 +2020,8 @@ final class ArchiveVideoPlayerController: UIViewController {
                             claimed.isMuted = self.mutedFlag
                             claimed.volume = self.mutedFlag ? 0 : 1
                             claimed.safePlayImmediately(atRate: 1.0)
-                            self.revealPosterWhenFramesReady(claimed)
+                            self.onPlayingChanged?(true)
                             self.onReady?()
-                        } else if !self.userWantsPlayback {
-                            // Warm buffer ready while scrolling — keep poster, no black flash.
-                            self.posterView.isHidden = false
                         }
                     case .failed:
                         self.teardown()
@@ -2357,8 +2048,10 @@ final class ArchiveVideoPlayerController: UIViewController {
         let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
         timeObserver = observed.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
             guard let self else { return }
-            let current = SafeNumeric.nonNegativeSeconds(time.seconds)
-            let dur = SafeNumeric.seconds(item.duration.seconds)
+            let raw = time.seconds
+            let current = raw.isFinite ? max(0, raw) : 0
+            let duration = item.duration.seconds
+            let dur = duration.isFinite && duration > 0 ? duration : 0
             let playing = observed.rate > 0.01
             let scrubbing = self.isScrubbing
             DispatchQueue.main.async { [weak self] in
@@ -2367,40 +2060,10 @@ final class ArchiveVideoPlayerController: UIViewController {
                 if !scrubbing {
                     self.lastKnownSeconds = current
                     // Always publish — parent must not rely on stale isActive captures.
-                    self.onProgress?(current, dur > 0 ? dur : 0)
+                    self.onProgress?(current, dur)
                     self.onPlayingChanged?(playing)
-                    // Drop poster only once frames are actually advancing (IG/YT).
-                    if playing, self.userWantsPlayback, !self.posterView.isHidden {
-                        self.posterView.isHidden = true
-                    }
-                    self.maybeLoopNearEnd(current: current, duration: dur > 0 ? dur : 0, player: observed)
+                    self.maybeLoopNearEnd(current: current, duration: dur, player: observed)
                 }
-            }
-        }
-    }
-
-    /// Keep poster until AVPlayer is producing frames — never black hole after thumb.
-    private func revealPosterWhenFramesReady(_ player: AVPlayer) {
-        if player.rate > 0.05 || player.timeControlStatus == .playing {
-            posterView.isHidden = true
-            onPlayingChanged?(true)
-            return
-        }
-        Task { @MainActor [weak self] in
-            for _ in 0..<50 {
-                try? await Task.sleep(nanoseconds: 40_000_000)
-                guard let self else { return }
-                guard self.userWantsPlayback else { return }
-                if player.rate > 0.05 || player.timeControlStatus == .playing {
-                    self.posterView.isHidden = true
-                    self.onPlayingChanged?(true)
-                    return
-                }
-            }
-            // Prefer poster over black if still not painting.
-            if let self = self, self.userWantsPlayback, player.rate > 0.01 {
-                self.posterView.isHidden = true
-                self.onPlayingChanged?(true)
             }
         }
     }
@@ -2463,8 +2126,7 @@ final class ArchiveVideoPlayerController: UIViewController {
         }
         configureAudioSession()
         spinner.stopAnimating()
-        // Only uncover the layer when we intend to play; else keep poster under scroll.
-        posterView.isHidden = userWantsPlayback
+        posterView.isHidden = true
         errorLabel.isHidden = true
 
         if let item = claimed.currentItem {
@@ -2678,9 +2340,11 @@ final class ArchiveVideoPlayerController: UIViewController {
                 switch item.status {
                 case .readyToPlay:
                     self.spinner.stopAnimating()
+                    self.posterView.isHidden = true
                     self.errorLabel.isHidden = true
                     // Kick playback only once per item — double play() caused visible restarts.
                     if !self.didKickPlayback {
+                        self.didKickPlayback = true
                         if startTime > 0.5 {
                             await newPlayer.seek(to: CMTime(seconds: startTime, preferredTimescale: 600))
                         }
@@ -2689,32 +2353,18 @@ final class ArchiveVideoPlayerController: UIViewController {
                                keeping: newPlayer,
                                pageEpoch: self.activePageEpoch
                            ) {
-                            // Keep poster until rate — never black flash after thumb.
-                            self.posterView.isHidden = false
-                            self.didKickPlayback = true
                             newPlayer.isMuted = self.mutedFlag
                             newPlayer.volume = self.mutedFlag ? 0 : 1
                             newPlayer.safePlayImmediately(atRate: 1.0)
-                            self.revealPosterWhenFramesReady(newPlayer)
-                            DispatchQueue.main.async { [weak self] in
-                                self?.onReady?()
-                            }
                         } else {
-                            // Prebuffer while scrolling: stay on poster (never black AVPlayerLayer).
                             newPlayer.pause()
                             newPlayer.isMuted = true
                             newPlayer.volume = 0
-                            self.posterView.isHidden = false
-                            DispatchQueue.main.async { [weak self] in
-                                self?.onPlayingChanged?(false)
-                                // Still signal ready so warm pool can claim, without chrome.
-                                self?.onReady?()
-                            }
                         }
-                    } else if self.userWantsPlayback {
-                        self.revealPosterWhenFramesReady(newPlayer)
-                    } else {
-                        self.posterView.isHidden = false
+                        DispatchQueue.main.async { [weak self] in
+                            self?.onPlayingChanged?(true)
+                            self?.onReady?()
+                        }
                     }
                     #if DEBUG
                     print("[ArchiveVideo] ready \(url.host ?? "") rate=\(newPlayer.rate)")

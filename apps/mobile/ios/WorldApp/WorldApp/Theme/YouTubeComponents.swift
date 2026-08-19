@@ -288,8 +288,7 @@ private struct SparksTileChrome: View {
                 contentMode: .fill,
                 showsPlayIcon: false,
                 playIconSize: playIconSize,
-                // Never extract frames on Sparks rails — freezes Hubs / feed scroll.
-                extractFrameIfNeeded: false,
+                extractFrameIfNeeded: true,
                 placeholder: AnyView(
                     LinearGradient(
                         colors: [Theme.canvasMuted, Theme.canvasDeep],
@@ -458,9 +457,9 @@ struct YouTubeMiniPlayerBar: View {
     let post: CountryPost
     let onExpand: () -> Void
     let onClose: () -> Void
-    /// When false, parent draws a continuous player over this clear video slot (no restart).
+    /// When false, parent draws a continuous player through this clear video slot (no restart).
     var embedsVideo: Bool = true
-    /// When false, chrome is drawn by parent above continuous film (z-order).
+    /// When false, chrome is drawn by parent above the film (floating mini z-order).
     var showsChrome: Bool = true
     @Binding var isPlaying: Bool
     @Binding var isMuted: Bool
@@ -517,25 +516,22 @@ struct YouTubeMiniPlayerBar: View {
     var body: some View {
         GeometryReader { geo in
             ZStack {
-                // Expand hit target (YouTube: tap / swipe up → full player).
-                // Button is more reliable than onTapGesture under competing chrome.
-                Button(action: onExpand) {
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-                .buttonStyle(.plain)
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 12, coordinateSpace: .local)
-                        .onEnded { value in
-                            if value.translation.height < -24
-                                || value.predictedEndTranslation.height < -70 {
-                                onExpand()
+                // Expand hit target behind controls (never wraps the buttons).
+                // YouTube: tap or swipe up on mini → full player.
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: onExpand)
+                    .gesture(
+                        DragGesture(minimumDistance: 12, coordinateSpace: .local)
+                            .onEnded { value in
+                                if value.translation.height < -24
+                                    || value.predictedEndTranslation.height < -70 {
+                                    onExpand()
+                                }
                             }
-                        }
-                )
-                .accessibilityLabel("Expand video")
-                .accessibilityAddTraits(.isButton)
+                    )
+                    .accessibilityLabel("Expand video")
+                    .accessibilityAddTraits(.isButton)
 
                 if embedsVideo {
                     Theme.ink.allowsHitTesting(false)
@@ -565,53 +561,42 @@ struct YouTubeMiniPlayerBar: View {
                         .allowsHitTesting(false)
                     }
                 } else {
-                    // Poster floor + dock measure. Continuous film paints ABOVE this bar
-                    // (MainTabView z 110) so UIKit is never trapped under a clear SwiftUI hole
-                    // (that path painted solid black/ink). If film is late, poster still shows.
-                    ZStack {
-                        Theme.ink
-                        YouTubeVideoThumbnail(
-                            post: post,
-                            maxPixelSize: 720,
-                            showsPlayIcon: false,
-                            frameStyle: .card
-                        )
+                    // MUST be clear — continuous GlobalHubPlaybackLayer (zIndex below)
+                    // paints the live video through this hole. Opaque ink = black mini.
+                    Color.clear
                         .allowsHitTesting(false)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipped()
-                    .allowsHitTesting(false)
-                    .background(
-                        GeometryReader { g in
-                            Color.clear.preference(
-                                key: HubContinuousVideoSlotKey.self,
-                                value: g.frame(in: .global)
-                            )
-                        }
-                    )
+                        .overlay(
+                            GeometryReader { g in
+                                Color.clear.preference(
+                                    key: HubContinuousVideoSlotKey.self,
+                                    value: g.frame(in: .global)
+                                )
+                            }
+                        )
                 }
 
+                // Play / mute / close — optional when parent draws chrome above continuous film.
                 if showsChrome {
                     HubMiniPlayerChrome(
                         isPlaying: $isPlaying,
                         isMuted: $isMuted,
                         onClose: onClose
                     )
-                    .zIndex(20)
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
         }
         .frame(maxWidth: .infinity)
         .frame(height: Self.barHeight)
-        .background(Theme.ink)
-        .shadow(color: Theme.ink.opacity(0.22), radius: 10, y: -2)
+        // Clear when continuous player paints through; ink only when this bar embeds its own player.
+        .background(embedsVideo ? Theme.ink : Color.clear)
+        .shadow(color: Theme.ink.opacity(0.28), radius: 12, y: -3)
         .overlay(alignment: .top) {
             Rectangle()
                 .fill(Color.white.opacity(0.08))
                 .frame(height: 0.5)
-                .allowsHitTesting(false)
         }
+        .clipped()
     }
 }
 
@@ -628,42 +613,38 @@ struct HubMiniPlayerChrome: View {
     private var btn: CGFloat { YouTubeMiniPlayerBar.controlButtonSize }
     private var playSize: CGFloat { YouTubeMiniPlayerBar.playButtonSize }
     private let pad: CGFloat = 10
-    // Readable chips without a heavy black veil over the film.
-    private let chipFill = Color.black.opacity(0.42)
-    private let chipStroke = Color.white.opacity(0.45)
+    private let chipFill = Color.white.opacity(0.18)
+    private let chipStroke = Color.white.opacity(0.28)
 
     var body: some View {
         ZStack {
-            // Light edge fades only — never a full black overlay on the mini video.
             VStack(spacing: 0) {
                 LinearGradient(
-                    colors: [.black.opacity(0.28), .clear],
+                    colors: [.black.opacity(0.22), .clear],
                     startPoint: .top,
                     endPoint: .bottom
                 )
-                .frame(height: 36)
+                .frame(height: 40)
                 Spacer(minLength: 0)
                 LinearGradient(
-                    colors: [.clear, .black.opacity(0.3)],
+                    colors: [.clear, .black.opacity(0.32)],
                     startPoint: .top,
                     endPoint: .bottom
                 )
-                .frame(height: 44)
+                .frame(height: 56)
             }
             .allowsHitTesting(false)
 
-            // Only the three controls hit-test — Spacers used to swallow expand taps.
             VStack(spacing: 0) {
                 HStack {
                     Spacer(minLength: 0)
-                        .allowsHitTesting(false)
                     Button(action: onClose) {
                         Image(systemName: "xmark")
                             .font(.system(size: btn * 0.38, weight: .bold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.white.opacity(0.95))
                             .frame(width: btn, height: btn)
                             .background(chipFill, in: Circle())
-                            .overlay(Circle().stroke(chipStroke, lineWidth: 0.75))
+                            .overlay(Circle().stroke(chipStroke, lineWidth: 0.5))
                             .contentShape(Circle())
                     }
                     .buttonStyle(.plain)
@@ -673,21 +654,18 @@ struct HubMiniPlayerChrome: View {
                 .padding(.trailing, pad)
 
                 Spacer(minLength: 0)
-                    .allowsHitTesting(false)
 
                 HStack(spacing: 12) {
                     Spacer(minLength: 0)
-                        .allowsHitTesting(false)
                     Button {
                         isMuted.toggle()
                     } label: {
                         Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                             .font(.system(size: btn * 0.4, weight: .semibold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.white.opacity(0.95))
                             .frame(width: btn, height: btn)
                             .background(chipFill, in: Circle())
-                            .overlay(Circle().stroke(chipStroke, lineWidth: 0.75))
-                            .contentShape(Circle())
+                            .overlay(Circle().stroke(chipStroke, lineWidth: 0.5))
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(isMuted ? "Unmute" : "Mute")
@@ -697,16 +675,14 @@ struct HubMiniPlayerChrome: View {
                     } label: {
                         ZStack {
                             Circle()
-                                .fill(Theme.accentBright)
+                                .fill(Theme.accentBright.opacity(0.72))
                                 .frame(width: playSize, height: playSize)
-                                .overlay(Circle().stroke(Color.white.opacity(0.45), lineWidth: 0.75))
-                                .shadow(color: .black.opacity(0.35), radius: 6, y: 2)
+                                .overlay(Circle().stroke(Color.white.opacity(0.35), lineWidth: 0.5))
                             Image(systemName: isPlaying ? "pause.fill" : "play.fill")
                                 .font(.system(size: playSize * 0.34, weight: .bold))
-                                .foregroundStyle(Theme.paper)
+                                .foregroundStyle(Theme.paper.opacity(0.95))
                                 .offset(x: isPlaying ? 0 : 1)
                         }
-                        .contentShape(Circle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(isPlaying ? "Pause" : "Play")
@@ -716,8 +692,6 @@ struct HubMiniPlayerChrome: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Empty chrome area must not block the expand layer underneath.
-        .allowsHitTesting(true)
     }
 }
 
