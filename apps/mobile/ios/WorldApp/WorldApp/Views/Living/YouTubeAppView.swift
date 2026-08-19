@@ -500,14 +500,9 @@ struct YouTubeAppView: View {
             Task { await consumePendingLivingVideoIfNeeded() }
             if appState.selectedTab == .hubs {
                 EngagementTracker.shared.hubsOpened()
-                // Soft-warm only — remounting LazyVStack on every appear was multi-second lag.
-                if allVideos.filter({ !$0.isReel }).count < 8 {
-                    Task {
-                        await loadVideos(forceRefresh: false, mode: .fast)
-                        // Soft update window without remounting the list.
-                        refreshHubsVisitShuffle(remountList: false)
-                    }
-                } else {
+                // Don’t kick a second loadVideos here — `.task(id:)` owns first paint.
+                // Duplicate loads were freezing Feed while Hubs tab stayed mounted.
+                if allVideos.filter({ !$0.isReel }).count >= 8 {
                     butterWarmHubCatalog(allVideos)
                 }
             }

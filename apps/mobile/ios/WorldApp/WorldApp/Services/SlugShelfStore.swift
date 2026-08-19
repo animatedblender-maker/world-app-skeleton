@@ -282,8 +282,8 @@ final class SlugShelfStore {
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
         req.setValue("application/json", forHTTPHeaderField: "Accept")
-        // Snappy first paint — never await token refresh (that made hubs “take years”).
-        req.timeoutInterval = 4
+        // First paint: don’t hang Feed for 4s on a slow for-you — fail soft to legacy.
+        req.timeoutInterval = 6
         // Cached access token only (public shelves work without auth too).
         if let token = AuthService.shared.accessToken() {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")

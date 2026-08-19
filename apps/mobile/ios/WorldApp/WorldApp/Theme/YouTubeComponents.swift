@@ -509,7 +509,6 @@ struct YouTubeMiniPlayerBar: View {
 
     var body: some View {
         GeometryReader { geo in
-            let btn = Self.controlButtonSize
             ZStack {
                 // Full-bleed continuous hole — film fills under the chrome.
                 ZStack {
@@ -557,71 +556,99 @@ struct YouTubeMiniPlayerBar: View {
                 .accessibilityLabel("Expand video")
                 .accessibilityAddTraits(.isButton)
 
-                // Glass chips over film — play / mute / close.
-                if showsChrome {
-                    VStack {
-                        Spacer(minLength: 0)
-                        HStack(spacing: 8) {
-                            Spacer(minLength: 0)
-                            HStack(spacing: 4) {
-                                Button {
-                                    isPlaying.toggle()
-                                } label: {
-                                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                                        .font(.system(size: btn * 0.38, weight: .bold))
-                                        .foregroundStyle(Theme.paper)
-                                        .frame(width: btn, height: btn)
-                                        .background(Theme.accentBright, in: Circle())
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel(isPlaying ? "Pause" : "Play")
-
-                                Button {
-                                    isMuted.toggle()
-                                } label: {
-                                    Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                                        .font(.system(size: btn * 0.36, weight: .semibold))
-                                        .foregroundStyle(Theme.paper)
-                                        .frame(width: btn, height: btn)
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel(isMuted ? "Unmute" : "Mute")
-
-                                Button(action: onClose) {
-                                    Image(systemName: "xmark")
-                                        .font(.system(size: btn * 0.34, weight: .bold))
-                                        .foregroundStyle(Theme.paper)
-                                        .frame(width: btn, height: btn)
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("Close mini player")
-                            }
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 4)
-                            .background(.ultraThinMaterial, in: Capsule())
-                            .overlay(
-                                Capsule()
-                                    .stroke(Color.white.opacity(0.22), lineWidth: 0.5)
-                            )
-                        }
-                        .padding(.trailing, 12)
-                        .padding(.bottom, 10)
-                    }
-                    .allowsHitTesting(true)
-                }
+                // Chrome is drawn by `YouTubeMiniPlayerChrome` above GlobalHubPlaybackLayer
+                // (z-order). Drawing it here puts buttons under the continuous film.
             }
         }
         .frame(maxWidth: .infinity)
         .frame(height: Self.barHeight)
-        .background(Theme.ink)
-        .shadow(color: Theme.ink.opacity(0.32), radius: 12, y: -3)
+        // Clear when continuous film paints through; ink only for embedded (chat) mode.
+        .background(embedsVideo ? Theme.ink : Color.clear)
+        .shadow(color: embedsVideo ? Theme.ink.opacity(0.32) : .clear, radius: 12, y: -3)
         .overlay(alignment: .top) {
-            Rectangle()
-                .fill(Color.white.opacity(0.08))
-                .frame(height: 0.5)
-                .allowsHitTesting(false)
+            if embedsVideo {
+                Rectangle()
+                    .fill(Color.white.opacity(0.08))
+                    .frame(height: 0.5)
+                    .allowsHitTesting(false)
+            }
         }
         .clipped()
+        // Embedded-only chrome (standalone bar with its own AVPlayer).
+        // Continuous mini chrome is drawn by GlobalHubPlaybackLayer on top of the film.
+        .overlay {
+            if showsChrome, embedsVideo {
+                YouTubeMiniPlayerChrome(
+                    isPlaying: $isPlaying,
+                    isMuted: $isMuted,
+                    onClose: onClose
+                )
+            }
+        }
+    }
+}
+
+/// Play / mute / close chips — must sit **above** `GlobalHubPlaybackLayer` (higher zIndex).
+/// Empty film area does **not** claim hits so taps fall through to expand.
+struct YouTubeMiniPlayerChrome: View {
+    @Binding var isPlaying: Bool
+    @Binding var isMuted: Bool
+    let onClose: () -> Void
+
+    private var btn: CGFloat { YouTubeMiniPlayerBar.controlButtonSize }
+
+    var body: some View {
+        VStack {
+            Spacer(minLength: 0)
+            HStack(spacing: 8) {
+                Spacer(minLength: 0)
+                HStack(spacing: 4) {
+                    Button {
+                        isPlaying.toggle()
+                    } label: {
+                        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                            .font(.system(size: btn * 0.38, weight: .bold))
+                            .foregroundStyle(Theme.paper)
+                            .frame(width: btn, height: btn)
+                            .background(Theme.accentBright, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(isPlaying ? "Pause" : "Play")
+
+                    Button {
+                        isMuted.toggle()
+                    } label: {
+                        Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                            .font(.system(size: btn * 0.36, weight: .semibold))
+                            .foregroundStyle(Theme.paper)
+                            .frame(width: btn, height: btn)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(isMuted ? "Unmute" : "Mute")
+
+                    Button(action: onClose) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: btn * 0.34, weight: .bold))
+                            .foregroundStyle(Theme.paper)
+                            .frame(width: btn, height: btn)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Close mini player")
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay(
+                    Capsule()
+                        .stroke(Color.white.opacity(0.22), lineWidth: 0.5)
+                )
+            }
+            .padding(.trailing, 12)
+            .padding(.bottom, 10)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // No full-rect contentShape — only the capsule/buttons claim hits;
+        // film taps fall through to GlobalHubPlaybackLayer → expand.
     }
 }
 

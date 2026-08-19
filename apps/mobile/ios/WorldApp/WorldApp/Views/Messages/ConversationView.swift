@@ -165,8 +165,8 @@ struct ConversationView: View {
                         appState.stopHubPlayback()
                     },
                     embedsVideo: false,
-                    // Chat-docked mini: chrome on the bar (floating mini uses MainTabView z120).
-                    showsChrome: true,
+                    // Continuous film + chrome come from GlobalHubPlaybackLayer.
+                    showsChrome: false,
                     isPlaying: Binding(
                         get: { appState.hubPlaybackPlaying },
                         set: { appState.hubPlaybackPlaying = $0 }

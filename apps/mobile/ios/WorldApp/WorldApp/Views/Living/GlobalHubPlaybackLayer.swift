@@ -123,8 +123,7 @@ struct GlobalHubPlaybackLayer: View {
                 .allowsHitTesting(false)
 
             // Continuous video surface — stable id across expand/mini/dock.
-            // Mini chrome is owned by MainTabView’s bottom stack (flush on the tab bar).
-            // Full-bleed mini: film fills the entire strip under the glass chips.
+            // Full-bleed mini: film fills the strip; chrome overlays ON the film (same layer).
             playerSurface(for: post, showControls: expanded && !isPullingMinimize)
                 .frame(width: layout.width, height: layout.height)
                 // Ink only under expanded stage (16:9 letterbox); mini hole stays transparent.
@@ -166,6 +165,16 @@ struct GlobalHubPlaybackLayer: View {
                             .transition(.opacity.combined(with: .move(edge: .bottom)))
                         }
                         .allowsHitTesting(false)
+                    }
+                }
+                // Mini/dock chrome on top of film (MainTab bar chrome was under this layer).
+                .overlay {
+                    if !expanded {
+                        YouTubeMiniPlayerChrome(
+                            isPlaying: playingBinding,
+                            isMuted: mutedBinding,
+                            onClose: { stop() }
+                        )
                     }
                 }
                 .simultaneousGesture(minimizeGesture)

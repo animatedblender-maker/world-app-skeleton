@@ -65,8 +65,7 @@ struct MainTabView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            // Mini chrome only (flush above tab bar). Intrinsic height — never a full-screen
-            // hit target (that floated the bar and ate feed taps).
+            // Mini video hole only (flush above tab bar). Chrome sits ABOVE the film.
             if showsFloatingMiniBar || appState.navigationPath.isEmpty {
                 VStack(spacing: 0) {
                     if showsFloatingMiniBar, let post = appState.hubPlaybackPost {
@@ -75,6 +74,7 @@ struct MainTabView: View {
                             onExpand: { appState.expandHubPlayback() },
                             onClose: { appState.stopHubPlayback() },
                             embedsVideo: false,
+                            showsChrome: false,
                             isPlaying: Binding(
                                 get: { appState.hubPlaybackPlaying },
                                 set: { appState.hubPlaybackPlaying = $0 }
@@ -86,6 +86,7 @@ struct MainTabView: View {
                         )
                         .frame(height: YouTubeMiniPlayerBar.barHeight)
                         .frame(maxWidth: .infinity)
+                        .allowsHitTesting(false)
                     }
                     // Spacer matching tab bar height so mini stays flush above it when tab is shown.
                     if appState.navigationPath.isEmpty {
@@ -98,7 +99,7 @@ struct MainTabView: View {
                 .zIndex(50)
             }
 
-            // Continuous AVPlayer — above mini chrome, below tab bar.
+            // Continuous AVPlayer + mini chrome overlay (chips live on the film layer).
             GlobalHubPlaybackLayer(dockSlotGlobal: hubContinuousDockSlotGlobal)
                 .zIndex(55)
 

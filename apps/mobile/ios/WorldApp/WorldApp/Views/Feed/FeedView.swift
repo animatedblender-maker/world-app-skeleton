@@ -87,9 +87,10 @@ struct FeedView: View {
                     "didPaint": store.didPaint ? "1" : "0",
                 ]
             )
-            // Defer strip network — unstructured so SwiftUI task cancel can't abort Sparks/Hubs rails.
+            // Defer strip network well after first paint — hubs longform + deep Sparks
+            // were hitching the feed open (loadLivingVideos × N + 600-item catalog).
             Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 350_000_000)
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
                 await refreshStrips(network: true)
             }
         }
@@ -363,13 +364,13 @@ struct FeedView: View {
         stripsNetworkGeneration += 1
         let gen = stripsNetworkGeneration
 
-        // Parallel light fetches — never sequential deep walks.
-        async let reelsDone: Void = refreshFeedReels(network: true)
-        async let contDone: Void = refreshContinueWatching(network: true)
-        async let hubsDone: Void = refreshNewOnPlayNetwork(gen: gen)
-        _ = await (reelsDone, contDone, hubsDone)
+        // Sparks rail only on the hot path — never pull hubs longform catalog here
+        // (that froze Feed while Hubs tab’s own loader already runs loadLivingVideos).
+        await refreshFeedReels(network: true)
         guard gen == stripsNetworkGeneration else { return }
+        // Cache-only hubs strips; network hubs stay on the Hubs tab.
         refreshNewOnPlay()
+        await refreshContinueWatching(network: false)
     }
 
     private func refreshFeedReels(network: Bool) async {

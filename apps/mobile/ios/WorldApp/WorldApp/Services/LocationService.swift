@@ -35,9 +35,23 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
         case .restricted, .denied:
             return false
         case .notDetermined:
+            // Resume any prior waiter so we never leak a continuation.
+            if let stale = authorizationContinuation {
+                authorizationContinuation = nil
+                stale.resume(returning: false)
+            }
             return await withCheckedContinuation { continuation in
                 authorizationContinuation = continuation
                 manager.requestWhenInUseAuthorization()
+                // Safety: if the system never delivers a terminal status, don’t hang forever.
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 15_000_000_000)
+                    guard let pending = self.authorizationContinuation else { return }
+                    self.authorizationContinuation = nil
+                    let ok = self.manager.authorizationStatus == .authorizedAlways
+                        || self.manager.authorizationStatus == .authorizedWhenInUse
+                    pending.resume(returning: ok)
+                }
             }
         @unknown default:
             return false
@@ -46,15 +60,18 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
 
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         Task { @MainActor in
+            let status = manager.authorizationStatus
+            // Still prompting — wait for a terminal callback (don’t clear the continuation).
+            if status == .notDetermined { return }
             guard let continuation = authorizationContinuation else { return }
             authorizationContinuation = nil
-            switch manager.authorizationStatus {
+            switch status {
             case .authorizedAlways, .authorizedWhenInUse:
                 continuation.resume(returning: true)
             case .denied, .restricted:
                 continuation.resume(returning: false)
             default:
-                break
+                continuation.resume(returning: false)
             }
         }
     }
