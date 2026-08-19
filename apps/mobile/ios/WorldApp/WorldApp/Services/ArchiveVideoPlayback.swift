@@ -1634,8 +1634,8 @@ final class ArchiveVideoPlayerController: UIViewController {
             configureAudioSession()
         }
         spinner.stopAnimating()
-        // Keep poster until we have a ready item — then hide (no black gap).
-        posterView.isHidden = claimed.currentItem?.status == .readyToPlay
+        // Keep poster until playback is actually painting (readyToPlay ≠ frames).
+        posterView.isHidden = false
         errorLabel.isHidden = true
         // Do not layoutIfNeeded with zero bounds — wait for viewDidLayoutSubviews.
 
@@ -1659,7 +1659,7 @@ final class ArchiveVideoPlayerController: UIViewController {
         }
 
         if needsSeek {
-            // Keyframe seek without covering with poster — keep layer visible.
+            // Seek under poster — reveal only after rate > 0.
             claimed.seek(
                 to: .zero,
                 toleranceBefore: .positiveInfinity,
@@ -1668,10 +1668,13 @@ final class ArchiveVideoPlayerController: UIViewController {
                 guard finished, let self else { return }
                 DispatchQueue.main.async {
                     self.lastKnownSeconds = 0
-                    self.posterView.isHidden = true
+                    self.posterView.isHidden = false
                     guard self.userWantsPlayback else { return }
                     // Already playing after a prior kick — don't re-play (visible restart).
-                    if self.didKickPlayback, claimed.rate > 0.01 { return }
+                    if self.didKickPlayback, claimed.rate > 0.01 {
+                        self.revealPosterWhenPlaying(claimed)
+                        return
+                    }
                     _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
                         keeping: claimed,
                         pageEpoch: self.activePageEpoch
@@ -1682,15 +1685,17 @@ final class ArchiveVideoPlayerController: UIViewController {
                     self.didKickPlayback = true
                     self.onPlayingChanged?(true)
                     self.onReady?()
+                    self.revealPosterWhenPlaying(claimed)
                 }
             }
         } else if userWantsPlayback {
             lastKnownSeconds = nearZero ? 0 : lastKnownSeconds
-            posterView.isHidden = true
+            posterView.isHidden = false
             claimed.safePlayImmediately(atRate: 1.0)
             didKickPlayback = true
             onPlayingChanged?(true)
             onReady?()
+            revealPosterWhenPlaying(claimed)
         } else {
             // Silent pre-buffer (off-screen page).
             claimed.pause()
@@ -1712,7 +1717,8 @@ final class ArchiveVideoPlayerController: UIViewController {
                     guard let self else { return }
                     switch item.status {
                     case .readyToPlay:
-                        self.posterView.isHidden = true
+                        // Stay on poster until rate > 0 (ready ≠ painted).
+                        self.posterView.isHidden = false
                         if !self.didKickPlayback, self.userWantsPlayback {
                             self.didKickPlayback = true
                             _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
@@ -1724,6 +1730,7 @@ final class ArchiveVideoPlayerController: UIViewController {
                             claimed.safePlayImmediately(atRate: 1.0)
                             self.onPlayingChanged?(true)
                             self.onReady?()
+                            self.revealPosterWhenPlaying(claimed)
                         }
                     case .failed:
                         self.teardown()
@@ -1735,6 +1742,26 @@ final class ArchiveVideoPlayerController: UIViewController {
             }
             attachLoopObserver(for: item, player: claimed)
             attachTimeObserver(for: item, player: claimed)
+        }
+    }
+
+    /// Drop poster only after AV is actually painting (never on readyToPlay alone).
+    private func revealPosterWhenPlaying(_ player: AVPlayer) {
+        Task { @MainActor in
+            for _ in 0..<50 {
+                try? await Task.sleep(nanoseconds: 40_000_000)
+                guard self.player === player else { return }
+                if player.rate > 0.05 || player.timeControlStatus == .playing {
+                    self.posterView.isHidden = true
+                    self.spinner.stopAnimating()
+                    return
+                }
+            }
+            // Last resort only if clearly playing.
+            if self.player === player, player.rate > 0.01 {
+                self.posterView.isHidden = true
+                self.spinner.stopAnimating()
+            }
         }
     }
 
@@ -2004,7 +2031,8 @@ final class ArchiveVideoPlayerController: UIViewController {
                 switch item.status {
                 case .readyToPlay:
                     self.spinner.stopAnimating()
-                    self.posterView.isHidden = true
+                    // Keep poster until rate > 0 — readyToPlay still paints black.
+                    self.posterView.isHidden = false
                     self.errorLabel.isHidden = true
                     // Kick playback only once per item — double play() caused visible restarts.
                     if !self.didKickPlayback {
@@ -2020,6 +2048,7 @@ final class ArchiveVideoPlayerController: UIViewController {
                             newPlayer.isMuted = self.mutedFlag
                             newPlayer.volume = self.mutedFlag ? 0 : 1
                             newPlayer.safePlayImmediately(atRate: 1.0)
+                            self.revealPosterWhenPlaying(newPlayer)
                         } else {
                             newPlayer.pause()
                             newPlayer.isMuted = true

@@ -213,13 +213,10 @@ struct VideoPlayerView: View {
             if showsControls {
                 showChrome = true
             }
-            // Warm claim at t≈0 → skip cover (IG-style instant first frame).
-            if let postID, SparkWarmPool.shared.isReadyAtStart(postID: postID) {
-                showPosterCover = false
-            } else if player?.currentItem?.status == .readyToPlay {
-                showPosterCover = false
-            } else {
-                showPosterCover = true
+            // ALWAYS start covered — readyToPlay / warm-at-0 ≠ painted frames (black flash).
+            showPosterCover = true
+            if let player, liveGate.isActive, !liveGate.userWantsPause {
+                revealPlayerWhenFramesReady(player)
             }
             if isActive {
                 liveGate.pageEpoch = MediaPlaybackCoordinator.shared.sparkPageEpoch
@@ -323,10 +320,8 @@ struct VideoPlayerView: View {
                 lastHandledRestartToken = token
                 return
             }
-            // Never force poster on warm ready players (blink on swipe).
-            if player?.currentItem?.status == .readyToPlay {
-                showPosterCover = false
-            }
+            // Keep poster until frames paint after restart (readyToPlay ≠ pixels).
+            showPosterCover = true
             guard isActive || liveGate.isActive else {
                 softSeekToBeginning(playAfter: false)
                 return
@@ -480,13 +475,9 @@ struct VideoPlayerView: View {
 
     /// True only when the layer is likely painting pixels (not a black ready buffer).
     private func playerHasPaintedFrames(_ player: AVPlayer) -> Bool {
+        // Require actual playback — readyToPlay / parked-at-0 still shows black.
         if player.rate > 0.05 { return true }
-        if player.timeControlStatus == .playing { return true }
-        // Progress already advanced past the cold start (warm reclaim).
-        let t = player.currentTime().seconds
-        if t.isFinite, t > 0.05, player.currentItem?.status == .readyToPlay {
-            return true
-        }
+        if player.timeControlStatus == .playing, player.rate > 0.01 { return true }
         return false
     }
 
@@ -551,7 +542,7 @@ struct VideoPlayerView: View {
             guard self.player === player else { return }
             guard self.liveGate.isActive, !self.liveGate.userWantsPause, self.loops else { return }
             self.currentSeconds = 0
-            self.showPosterCover = false
+            self.showPosterCover = true
             self.kickAudiblePlayback(on: player)
             // If solo gate flaked, force one more play attempt at t=0.
             if player.rate < 0.01, self.liveGate.isActive, !self.liveGate.userWantsPause {
@@ -560,6 +551,7 @@ struct VideoPlayerView: View {
                 player.play()
                 player.safePlayImmediately(atRate: 1.0)
                 self.isPlaying = true
+                self.revealPlayerWhenFramesReady(player)
             }
         }
     }
@@ -608,18 +600,18 @@ struct VideoPlayerView: View {
             isRestartSeeking = false
             return
         }
+        // Keep poster until kickAudiblePlayback confirms painted frames.
+        showPosterCover = true
         // Warm pool parks at exact 0 — only treat true start as ready (not <1.5s mid-clip).
         if SparkWarmPool.isAtStart(player) {
             isRestartSeeking = false
-            showPosterCover = false
             if playAfter, liveGate.isActive, !liveGate.userWantsPause {
                 kickAudiblePlayback(on: player)
             }
             return
         }
         // Mid-clip → exact 0, then play. Zero tolerance so we don't land on a late keyframe.
-        isRestartSeeking = false
-        showPosterCover = false
+        isRestartSeeking = true
         player.pause()
         player.rate = 0
         Task { @MainActor in
@@ -632,7 +624,7 @@ struct VideoPlayerView: View {
             guard self.player === player else { return }
             self.currentSeconds = 0
             self.isRestartSeeking = false
-            self.showPosterCover = false
+            self.showPosterCover = true
             if playAfter, self.liveGate.isActive, !self.liveGate.userWantsPause {
                 self.kickAudiblePlayback(on: player)
             }
@@ -832,9 +824,11 @@ struct VideoPlayerView: View {
         // Claimed warm players must still loop when the Spark finishes.
         claimed.actionAtItemEnd = loops ? .none : .pause
 
+        // Keep poster up — kickAudiblePlayback reveals only after frames paint.
+        showPosterCover = true
+
         // If already at t≈0 (warm pool contract), play immediately — no seek, no jump.
         if alreadyAtStart || !needsExactStart {
-            showPosterCover = false
             if liveGate.isActive, !liveGate.userWantsPause {
                 kickAudiblePlayback(on: claimed)
             }
@@ -853,7 +847,7 @@ struct VideoPlayerView: View {
             claimed.pause()
             claimed.rate = 0
             self.currentSeconds = 0
-            self.showPosterCover = false
+            self.showPosterCover = true
             if self.liveGate.isActive, !self.liveGate.userWantsPause {
                 self.kickAudiblePlayback(on: claimed)
             } else {
@@ -2066,27 +2060,10 @@ struct InFrameVideoPlayer: View {
                 framesReady = false
                 return
             }
-            // Focus winner: claim warm first-frame when ready — never flash black.
+            // Never mark framesReady from warm-at-0 alone — that flashed black on scroll.
+            framesReady = false
             if let postID {
-                if SparkWarmPool.shared.isReadyAtStart(postID: postID) {
-                    framesReady = true
-                } else {
-                    framesReady = false
-                    SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: true)
-                    // Brief wait then re-check — cover stays up until decoded.
-                    Task { @MainActor in
-                        await SparkWarmPool.shared.awaitReady(postIDs: [postID], timeout: 0.85)
-                        guard playGate else { return }
-                        if SparkWarmPool.shared.isReadyAtStart(postID: postID)
-                            || SparkWarmPool.shared.hasWarmOrInflight(postID: postID) {
-                            // Still keep cover until onFramesReady / playing callback
-                            // unless we already know the parked frame is decoded.
-                            if SparkWarmPool.shared.isReadyAtStart(postID: postID) {
-                                framesReady = true
-                            }
-                        }
-                    }
-                }
+                SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: true)
             }
             if usesArchivePath {
                 ArchiveVideoPlayback.warmResolve(url)
@@ -2111,10 +2088,7 @@ struct InFrameVideoPlayer: View {
         if shouldPlay {
             deactivateTask?.cancel()
             deactivateTask = nil
-            // Warm claim ready → skip poster/black entirely on first paint.
-            if let postID, SparkWarmPool.shared.isReadyAtStart(postID: postID) {
-                framesReady = true
-            }
+            // Keep framesReady false until onFramesReady / playing (no black flash).
             playGate = true
             return
         }
