@@ -325,7 +325,7 @@ final class HomeFeedStore {
                 applyPosts(Array(rankedPool.prefix(80)), replace: true, sessionId: feedSessionId, alreadyRanked: true)
                 isBootstrapping = false
                 didPaint = true
-                warmHead()
+                await warmHead()
             } else {
                 isBootstrapping = true
             }
@@ -361,7 +361,7 @@ final class HomeFeedStore {
                 applyPosts(capped, replace: true, sessionId: feedSessionId, alreadyRanked: true)
                 ContentCache.shared.setPosts(posts, for: .homeFeed)
                 didPaint = true
-                warmHead()
+                await warmHead()
                 hasMore = true
                 recyclePass = 0
                 #if DEBUG
@@ -472,7 +472,7 @@ final class HomeFeedStore {
                 applyPosts(ranked, replace: true, sessionId: feedSessionId, alreadyRanked: true)
                 isBootstrapping = false
                 didPaint = true
-                warmHead()
+                await warmHead()
             }
         }
 
@@ -507,7 +507,7 @@ final class HomeFeedStore {
                 applyPosts(capped, replace: true, sessionId: feedSessionId, alreadyRanked: true)
                 ContentCache.shared.setPosts(posts, for: .homeFeed)
                 didPaint = true
-                warmHead()
+                await warmHead()
                 hasMore = true
                 recyclePass = 0
                 #if DEBUG
@@ -750,7 +750,7 @@ final class HomeFeedStore {
         // Always more — R2 library + network continue after this head.
         hasMore = true
         didPaint = !posts.isEmpty
-        warmHead()
+        await warmHead()
         if !filtered.isEmpty {
             ContentCache.shared.setPosts(posts, for: .homeFeed)
         } else {
@@ -912,9 +912,9 @@ final class HomeFeedStore {
         hasMore = true
     }
 
-    private func warmHead() {
-        // Slug/edge path: CDN batch + deep AV preroll on the first videos so the
-        // focus winner claims a decoded first frame (no thumb / black stall).
+    /// Deep-preroll the first feed videos, then wait briefly so autoplay can claim
+    /// a decoded frame (Instagram-style — no black/thumb blink on the winner).
+    private func warmHead() async {
         let head = Array(posts.prefix(max(firstWindow + 4, 20)))
         ImageCache.shared.prefetchFeedMedia(head, maxPixelSize: 360)
         var videoIDs: [String] = []
@@ -927,8 +927,8 @@ final class HomeFeedStore {
                 || PlayPlatformBridge.isHubOriginShare(post)
             guard isSpark || isHub || post.hasVideo else { continue }
             videoIDs.append(post.id)
-            // First two: deep preroll (first-frame ready). Rest: light warm.
-            SparkWarmPool.shared.warmSingle(postID: post.id, url: url, deep: warmed < 2)
+            // First three: deep preroll (first-frame ready). Rest: light warm.
+            SparkWarmPool.shared.warmSingle(postID: post.id, url: url, deep: warmed < 3)
             if ArchiveVideoPlayback.isArchiveURL(url) {
                 ArchiveVideoPlayback.warmResolve(url)
             }
@@ -938,6 +938,11 @@ final class HomeFeedStore {
             Task(priority: .utility) {
                 await RecommendationClient.warmPlaybackURLs(videoIDs)
             }
+            // Block only a short beat so the first focus winner is already decoded.
+            await SparkWarmPool.shared.awaitReady(
+                postIDs: Array(videoIDs.prefix(2)),
+                timeout: 1.0
+            )
         }
     }
 

@@ -1102,16 +1102,19 @@ final class ArchiveVideoPlayerController: UIViewController {
         return lastKnownSeconds
     }
 
+    /// Soft floor matching Theme.canvasDeep — never flash pure black before first frame.
+    private static let softFloor = UIColor(red: 0.929, green: 0.918, blue: 0.898, alpha: 1)
+
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .black
+        view.backgroundColor = Self.softFloor
         view.clipsToBounds = true
 
         // Match video gravity (updated in applyVideoGravity) — avoid poster/video framing jump.
         // Default fill so Sparks never flash fit→fill on first layout.
         posterView.contentMode = .scaleAspectFill
         posterView.clipsToBounds = true
-        posterView.backgroundColor = .black
+        posterView.backgroundColor = Self.softFloor
         posterView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(posterView)
 
@@ -1181,7 +1184,7 @@ final class ArchiveVideoPlayerController: UIViewController {
         }
         CATransaction.commit()
         posterView.contentMode = gravity == .resizeAspectFill ? .scaleAspectFill : .scaleAspectFit
-        posterView.backgroundColor = .black
+        posterView.backgroundColor = Self.softFloor
     }
 
     func configure(url: URL, posterURL: URL?, muted: Bool, startTime: Double, active: Bool) {

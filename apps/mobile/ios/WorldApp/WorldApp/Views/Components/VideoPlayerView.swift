@@ -99,10 +99,18 @@ struct VideoPlayerView: View {
         return showPosterCover
     }
 
+    /// Soft floor — never flash pure black while AV paints the first frame (IG-style).
+    private var softVideoFloor: some View {
+        LinearGradient(
+            colors: [Theme.canvasMuted, Theme.canvasDeep],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+
     var body: some View {
         ZStack {
-            // Never pure black under Sparks — poster or dark paper while buffering.
-            Color.black
+            softVideoFloor
 
             // Poster matches video gravity (fill/fit) so there is no framing jump.
             if let posterURL {
@@ -110,7 +118,7 @@ struct VideoPlayerView: View {
                     url: posterURL,
                     maxPixelSize: 900,
                     contentMode: fillsFrame ? .fill : .fit,
-                    placeholder: AnyView(Color.black)
+                    placeholder: AnyView(softVideoFloor)
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
@@ -164,28 +172,35 @@ struct VideoPlayerView: View {
             }
 
             // Poster cover only while cold — same gravity as video.
-            if let posterURL, shouldShowPosterCover {
-                CachedAsyncImage(
-                    url: posterURL,
-                    maxPixelSize: 900,
-                    contentMode: fillsFrame ? .fill : .fit,
-                    placeholder: AnyView(Color.black)
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
-                .allowsHitTesting(false)
+            if shouldShowPosterCover {
+                if let posterURL {
+                    CachedAsyncImage(
+                        url: posterURL,
+                        maxPixelSize: 900,
+                        contentMode: fillsFrame ? .fill : .fit,
+                        placeholder: AnyView(softVideoFloor)
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+                    .allowsHitTesting(false)
+                } else {
+                    softVideoFloor
+                        .allowsHitTesting(false)
+                }
             }
         }
-        .background(Color.black)
+        .background(softVideoFloor)
         .onAppear {
             liveGate.isActive = isActive
             liveGate.userWantsPause = userWantsPause
             liveGate.onProgress = onProgress
-            // Only cover cold mounts — reclaiming a warm player must not flash poster/black.
-            if player?.currentItem?.status != .readyToPlay {
-                showPosterCover = true
-            } else {
+            // Warm claim at t≈0 → skip cover (IG-style instant first frame).
+            if let postID, SparkWarmPool.shared.isReadyAtStart(postID: postID) {
                 showPosterCover = false
+            } else if player?.currentItem?.status == .readyToPlay {
+                showPosterCover = false
+            } else {
+                showPosterCover = true
             }
             if isActive {
                 liveGate.pageEpoch = MediaPlaybackCoordinator.shared.sparkPageEpoch
@@ -2013,16 +2028,30 @@ struct InFrameVideoPlayer: View {
         }
         .onChange(of: playGate) { _, active in
             if !active {
-                // Unmount player (body) + re-arm poster for next win.
+                // Unmount player (body) + re-arm soft cover for next win.
                 framesReady = false
                 return
             }
-            // Focus winner: claim warm first-frame when ready — never flash thumb/black.
+            // Focus winner: claim warm first-frame when ready — never flash black.
             if let postID {
                 if SparkWarmPool.shared.isReadyAtStart(postID: postID) {
                     framesReady = true
                 } else {
+                    framesReady = false
                     SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: true)
+                    // Brief wait then re-check — cover stays up until decoded.
+                    Task { @MainActor in
+                        await SparkWarmPool.shared.awaitReady(postIDs: [postID], timeout: 0.85)
+                        guard playGate else { return }
+                        if SparkWarmPool.shared.isReadyAtStart(postID: postID)
+                            || SparkWarmPool.shared.hasWarmOrInflight(postID: postID) {
+                            // Still keep cover until onFramesReady / playing callback
+                            // unless we already know the parked frame is decoded.
+                            if SparkWarmPool.shared.isReadyAtStart(postID: postID) {
+                                framesReady = true
+                            }
+                        }
+                    }
                 }
             }
             if usesArchivePath {

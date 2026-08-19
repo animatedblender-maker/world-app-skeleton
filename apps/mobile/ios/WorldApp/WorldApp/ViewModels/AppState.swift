@@ -276,7 +276,11 @@ final class AppState {
         guard !didStampLaunchGeneration else { return }
         didStampLaunchGeneration = true
         hubsFreshSessionToken += 1
+        // New feed mix + strip reshuffle on every cold open.
+        feedFreshSessionToken += 1
         contentLoadGeneration += 1
+        SparkDiscoveryEngine.resetSession()
+        PostsService.shared.invalidateSparksDiscoveryCatalog()
     }
 
     /// Call from MainTabView when the selected tab changes.
@@ -287,12 +291,12 @@ final class AppState {
             return
         }
         if new == .feed, old != .feed {
-            if let left = feedLeftAt, Date().timeIntervalSince(left) >= feedStaleAwayInterval {
-                #if DEBUG
-                print("[Feed] away \(Int(Date().timeIntervalSince(left)))s ≥ 5m → fresh session")
-                #endif
-                requestFreshFeedSession(reason: "away_5m")
-            }
+            // Every return to Feed → new video mix (not only after 5+ min away).
+            let away = feedLeftAt.map { Date().timeIntervalSince($0) } ?? 0
+            #if DEBUG
+            print("[Feed] open feed tab away=\(Int(away))s → fresh session")
+            #endif
+            requestFreshFeedSession(reason: away >= feedStaleAwayInterval ? "away_5m" : "open_feed_tab")
             feedLeftAt = nil
         }
         if new == .hubs, old != .hubs {

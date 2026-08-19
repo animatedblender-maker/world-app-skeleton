@@ -138,11 +138,17 @@ struct YouTubeVideoFrame<Content: View>: View {
                     .clipShape(Rectangle())
             case .feed:
                 // 16:9 film + timeline chrome pad so the scrubber isn’t cropped.
-                // Sparks use SparkFeedCard + dominantFeedVideoHeight, not this frame.
+                // Soft canvas floor — never pure ink/black before first frame (IG-style).
                 Color.clear
                     .frame(maxWidth: .infinity)
                     .frame(height: FacebookMediaLayout.hubFeedVideoHeight())
-                    .background(Theme.ink)
+                    .background(
+                        LinearGradient(
+                            colors: [Theme.canvasMuted, Theme.canvasDeep],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
                     .overlay {
                         content().clipShape(Rectangle())
                     }

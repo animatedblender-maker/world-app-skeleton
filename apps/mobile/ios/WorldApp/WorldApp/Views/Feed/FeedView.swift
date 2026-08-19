@@ -74,9 +74,11 @@ struct FeedView: View {
                     meta: ["source": "cache_or_strip"]
                 )
             }
-            // Soft merge when we already painted — full reshape freezes UI on every generation bump.
-            let forceReshape = !store.didPaint || store.displayedPosts.isEmpty
-            await store.beginFreshSession(forceReplace: forceReshape)
+            // Every open / generation bump → brand-new mix (Instagram-style, not sticky head).
+            feedReels = []
+            continueWatching = []
+            newOnPlay = []
+            await store.beginFreshSession(forceReplace: true)
             guard !Task.isCancelled else { return }
             paintStripsFromCache()
             PerformanceTelemetry.milestoneFromLaunch(
