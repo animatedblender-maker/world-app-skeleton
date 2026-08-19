@@ -39,7 +39,8 @@ final class SlugShelfStore {
     private var sessionToken: String = {
         "s\(UInt64.random(in: 1...UInt64.max))-\(Int(Date().timeIntervalSince1970))"
     }()
-    private var inFlight: Set<String> = []
+    /// In-flight page loads — waiters **join** the same Task (never return empty mid-fetch).
+    private var inFlightTasks: [String: Task<Page, Never>] = [:]
 
     private init() {}
 
@@ -111,10 +112,9 @@ final class SlugShelfStore {
         force: Bool,
         append: Bool
     ) async -> Page {
-        if inFlight.contains(key) {
-            // Coalesce — return what we have.
-            let s = shelves[key] ?? ShelfState()
-            return Page(items: s.posts, nextCursor: s.nextCursor, slugsUsed: slug.map { [$0] } ?? [], session: sessionToken)
+        // Join in-flight first-page fetch — never hand back an empty shelf mid-load.
+        if !append, let existing = inFlightTasks[key] {
+            return await existing.value
         }
 
         var state = shelves[key] ?? ShelfState()
@@ -130,9 +130,27 @@ final class SlugShelfStore {
             return Page(items: state.posts, nextCursor: nil, slugsUsed: [], session: sessionToken)
         }
 
-        inFlight.insert(key)
-        defer { inFlight.remove(key) }
+        let flightKey = append ? "\(key)#more" : key
+        if let existing = inFlightTasks[flightKey] {
+            return await existing.value
+        }
 
+        let task = Task { @MainActor in
+            await self.performLoadPage(key: key, slug: slug, force: force, append: append)
+        }
+        inFlightTasks[flightKey] = task
+        let page = await task.value
+        inFlightTasks[flightKey] = nil
+        return page
+    }
+
+    private func performLoadPage(
+        key: String,
+        slug: String?,
+        force: Bool,
+        append: Bool
+    ) async -> Page {
+        var state = shelves[key] ?? ShelfState()
         let cursor = append ? state.nextCursor : nil
         let remote: Page?
         if let slug {
