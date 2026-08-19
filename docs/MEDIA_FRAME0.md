@@ -75,8 +75,38 @@ Sizes: long-edge **256 / 512 / 1080**. Never `-ss` after a scenic seek.
 - YouTube `hqdefault` is **not** Frame 0 — demote once server posters exist.
 - Optimistic upload thumb must also be **t=0** (iOS already does).
 
-## Ops
+## Ops — dedicated `matterya-media-worker` (approved)
 
-- Worker runs **in-process** with `matterya-api` when `KAFKA_ENABLED=true` (ffmpeg on PATH).
-- Dedicated Render Background Worker + Docker image: **ask before deploy**.
-- Backfill: `npm run media:frame0-backfill` in `apps/api` (enqueue only; consumer does work).
+**Default:** Frame 0 runs in a **Docker Background Worker** with ffmpeg — not on the API Node dyno.
+
+| Piece | Value |
+|-------|--------|
+| Image | `apps/api/Dockerfile.media-worker` (`node:22-bookworm-slim` + `ffmpeg`) |
+| Entrypoint | `node dist/media/worker-main.js` |
+| Render service | `matterya-media-worker` (see `render.yaml`) |
+| Kafka | `matterya.media` · client/group `matterya-media-worker` |
+| API opt-in | `MEDIA_WORKER_INPROCESS=true` only if you must run Frame 0 inside `matterya-api` (needs ffmpeg on PATH) |
+
+### Local Docker
+
+```bash
+cd apps/api
+npm run docker:media-worker:build
+docker run --rm --env-file .env matterya-media-worker
+```
+
+### Render (you create / sync — Blueprint does not always update existing services)
+
+1. Ensure Kafka topic **`matterya.media`** exists (Confluent UI if auto-create blocked).
+2. Dashboard → **New → Background Worker** (or Blueprint sync) → Docker  
+   - Dockerfile path: `./apps/api/Dockerfile.media-worker`  
+   - Context: `./apps/api`  
+   - Branch: `ios-native`
+3. Copy env from `matterya-api`: `DATABASE_URL`, `KAFKA_*`, `R2_*` (see `render.yaml`).
+4. Deploy worker → logs should show `matterya-media-worker ready` + `ffmpeg available`.
+5. Enqueue backfill (from a machine with API `.env`):  
+   `cd apps/api && npm run media:frame0-backfill`
+
+### Backfill
+
+`npm run media:frame0-backfill` enqueues only; the **worker** performs ffmpeg + R2 writes.

@@ -1,0 +1,37 @@
+# matterya-media-worker — Frame 0 posters (ffmpeg) + Kafka consumer
+# Build from apps/api context:
+#   docker build -f Dockerfile.media-worker -t matterya-media-worker .
+# Run:
+#   docker run --env-file .env matterya-media-worker
+#
+# Hard rule: poster = video's first displayed frame (t=0). See docs/MEDIA_FRAME0.md
+
+FROM node:22-bookworm-slim
+
+# ffmpeg + libwebp for frame0_{256,512,1080}.webp
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
+  && rm -rf /var/lib/apt/lists/* \
+  && ffmpeg -version | head -n 1
+
+WORKDIR /app
+
+# Install prod+dev deps for tsc build (lockfile is apps/api-local, not monorepo root)
+COPY package.json package-lock.json ./
+RUN npm ci --no-workspaces --include=dev
+
+COPY tsconfig.json ./
+COPY src ./src
+
+RUN npm run build \
+  && npm prune --omit=dev \
+  && test -f dist/media/worker-main.js
+
+ENV NODE_ENV=production
+ENV KAFKA_ENABLED=true
+ENV KAFKA_CLIENT_ID=matterya-media-worker
+ENV KAFKA_CONSUMER_GROUP=matterya-media-worker
+ENV KAFKAJS_NO_PARTITIONER_WARNING=1
+
+# No HTTP port — Background Worker
+CMD ["node", "dist/media/worker-main.js"]
