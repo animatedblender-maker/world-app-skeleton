@@ -787,22 +787,18 @@ struct FacebookPostCard: View {
             loops: true,
             preferArchivePlayer: useArchivePath,
             showsControls: true,
-            // Hubs: fill the film zone; reserve bottom pad so timeline isn’t clipped.
-            fillsFrame: true,
-            bottomChromeReserve: isHub ? FacebookMediaLayout.hubFeedTimelineChromePad : 0,
+            // Hubs: aspect-fit in 16:9 (no crop). Sparks/short may fill.
+            fillsFrame: !isHub,
+            bottomChromeReserve: 0,
             autoplaySurface: autoplaySurface,
             onViewed: { Task { await PostsService.shared.recordView(post) } }
         )
         .background(
-            isHub
-                ? AnyView(
-                    LinearGradient(
-                        colors: [Theme.canvasMuted, Theme.canvasDeep],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                : AnyView(Color.clear)
+            LinearGradient(
+                colors: [Theme.canvasMuted, Theme.canvasDeep],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
         )
     }
 

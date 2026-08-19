@@ -556,6 +556,11 @@ struct MatteryaHubPlayerView: View {
 
     private func scheduleChromeHide() {
         chromeHideTask?.cancel()
+        // Feed / in-frame (no fullscreen): keep timeline visible.
+        guard allowsFullscreen else {
+            showChrome = true
+            return
+        }
         // Stay up while paused so center play / ±10s never vanish mid-pause.
         guard bridge.isPlaying else { return }
         chromeHideTask = Task {

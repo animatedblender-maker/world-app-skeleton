@@ -209,6 +209,10 @@ struct VideoPlayerView: View {
             liveGate.isActive = isActive
             liveGate.userWantsPause = userWantsPause
             liveGate.onProgress = onProgress
+            // In-feed transport must appear immediately (not after a tap).
+            if showsControls {
+                showChrome = true
+            }
             // Warm claim at t≈0 → skip cover (IG-style instant first frame).
             if let postID, SparkWarmPool.shared.isReadyAtStart(postID: postID) {
                 showPosterCover = false
@@ -674,6 +678,11 @@ struct VideoPlayerView: View {
 
     private func scheduleChromeHide() {
         guard showsControls else { return }
+        // Feed / in-frame: keep timeline + transport visible. Auto-hide only in fullscreen watch.
+        guard allowsFullscreen else {
+            showChrome = true
+            return
+        }
         chromeTask?.cancel()
         chromeTask = Task {
             try? await Task.sleep(nanoseconds: 3_500_000_000)
@@ -1941,10 +1950,10 @@ struct InFrameVideoPlayer: View {
                         )
                     }
                 }
-                // Cover film until first frames (no black flash).
-                if !framesReady {
-                    posterFloor
-                }
+                // Poster only over the film — NEVER cover transport/timeline chrome.
+                // VideoPlayerView / MatteryaHubPlayer already keep their own poster until frames.
+            } else {
+                posterFloor
             }
 
             if muteOnlyControls, playGate {

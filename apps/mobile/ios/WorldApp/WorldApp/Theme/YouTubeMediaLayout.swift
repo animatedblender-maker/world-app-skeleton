@@ -137,8 +137,7 @@ struct YouTubeVideoFrame<Content: View>: View {
                     }
                     .clipShape(Rectangle())
             case .feed:
-                // 16:9 film + timeline chrome pad so the scrubber isn’t cropped.
-                // Soft canvas floor — never pure ink/black before first frame (IG-style).
+                // True 16:9 — hubs film fits (no picture crop); chrome overlays inside.
                 Color.clear
                     .frame(maxWidth: .infinity)
                     .frame(height: FacebookMediaLayout.hubFeedVideoHeight())
@@ -150,9 +149,9 @@ struct YouTubeVideoFrame<Content: View>: View {
                         )
                     )
                     .overlay {
-                        content().clipShape(Rectangle())
+                        content()
                     }
-                    .clipShape(Rectangle())
+                    .clipped()
             case .card:
                 // Shelf / search cards stay compact 16:9.
                 Color.clear
@@ -494,9 +493,9 @@ struct PlayFeedLinkCard: View {
                     preferArchivePlayer: useArchivePath,
                     showsControls: true,
                     muteOnlyControls: false,
-                    // Fill the 16:9 film zone; chrome pad below keeps timeline/buttons uncropped.
-                    fillsFrame: true,
-                    bottomChromeReserve: FacebookMediaLayout.hubFeedTimelineChromePad,
+                    // Exact 16:9 box + aspect-fit = full picture, no crop; chrome overlays film.
+                    fillsFrame: false,
+                    bottomChromeReserve: 0,
                     sharesFeedMute: true,
                     autoplaySurface: autoplaySurface,
                     onViewed: { Task { await PostsService.shared.recordView(post) } }
@@ -510,8 +509,7 @@ struct PlayFeedLinkCard: View {
                     endPoint: .bottomTrailing
                 )
             )
-            // Media session 09: no warm/resolve on appear — focus winner installs player.
-            .onTapGesture { onOpen() }
+            // Don’t steal taps from timeline/transport — open Hubs via badge / poster only.
         } else {
             YouTubeVideoThumbnail(
                 post: post,
