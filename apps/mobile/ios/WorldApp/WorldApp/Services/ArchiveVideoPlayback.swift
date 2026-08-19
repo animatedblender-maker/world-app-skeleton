@@ -220,6 +220,8 @@ struct MatteryaHubPlayerView: View {
     var onReady: (() -> Void)? = nil
     /// Keeps AppState.hubPlaybackPlaying in sync when chrome play/pause is used.
     var onPlayingChange: ((Bool) -> Void)? = nil
+    /// Progress for Frame 0 hold (feed/hubs) — current seconds, duration.
+    var onProgress: ((Double, Double) -> Void)? = nil
 
     var allowsFullscreen: Bool = true
 
@@ -242,7 +244,8 @@ struct MatteryaHubPlayerView: View {
         isMuted: Binding<Bool> = .constant(false),
         allowsFullscreen: Bool = true,
         onReady: (() -> Void)? = nil,
-        onPlayingChange: ((Bool) -> Void)? = nil
+        onPlayingChange: ((Bool) -> Void)? = nil,
+        onProgress: ((Double, Double) -> Void)? = nil
     ) {
         self.url = url
         self.posterURL = posterURL
@@ -257,6 +260,7 @@ struct MatteryaHubPlayerView: View {
         self.allowsFullscreen = allowsFullscreen
         self.onReady = onReady
         self.onPlayingChange = onPlayingChange
+        self.onProgress = onProgress
     }
 
     var body: some View {
@@ -286,6 +290,7 @@ struct MatteryaHubPlayerView: View {
                         guard !isScrubbing else { return }
                         let playing = bridge.controller?.isPlaying
                         bridge.publishProgress(current: current, duration: duration, playing: playing)
+                        onProgress?(current, duration)
                         if let postID, current >= 0.5 {
                             YouTubeCatalogService.shared.notePlaybackPosition(
                                 current,

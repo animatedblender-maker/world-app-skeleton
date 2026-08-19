@@ -226,19 +226,31 @@ struct YouTubeVideoThumbnail: View {
     }
 
     private var matteryaPlaceholder: some View {
-        Rectangle()
-            .fill(
-                LinearGradient(
-                    colors: [Theme.canvasMuted, Theme.canvasDeep],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            )
-            .overlay {
-                Image(systemName: post.hasVideo ? "film" : "photo")
-                    .font(.title3)
-                    .foregroundStyle(Theme.inkMuted.opacity(0.7))
+        // Video thumbs: Sparks black floor (no cream flash). Photos keep soft canvas.
+        Group {
+            if post.hasVideo {
+                Color.black
+                    .overlay {
+                        Image(systemName: "film")
+                            .font(.title3)
+                            .foregroundStyle(Color.white.opacity(0.35))
+                    }
+            } else {
+                Rectangle()
+                    .fill(
+                        LinearGradient(
+                            colors: [Theme.canvasMuted, Theme.canvasDeep],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .overlay {
+                        Image(systemName: "photo")
+                            .font(.title3)
+                            .foregroundStyle(Theme.inkMuted.opacity(0.7))
+                    }
             }
+        }
     }
 }
 

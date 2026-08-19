@@ -918,11 +918,12 @@ struct FacebookPostCard: View {
     }
 
     private var mediaPlaceholder: some View {
+        // Videos: black like Sparks (never cream/paper flash). Photos keep muted canvas.
         Rectangle()
-            .fill(Theme.canvasMuted)
+            .fill(post.hasVideo ? Color.black : Theme.canvasMuted)
             .overlay {
                 Image(systemName: post.hasVideo ? "video" : "photo")
-                    .foregroundStyle(Theme.inkMuted)
+                    .foregroundStyle(post.hasVideo ? Color.white.opacity(0.35) : Theme.inkMuted)
             }
     }
 

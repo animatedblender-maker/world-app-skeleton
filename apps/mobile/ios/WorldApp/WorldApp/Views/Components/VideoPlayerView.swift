@@ -1968,7 +1968,14 @@ struct InFrameVideoPlayer: View {
                                 onViewed?()
                             },
                             onPlayingChange: { playing in
-                                if playing { framesReady = true }
+                                // Sparks/Archive: kick ≠ painted frames. Keep SwiftUI poster
+                                // until rate/time proves paint (UIKit still holds its own cover).
+                                if !playing { framesReady = false }
+                            },
+                            onProgress: { current, _ in
+                                if !framesReady, current > 0.04 {
+                                    framesReady = true
+                                }
                             }
                         )
                     } else {
