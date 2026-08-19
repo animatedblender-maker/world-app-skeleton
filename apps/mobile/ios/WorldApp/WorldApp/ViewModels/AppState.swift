@@ -160,6 +160,9 @@ final class AppState {
         // Returning user: enter the app shell immediately.
         YouTubeCatalogService.shared.bindToUser(auth.currentUser?.id)
         restoreCachedProfile()
+        // Stamp open generation **before** Feed/Hubs mount so `.task(id:)` never
+        // starts at 0 then gets cancelled when warmup bumps the token.
+        stampLaunchGenerationIfNeeded()
         isSessionReady = true
     }
 
@@ -210,6 +213,7 @@ final class AppState {
         guard isAuthenticated else { return }
         if !isSessionReady {
             restoreCachedProfile()
+            stampLaunchGenerationIfNeeded()
             markSessionReady()
             Task { await finishSessionWarmup() }
             return
@@ -254,18 +258,25 @@ final class AppState {
             ImageCache.shared.prefetchFeedMedia(Array(cached.prefix(12)), maxPixelSize: 360)
         }
 
-        // Every app open: FeedView reloads a new mix via contentLoadGeneration;
-        // Hubs For you reshuffles via hubsFreshSessionToken.
-        hubsFreshSessionToken += 1
-
-        // Feed can paint now — secondary work is non-blocking.
-        contentLoadGeneration += 1
+        // Generation already stamped in hydrate (returning user) or below (late ready).
+        stampLaunchGenerationIfNeeded()
 
         Task(priority: .utility) {
             await prepareSession()
             await refreshProfile()
             await refreshAllInBackground()
         }
+    }
+
+    /// One open-generation bump per process. Prevents Feed/Hubs `.task(id:)` from
+    /// starting a fetch then immediately cancelling it when warmup increments again.
+    private var didStampLaunchGeneration = false
+
+    private func stampLaunchGenerationIfNeeded() {
+        guard !didStampLaunchGeneration else { return }
+        didStampLaunchGeneration = true
+        hubsFreshSessionToken += 1
+        contentLoadGeneration += 1
     }
 
     /// Call from MainTabView when the selected tab changes.
@@ -747,6 +758,7 @@ final class AppState {
         // Per-user watch history / resume points (never share across accounts).
         YouTubeCatalogService.shared.bindToUser(auth.currentUser?.id)
         restoreCachedProfile()
+        stampLaunchGenerationIfNeeded()
         markSessionReady()
         // Defer call stack + permissions so login button returns immediately.
         Task(priority: .utility) {
@@ -820,6 +832,9 @@ final class AppState {
         isAuthenticated = false
         isSessionReady = true
         contentLoadGeneration = 0
+        hubsFreshSessionToken = 0
+        feedFreshSessionToken = 0
+        didStampLaunchGeneration = false
         needsProfileSetup = false
         currentProfile = nil
         selectedCountry = nil

@@ -61,7 +61,8 @@ final class GraphQLService: Sendable {
 
         let (data, response): (Data, URLResponse)
         do {
-            (data, response) = try await URLSession.shared.data(for: request)
+            // Survive SwiftUI `.task(id:)` cancellation (launch gen bump / tab remount).
+            (data, response) = try await UncancellableHTTP.data(for: request)
         } catch {
             throw GraphQLError.network("GraphQL network error: \(error.localizedDescription)")
         }

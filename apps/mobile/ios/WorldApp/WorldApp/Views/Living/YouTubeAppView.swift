@@ -454,6 +454,10 @@ struct YouTubeAppView: View {
             refreshHubsVisitShuffle(remountList: true)
         }
         .task(id: appState.contentLoadGeneration) {
+            // Coalesce launch/share generation bumps — avoid cancelling for-you mid-flight.
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            guard !Task.isCancelled else { return }
+
             PerformanceTelemetry.markIfAbsent("hubs_task_start")
             await consumePendingLivingVideoIfNeeded()
             // 1) Instant paint (session / disk) — never blocks.
@@ -475,6 +479,7 @@ struct YouTubeAppView: View {
             let longForm = allVideos.filter { !$0.isReel }.count
             if longForm < 8 {
                 await loadVideos(forceRefresh: false, mode: .fast)
+                guard !Task.isCancelled else { return }
                 rebuildStableHomeLists(shuffle: false, remountList: false)
             } else {
                 isLoading = false
@@ -1282,7 +1287,15 @@ struct YouTubeAppView: View {
     }
 
     /// Load active surface via slug shelves (thin pages). Falls back to legacy catalog once.
+    /// Detached so `.task(id: contentLoadGeneration)` cancel can't abort for-you mid-flight.
     private func loadVideos(forceRefresh: Bool, mode: HubsLoadMode = .full) async {
+        let work = Task { @MainActor in
+            await self.runLoadVideos(forceRefresh: forceRefresh, mode: mode)
+        }
+        _ = await work.result
+    }
+
+    private func runLoadVideos(forceRefresh: Bool, mode: HubsLoadMode) async {
         // Never blank an already-painted catalog with a full-screen spinner.
         if allVideos.isEmpty { isLoading = true }
         errorMessage = nil

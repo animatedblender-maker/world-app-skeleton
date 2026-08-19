@@ -267,11 +267,22 @@ final class HomeFeedStore {
 
     // MARK: - Lifecycle
 
-    /// New browsing session (app open / 3+ min away / pull).
+    /// New browsing session (app open / 5+ min away / pull).
     /// - Parameter forceReplace: pull-to-refresh / explicit reshuffle — rebuilds the whole list.
     ///   Default **false**: after the first paint, network only soft-merges so a late
     ///   first-paint response never rips out the row the user is already watching.
+    ///
+    /// Runs **detached** so SwiftUI `.task(id:)` cancellation (launch generation bump)
+    /// cannot abort `/v1/feed` mid-flight and leave an empty feed.
     func beginFreshSession(forceReplace: Bool = false) async {
+        let work = Task.detached(priority: .userInitiated) { @MainActor in
+            await HomeFeedStore.shared.runFreshSession(forceReplace: forceReplace)
+        }
+        // If the caller is cancelled, still let work finish applying posts.
+        _ = await work.result
+    }
+
+    private func runFreshSession(forceReplace: Bool) async {
         generation += 1
         let gen = generation
         errorMessage = nil

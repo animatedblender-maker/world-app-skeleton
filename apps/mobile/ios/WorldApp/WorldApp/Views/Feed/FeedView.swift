@@ -59,6 +59,10 @@ struct FeedView: View {
             await refreshStrips(network: true)
         }
         .task(id: "\(appState.contentLoadGeneration)-\(appState.feedFreshSessionToken)") {
+            // Coalesce rapid generation bumps (share / country) so we don't cancel mid-fetch.
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            guard !Task.isCancelled else { return }
+
             // App open / away: reshape. contentLoadGeneration also fires on share — still reshape
             // but rank is off-main. Strips network is deferred so first scroll stays smooth.
             PerformanceTelemetry.markIfAbsent("feed_task_start")
@@ -73,6 +77,7 @@ struct FeedView: View {
             // Soft merge when we already painted — full reshape freezes UI on every generation bump.
             let forceReshape = !store.didPaint || store.displayedPosts.isEmpty
             await store.beginFreshSession(forceReplace: forceReshape)
+            guard !Task.isCancelled else { return }
             paintStripsFromCache()
             PerformanceTelemetry.milestoneFromLaunch(
                 "app_start_to_feed_interactive",
@@ -82,9 +87,11 @@ struct FeedView: View {
                     "didPaint": store.didPaint ? "1" : "0",
                 ]
             )
-            // Defer strip network — competing with feed warm caused intermittent jank.
-            try? await Task.sleep(nanoseconds: 350_000_000)
-            await refreshStrips(network: true)
+            // Defer strip network — unstructured so SwiftUI task cancel can't abort Sparks/Hubs rails.
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                await refreshStrips(network: true)
+            }
         }
         .onAppear {
             paintStripsFromCache()

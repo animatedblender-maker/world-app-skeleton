@@ -58,7 +58,8 @@ enum SurfacePageClient {
         }
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: req)
+            // Survive SwiftUI `.task(id:)` cancellation on launch generation bumps.
+            let (data, response) = try await UncancellableHTTP.data(for: req)
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
                 return nil
             }
