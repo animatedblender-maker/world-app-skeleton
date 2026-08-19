@@ -2993,22 +2993,34 @@ enum SparkDiscoveryEngine {
             ? newestFirst(otherUnviewed)
             : seededShuffle(otherUnviewed, seed: sessionSeed)
 
-        // HARD: never append already-seen posts while any unviewed remain.
+        // Prefer unviewed, but never starve first paint to 1–2 cards (API pages are mostly viewed).
         // Weave discovery into the head (IG-style mix) — not mine→follows→explore forever.
         let fresh = weaveHomeFeed(
             primary: mineFresh + followFresh,
             discovery: otherFresh,
             seed: sessionSeed
         )
-        if !fresh.isEmpty {
+        let minHead = 12
+        let recycled = viewedPool
+            .sorted { $0.1 < $1.1 }
+            .map(\.0)
+
+        if fresh.count >= minHead {
             return fresh
+        }
+        if !fresh.isEmpty {
+            // Unviewed first, then least-recently-viewed fillers so the list is usable.
+            var seen = Set(fresh.map(\.id))
+            var out = fresh
+            for post in recycled where seen.insert(post.id).inserted {
+                out.append(post)
+                if out.count >= minHead { break }
+            }
+            return out
         }
 
         // Last resort only (library exhausted): least-recently-viewed, then rotate by seed
         // so two opens never show the exact same recycle order.
-        let recycled = viewedPool
-            .sorted { $0.1 < $1.1 }
-            .map(\.0)
         guard recycled.count > 1, sessionSeed != 0 else { return recycled }
         let rot = Int(sessionSeed % UInt64(recycled.count))
         return Array(recycled[rot...]) + Array(recycled[..<rot])

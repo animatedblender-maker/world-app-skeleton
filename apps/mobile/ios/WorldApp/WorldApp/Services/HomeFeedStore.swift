@@ -333,13 +333,15 @@ final class HomeFeedStore {
         }
 
         // 2) Network — thin /v1/feed first, GraphQL fallback. Never hard-replace while watching.
-        let live: [CountryPost]
-        if let thin = await SurfacePageClient.fetchHomeFeed(limit: 28, cursor: nil), !thin.items.isEmpty {
+        // Pull a wider first page so viewed-filter still leaves a usable head.
+        let liveRaw: [CountryPost]
+        if let thin = await SurfacePageClient.fetchHomeFeed(limit: 48, cursor: nil), !thin.items.isEmpty {
             nextCursor = thin.nextCursor
-            live = Self.liveOnlyPosts(thin.items)
+            liveRaw = thin.items
         } else {
-            live = Self.liveOnlyPosts(await PostsService.shared.fetchFirstPaintHomePosts(limit: 48))
+            liveRaw = await PostsService.shared.fetchFirstPaintHomePosts(limit: 64)
         }
+        let live = Self.liveOnlyPosts(liveRaw)
         guard gen == generation else { return }
 
         let preserveHead = !forceReplace
@@ -355,8 +357,19 @@ final class HomeFeedStore {
             print("[HomeFeed] freshSession soft-merge live=\(live.count) pool=\(posts.count) window=\(windowLimit) engaged=\(userEngagedThisSession)")
             #endif
         } else {
-            let realBatch = Self.liveOnlyPosts(live + posts)
-            let capped = Array((await rankForSessionAsync(realBatch)).prefix(min(realBatch.count, 90)))
+            // Rank the full raw+pool first (session order tops up thin unviewed), then liveOnly.
+            let realBatch = Self.liveOnlyPosts(liveRaw + posts)
+            var capped = Array((await rankForSessionAsync(realBatch)).prefix(min(max(realBatch.count, 1), 90)))
+            // Safety net: if rank still starved, fall back to liveOnlyPosts of the raw page.
+            if capped.count < 8, liveRaw.count > capped.count {
+                let fallback = Self.liveOnlyPosts(liveRaw + posts + capped)
+                if fallback.count > capped.count {
+                    capped = Array((await rankForSessionAsync(fallback)).prefix(90))
+                }
+                if capped.count < 8 {
+                    capped = Array(fallback.prefix(90))
+                }
+            }
 
             if !capped.isEmpty {
                 applyPosts(capped, replace: true, sessionId: feedSessionId, alreadyRanked: true)
@@ -366,7 +379,7 @@ final class HomeFeedStore {
                 hasMore = true
                 recyclePass = 0
                 #if DEBUG
-                print("[HomeFeed] freshSession replace total=\(capped.count) following=\(sessionFollowingIDs.count) seed=\(sessionRankSeed)")
+                print("[HomeFeed] freshSession replace total=\(capped.count) raw=\(liveRaw.count) live=\(live.count) following=\(sessionFollowingIDs.count) seed=\(sessionRankSeed)")
                 #endif
             } else if posts.isEmpty {
                 applyPosts([], replace: true, sessionId: feedSessionId)

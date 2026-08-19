@@ -1467,15 +1467,14 @@ private struct MatteryaVideoSurface: UIViewRepresentable {
         let view = MatteryaPlayerUIView()
         // Gravity BEFORE player attach — first decoded frame already correct.
         view.lockGravity(fillsFrame: fillsFrame)
-        view.playerLayer.player = player
+        // Defer attach until non-zero bounds (zero-size mount → black + FigGeometry errors).
+        view.setPendingPlayer(player)
         return view
     }
 
     func updateUIView(_ uiView: MatteryaPlayerUIView, context: Context) {
         uiView.lockGravity(fillsFrame: fillsFrame)
-        if uiView.playerLayer.player !== player {
-            uiView.playerLayer.player = player
-        }
+        uiView.setPendingPlayer(player)
     }
 }
 
@@ -1487,6 +1486,7 @@ private final class MatteryaPlayerUIView: UIView {
 
     private var lockedGravity: AVLayerVideoGravity = .resizeAspectFill
     private var gravityLocked = false
+    private var pendingPlayer: AVPlayer?
 
     /// Soft floor (Theme.canvasDeep) — never flash pure black while the first frame decodes.
     private static let softFloor = UIColor(red: 0.929, green: 0.918, blue: 0.898, alpha: 1)
@@ -1512,6 +1512,29 @@ private final class MatteryaPlayerUIView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    /// Queue the player until layout has real size — attaching at 0×0 flashes black.
+    func setPendingPlayer(_ player: AVPlayer?) {
+        pendingPlayer = player
+        attachPlayerIfReady()
+    }
+
+    private func attachPlayerIfReady() {
+        guard bounds.width > 2, bounds.height > 2 else {
+            // Detach while zero-sized so FigGeometry doesn't error / paint black.
+            if playerLayer.player != nil {
+                playerLayer.player = nil
+            }
+            return
+        }
+        guard let pendingPlayer else { return }
+        if playerLayer.player !== pendingPlayer {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            playerLayer.player = pendingPlayer
+            CATransaction.commit()
+        }
+    }
+
     /// Apply gravity without CA zoom. Allows one fill↔fit switch when Sparks learns size.
     func lockGravity(fillsFrame: Bool) {
         let gravity: AVLayerVideoGravity = fillsFrame ? .resizeAspectFill : .resizeAspect
@@ -1535,6 +1558,7 @@ private final class MatteryaPlayerUIView: UIView {
             playerLayer.videoGravity = lockedGravity
         }
         CATransaction.commit()
+        attachPlayerIfReady()
     }
 }
 
