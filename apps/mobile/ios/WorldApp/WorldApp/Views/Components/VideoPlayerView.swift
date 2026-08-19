@@ -1023,8 +1023,9 @@ struct VideoPlayerView: View {
                     updateDuration(from: item)
                 }
                 isPlaying = player.rate > 0.01
-                // First real progress while active ⇒ frames are on screen; drop poster cover.
-                if gate.isActive, !gate.userWantsPause, showPosterCover, player.rate > 0.01 {
+                // First real paint (rate + advanced time) — never drop on rate alone (blink).
+                if gate.isActive, !gate.userWantsPause, showPosterCover,
+                   self.playerHasPaintedFrames(player) {
                     markPosterCoverReady()
                 }
                 trackPlaybackPositionIfNeeded()
