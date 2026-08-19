@@ -238,6 +238,24 @@ struct VideoPlayerView: View {
                 kickAudiblePlayback(on: player)
             }
         }
+        // Same-runloop handoff: park live buffer mid-playhead before Sparks/Hubs claim.
+        .onReceive(NotificationCenter.default.publisher(for: .matteryaExportPlaybackForHandoff)) { note in
+            guard let ids = note.userInfo?["postIDs"] as? [String],
+                  let postID,
+                  ids.contains(postID),
+                  let player,
+                  player.currentItem != nil,
+                  player.status != .failed
+            else { return }
+            persistPlaybackPosition()
+            SparkWarmPool.shared.parkContinuing(postID: postID, player: player)
+            // Detach without destroying the item (pool owns it now).
+            removeTimeObserver()
+            teardownPlayerObservers()
+            self.player = nil
+            isPlaying = false
+            showPosterCover = true
+        }
         .onChange(of: isActive) { _, active in
             liveGate.isActive = active
             liveGate.onProgress = onProgress
@@ -819,10 +837,14 @@ struct VideoPlayerView: View {
         // Feed → Sparks/Hubs handoff: keep mid-clip playhead (do not seek to 0).
         let continueMid = postID.map { SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: $0) } ?? false
         if continueMid {
-            if let postID { SparkWarmPool.shared.clearContinueFlag(postID: postID) }
-            appState.clearContinuePlayback(for: postID ?? "")
+            if let postID {
+                SparkWarmPool.shared.clearContinueFlag(postID: postID)
+                appState.clearContinuePlayback(for: postID)
+            }
             let t = claimed.currentTime().seconds
             currentSeconds = t.isFinite ? max(0, t) : 0
+            // Already has a painted frame — skip poster cover for seamless continue.
+            showPosterCover = false
             if liveGate.isActive, !liveGate.userWantsPause {
                 kickAudiblePlayback(on: claimed)
             }
@@ -1900,6 +1922,14 @@ struct InFrameVideoPlayer: View {
         }
     }
 
+    /// Continue mid-clip when feed→Sparks/Hubs parked this buffer.
+    private var continueStartTime: Double {
+        guard let postID, SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: postID) else {
+            return 0
+        }
+        return YouTubeCatalogService.shared.playbackPosition(for: postID)
+    }
+
     var body: some View {
         ZStack {
             // Always poster base (neighbors never mount AV — media session 09).
@@ -1913,7 +1943,8 @@ struct InFrameVideoPlayer: View {
                             url: url,
                             posterURL: posterURL,
                             isActive: true,
-                            startTime: 0,
+                            // Continue mid-clip when feed→hubs/sparks handoff parked this buffer.
+                            startTime: continueStartTime,
                             postID: postID,
                             showsControls: transportChrome,
                             loops: loops,
@@ -1966,8 +1997,6 @@ struct InFrameVideoPlayer: View {
                         )
                     }
                 }
-                // Poster only over the film — NEVER cover transport/timeline chrome.
-                // VideoPlayerView / MatteryaHubPlayer already keep their own poster until frames.
             } else {
                 posterFloor
             }

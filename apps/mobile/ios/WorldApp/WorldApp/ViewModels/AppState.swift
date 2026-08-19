@@ -1271,8 +1271,18 @@ final class AppState {
         isPlayPresented = false
         clearPendingLivingVideo()
 
-        // Feed card → hubs: continue mid-clip (park without rewind).
-        markContinuePlayback(for: [watchPost.id, PlayPlatformBridge.hubWatchPresentation(for: watchPost).id])
+        // Feed card → hubs: sync-export live buffer mid-clip, then claim in the same runloop.
+        let presentation = PlayPlatformBridge.hubWatchPresentation(for: watchPost)
+        let handoffIDs = [watchPost.id, presentation.id]
+        markContinuePlayback(for: handoffIDs)
+        NotificationCenter.default.post(
+            name: .matteryaExportPlaybackForHandoff,
+            object: nil,
+            userInfo: ["postIDs": Array(Set(handoffIDs))]
+        )
+        if presentation.id != watchPost.id {
+            SparkWarmPool.shared.rekey(from: watchPost.id, to: presentation.id)
+        }
 
         // Intent first — GlobalHubPlaybackLayer mounts with isActive true (no silent first frame).
         hubPlaybackPlaying = true
@@ -1662,23 +1672,31 @@ final class AppState {
 
     /// Shared open path for feed + chat: paint now, warm handoff, expand later.
     private func presentGlobalSparks(starting start: CountryPost, fromFeedPost: CountryPost? = nil) {
-        // Mark continue so feed teardown parks mid-playhead (not rewind to 0).
+        // Mark continue + sync-export live feed player into the warm pool (same runloop).
         var handoffIDs = [start.id]
         if let from = fromFeedPost { handoffIDs.append(from.id) }
         markContinuePlayback(for: handoffIDs)
+        NotificationCenter.default.post(
+            name: .matteryaExportPlaybackForHandoff,
+            object: nil,
+            userInfo: ["postIDs": Array(Set(handoffIDs))]
+        )
+        if let from = fromFeedPost, from.id != start.id {
+            SparkWarmPool.shared.rekey(from: from.id, to: start.id)
+        }
 
-        // Tiny instant queue — first paint never waits on ranking 70+ clips.
+        // Tiny instant queue — first paint never waits on ranking / catalog.
         let seeds = Self.instantSparksSeedQueue(starting: start, limit: 16)
-        // Paint Sparks UI immediately — feed parks continuing into the pool on unmount.
+        SparkWarmPool.shared.preparePlayerWindow(posts: seeds, around: 0)
+        // Paint Sparks UI immediately — claim hits the exported live buffer.
         openReelsViewer(startingPost: start, seedPosts: seeds)
-        // After feed parks: re-key share→origin, warm neighbors, expand catalog.
-        Task { @MainActor in
-            await Task.yield()
+
+        // Catalog expand strictly off the open path (no await before first paint).
+        Task(priority: .utility) { @MainActor in
             if let from = fromFeedPost, from.id != start.id {
                 SparkWarmPool.shared.rekey(from: from.id, to: start.id)
             }
             SparkWarmPool.shared.preparePlayerWindow(posts: seeds, around: 0)
-            NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
             _ = await PostsService.shared.loadSparksDiscoveryCatalog(
                 forceRefresh: seeds.count < 12,
                 deep: false

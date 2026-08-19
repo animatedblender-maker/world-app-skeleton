@@ -1664,12 +1664,12 @@ final class ArchiveVideoPlayerController: UIViewController {
 
         if continueMid, userWantsPlayback {
             lastKnownSeconds = t.isFinite ? max(0, t) : 0
-            posterView.isHidden = false
+            // Already has a painted frame — skip poster for seamless continue.
+            posterView.isHidden = true
             claimed.safePlayImmediately(atRate: 1.0)
             didKickPlayback = true
             onPlayingChanged?(true)
             onReady?()
-            revealPosterWhenPlaying(claimed)
         } else if needsSeek {
             // Seek under poster — reveal only after rate > 0.
             claimed.seek(

@@ -292,7 +292,9 @@ struct FacebookPostCard: View {
                 )
             }
 
+            // Social actions (like / comments / share / save) always sit under the media block.
             actions
+                .padding(.top, showsPlayLinkInFeed || opensAsSpark ? 6 : 0)
             meta
 
             if let actionMessage {
@@ -787,7 +789,7 @@ struct FacebookPostCard: View {
             loops: true,
             preferArchivePlayer: useArchivePath,
             showsControls: true,
-            // Fill the media box; hubs chrome overlays the film (YT-style).
+            // Fill the 16:9 film; chrome overlays (play centered, scrubber on bottom edge).
             fillsFrame: true,
             bottomChromeReserve: 0,
             autoplaySurface: autoplaySurface,
