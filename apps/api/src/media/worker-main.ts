@@ -19,7 +19,7 @@ import { disconnectKafka, ensureTopics, getProducer } from '../kafka/client.js';
 import { kafkaEnabled } from '../kafka/config.js';
 import { startMediaConsumer } from '../kafka/consumers/media.consumer.js';
 import { startOutboxPublisher, stopOutboxPublisher } from '../kafka/publisher.js';
-import { ffmpegAvailable } from './frame0.js';
+import { ffmpegAvailable, resolveFfmpegPath } from './frame0.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '..', '..', '.env'), override: true });
@@ -38,10 +38,10 @@ async function main(): Promise<void> {
 
   const hasFf = await ffmpegAvailable();
   if (!hasFf) {
-    console.error('❌ ffmpeg not on PATH — use Dockerfile.media-worker image');
+    console.error(`❌ ffmpeg not available (tried ${resolveFfmpegPath()})`);
     process.exit(1);
   }
-  console.log('✅ ffmpeg available');
+  console.log(`✅ ffmpeg available (${resolveFfmpegPath()})`);
 
   // Always use a dedicated identity (API uses matterya-api-workers).
   // Consumer code appends "-media" → group matterya-media-worker-media.

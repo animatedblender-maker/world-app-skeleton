@@ -102,60 +102,13 @@ services:
         value: matterya-sparks
       - key: R2_ENDPOINT
         sync: false
-      # Frame 0 runs on matterya-media-worker (ffmpeg Docker). Keep API off by default.
+      # Frame 0 runs in-process on this web service (ffmpeg-static). No extra worker bill.
       - key: MEDIA_WORKER_INPROCESS
-        value: "false"
-
-  # Frame 0 poster worker (ffmpeg). Poster = first displayed video frame only.
-  # Create via Blueprint sync or Dashboard → New Background Worker → Docker.
-  # Docs: docs/MEDIA_FRAME0.md
-  - type: worker
-    name: matterya-media-worker
-    runtime: docker
-    branch: ios-native
-    dockerfilePath: ./apps/api/Dockerfile.media-worker
-    dockerContext: ./apps/api
-    envVars:
-      - key: PGSSLMODE
-        value: require
-      - key: DATABASE_URL
-        sync: false
-      - key: KAFKA_ENABLED
         value: "true"
-      - key: KAFKA_BROKERS
-        sync: false
-      - key: KAFKA_CLIENT_ID
-        value: matterya-media-worker
-      - key: KAFKA_CONSUMER_GROUP
-        value: matterya-media-worker
-      - key: KAFKA_SHADOW
-        sync: false
-      - key: KAFKA_SSL
-        sync: false
-      - key: KAFKA_SASL_MECHANISM
-        sync: false
-      - key: KAFKA_SASL_USERNAME
-        sync: false
-      - key: KAFKA_SASL_PASSWORD
-        sync: false
-      - key: KAFKA_REPLICATION_FACTOR
-        sync: false
-      - key: KAFKAJS_NO_PARTITIONER_WARNING
-        value: "1"
-      - key: R2_ACCOUNT_ID
-        sync: false
-      - key: R2_ACCESS_KEY_ID
-        sync: false
-      - key: R2_SECRET_ACCESS_KEY
-        sync: false
-      - key: R2_BUCKET
-        value: matterya-sparks
-      - key: R2_ENDPOINT
-        sync: false
-      - key: R2_PUBLIC_BASE_URL
-        sync: false
-      - key: R2_FORCE_PUBLIC
-        sync: false
+
+  # Optional later: dedicated Docker media worker (Dockerfile.media-worker) if you
+  # outgrow in-process Frame 0. Not required — leave undeployed to avoid extra cost.
+  # See docs/MEDIA_FRAME0.md
 
   # Every 6h: discover new R2 packs, create owned Sparks + feed shares, re-sign URLs.
   - type: cron

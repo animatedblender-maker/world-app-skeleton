@@ -25,19 +25,19 @@ See **[CONTENT_PIPELINE.md](./CONTENT_PIPELINE.md)**.
 `CONTENT_CRON_SECRET` = any secret you generate (`openssl rand -hex 32`).  
 R2 keys = Cloudflare R2 API token (same names as local `.env.r2`).
 
-## Media worker (Frame 0 posters)
+## Frame 0 posters (no extra service)
 
 See **[MEDIA_FRAME0.md](./MEDIA_FRAME0.md)**.
 
+Runs **in-process** on **`matterya-api`** via **`ffmpeg-static`**. No Background Worker, no extra monthly cost.
+
 | | |
 |--|--|
-| **Service** | `matterya-media-worker` (Background Worker, **Docker**) |
-| **Dockerfile** | `apps/api/Dockerfile.media-worker` |
+| **Service** | existing `matterya-api` |
+| **Env** | `MEDIA_WORKER_INPROCESS=true` (default) |
 | **Kafka** | Topic `matterya.media` |
-| **Why Docker** | Needs **ffmpeg** — not on the stock Node web image |
-| **API** | Keep `MEDIA_WORKER_INPROCESS=false` on `matterya-api` |
 
-Create/sync the worker in the Render Dashboard (Blueprint alone often does not attach new services to an existing account). Copy `DATABASE_URL`, `KAFKA_*`, and `R2_*` from `matterya-api`.
+Optional Docker worker (`Dockerfile.media-worker`) is only if you later want a separate paid dyno.
 
 ## Platform reports (password page)
 

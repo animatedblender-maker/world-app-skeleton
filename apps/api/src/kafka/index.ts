@@ -8,10 +8,13 @@ import { startOutboxPublisher, stopOutboxPublisher } from './publisher.js';
 
 let started = false;
 
-/** Run Frame 0 consumer inside matterya-api (needs ffmpeg on PATH). Default: off. */
+/**
+ * Frame 0 runs in-process on matterya-api by default (bundled ffmpeg-static — no extra bill).
+ * Set MEDIA_WORKER_INPROCESS=false only if you run a dedicated matterya-media-worker.
+ */
 function mediaWorkerInProcess(): boolean {
-  const raw = (process.env.MEDIA_WORKER_INPROCESS ?? '').trim().toLowerCase();
-  return raw === '1' || raw === 'true' || raw === 'yes';
+  const raw = (process.env.MEDIA_WORKER_INPROCESS ?? 'true').trim().toLowerCase();
+  return !(raw === '0' || raw === 'false' || raw === 'no');
 }
 
 /**
@@ -34,14 +37,13 @@ export async function startKafkaPipeline(): Promise<void> {
       await startMessagesConsumer();
       await startEngagementConsumer();
       await startR2IngestConsumer();
-      // Frame 0: prefer dedicated matterya-media-worker (ffmpeg Docker image).
-      // Opt-in only so the API Node runtime is not required to have ffmpeg.
+      // Frame 0 posters on the same API process (ffmpeg-static). No extra Render worker.
       if (mediaWorkerInProcess()) {
         await startMediaConsumer();
-        console.log('   Media Frame 0: in-process (MEDIA_WORKER_INPROCESS=true)');
+        console.log('   Media Frame 0: in-process on matterya-api (ffmpeg-static)');
       } else {
         console.log(
-          '   Media Frame 0: deferred to matterya-media-worker (set MEDIA_WORKER_INPROCESS=true to run here)'
+          '   Media Frame 0: skipped (MEDIA_WORKER_INPROCESS=false — use dedicated worker if configured)'
         );
       }
     } else {

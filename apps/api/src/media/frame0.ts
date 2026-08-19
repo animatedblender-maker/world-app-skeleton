@@ -1,11 +1,13 @@
 /**
  * Frame 0 poster extract — first displayed video frame only.
  * Hard rule: poster pixels == video frame at t=0 (never a later “meaningful” frame).
+ * Runs in-process on matterya-api via bundled `ffmpeg-static` (no extra Render worker).
  * @see docs/MEDIA_FRAME0.md
  */
 import { spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -22,11 +24,26 @@ import {
 import { publicObjectUrl } from './r2-playback.js';
 import type { MediaProcessPayload, MediaReadyPayload } from '../kafka/types.js';
 
+const require = createRequire(import.meta.url);
+
 export const FRAME0_SIZES = [256, 512, 1080] as const;
 export type Frame0Size = (typeof FRAME0_SIZES)[number];
 
 /** Default list / Sparks / Hubs poster. */
 export const FRAME0_DEFAULT_SIZE: Frame0Size = 512;
+
+/** Resolve ffmpeg binary: FFMPEG_PATH → ffmpeg-static → PATH `ffmpeg`. */
+export function resolveFfmpegPath(): string {
+  const fromEnv = process.env.FFMPEG_PATH?.trim();
+  if (fromEnv) return fromEnv;
+  try {
+    const bundled = require('ffmpeg-static') as string | null;
+    if (bundled && typeof bundled === 'string') return bundled;
+  } catch {
+    /* optional dep missing in odd installs */
+  }
+  return 'ffmpeg';
+}
 
 export function packPrefixFromVideoKey(videoKey: string): string {
   const clean = videoKey.replace(/^\/+/, '');
@@ -44,8 +61,16 @@ export function frame0ObjectKey(videoKey: string, size: Frame0Size): string {
 }
 
 export async function ffmpegAvailable(): Promise<boolean> {
+  const bin = resolveFfmpegPath();
+  if (bin !== 'ffmpeg') {
+    try {
+      await access(bin);
+    } catch {
+      return false;
+    }
+  }
   return new Promise((resolve) => {
-    const child = spawn('ffmpeg', ['-version'], { stdio: 'ignore' });
+    const child = spawn(bin, ['-version'], { stdio: 'ignore' });
     child.on('error', () => resolve(false));
     child.on('close', (code) => resolve(code === 0));
   });
@@ -128,8 +153,11 @@ export async function processFrame0(
   if (!r2Configured()) {
     throw new Error('R2 not configured');
   }
+  const ffmpegBin = resolveFfmpegPath();
   if (!(await ffmpegAvailable())) {
-    throw new Error('ffmpeg not on PATH — install ffmpeg or deploy media worker image');
+    throw new Error(
+      `ffmpeg not available (tried ${ffmpegBin}). Install ffmpeg-static or set FFMPEG_PATH.`
+    );
   }
 
   const bucket = (payload.r2Bucket || getBucket()).trim();
@@ -150,7 +178,7 @@ export async function processFrame0(
         const localWebp = join(workDir, `frame0_${size}.webp`);
 
         // Seek before -i; force first decoded frame only — never scene-detect.
-        await runCmd('ffmpeg', [
+        await runCmd(ffmpegBin, [
           '-y',
           '-ss',
           '0',
