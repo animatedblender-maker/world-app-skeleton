@@ -142,7 +142,8 @@ struct VideoPlayerView: View {
                         MatteryaVideoSurface(player: player, fillsFrame: fillsFrame)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .clipped()
-                            .opacity(1)
+                            // Hide black/empty AV layer until poster cover lifts (scroll handoff).
+                            .opacity(shouldShowPosterCover ? 0.01 : 1)
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 guard showsControls else { return }
@@ -1484,11 +1485,15 @@ private final class MatteryaPlayerUIView: UIView {
     private var lockedGravity: AVLayerVideoGravity = .resizeAspectFill
     private var gravityLocked = false
 
+    /// Soft floor (Theme.canvasDeep) — never flash pure black while the first frame decodes.
+    private static let softFloor = UIColor(red: 0.929, green: 0.918, blue: 0.898, alpha: 1)
+
     override init(frame: CGRect) {
         super.init(frame: frame)
-        backgroundColor = .black
+        backgroundColor = Self.softFloor
         // Default fill (FB/IG feed + Sparks); host may switch to fit for wide clips.
         playerLayer.videoGravity = .resizeAspectFill
+        playerLayer.backgroundColor = Self.softFloor.cgColor
         lockedGravity = .resizeAspectFill
         isUserInteractionEnabled = false
         clipsToBounds = true
@@ -1515,7 +1520,7 @@ private final class MatteryaPlayerUIView: UIView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         playerLayer.videoGravity = gravity
-        playerLayer.backgroundColor = UIColor.black.cgColor
+        playerLayer.backgroundColor = Self.softFloor.cgColor
         CATransaction.commit()
     }
 

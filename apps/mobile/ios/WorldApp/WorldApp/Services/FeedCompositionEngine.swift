@@ -148,11 +148,16 @@ enum FeedCompositionEngine {
                 )
             )
         }
-        // HARD: while any unviewed remain, drop already-watched (shares + originals).
+        // Prefer unviewed, but never starve the head to 1–2 cards (that hung the feed).
         if policy.preferUnviewed {
             let fresh = out.filter { !SparkDiscoveryEngine.isViewed($0.post) }
-            if !fresh.isEmpty {
+            let minHead = max(8, policy.pageSize / 3)
+            if fresh.count >= minHead {
                 out = fresh
+            } else if !fresh.isEmpty {
+                // Unviewed first, then keep scored viewed fillers so the list stays usable.
+                let viewed = out.filter { SparkDiscoveryEngine.isViewed($0.post) }
+                out = fresh + viewed
             } else if !policy.allowRecycleWhenExhausted {
                 out = []
             }

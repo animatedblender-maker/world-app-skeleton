@@ -291,12 +291,13 @@ final class AppState {
             return
         }
         if new == .feed, old != .feed {
-            // Every return to Feed → new video mix (not only after 5+ min away).
-            let away = feedLeftAt.map { Date().timeIntervalSince($0) } ?? 0
-            #if DEBUG
-            print("[Feed] open feed tab away=\(Int(away))s → fresh session")
-            #endif
-            requestFreshFeedSession(reason: away >= feedStaleAwayInterval ? "away_5m" : "open_feed_tab")
+            // Only reshuffle after a real away — quick tab hops were starving/reloading the feed.
+            if let left = feedLeftAt, Date().timeIntervalSince(left) >= feedStaleAwayInterval {
+                #if DEBUG
+                print("[Feed] away \(Int(Date().timeIntervalSince(left)))s ≥ 5m → fresh session")
+                #endif
+                requestFreshFeedSession(reason: "away_5m")
+            }
             feedLeftAt = nil
         }
         if new == .hubs, old != .hubs {

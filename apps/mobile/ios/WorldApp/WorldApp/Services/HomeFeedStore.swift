@@ -325,7 +325,8 @@ final class HomeFeedStore {
                 applyPosts(Array(rankedPool.prefix(80)), replace: true, sessionId: feedSessionId, alreadyRanked: true)
                 isBootstrapping = false
                 didPaint = true
-                await warmHead()
+                // Never block first paint on AV warm — warm in parallel.
+                Task { await warmHead() }
             } else {
                 isBootstrapping = true
             }
@@ -361,7 +362,7 @@ final class HomeFeedStore {
                 applyPosts(capped, replace: true, sessionId: feedSessionId, alreadyRanked: true)
                 ContentCache.shared.setPosts(posts, for: .homeFeed)
                 didPaint = true
-                await warmHead()
+                Task { await warmHead() }
                 hasMore = true
                 recyclePass = 0
                 #if DEBUG
@@ -375,6 +376,11 @@ final class HomeFeedStore {
         }
 
         isBootstrapping = false
+        // Thin head after viewed-filter → immediately page for more (don’t spin on 1 card).
+        if posts.count < 12 {
+            hasMore = true
+            requestLoadMore()
+        }
         // Facebook-style: never leave the user waiting at the tail — fill the pool in background.
         Task(priority: .utility) { [weak self] in
             await self?.ensureBufferedPool()
@@ -472,7 +478,7 @@ final class HomeFeedStore {
                 applyPosts(ranked, replace: true, sessionId: feedSessionId, alreadyRanked: true)
                 isBootstrapping = false
                 didPaint = true
-                await warmHead()
+                Task { await warmHead() }
             }
         }
 
@@ -507,7 +513,7 @@ final class HomeFeedStore {
                 applyPosts(capped, replace: true, sessionId: feedSessionId, alreadyRanked: true)
                 ContentCache.shared.setPosts(posts, for: .homeFeed)
                 didPaint = true
-                await warmHead()
+                Task { await warmHead() }
                 hasMore = true
                 recyclePass = 0
                 #if DEBUG
@@ -535,10 +541,28 @@ final class HomeFeedStore {
     /// Drop offline Reddit / catalog fakes; keep real UUID-backed posts only
     /// (includes DE Million Post Corpus seeds + their comments).
     /// **Keeps R2 Sparks** — they render as SparkFeedCard on the main feed.
-    /// **Hard hide watched** — never re-surface after watch / relaunch / 5min away.
+    /// Prefer unviewed; if the head would starve (<8), top up with least-recently-viewed
+    /// so the feed never paints a single card then hangs.
     private static func liveOnlyPosts(_ posts: [CountryPost]) -> [CountryPost] {
         let base = posts.excludingDeletedPosts().forHomeFeed()
-        return base.filter { !SparkDiscoveryEngine.isViewed($0) }
+        let unviewed = base.filter { !SparkDiscoveryEngine.isViewed($0) }
+        let minHead = 8
+        if unviewed.count >= minHead { return unviewed }
+        if unviewed.isEmpty {
+            // Library exhausted for this page — least-recent first (still a usable list).
+            return SparkDiscoveryEngine.rankForDiscovery(base)
+        }
+        // Keep every unviewed, then fill with least-recently-viewed until minHead.
+        var seen = Set(unviewed.map(\.id))
+        var out = unviewed
+        let fillers = SparkDiscoveryEngine.rankForDiscovery(
+            base.filter { SparkDiscoveryEngine.isViewed($0) }
+        )
+        for post in fillers where seen.insert(post.id).inserted {
+            out.append(post)
+            if out.count >= minHead { break }
+        }
+        return out
     }
 
     // MARK: - Scroll / prefetch
@@ -750,7 +774,7 @@ final class HomeFeedStore {
         // Always more — R2 library + network continue after this head.
         hasMore = true
         didPaint = !posts.isEmpty
-        await warmHead()
+        Task { await warmHead() }
         if !filtered.isEmpty {
             ContentCache.shared.setPosts(posts, for: .homeFeed)
         } else {
@@ -938,10 +962,10 @@ final class HomeFeedStore {
             Task(priority: .utility) {
                 await RecommendationClient.warmPlaybackURLs(videoIDs)
             }
-            // Block only a short beat so the first focus winner is already decoded.
+            // Short beat — first focus winner should already be decoded when possible.
             await SparkWarmPool.shared.awaitReady(
                 postIDs: Array(videoIDs.prefix(2)),
-                timeout: 1.0
+                timeout: 0.45
             )
         }
     }

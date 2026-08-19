@@ -11,6 +11,8 @@ struct FeedView: View {
     @State private var errorMessage: String?
     /// Prevents hammering strip network when task re-runs.
     @State private var stripsNetworkGeneration = 0
+    /// Detect real feed-fresh bumps (open / 5m away / pull) vs share-only gen bumps.
+    @State private var lastHandledFreshToken = -1
 
     private var hasAnyStrip: Bool {
         !feedReels.isEmpty || !continueWatching.isEmpty || !newOnPlay.isEmpty
@@ -74,11 +76,16 @@ struct FeedView: View {
                     meta: ["source": "cache_or_strip"]
                 )
             }
-            // Every open / generation bump → brand-new mix (Instagram-style, not sticky head).
-            feedReels = []
-            continueWatching = []
-            newOnPlay = []
-            await store.beginFreshSession(forceReplace: true)
+            // Cold open / 5m away / pull → full reshape. Share-only gen bumps soft-merge.
+            let freshBump = appState.feedFreshSessionToken != lastHandledFreshToken
+            lastHandledFreshToken = appState.feedFreshSessionToken
+            let forceReshape = freshBump || !store.didPaint || store.displayedPosts.isEmpty
+            if forceReshape {
+                feedReels = []
+                continueWatching = []
+                newOnPlay = []
+            }
+            await store.beginFreshSession(forceReplace: forceReshape)
             guard !Task.isCancelled else { return }
             paintStripsFromCache()
             PerformanceTelemetry.milestoneFromLaunch(
