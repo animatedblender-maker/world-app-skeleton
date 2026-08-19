@@ -202,31 +202,24 @@ struct GlobalHubPlaybackLayer: View {
                                 .frame(width: geo.size.width, height: geo.size.height)
                                 .allowsHitTesting(false)
                         }
-                        Group {
-                            let film = HubPassThroughContainer(
-                                interactiveRectGlobal: interactiveHitGlobal,
-                                contentID: post.id,
-                                layoutSignature: post.id
-                            ) {
-                                continuousFilm(post: post)
-                            }
-                            .frame(width: safePositive(layout.width), height: safePositive(layout.height))
-                            .offset(x: safeOffset(layout.x), y: safeOffset(layout.y))
-                            .animation(interactiveAnimation, value: collapse)
-                            .animation(interactiveAnimation, value: fsProgress)
-
-                            // Clip only in mini — expanded clip cut the timeline scrubber.
-                            if !expanded || collapse > 0.55 {
-                                film.clipShape(
-                                    RoundedRectangle(
-                                        cornerRadius: cornerRadius(for: layout),
-                                        style: .continuous
-                                    )
-                                )
-                            } else {
-                                film
-                            }
+                        HubPassThroughContainer(
+                            interactiveRectGlobal: interactiveHitGlobal,
+                            contentID: post.id,
+                            layoutSignature: post.id
+                        ) {
+                            // Fills host bounds; outer frame/offset morphs stage↔mini without rehost.
+                            continuousFilm(post: post)
                         }
+                        .frame(width: safePositive(layout.width), height: safePositive(layout.height))
+                        .offset(x: safeOffset(layout.x), y: safeOffset(layout.y))
+                        .animation(interactiveAnimation, value: collapse)
+                        .animation(interactiveAnimation, value: fsProgress)
+                        .clipShape(
+                            RoundedRectangle(
+                                cornerRadius: cornerRadius(for: layout),
+                                style: .continuous
+                            )
+                        )
                     }
                     .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
                 }
@@ -269,10 +262,27 @@ struct GlobalHubPlaybackLayer: View {
                 if appState.hubPlaybackPullProgress > 0.5 {
                     appState.hubPlaybackPullProgress = 0
                 }
-                // Geometry only — finishMinimize already reasserted audio once.
+                // Mini handoff: keep film playing.
+                appState.hubPlaybackPlaying = true
+                MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
+                    userMuted: appState.hubPlaybackMuted
+                )
+                NotificationCenter.default.post(
+                    name: .matteryaResumePlaybackAfterInterrupt,
+                    object: nil
+                )
                 if collapse < 0.99 { collapse = 1 }
                 if fsProgress > 0.001 { fsProgress = 0 }
                 pushMorphState()
+                // One delayed re-assert — covers tab/layout settle without multi-beat thrash.
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    guard appState.hubPlaybackPost != nil, !appState.hubPlaybackExpanded else { return }
+                    appState.hubPlaybackPlaying = true
+                    MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
+                        userMuted: appState.hubPlaybackMuted
+                    )
+                }
             }
         }
         .onChange(of: appState.hubPlaybackPost?.id) { _, _ in
@@ -358,8 +368,8 @@ struct GlobalHubPlaybackLayer: View {
             let h = safePositive(g.size.height)
             ZStack {
                 Theme.ink
-                // Poster only while not playing — once AV paints, never cover with thumb.
-                if let poster = post.posterImageURL, !appState.hubPlaybackPlaying {
+                // Poster only under film — AV layer stays mounted; never swap to list thumb.
+                if let poster = post.posterImageURL {
                     CachedAsyncImage(
                         url: poster,
                         maxPixelSize: 900,
@@ -370,9 +380,7 @@ struct GlobalHubPlaybackLayer: View {
                     .clipped()
                     .allowsHitTesting(false)
                 }
-                // Controls come from AppState inside MatteryaHubPlayerView (pass-through
-                // freezes SwiftUI props — never bake showControls:false forever).
-                playerSurface(for: post, showControls: true, chromeOpacity: 1)
+                playerSurface(for: post, showControls: false, chromeOpacity: 0)
                     .frame(width: w, height: h)
                     .clipped()
             }
@@ -526,26 +534,19 @@ struct GlobalHubPlaybackLayer: View {
     }
 
     /// Mirror local @State into the morph driver (hosted film can observe without rehost).
-    /// Skip no-op writes — every @Published assign was freezing mini↔max morph.
     private func pushMorphState() {
-        if abs(morph.collapse - collapse) > 0.002 { morph.collapse = collapse }
-        if abs(morph.fsProgress - fsProgress) > 0.002 { morph.fsProgress = fsProgress }
-        if morph.expanded != expanded { morph.expanded = expanded }
-        if morph.dockGlobal != dockSlotGlobal { morph.dockGlobal = dockSlotGlobal }
-        if morph.stageGlobal != watchStageGlobal { morph.stageGlobal = watchStageGlobal }
-        let aspect = appState.hubPlaybackVideoAspect
-        if abs(morph.videoAspect - aspect) > 0.01 { morph.videoAspect = aspect }
-        let pathEmpty = appState.navigationPath.isEmpty
-        if morph.pathEmpty != pathEmpty { morph.pathEmpty = pathEmpty }
-        if morph.playing != appState.hubPlaybackPlaying {
-            morph.playing = appState.hubPlaybackPlaying
-        }
-        if morph.contentRotation != contentRotation { morph.contentRotation = contentRotation }
-        if morph.useLandscapeLayout != useLandscapeLayout {
-            morph.useLandscapeLayout = useLandscapeLayout
-        }
-        if morph.isDragging != isDragging { morph.isDragging = isDragging }
-        if morph.isFSDragging != isFSDragging { morph.isFSDragging = isFSDragging }
+        morph.collapse = collapse
+        morph.fsProgress = fsProgress
+        morph.expanded = expanded
+        morph.dockGlobal = dockSlotGlobal
+        morph.stageGlobal = watchStageGlobal
+        morph.videoAspect = appState.hubPlaybackVideoAspect
+        morph.pathEmpty = appState.navigationPath.isEmpty
+        morph.playing = appState.hubPlaybackPlaying
+        morph.contentRotation = contentRotation
+        morph.useLandscapeLayout = useLandscapeLayout
+        morph.isDragging = isDragging
+        morph.isFSDragging = isFSDragging
     }
 
     /// Coarse layout fingerprint — 4pt / 5% buckets so sub-pixel preference noise
@@ -1003,8 +1004,11 @@ struct GlobalHubPlaybackLayer: View {
         // Belt-and-suspenders: never leave immersive FS flags stuck over mini chrome.
         fsProgress = 0
         appState.hubFullscreenPullProgress = 0
-        // Keep intent playing through morph — single reassert happens in finishMinimize.
+        // Audio must keep running through the morph.
         appState.hubPlaybackPlaying = true
+        MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
+            userMuted: appState.hubPlaybackMuted
+        )
         let returnToChat = appState.hubMinimizeReturnToChat
         withAnimation(MatteryaMotion.ytMorph) {
             collapse = 1
@@ -1017,8 +1021,21 @@ struct GlobalHubPlaybackLayer: View {
             withTransaction(t) {
                 collapse = 1
             }
-            // One session flip + one reassert inside finishMinimize — no cascade.
             appState.finishMinimizeHubPlayback(returnToChat: returnToChat)
+            var t2 = Transaction()
+            t2.disablesAnimations = true
+            withTransaction(t2) {
+                collapse = 1
+            }
+            // After chrome mounts: re-solo (tab/feed may have stolen focus mid-morph).
+            appState.hubPlaybackPlaying = true
+            MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
+                userMuted: appState.hubPlaybackMuted
+            )
+            NotificationCenter.default.post(
+                name: .matteryaResumePlaybackAfterInterrupt,
+                object: nil
+            )
         }
     }
 }

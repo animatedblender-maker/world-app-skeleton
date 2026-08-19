@@ -204,8 +204,6 @@ final class ArchivePlayerBridge: ObservableObject {
 /// Matterya-styled controls over the Archive player: play/pause, mute, scrub, ±10s.
 /// Used in Hubs watch, mini handoff, and feed — keep this as the single hub video surface.
 struct MatteryaHubPlayerView: View {
-    @Environment(AppState.self) private var appState
-
     let url: URL
     var posterURL: URL? = nil
     var isActive: Bool = true
@@ -253,27 +251,6 @@ struct MatteryaHubPlayerView: View {
     /// YouTube-style double-tap skip flash (negative = back, positive = forward).
     @State private var skipFlash: Int = 0
     @State private var skipFlashTask: Task<Void, Never>?
-
-    /// Pass-through host freezes `showsControls` at first mount — read AppState live instead.
-    private var effectiveShowsControls: Bool {
-        if isContinuousHubPlayer {
-            guard appState.hubPlaybackExpanded else { return false }
-            if appState.hubPlaybackPullProgress > 0.55 { return false }
-            return true
-        }
-        return showsControls
-    }
-
-    private var effectiveChromeOpacity: Double {
-        if isContinuousHubPlayer {
-            guard appState.hubPlaybackExpanded else { return 0 }
-            let pull = appState.hubPlaybackPullProgress
-            if pull > 0.55 { return 0 }
-            if isFullscreenActive { return 1 }
-            return Double(1 - min(1, max(0, pull)))
-        }
-        return chromeOpacity
-    }
 
     init(
         url: URL,
@@ -382,29 +359,29 @@ struct MatteryaHubPlayerView: View {
                 isContinuousHubPlayer: isContinuousHubPlayer
             )
 
-            if effectiveShowsControls {
+            if showsControls {
                 // Spinner only while this slot is actively trying to play (never mid-scroll).
                 if !bridge.isReady, isActive {
                     ProgressView()
                         .progressViewStyle(.circular)
                         .tint(.white)
                         .scaleEffect(1.15)
-                        .opacity(effectiveChromeOpacity)
+                        .opacity(chromeOpacity)
                         .zIndex(2)
                 }
 
-                // Buttons after tap — continuous expanded starts with chrome visible once.
+                // Buttons only after the user taps the video — never while scrolling.
                 if showChrome {
                     hubChrome
-                        .opacity(effectiveChromeOpacity)
-                        .allowsHitTesting(effectiveChromeOpacity > 0.2)
+                        .opacity(chromeOpacity)
+                        .allowsHitTesting(chromeOpacity > 0.2)
                         .transition(.opacity)
                         .zIndex(3)
                 } else {
                     // Capture taps + double-tap skip without drawing transport chrome.
                     youtubeHiddenChromeHitLayer
-                        .opacity(max(0.01, effectiveChromeOpacity))
-                        .allowsHitTesting(effectiveChromeOpacity > 0.05 || isContinuousHubPlayer)
+                        .opacity(chromeOpacity)
+                        .allowsHitTesting(chromeOpacity > 0.2)
                         .zIndex(3)
                 }
 
@@ -421,7 +398,7 @@ struct MatteryaHubPlayerView: View {
                     }
                     .padding(.horizontal, 28)
                     .allowsHitTesting(false)
-                    .opacity(effectiveChromeOpacity)
+                    .opacity(chromeOpacity)
                     .transition(.opacity.combined(with: .scale(scale: 0.9)))
                     .zIndex(40)
                 }
@@ -520,9 +497,6 @@ struct MatteryaHubPlayerView: View {
                     bridge.controller?.setMuted(isMuted)
                     bridge.controller?.setActive(true)
                     bridge.controller?.ensureContinuingPlayback()
-                    if let p = bridge.controller?.avPlayer {
-                        MediaPlaybackCoordinator.shared.protectContinuous(p)
-                    }
                     bridge.isPlaying = true
                 } else {
                     bridge.controller?.pauseKeepingFrame()
@@ -590,35 +564,6 @@ struct MatteryaHubPlayerView: View {
                 scheduleChromeHide()
             }
         }
-        .onChange(of: appState.hubPlaybackExpanded) { _, expanded in
-            guard isContinuousHubPlayer else { return }
-            if expanded {
-                // Maximized: show transport buttons (pass-through froze showsControls=false).
-                showChrome = true
-                scheduleChromeHide()
-                bridge.controller?.setMuted(isMuted)
-                bridge.controller?.setActive(true)
-                bridge.controller?.ensureContinuingPlayback()
-                if let p = bridge.controller?.avPlayer {
-                    MediaPlaybackCoordinator.shared.protectContinuous(p)
-                }
-                bridge.isPlaying = true
-                onPlayingChange?(true)
-            } else {
-                // Mini: hide transport; keep AV painting (never fall back to poster/thumb).
-                chromeHideTask?.cancel()
-                showChrome = false
-                bridge.controller?.setMuted(isMuted)
-                bridge.controller?.setActive(true)
-                bridge.controller?.ensureContinuingPlayback()
-                if let p = bridge.controller?.avPlayer {
-                    MediaPlaybackCoordinator.shared.protectContinuous(p)
-                }
-                MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(userMuted: isMuted)
-                bridge.isPlaying = true
-                onPlayingChange?(true)
-            }
-        }
         .onChange(of: isMuted) { _, muted in
             bridge.controller?.setMuted(muted)
             bridge.publishMuted(muted)
@@ -642,15 +587,6 @@ struct MatteryaHubPlayerView: View {
             bridge.controller?.setMuted(isMuted)
             if isActive {
                 bridge.controller?.setActive(true)
-                bridge.controller?.ensureContinuingPlayback()
-                if isContinuousHubPlayer, let p = bridge.controller?.avPlayer {
-                    MediaPlaybackCoordinator.shared.protectContinuous(p)
-                }
-            }
-            // Continuous expanded: reveal transport (props were frozen showControls=false).
-            if isContinuousHubPlayer, appState.hubPlaybackExpanded {
-                showChrome = true
-                scheduleChromeHide()
             }
         }
         .onDisappear {
@@ -674,19 +610,10 @@ struct MatteryaHubPlayerView: View {
         let safeBottom = isFullscreenActive ? max(12, YouTubeMediaLayout.keyWindowSafeBottom + 6) : 10
 
         return ZStack {
-            // Never full-bleed black dim — that read as a bar cutting the maximized film.
-            // Paused: tiny vignette only at the bottom scrubber band.
+            // Soft dim when paused — keep transparent enough to avoid “black bar” slabs.
             if !bridge.isPlaying {
-                VStack(spacing: 0) {
-                    Spacer(minLength: 0)
-                    LinearGradient(
-                        colors: [.clear, Color.black.opacity(0.35)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .frame(height: 72)
-                }
-                .allowsHitTesting(false)
+                Color.black.opacity(0.18)
+                    .allowsHitTesting(false)
             }
 
             // Single tap empty area → hide chrome when playing; double-tap L/R → ±10s.
@@ -808,19 +735,17 @@ struct MatteryaHubPlayerView: View {
                     .padding(.horizontal, 14)
                     .padding(.bottom, safeBottom)
                 }
-                .padding(.top, 10)
-                // Hairline fade under scrubber only — never a slab over the timeline.
+                .padding(.top, 20)
                 .background(
                     LinearGradient(
                         colors: [
                             .clear,
-                            Theme.ink.opacity(0.12),
-                            Theme.ink.opacity(0.28),
+                            Theme.ink.opacity(0.5),
+                            Theme.ink.opacity(0.88),
                         ],
                         startPoint: .top,
                         endPoint: .bottom
                     )
-                    .allowsHitTesting(false)
                 )
             }
             .zIndex(4)
@@ -1473,7 +1398,6 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
         var lastURL: URL?
         var lastActive: Bool?
         var lastMuted: Bool?
-        var lastGravity: AVLayerVideoGravity?
         var lastSeekToken: Double?
         var lastRestartToken: UInt = 0
         var lastUserPaused: Bool = false
@@ -1503,7 +1427,6 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
         context.coordinator.lastURL = url
         context.coordinator.lastActive = isActive
         context.coordinator.lastMuted = muted
-        context.coordinator.lastGravity = videoGravity
         context.coordinator.lastRestartToken = restartFromBeginningToken
         // Gravity BEFORE configure/install — never play one frame at fill then snap to fit.
         vc.applyVideoGravity(videoGravity)
@@ -1517,30 +1440,8 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ vc: ArchiveVideoPlayerController, context: Context) {
-        let urlChanged = context.coordinator.lastURL != url
-        let activeChanged = context.coordinator.lastActive != isActive
-        let mutedChanged = context.coordinator.lastMuted != muted
-        let restartChanged = context.coordinator.lastRestartToken != restartFromBeginningToken
-        let pauseChanged = context.coordinator.lastUserPaused != isPausedByUser
-        let gravityChanged = context.coordinator.lastGravity != videoGravity
-
-        // Continuous hubs mini↔max morph resizes the host every frame.
-        // Never re-apply gravity / mute / callbacks on no-op SwiftUI updates (main-thread freeze).
-        let anyChange = urlChanged || activeChanged || mutedChanged || restartChanged
-            || pauseChanged || gravityChanged
-        guard anyChange || seekToSeconds != nil else {
-            // Cheap bookkeeping only — no AV work.
-            if vc.postID != postID { vc.postID = postID }
-            if vc.isContinuousHubPlayer != isContinuousHubPlayer {
-                vc.isContinuousHubPlayer = isContinuousHubPlayer
-            }
-            return
-        }
-
-        if gravityChanged {
-            context.coordinator.lastGravity = videoGravity
-            vc.applyVideoGravity(videoGravity)
-        }
+        // Gravity first on every update so install paths never see the wrong default.
+        vc.applyVideoGravity(videoGravity)
         vc.loops = loops
         vc.postID = postID
         vc.isContinuousHubPlayer = isContinuousHubPlayer
@@ -1555,6 +1456,12 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
             bridge?.publishPlaying(playing)
         }
         bridge?.controller = vc
+
+        let urlChanged = context.coordinator.lastURL != url
+        let activeChanged = context.coordinator.lastActive != isActive
+        let mutedChanged = context.coordinator.lastMuted != muted
+        let restartChanged = context.coordinator.lastRestartToken != restartFromBeginningToken
+        let pauseChanged = context.coordinator.lastUserPaused != isPausedByUser
 
         if urlChanged {
             context.coordinator.lastURL = url
@@ -1615,6 +1522,9 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
             } else {
                 vc.setActive(false)
             }
+        } else if isActive {
+            // Keep mute in sync even when only coordinator paused/muted us.
+            vc.setMuted(muted)
         }
 
         // Sparks timeline scrub — apply once per request, then clear token so re-seeks work.
@@ -1792,13 +1702,7 @@ final class ArchiveVideoPlayerController: UIViewController {
         playerLayer?.frame = view.bounds
         playerLayer?.videoGravity = preferredVideoGravity
         playerLayer?.opacity = 1
-        playerLayer?.isHidden = false
-        // Continuous mini: never leave UIKit poster covering a live film (audio-only thumb).
-        if isContinuousHubPlayer, userWantsPlayback, (player?.rate ?? 0) > 0.01 {
-            posterView.isHidden = true
-        }
         CATransaction.commit()
-        posterView.frame = view.bounds
     }
 
     /// Default fill (FB/IG); landscape Sparks may switch to fit when crop would be hard.
@@ -2371,9 +2275,8 @@ final class ArchiveVideoPlayerController: UIViewController {
                 self.posterView.isHidden = false
                 return
             }
-            // Continuous: never cover live film with poster (mini became thumb+audio).
-            // Sparks/feed: keep poster until rate is real.
-            self.posterView.isHidden = self.isContinuousHubPlayer
+            // IG/YT: keep poster until rate is real — never hide before first paint.
+            self.posterView.isHidden = false
             _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
                 keeping: claimed,
                 pageEpoch: self.activePageEpoch
@@ -2478,14 +2381,6 @@ final class ArchiveVideoPlayerController: UIViewController {
 
     /// Keep poster until AVPlayer is producing frames — never black hole after thumb.
     private func revealPosterWhenFramesReady(_ player: AVPlayer) {
-        // Continuous hubs: hide poster as soon as we intend to play — keeping it up
-        // caused mini “thumbnail + audio only” (UIKit poster over AVPlayerLayer).
-        if isContinuousHubPlayer, userWantsPlayback {
-            posterView.isHidden = true
-            if player.rate > 0.01 || player.timeControlStatus == .playing {
-                onPlayingChanged?(true)
-            }
-        }
         if player.rate > 0.05 || player.timeControlStatus == .playing {
             posterView.isHidden = true
             onPlayingChanged?(true)
@@ -2496,15 +2391,13 @@ final class ArchiveVideoPlayerController: UIViewController {
                 try? await Task.sleep(nanoseconds: 40_000_000)
                 guard let self else { return }
                 guard self.userWantsPlayback else { return }
-                if self.isContinuousHubPlayer {
-                    self.posterView.isHidden = true
-                }
                 if player.rate > 0.05 || player.timeControlStatus == .playing {
                     self.posterView.isHidden = true
                     self.onPlayingChanged?(true)
                     return
                 }
             }
+            // Prefer poster over black if still not painting.
             if let self = self, self.userWantsPlayback, player.rate > 0.01 {
                 self.posterView.isHidden = true
                 self.onPlayingChanged?(true)
@@ -2919,10 +2812,9 @@ final class ArchiveVideoPlayerController: UIViewController {
     }
 
     private func configureAudioSession() {
-        // Off main + debounced — main-thread setActive freezes hubs open (SessionCore).
-        Task { @MainActor in
-            MediaPlaybackCoordinator.shared.ensurePlaybackAudioSession()
-        }
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playback, mode: .moviePlayback, options: [])
+        try? session.setActive(true, options: [])
     }
 
     private func loadPoster(_ url: URL?) {

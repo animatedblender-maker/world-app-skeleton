@@ -90,13 +90,12 @@ struct MainTabView: View {
             && !appState.hubPlaybackDockInChat
     }
 
-    /// Mini: above bar plate (100) so film covers the hole.
-    /// Expanded: above tab bar (100) so timeline isn’t buried under BottomTabBar overlay;
-    /// still below mini chrome slot (120). FS: 200.
     private var continuousPlayerZIndex: Double {
         if hubsImmersiveFullscreen { return 200 }
-        if appState.hubPlaybackExpanded { return 105 }
-        return 115
+        if appState.hubPlaybackExpanded { return 55 }
+        // Mini: paint ABOVE the mini bar plate/poster (100) so UIKit film is not
+        // swallowed under a clear SwiftUI hole. Mini chrome is drawn inside this layer.
+        return 110
     }
 
     /// Soft plate under the mini strip so paper never flashes through a clear hole.
@@ -139,8 +138,6 @@ struct MainTabView: View {
     /// Mini strip flush **above** the tab bar (never under it). Continuous film docks here.
     @ViewBuilder
     private var floatingMiniAndTabChrome: some View {
-        // When hubs watch is expanded, keep tab bar but never stack it over the film timeline.
-        // (Continuous z=105 sits above this z=100.)
         if !hubsImmersiveFullscreen, showsFloatingMiniBar || appState.navigationPath.isEmpty {
             VStack(spacing: 0) {
                 if showsFloatingMiniBar, let post = appState.hubPlaybackPost {
@@ -171,7 +168,6 @@ struct MainTabView: View {
             .frame(maxWidth: .infinity)
             .ignoresSafeArea(.keyboard)
             .zIndex(100)
-            .allowsHitTesting(!appState.hubPlaybackExpanded || showsFloatingMiniBar)
         }
     }
 
@@ -324,19 +320,11 @@ private struct MainTabLifecycleModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .onPreferenceChange(HubContinuousVideoSlotKey.self) { frame in
-                // Mini only — ignore nil mid-morph; never keep an expanded-stage-sized dock.
-                guard !appState.hubPlaybackExpanded else { return }
-                guard let frame, frame.width > 20, frame.height > 20 else { return }
-                // Reject absurdly tall “dock” (stale stage leaked into mini).
-                let maxMini = YouTubeMiniPlayerBar.barHeight + 24
-                guard frame.height <= maxMini else { return }
                 if MainTabView.frameMeaningfullyChanged(hubContinuousDockSlotGlobal, frame) {
                     hubContinuousDockSlotGlobal = frame
                 }
             }
             .onPreferenceChange(HubWatchStageFrameKey.self) { frame in
-                guard appState.hubPlaybackExpanded else { return }
-                guard let frame, frame.width > 40, frame.height > 40 else { return }
                 if MainTabView.frameMeaningfullyChanged(hubWatchStageGlobal, frame) {
                     hubWatchStageGlobal = frame
                 }
@@ -412,14 +400,12 @@ private struct MainTabLifecycleModifier: ViewModifier {
 
     private func handleSelectedTabChange(from oldTab: AppTab, to tab: AppTab) {
         if tab != .hubs, appState.hubPlaybackExpanded {
-            // Morph to mini — never animated:false (that snapped + silenced mid-frame).
-            appState.minimizeHubPlayback(returnToChat: false, animated: true)
+            appState.minimizeHubPlayback(returnToChat: false, animated: false)
         }
+        FeedVideoFocus.shared.resetAll()
         if appState.hubPlaybackPost == nil {
-            FeedVideoFocus.shared.resetAll()
             MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
         } else {
-            // Continuous hubs owns AV — skip resetAll/silence (froze expand/minimize).
             appState.hubPlaybackPlaying = true
             MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
                 userMuted: appState.hubPlaybackMuted
@@ -436,16 +422,18 @@ private struct MainTabLifecycleModifier: ViewModifier {
 
     private func handleNavigationCountChange(_ count: Int) {
         if count > 0, appState.hubPlaybackExpanded {
-            appState.minimizeHubPlayback(returnToChat: false, animated: true)
+            appState.minimizeHubPlayback(returnToChat: false, animated: false)
             appState.hubPlaybackPlaying = true
             MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
                 userMuted: appState.hubPlaybackMuted
             )
+            NotificationCenter.default.post(
+                name: .matteryaResumePlaybackAfterInterrupt,
+                object: nil
+            )
         }
         appState.syncHubPlaybackChatReturnWithPath()
-        if appState.hubPlaybackPost == nil {
-            FeedVideoFocus.shared.resetAll()
-        }
+        FeedVideoFocus.shared.resetAll()
         if count == 0, appState.hubPlaybackPost != nil, appState.hubPlaybackPlaying {
             MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
                 userMuted: appState.hubPlaybackMuted
