@@ -517,7 +517,8 @@ struct MatteryaHubPlayerView: View {
                         .frame(width: 42, alignment: .trailing)
                 }
                 .padding(.horizontal, 16)
-                .padding(.bottom, 14)
+                // Keep scrubber fully on-film (parent clips were shaving ~8–12pt).
+                .padding(.bottom, 26)
                 .padding(.top, 18)
                 .background(
                     LinearGradient(

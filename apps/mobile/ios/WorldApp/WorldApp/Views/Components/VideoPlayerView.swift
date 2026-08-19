@@ -1634,8 +1634,8 @@ private struct MatteryaVideoControls: View {
                         .frame(width: 42, alignment: .trailing)
                 }
                 .padding(.horizontal, 14)
-                // Keep scrubber fully inside the filled 16:9 card (never clipped).
-                .padding(.bottom, isFullscreen ? 0 : 18)
+                // Extra bottom inset so the scrubber sits fully on-film (never cropped).
+                .padding(.bottom, isFullscreen ? 0 : 26)
                 .padding(.top, 10)
                 .safeAreaPadding(.bottom, isFullscreen ? 10 : 0)
                 .background(
@@ -1647,7 +1647,7 @@ private struct MatteryaVideoControls: View {
                 )
             }
 
-            // Dead-center of the film box (same ZStack — not skewed by a chrome pad).
+            // Dead-center of the film box.
             HStack(spacing: 40) {
                 controlIconButton(systemName: "gobackward.10", size: 46) {
                     onSeek(max(0, currentSeconds - 10))
@@ -2176,12 +2176,19 @@ struct InFrameVideoPlayer: View {
         }
 
         let ratio = FeedVideoFocus.visibleRatio(for: frame)
-        // Approaching focus → deep-warm so claim lands on a decoded first frame.
-        if ratio >= 0.28, let postID,
-           !SparkWarmPool.shared.hasWarmOrInflight(postID: postID) {
-            SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: true)
+        // Approaching focus → deep-warm (fire-and-forget — never await on scroll).
+        if ratio >= 0.22, let postID {
+            if !SparkWarmPool.shared.hasWarmOrInflight(postID: postID) {
+                SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: true)
+            }
             if usesArchivePath {
                 ArchiveVideoPlayback.warmResolve(url)
+            }
+            // CDN edge warm once per approach (utility — does not block UI).
+            if ratio >= 0.35, ratio - lastReportedRatio > 0.05 || lastReportedRatio < 0 {
+                Task(priority: .utility) {
+                    await RecommendationClient.warmPlaybackURLs([postID])
+                }
             }
         }
         // Skip tiny noise; still re-check winner (pause only when >70% off-screen).

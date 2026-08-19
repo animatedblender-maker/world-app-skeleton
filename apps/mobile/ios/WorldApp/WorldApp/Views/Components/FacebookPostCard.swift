@@ -1356,7 +1356,7 @@ private struct FeedMediaSizeModifier: ViewModifier {
             content
                 .frame(minWidth: 0, maxWidth: .infinity)
                 .frame(height: height)
-                .clipped()
+                // Do not .clipped() hubs — that shaved the overlay scrubber off the bottom.
                 .contentShape(Rectangle())
         } else {
             content

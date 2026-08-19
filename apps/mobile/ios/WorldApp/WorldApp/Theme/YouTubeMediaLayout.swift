@@ -137,7 +137,8 @@ struct YouTubeVideoFrame<Content: View>: View {
                     }
                     .clipShape(Rectangle())
             case .feed:
-                // True 16:9 — film fills; transport overlays (not clipped away).
+                // True 16:9 — film fills; transport overlays on top.
+                // Do NOT .clipped() the outer box — that shaved the scrubber off the bottom.
                 Color.clear
                     .frame(maxWidth: .infinity)
                     .frame(height: FacebookMediaLayout.hubFeedVideoHeight())
@@ -145,8 +146,6 @@ struct YouTubeVideoFrame<Content: View>: View {
                     .overlay {
                         content()
                     }
-                    // Clip media only — chrome is drawn inside and must stay visible.
-                    .clipped()
             case .card:
                 // Shelf / search cards stay compact 16:9.
                 Color.clear
@@ -403,15 +402,21 @@ struct PlayFeedLinkCard: View {
     }
 
     var body: some View {
-        // Player full-bleed. Badge is **outside** clipShape so it never gets cropped.
-        YouTubeVideoFrame(style: .feed) {
-            hubFeedPlayerSurface
-        }
-        .clipShape(RoundedRectangle(cornerRadius: edgeToEdge ? 0 : 12, style: .continuous))
-        .overlay {
-            if !edgeToEdge {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Theme.border, lineWidth: 0.5)
+        // Player full-bleed. Avoid clipping the overlay scrubber on edge-to-edge cards.
+        Group {
+            if edgeToEdge {
+                YouTubeVideoFrame(style: .feed) {
+                    hubFeedPlayerSurface
+                }
+            } else {
+                YouTubeVideoFrame(style: .feed) {
+                    hubFeedPlayerSurface
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Theme.border, lineWidth: 0.5)
+                }
             }
         }
         .overlay(alignment: .topLeading) {
