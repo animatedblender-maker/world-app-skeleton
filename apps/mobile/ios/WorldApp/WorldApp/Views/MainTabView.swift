@@ -5,8 +5,6 @@ struct MainTabView: View {
     @State private var postToOpenAfterCreate: CountryPost?
     /// Chat mini video hole (global) — continuous hubs player docks here without remounting.
     @State private var hubContinuousDockSlotGlobal: CGRect?
-    /// Expanded watch stage hole — continuous player locks to this so it never covers the title.
-    @State private var hubWatchStageGlobal: CGRect?
 
     var body: some View {
         // Mini player lives OUTSIDE NavigationStack so chat / search / profile pushes
@@ -67,17 +65,8 @@ struct MainTabView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            // Continuous AVPlayer.
-            // Expanded: above page content so the watch stage is visible.
-            // Mini: *below* the mini-bar chrome (z70) so the **clear** hole reveals video;
-            // never put an opaque ink fill in that hole (that made a black miniplayer).
-            GlobalHubPlaybackLayer(
-                dockSlotGlobal: hubContinuousDockSlotGlobal,
-                watchStageGlobal: hubWatchStageGlobal
-            )
-            .zIndex(appState.hubPlaybackExpanded ? 55 : 45)
-
-            // One bottom stack: mini strip (if any) then tab bar — YouTube order, no overlap.
+            // Mini chrome only (flush above tab bar). Intrinsic height — never a full-screen
+            // hit target (that floated the bar and ate feed taps).
             if showsFloatingMiniBar || appState.navigationPath.isEmpty {
                 VStack(spacing: 0) {
                     if showsFloatingMiniBar, let post = appState.hubPlaybackPost {
@@ -98,21 +87,31 @@ struct MainTabView: View {
                         .frame(height: YouTubeMiniPlayerBar.barHeight)
                         .frame(maxWidth: .infinity)
                     }
+                    // Spacer matching tab bar height so mini stays flush above it when tab is shown.
                     if appState.navigationPath.isEmpty {
-                        BottomTabBar()
-                            .frame(maxWidth: .infinity)
+                        Color.clear
+                            .frame(height: Theme.tabBarHeight)
+                            .allowsHitTesting(false)
                     }
                 }
                 .frame(maxWidth: .infinity)
-                .zIndex(70)
+                .zIndex(50)
+            }
+
+            // Continuous AVPlayer — above mini chrome, below tab bar.
+            GlobalHubPlaybackLayer(dockSlotGlobal: hubContinuousDockSlotGlobal)
+                .zIndex(55)
+
+            // Tab bar pinned to the physical bottom of the ZStack.
+            if appState.navigationPath.isEmpty {
+                BottomTabBar()
+                    .frame(maxWidth: .infinity)
+                    .zIndex(70)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onPreferenceChange(HubContinuousVideoSlotKey.self) { frame in
             hubContinuousDockSlotGlobal = frame
-        }
-        .onPreferenceChange(HubWatchStageFrameKey.self) { frame in
-            hubWatchStageGlobal = frame
         }
         // Keyboard dismiss is window-level (cancelsTouchesInView = false).
         // Root dismissKeyboardOnTap() blocked Settings List taps.
@@ -234,6 +233,7 @@ struct MainTabView: View {
         )) { context in
             ReelsScrollViewer(context: context)
                 .withAppState(appState)
+                // Edge-to-edge from first paint — no safe-area reflow after video mounts.
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .ignoresSafeArea(.all)
                 .statusBarHidden(true)

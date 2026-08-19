@@ -1213,13 +1213,6 @@ final class AppState {
     func startHubPlayback(_ post: CountryPost, expanded: Bool = true) {
         // Instant: paint + play with the post we already have (no await before first frame).
         let quick = PlayPlatformBridge.hubWatchPresentation(for: post)
-        // Kick AV buffer **before** any pauseAll / route swap so claim can hit a warm slot.
-        if let url = quick.playableVideoURL {
-            if ArchiveVideoPlayback.isArchiveURL(url) {
-                ArchiveVideoPlayback.warmResolve(url)
-            }
-            SparkWarmPool.shared.warmSingle(postID: quick.id, url: url)
-        }
         applyHubPlayback(quick, expanded: expanded)
         // Background: upgrade to full catalog identity if needed (sharer → channel).
         Task { @MainActor in
@@ -1227,9 +1220,6 @@ final class AppState {
             guard hubPlaybackPost?.id == quick.id || hubPlaybackPost?.id == post.id else { return }
             if resolved.authorID != hubPlaybackPost?.authorID
                 || resolved.playableVideoURL != nil && hubPlaybackPost?.playableVideoURL == nil {
-                if let url = resolved.playableVideoURL {
-                    SparkWarmPool.shared.warmSingle(postID: resolved.id, url: url)
-                }
                 applyHubPlayback(resolved, expanded: hubPlaybackExpanded)
             }
         }
@@ -1257,14 +1247,10 @@ final class AppState {
         }
 
         let switchingVideo = hubPlaybackPost?.id != watchPost.id
-        // Keep warm-pool player for *this* post alive — pauseAll must not kill its buffer.
-        let keepWarm = SparkWarmPool.shared.parkedPlayer(for: watchPost.id)
         if switchingVideo {
             // Soft-pause others only — never stopAll/tear-down (that delayed first frame).
-            MediaPlaybackCoordinator.shared.pauseAll(except: keepWarm)
+            MediaPlaybackCoordinator.shared.pauseAll()
             hubPlaybackPost = watchPost
-            hubWatchScrollCollapse = 0
-            hubPlaybackVideoAspect = 16.0 / 9.0
         } else if hubPlaybackPost?.playableVideoURL == nil, watchPost.playableVideoURL != nil {
             hubPlaybackPost = watchPost
         } else if hubPlaybackPost?.authorID != watchPost.authorID {
@@ -1272,18 +1258,11 @@ final class AppState {
             hubPlaybackPost = watchPost
         } else if hubPlaybackPost == nil {
             hubPlaybackPost = watchPost
-            hubWatchScrollCollapse = 0
-            hubPlaybackVideoAspect = 16.0 / 9.0
         }
 
         // Continuous Hubs player (mini or full) owns audio — kill feed/profile autoplay.
         FeedVideoFocus.shared.resetAll()
         YouTubeCatalogService.shared.recordWatch(watchPost.id)
-        // Prefetch first comment page so Hubs watch paints threads instantly.
-        CommentsWarmCache.shared.warm(watchPost.id)
-        if let origin = PostsService.commentThreadOriginID(for: watchPost.id, post: watchPost) {
-            CommentsWarmCache.shared.warm(origin)
-        }
         if let url = watchPost.playableVideoURL {
             if ArchiveVideoPlayback.isArchiveURL(url) {
                 ArchiveVideoPlayback.warmResolve(url)
@@ -1292,67 +1271,29 @@ final class AppState {
             SparkWarmPool.shared.warmSingle(postID: watchPost.id, url: url)
         }
         ImageCache.shared.prefetchPostThumbnails([watchPost], maxPixelSize: 720)
-        // Prefetch next related long-form so related taps / auto-next feel instant.
-        Task(priority: .utility) {
-            let related = YouTubeCatalogService.shared.relatedVideos(
-                to: watchPost,
-                from: PostsService.shared.hubsSessionCatalog,
-                limit: 8
-            )
-            ImageCache.shared.prefetchPostThumbnails(
-                Array(related.prefix(6)),
-                maxPixelSize: 480,
-                aggressive: false
-            )
-            // Warm more related players — next tap should claim, not cold-start.
-            for post in related.prefix(5) {
-                if let u = post.playableVideoURL {
-                    SparkWarmPool.shared.warmSingle(postID: post.id, url: u)
-                }
-            }
-        }
         // Kick continuous surface if it was paused.
         NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
     }
 
     /// Collapse to mini — **playback keeps running** (same continuous AVPlayer, only layout changes).
-    /// Geometry morph is owned by `GlobalHubPlaybackLayer` (`collapse` 0→1). This only flips session flags.
-    /// - Parameter animated: when false, layer already finished the morph — no second animation.
-    func minimizeHubPlayback(returnToChat: Bool = true, animated: Bool = true) {
+    /// If this session started from a chat and user hasn't navigated elsewhere, restore that chat.
+    /// Chat messages stay warm in `MessagesService` cache so re-open is instant.
+    func minimizeHubPlayback(returnToChat: Bool = true) {
         guard hubPlaybackPost != nil else { return }
         // Never stop/pause mini — GlobalHubPlaybackLayer only resizes the stage.
+        // Feed/profile autoplay must yield while mini is on.
         hubPlaybackPlaying = true
-        hubWatchScrollCollapse = 0
-        // Hold pull at 1 so watch chrome stays fully faded through the handoff.
-        if hubPlaybackExpanded {
-            hubPlaybackPullProgress = 1
+        withAnimation(.interactiveSpring(response: 0.42, dampingFraction: 0.86)) {
+            hubPlaybackExpanded = false
         }
-        if animated {
-            withAnimation(MatteryaMotion.minimize) {
-                hubPlaybackExpanded = false
-            }
-        } else {
-            // Layer already at mini frame — flip with zero animation to avoid a second jump.
-            var t = Transaction()
-            t.disablesAnimations = true
-            withTransaction(t) {
-                hubPlaybackExpanded = false
-            }
-        }
+        FeedVideoFocus.shared.resetAll()
 
-        // Defer side-effects so they never hitch the release / morph frame.
-        let shouldReturn = returnToChat
-        let conversationID = hubPlaybackReturnConversationID
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 120_000_000)
-            FeedVideoFocus.shared.resetAll()
-            syncHubPlaybackChatReturnWithPath()
-            if shouldReturn, let conversationID {
-                try? await Task.sleep(nanoseconds: 60_000_000)
-                guard hubPlaybackPost != nil, !hubPlaybackExpanded else { return }
-                selectedTab = .messages
-                navigationPath = [.conversation(conversationID)]
-            }
+        // Drop return target if user already left that chat while minimized.
+        syncHubPlaybackChatReturnWithPath()
+
+        if returnToChat, let conversationID = hubPlaybackReturnConversationID {
+            selectedTab = .messages
+            navigationPath = [.conversation(conversationID)]
         }
     }
 
@@ -1407,7 +1348,6 @@ final class AppState {
 
     /// Tap miniplayer (from chat dock or floating bar) → full Hubs watch with comments.
     /// Same continuous player — expand only grows the stage; audio/video never restart.
-    /// YouTube-style: spring expand (handled in GlobalHubPlaybackLayer via collapse 1→0).
     func expandHubPlayback() {
         guard hubPlaybackPost != nil else { return }
         rememberHubPlaybackChatReturnIfNeeded()
@@ -1415,13 +1355,9 @@ final class AppState {
         navigationPath.removeAll()
         selectedTab = .hubs
         hubPlaybackPlaying = true
-        hubWatchScrollCollapse = 0
-        // Clear pull so watch chrome is fully visible during expand.
-        hubPlaybackPullProgress = 0
-        withAnimation(MatteryaMotion.expand) {
+        withAnimation(.interactiveSpring(response: 0.42, dampingFraction: 0.86)) {
             hubPlaybackExpanded = true
         }
-        NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
     }
 
     /// YouTube: drag down on the meta strip under the video → landscape fullscreen.
@@ -1443,16 +1379,9 @@ final class AppState {
         hubPlaybackPost = nil
         hubPlaybackExpanded = false
         hubPlaybackPlaying = false
-        hubPlaybackPullProgress = 0
-        hubFullscreenPullProgress = 0
-        hubWatchScrollCollapse = 0
-        hubPlaybackVideoAspect = 16.0 / 9.0
-        hubPlaybackFullscreenToken = 0
-        hubExpandToken = 0
-        hubMinimizeMorphToken = 0
         hubPlaybackReturnConversationID = nil
-        MediaPlaybackCoordinator.shared.clearContinuousProtection()
         MediaPlaybackCoordinator.shared.stopAllPlayback()
+        // Mini closed — feed/profile may elect autoplay again.
         FeedVideoFocus.shared.resetAll()
     }
 

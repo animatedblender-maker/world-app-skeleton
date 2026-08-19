@@ -212,35 +212,20 @@ struct MatteryaHubPlayerView: View {
     /// When false (mini player), hide chrome but keep the same AVPlayer alive.
     var showsControls: Bool = true
     var loops: Bool = false
-    /// When true, crop to fill the stage (no black letterbox bars). Hubs always fills.
-    var fillsFrame: Bool = true
-    /// 0…1 external fade (pull-to-mini slider). 1 = full chrome, 0 = hidden.
-    var chromeOpacity: Double = 1
+    /// When true, crop to fill (Sparks). Hubs long-form should pass **false** (aspectFit, no crop).
+    var fillsFrame: Bool = false
     @Binding var isMuted: Bool
     var onReady: (() -> Void)? = nil
     /// Keeps AppState.hubPlaybackPlaying in sync when chrome play/pause is used.
     var onPlayingChange: ((Bool) -> Void)? = nil
-    /// Mini player / external chrome: (currentSeconds, durationSeconds).
-    var onProgress: ((Double, Double) -> Void)? = nil
-    /// Natural video size once known (for uncropped stage height).
-    var onVideoSize: ((CGSize) -> Void)? = nil
-    /// When set, seek once then clear via `onSeekConsumed`.
-    var seekToSeconds: Double? = nil
-    var onSeekConsumed: (() -> Void)? = nil
 
-    /// When true, show the fullscreen control (YouTube expand arrows).
-    var allowsFullscreen: Bool = false
-    /// External trigger (e.g. swipe-up on player) — set true to open fullscreen, cleared after present.
-    @Binding var presentFullscreen: Bool
+    var allowsFullscreen: Bool = true
 
     @StateObject private var bridge = ArchivePlayerBridge()
     @State private var showChrome = true
     @State private var chromeHideTask: Task<Void, Never>?
     @State private var isScrubbing = false
     @State private var showFullscreen = false
-    /// YouTube-style double-tap skip flash (negative = back, positive = forward).
-    @State private var skipFlash: Int = 0
-    @State private var skipFlashTask: Task<Void, Never>?
 
     init(
         url: URL,
@@ -250,17 +235,11 @@ struct MatteryaHubPlayerView: View {
         postID: String? = nil,
         showsControls: Bool = true,
         loops: Bool = false,
-        fillsFrame: Bool = true,
-        chromeOpacity: Double = 1,
+        fillsFrame: Bool = false,
         isMuted: Binding<Bool> = .constant(false),
-        allowsFullscreen: Bool = false,
-        presentFullscreen: Binding<Bool> = .constant(false),
+        allowsFullscreen: Bool = true,
         onReady: (() -> Void)? = nil,
-        onPlayingChange: ((Bool) -> Void)? = nil,
-        onProgress: ((Double, Double) -> Void)? = nil,
-        onVideoSize: ((CGSize) -> Void)? = nil,
-        seekToSeconds: Double? = nil,
-        onSeekConsumed: (() -> Void)? = nil
+        onPlayingChange: ((Bool) -> Void)? = nil
     ) {
         self.url = url
         self.posterURL = posterURL
@@ -270,16 +249,10 @@ struct MatteryaHubPlayerView: View {
         self.showsControls = showsControls
         self.loops = loops
         self.fillsFrame = fillsFrame
-        self.chromeOpacity = chromeOpacity
         self._isMuted = isMuted
         self.allowsFullscreen = allowsFullscreen
-        self._presentFullscreen = presentFullscreen
         self.onReady = onReady
         self.onPlayingChange = onPlayingChange
-        self.onProgress = onProgress
-        self.onVideoSize = onVideoSize
-        self.seekToSeconds = seekToSeconds
-        self.onSeekConsumed = onSeekConsumed
     }
 
     var body: some View {
@@ -308,7 +281,6 @@ struct MatteryaHubPlayerView: View {
                     guard !isScrubbing else { return }
                     let playing = bridge.controller?.isPlaying
                     bridge.publishProgress(current: current, duration: duration, playing: playing)
-                    onProgress?(current, duration)
                     if let postID, current >= 0.5 {
                         YouTubeCatalogService.shared.notePlaybackPosition(
                             current,
@@ -316,56 +288,53 @@ struct MatteryaHubPlayerView: View {
                             duration: duration > 0 ? duration : nil
                         )
                     }
-                },
-                onVideoSize: { size in
-                    onVideoSize?(size)
-                },
-                seekToSeconds: seekToSeconds,
-                onSeekConsumed: onSeekConsumed
+                }
             )
 
             if showsControls {
-                // Loading / buffering spinner (YouTube center ring).
-                if !bridge.isReady {
-                    ProgressView()
-                        .progressViewStyle(.circular)
-                        .tint(.white)
-                        .scaleEffect(1.15)
-                        .opacity(chromeOpacity)
-                        .zIndex(2)
-                }
-
-                if showChrome || !bridge.isPlaying {
+                // Chrome / tap-to-reveal first (under transport).
+                if showChrome || !bridge.isReady {
                     hubChrome
-                        .opacity(chromeOpacity)
-                        .allowsHitTesting(chromeOpacity > 0.2)
                         .transition(.opacity)
-                        .zIndex(3)
+                        .zIndex(1)
                 } else {
-                    // Chrome hidden while playing — still capture taps + double-tap skip.
-                    youtubeHiddenChromeHitLayer
-                        .opacity(chromeOpacity)
-                        .allowsHitTesting(chromeOpacity > 0.2)
-                        .zIndex(3)
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                showChrome = true
+                            }
+                            scheduleChromeHide()
+                        }
+                        .zIndex(1)
                 }
 
-                // Double-tap skip flash (YouTube left/right arcs).
-                if skipFlash != 0 {
-                    HStack {
-                        if skipFlash < 0 {
-                            skipFlashBadge(seconds: 10, systemName: "gobackward.10")
-                            Spacer(minLength: 0)
-                        } else {
-                            Spacer(minLength: 0)
-                            skipFlashBadge(seconds: 10, systemName: "goforward.10")
+                // Mute + fullscreen ALWAYS on top of chrome/tap layers so hits never get stolen.
+                VStack {
+                    HStack(spacing: 10) {
+                        Spacer(minLength: 0)
+                        chromeIconButton(
+                            systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill"
+                        ) {
+                            isMuted.toggle()
+                            bridge.controller?.setMuted(isMuted)
+                            bridge.publishMuted(isMuted)
+                            // Feed binding already updates appState.feedVideosMuted when shared.
+                            scheduleChromeHide()
+                        }
+                        if allowsFullscreen {
+                            chromeIconButton(systemName: "arrow.up.left.and.arrow.down.right") {
+                                showFullscreen = true
+                                chromeHideTask?.cancel()
+                            }
                         }
                     }
-                    .padding(.horizontal, 28)
-                    .allowsHitTesting(false)
-                    .opacity(chromeOpacity)
-                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
-                    .zIndex(40)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 10)
+                    Spacer(minLength: 0)
                 }
+                .zIndex(50)
+                .allowsHitTesting(true)
             }
         }
         .fullScreenCover(isPresented: $showFullscreen) {
@@ -408,15 +377,6 @@ struct MatteryaHubPlayerView: View {
                 bridge.controller?.ensureContinuingPlayback()
                 bridge.isPlaying = true
             }
-        }
-        .onChange(of: presentFullscreen) { _, want in
-            // YouTube swipe-up / parent gesture → open landscape fullscreen.
-            guard want, allowsFullscreen else {
-                if want { presentFullscreen = false }
-                return
-            }
-            presentFullscreen = false
-            showFullscreen = true
         }
         .onChange(of: showsControls) { _, visible in
             if visible {
@@ -463,96 +423,68 @@ struct MatteryaHubPlayerView: View {
         }
     }
 
-    /// Matterya-styled chrome, YouTube behaviors (tap hide, double-tap ±10s, auto-hide, scrub).
+    /// Center transport (like the provided Hubs chrome): −10s · play/pause · +10s, scrubber bottom.
     private var hubChrome: some View {
         ZStack {
-            // Soft dim when paused — keep transparent enough to avoid “black bar” slabs.
-            if !bridge.isPlaying {
-                Color.black.opacity(0.18)
-                    .allowsHitTesting(false)
-            }
-
-            // Single tap empty area → hide chrome when playing; double-tap L/R → ±10s.
-            youtubeGestureLayer
-                .zIndex(0)
-
-            // Top tools — mute + fullscreen (YouTube-style).
-            VStack {
-                HStack(spacing: 10) {
-                    Spacer(minLength: 0)
-                    youtubeTopIcon(
-                        systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill",
-                        label: isMuted ? "Unmute" : "Mute"
-                    ) {
-                        isMuted.toggle()
-                        bridge.controller?.setMuted(isMuted)
-                        bridge.publishMuted(isMuted)
-                        scheduleChromeHide()
+            // Tap empty area to hide chrome (transport + scrubber sit above this layer).
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        showChrome = false
                     }
-                    if allowsFullscreen {
-                        youtubeTopIcon(
-                            systemName: "arrow.up.left.and.arrow.down.right",
-                            label: "Full screen"
-                        ) {
-                            showFullscreen = true
-                            scheduleChromeHide()
-                        }
-                    }
+                    chromeHideTask?.cancel()
                 }
-                .padding(.horizontal, 12)
-                .padding(.top, 10)
-                Spacer(minLength: 0)
-            }
-            .zIndex(5)
 
-            // Center transport: −10s · play/pause · +10s (Matterya warm accent family)
-            HStack(spacing: 32) {
-                hubSkipButton(systemName: "gobackward.10", label: "Back 10 seconds") {
-                    performSkip(by: -10)
+            // TRUE center: skip back · large play · skip forward
+            HStack(spacing: 40) {
+                chromeIconButton(systemName: "gobackward.10", size: 46) {
+                    bridge.skip(by: -10)
                     scheduleChromeHide()
                 }
+                .accessibilityLabel("Back 10 seconds")
 
                 Button {
                     bridge.togglePlayPause()
-                    if bridge.isPlaying {
-                        scheduleChromeHide()
-                    } else {
-                        chromeHideTask?.cancel()
-                        showChrome = true
-                    }
+                    scheduleChromeHide()
                 } label: {
                     Image(systemName: bridge.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: bridge.isPlaying ? 26 : 30, weight: .bold))
+                        .font(.system(size: 28, weight: .bold))
                         .foregroundStyle(Theme.paper)
-                        .offset(x: bridge.isPlaying ? 0 : 2)
-                        .frame(width: 72, height: 72)
+                        .frame(width: 68, height: 68)
                         .background(Theme.accentBright, in: Circle())
-                        .shadow(color: Theme.ink.opacity(0.35), radius: 14, y: 5)
+                        .shadow(color: Theme.ink.opacity(0.34), radius: 12, y: 4)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(bridge.isPlaying ? "Pause" : "Play")
 
-                hubSkipButton(systemName: "goforward.10", label: "Forward 10 seconds") {
-                    performSkip(by: 10)
+                chromeIconButton(systemName: "goforward.10", size: 46) {
+                    bridge.skip(by: 10)
                     scheduleChromeHide()
                 }
+                .accessibilityLabel("Forward 10 seconds")
             }
-            .zIndex(4)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            .zIndex(2)
 
-            // Bottom bar: scrubber + times (Matterya accent rail)
+            // Timeline only — pinned to bottom of the stage.
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
-                VStack(spacing: 6) {
+                HStack(spacing: 10) {
+                    Text(formatTime(bridge.currentSeconds))
+                        .font(.caption.monospacedDigit().weight(.medium))
+                        .foregroundStyle(Theme.paper.opacity(0.92))
+                        .frame(width: 42, alignment: .leading)
+
                     HubTimelineScrubber(
                         value: scrubberValue,
-                        accent: Theme.accentBright,
                         onEditingChanged: { editing in
                             isScrubbing = editing
                             if editing {
                                 chromeHideTask?.cancel()
-                                showChrome = true
                                 bridge.beginScrub()
                             } else if bridge.durationSeconds > 0 {
+                                // Land on scrub time and keep playing (never pause at seek).
                                 let target = bridge.currentSeconds
                                 bridge.endScrub(at: target)
                                 onPlayingChange?(true)
@@ -564,206 +496,27 @@ struct MatteryaHubPlayerView: View {
                             bridge.currentSeconds = fraction * bridge.durationSeconds
                         }
                     )
-                    .padding(.horizontal, 12)
 
-                    HStack(spacing: 8) {
-                        Text(formatTime(bridge.currentSeconds))
-                            .font(.caption2.monospacedDigit().weight(.semibold))
-                            .foregroundStyle(Theme.paper.opacity(0.95))
-
-                        Text("·")
-                            .font(.caption2)
-                            .foregroundStyle(Theme.paper.opacity(0.4))
-
-                        Text(formatTime(bridge.durationSeconds))
-                            .font(.caption2.monospacedDigit().weight(.medium))
-                            .foregroundStyle(Theme.paper.opacity(0.72))
-
-                        Spacer(minLength: 0)
-
-                        if allowsFullscreen {
-                            Button {
-                                showFullscreen = true
-                                scheduleChromeHide()
-                            } label: {
-                                Image(systemName: "arrow.up.left.and.arrow.down.right")
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(Theme.paper.opacity(0.95))
-                                    .frame(width: 32, height: 28)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Full screen")
-                        }
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 10)
+                    Text(formatTime(bridge.durationSeconds))
+                        .font(.caption.monospacedDigit().weight(.medium))
+                        .foregroundStyle(Theme.paper.opacity(0.75))
+                        .frame(width: 42, alignment: .trailing)
                 }
-                .padding(.top, 20)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 14)
+                .padding(.top, 18)
                 .background(
                     LinearGradient(
-                        colors: [
-                            .clear,
-                            Theme.ink.opacity(0.5),
-                            Theme.ink.opacity(0.88),
-                        ],
+                        colors: [.clear, Theme.ink.opacity(0.55), Theme.ink.opacity(0.82)],
                         startPoint: .top,
                         endPoint: .bottom
                     )
                 )
             }
-            .zIndex(4)
+            .zIndex(1)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .allowsHitTesting(true)
-    }
-
-    /// When chrome is auto-hidden: single-tap shows chrome, double-tap L/R skips.
-    private var youtubeHiddenChromeHitLayer: some View {
-        GeometryReader { geo in
-            HStack(spacing: 0) {
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture(count: 2) { performSkip(by: -10) }
-                    .onTapGesture(count: 1) { revealChrome() }
-                    .frame(width: geo.size.width * 0.42)
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture(count: 1) {
-                        // Center band: tap toggles play (YT) and shows chrome.
-                        bridge.togglePlayPause()
-                        revealChrome()
-                    }
-                    .frame(maxWidth: .infinity)
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture(count: 2) { performSkip(by: 10) }
-                    .onTapGesture(count: 1) { revealChrome() }
-                    .frame(width: geo.size.width * 0.42)
-            }
-        }
-    }
-
-    private var youtubeGestureLayer: some View {
-        GeometryReader { geo in
-            HStack(spacing: 0) {
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture(count: 2) { performSkip(by: -10) }
-                    .onTapGesture(count: 1) {
-                        if bridge.isPlaying {
-                            withAnimation(.easeInOut(duration: 0.15)) { showChrome = false }
-                            chromeHideTask?.cancel()
-                        } else {
-                            bridge.togglePlayPause()
-                            scheduleChromeHide()
-                        }
-                    }
-                    .frame(width: geo.size.width * 0.42)
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture(count: 1) {
-                        if bridge.isPlaying {
-                            withAnimation(.easeInOut(duration: 0.15)) { showChrome = false }
-                            chromeHideTask?.cancel()
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture(count: 2) { performSkip(by: 10) }
-                    .onTapGesture(count: 1) {
-                        if bridge.isPlaying {
-                            withAnimation(.easeInOut(duration: 0.15)) { showChrome = false }
-                            chromeHideTask?.cancel()
-                        } else {
-                            bridge.togglePlayPause()
-                            scheduleChromeHide()
-                        }
-                    }
-                    .frame(width: geo.size.width * 0.42)
-            }
-        }
-    }
-
-    private func youtubeTopIcon(
-        systemName: String,
-        label: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Theme.paper)
-                .frame(width: 36, height: 36)
-                .background(Theme.ink.opacity(0.52), in: Circle())
-                .overlay(Circle().stroke(Theme.paper.opacity(0.14), lineWidth: 0.5))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
-    }
-
-    /// ±10s control — Matterya secondary disc (warm paper + accent ring, pairs with play).
-    private func hubSkipButton(
-        systemName: String,
-        label: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 20, weight: .bold))
-                .foregroundStyle(Theme.paper)
-                .frame(width: 52, height: 52)
-                .background(
-                    Circle()
-                        .fill(Theme.accentBright.opacity(0.92))
-                )
-                .overlay(
-                    Circle()
-                        .stroke(Theme.paper.opacity(0.22), lineWidth: 1)
-                )
-                .shadow(color: Theme.ink.opacity(0.28), radius: 10, y: 4)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
-    }
-
-    private func skipFlashBadge(seconds: Int, systemName: String) -> some View {
-        VStack(spacing: 4) {
-            Image(systemName: systemName)
-                .font(.system(size: 22, weight: .semibold))
-            Text("\(seconds)")
-                .font(.caption.weight(.bold).monospacedDigit())
-        }
-        .foregroundStyle(Theme.paper)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(Theme.ink.opacity(0.55), in: Capsule())
-        .overlay(Capsule().stroke(Theme.accentBright.opacity(0.45), lineWidth: 1))
-    }
-
-    private func revealChrome() {
-        withAnimation(.easeInOut(duration: 0.15)) {
-            showChrome = true
-        }
-        scheduleChromeHide()
-    }
-
-    private func performSkip(by delta: Double) {
-        bridge.skip(by: delta)
-        onPlayingChange?(true)
-        skipFlashTask?.cancel()
-        withAnimation(.easeOut(duration: 0.12)) {
-            skipFlash = delta < 0 ? -1 : 1
-        }
-        skipFlashTask = Task {
-            try? await Task.sleep(nanoseconds: 550_000_000)
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                withAnimation(.easeOut(duration: 0.2)) { skipFlash = 0 }
-            }
-        }
-        revealChrome()
     }
 
     private var scrubberValue: Double {
@@ -771,16 +524,32 @@ struct MatteryaHubPlayerView: View {
         return min(1, max(0, bridge.currentSeconds / bridge.durationSeconds))
     }
 
+    private func chromeIconButton(
+        systemName: String,
+        size: CGFloat = 36,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: size > 36 ? 18 : 14, weight: .semibold))
+                .foregroundStyle(Theme.paper)
+                .frame(width: size, height: size)
+                .background(Theme.ink.opacity(0.48), in: Circle())
+                .overlay(Circle().stroke(Theme.paper.opacity(0.12), lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+    }
+
     private func scheduleChromeHide() {
         chromeHideTask?.cancel()
-        // Stay up while paused so center play never vanishes mid-pause.
+        // Stay up while paused so center play / ±10s never vanish mid-pause.
         guard bridge.isPlaying else { return }
         chromeHideTask = Task {
-            try? await Task.sleep(nanoseconds: 2_800_000_000)
+            try? await Task.sleep(nanoseconds: 3_200_000_000)
             guard !Task.isCancelled, !isScrubbing else { return }
             await MainActor.run {
                 guard bridge.isPlaying else { return }
-                withAnimation(.easeInOut(duration: 0.2)) {
+                withAnimation(.easeInOut(duration: 0.22)) {
                     showChrome = false
                 }
             }
@@ -793,6 +562,7 @@ struct MatteryaHubPlayerView: View {
         let h = total / 3600
         let m = (total % 3600) / 60
         let s = total % 60
+        // Long Hubs videos: 1:01:00 not 61:00
         if h > 0 {
             return String(format: "%d:%02d:%02d", h, m, s)
         }
@@ -800,10 +570,9 @@ struct MatteryaHubPlayerView: View {
     }
 }
 
-// MARK: - Fullscreen (hub / archive) — portrait + landscape
+// MARK: - Landscape fullscreen (hub / archive)
 
-/// Full-screen hub player. Follows the phone’s orientation (portrait or landscape).
-/// Aspect-fit only — never crop or zoom the picture. Drag down to dismiss.
+/// Full-screen hub player. Unlocks landscape so tilting the device rotates playback.
 struct MatteryaLandscapeFullscreenPlayer: View {
     let url: URL
     var posterURL: URL? = nil
@@ -819,110 +588,61 @@ struct MatteryaLandscapeFullscreenPlayer: View {
     @State private var showChrome = true
     @State private var chromeHideTask: Task<Void, Never>?
     @State private var isScrubbing = false
-    /// YouTube drag-down dismiss offset (no scale/zoom).
-    @State private var dismissDrag: CGFloat = 0
 
     var body: some View {
-        GeometryReader { geo in
-            let size = geo.size
-            ZStack {
-                Color.black.ignoresSafeArea()
-                    .opacity(max(0.4, 1 - Double(dismissDrag / 480)))
+        ZStack {
+            Color.black.ignoresSafeArea()
 
-                // Full bounds + aspect-fit: entire frame visible in portrait *and* landscape.
-                // Never fillsFrame (that crops) and never scaleEffect (that zooms).
-                ArchiveVideoPlayerView(
-                    url: url,
-                    posterURL: posterURL,
-                    isActive: true,
-                    muted: isMuted,
-                    startTime: startTime,
-                    loops: false,
-                    fillsFrame: false,
-                    bridge: bridge,
-                    onReady: {
-                        bridge.publishReady(playing: true)
-                        // Re-assert fit after first frame (configure must not force fill).
-                        bridge.controller?.applyVideoGravity(.resizeAspect)
-                        scheduleChromeHide()
-                    },
-                    onProgress: { current, duration in
-                        guard !isScrubbing else { return }
-                        let playing = bridge.controller?.isPlaying
-                        bridge.publishProgress(current: current, duration: duration, playing: playing)
-                    }
-                )
-                .frame(width: size.width, height: size.height)
-                .offset(y: max(0, dismissDrag))
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    withAnimation(.easeInOut(duration: 0.18)) {
-                        showChrome.toggle()
-                    }
-                    if showChrome { scheduleChromeHide() }
+            ArchiveVideoPlayerView(
+                url: url,
+                posterURL: posterURL,
+                isActive: true,
+                muted: isMuted,
+                startTime: startTime,
+                loops: false,
+                bridge: bridge,
+                onReady: {
+                    bridge.publishReady(playing: true)
+                    scheduleChromeHide()
+                },
+                onProgress: { current, duration in
+                    guard !isScrubbing else { return }
+                    let playing = bridge.controller?.isPlaying
+                    bridge.publishProgress(current: current, duration: duration, playing: playing)
                 }
-                .gesture(fullscreenDismissGesture)
-
-                if (showChrome || !bridge.isPlaying), dismissDrag < 24 {
-                    fullscreenChrome
-                        .frame(width: size.width, height: size.height)
-                        .transition(.opacity)
+            )
+            .ignoresSafeArea()
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    showChrome.toggle()
                 }
+                if showChrome { scheduleChromeHide() }
             }
-            .frame(width: size.width, height: size.height)
+
+            if showChrome {
+                fullscreenChrome
+                    .transition(.opacity)
+            }
         }
         .ignoresSafeArea()
         .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)
-        // Rotate with the device while fullscreen (portrait + landscape).
         .onAppear {
             isMuted = initialMuted
             AppDelegate.orientationLock = .allButUpsideDown
             Self.refreshSupportedOrientations()
-            // Prefer current physical orientation instead of forcing landscape.
-            Self.requestGeometryUpdateIfNeeded()
             scheduleChromeHide()
         }
         .onDisappear {
             chromeHideTask?.cancel()
             AppDelegate.orientationLock = .portrait
             Self.refreshSupportedOrientations()
-            Self.requestGeometryUpdateIfNeeded()
         }
         .onChange(of: isMuted) { _, muted in
             bridge.controller?.setMuted(muted)
             bridge.publishMuted(muted)
         }
-        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
-            // Keep aspect-fit after rotation (layer frame updates in viewDidLayoutSubviews).
-            bridge.controller?.applyVideoGravity(.resizeAspect)
-            Self.refreshSupportedOrientations()
-        }
-    }
-
-    private var fullscreenDismissGesture: some Gesture {
-        DragGesture(minimumDistance: 12, coordinateSpace: .local)
-            .onChanged { value in
-                guard !isScrubbing else { return }
-                let y = value.translation.height
-                let x = abs(value.translation.width)
-                guard y > 0, y > x * 0.6 else { return }
-                dismissDrag = y
-                showChrome = false
-            }
-            .onEnded { value in
-                let y = value.translation.height
-                let predicted = value.predictedEndTranslation.height
-                if y > 140 || predicted > 280 {
-                    close()
-                } else {
-                    withAnimation(MatteryaMotion.fullscreen) {
-                        dismissDrag = 0
-                    }
-                    showChrome = true
-                    scheduleChromeHide()
-                }
-            }
     }
 
     private var fullscreenChrome: some View {
@@ -967,7 +687,6 @@ struct MatteryaLandscapeFullscreenPlayer: View {
 
                     HubTimelineScrubber(
                         value: scrubberValue,
-                        accent: Theme.accentBright,
                         onEditingChanged: { editing in
                             isScrubbing = editing
                             if editing {
@@ -986,7 +705,7 @@ struct MatteryaLandscapeFullscreenPlayer: View {
 
                     Text(formatTime(bridge.durationSeconds))
                         .font(.caption.monospacedDigit())
-                        .foregroundStyle(Theme.paper.opacity(0.75))
+                        .foregroundStyle(.white.opacity(0.75))
                         .frame(width: 42, alignment: .trailing)
                 }
                 .padding(.horizontal, 16)
@@ -1088,22 +807,10 @@ struct MatteryaLandscapeFullscreenPlayer: View {
             window.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
         }
     }
-
-    /// Ask the window scene to re-evaluate orientation so portrait↔landscape follows the phone.
-    private static func requestGeometryUpdateIfNeeded() {
-        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
-        // iOS 16+: update geometry preferences so rotate-to-landscape works while unlocked.
-        scene.requestGeometryUpdate(.iOS(interfaceOrientations: AppDelegate.orientationLock)) { _ in }
-        for window in scene.windows {
-            window.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
-        }
-    }
 }
 
-/// YouTube-style progress rail — thin bar, red fill, knobby only while scrubbing.
 private struct HubTimelineScrubber: View {
     let value: Double
-    var accent: Color = Theme.accentBright
     let onEditingChanged: (Bool) -> Void
     let onValueChanged: (Double) -> Void
 
@@ -1113,29 +820,24 @@ private struct HubTimelineScrubber: View {
     var body: some View {
         GeometryReader { proxy in
             let width = max(proxy.size.width, 1)
-            let fraction = isDragging ? dragValue : value
-            let fill = max(0, min(1, fraction)) * width
-            let trackH: CGFloat = isDragging ? 5 : 3
-            let knob: CGFloat = isDragging ? 14 : 0
+            let fill = (isDragging ? dragValue : value) * width
 
             ZStack(alignment: .leading) {
                 Capsule()
-                    .fill(Color.white.opacity(0.28))
-                    .frame(height: trackH)
+                    .fill(Theme.paper.opacity(0.22))
+                    .frame(height: 4)
 
                 Capsule()
-                    .fill(accent)
-                    .frame(width: max(fill, trackH), height: trackH)
+                    .fill(Theme.accentBright)
+                    .frame(width: max(fill, 0), height: 4)
 
-                if isDragging {
-                    Circle()
-                        .fill(accent)
-                        .frame(width: knob, height: knob)
-                        .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
-                        .offset(x: max(0, fill - knob / 2))
-                }
+                Circle()
+                    .fill(Theme.paper)
+                    .frame(width: 15, height: 15)
+                    .shadow(color: Theme.ink.opacity(0.3), radius: 3, y: 1)
+                    .offset(x: max(0, fill - 7.5))
             }
-            .frame(maxHeight: .infinity, alignment: .center)
+            .frame(height: 22)
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
@@ -1155,7 +857,6 @@ private struct HubTimelineScrubber: View {
             )
         }
         .frame(height: 22)
-        .animation(.easeOut(duration: 0.12), value: isDragging)
         .onChange(of: value) { _, newValue in
             if !isDragging { dragValue = newValue }
         }
@@ -1184,6 +885,7 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
     var onReady: (() -> Void)? = nil
     var onFailed: ((String) -> Void)? = nil
     var onProgress: ((Double, Double) -> Void)? = nil
+    /// Natural video size once known (Sparks fill vs fit).
     var onVideoSize: ((CGSize) -> Void)? = nil
     /// When set, seek once then clear via `onSeekConsumed`.
     var seekToSeconds: Double? = nil
@@ -1366,8 +1068,6 @@ final class ArchiveVideoPlayerController: UIViewController {
     var onProgress: ((Double, Double) -> Void)?
     var onPlayingChanged: ((Bool) -> Void)?
     var onVideoSize: ((CGSize) -> Void)?
-    private var presentationSizeObs: NSKeyValueObservation?
-    private var didReportVideoSize = false
     /// Sparks loop by default so clips don't freeze on the last frame.
     var loops = true
     /// Used to claim a pre-buffered player from SparkWarmPool.
@@ -1404,17 +1104,16 @@ final class ArchiveVideoPlayerController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        // Clear bed — black backgrounds show as gaps around aspectFit frames.
-        view.backgroundColor = .clear
+        view.backgroundColor = .black
         view.clipsToBounds = true
 
-        // Default fill — matches FB/IG; may switch to fit for wide clips only.
+        // Match video gravity (updated in applyVideoGravity) — avoid poster/video framing jump.
+        // Default fill so Sparks never flash fit→fill on first layout.
         posterView.contentMode = .scaleAspectFill
         posterView.clipsToBounds = true
-        posterView.backgroundColor = .clear
+        posterView.backgroundColor = .black
         posterView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(posterView)
-        view.backgroundColor = .black
 
         spinner.color = .white
         spinner.translatesAutoresizingMaskIntoConstraints = false
@@ -1459,32 +1158,30 @@ final class ArchiveVideoPlayerController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        // Only size when host has real bounds — never animate gravity/frame (Sparks zoom jump).
         guard view.bounds.width > 2, view.bounds.height > 2 else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        // Layer tracks the host view only — never a larger “screen” frame (that zoomed/cropped).
         playerLayer?.frame = view.bounds
         playerLayer?.videoGravity = preferredVideoGravity
-        playerLayer?.opacity = 1
         CATransaction.commit()
     }
 
-    /// Default fill (FB/IG); landscape Sparks may switch to fit when crop would be hard.
-    private var preferredVideoGravity: AVLayerVideoGravity = .resizeAspectFill
+    /// Default aspect-fit — Sparks pass fit; Hubs pass fill. Never flip after first frame.
+    private var preferredVideoGravity: AVLayerVideoGravity = .resizeAspect
 
     func applyVideoGravity(_ gravity: AVLayerVideoGravity) {
         preferredVideoGravity = gravity
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         playerLayer?.videoGravity = gravity
+        // Only size when host has real bounds (zero-size install was the zoom pop).
         if view.bounds.width > 2, view.bounds.height > 2 {
             playerLayer?.frame = view.bounds
         }
-        playerLayer?.opacity = 1
-        playerLayer?.backgroundColor = UIColor.black.cgColor
         CATransaction.commit()
         posterView.contentMode = gravity == .resizeAspectFill ? .scaleAspectFill : .scaleAspectFit
-        view.backgroundColor = .black
+        posterView.backgroundColor = .black
     }
 
     func configure(url: URL, posterURL: URL?, muted: Bool, startTime: Double, active: Bool) {
@@ -1503,11 +1200,6 @@ final class ArchiveVideoPlayerController: UIViewController {
         sourceURL = url
         didRetry = false
         didKickPlayback = false
-        didReportVideoSize = false
-        // Do NOT reset preferredVideoGravity here — SwiftUI already set fill vs fit via
-        // `applyVideoGravity` from `fillsFrame`. Forcing fill re-cropped Hubs watch.
-        presentationSizeObs?.invalidate()
-        presentationSizeObs = nil
         resolvedPlayURL = nil
         errorLabel.isHidden = true
         loadPoster(posterURL)
@@ -1517,31 +1209,6 @@ final class ArchiveVideoPlayerController: UIViewController {
         } else {
             // Always pre-buffer off-screen Sparks (silent) so swipe-in is pure play — no black flash.
             startPlayback(url: url, muted: true, startTime: restartsFromBeginningOnFocus ? 0 : startTime, autoplay: false)
-        }
-    }
-
-    /// Publish natural size so Hubs can size the stage without cropping.
-    func reportVideoSizeIfNeeded(from item: AVPlayerItem? = nil) {
-        let target = item ?? player?.currentItem
-        guard let target else { return }
-        let size = target.presentationSize
-        guard size.width > 2, size.height > 2 else { return }
-        if !didReportVideoSize {
-            didReportVideoSize = true
-            onVideoSize?(size)
-        } else {
-            onVideoSize?(size)
-        }
-        // Keep observing in case the first non-zero size arrives late.
-        if presentationSizeObs == nil {
-            presentationSizeObs = target.observe(\.presentationSize, options: [.new]) { [weak self] item, _ in
-                let s = item.presentationSize
-                guard s.width > 2, s.height > 2 else { return }
-                DispatchQueue.main.async {
-                    self?.didReportVideoSize = true
-                    self?.onVideoSize?(s)
-                }
-            }
         }
     }
 
@@ -1611,12 +1278,14 @@ final class ArchiveVideoPlayerController: UIViewController {
         }
     }
 
-    /// Soft start seek — skip if already at t≈0; never play-then-snap (mid-clip first frame).
+    /// Soft start seek — skip if already near 0; never swap to poster (that was the swipe black flash).
     private func softSeekToBeginning(playAfter: Bool) {
         lastKnownSeconds = 0
         guard let player, player.currentItem != nil else { return }
-        // True start only — wide windows (<1s) caused free-play from mid-buffer then jump.
-        if SparkWarmPool.isAtStart(player) {
+        let t = player.currentTime().seconds
+        // Wide near-zero: skip seek (seek = swipe flicker).
+        if t.isFinite, t >= 0, t < 1.0 {
+            // Keep decoded first frame visible — no poster swap.
             posterView.isHidden = true
             spinner.stopAnimating()
             if playAfter, userWantsPlayback {
@@ -1631,13 +1300,13 @@ final class ArchiveVideoPlayerController: UIViewController {
             }
             return
         }
+        // Mid-clip → 0: keep the live layer (last frame) while keyframe-seeking.
+        // Showing poster here felt like a full refresh on scroll.
         posterView.isHidden = true
-        player.pause()
-        player.rate = 0
         player.seek(
             to: .zero,
-            toleranceBefore: .zero,
-            toleranceAfter: .zero
+            toleranceBefore: .positiveInfinity,
+            toleranceAfter: .positiveInfinity
         ) { [weak self] finished in
             guard finished, let self else { return }
             Task { @MainActor in
@@ -1669,8 +1338,13 @@ final class ArchiveVideoPlayerController: UIViewController {
         posterView.isHidden = true
         spinner.stopAnimating()
         if let player, player.currentItem != nil {
-            // Instant path: already at exact start → play, never seek-after-play.
-            if SparkWarmPool.isAtStart(player) {
+            // Instant path: item ready + near 0 → solo + play on this runloop (no async hop).
+            let t = player.currentTime().seconds
+            let nearZero = t.isFinite && t >= 0 && t < 1.0
+            let ready = player.currentItem?.status == .readyToPlay
+                || player.status == .readyToPlay
+            // Even if not "ready", kick play first — seek only when clearly mid-clip.
+            if nearZero {
                 posterView.isHidden = true
                 spinner.stopAnimating()
                 applyUserAudioOutput(on: player)
@@ -1678,12 +1352,20 @@ final class ArchiveVideoPlayerController: UIViewController {
                     keeping: player,
                     pageEpoch: activePageEpoch
                 )
+                applyUserAudioOutput(on: player)
                 player.play()
                 player.safePlayImmediately(atRate: 1.0)
                 onPlayingChanged?(true)
                 return
             }
-            // Mid-clip: seek to exact 0 first, then play (never play-then-adjust).
+            if ready {
+                applyUserAudioOutput(on: player)
+                softSeekToBeginning(playAfter: true)
+                return
+            }
+            // Not ready and mid-clip: play now, soft-seek without blanking.
+            applyUserAudioOutput(on: player)
+            player.play()
             softSeekToBeginning(playAfter: true)
             return
         }
@@ -1862,47 +1544,21 @@ final class ArchiveVideoPlayerController: UIViewController {
         userWantsPlayback = autoplay
         activePageEpoch = MediaPlaybackCoordinator.shared.sparkPageEpoch
 
-        // Claim by postID when the warm item is healthy (claim() rejects failed items).
+        // Instagram-speed: claim a pre-buffered player before any CDN resolve.
+        // Install + play synchronously so the first painted frame is video, not black/poster.
         if let postID, let claimed = SparkWarmPool.shared.claim(postID: postID) {
             installClaimedPlayerSync(claimed, original: url, muted: muted, startTime: startTime, autoplay: autoplay)
             return
+        }
+        if let postID {
+            SparkWarmPool.shared.markInUse(postID: postID)
         }
 
         // Never spin on Sparks swipe — poster stays until first frame.
         spinner.stopAnimating()
         loadTask = Task { [weak self] in
             guard let self else { return }
-
-            // Only wait on warm if one is already in-flight / parked — never add a fixed
-            // 400ms stall on a true cold open (that made every hubs share feel laggy).
-            if let postID {
-                SparkWarmPool.shared.warmSingle(postID: postID, url: url)
-                if SparkWarmPool.shared.hasWarmOrInflight(postID: postID) {
-                    let timeout: TimeInterval = ArchiveVideoPlayback.isArchiveURL(url) ? 0.28 : 0.18
-                    await SparkWarmPool.shared.awaitReady(postIDs: [postID], timeout: timeout)
-                    if let claimed = SparkWarmPool.shared.claim(postID: postID) {
-                        await MainActor.run {
-                            self.installClaimedPlayerSync(
-                                claimed,
-                                original: url,
-                                muted: muted,
-                                startTime: startTime,
-                                autoplay: autoplay
-                            )
-                        }
-                        return
-                    }
-                }
-                SparkWarmPool.shared.markInUse(postID: postID)
-            }
-
-            // Public R2 / non-Archive: skip CDN chase.
-            let playURL: URL
-            if ArchiveVideoPlayback.isArchiveURL(url) {
-                playURL = await ArchiveVideoPlayback.resolvedPlaybackURL(for: url)
-            } else {
-                playURL = url
-            }
+            let playURL = await ArchiveVideoPlayback.resolvedPlaybackURL(for: url)
             guard !Task.isCancelled else { return }
             await self.installPlayer(url: playURL, original: url, muted: muted, startTime: startTime)
             if !autoplay {
@@ -1910,6 +1566,7 @@ final class ArchiveVideoPlayerController: UIViewController {
                 self.player?.pause()
                 self.player?.isMuted = true
                 self.player?.volume = 0
+                // Park head at 0 for instant next focus.
                 if self.restartsFromBeginningOnFocus {
                     self.softSeekToBeginning(playAfter: false)
                 }
@@ -1939,12 +1596,12 @@ final class ArchiveVideoPlayerController: UIViewController {
         mutedFlag = muted
 
         let layer = AVPlayerLayer(player: claimed)
+        // Gravity + frame match the host view only — NEVER UIScreen.main.bounds
+        // (that painted full-screen zoomed video, then snapped to the page = creep).
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         layer.videoGravity = preferredVideoGravity
         layer.frame = view.bounds
-        layer.opacity = 1
-        layer.backgroundColor = UIColor.black.cgColor
         view.layer.insertSublayer(layer, above: posterView.layer)
         CATransaction.commit()
         playerLayer = layer
@@ -1955,53 +1612,76 @@ final class ArchiveVideoPlayerController: UIViewController {
             configureAudioSession()
         }
         spinner.stopAnimating()
+        // Keep poster until we have a ready item — then hide (no black gap).
+        posterView.isHidden = claimed.currentItem?.status == .readyToPlay
         errorLabel.isHidden = true
-        claimed.pause()
-        claimed.rate = 0
+        // Do not layoutIfNeeded with zero bounds — wait for viewDidLayoutSubviews.
 
-        let atStart = SparkWarmPool.isAtStart(claimed)
-        let needsExactStart = restartsFromBeginningOnFocus || startTime < 0.5
+        let forcedStart = restartsFromBeginningOnFocus ? 0 : startTime
+        let t = claimed.currentTime().seconds
+        // Wide near-zero: warm park is rarely exact 0 — skip seek to kill swipe flash.
+        let nearZero = t.isFinite && t >= 0 && t < 1.0
+        let needsSeek = (restartsFromBeginningOnFocus || forcedStart < 0.5) && !nearZero
 
-        let playNow = {
-            self.posterView.isHidden = true
-            if self.view.bounds.width > 2 {
-                self.playerLayer?.frame = self.view.bounds
-            }
-            guard autoplay, self.userWantsPlayback else {
-                claimed.isMuted = true
-                claimed.volume = 0
-                return
-            }
+        if autoplay, userWantsPlayback {
             _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
                 keeping: claimed,
-                pageEpoch: self.activePageEpoch
+                pageEpoch: activePageEpoch
             )
             claimed.isMuted = muted
             claimed.volume = muted ? 0 : 1
-            claimed.safePlayImmediately(atRate: 1.0)
-            self.didKickPlayback = true
-            self.onPlayingChanged?(true)
-            self.reportVideoSizeIfNeeded(from: claimed.currentItem)
-            self.onReady?()
-        }
-
-        if atStart || !needsExactStart {
-            lastKnownSeconds = 0
-            playNow()
         } else {
+            claimed.pause()
             claimed.isMuted = true
             claimed.volume = 0
+        }
+
+        if needsSeek {
+            // Keyframe seek without covering with poster — keep layer visible.
             claimed.seek(
                 to: .zero,
-                toleranceBefore: .zero,
-                toleranceAfter: .zero
+                toleranceBefore: .positiveInfinity,
+                toleranceAfter: .positiveInfinity
             ) { [weak self] finished in
                 guard finished, let self else { return }
                 DispatchQueue.main.async {
                     self.lastKnownSeconds = 0
-                    playNow()
+                    self.posterView.isHidden = true
+                    guard self.userWantsPlayback else { return }
+                    // Already playing after a prior kick — don't re-play (visible restart).
+                    if self.didKickPlayback, claimed.rate > 0.01 { return }
+                    _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
+                        keeping: claimed,
+                        pageEpoch: self.activePageEpoch
+                    )
+                    claimed.isMuted = self.mutedFlag
+                    claimed.volume = self.mutedFlag ? 0 : 1
+                    claimed.safePlayImmediately(atRate: 1.0)
+                    self.didKickPlayback = true
+                    self.onPlayingChanged?(true)
+                    self.onReady?()
                 }
             }
+        } else if userWantsPlayback {
+            lastKnownSeconds = nearZero ? 0 : lastKnownSeconds
+            posterView.isHidden = true
+            claimed.safePlayImmediately(atRate: 1.0)
+            didKickPlayback = true
+            onPlayingChanged?(true)
+            onReady?()
+        } else {
+            // Silent pre-buffer (off-screen page).
+            claimed.pause()
+            claimed.isMuted = true
+            claimed.volume = 0
+            if restartsFromBeginningOnFocus, !nearZero {
+                claimed.seek(
+                    to: .zero,
+                    toleranceBefore: .positiveInfinity,
+                    toleranceAfter: .positiveInfinity
+                )
+            }
+            lastKnownSeconds = 0
         }
 
         if let item = claimed.currentItem {
@@ -2062,7 +1742,6 @@ final class ArchiveVideoPlayerController: UIViewController {
                     // Always publish — parent must not rely on stale isActive captures.
                     self.onProgress?(current, dur)
                     self.onPlayingChanged?(playing)
-                    self.maybeLoopNearEnd(current: current, duration: dur, player: observed)
                 }
             }
         }
@@ -2087,13 +1766,8 @@ final class ArchiveVideoPlayerController: UIViewController {
         mutedFlag = muted
 
         let layer = AVPlayerLayer(player: claimed)
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
         layer.videoGravity = preferredVideoGravity
         layer.frame = view.bounds
-        layer.opacity = 1
-        layer.backgroundColor = UIColor.black.cgColor
-        CATransaction.commit()
         view.layer.insertSublayer(layer, above: posterView.layer)
         playerLayer = layer
         player = claimed
@@ -2106,8 +1780,8 @@ final class ArchiveVideoPlayerController: UIViewController {
             if !(t.isFinite && t >= 0 && t < 0.35) {
                 await claimed.seek(
                     to: .zero,
-                    toleranceBefore: .zero,
-                    toleranceAfter: .zero
+                    toleranceBefore: .positiveInfinity,
+                    toleranceAfter: .positiveInfinity
                 )
             }
             lastKnownSeconds = 0
@@ -2198,7 +1872,6 @@ final class ArchiveVideoPlayerController: UIViewController {
             self.endObserver = nil
         }
         guard loops else { return }
-        player.actionAtItemEnd = .none
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: item,
@@ -2211,60 +1884,28 @@ final class ArchiveVideoPlayerController: UIViewController {
         }
     }
 
-    private var lastLoopRestartAt: Date = .distantPast
-    private var isLoopRestarting = false
-
     private func restartFromBeginning(player: AVPlayer) {
-        guard loops, userWantsPlayback else { return }
-        let now = Date()
-        if isLoopRestarting || now.timeIntervalSince(lastLoopRestartAt) < 0.35 { return }
-        isLoopRestarting = true
-        lastLoopRestartAt = now
         // Refresh epoch so a prior Sparks page-change doesn't block feed loop restarts.
         activePageEpoch = MediaPlaybackCoordinator.shared.sparkPageEpoch
         _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
             keeping: player,
             pageEpoch: activePageEpoch
         )
-        player.actionAtItemEnd = .none
         player.isMuted = mutedFlag
         player.volume = mutedFlag ? 0 : 1
-        player.pause()
-        player.rate = 0
-        // Exact start for Sparks — never resume mid-clip after a loop.
         player.seek(
             to: .zero,
-            toleranceBefore: .zero,
-            toleranceAfter: .zero
+            toleranceBefore: .positiveInfinity,
+            toleranceAfter: .positiveInfinity
         ) { [weak self] finished in
+            guard finished else { return }
             DispatchQueue.main.async {
-                guard let self else { return }
-                self.isLoopRestarting = false
-                guard finished, self.userWantsPlayback, self.loops else { return }
-                self.activePageEpoch = MediaPlaybackCoordinator.shared.sparkPageEpoch
-                _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
-                    keeping: player,
-                    pageEpoch: self.activePageEpoch
-                )
-                player.isMuted = self.mutedFlag
-                player.volume = self.mutedFlag ? 0 : 1
+                guard let self, self.userWantsPlayback else { return }
                 player.play()
                 player.safePlayImmediately(atRate: 1.0)
                 self.lastKnownSeconds = 0
-                self.onProgress?(0, player.currentItem?.duration.seconds ?? 0)
                 self.onPlayingChanged?(true)
             }
-        }
-    }
-
-    /// Fallback when DidPlayToEndTime never fires (some R2/HLS streams).
-    private func maybeLoopNearEnd(current: Double, duration: Double, player: AVPlayer) {
-        guard loops, userWantsPlayback, !isScrubbing, !isLoopRestarting else { return }
-        guard duration > 0.4 else { return }
-        let atEnd = current >= duration - 0.08
-        let stalledAtEnd = atEnd && player.rate < 0.01
-        if stalledAtEnd || current >= duration - 0.02 {
-            restartFromBeginning(player: player)
         }
     }
 
@@ -2287,18 +1928,18 @@ final class ArchiveVideoPlayerController: UIViewController {
             ]
         )
 
-        // Let AVPlayerItem pull playable/duration — no deprecated loadValuesAsynchronously.
+        // Don't block first frame on duration metadata (slow on Archive CDN).
+        asset.loadValuesAsynchronously(forKeys: ["playable", "duration"]) {}
+
         guard !Task.isCancelled else { return }
 
         let item = AVPlayerItem(asset: asset)
-        // Hubs long-form needs a bit more head buffer; Sparks stay lighter.
-        item.preferredForwardBufferDuration = loops ? 4 : 8
+        item.preferredForwardBufferDuration = 4
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-        item.preferredPeakBitRate = 0
 
         let newPlayer = AVPlayer(playerItem: item)
         newPlayer.isMuted = muted
-        // false = kick playback as soon as enough is buffered (snappier Sparks / Hubs).
+        // false = kick playback as soon as enough is buffered (snappier Sparks).
         newPlayer.automaticallyWaitsToMinimizeStalling = false
         newPlayer.actionAtItemEnd = loops ? .none : .pause
 
@@ -2306,9 +1947,8 @@ final class ArchiveVideoPlayerController: UIViewController {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         layer.videoGravity = preferredVideoGravity
+        // Host view bounds only — never full-screen interim frame (zoom pop).
         layer.frame = view.bounds
-        layer.opacity = 1
-        layer.backgroundColor = UIColor.black.cgColor
         view.layer.insertSublayer(layer, above: posterView.layer)
         CATransaction.commit()
         playerLayer = layer
@@ -2401,7 +2041,6 @@ final class ArchiveVideoPlayerController: UIViewController {
                     self.lastKnownSeconds = current
                     self.onProgress?(current, dur)
                     self.onPlayingChanged?(playing)
-                    self.maybeLoopNearEnd(current: current, duration: dur, player: newPlayer)
                 }
             }
         }
