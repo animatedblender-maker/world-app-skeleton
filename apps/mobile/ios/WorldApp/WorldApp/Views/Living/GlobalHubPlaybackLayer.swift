@@ -277,34 +277,57 @@ struct GlobalHubPlaybackLayer: View {
         let stored = YouTubeCatalogService.shared.playbackPosition(for: post.id)
         let resumeAt = stored > 0.2 ? stored : 0
         if let url = post.playableVideoURL {
+            let poster = MediaURLResolver.posterURL(for: post) ?? post.posterImageURL
             // One Hubs chrome for every long-form surface (R2 + Archive):
             // center play · −10s · +10s · bottom scrubber (MatteryaHubPlayerView).
-            MatteryaHubPlayerView(
-                url: url,
-                posterURL: post.posterImageURL,
-                isActive: appState.hubPlaybackPlaying,
-                startTime: resumeAt,
-                postID: post.id,
-                showsControls: showControls,
-                loops: false,
-                // Expanded: aspect-fit 16:9 (no crop). Mini: fill the full-bleed strip.
-                fillsFrame: !expanded,
-                isMuted: mutedBinding,
-                allowsFullscreen: showControls,
-                onReady: {
-                    Task { await PostsService.shared.recordView(post) }
-                    // Re-assert play if something paused us during mount.
-                    if appState.hubPlaybackPlaying {
-                        NotificationCenter.default.post(
-                            name: .matteryaResumePlaybackAfterInterrupt,
-                            object: nil
-                        )
-                    }
-                },
-                onPlayingChange: { playing in
-                    appState.hubPlaybackPlaying = playing
+            // Sparks pattern: Frame 0 poster under film until AV paints.
+            ZStack {
+                Color.black
+                if let poster {
+                    CachedAsyncImage(
+                        url: poster,
+                        maxPixelSize: showControls ? 900 : 480,
+                        contentMode: expanded ? .fit : .fill,
+                        placeholder: AnyView(Color.black)
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+                    .allowsHitTesting(false)
+                } else {
+                    FrameZeroFallbackPoster(
+                        postID: post.id,
+                        videoURL: url,
+                        fillsFrame: !expanded
+                    )
+                    .allowsHitTesting(false)
                 }
-            )
+                MatteryaHubPlayerView(
+                    url: url,
+                    posterURL: poster,
+                    isActive: appState.hubPlaybackPlaying,
+                    startTime: resumeAt,
+                    postID: post.id,
+                    showsControls: showControls,
+                    loops: false,
+                    // Expanded: aspect-fit 16:9 (no crop). Mini: fill the full-bleed strip.
+                    fillsFrame: !expanded,
+                    isMuted: mutedBinding,
+                    allowsFullscreen: showControls,
+                    onReady: {
+                        Task { await PostsService.shared.recordView(post) }
+                        // Re-assert play if something paused us during mount.
+                        if appState.hubPlaybackPlaying {
+                            NotificationCenter.default.post(
+                                name: .matteryaResumePlaybackAfterInterrupt,
+                                object: nil
+                            )
+                        }
+                    },
+                    onPlayingChange: { playing in
+                        appState.hubPlaybackPlaying = playing
+                    }
+                )
+            }
             .id("hub-continuous-\(post.id)")
         } else {
             YouTubeVideoThumbnail(

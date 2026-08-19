@@ -72,8 +72,8 @@ struct SparkFeedCard: View {
     }
 
     private var posterURL: URL? {
-        post.posterImageURL
-            ?? post.sharedPost?.asCountryPost.posterImageURL
+        MediaURLResolver.posterURL(for: post)
+            ?? post.sharedPost?.asCountryPost.flatMap { MediaURLResolver.posterURL(for: $0) }
     }
 
     var body: some View {
@@ -82,24 +82,38 @@ struct SparkFeedCard: View {
 
             if let url = playURL {
                 // Facebook: size the box, then **fill** it — no letterbox that shrinks the picture.
-                // Prefer the **fast Sparks path** (VideoPlayerView + warm pool). Archive only for archive.org.
-                InFrameVideoPlayer(
-                    url: url,
-                    posterURL: posterURL,
-                    placement: "reel",
-                    countryCode: post.countryCode,
-                    contentCountryCode: post.countryCode,
-                    postID: post.id,
-                    muted: appState.feedVideosMuted,
-                    loops: true,
-                    preferArchivePlayer: ArchiveVideoPlayback.isArchiveURL(url),
-                    showsControls: false,
-                    muteOnlyControls: true,
-                    fillsFrame: true,
-                    sharesFeedMute: true,
-                    autoplaySurface: autoplaySurface,
-                    onViewed: { Task { await PostsService.shared.recordView(post) } }
-                )
+                // Same Sparks full-player stack: Frame 0 underlay + hold until frames paint.
+                ZStack {
+                    Color.black
+                    if let posterURL {
+                        CachedAsyncImage(
+                            url: posterURL,
+                            maxPixelSize: 720,
+                            contentMode: .fill,
+                            placeholder: AnyView(Color.black)
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .clipped()
+                        .allowsHitTesting(false)
+                    }
+                    InFrameVideoPlayer(
+                        url: url,
+                        posterURL: posterURL,
+                        placement: "reel",
+                        countryCode: post.countryCode,
+                        contentCountryCode: post.countryCode,
+                        postID: post.id,
+                        muted: appState.feedVideosMuted,
+                        loops: true,
+                        preferArchivePlayer: ArchiveVideoPlayback.isArchiveURL(url),
+                        showsControls: false,
+                        muteOnlyControls: true,
+                        fillsFrame: true,
+                        sharesFeedMute: true,
+                        autoplaySurface: autoplaySurface,
+                        onViewed: { Task { await PostsService.shared.recordView(post) } }
+                    )
+                }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Theme.ink)
                 .clipped()

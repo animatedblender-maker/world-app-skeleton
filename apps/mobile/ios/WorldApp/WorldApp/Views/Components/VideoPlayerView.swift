@@ -1903,19 +1903,23 @@ struct InFrameVideoPlayer: View {
         showsControls && !muteOnlyControls && playGate
     }
 
-    /// Poster / letterbox floor — black when no poster (Sparks/Hubs), never paper-white.
+    /// Poster / letterbox floor — same as Sparks full player: remote thumb, else Frame 0 extract, else black.
     @ViewBuilder
     private var posterFloor: some View {
         if let posterURL {
             CachedAsyncImage(
                 url: posterURL,
-                maxPixelSize: 480,
-                contentMode: .fill,
+                maxPixelSize: 720,
+                contentMode: fillsFrame ? .fill : .fit,
                 placeholder: AnyView(Color.black)
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
             .allowsHitTesting(false)
+        } else if let postID {
+            // Copy Sparks: when no thumb_url, hold first decoded frame (t=0) — never empty black.
+            FrameZeroFallbackPoster(postID: postID, videoURL: url, fillsFrame: fillsFrame)
+                .allowsHitTesting(false)
         } else {
             Color.black
                 .allowsHitTesting(false)
@@ -1996,6 +2000,12 @@ struct InFrameVideoPlayer: View {
                             }
                         )
                     }
+                }
+                // Sparks pattern: keep Frame 0 poster ON TOP until AV is painting (framesReady).
+                // Without this, feed/hubs flash black while readyToPlay ≠ first frame.
+                if !framesReady {
+                    posterFloor
+                        .transition(.identity)
                 }
             } else {
                 posterFloor

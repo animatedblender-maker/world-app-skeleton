@@ -771,30 +771,44 @@ struct FacebookPostCard: View {
 
     @ViewBuilder
     private func feedAutoplayVideo(url: URL) -> some View {
-        let isHub = PlayPlatformBridge.isHubCatalogContent(post)
-            || PlayPlatformBridge.isHubFeedCardVideo(post)
-            || isHubOriginShareCard
-            || ArchiveVideoPlayback.isArchiveURL(url)
         // Feed: only Archive CDN needs MatteryaHubPlayer. R2 hubs use light AV path —
         // mounting the hub UIKit player on every cell froze scroll.
         let useArchivePath = ArchiveVideoPlayback.isArchiveURL(url)
-        InFrameVideoPlayer(
-            url: url,
-            posterURL: post.posterImageURL,
-            placement: nil,
-            countryCode: post.countryCode,
-            contentCountryCode: post.countryCode,
-            postID: post.id,
-            muted: false,
-            loops: true,
-            preferArchivePlayer: useArchivePath,
-            showsControls: true,
-            // Fill the 16:9 film; chrome overlays (play centered, scrubber on bottom edge).
-            fillsFrame: true,
-            bottomChromeReserve: 0,
-            autoplaySurface: autoplaySurface,
-            onViewed: { Task { await PostsService.shared.recordView(post) } }
-        )
+        // Same poster resolve as Sparks feed card (self → shared origin → resolver).
+        let poster = MediaURLResolver.posterURL(for: post)
+            ?? post.sharedPost?.asCountryPost.flatMap { MediaURLResolver.posterURL(for: $0) }
+        // Sparks full-player pattern: black + Frame 0 poster under film; InFrame holds until frames.
+        ZStack {
+            Color.black
+            if let poster {
+                CachedAsyncImage(
+                    url: poster,
+                    maxPixelSize: 720,
+                    contentMode: .fill,
+                    placeholder: AnyView(Color.black)
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+                .allowsHitTesting(false)
+            }
+            InFrameVideoPlayer(
+                url: url,
+                posterURL: poster,
+                placement: nil,
+                countryCode: post.countryCode,
+                contentCountryCode: post.countryCode,
+                postID: post.id,
+                muted: false,
+                loops: true,
+                preferArchivePlayer: useArchivePath,
+                showsControls: true,
+                // Fill the 16:9 film; chrome overlays (play centered, scrubber on bottom edge).
+                fillsFrame: true,
+                bottomChromeReserve: 0,
+                autoplaySurface: autoplaySurface,
+                onViewed: { Task { await PostsService.shared.recordView(post) } }
+            )
+        }
         .background(Color.black)
     }
 
@@ -915,13 +929,13 @@ struct FacebookPostCard: View {
     private var feedVideoPoster: some View {
         Group {
             if usesYouTubeVideoFrame {
-                // Never extract frames while scrolling the feed — posters only.
+                // Prefer remote poster; allow Frame 0 extract when missing (Sparks parity).
                 YouTubeVideoThumbnail(
                     post: post,
                     maxPixelSize: 420,
                     frameStyle: .feed,
                     embedsFrame: false,
-                    extractFrameIfNeeded: false
+                    extractFrameIfNeeded: true
                 )
             } else {
                 VideoThumbnailView(
@@ -929,7 +943,7 @@ struct FacebookPostCard: View {
                     maxPixelSize: 420,
                     contentMode: .fill,
                     showsPlayIcon: false,
-                    extractFrameIfNeeded: false,
+                    extractFrameIfNeeded: true,
                     placeholder: AnyView(mediaPlaceholder)
                 )
             }

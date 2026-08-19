@@ -74,6 +74,31 @@ struct VideoThumbnailView: View {
     }
 }
 
+/// Sparks-style Frame 0 hold when `thumb_url` is missing (feed / hubs / hub shares).
+struct FrameZeroFallbackPoster: View {
+    let postID: String
+    let videoURL: URL
+    var fillsFrame: Bool = true
+
+    @State private var frameImage: UIImage?
+
+    var body: some View {
+        ZStack {
+            Color.black
+            if let frameImage {
+                Image(uiImage: frameImage)
+                    .resizable()
+                    .aspectRatio(contentMode: fillsFrame ? .fill : .fit)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+            }
+        }
+        .task(id: "\(postID)|\(videoURL.absoluteString)") {
+            frameImage = await VideoFrameCache.shared.image(for: postID, videoURL: videoURL)
+        }
+    }
+}
+
 @MainActor
 final class VideoFrameCache {
     static let shared = VideoFrameCache()

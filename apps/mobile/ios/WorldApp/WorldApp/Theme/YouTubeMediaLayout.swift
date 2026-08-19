@@ -450,18 +450,22 @@ struct PlayFeedLinkCard: View {
                 shared.asCountryPost.playableVideoURL
                     ?? MediaURLResolver.videoURL(for: shared.asCountryPost)
             }) {
-            let poster = playPost.posterImageURL ?? post.posterImageURL
+            // Same resolve as Sparks: Frame 0 / thumb_url before YouTube hqdefault fallback.
+            let poster = MediaURLResolver.posterURL(for: playPost)
+                ?? MediaURLResolver.posterURL(for: post)
+                ?? playPost.posterImageURL
+                ?? post.posterImageURL
             // Feed: only Archive CDN needs the UIKit archive path. R2 long-form uses the
             // light VideoPlayerView path — mounting MatteryaHubPlayer on every hub share
             // froze the feed (AV + warm storms).
             let useArchivePath = ArchiveVideoPlayback.isArchiveURL(url)
             ZStack {
                 Color.black
-                // Poster under film until first frames.
+                // Sparks pattern: poster under film until first frames.
                 if let poster {
                     CachedAsyncImage(
                         url: poster,
-                        maxPixelSize: 480,
+                        maxPixelSize: 720,
                         contentMode: .fill,
                         placeholder: AnyView(Color.black)
                     )
@@ -547,16 +551,32 @@ struct YouTubeFeedVideoCard: View {
         VStack(alignment: .leading, spacing: 12) {
             YouTubeVideoFrame(style: .feed) {
                 if let url = post.playableVideoURL {
-                    InFrameVideoPlayer(
-                        url: url,
-                        posterURL: post.posterImageURL,
-                        countryCode: post.countryCode,
-                        contentCountryCode: post.countryCode,
-                        postID: post.id,
-                        muted: true,
-                        fillsFrame: true,
-                        onViewed: { Task { await PostsService.shared.recordView(post) } }
-                    )
+                    let poster = MediaURLResolver.posterURL(for: post) ?? post.posterImageURL
+                    // Sparks pattern for Hubs feed cards.
+                    ZStack {
+                        Color.black
+                        if let poster {
+                            CachedAsyncImage(
+                                url: poster,
+                                maxPixelSize: 720,
+                                contentMode: .fill,
+                                placeholder: AnyView(Color.black)
+                            )
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .clipped()
+                            .allowsHitTesting(false)
+                        }
+                        InFrameVideoPlayer(
+                            url: url,
+                            posterURL: poster,
+                            countryCode: post.countryCode,
+                            contentCountryCode: post.countryCode,
+                            postID: post.id,
+                            muted: true,
+                            fillsFrame: true,
+                            onViewed: { Task { await PostsService.shared.recordView(post) } }
+                        )
+                    }
                 } else {
                     YouTubeVideoThumbnail(
                         post: post,
