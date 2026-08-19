@@ -57,7 +57,8 @@ struct ReelsVerticalFeed: View {
         .background(Color.black)
         .ignoresSafeArea(.all)
         .onAppear {
-            MediaPlaybackCoordinator.shared.silenceForSparkPageChange()
+            // Don’t silenceAll / pauseAll here — feed already soft-handed off; wiping
+            // the warm buffer made open feel like a cold start.
             if posts.indices.contains(activeIndex) {
                 recordView(at: activeIndex)
                 SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
@@ -1304,35 +1305,27 @@ struct ReelsScrollViewer: View {
             Task { await ensureBulkQueueAhead() }
         }
         .task {
-            // Open must paint immediately — never block first frames on network/warm.
+            // Open must paint immediately — never await warm/network on the critical path.
             PerformanceTelemetry.markIfAbsent("sparks_open_start")
-            MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
             SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
             if posts.indices.contains(activeIndex) {
                 CommentsWarmCache.shared.warm(posts[activeIndex].id)
             }
-            // Short head warm only (was 0.9+0.7s serial waits → open “hallucinations”).
-            let headIDs = Array(posts.dropFirst(activeIndex).prefix(4).map(\.id))
-            await SparkWarmPool.shared.awaitReady(postIDs: headIDs, timeout: 0.45)
             PerformanceTelemetry.milestone(
                 "reel_swipe_first_frame",
                 surface: "sparks",
                 from: "sparks_open_start",
-                meta: ["path": "open_warm", "queue": "\(posts.count)"]
+                meta: ["path": "open_instant", "queue": "\(posts.count)"]
             )
 
-            // Instant local bulk (no remount) then deep expand off the critical path.
-            seedFromWarmCatalogIfNeeded()
-            // Always top-up queue on open (chat share often arrives with a single seed).
-            await ensureBulkQueueAhead(target: max(24, SparksQueueBudget.minQueueAhead))
-            SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
-
-            // Catalog expand + bulk top-up in background — swipe never waits.
+            // Everything else off the open path.
             Task { @MainActor in
+                seedFromWarmCatalogIfNeeded()
+                await ensureBulkQueueAhead(target: max(24, SparksQueueBudget.minQueueAhead))
+                SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
                 await expandFeed()
                 await ensureBulkQueueAhead(target: SparksQueueBudget.minQueueAhead)
                 SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
-                // Second pass if still thin (cold catalog / chat entry).
                 if posts.count < SparksQueueBudget.minQueueAhead {
                     await loadMoreReels()
                     await ensureBulkQueueAhead(target: SparksQueueBudget.minQueueAhead)

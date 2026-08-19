@@ -163,6 +163,30 @@ final class SparkWarmPool {
         slots[postID]?.player
     }
 
+    /// Move a parked warm slot from one id → another (feed share id → Sparks origin id).
+    /// Lets feed→Sparks open claim the same decoded player without a cold start.
+    func rekey(from oldID: String, to newID: String) {
+        let old = oldID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let neu = newID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !old.isEmpty, !neu.isEmpty, old != neu else { return }
+        if slots[neu] != nil {
+            // Prefer keeping the destination; drop the old duplicate.
+            if let discarded = slots.removeValue(forKey: old) {
+                discarded.player.pause()
+                discarded.player.replaceCurrentItem(with: nil)
+                MediaPlaybackCoordinator.shared.unregister(discarded.player)
+            }
+            if inUse.remove(old) != nil { inUse.insert(neu) }
+            return
+        }
+        guard let slot = slots.removeValue(forKey: old) else {
+            if inUse.remove(old) != nil { inUse.insert(neu) }
+            return
+        }
+        slots[neu] = Slot(postID: neu, player: slot.player, parkedAt: slot.parkedAt)
+        if inUse.remove(old) != nil { inUse.insert(neu) }
+    }
+
     /// Hand a fully buffered player to the visible card (removes it from the pool).
     /// Caller must treat the player as **paused at t≈0** (pool enforces that before parking).
     /// Returns nil if the parked item is missing or already failed (forces a clean cold start).

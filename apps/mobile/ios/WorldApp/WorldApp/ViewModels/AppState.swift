@@ -1585,15 +1585,15 @@ final class AppState {
     }
 
     func openReelsViewer(startingPost: CountryPost, seedPosts: [CountryPost] = []) {
-        // Feed / hubs audio must die before Sparks scroll takes over.
-        // Do not drain warm pool here — callers may pre-warm the first few clips.
+        // Soft handoff: clear feed focus, but do NOT pauseAll / silenceAllBuffered —
+        // that wiped the warm first-frame the feed card already decoded (slow open).
         FeedVideoFocus.shared.resetAll()
-        MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
-        MediaPlaybackCoordinator.shared.pauseAll()
+        MediaPlaybackCoordinator.shared.silenceForSparkPageChange()
         hubPlaybackPlaying = false
         var seeds = seedPosts
         if seeds.isEmpty {
-            seeds = Self.instantSparksSeedQueue(starting: startingPost, limit: 72)
+            // Small instant seed — expand in background after first frame.
+            seeds = Self.instantSparksSeedQueue(starting: startingPost, limit: 24)
         }
         if !seeds.contains(where: { $0.id == startingPost.id }) {
             seeds.insert(ReelsRankingEngine.resolvePlayerStart(startingPost), at: 0)
@@ -1633,39 +1633,49 @@ final class AppState {
                     showToast("\(MatteryaCopy.noSparksYet) — publish one to get started.", style: .info)
                     return
                 }
-                presentGlobalSparks(starting: resolved)
+                presentGlobalSparks(starting: resolved, fromFeedPost: startingPost)
             }
             return
         }
 
-        presentGlobalSparks(starting: start)
+        presentGlobalSparks(starting: start, fromFeedPost: startingPost)
     }
 
-    /// Shared open path for feed + chat: multi-seed queue + warm pool + deep expand later.
-    private func presentGlobalSparks(starting start: CountryPost) {
-        // Large instant bulk so the player never waits on network for the first ~dozen swipes.
-        // Same path for feed card, hubs strip, **and chat share** — endless from open.
-        let seeds = Self.instantSparksSeedQueue(starting: start, limit: 72)
+    /// Shared open path for feed + chat: paint now, warm handoff, expand later.
+    private func presentGlobalSparks(starting start: CountryPost, fromFeedPost: CountryPost? = nil) {
+        // Tiny instant queue — first paint never waits on ranking 70+ clips.
+        let seeds = Self.instantSparksSeedQueue(starting: start, limit: 20)
+        // Pre-warm destination id before UI mounts (feed may still hold share-id slot).
+        if let url = start.playableVideoURL {
+            SparkWarmPool.shared.warmSingle(postID: start.id, url: url, deep: true)
+            if let from = fromFeedPost, from.id != start.id {
+                SparkWarmPool.shared.warmSingle(postID: from.id, url: url, deep: true)
+            }
+            if ArchiveVideoPlayback.isArchiveURL(url) {
+                ArchiveVideoPlayback.warmResolve(url)
+            }
+        }
+        // Paint Sparks UI immediately (no await).
         openReelsViewer(startingPost: start, seedPosts: seeds)
-        if let url = start.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) {
-            ArchiveVideoPlayback.warmResolve(url)
-        }
-        // Warm a bulk window immediately — short await so open never stalls/flickers.
         SparkWarmPool.shared.preparePlayerWindow(posts: seeds, around: 0)
+        // After feed parks its player into the pool, re-key share → origin for claim hit.
         Task { @MainActor in
-            await SparkWarmPool.shared.awaitReady(
-                postIDs: Array(seeds.prefix(3).map(\.id)),
-                timeout: 0.35
-            )
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 24_000_000)
+            if let from = fromFeedPost, from.id != start.id {
+                SparkWarmPool.shared.rekey(from: from.id, to: start.id)
+            }
+            SparkWarmPool.shared.preparePlayerWindow(posts: seeds, around: 0)
+            // Nudge Sparks focus to reclaim if it cold-started one frame early.
+            NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
         }
-        // Always kick catalog fuel + discovery session so chat-entry never stays single-clip.
-        Task { @MainActor in
+        // Catalog / deep queue off the critical path.
+        Task(priority: .utility) { @MainActor in
             _ = await PostsService.shared.loadSparksDiscoveryCatalog(
-                forceRefresh: seeds.count < 24,
-                deep: true
+                forceRefresh: seeds.count < 12,
+                deep: false
             )
-            if seeds.count < 16 {
-                // Force a full discovery fill so GlobalSparksViewer.expandFeed has bulk ready.
+            if seeds.count < 12 {
                 _ = await PostsService.shared.beginFreshSparksSession(preferStart: start)
             }
         }
@@ -1673,7 +1683,7 @@ final class AppState {
 
     /// Instant swipe seed — **eligible originals only**, **unviewed discovery order**
     /// (not a sticky shuffle of the same catalog head).
-    private static func instantSparksSeedQueue(starting start: CountryPost, limit: Int = 72) -> [CountryPost] {
+    private static func instantSparksSeedQueue(starting start: CountryPost, limit: Int = 24) -> [CountryPost] {
         let head = ReelsRankingEngine.resolvePlayerStart(start)
         var out: [CountryPost] = [head]
         var seen: Set<String> = [head.id]

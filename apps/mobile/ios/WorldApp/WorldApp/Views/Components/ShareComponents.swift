@@ -161,7 +161,14 @@ struct SparkFeedCard: View {
             onOpen()
             return
         }
-        // Endless Sparks from all over Matterya — not a one-clip dead end.
+        // Pre-warm origin + share ids so full-screen claim is a hit (IG-style).
+        let start = ReelsRankingEngine.resolvePlayerStart(post)
+        if let url = start.playableVideoURL ?? playURL {
+            SparkWarmPool.shared.warmSingle(postID: start.id, url: url, deep: true)
+            if start.id != post.id {
+                SparkWarmPool.shared.warmSingle(postID: post.id, url: url, deep: true)
+            }
+        }
         appState.openGlobalSparksViewer(startingPost: post)
     }
 }
