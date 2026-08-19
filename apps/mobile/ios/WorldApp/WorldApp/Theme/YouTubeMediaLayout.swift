@@ -137,7 +137,7 @@ struct YouTubeVideoFrame<Content: View>: View {
                     }
                     .clipShape(Rectangle())
             case .feed:
-                // 16:9 film + chrome pad; black letterbox (never paper-white).
+                // True 16:9 — film fills; transport overlays (not clipped away).
                 Color.clear
                     .frame(maxWidth: .infinity)
                     .frame(height: FacebookMediaLayout.hubFeedVideoHeight())
@@ -145,6 +145,7 @@ struct YouTubeVideoFrame<Content: View>: View {
                     .overlay {
                         content()
                     }
+                    // Clip media only — chrome is drawn inside and must stay visible.
                     .clipped()
             case .card:
                 // Shelf / search cards stay compact 16:9.
@@ -476,9 +477,9 @@ struct PlayFeedLinkCard: View {
                     preferArchivePlayer: useArchivePath,
                     showsControls: true,
                     muteOnlyControls: false,
-                    // Fill the 16:9 film zone; black chrome pad keeps timeline uncropped.
+                    // Fill the 16:9 card; play/±10s/scrubber overlay centered on the film.
                     fillsFrame: true,
-                    bottomChromeReserve: FacebookMediaLayout.hubFeedTimelineChromePad,
+                    bottomChromeReserve: 0,
                     sharesFeedMute: true,
                     autoplaySurface: autoplaySurface,
                     onViewed: { Task { await PostsService.shared.recordView(post) } }

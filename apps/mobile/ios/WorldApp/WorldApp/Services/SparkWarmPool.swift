@@ -203,10 +203,11 @@ final class SparkWarmPool {
             player.pause()
             player.replaceCurrentItem(with: nil)
             MediaPlaybackCoordinator.shared.unregister(player)
+            continuingIDs.remove(postID)
             return nil
         }
         inUse.insert(postID)
-        // Stop any silent pool buffering; card takes exclusive control.
+        // Soft pause for handoff; keep playhead (continue) or t≈0 (normal park).
         player.pause()
         player.isMuted = true
         player.volume = 0
@@ -226,6 +227,15 @@ final class SparkWarmPool {
     /// Return a still-buffered player so scrolling back is instant (keeps `currentItem`).
     /// Always rewound to **exact t=0** before the next claim (no mid-clip first frame).
     func park(postID: String, player: AVPlayer) {
+        parkInternal(postID: postID, player: player, continueFromCurrentTime: false)
+    }
+
+    /// Park without seeking to 0 — feed→Sparks/Hubs open continues mid-clip.
+    func parkContinuing(postID: String, player: AVPlayer) {
+        parkInternal(postID: postID, player: player, continueFromCurrentTime: true)
+    }
+
+    private func parkInternal(postID: String, player: AVPlayer, continueFromCurrentTime: Bool) {
         inUse.remove(postID)
         player.pause()
         player.isMuted = true
@@ -263,8 +273,25 @@ final class SparkWarmPool {
 
         MediaPlaybackCoordinator.shared.register(player)
         slots[postID] = Slot(postID: postID, player: player, parkedAt: Date())
-        // Snap to exact 0 + decode first frame while parked (never free-play into the clip).
-        Task { await silentBufferFill(postID: postID, player: player) }
+        if continueFromCurrentTime {
+            continuingIDs.insert(postID)
+        } else {
+            continuingIDs.remove(postID)
+            // Snap to exact 0 + decode first frame while parked (never free-play into the clip).
+            Task { await silentBufferFill(postID: postID, player: player) }
+        }
+    }
+
+    /// IDs parked for mid-clip continue (do not seek to 0 on next claim).
+    private var continuingIDs: Set<String> = []
+
+    /// True when the next claim should resume mid-playhead (feed → full player).
+    func shouldContinueFromCurrentTime(postID: String) -> Bool {
+        continuingIDs.contains(postID)
+    }
+
+    func clearContinueFlag(postID: String) {
+        continuingIDs.remove(postID)
     }
 
     /// True when this exact player is still sitting in the pool (not claimed).

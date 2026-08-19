@@ -273,10 +273,9 @@ struct GlobalHubPlaybackLayer: View {
 
     @ViewBuilder
     private func playerSurface(for post: CountryPost, showControls: Bool) -> some View {
-        // Resume mid-clip only when already deep into the video — never block first frame
-        // with a hard seek on open (that made Hubs feel laggy).
+        // Resume from feed playhead (any >0.2s) so open continues where the user left off.
         let stored = YouTubeCatalogService.shared.playbackPosition(for: post.id)
-        let resumeAt = stored > 3 ? stored : 0
+        let resumeAt = stored > 0.2 ? stored : 0
         if let url = post.playableVideoURL {
             // One Hubs chrome for every long-form surface (R2 + Archive):
             // center play · −10s · +10s · bottom scrubber (MatteryaHubPlayerView).

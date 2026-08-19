@@ -787,9 +787,9 @@ struct FacebookPostCard: View {
             loops: true,
             preferArchivePlayer: useArchivePath,
             showsControls: true,
-            // Hubs: fill film + black chrome pad. Sparks: fill tall box.
+            // Fill the media box; hubs chrome overlays the film (YT-style).
             fillsFrame: true,
-            bottomChromeReserve: isHub ? FacebookMediaLayout.hubFeedTimelineChromePad : 0,
+            bottomChromeReserve: 0,
             autoplaySurface: autoplaySurface,
             onViewed: { Task { await PostsService.shared.recordView(post) } }
         )

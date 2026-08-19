@@ -71,6 +71,24 @@ final class AppState {
     var pendingPlayChannelAuthorID: String?
     var pendingPlayChannelUsername: String?
 
+    /// Post ids that should hand off mid-clip into Sparks/Hubs (feed → full player).
+    private var continuePlaybackIDs: Set<String> = []
+
+    func markContinuePlayback(for postIDs: [String]) {
+        for id in postIDs where !id.isEmpty {
+            continuePlaybackIDs.insert(id)
+        }
+    }
+
+    func shouldContinuePlayback(for postID: String) -> Bool {
+        continuePlaybackIDs.contains(postID)
+    }
+
+    func clearContinuePlayback(for postID: String) {
+        continuePlaybackIDs.remove(postID)
+        SparkWarmPool.shared.clearContinueFlag(postID: postID)
+    }
+
     // MARK: - Global hub continuous playback (survives tabs + minimize)
     /// Active long-form hubs video. Owned by `GlobalHubPlaybackLayer` (single AVPlayer).
     var hubPlaybackPost: CountryPost?
@@ -1253,6 +1271,9 @@ final class AppState {
         isPlayPresented = false
         clearPendingLivingVideo()
 
+        // Feed card → hubs: continue mid-clip (park without rewind).
+        markContinuePlayback(for: [watchPost.id, PlayPlatformBridge.hubWatchPresentation(for: watchPost).id])
+
         // Intent first — GlobalHubPlaybackLayer mounts with isActive true (no silent first frame).
         hubPlaybackPlaying = true
         hubPlaybackMuted = false
@@ -1268,8 +1289,8 @@ final class AppState {
 
         let switchingVideo = hubPlaybackPost?.id != watchPost.id
         if switchingVideo {
-            // Soft-pause others only — never stopAll/tear-down (that delayed first frame).
-            MediaPlaybackCoordinator.shared.pauseAll()
+            // Soft page silence only — never pauseAll/silenceAllBuffered (wipes feed handoff).
+            MediaPlaybackCoordinator.shared.silenceForSparkPageChange()
             hubPlaybackPost = watchPost
         } else if hubPlaybackPost?.playableVideoURL == nil, watchPost.playableVideoURL != nil {
             hubPlaybackPost = watchPost
@@ -1287,11 +1308,9 @@ final class AppState {
             if ArchiveVideoPlayback.isArchiveURL(url) {
                 ArchiveVideoPlayback.warmResolve(url)
             }
-            // Pre-warm AV buffer immediately (same runloop as open).
-            SparkWarmPool.shared.warmSingle(postID: watchPost.id, url: url)
+            SparkWarmPool.shared.warmSingle(postID: watchPost.id, url: url, deep: true)
         }
         ImageCache.shared.prefetchPostThumbnails([watchPost], maxPixelSize: 720)
-        // Kick continuous surface if it was paused.
         NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
     }
 
@@ -1643,29 +1662,23 @@ final class AppState {
 
     /// Shared open path for feed + chat: paint now, warm handoff, expand later.
     private func presentGlobalSparks(starting start: CountryPost, fromFeedPost: CountryPost? = nil) {
+        // Mark continue so feed teardown parks mid-playhead (not rewind to 0).
+        var handoffIDs = [start.id]
+        if let from = fromFeedPost { handoffIDs.append(from.id) }
+        markContinuePlayback(for: handoffIDs)
+
         // Tiny instant queue — first paint never waits on ranking 70+ clips.
         let seeds = Self.instantSparksSeedQueue(starting: start, limit: 16)
-        if let url = start.playableVideoURL {
-            SparkWarmPool.shared.warmSingle(postID: start.id, url: url, deep: true)
-            if let from = fromFeedPost, from.id != start.id {
-                SparkWarmPool.shared.warmSingle(postID: from.id, url: url, deep: true)
-                // Re-key before mount so Sparks claim hits the feed’s warm slot.
-                SparkWarmPool.shared.rekey(from: from.id, to: start.id)
-            }
-            if ArchiveVideoPlayback.isArchiveURL(url) {
-                ArchiveVideoPlayback.warmResolve(url)
-            }
-        }
-        SparkWarmPool.shared.preparePlayerWindow(posts: seeds, around: 0)
-        // Paint Sparks UI immediately — no sleeps / awaits on the open path.
+        // Paint Sparks UI immediately — feed parks continuing into the pool on unmount.
         openReelsViewer(startingPost: start, seedPosts: seeds)
-        // Catalog expand off the critical path.
-        Task(priority: .utility) { @MainActor in
-            // Feed may park under share id one frame later — re-key again cheaply.
+        // After feed parks: re-key share→origin, warm neighbors, expand catalog.
+        Task { @MainActor in
+            await Task.yield()
             if let from = fromFeedPost, from.id != start.id {
                 SparkWarmPool.shared.rekey(from: from.id, to: start.id)
             }
             SparkWarmPool.shared.preparePlayerWindow(posts: seeds, around: 0)
+            NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
             _ = await PostsService.shared.loadSparksDiscoveryCatalog(
                 forceRefresh: seeds.count < 12,
                 deep: false

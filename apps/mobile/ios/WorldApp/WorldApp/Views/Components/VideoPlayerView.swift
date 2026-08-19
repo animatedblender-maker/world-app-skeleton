@@ -110,10 +110,48 @@ struct VideoPlayerView: View {
         ZStack {
             softVideoFloor
 
-            // Film zone — padded from bottom when feed hubs reserve timeline chrome.
-            VStack(spacing: 0) {
-                ZStack {
-                    // Poster matches video gravity (fill/fit) so there is no framing jump.
+            // Single film box — fill the card; chrome overlays centered on the picture.
+            ZStack {
+                if let posterURL {
+                    CachedAsyncImage(
+                        url: posterURL,
+                        maxPixelSize: 900,
+                        contentMode: fillsFrame ? .fill : .fit,
+                        placeholder: AnyView(softVideoFloor)
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+                    .allowsHitTesting(false)
+                }
+
+                if shouldShowAd, let placement {
+                    AdPrerollView(
+                        placement: placement,
+                        countryCode: countryCode,
+                        contentCountryCode: contentCountryCode,
+                        postID: postID,
+                        onComplete: { adFinished = true }
+                    )
+                } else if let player {
+                    MatteryaVideoSurface(player: player, fillsFrame: fillsFrame)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .clipped()
+                        .opacity(shouldShowPosterCover ? 0.01 : 1)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            guard showsControls else { return }
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                showChrome.toggle()
+                            }
+                            scheduleChromeHide()
+                        }
+                } else if loadFailed {
+                    unavailableState
+                } else if posterURL == nil {
+                    ProgressView().tint(Theme.accentBright)
+                }
+
+                if shouldShowPosterCover {
                     if let posterURL {
                         CachedAsyncImage(
                             url: posterURL,
@@ -124,65 +162,14 @@ struct VideoPlayerView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .clipped()
                         .allowsHitTesting(false)
-                    }
-
-                    if shouldShowAd, let placement {
-                        AdPrerollView(
-                            placement: placement,
-                            countryCode: countryCode,
-                            contentCountryCode: contentCountryCode,
-                            postID: postID,
-                            onComplete: { adFinished = true }
-                        )
-                    } else if let player {
-                        MatteryaVideoSurface(player: player, fillsFrame: fillsFrame)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .clipped()
-                            // Hide black/empty AV layer until poster cover lifts (scroll handoff).
-                            .opacity(shouldShowPosterCover ? 0.01 : 1)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                guard showsControls else { return }
-                                withAnimation(.easeInOut(duration: 0.18)) {
-                                    showChrome.toggle()
-                                }
-                                scheduleChromeHide()
-                            }
-                    } else if loadFailed {
-                        unavailableState
-                    } else if posterURL == nil {
-                        ProgressView().tint(Theme.accentBright)
-                    }
-
-                    // Poster cover only while cold — same gravity as video.
-                    if shouldShowPosterCover {
-                        if let posterURL {
-                            CachedAsyncImage(
-                                url: posterURL,
-                                maxPixelSize: 900,
-                                contentMode: fillsFrame ? .fill : .fit,
-                                placeholder: AnyView(softVideoFloor)
-                            )
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .clipped()
+                    } else {
+                        softVideoFloor
                             .allowsHitTesting(false)
-                        } else {
-                            softVideoFloor
-                                .allowsHitTesting(false)
-                        }
                     }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
-
-                if bottomChromeReserve > 0 {
-                    softVideoFloor
-                        .frame(height: bottomChromeReserve)
-                        .allowsHitTesting(false)
                 }
             }
 
-            // Transport/timeline — tap empty film (not buttons) toggles chrome.
+            // Transport overlays the film — play centered, scrubber on bottom edge.
             if shouldShowChrome {
                 ZStack {
                     Color.clear
@@ -829,6 +816,19 @@ struct VideoPlayerView: View {
         // Keep poster up — kickAudiblePlayback reveals only after frames paint.
         showPosterCover = true
 
+        // Feed → Sparks/Hubs handoff: keep mid-clip playhead (do not seek to 0).
+        let continueMid = postID.map { SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: $0) } ?? false
+        if continueMid {
+            if let postID { SparkWarmPool.shared.clearContinueFlag(postID: postID) }
+            appState.clearContinuePlayback(for: postID ?? "")
+            let t = claimed.currentTime().seconds
+            currentSeconds = t.isFinite ? max(0, t) : 0
+            if liveGate.isActive, !liveGate.userWantsPause {
+                kickAudiblePlayback(on: claimed)
+            }
+            return
+        }
+
         // If already at t≈0 (warm pool contract), play immediately — no seek, no jump.
         if alreadyAtStart || !needsExactStart {
             if liveGate.isActive, !liveGate.userWantsPause {
@@ -1180,8 +1180,13 @@ struct VideoPlayerView: View {
             player.isMuted = true
             player.volume = 0
             if park, let postID, player.currentItem != nil, player.status != .failed {
-                // Keep the buffered item for instant re-entry when the user scrolls back.
-                SparkWarmPool.shared.park(postID: postID, player: player)
+                // Opening Sparks/Hubs from this card → keep playhead (seamless continue).
+                if appState.shouldContinuePlayback(for: postID) {
+                    SparkWarmPool.shared.parkContinuing(postID: postID, player: player)
+                } else {
+                    // Scroll-away: rewind to 0 for next feed autoplay claim.
+                    SparkWarmPool.shared.park(postID: postID, player: player)
+                }
             } else {
                 if let postID {
                     SparkWarmPool.shared.release(postID: postID)
@@ -1629,8 +1634,9 @@ private struct MatteryaVideoControls: View {
                         .frame(width: 42, alignment: .trailing)
                 }
                 .padding(.horizontal, 14)
-                .padding(.bottom, isFullscreen ? 0 : 14)
-                .padding(.top, 12)
+                // Keep scrubber fully inside the filled 16:9 card (never clipped).
+                .padding(.bottom, isFullscreen ? 0 : 18)
+                .padding(.top, 10)
                 .safeAreaPadding(.bottom, isFullscreen ? 10 : 0)
                 .background(
                     LinearGradient(
@@ -1641,7 +1647,7 @@ private struct MatteryaVideoControls: View {
                 )
             }
 
-            // Dead-center transport (Hubs-style).
+            // Dead-center of the film box (same ZStack — not skewed by a chrome pad).
             HStack(spacing: 40) {
                 controlIconButton(systemName: "gobackward.10", size: 46) {
                     onSeek(max(0, currentSeconds - 10))

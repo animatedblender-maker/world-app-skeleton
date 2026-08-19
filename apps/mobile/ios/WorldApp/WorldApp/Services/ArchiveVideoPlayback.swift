@@ -1635,11 +1635,18 @@ final class ArchiveVideoPlayerController: UIViewController {
         errorLabel.isHidden = true
         // Do not layoutIfNeeded with zero bounds — wait for viewDidLayoutSubviews.
 
+        let continueMid = postID.map { SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: $0) } ?? false
+        if continueMid, let postID {
+            SparkWarmPool.shared.clearContinueFlag(postID: postID)
+        }
         let forcedStart = restartsFromBeginningOnFocus ? 0 : startTime
         let t = claimed.currentTime().seconds
         // Wide near-zero: warm park is rarely exact 0 — skip seek to kill swipe flash.
         let nearZero = t.isFinite && t >= 0 && t < 1.0
-        let needsSeek = (restartsFromBeginningOnFocus || forcedStart < 0.5) && !nearZero
+        // Feed→full handoff: never seek away from the live playhead.
+        let needsSeek = !continueMid
+            && (restartsFromBeginningOnFocus || forcedStart < 0.5)
+            && !nearZero
 
         if autoplay, userWantsPlayback {
             _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
@@ -1654,7 +1661,15 @@ final class ArchiveVideoPlayerController: UIViewController {
             claimed.volume = 0
         }
 
-        if needsSeek {
+        if continueMid, userWantsPlayback {
+            lastKnownSeconds = t.isFinite ? max(0, t) : 0
+            posterView.isHidden = false
+            claimed.safePlayImmediately(atRate: 1.0)
+            didKickPlayback = true
+            onPlayingChanged?(true)
+            onReady?()
+            revealPosterWhenPlaying(claimed)
+        } else if needsSeek {
             // Seek under poster — reveal only after rate > 0.
             claimed.seek(
                 to: .zero,
