@@ -1763,21 +1763,31 @@ final class ArchiveVideoPlayerController: UIViewController {
     }
 
     /// Drop poster only after AV is actually painting (never on readyToPlay alone).
+    /// `rate > 0` alone still blinks — wait until time advances, then settle 1–2 frames.
     private func revealPosterWhenPlaying(_ player: AVPlayer) {
         Task { @MainActor in
-            for _ in 0..<50 {
+            for _ in 0..<60 {
                 try? await Task.sleep(nanoseconds: 40_000_000)
                 guard self.player === player else { return }
-                if player.rate > 0.05 || player.timeControlStatus == .playing {
+                let t = player.currentTime().seconds
+                let advanced = t.isFinite && t >= 0.08
+                let moving = player.rate > 0.05
+                    || (player.timeControlStatus == .playing && player.rate > 0.01)
+                if moving, advanced {
+                    try? await Task.sleep(nanoseconds: 120_000_000)
+                    guard self.player === player else { return }
                     self.posterView.isHidden = true
                     self.spinner.stopAnimating()
                     return
                 }
             }
-            // Last resort only if clearly playing.
-            if self.player === player, player.rate > 0.01 {
-                self.posterView.isHidden = true
-                self.spinner.stopAnimating()
+            // Last resort only if clearly playing with advanced time.
+            if self.player === player {
+                let t = player.currentTime().seconds
+                if player.rate > 0.01, t.isFinite, t >= 0.08 {
+                    self.posterView.isHidden = true
+                    self.spinner.stopAnimating()
+                }
             }
         }
     }

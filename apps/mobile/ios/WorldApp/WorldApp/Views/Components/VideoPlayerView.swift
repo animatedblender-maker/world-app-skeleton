@@ -485,26 +485,37 @@ struct VideoPlayerView: View {
     }
 
     /// True only when the layer is likely painting pixels (not a black ready buffer).
+    /// `rate > 0` alone still blinks — decoder often shows 1–2 black frames first.
     private func playerHasPaintedFrames(_ player: AVPlayer) -> Bool {
-        // Require actual playback — readyToPlay / parked-at-0 still shows black.
-        if player.rate > 0.05 { return true }
-        if player.timeControlStatus == .playing, player.rate > 0.01 { return true }
-        return false
+        let t = player.currentTime().seconds
+        let advanced = t.isFinite && t >= 0.08
+        let moving = player.rate > 0.05
+            || (player.timeControlStatus == .playing && player.rate > 0.01)
+        return moving && advanced
     }
 
     @MainActor
     private func markPosterCoverReady() {
         guard showPosterCover else { return }
-        showPosterCover = false
-        onFramesReady?()
+        // Settle: keep poster on top for a couple display frames AFTER paint proof,
+        // so dropping the cover never reveals a still-black AVPlayerLayer (the blink).
+        let player = self.player
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            guard showPosterCover else { return }
+            guard liveGate.isActive, !liveGate.userWantsPause else { return }
+            if let player, !playerHasPaintedFrames(player) { return }
+            showPosterCover = false
+            onFramesReady?()
+        }
     }
 
     /// Drop poster cover only after AVPlayer is producing frames (never on readyToPlay alone).
     @MainActor
     private func revealPlayerWhenFramesReady(_ player: AVPlayer) {
         Task { @MainActor in
-            // ~2s max — stay on poster the whole time (Instagram/YT), never flash black.
-            for _ in 0..<50 {
+            // ~2.5s max — stay on poster the whole time (Instagram/YT), never flash black.
+            for _ in 0..<60 {
                 try? await Task.sleep(nanoseconds: 40_000_000)
                 guard liveGate.isActive, !liveGate.userWantsPause else { return }
                 if playerHasPaintedFrames(player) {
@@ -513,11 +524,11 @@ struct VideoPlayerView: View {
                     return
                 }
             }
-            // Last resort: only if item is ready AND we still intend to play.
-            // Prefer sticking on poster over a black hole.
+            // Last resort: only if clearly playing AND time has advanced.
+            // Prefer sticking on poster over a black blink.
             if liveGate.isActive,
                player.currentItem?.status == .readyToPlay,
-               player.timeControlStatus == .playing || player.rate > 0.01 {
+               playerHasPaintedFrames(player) {
                 isRestartSeeking = false
                 markPosterCoverReady()
             }
@@ -1968,13 +1979,13 @@ struct InFrameVideoPlayer: View {
                                 onViewed?()
                             },
                             onPlayingChange: { playing in
-                                // Sparks/Archive: kick ≠ painted frames. Keep SwiftUI poster
-                                // until rate/time proves paint (UIKit still holds its own cover).
+                                // Kick ≠ painted frames — never lift cover here (blink source).
                                 if !playing { framesReady = false }
                             },
                             onProgress: { current, _ in
-                                if !framesReady, current > 0.04 {
-                                    framesReady = true
+                                // Match VideoPlayerView: time must advance past first black frames.
+                                if !framesReady, current >= 0.12 {
+                                    markInFrameFramesReady()
                                 }
                             }
                         )
@@ -1998,12 +2009,13 @@ struct InFrameVideoPlayer: View {
                             preloadsWhenInactive: false,
                             onViewed: onViewed,
                             onProgress: { current, _ in
-                                if !framesReady, current > 0.04 {
-                                    framesReady = true
+                                if !framesReady, current >= 0.12 {
+                                    markInFrameFramesReady()
                                 }
                             },
                             onFramesReady: {
-                                framesReady = true
+                                // Player already settled its own cover — lift outer after a beat.
+                                markInFrameFramesReady()
                             }
                         )
                     }
@@ -2013,6 +2025,7 @@ struct InFrameVideoPlayer: View {
                 if !framesReady {
                     posterFloor
                         .transition(.identity)
+                        .animation(nil, value: framesReady)
                 }
             } else {
                 posterFloor
@@ -2149,6 +2162,16 @@ struct InFrameVideoPlayer: View {
         }
         // Win → play now. Lose → soft pause (debounced) unless surface left.
         syncPlayGate(immediate: win)
+    }
+
+    /// Lift outer poster only after paint proof + short settle (no start blink).
+    private func markInFrameFramesReady() {
+        guard !framesReady else { return }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            guard playGate, shouldPlay else { return }
+            framesReady = true
+        }
     }
 
     /// Instant on for play; delayed off so GeometryReader glitches don't pause full-screen cards.
