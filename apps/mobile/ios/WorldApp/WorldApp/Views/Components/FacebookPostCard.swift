@@ -776,7 +776,7 @@ struct FacebookPostCard: View {
         let useArchivePath = ArchiveVideoPlayback.isArchiveURL(url)
         // Same poster resolve as Sparks feed card (self → shared origin → resolver).
         let poster = MediaURLResolver.posterURL(for: post)
-            ?? post.sharedPost?.asCountryPost.flatMap { MediaURLResolver.posterURL(for: $0) }
+            ?? post.sharedPost.flatMap { MediaURLResolver.posterURL(for: $0.asCountryPost) }
         // Sparks full-player pattern: black + Frame 0 poster under film; InFrame holds until frames.
         ZStack {
             Color.black

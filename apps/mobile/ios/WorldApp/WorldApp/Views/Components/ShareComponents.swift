@@ -73,7 +73,7 @@ struct SparkFeedCard: View {
 
     private var posterURL: URL? {
         MediaURLResolver.posterURL(for: post)
-            ?? post.sharedPost?.asCountryPost.flatMap { MediaURLResolver.posterURL(for: $0) }
+            ?? post.sharedPost.flatMap { MediaURLResolver.posterURL(for: $0.asCountryPost) }
     }
 
     var body: some View {
