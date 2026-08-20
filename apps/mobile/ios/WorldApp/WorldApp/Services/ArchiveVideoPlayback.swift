@@ -532,9 +532,9 @@ struct MatteryaHubPlayerView: View {
                         .frame(width: 42, alignment: .trailing)
                 }
                 .padding(.horizontal, 16)
-                // On-film scrubber (16:9 stage is not clipped).
-                .padding(.bottom, 12)
-                .padding(.top, 18)
+                // Timeline in container strip under the 16:9 film.
+                .padding(.bottom, 8)
+                .padding(.top, 12)
                 .background(
                     LinearGradient(
                         colors: [.clear, Theme.ink.opacity(0.55), Theme.ink.opacity(0.82)],

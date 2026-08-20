@@ -1688,9 +1688,9 @@ private struct MatteryaVideoControls: View {
                         .frame(width: 42, alignment: .trailing)
                 }
                 .padding(.horizontal, 14)
-                // On-film timeline — parent must not clip this frame.
-                .padding(.bottom, isFullscreen ? 0 : 12)
-                .padding(.top, 10)
+                // Timeline lives in the container’s bottom strip (under the 16:9 film).
+                .padding(.bottom, isFullscreen ? 0 : 8)
+                .padding(.top, 8)
                 .safeAreaPadding(.bottom, isFullscreen ? 10 : 0)
                 .background(
                     LinearGradient(

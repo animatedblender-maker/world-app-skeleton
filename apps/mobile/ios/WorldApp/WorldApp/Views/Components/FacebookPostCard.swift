@@ -270,8 +270,7 @@ struct FacebookPostCard: View {
                 SharedPostLoadingEmbed(postID: post.sharedPostID!)
                     .padding(.horizontal, textGutter)
             } else if showsPlayLinkInFeed {
-                // Hub long-form / hub-origin share: same 16:9 full-width stage as Hubs.
-                // Film only here — like/share/save/comments are below (Sparks pattern).
+                // Video container only (16:9 film + timeline). Social row is below.
                 PlayFeedLinkCard(
                     post: post,
                     onOpen: { openPlayVideo() },
@@ -284,19 +283,30 @@ struct FacebookPostCard: View {
                 media
             }
 
-            // Body text always has a small readable side margin (never edge-to-edge).
-            if !isImageOnlyPost, !post.displayExcerpt.isEmpty {
-                captionBlock(
-                    text: post.displayExcerpt,
-                    topPadding: post.hasMedia || opensAsSpark || showsPlayLinkInFeed || post.sharedPost != nil ? 12 : 10,
-                    bottomPadding: 4
-                )
+            // UNDER the video container — never inside it (Sparks / Hubs shares).
+            if showsPlayLinkInFeed || opensAsSpark {
+                actions
+                    .padding(.top, 10)
+                if !isImageOnlyPost, !post.displayExcerpt.isEmpty {
+                    captionBlock(
+                        text: post.displayExcerpt,
+                        topPadding: 8,
+                        bottomPadding: 4
+                    )
+                }
+                meta
+            } else {
+                if !isImageOnlyPost, !post.displayExcerpt.isEmpty {
+                    captionBlock(
+                        text: post.displayExcerpt,
+                        topPadding: post.hasMedia || post.sharedPost != nil ? 12 : 10,
+                        bottomPadding: 4
+                    )
+                }
+                actions
+                    .padding(.top, 4)
+                meta
             }
-
-            // Social actions under the film (Sparks + Hubs shares) — never inside the 16:9 stage.
-            actions
-                .padding(.top, showsPlayLinkInFeed || opensAsSpark ? 10 : 4)
-            meta
 
             if let actionMessage {
                 Text(actionMessage)
@@ -1390,12 +1400,12 @@ private struct FeedMediaSizeModifier: ViewModifier {
         let aspect = FacebookMediaLayout.clampedAspect(photoAspect)
         if isVideo {
             let height = isHubCompact
-                ? FacebookMediaLayout.hubFeedVideoHeight()
+                ? FacebookMediaLayout.hubFeedStageHeight()
                 : FacebookMediaLayout.dominantFeedVideoHeight()
             content
                 .frame(minWidth: 0, maxWidth: .infinity)
                 .frame(height: height)
-                // Do not .clipped() hubs — that shaved the overlay scrubber off the bottom.
+                .clipped()
                 .contentShape(Rectangle())
         } else {
             content

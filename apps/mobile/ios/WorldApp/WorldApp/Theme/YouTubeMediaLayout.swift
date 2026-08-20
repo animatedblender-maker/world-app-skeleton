@@ -137,15 +137,16 @@ struct YouTubeVideoFrame<Content: View>: View {
                     }
                     .clipShape(Rectangle())
             case .feed:
-                // Pure full-width 16:9 — same as Hubs. Film fills; mute/timeline overlay ON the picture.
-                // Like / share / save / comments are NOT in this frame (parent card, under the film).
+                // Video CONTAINER only: full-width 16:9 film + timeline strip.
+                // Like / share / keep / comments are outside — under this container.
                 Color.clear
                     .frame(maxWidth: .infinity)
-                    .frame(height: FacebookMediaLayout.hubFeedVideoHeight())
+                    .frame(height: FacebookMediaLayout.hubFeedStageHeight())
                     .background(Color.black)
                     .overlay {
                         content()
                     }
+                    .clipped()
                     .contentShape(Rectangle())
             case .card:
                 // Shelf / search cards stay compact 16:9.
@@ -500,10 +501,10 @@ struct PlayFeedLinkCard: View {
                     preferArchivePlayer: useArchivePath,
                     showsControls: true,
                     muteOnlyControls: false,
-                    // Full-bleed 16:9 fill (width + height). Controls overlay the film — not separate strips.
+                    // Film fills the 16:9 band; timeline sits in the container strip below the film.
                     fillsFrame: true,
                     topChromeReserve: 0,
-                    bottomChromeReserve: 0,
+                    bottomChromeReserve: FacebookMediaLayout.hubFeedTimelineHeight,
                     sharesFeedMute: true,
                     autoplaySurface: autoplaySurface,
                     onViewed: { Task { await PostsService.shared.recordView(post) } }

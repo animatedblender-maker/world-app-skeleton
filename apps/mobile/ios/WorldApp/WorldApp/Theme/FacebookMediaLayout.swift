@@ -47,11 +47,14 @@ enum FacebookMediaLayout {
         return min(max(h, minFeedMediaHeight), maxFeedMediaHeight)
     }
 
-    /// Alias — Hubs feed stage is pure full-width 16:9 (controls overlay the film).
+    /// Timeline-only strip inside the video container (not like/share/save).
+    static let hubFeedTimelineHeight: CGFloat = 44
+
+    /// Video container = full-width 16:9 film + timeline. Social actions sit under this.
     static func hubFeedStageHeight(
         forWidth width: CGFloat = UIScreen.main.bounds.width
     ) -> CGFloat {
-        hubFeedVideoHeight(forWidth: width)
+        hubFeedVideoHeight(forWidth: width) + hubFeedTimelineHeight
     }
 
     /// Clamp aspect ratios so a bad media metadata value can't blow out the card.
