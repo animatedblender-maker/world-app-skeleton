@@ -522,8 +522,8 @@ struct MatteryaHubPlayerView: View {
                         .frame(width: 42, alignment: .trailing)
                 }
                 .padding(.horizontal, 16)
-                // Keep scrubber fully on-film (parent clips were shaving ~8–12pt).
-                .padding(.bottom, 26)
+                // Stay inside the 16:9 stage — social actions sit under the feed card.
+                .padding(.bottom, 10)
                 .padding(.top, 18)
                 .background(
                     LinearGradient(
