@@ -186,7 +186,8 @@ struct VideoPlayerView: View {
                 }
             }
 
-            // Transport overlays the stage — mute in top strip, scrubber in bottom strip.
+            // Transport overlays the film band — pad bottom reserve so play stays centered on picture
+            // (not shifted into the timeline strip / off to one side).
             if shouldShowChrome {
                 ZStack {
                     Color.clear
@@ -204,7 +205,7 @@ struct VideoPlayerView: View {
                         durationSeconds: durationSeconds,
                         showsFullscreen: allowsFullscreen,
                         isFullscreen: false,
-                        topInset: max(8, topChromeReserve > 0 ? 10 : 10),
+                        topInset: max(8, topChromeReserve > 0 ? 10 : 12),
                         onPlayPause: { togglePlayback() },
                         onMuteToggle: { toggleMute() },
                         onSeek: { seek(to: $0) },
@@ -212,6 +213,8 @@ struct VideoPlayerView: View {
                         onExitFullscreen: nil
                     )
                 }
+                .padding(.top, topChromeReserve)
+                .padding(.bottom, bottomChromeReserve)
                 .transition(.opacity)
             }
         }

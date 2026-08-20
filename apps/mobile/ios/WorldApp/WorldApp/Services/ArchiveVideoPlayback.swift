@@ -322,8 +322,11 @@ struct MatteryaHubPlayerView: View {
 
             if showsControls {
                 // Chrome / tap-to-reveal first (under transport).
+                // Pad reserves so play stays centered on the film (not timeline strip).
                 if showChrome || !bridge.isReady {
                     hubChrome
+                        .padding(.top, topChromeReserve)
+                        .padding(.bottom, bottomChromeReserve)
                         .transition(.opacity)
                         .zIndex(1)
                 } else {
@@ -335,6 +338,8 @@ struct MatteryaHubPlayerView: View {
                             }
                             scheduleChromeHide()
                         }
+                        .padding(.top, topChromeReserve)
+                        .padding(.bottom, bottomChromeReserve)
                         .zIndex(1)
                 }
 
@@ -359,9 +364,11 @@ struct MatteryaHubPlayerView: View {
                         }
                     }
                     .padding(.horizontal, 12)
-                    .padding(.top, topChromeReserve > 0 ? 10 : 10)
+                    .padding(.top, 12)
                     Spacer(minLength: 0)
                 }
+                .padding(.top, topChromeReserve)
+                .padding(.bottom, bottomChromeReserve)
                 .zIndex(50)
                 .allowsHitTesting(true)
             }

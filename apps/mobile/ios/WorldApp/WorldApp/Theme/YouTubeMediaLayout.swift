@@ -476,12 +476,12 @@ struct PlayFeedLinkCard: View {
             let useArchivePath = ArchiveVideoPlayback.isArchiveURL(url)
             ZStack {
                 Color.black
-                // Sparks pattern: poster under film until first frames.
+                // Same as Hubs watch: fit the whole frame (not aspectFill zoom/crop).
                 if let poster {
                     CachedAsyncImage(
                         url: poster,
                         maxPixelSize: 720,
-                        contentMode: .fill,
+                        contentMode: .fit,
                         placeholder: AnyView(Color.black)
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -501,8 +501,8 @@ struct PlayFeedLinkCard: View {
                     preferArchivePlayer: useArchivePath,
                     showsControls: true,
                     muteOnlyControls: false,
-                    // Film fills the 16:9 band; timeline sits in the container strip below the film.
-                    fillsFrame: true,
+                    // Hubs player uses fit (resizeAspect) — fill was zooming and shoving chrome off-center.
+                    fillsFrame: false,
                     topChromeReserve: 0,
                     bottomChromeReserve: FacebookMediaLayout.hubFeedTimelineHeight,
                     sharesFeedMute: true,
@@ -569,14 +569,14 @@ struct YouTubeFeedVideoCard: View {
             YouTubeVideoFrame(style: .feed) {
                 if let url = post.playableVideoURL {
                     let poster = MediaURLResolver.posterURL(for: post) ?? post.posterImageURL
-                    // Sparks pattern for Hubs feed cards.
+                    // Same fit gravity as Hubs watch (not fill/zoom).
                     ZStack {
                         Color.black
                         if let poster {
                             CachedAsyncImage(
                                 url: poster,
                                 maxPixelSize: 720,
-                                contentMode: .fill,
+                                contentMode: .fit,
                                 placeholder: AnyView(Color.black)
                             )
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -590,7 +590,8 @@ struct YouTubeFeedVideoCard: View {
                             contentCountryCode: post.countryCode,
                             postID: post.id,
                             muted: true,
-                            fillsFrame: true,
+                            fillsFrame: false,
+                            bottomChromeReserve: FacebookMediaLayout.hubFeedTimelineHeight,
                             onViewed: { Task { await PostsService.shared.recordView(post) } }
                         )
                     }
