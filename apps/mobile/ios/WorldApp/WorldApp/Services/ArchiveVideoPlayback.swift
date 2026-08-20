@@ -532,8 +532,8 @@ struct MatteryaHubPlayerView: View {
                         .frame(width: 42, alignment: .trailing)
                 }
                 .padding(.horizontal, 16)
-                // Timeline sits in bottomChromeReserve under the film (fully visible).
-                .padding(.bottom, 14)
+                // On-film scrubber (16:9 stage is not clipped).
+                .padding(.bottom, 12)
                 .padding(.top, 18)
                 .background(
                     LinearGradient(

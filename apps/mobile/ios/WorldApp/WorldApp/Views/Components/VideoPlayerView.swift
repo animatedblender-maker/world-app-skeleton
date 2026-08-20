@@ -1656,7 +1656,8 @@ private struct MatteryaVideoControls: View {
                     }
                 }
                 .padding(.horizontal, 12)
-                .padding(.top, isFullscreen ? 0 : topInset)
+                // Keep mute fully on-film (not zoomed/cropped by outer chrome strips).
+                .padding(.top, isFullscreen ? 0 : max(12, topInset))
                 .safeAreaPadding(.top, isFullscreen ? 6 : 0)
 
                 Spacer(minLength: 0)
@@ -1687,8 +1688,8 @@ private struct MatteryaVideoControls: View {
                         .frame(width: 42, alignment: .trailing)
                 }
                 .padding(.horizontal, 14)
-                // Sit in the chrome reserve under the 16:9 film (not cropped, not on social row).
-                .padding(.bottom, isFullscreen ? 0 : 14)
+                // On-film timeline — parent must not clip this frame.
+                .padding(.bottom, isFullscreen ? 0 : 12)
                 .padding(.top, 10)
                 .safeAreaPadding(.bottom, isFullscreen ? 10 : 0)
                 .background(

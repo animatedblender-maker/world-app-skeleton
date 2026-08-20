@@ -137,12 +137,11 @@ struct YouTubeVideoFrame<Content: View>: View {
                     }
                     .clipShape(Rectangle())
             case .feed:
-                // Full-width Hubs stage: mute strip + true 16:9 film + timeline strip.
-                // Do not .clipped() — that shaved mute (top) and scrubber (bottom).
-                // Social like/share/save sit under this whole stage (Sparks-style).
+                // Pure full-width 16:9 — same as Hubs. Film fills; mute/timeline overlay ON the picture.
+                // Like / share / save / comments are NOT in this frame (parent card, under the film).
                 Color.clear
                     .frame(maxWidth: .infinity)
-                    .frame(height: FacebookMediaLayout.hubFeedStageHeight())
+                    .frame(height: FacebookMediaLayout.hubFeedVideoHeight())
                     .background(Color.black)
                     .overlay {
                         content()
@@ -501,16 +500,17 @@ struct PlayFeedLinkCard: View {
                     preferArchivePlayer: useArchivePath,
                     showsControls: true,
                     muteOnlyControls: false,
-                    // True 16:9 film between top (mute) + bottom (timeline) reserves — nothing cropped.
+                    // Full-bleed 16:9 fill (width + height). Controls overlay the film — not separate strips.
                     fillsFrame: true,
-                    topChromeReserve: FacebookMediaLayout.hubFeedTopChromeReserve,
-                    bottomChromeReserve: FacebookMediaLayout.hubFeedChromeReserve,
+                    topChromeReserve: 0,
+                    bottomChromeReserve: 0,
                     sharesFeedMute: true,
                     autoplaySurface: autoplaySurface,
                     onViewed: { Task { await PostsService.shared.recordView(post) } }
                 )
             }
             .id("hub-feed-\(playPost.id)")
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.black)
             // Open Hubs via badge; taps on film toggle chrome inside the player.
         } else {

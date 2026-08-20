@@ -47,17 +47,11 @@ enum FacebookMediaLayout {
         return min(max(h, minFeedMediaHeight), maxFeedMediaHeight)
     }
 
-    /// Mute / badge strip above the 16:9 picture (must not crop the film or mute control).
-    static let hubFeedTopChromeReserve: CGFloat = 48
-
-    /// Timeline strip under the 16:9 picture (scrubber must not crop the film).
-    static let hubFeedChromeReserve: CGFloat = 56
-
-    /// Full Hubs feed stage = top chrome + 16:9 film + timeline. Social actions sit under this.
+    /// Alias — Hubs feed stage is pure full-width 16:9 (controls overlay the film).
     static func hubFeedStageHeight(
         forWidth width: CGFloat = UIScreen.main.bounds.width
     ) -> CGFloat {
-        hubFeedTopChromeReserve + hubFeedVideoHeight(forWidth: width) + hubFeedChromeReserve
+        hubFeedVideoHeight(forWidth: width)
     }
 
     /// Clamp aspect ratios so a bad media metadata value can't blow out the card.
