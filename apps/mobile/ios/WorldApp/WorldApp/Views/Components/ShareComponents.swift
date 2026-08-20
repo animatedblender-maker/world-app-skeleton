@@ -158,9 +158,10 @@ struct SparkFeedCard: View {
 
             SparksOriginBadge(compact: true)
                 .padding(10)
+                .zIndex(70)
                 .allowsHitTesting(false)
 
-            // Tap opens full Sparks player; leave top strip free for mute chip.
+            // Tap opens full Sparks player; leave top strip free for mute chip + badge.
             VStack(spacing: 0) {
                 Color.clear
                     .frame(height: 52)
@@ -169,6 +170,7 @@ struct SparkFeedCard: View {
                     .contentShape(Rectangle())
                     .onTapGesture { openFullPlayer() }
             }
+            .zIndex(20)
         }
         .frame(minWidth: 0, maxWidth: .infinity)
         .frame(height: cardHeight)

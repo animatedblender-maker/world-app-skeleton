@@ -975,34 +975,31 @@ final class HomeFeedStore {
     /// Deep-preroll the first feed videos, then wait briefly so autoplay can claim
     /// a decoded frame (Instagram-style — no black/thumb blink on the winner).
     private func warmHead() async {
-        let head = Array(posts.prefix(max(firstWindow + 4, 20)))
+        // Posters first (cheap). Limit R2 video warm — parallel MP4 GETs were timing out (-1001)
+        // and starving Frame 0 / first paint (black screens on feed + Sparks).
+        let head = Array(posts.prefix(max(firstWindow + 2, 12)))
         ImageCache.shared.prefetchFeedMedia(head, maxPixelSize: 360)
         var videoIDs: [String] = []
         var warmed = 0
         for post in head {
-            guard warmed < 6 else { break }
+            guard warmed < 2 else { break }
             guard let url = post.playableVideoURL else { continue }
             let isSpark = post.isSpark || post.isReel || PlayPlatformBridge.isSparkFeedCard(post)
             let isHub = PlayPlatformBridge.isHubFeedCardVideo(post)
                 || PlayPlatformBridge.isHubOriginShare(post)
             guard isSpark || isHub || post.hasVideo else { continue }
             videoIDs.append(post.id)
-            // First three: deep preroll (first-frame ready). Rest: light warm.
-            SparkWarmPool.shared.warmSingle(postID: post.id, url: url, deep: warmed < 3)
+            SparkWarmPool.shared.warmSingle(postID: post.id, url: url, deep: warmed == 0)
             if ArchiveVideoPlayback.isArchiveURL(url) {
                 ArchiveVideoPlayback.warmResolve(url)
             }
             warmed += 1
         }
-        if !videoIDs.isEmpty {
+        if let first = videoIDs.first {
             Task(priority: .utility) {
-                await RecommendationClient.warmPlaybackURLs(videoIDs)
+                await RecommendationClient.warmPlaybackURLs([first])
             }
-            // Short beat — first focus winner should already be decoded when possible.
-            await SparkWarmPool.shared.awaitReady(
-                postIDs: Array(videoIDs.prefix(2)),
-                timeout: 0.45
-            )
+            await SparkWarmPool.shared.awaitReady(postIDs: [first], timeout: 0.35)
         }
     }
 

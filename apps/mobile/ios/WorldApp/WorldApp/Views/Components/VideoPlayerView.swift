@@ -2092,7 +2092,9 @@ struct InFrameVideoPlayer: View {
                 posterFloor
             }
 
-            if muteOnlyControls, playGate {
+            // Always show mute on Spark feed cards (not only when playGate) — badge/mute were
+            // disappearing while neighbors stayed poster-only.
+            if muteOnlyControls {
                 VStack {
                     HStack {
                         Spacer(minLength: 0)
@@ -2118,6 +2120,7 @@ struct InFrameVideoPlayer: View {
                     .padding(10)
                     Spacer(minLength: 0)
                 }
+                .zIndex(60)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .feedVideoFocusDidChange)) { _ in

@@ -24,18 +24,19 @@ final class SparkWarmPool {
         static var isConstrained: Bool { physicalGB < 3.6 }
         static var isMid: Bool { physicalGB < 5.6 }
 
+        // Tight windows — wide concurrent R2 MP4 warms caused -1001 timeouts + black screens.
         /// Full first-frame preroll depth (feed home).
-        static var deepPrerollFeed: Int { isConstrained ? 1 : (isMid ? 2 : 2) }
-        /// Sparks vertical player can afford a slightly deeper head.
-        static var deepPrerollSparks: Int { isConstrained ? 2 : (isMid ? 3 : 4) }
+        static var deepPrerollFeed: Int { isConstrained ? 1 : 2 }
+        /// Sparks: keep N+1 ready; do not storm 7–10 parallel downloads.
+        static var deepPrerollSparks: Int { isConstrained ? 1 : 2 }
         /// Parked player slots (claimed not counted).
-        static var maxSlots: Int { isConstrained ? 6 : (isMid ? 10 : 14) }
+        static var maxSlots: Int { isConstrained ? 4 : (isMid ? 6 : 8) }
         /// How far ahead to keep *any* player item mounted (light or deep).
-        static var playerAheadFeed: Int { isConstrained ? 2 : (isMid ? 3 : 4) }
-        static var playerAheadSparks: Int { isConstrained ? 4 : (isMid ? 7 : 10) }
-        static var playerBehind: Int { isConstrained ? 1 : 2 }
-        static var forwardBufferDeep: Double { isConstrained ? 8 : (isMid ? 12 : 14) }
-        static var forwardBufferLight: Double { isConstrained ? 4 : 6 }
+        static var playerAheadFeed: Int { isConstrained ? 1 : 2 }
+        static var playerAheadSparks: Int { isConstrained ? 2 : 3 }
+        static var playerBehind: Int { 1 }
+        static var forwardBufferDeep: Double { isConstrained ? 4 : 6 }
+        static var forwardBufferLight: Double { isConstrained ? 2 : 3 }
     }
 
     /// Default Sparks player window (adaptive).

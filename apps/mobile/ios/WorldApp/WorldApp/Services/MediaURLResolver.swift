@@ -95,10 +95,26 @@ enum MediaURLResolver {
         // Server Frame 0 (first displayed video frame) — prefer over any CDN fallback.
         if let frame0 = frame0PosterURL(for: post) { return frame0 }
         if let thumb = resolve(post.thumbURL), !isVideoURL(thumb) { return thumb }
-        // Last resort only while Frame 0 backfill catches up. YouTube hqdefault is NOT
-        // video frame 0 — demote once thumb_url / posters.512 exist.
+        // Matterya R2 LongForm/Sparks: never use YouTube hqdefault (wrong pixels vs Frame 0).
+        // Nil → client holds black / extracts t=0 until backfill fills thumb_url.
+        if hasMatteryaR2VideoKey(post) {
+            return imageURL(for: post)
+        }
+        // Non-R2 legacy only.
         if let yt = r2LongformYouTubePosterURL(for: post) { return yt }
         return imageURL(for: post)
+    }
+
+    /// True when media lives on Matterya R2 (catalog or share) — Frame 0 owns the poster.
+    static func hasMatteryaR2VideoKey(_ post: CountryPost) -> Bool {
+        let blobs = [post.mediaURL, post.thumbURL, post.linkURL].compactMap { $0?.lowercased() }
+        for b in blobs {
+            if b.contains("r2_key") || b.contains("matterya-sparks") || b.contains("longform/")
+                || b.contains("shortform/") || b.contains("r2.cloudflarestorage.com") {
+                return true
+            }
+        }
+        return false
     }
 
     /// Prefer server `frame0_*.webp` / media JSON `posters` (true t=0 pixels, same aspect as film).
