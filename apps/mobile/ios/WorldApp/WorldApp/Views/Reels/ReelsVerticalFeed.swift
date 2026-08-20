@@ -292,14 +292,23 @@ struct ReelsPagerCard: View {
     /// Start as fill (most Sparks are vertical + covers notch); may drop to fit for wide clips.
     @State private var useFill = true
 
-    /// Do **not** force t=0 on every focus — swipe away/back continues from saved playhead.
-    /// Loop-to-start is handled inside the player when the clip ends.
-    private var restartFromBeginningToken: UInt { 0 }
+    /// Sparks vertical player: always start at 0 on focus (instant TikTok-style sessions).
+    /// Feed→Sparks handoff still continues mid-clip via SparkWarmPool continue flag + claim.
+    private var restartFromBeginningToken: UInt {
+        // If feed exported a live buffer for this id, do not force t=0 (seamless open).
+        if SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: post.id) {
+            return 0
+        }
+        return isActive ? max(1, focusGeneration) : 0
+    }
 
-    /// Resume mid-clip after scroll or feed→Sparks handoff (0 = cold start).
+    /// Only used for feed→Sparks continue; normal Sparks swipe uses restart token → 0.
     private var resumeStartTime: Double {
-        let t = YouTubeCatalogService.shared.playbackPosition(for: post.id)
-        return t > 0.2 ? t : 0
+        if SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: post.id) {
+            let t = YouTubeCatalogService.shared.playbackPosition(for: post.id)
+            return t > 0.2 ? t : 0
+        }
+        return 0
     }
 
     /// Best-effort play URL — primary resolver plus raw media/thumb fallbacks.

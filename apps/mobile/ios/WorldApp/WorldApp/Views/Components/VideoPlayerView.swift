@@ -1198,17 +1198,20 @@ struct VideoPlayerView: View {
     }
 
     private func resolvedStartTime() -> Double {
-        // Explicit restart (rare) — only when token bumped for a hard reset.
+        // Sparks focus token → always t=0 for instant vertical sessions (neighbors preloaded at 0).
         if restartFromBeginningToken > 0 {
             return 0
         }
+        // Feed→Sparks/Hubs handoff (continue flag) or explicit startTime.
         if let startTime, startTime > 0.2 {
             return startTime
         }
         guard let postID else { return 0 }
-        // Scroll revisit + feed→Sparks/Hubs handoff: continue from saved playhead.
-        let stored = YouTubeCatalogService.shared.playbackPosition(for: postID)
-        return stored > 0.2 ? stored : 0
+        if SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: postID) {
+            let stored = YouTubeCatalogService.shared.playbackPosition(for: postID)
+            return stored > 0.2 ? stored : 0
+        }
+        return 0
     }
 
     private func trackPlaybackPositionIfNeeded() {
