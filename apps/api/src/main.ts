@@ -84,6 +84,12 @@ import {
   handlePipelineRun,
   handlePipelineRunStream,
 } from './content-pipeline/pipeline-page.js';
+import {
+  handleFrame0Get,
+  handleFrame0Login,
+  handleFrame0Logout,
+  handleFrame0Status,
+} from './media/frame0-progress.js';
 import { kafkaEnabled } from './kafka/config.js';
 
 type AuthedUser = {
@@ -282,6 +288,17 @@ app.post('/pipeline/clear-log', handlePipelineClearLog);
 app.get('/pipeline/status', (req, res) => {
   // Public enough for health widgets; no secrets.
   res.json({ ok: true, ...getPipelineStatus() });
+});
+
+// ── Frame 0 backfill progress ───────────────────────────────────────────
+// https://api.matterya.com/frame0  ·  same password as pipeline/reports
+app.get('/frame0', (req, res) => {
+  void handleFrame0Get(req, res);
+});
+app.post('/frame0/login', handleFrame0Login);
+app.get('/frame0/logout', handleFrame0Logout);
+app.get('/frame0/status', (req, res) => {
+  void handleFrame0Status(req, res);
 });
 
 // ✅ health endpoint (typed _req to avoid implicit any)

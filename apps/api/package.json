@@ -14,6 +14,7 @@
     "media:frame0-backfill": "tsx src/media/frame0-backfill.ts",
     "media:frame0-backfill:dry": "tsx src/media/frame0-backfill.ts --dry-run",
     "media:frame0-backfill:batch": "tsx src/media/frame0-backfill.ts --concurrency=4",
+    "media:frame0-progress": "tsx src/media/frame0-progress-server.ts",
     "docker:media-worker:build": "docker build -f Dockerfile.media-worker -t matterya-media-worker ."
   },
   "engines": {

@@ -241,6 +241,8 @@ function dashboardHtml(flash?: { ok?: boolean; text?: string }): string {
       <h1>Content pipeline</h1>
     </div>
     <div>
+      <a class="out" href="/frame0">Frame 0</a>
+      ·
       <a class="out" href="/reports">Reports</a>
       ·
       <a class="out" href="/pipeline/logout">Log out</a>

@@ -15,6 +15,7 @@
 import dotenv from 'dotenv';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { appendFile, mkdir } from 'node:fs/promises';
 import { getBucket, r2Configured } from '../content-pipeline/r2.js';
 import { enqueueMediaProcessJob } from './enqueue.js';
 import {
@@ -24,9 +25,22 @@ import {
   processFrame0,
   resolveFfmpegPath,
 } from './frame0.js';
+import {
+  FRAME0_LOG_FILE,
+  FRAME0_PROGRESS_DIR,
+  writeFrame0Progress,
+} from './frame0-progress.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '..', '..', '.env'), override: true });
+
+await mkdir(FRAME0_PROGRESS_DIR, { recursive: true }).catch(() => undefined);
+
+async function logLine(msg: string): Promise<void> {
+  const line = msg.endsWith('\n') ? msg : `${msg}\n`;
+  process.stdout.write(line);
+  await appendFile(FRAME0_LOG_FILE, line, 'utf8').catch(() => undefined);
+}
 
 function argValue(args: string[], name: string): string | undefined {
   const hit = args.find((a) => a.startsWith(`${name}=`));
@@ -81,7 +95,8 @@ if (!viaKafka && !dryRun && !r2Configured()) {
 }
 
 const rows = await listPostsNeedingFrame0(limit);
-console.log(
+const startedAt = new Date().toISOString();
+await logLine(
   `[frame0-backfill] mode=${viaKafka ? 'kafka-enqueue' : 'inline'} ` +
     `candidates=${rows.length} dryRun=${dryRun} force=${force} limit=${limit} concurrency=${concurrency} ` +
     `ffmpeg=${hasFf ? resolveFfmpegPath() : 'n/a'}`
@@ -91,11 +106,66 @@ let ok = 0;
 let skipped = 0;
 let failed = 0;
 
+await writeFrame0Progress({
+  running: true,
+  mode: viaKafka ? 'kafka-enqueue' : 'inline',
+  dryRun,
+  force,
+  limit,
+  concurrency: viaKafka ? 1 : concurrency,
+  candidates: rows.length,
+  ok: 0,
+  skipped: 0,
+  failed: 0,
+  processed: 0,
+  startedAt,
+  finishedAt: null,
+  pid: process.pid,
+  logPath: FRAME0_LOG_FILE,
+});
+
+/** Serialize progress writes so concurrent workers don't clobber counters. */
+let bumpChain: Promise<void> = Promise.resolve();
+function bump(partial: {
+  deltaOk?: number;
+  deltaSkipped?: number;
+  deltaFailed?: number;
+  lastPostId?: string;
+  lastThumbPath?: string;
+  lastError?: string | null;
+}): Promise<void> {
+  bumpChain = bumpChain.then(async () => {
+    if (partial.deltaOk) ok += partial.deltaOk;
+    if (partial.deltaSkipped) skipped += partial.deltaSkipped;
+    if (partial.deltaFailed) failed += partial.deltaFailed;
+    await writeFrame0Progress({
+      running: true,
+      mode: viaKafka ? 'kafka-enqueue' : 'inline',
+      dryRun,
+      force,
+      limit,
+      concurrency: viaKafka ? 1 : concurrency,
+      candidates: rows.length,
+      ok,
+      skipped,
+      failed,
+      processed: ok + skipped + failed,
+      startedAt,
+      lastPostId: partial.lastPostId,
+      lastThumbPath: partial.lastThumbPath,
+      lastError: partial.lastError === undefined ? undefined : partial.lastError,
+      pid: process.pid,
+      logPath: FRAME0_LOG_FILE,
+    });
+  });
+  return bumpChain;
+}
+
 if (viaKafka) {
   for (const row of rows) {
     if (dryRun) {
-      console.log(`  would enqueue post=${row.postId} key=${row.r2Key}`);
-      ok += 1;
+      await logLine(`  would enqueue post=${row.postId} key=${row.r2Key}`);
+      await bump({ deltaOk: 1, lastPostId: row.postId, lastError: null });
       continue;
     }
     const r = await enqueueMediaProcessJob({
@@ -107,21 +177,31 @@ if (viaKafka) {
       requestedOutputs: 'frame0',
       requestedBy: 'frame0-backfill-cli',
     });
-    if (r.enqueued) ok += 1;
-    else {
-      failed += 1;
-      console.warn(`  enqueue failed post=${row.postId}: ${r.error}`);
+    if (r.enqueued) {
+      await bump({ deltaOk: 1, lastPostId: row.postId, lastError: null });
+    } else {
+      await logLine(`  enqueue failed post=${row.postId}: ${r.error}`);
+      await bump({
+        deltaFailed: 1,
+        lastPostId: row.postId,
+        lastError: r.error || 'enqueue failed',
+      });
     }
   }
 } else {
-  const results = await mapPool(rows, dryRun ? 1 : concurrency, async (row) => {
+  await mapPool(rows, dryRun ? 1 : concurrency, async (row) => {
     const bucket = getBucket();
     if (dryRun) {
       const exists = !force && (await frame0DerivativesExist(row.r2Key, bucket).catch(() => false));
-      console.log(
+      await logLine(
         `  would ${exists ? 'refresh-db' : 'extract'} post=${row.postId} key=${row.r2Key}`
       );
-      return exists ? ('skipped' as const) : ('ok' as const);
+      if (exists) {
+        await bump({ deltaSkipped: 1, lastPostId: row.postId, lastError: null });
+        return 'skipped' as const;
+      }
+      await bump({ deltaOk: 1, lastPostId: row.postId, lastError: null });
+      return 'ok' as const;
     }
     try {
       const existed = !force && (await frame0DerivativesExist(row.r2Key, bucket));
@@ -138,21 +218,32 @@ if (viaKafka) {
         },
         { force }
       );
-      console.log(
+      await logLine(
         `  ${existed ? 'refreshed' : 'ready'} post=${row.postId} outputs=${ready.outputs.length} thumb=${ready.thumbPath}`
       );
-      return existed ? ('skipped' as const) : ('ok' as const);
+      if (existed) {
+        await bump({
+          deltaSkipped: 1,
+          lastPostId: row.postId,
+          lastThumbPath: ready.thumbPath,
+          lastError: null,
+        });
+        return 'skipped' as const;
+      }
+      await bump({
+        deltaOk: 1,
+        lastPostId: row.postId,
+        lastThumbPath: ready.thumbPath,
+        lastError: null,
+      });
+      return 'ok' as const;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`  FAILED post=${row.postId} key=${row.r2Key}: ${msg}`);
+      await logLine(`  FAILED post=${row.postId} key=${row.r2Key}: ${msg}`);
+      await bump({ deltaFailed: 1, lastPostId: row.postId, lastError: msg });
       return 'failed' as const;
     }
   });
-  for (const r of results) {
-    if (r === 'ok') ok += 1;
-    else if (r === 'skipped') skipped += 1;
-    else failed += 1;
-  }
 }
 
 const summary = {
@@ -164,5 +255,23 @@ const summary = {
   failed,
   concurrency: viaKafka ? 1 : concurrency,
 };
-console.log(JSON.stringify(summary, null, 2));
+await logLine(JSON.stringify(summary, null, 2));
+await writeFrame0Progress({
+  running: false,
+  mode: viaKafka ? 'kafka-enqueue' : 'inline',
+  dryRun,
+  force,
+  limit,
+  concurrency: viaKafka ? 1 : concurrency,
+  candidates: rows.length,
+  ok,
+  skipped,
+  failed,
+  processed: ok + skipped + failed,
+  startedAt,
+  finishedAt: new Date().toISOString(),
+  pid: process.pid,
+  logPath: FRAME0_LOG_FILE,
+  lastError: failed ? `${failed} failed` : null,
+});
 process.exit(failed === 0 ? 0 : 1);
