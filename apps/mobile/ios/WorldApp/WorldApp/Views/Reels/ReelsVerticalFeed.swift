@@ -292,9 +292,14 @@ struct ReelsPagerCard: View {
     /// Start as fill (most Sparks are vertical + covers notch); may drop to fit for wide clips.
     @State private var useFill = true
 
-    /// Single restart token — active + parent generation in the same render (no double play).
-    private var restartFromBeginningToken: UInt {
-        isActive ? max(1, focusGeneration) : 0
+    /// Do **not** force t=0 on every focus — swipe away/back continues from saved playhead.
+    /// Loop-to-start is handled inside the player when the clip ends.
+    private var restartFromBeginningToken: UInt { 0 }
+
+    /// Resume mid-clip after scroll or feed→Sparks handoff (0 = cold start).
+    private var resumeStartTime: Double {
+        let t = YouTubeCatalogService.shared.playbackPosition(for: post.id)
+        return t > 0.2 ? t : 0
     }
 
     /// Best-effort play URL — primary resolver plus raw media/thumb fallbacks.
@@ -427,7 +432,7 @@ struct ReelsPagerCard: View {
                             posterURL: post.posterImageURL,
                             isActive: isActive,
                             muted: false,
-                            startTime: 0,
+                            startTime: resumeStartTime,
                             loops: true,
                             fillsFrame: useFill,
                             postID: post.id,
@@ -455,6 +460,7 @@ struct ReelsPagerCard: View {
                             muted: false,
                             showsControls: false,
                             fillsFrame: useFill,
+                            startTime: resumeStartTime > 0 ? resumeStartTime : nil,
                             preloadsWhenInactive: true,
                             onViewed: { Task { await PostsService.shared.recordView(post) } },
                             onProgress: { current, duration in
@@ -671,6 +677,14 @@ struct ReelsPagerCard: View {
     /// Update Sparks timeline from AVPlayer ticks.
     /// Safe to call from a preloaded (inactive) time-observer closure — @State storage is shared.
     private func applyTimelineProgress(current: Double, duration: Double) {
+        // Persist playhead so swipe away/back + feed handoff can continue mid-clip.
+        if current >= 0.2 {
+            YouTubeCatalogService.shared.notePlaybackPosition(
+                current,
+                for: post.id,
+                duration: duration > 0 ? duration : nil
+            )
+        }
         guard !isScrubbingTimeline else { return }
         let cur = current.isFinite ? max(0, current) : 0
         progressSeconds = cur

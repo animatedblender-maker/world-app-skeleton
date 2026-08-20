@@ -1198,15 +1198,17 @@ struct VideoPlayerView: View {
     }
 
     private func resolvedStartTime() -> Double {
-        // Sparks player always opens / re-focuses at 0 — ignore Hubs resume points.
+        // Explicit restart (rare) — only when token bumped for a hard reset.
         if restartFromBeginningToken > 0 {
             return 0
         }
-        if let startTime, startTime > 0 {
+        if let startTime, startTime > 0.2 {
             return startTime
         }
         guard let postID else { return 0 }
-        return YouTubeCatalogService.shared.playbackPosition(for: postID)
+        // Scroll revisit + feed→Sparks/Hubs handoff: continue from saved playhead.
+        let stored = YouTubeCatalogService.shared.playbackPosition(for: postID)
+        return stored > 0.2 ? stored : 0
     }
 
     private func trackPlaybackPositionIfNeeded() {
@@ -1986,12 +1988,15 @@ struct InFrameVideoPlayer: View {
         }
     }
 
-    /// Continue mid-clip when feed→Sparks/Hubs parked this buffer.
+    /// Continue mid-clip: feed handoff flag **or** saved playhead after scroll away/back.
     private var continueStartTime: Double {
-        guard let postID, SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: postID) else {
-            return 0
+        guard let postID else { return 0 }
+        let stored = YouTubeCatalogService.shared.playbackPosition(for: postID)
+        if SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: postID) {
+            return stored > 0.2 ? stored : 0
         }
-        return YouTubeCatalogService.shared.playbackPosition(for: postID)
+        // Remount after scroll (playGate) — resume where we paused.
+        return stored > 0.2 ? stored : 0
     }
 
     var body: some View {

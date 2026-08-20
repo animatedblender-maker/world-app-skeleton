@@ -105,8 +105,12 @@ private struct ReelCard: View {
                         posterURL: post.posterImageURL,
                         isActive: isActive,
                         muted: false,
-                        startTime: 0,
-                        fillsFrame: false
+                        startTime: {
+                            let t = YouTubeCatalogService.shared.playbackPosition(for: post.id)
+                            return t > 0.2 ? t : 0
+                        }(),
+                        fillsFrame: false,
+                        postID: post.id
                     )
                     .ignoresSafeArea()
                     .background(Color.black)
