@@ -214,6 +214,8 @@ struct MatteryaHubPlayerView: View {
     var loops: Bool = false
     /// When true, crop to fill (Sparks / feed hubs film). Expanded watch uses false.
     var fillsFrame: Bool = false
+    /// Top strip for mute so fill doesn’t crop the control.
+    var topChromeReserve: CGFloat = 0
     /// Bottom strip for feed timeline so fill doesn’t crop scrubber/buttons.
     var bottomChromeReserve: CGFloat = 0
     @Binding var isMuted: Bool
@@ -240,6 +242,7 @@ struct MatteryaHubPlayerView: View {
         showsControls: Bool = true,
         loops: Bool = false,
         fillsFrame: Bool = false,
+        topChromeReserve: CGFloat = 0,
         bottomChromeReserve: CGFloat = 0,
         isMuted: Binding<Bool> = .constant(false),
         allowsFullscreen: Bool = true,
@@ -255,6 +258,7 @@ struct MatteryaHubPlayerView: View {
         self.showsControls = showsControls
         self.loops = loops
         self.fillsFrame = fillsFrame
+        self.topChromeReserve = topChromeReserve
         self.bottomChromeReserve = bottomChromeReserve
         self._isMuted = isMuted
         self.allowsFullscreen = allowsFullscreen
@@ -266,6 +270,12 @@ struct MatteryaHubPlayerView: View {
     var body: some View {
         ZStack {
             VStack(spacing: 0) {
+                if topChromeReserve > 0 {
+                    Color.black
+                        .frame(height: topChromeReserve)
+                        .allowsHitTesting(false)
+                }
+
                 ArchiveVideoPlayerView(
                     url: url,
                     posterURL: posterURL,
@@ -349,7 +359,7 @@ struct MatteryaHubPlayerView: View {
                         }
                     }
                     .padding(.horizontal, 12)
-                    .padding(.top, 10)
+                    .padding(.top, topChromeReserve > 0 ? 10 : 10)
                     Spacer(minLength: 0)
                 }
                 .zIndex(50)

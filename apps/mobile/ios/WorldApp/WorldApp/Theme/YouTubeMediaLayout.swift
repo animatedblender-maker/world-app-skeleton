@@ -137,8 +137,8 @@ struct YouTubeVideoFrame<Content: View>: View {
                     }
                     .clipShape(Rectangle())
             case .feed:
-                // Full-width Hubs stage: true 16:9 film + timeline reserve under it.
-                // Do not .clipped() — that shaved the scrubber and the bottom of the picture.
+                // Full-width Hubs stage: mute strip + true 16:9 film + timeline strip.
+                // Do not .clipped() — that shaved mute (top) and scrubber (bottom).
                 // Social like/share/save sit under this whole stage (Sparks-style).
                 Color.clear
                     .frame(maxWidth: .infinity)
@@ -440,6 +440,7 @@ struct PlayFeedLinkCard: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.leading, 10)
+                // Sit in the top chrome strip (fully visible, never cropped with the film).
                 .padding(.top, 10)
                 .zIndex(40)
                 .accessibilityLabel(MatteryaCopy.watchOnHubs)
@@ -500,8 +501,9 @@ struct PlayFeedLinkCard: View {
                     preferArchivePlayer: useArchivePath,
                     showsControls: true,
                     muteOnlyControls: false,
-                    // 16:9 film fills the top; timeline lives in hubFeedChromeReserve (not cropped).
+                    // True 16:9 film between top (mute) + bottom (timeline) reserves — nothing cropped.
                     fillsFrame: true,
+                    topChromeReserve: FacebookMediaLayout.hubFeedTopChromeReserve,
                     bottomChromeReserve: FacebookMediaLayout.hubFeedChromeReserve,
                     sharesFeedMute: true,
                     autoplaySurface: autoplaySurface,

@@ -24,6 +24,8 @@ struct VideoPlayerView: View {
     var sharesFeedMute: Bool = false
     /// When true, crop to fill the card — no black bars. Always preferred for Hubs / feed video.
     var fillsFrame: Bool = true
+    /// Top inset reserved for mute / badge so fill doesn’t cover controls.
+    var topChromeReserve: CGFloat = 0
     /// Bottom inset reserved for timeline/transport so fill doesn’t cover controls.
     var bottomChromeReserve: CGFloat = 0
     /// When true, build/buffer a silent player even while `isActive` is false (feed Sparks).
@@ -110,8 +112,14 @@ struct VideoPlayerView: View {
         ZStack(alignment: .bottom) {
             softVideoFloor
 
-            // Film on top; optional bottom reserve so timeline never crops the picture.
+            // Top mute strip + uncropped film + bottom timeline strip.
             VStack(spacing: 0) {
+                if topChromeReserve > 0 {
+                    Color.black
+                        .frame(height: topChromeReserve)
+                        .allowsHitTesting(false)
+                }
+
                 ZStack {
                     if let posterURL {
                         CachedAsyncImage(
@@ -178,7 +186,7 @@ struct VideoPlayerView: View {
                 }
             }
 
-            // Transport overlays the stage — scrubber sits in the reserve / bottom edge.
+            // Transport overlays the stage — mute in top strip, scrubber in bottom strip.
             if shouldShowChrome {
                 ZStack {
                     Color.clear
@@ -196,6 +204,7 @@ struct VideoPlayerView: View {
                         durationSeconds: durationSeconds,
                         showsFullscreen: allowsFullscreen,
                         isFullscreen: false,
+                        topInset: max(8, topChromeReserve > 0 ? 10 : 10),
                         onPlayPause: { togglePlayback() },
                         onMuteToggle: { toggleMute() },
                         onSeek: { seek(to: $0) },
@@ -1620,6 +1629,7 @@ private struct MatteryaVideoControls: View {
     let durationSeconds: Double
     let showsFullscreen: Bool
     let isFullscreen: Bool
+    var topInset: CGFloat = 10
     let onPlayPause: () -> Void
     let onMuteToggle: () -> Void
     let onSeek: (Double) -> Void
@@ -1646,7 +1656,7 @@ private struct MatteryaVideoControls: View {
                     }
                 }
                 .padding(.horizontal, 12)
-                .padding(.top, isFullscreen ? 0 : 10)
+                .padding(.top, isFullscreen ? 0 : topInset)
                 .safeAreaPadding(.top, isFullscreen ? 6 : 0)
 
                 Spacer(minLength: 0)
@@ -1842,6 +1852,8 @@ struct InFrameVideoPlayer: View {
     var muteOnlyControls: Bool = false
     /// Full-bleed fill — never black bars on sides/top.
     var fillsFrame: Bool = true
+    /// Top strip for mute so fill doesn’t crop the control.
+    var topChromeReserve: CGFloat = 0
     /// Bottom strip reserved for timeline/buttons (hubs feed) so fill doesn’t crop chrome.
     var bottomChromeReserve: CGFloat = 0
     /// When true, mute chip drives app-wide feed mute (all feed videos stay in sync).
@@ -1874,6 +1886,7 @@ struct InFrameVideoPlayer: View {
         showsControls: Bool = true,
         muteOnlyControls: Bool = false,
         fillsFrame: Bool = true,
+        topChromeReserve: CGFloat = 0,
         bottomChromeReserve: CGFloat = 0,
         forceSilentUntilUnmute: Bool = false,
         sharesFeedMute: Bool = true,
@@ -1893,6 +1906,7 @@ struct InFrameVideoPlayer: View {
         self.showsControls = showsControls
         self.muteOnlyControls = muteOnlyControls
         self.fillsFrame = fillsFrame
+        self.topChromeReserve = topChromeReserve
         self.bottomChromeReserve = bottomChromeReserve
         self.sharesFeedMute = sharesFeedMute
         self.autoplaySurface = autoplaySurface
@@ -1978,6 +1992,7 @@ struct InFrameVideoPlayer: View {
                             showsControls: transportChrome,
                             loops: loops,
                             fillsFrame: fillsFrame,
+                            topChromeReserve: topChromeReserve,
                             bottomChromeReserve: bottomChromeReserve,
                             isMuted: Binding(
                                 get: { isMuted },
@@ -2019,6 +2034,7 @@ struct InFrameVideoPlayer: View {
                             allowsFullscreen: false,
                             sharesFeedMute: sharesFeedMute,
                             fillsFrame: fillsFrame,
+                            topChromeReserve: topChromeReserve,
                             bottomChromeReserve: bottomChromeReserve,
                             // Claim warm buffer when approaching — butter-smooth start.
                             preloadsWhenInactive: false,
