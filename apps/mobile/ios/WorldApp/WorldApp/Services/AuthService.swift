@@ -91,19 +91,40 @@ final class AuthService {
             try applyAuthResponse(response)
             NotificationCenter.default.post(name: .authTokenDidRefresh, object: nil)
             guard let refreshed = self.session?.accessToken else {
+                // Response parsed but token missing — treat as expired.
+                logout()
                 throw AuthError.sessionExpired
             }
             return refreshed
         } catch let error as AuthError {
-            if case .server = error {
+            // Only wipe the session when Supabase says the refresh token is dead.
+            // Network blips / API DB outages must NOT log the user out.
+            if case .invalidCredentials = error {
+                logout()
+                throw AuthError.sessionExpired
+            }
+            if case .server(let message) = error, Self.isDefinitiveAuthRejection(message) {
                 logout()
                 throw AuthError.sessionExpired
             }
             throw error
         } catch {
-            logout()
-            throw AuthError.sessionExpired
+            // Transport / decode failures — keep disk session so retry can succeed.
+            throw AuthError.network(error.localizedDescription)
         }
+    }
+
+    /// True when the auth server explicitly rejected the refresh/access token.
+    private static func isDefinitiveAuthRejection(_ message: String) -> Bool {
+        let m = message.lowercased()
+        return m.contains("invalid refresh")
+            || m.contains("refresh_token_not_found")
+            || m.contains("invalid claim")
+            || m.contains("session not found")
+            || m.contains("user not found")
+            || m.contains("token is expired")
+            || m.contains("jwt expired")
+            || m.contains("invalid jwt")
     }
 
     func login(email: String, password: String) async throws {
@@ -247,7 +268,12 @@ final class AuthService {
         if http.statusCode >= 400 {
             let message = json["error_description"] as? String
                 ?? json["msg"] as? String
+                ?? json["error"] as? String
                 ?? "Auth failed (HTTP \(http.statusCode))."
+            // 401/403 on refresh/login = credentials/session rejected.
+            if http.statusCode == 401 || http.statusCode == 403 {
+                throw AuthError.invalidCredentials
+            }
             throw AuthError.server(message)
         }
         return json
