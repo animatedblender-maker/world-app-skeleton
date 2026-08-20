@@ -275,26 +275,26 @@ struct SharedPostEmbedView: View {
                 .padding(.vertical, edgeToEdge ? 0 : 8)
             } else if isHubShareVideo || (PlayPlatformBridge.isLongFormVideo(sourcePost)
                 && PlayPlatformBridge.isHubCatalogContent(sourcePost)) {
-                // Hubs origin share — badge + open original channel (never creates a channel for sharer).
+                // Hubs origin share — full-width 16:9 film only; parent card owns actions under it.
                 PlayFeedLinkCard(
                     post: sourcePost,
                     onOpen: { appState.openPost(sourcePost) },
-                    edgeToEdge: edgeToEdge,
+                    edgeToEdge: true,
                     forceHubsBadge: true,
                     autoplaySurface: autoplaySurface
                 )
-                .padding(.horizontal, mediaSideInset)
+                .padding(.horizontal, edgeToEdge ? 0 : mediaSideInset)
                 .padding(.vertical, edgeToEdge ? 0 : 8)
             } else if PlayPlatformBridge.isLongFormVideo(sourcePost) {
                 // Plain long-form feed share — player only, no Hubs badge/channel claim.
                 PlayFeedLinkCard(
                     post: sourcePost,
                     onOpen: { appState.openPost(sourcePost) },
-                    edgeToEdge: edgeToEdge,
+                    edgeToEdge: true,
                     forceHubsBadge: false,
                     autoplaySurface: autoplaySurface
                 )
-                .padding(.horizontal, mediaSideInset)
+                .padding(.horizontal, edgeToEdge ? 0 : mediaSideInset)
                 .padding(.vertical, edgeToEdge ? 0 : 8)
             } else {
                 standardEmbed

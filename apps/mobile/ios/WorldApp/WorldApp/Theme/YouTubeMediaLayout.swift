@@ -137,8 +137,8 @@ struct YouTubeVideoFrame<Content: View>: View {
                     }
                     .clipShape(Rectangle())
             case .feed:
-                // True 16:9 — film fills; transport overlays on top.
-                // Do NOT .clipped() the outer box — that shaved the scrubber off the bottom.
+                // True 16:9 full-width — same stage as Hubs. Clip so scrubber stays ON film;
+                // like / share / save / comments live under the card (Sparks-style), not in overflow.
                 Color.clear
                     .frame(maxWidth: .infinity)
                     .frame(height: FacebookMediaLayout.hubFeedVideoHeight())
@@ -146,6 +146,8 @@ struct YouTubeVideoFrame<Content: View>: View {
                     .overlay {
                         content()
                     }
+                    .clipped()
+                    .contentShape(Rectangle())
             case .card:
                 // Shelf / search cards stay compact 16:9.
                 Color.clear
@@ -498,9 +500,9 @@ struct PlayFeedLinkCard: View {
                     preferArchivePlayer: useArchivePath,
                     showsControls: true,
                     muteOnlyControls: false,
-                    // Fill the 16:9 card; play/±10s/scrubber overlay centered on the film.
+                    // Same as Hubs: fill the 16:9 stage; reserve bottom for on-film scrubber only.
                     fillsFrame: true,
-                    bottomChromeReserve: 0,
+                    bottomChromeReserve: 52,
                     sharesFeedMute: true,
                     autoplaySurface: autoplaySurface,
                     onViewed: { Task { await PostsService.shared.recordView(post) } }

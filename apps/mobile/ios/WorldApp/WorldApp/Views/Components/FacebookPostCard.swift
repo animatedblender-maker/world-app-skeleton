@@ -270,11 +270,12 @@ struct FacebookPostCard: View {
                 SharedPostLoadingEmbed(postID: post.sharedPostID!)
                     .padding(.horizontal, textGutter)
             } else if showsPlayLinkInFeed {
-                // Hub long-form or hub-origin feed share (badge). Opens original channel, never "creates" one.
+                // Hub long-form / hub-origin share: same 16:9 full-width stage as Hubs.
+                // Film only here — like/share/save/comments are below (Sparks pattern).
                 PlayFeedLinkCard(
                     post: post,
                     onOpen: { openPlayVideo() },
-                    edgeToEdge: edgeToEdge,
+                    edgeToEdge: true,
                     forceHubsBadge: true,
                     autoplaySurface: autoplaySurface
                 )
@@ -292,9 +293,9 @@ struct FacebookPostCard: View {
                 )
             }
 
-            // Social actions (like / comments / share / save) always sit under the media block.
+            // Social actions under the film (Sparks + Hubs shares) — never inside the 16:9 stage.
             actions
-                .padding(.top, showsPlayLinkInFeed || opensAsSpark ? 6 : 0)
+                .padding(.top, showsPlayLinkInFeed || opensAsSpark ? 10 : 4)
             meta
 
             if let actionMessage {
@@ -350,8 +351,12 @@ struct FacebookPostCard: View {
         // lays out outside the screen frame.
         .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         .background(edgeToEdge ? Theme.canvas : Theme.surface)
-        .clipShape(cardShape)
-        .clipped()
+        // Sparks / Hubs shares: do NOT clip actions into the media rounded card —
+        // film clips itself; like/share/save/comments sit under on the canvas.
+        .modifier(FeedCardClipModifier(
+            shape: cardShape,
+            clipWholeCard: !(edgeToEdge && (opensAsSpark || showsPlayLinkInFeed))
+        ))
         .overlay {
             if !edgeToEdge {
                 cardShape
@@ -1352,6 +1357,22 @@ private struct PostEditSheet: View {
             return PostStoryMarker.buildBody(caption: trimmed, expiresAt: expires)
         }
         return trimmed
+    }
+}
+
+/// Outer card clip — skipped for Sparks/Hubs feed video so actions stay under the film.
+private struct FeedCardClipModifier: ViewModifier {
+    let shape: UnevenRoundedRectangle
+    let clipWholeCard: Bool
+
+    func body(content: Content) -> some View {
+        if clipWholeCard {
+            content
+                .clipShape(shape)
+                .clipped()
+        } else {
+            content
+        }
     }
 }
 

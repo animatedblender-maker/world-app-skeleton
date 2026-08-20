@@ -1668,8 +1668,8 @@ private struct MatteryaVideoControls: View {
                         .frame(width: 42, alignment: .trailing)
                 }
                 .padding(.horizontal, 14)
-                // Extra bottom inset so the scrubber sits fully on-film (never cropped).
-                .padding(.bottom, isFullscreen ? 0 : 26)
+                // Keep scrubber inside the 16:9 film — social actions sit under the card (Sparks-like).
+                .padding(.bottom, isFullscreen ? 0 : 10)
                 .padding(.top, 10)
                 .safeAreaPadding(.bottom, isFullscreen ? 10 : 0)
                 .background(
