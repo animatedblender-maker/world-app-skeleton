@@ -9,7 +9,7 @@
  * Full post bodies / comments load only on open.
  */
 import { pool } from '../db.js';
-import { freshenMediaUrlString } from '../media/r2-playback.js';
+import { freshenMediaUrlString, freshenThumbUrlString } from '../media/r2-playback.js';
 
 export const HUB_PARENT_SLUGS = [
   'comedy',
@@ -225,8 +225,7 @@ function toIso(v: Date | string): string {
   return Number.isFinite(d.getTime()) ? d.toISOString() : String(v);
 }
 
-/** LongForm/<Country>/<youtubeId>/video.mp4 → YouTube CDN poster (shelves had null thumbs). */
-/** Re-presign media_url on shelf pages so clients never open a 403 public r2.dev link. */
+/** Re-presign media_url + Frame 0 thumb_url so clients never open dead/403 R2 links. */
 async function freshenCardMedia(items: ThinShelfCard[]): Promise<ThinShelfCard[]> {
   if (!items.length) return items;
   const concurrency = 6;
@@ -236,8 +235,17 @@ async function freshenCardMedia(items: ThinShelfCard[]): Promise<ThinShelfCard[]
     while (idx < items.length) {
       const i = idx++;
       const card = items[i];
+      let next = card;
       const fresh = await freshenMediaUrlString(card.media_url);
-      out[i] = fresh && fresh !== card.media_url ? { ...card, media_url: fresh } : card;
+      if (fresh && fresh !== card.media_url) {
+        next = { ...next, media_url: fresh };
+      }
+      // Live Frame 0: re-presign thumb, or mint from media_url pack key when missing.
+      const liveThumb = await freshenThumbUrlString(next.thumb_url, null, next.media_url);
+      if (liveThumb && liveThumb !== next.thumb_url) {
+        next = { ...next, thumb_url: liveThumb };
+      }
+      out[i] = next;
     }
   }
   await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));

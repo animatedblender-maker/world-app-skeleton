@@ -476,13 +476,21 @@ struct PlayFeedLinkCard: View {
             let useArchivePath = ArchiveVideoPlayback.isArchiveURL(url)
             ZStack {
                 Color.black
+                // Client t=0 while remote Frame 0 loads — kills black cold start on hub shares.
+                FrameZeroFallbackPoster(
+                    postID: playPost.id,
+                    videoURL: url,
+                    fillsFrame: false
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .allowsHitTesting(false)
                 // Same as Hubs watch: fit the whole frame (not aspectFill zoom/crop).
                 if let poster {
                     CachedAsyncImage(
                         url: poster,
                         maxPixelSize: 720,
                         contentMode: .fit,
-                        placeholder: AnyView(Color.black)
+                        placeholder: AnyView(Color.clear)
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .clipped()

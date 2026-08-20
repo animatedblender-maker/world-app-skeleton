@@ -1968,26 +1968,28 @@ struct InFrameVideoPlayer: View {
         showsControls && !muteOnlyControls && playGate
     }
 
-    /// Poster / letterbox floor — remote thumb, else black.
+    /// Poster / letterbox floor — remote thumb, else client Frame 0, else black.
     /// Frame 0 extract only while `playGate` (winner) — extracting on every neighbor kills scroll.
     @ViewBuilder
     private var posterFloor: some View {
-        if let posterURL {
-            CachedAsyncImage(
-                url: posterURL,
-                maxPixelSize: 720,
-                contentMode: fillsFrame ? .fill : .fit,
-                placeholder: AnyView(Color.black)
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipped()
-            .allowsHitTesting(false)
-        } else if playGate, let postID {
-            FrameZeroFallbackPoster(postID: postID, videoURL: url, fillsFrame: fillsFrame)
-                .allowsHitTesting(false)
-        } else {
+        ZStack {
             Color.black
+            // Client t=0 underlay while remote thumb loads / when thumb_url missing.
+            if playGate, let postID {
+                FrameZeroFallbackPoster(postID: postID, videoURL: url, fillsFrame: fillsFrame)
+                    .allowsHitTesting(false)
+            }
+            if let posterURL {
+                CachedAsyncImage(
+                    url: posterURL,
+                    maxPixelSize: 720,
+                    contentMode: fillsFrame ? .fill : .fit,
+                    placeholder: AnyView(Color.clear)
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
                 .allowsHitTesting(false)
+            }
         }
     }
 
@@ -2041,11 +2043,8 @@ struct InFrameVideoPlayer: View {
                                 // Kick ≠ painted frames — never lift cover here (blink source).
                                 if !playing { framesReady = false }
                             },
-                            onProgress: { current, _ in
-                                // Match VideoPlayerView: time must advance past first black frames.
-                                if !framesReady, current >= 0.12 {
-                                    markInFrameFramesReady()
-                                }
+                            onProgress: { _, _ in
+                                // Cover lifts only via paint-ready paths (not wall-clock).
                             }
                         )
                     } else {
@@ -2070,11 +2069,7 @@ struct InFrameVideoPlayer: View {
                             // Claim warm buffer when approaching — butter-smooth start.
                             preloadsWhenInactive: false,
                             onViewed: onViewed,
-                            onProgress: { current, _ in
-                                if !framesReady, current >= 0.12 {
-                                    markInFrameFramesReady()
-                                }
-                            },
+                            // Do NOT lift on time>=0.12 alone — that flashed black before paint.
                             onFramesReady: {
                                 // Player already settled its own cover — lift outer after a beat.
                                 markInFrameFramesReady()

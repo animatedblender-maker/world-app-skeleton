@@ -245,7 +245,55 @@ export async function freshenMediaUrlString(
   });
 }
 
-/** Freshen media_url (and nested shared_post.media_url) on post rows before GraphQL response. */
+/**
+ * Re-presign Frame 0 / poster thumb_url so clients never open a dead X-Amz signature.
+ * Prefer thumb_path (`r2:bucket/…/frame0_512.webp`); else parse key from the signed URL
+ * or derive `…/frame0_512.webp` from the video pack (media_path / media_url).
+ */
+export async function freshenThumbUrlString(
+  thumbUrl: string | null | undefined,
+  thumbPath?: string | null,
+  mediaHint?: string | null
+): Promise<string | null> {
+  if (!thumbUrl && !thumbPath && !mediaHint) return thumbUrl ?? null;
+
+  if (thumbUrl && existingPlayUrlStillFresh(thumbUrl)) {
+    return thumbUrl;
+  }
+
+  let key =
+    (thumbPath ? extractR2KeyFromMediaPath(String(thumbPath)) : null) ||
+    extractR2Key(thumbUrl, thumbPath) ||
+    null;
+
+  // Derive frame0 key from the video pack when thumb_path missing but media is R2.
+  if (!key && mediaHint) {
+    const videoKey =
+      extractR2KeyFromMediaPath(String(mediaHint)) || extractR2Key(mediaHint, null);
+    if (videoKey) {
+      key = videoKey.endsWith('/video.mp4')
+        ? videoKey.replace(/\/video\.mp4$/i, '/frame0_512.webp')
+        : /frame0_\d+\.webp$/i.test(videoKey)
+          ? videoKey
+          : null;
+    }
+  }
+
+  if (key?.endsWith('/video.mp4')) {
+    key = key.replace(/\/video\.mp4$/i, '/frame0_512.webp');
+  }
+
+  if (!key) return thumbUrl ?? null;
+  // Only mint for poster objects (never return a video URL as thumb).
+  if (!/frame0_\d+\.webp$/i.test(key) && !/\.(webp|jpe?g|png)$/i.test(key)) {
+    return thumbUrl ?? null;
+  }
+
+  const live = await resolvePlayUrlForKey(key);
+  return live || thumbUrl || null;
+}
+
+/** Freshen media_url + thumb_url (and nested shared_post) before GraphQL response. */
 export async function freshenPostsMedia<T extends Record<string, any>>(rows: T[]): Promise<T[]> {
   if (!rows?.length) return rows ?? [];
   // Only work when we can resolve (public base OR credentials).
@@ -265,11 +313,27 @@ export async function freshenPostsMedia<T extends Record<string, any>>(rows: T[]
         const fresh = await freshenMediaUrlString(next.media_url, mediaPath);
         if (fresh) next.media_url = fresh;
       }
+      if (next.thumb_url || next.thumb_path || mediaPath) {
+        const freshThumb = await freshenThumbUrlString(
+          next.thumb_url,
+          next.thumb_path ?? null,
+          mediaPath
+        );
+        if (freshThumb) next.thumb_url = freshThumb;
+      }
       if (next.shared_post && typeof next.shared_post === 'object') {
         const sp: any = { ...next.shared_post };
         if (sp.media_url || sp.media_path) {
           const freshSp = await freshenMediaUrlString(sp.media_url, sp.media_path ?? null);
           if (freshSp) sp.media_url = freshSp;
+        }
+        if (sp.thumb_url || sp.thumb_path || sp.media_path) {
+          const freshSpThumb = await freshenThumbUrlString(
+            sp.thumb_url,
+            sp.thumb_path ?? null,
+            sp.media_path ?? null
+          );
+          if (freshSpThumb) sp.thumb_url = freshSpThumb;
         }
         next.shared_post = sp;
       }

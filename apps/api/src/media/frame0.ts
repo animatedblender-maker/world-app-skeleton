@@ -488,7 +488,14 @@ async function listPostsNeedingFrame0Pg(
         or thumb_path = ''
         or thumb_path not like '%/frame0_512.webp'
       )
-    order by created_at desc
+    order by
+      -- Sparks first (vertical ShortForm + country packs) — hubs LongForm after.
+      case
+        when media_path like '%/ShortForm/%' then 0
+        when media_path like '%/LongForm/%' then 2
+        else 1
+      end,
+      created_at desc
     limit $1
     `,
     [limit]

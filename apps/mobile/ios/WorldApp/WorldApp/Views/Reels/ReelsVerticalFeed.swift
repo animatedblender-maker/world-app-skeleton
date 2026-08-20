@@ -421,12 +421,23 @@ struct ReelsPagerCard: View {
         ZStack {
             Color.black
 
+            // Client Frame 0 underlay while remote thumb loads (avoids black cold start).
+            if isActive, let url = sparkPlayURL {
+                FrameZeroFallbackPoster(
+                    postID: post.id,
+                    videoURL: url,
+                    fillsFrame: useFill
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .allowsHitTesting(false)
+            }
+
             if let poster = post.posterImageURL {
                 CachedAsyncImage(
                     url: poster,
                     maxPixelSize: 900,
                     contentMode: useFill ? .fill : .fit,
-                    placeholder: AnyView(Color.black)
+                    placeholder: AnyView(Color.clear)
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
