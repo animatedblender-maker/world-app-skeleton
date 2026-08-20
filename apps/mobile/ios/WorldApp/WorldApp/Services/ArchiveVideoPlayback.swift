@@ -539,8 +539,8 @@ struct MatteryaHubPlayerView: View {
                         .frame(width: 42, alignment: .trailing)
                 }
                 .padding(.horizontal, 16)
-                // Timeline in container strip under the 16:9 film.
-                .padding(.bottom, 8)
+                // On-film timeline (no black margin strip under the picture).
+                .padding(.bottom, 10)
                 .padding(.top, 12)
                 .background(
                     LinearGradient(

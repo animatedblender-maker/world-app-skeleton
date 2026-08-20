@@ -137,11 +137,11 @@ struct YouTubeVideoFrame<Content: View>: View {
                     }
                     .clipShape(Rectangle())
             case .feed:
-                // Video CONTAINER only: full-width 16:9 film + timeline strip.
-                // Like / share / keep / comments are outside — under this container.
+                // Full-width 16:9 container — film fits (Hubs gravity); timeline overlays bottom of film.
+                // No extra black strip under the picture. Like/share/keep sit under this container.
                 Color.clear
                     .frame(maxWidth: .infinity)
-                    .frame(height: FacebookMediaLayout.hubFeedStageHeight())
+                    .frame(height: FacebookMediaLayout.hubFeedVideoHeight())
                     .background(Color.black)
                     .overlay {
                         content()
@@ -501,10 +501,10 @@ struct PlayFeedLinkCard: View {
                     preferArchivePlayer: useArchivePath,
                     showsControls: true,
                     muteOnlyControls: false,
-                    // Hubs player uses fit (resizeAspect) — fill was zooming and shoving chrome off-center.
+                    // Hubs player uses fit (resizeAspect). Timeline overlays the film — no black margin strip.
                     fillsFrame: false,
                     topChromeReserve: 0,
-                    bottomChromeReserve: FacebookMediaLayout.hubFeedTimelineHeight,
+                    bottomChromeReserve: 0,
                     sharesFeedMute: true,
                     autoplaySurface: autoplaySurface,
                     onViewed: { Task { await PostsService.shared.recordView(post) } }
@@ -591,7 +591,7 @@ struct YouTubeFeedVideoCard: View {
                             postID: post.id,
                             muted: true,
                             fillsFrame: false,
-                            bottomChromeReserve: FacebookMediaLayout.hubFeedTimelineHeight,
+                            bottomChromeReserve: 0,
                             onViewed: { Task { await PostsService.shared.recordView(post) } }
                         )
                     }

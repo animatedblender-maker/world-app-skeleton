@@ -1400,7 +1400,7 @@ private struct FeedMediaSizeModifier: ViewModifier {
         let aspect = FacebookMediaLayout.clampedAspect(photoAspect)
         if isVideo {
             let height = isHubCompact
-                ? FacebookMediaLayout.hubFeedStageHeight()
+                ? FacebookMediaLayout.hubFeedVideoHeight()
                 : FacebookMediaLayout.dominantFeedVideoHeight()
             content
                 .frame(minWidth: 0, maxWidth: .infinity)
