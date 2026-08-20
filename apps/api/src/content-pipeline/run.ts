@@ -533,7 +533,7 @@ async function ingestOriginal(
     mediaUrl,
   });
 
-  // Frame 0 poster job (non-blocking). Poster = first displayed video frame only.
+  // Frame 0: zero-worker mode skips Kafka (use CLI backfill). Else optional enqueue.
   void enqueueMediaProcessJob({
     postId,
     r2Key: pack.videoKey,
@@ -545,7 +545,11 @@ async function ingestOriginal(
   }).then((r) => {
     if (r.enqueued) {
       pipelineLog(`  frame0 enqueued event=${r.eventId}`, 'ok');
-    } else if (r.error && r.error !== 'kafka_disabled') {
+    } else if (
+      r.error &&
+      r.error !== 'kafka_disabled' &&
+      r.error !== 'frame0_zero_worker'
+    ) {
       pipelineLog(`  frame0 enqueue skipped: ${r.error}`, 'warn');
     }
   });

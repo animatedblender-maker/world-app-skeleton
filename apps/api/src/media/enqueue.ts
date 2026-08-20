@@ -29,9 +29,18 @@ export type EnqueueMediaJobInput = {
  * Best-effort enqueue. Never throws into catalog ingest.
  * Returns enqueued=false when Kafka off or DB outbox fails.
  */
+/** Zero-worker mode: Frame 0 via CLI / client only — do not enqueue Kafka media jobs. */
+export function frame0ZeroWorkerMode(): boolean {
+  const raw = (process.env.FRAME0_ZERO_WORKER ?? '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes';
+}
+
 export async function enqueueMediaProcessJob(
   input: EnqueueMediaJobInput
 ): Promise<{ enqueued: boolean; eventId?: string; error?: string }> {
+  if (frame0ZeroWorkerMode()) {
+    return { enqueued: false, error: 'frame0_zero_worker' };
+  }
   if (!kafkaEnabled()) {
     return { enqueued: false, error: 'kafka_disabled' };
   }

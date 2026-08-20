@@ -13,6 +13,7 @@
     "content-pipeline:dry": "tsx src/content-pipeline/cli.ts --dry-run",
     "media:frame0-backfill": "tsx src/media/frame0-backfill.ts",
     "media:frame0-backfill:dry": "tsx src/media/frame0-backfill.ts --dry-run",
+    "media:frame0-backfill:batch": "tsx src/media/frame0-backfill.ts --concurrency=4",
     "docker:media-worker:build": "docker build -f Dockerfile.media-worker -t matterya-media-worker ."
   },
   "engines": {

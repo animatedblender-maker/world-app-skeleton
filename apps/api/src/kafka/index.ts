@@ -9,12 +9,15 @@ import { startOutboxPublisher, stopOutboxPublisher } from './publisher.js';
 let started = false;
 
 /**
- * Frame 0 runs in-process on matterya-api by default (bundled ffmpeg-static — no extra bill).
- * Set MEDIA_WORKER_INPROCESS=false only if you run a dedicated matterya-media-worker.
+ * Frame 0 compute: prefer zero-worker (CLI backfill + client upload).
+ * In-process Kafka consumer is opt-in emergency only when FRAME0_ZERO_WORKER is off
+ * and MEDIA_WORKER_INPROCESS=true.
  */
 function mediaWorkerInProcess(): boolean {
-  const raw = (process.env.MEDIA_WORKER_INPROCESS ?? 'true').trim().toLowerCase();
-  return !(raw === '0' || raw === 'false' || raw === 'no');
+  const zero = (process.env.FRAME0_ZERO_WORKER ?? '').trim().toLowerCase();
+  if (zero === '1' || zero === 'true' || zero === 'yes') return false;
+  const raw = (process.env.MEDIA_WORKER_INPROCESS ?? 'false').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes';
 }
 
 /**
@@ -37,13 +40,13 @@ export async function startKafkaPipeline(): Promise<void> {
       await startMessagesConsumer();
       await startEngagementConsumer();
       await startR2IngestConsumer();
-      // Frame 0 posters on the same API process (ffmpeg-static). No extra Render worker.
+      // Frame 0: zero-worker by default (CLI backfill + client). Opt-in Kafka consumer only.
       if (mediaWorkerInProcess()) {
         await startMediaConsumer();
-        console.log('   Media Frame 0: in-process on matterya-api (ffmpeg-static)');
+        console.log('   Media Frame 0: in-process consumer (MEDIA_WORKER_INPROCESS=true)');
       } else {
         console.log(
-          '   Media Frame 0: skipped (MEDIA_WORKER_INPROCESS=false — use dedicated worker if configured)'
+          '   Media Frame 0: zero-worker (CLI backfill / client upload — no permanent ffmpeg consumer)'
         );
       }
     } else {
