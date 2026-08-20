@@ -468,8 +468,8 @@ struct ReelsPagerCard: View {
                             loops: true,
                             muted: false,
                             showsControls: false,
-                            fillsFrame: useFill,
                             startTime: resumeStartTime > 0 ? resumeStartTime : nil,
+                            fillsFrame: useFill,
                             preloadsWhenInactive: true,
                             onViewed: { Task { await PostsService.shared.recordView(post) } },
                             onProgress: { current, duration in
