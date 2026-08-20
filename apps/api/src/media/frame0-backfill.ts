@@ -15,7 +15,7 @@
 import dotenv from 'dotenv';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getBucket } from '../content-pipeline/r2.js';
+import { getBucket, r2Configured } from '../content-pipeline/r2.js';
 import { enqueueMediaProcessJob } from './enqueue.js';
 import {
   ffmpegAvailable,
@@ -64,6 +64,18 @@ if (!viaKafka && !dryRun && !hasFf) {
   console.error(
     `[frame0-backfill] ffmpeg not available (tried ${resolveFfmpegPath()}). ` +
       'Install ffmpeg, or rely on ffmpeg-static in node_modules.'
+  );
+  process.exit(1);
+}
+
+if (!viaKafka && !dryRun && !r2Configured()) {
+  console.error(
+    '[frame0-backfill] R2 not configured. Set in apps/api/.env:\n' +
+      '  R2_ACCESS_KEY_ID\n' +
+      '  R2_SECRET_ACCESS_KEY   ← usually the missing one\n' +
+      '  R2_ACCOUNT_ID  (or R2_ENDPOINT)\n' +
+      '  R2_BUCKET=matterya-sparks\n' +
+      'Copy from Render → matterya-api → Environment.'
   );
   process.exit(1);
 }

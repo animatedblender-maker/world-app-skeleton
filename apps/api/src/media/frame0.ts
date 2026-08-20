@@ -23,6 +23,48 @@ import {
 } from '../content-pipeline/r2.js';
 import { publicObjectUrl } from './r2-playback.js';
 import type { MediaProcessPayload, MediaReadyPayload } from '../kafka/types.js';
+import { supabaseAdminConfigured, supabaseUrl } from '../supabase-admin.js';
+
+function supabaseServiceRole(): string {
+  return (process.env.SUPABASE_SERVICE_ROLE_KEY ?? '').trim();
+}
+
+/** PostgREST helper (service role). Used when DATABASE_URL/pg is broken. */
+async function postsRest<T = unknown>(
+  pathAndQuery: string,
+  init: RequestInit = {}
+): Promise<T> {
+  if (!supabaseAdminConfigured()) {
+    throw new Error('SUPABASE_ADMIN_NOT_CONFIGURED');
+  }
+  const url = `${supabaseUrl()}/rest/v1/${pathAndQuery.replace(/^\//, '')}`;
+  const headers = new Headers(init.headers);
+  const key = supabaseServiceRole();
+  headers.set('apikey', key);
+  headers.set('Authorization', `Bearer ${key}`);
+  if (init.body && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+  if (!headers.has('Prefer') && (init.method === 'PATCH' || init.method === 'POST')) {
+    headers.set('Prefer', 'return=minimal');
+  }
+  const res = await fetch(url, { ...init, headers });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`postsRest ${res.status}: ${text.slice(0, 300)}`);
+  }
+  if (res.status === 204) return undefined as T;
+  const text = await res.text();
+  if (!text) return undefined as T;
+  return JSON.parse(text) as T;
+}
+
+function isPgUnavailable(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /password authentication failed|ECONNREFUSED|ENOTFOUND|connect ETIMEDOUT|no pg_hba|timeout exceeded when trying to connect|connect ENOENT|28P01/i.test(
+    msg
+  );
+}
 
 const require = createRequire(import.meta.url);
 
@@ -259,6 +301,24 @@ async function applyFrame0ToPosts(opts: {
   posterUrls: Record<string, string>;
   videoKey: string;
 }): Promise<void> {
+  try {
+    await applyFrame0ToPostsPg(opts);
+  } catch (err) {
+    if (!isPgUnavailable(err) || !supabaseAdminConfigured()) throw err;
+    console.warn(
+      `[frame0] pg unavailable (${err instanceof Error ? err.message : err}); applying via Supabase REST`
+    );
+    await applyFrame0ToPostsRest(opts);
+  }
+}
+
+async function applyFrame0ToPostsPg(opts: {
+  postId: string;
+  thumbUrl: string;
+  thumbPath: string;
+  posterUrls: Record<string, string>;
+  videoKey: string;
+}): Promise<void> {
   const client = await pool.connect();
   try {
     const { rows } = await client.query<{ id: string; media_url: string | null }>(
@@ -313,6 +373,54 @@ async function applyFrame0ToPosts(opts: {
   }
 }
 
+async function applyFrame0ToPostsRest(opts: {
+  postId: string;
+  thumbUrl: string;
+  thumbPath: string;
+  posterUrls: Record<string, string>;
+  videoKey: string;
+}): Promise<void> {
+  const rows = await postsRest<Array<{ id: string; media_url: string | null }>>(
+    `posts?select=id,media_url&or=(id.eq.${opts.postId},shared_post_id.eq.${opts.postId})`
+  );
+
+  for (const row of rows ?? []) {
+    const nextMediaUrl = mergePostersIntoMediaUrl(row.media_url, {
+      posters: opts.posterUrls,
+      frame0_key: frame0ObjectKey(opts.videoKey, FRAME0_DEFAULT_SIZE),
+      r2_key: opts.videoKey,
+    });
+    const body: Record<string, unknown> = {
+      thumb_url: opts.thumbUrl,
+      thumb_path: opts.thumbPath,
+      updated_at: new Date().toISOString(),
+    };
+    if (nextMediaUrl != null) body.media_url = nextMediaUrl;
+    await postsRest(`posts?id=eq.${row.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
+  }
+
+  // Shares keyed by media_path (r2-share / r2-hubshare) without shared_post_id.
+  const shareOr = `or=(media_path.like.r2-share:%/${opts.videoKey},media_path.like.r2-hubshare:%/${opts.videoKey})`;
+  const shares = await postsRest<Array<{ id: string; thumb_path: string | null; shared_post_id: string | null }>>(
+    `posts?select=id,thumb_path,shared_post_id&media_type=eq.video&${shareOr}&id=neq.${opts.postId}`
+  );
+  for (const share of shares ?? []) {
+    if (share.shared_post_id && share.shared_post_id === opts.postId) continue;
+    if (share.thumb_path === opts.thumbPath) continue;
+    await postsRest(`posts?id=eq.${share.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        thumb_url: opts.thumbUrl,
+        thumb_path: opts.thumbPath,
+        updated_at: new Date().toISOString(),
+      }),
+    });
+  }
+}
+
 function mergePostersIntoMediaUrl(
   mediaUrl: string | null,
   extra: { posters: Record<string, string>; frame0_key: string; r2_key: string }
@@ -332,10 +440,35 @@ function mergePostersIntoMediaUrl(
   }
 }
 
-/** Rows missing Frame 0 posters (catalog originals). */
-export async function listPostsNeedingFrame0(limit = 50): Promise<
-  Array<{ postId: string; mediaPath: string; r2Key: string }>
-> {
+function mapFrame0Candidates(
+  rows: Array<{ id: string; media_path: string; media_url: string | null }>
+): Array<{ postId: string; mediaPath: string; r2Key: string }> {
+  const out: Array<{ postId: string; mediaPath: string; r2Key: string }> = [];
+  for (const r of rows) {
+    // Skip share wrappers (catalog originals only).
+    if (r.media_path.startsWith('r2-share:') || r.media_path.startsWith('r2-hubshare:')) {
+      continue;
+    }
+    const key =
+      extractR2KeyFromMediaPath(r.media_path) ||
+      (r.media_url?.startsWith('{')
+        ? (() => {
+            try {
+              return String((JSON.parse(r.media_url) as { r2_key?: string }).r2_key || '');
+            } catch {
+              return '';
+            }
+          })()
+        : '');
+    if (!key) continue;
+    out.push({ postId: r.id, mediaPath: r.media_path, r2Key: key });
+  }
+  return out;
+}
+
+async function listPostsNeedingFrame0Pg(
+  limit: number
+): Promise<Array<{ postId: string; mediaPath: string; r2Key: string }>> {
   const { rows } = await pool.query<{
     id: string;
     media_path: string;
@@ -360,24 +493,40 @@ export async function listPostsNeedingFrame0(limit = 50): Promise<
     `,
     [limit]
   );
+  return mapFrame0Candidates(rows);
+}
 
-  const out: Array<{ postId: string; mediaPath: string; r2Key: string }> = [];
-  for (const r of rows) {
-    const key =
-      extractR2KeyFromMediaPath(r.media_path) ||
-      (r.media_url?.startsWith('{')
-        ? (() => {
-            try {
-              return String((JSON.parse(r.media_url) as { r2_key?: string }).r2_key || '');
-            } catch {
-              return '';
-            }
-          })()
-        : '');
-    if (!key) continue;
-    out.push({ postId: r.id, mediaPath: r.media_path, r2Key: key });
+async function listPostsNeedingFrame0Rest(
+  limit: number
+): Promise<Array<{ postId: string; mediaPath: string; r2Key: string }>> {
+  // PostgREST `like` uses `*` as wildcard (not SQL `%`).
+  // `r2:*` already excludes `r2-share:` / `r2-hubshare:` (those use a hyphen after r2).
+  const filter =
+    `posts?select=id,media_path,media_url` +
+    `&media_type=eq.video` +
+    `&media_path=like.r2:*` +
+    `&or=(thumb_url.is.null,thumb_url.eq.,thumb_path.is.null,thumb_path.eq.,thumb_path.not.like.*/frame0_512.webp)` +
+    `&order=created_at.desc` +
+    `&limit=${Math.max(1, limit)}`;
+  const rows = await postsRest<Array<{ id: string; media_path: string; media_url: string | null }>>(
+    filter
+  );
+  return mapFrame0Candidates(rows ?? []).slice(0, limit);
+}
+
+/** Rows missing Frame 0 posters (catalog originals). */
+export async function listPostsNeedingFrame0(limit = 50): Promise<
+  Array<{ postId: string; mediaPath: string; r2Key: string }>
+> {
+  try {
+    return await listPostsNeedingFrame0Pg(limit);
+  } catch (err) {
+    if (!isPgUnavailable(err) || !supabaseAdminConfigured()) throw err;
+    console.warn(
+      `[frame0] pg unavailable (${err instanceof Error ? err.message : err}); listing via Supabase REST`
+    );
+    return listPostsNeedingFrame0Rest(limit);
   }
-  return out;
 }
 
 /** Skip work if all three WebPs already exist (idempotent re-run). */
