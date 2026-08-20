@@ -218,6 +218,8 @@ struct MatteryaHubPlayerView: View {
     var topChromeReserve: CGFloat = 0
     /// Bottom strip for feed timeline so fill doesn’t crop scrubber/buttons.
     var bottomChromeReserve: CGFloat = 0
+    /// Feed hubs: chrome hidden until tap; 3s auto-hide; tap again dismisses.
+    var tapToRevealControls: Bool = false
     @Binding var isMuted: Bool
     var onReady: (() -> Void)? = nil
     /// Keeps AppState.hubPlaybackPlaying in sync when chrome play/pause is used.
@@ -228,7 +230,7 @@ struct MatteryaHubPlayerView: View {
     var allowsFullscreen: Bool = true
 
     @StateObject private var bridge = ArchivePlayerBridge()
-    @State private var showChrome = true
+    @State private var showChrome = false
     @State private var chromeHideTask: Task<Void, Never>?
     @State private var isScrubbing = false
     @State private var showFullscreen = false
@@ -244,6 +246,7 @@ struct MatteryaHubPlayerView: View {
         fillsFrame: Bool = false,
         topChromeReserve: CGFloat = 0,
         bottomChromeReserve: CGFloat = 0,
+        tapToRevealControls: Bool = false,
         isMuted: Binding<Bool> = .constant(false),
         allowsFullscreen: Bool = true,
         onReady: (() -> Void)? = nil,
@@ -260,11 +263,13 @@ struct MatteryaHubPlayerView: View {
         self.fillsFrame = fillsFrame
         self.topChromeReserve = topChromeReserve
         self.bottomChromeReserve = bottomChromeReserve
+        self.tapToRevealControls = tapToRevealControls
         self._isMuted = isMuted
         self.allowsFullscreen = allowsFullscreen
         self.onReady = onReady
         self.onPlayingChange = onPlayingChange
         self.onProgress = onProgress
+        _showChrome = State(initialValue: showsControls && !tapToRevealControls)
     }
 
     var body: some View {
@@ -290,7 +295,8 @@ struct MatteryaHubPlayerView: View {
                         bridge.publishReady(playing: true)
                         DispatchQueue.main.async {
                             onReady?()
-                            if showsControls {
+                            // Feed hubs: stay chrome-hidden until the user taps.
+                            if showsControls, !tapToRevealControls {
                                 showChrome = true
                                 scheduleChromeHide()
                             }
@@ -321,56 +327,51 @@ struct MatteryaHubPlayerView: View {
             }
 
             if showsControls {
-                // Chrome / tap-to-reveal first (under transport).
                 // Pad reserves so play stays centered on the film (not timeline strip).
-                if showChrome || !bridge.isReady {
+                if showChrome || (!tapToRevealControls && !bridge.isReady) {
                     hubChrome
                         .padding(.top, topChromeReserve)
                         .padding(.bottom, bottomChromeReserve)
                         .transition(.opacity)
                         .zIndex(1)
+
+                    // Mute rides with chrome when tap-to-reveal (feed hubs).
+                    if showChrome || !tapToRevealControls {
+                        VStack {
+                            HStack(spacing: 10) {
+                                Spacer(minLength: 0)
+                                chromeIconButton(
+                                    systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill"
+                                ) {
+                                    isMuted.toggle()
+                                    bridge.controller?.setMuted(isMuted)
+                                    bridge.publishMuted(isMuted)
+                                    scheduleChromeHide()
+                                }
+                                if allowsFullscreen {
+                                    chromeIconButton(systemName: "arrow.up.left.and.arrow.down.right") {
+                                        showFullscreen = true
+                                        chromeHideTask?.cancel()
+                                    }
+                                }
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.top, 12)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.top, topChromeReserve)
+                        .padding(.bottom, bottomChromeReserve)
+                        .zIndex(50)
+                        .allowsHitTesting(true)
+                    }
                 } else {
                     Color.clear
                         .contentShape(Rectangle())
-                        .onTapGesture {
-                            withAnimation(.easeInOut(duration: 0.18)) {
-                                showChrome = true
-                            }
-                            scheduleChromeHide()
-                        }
+                        .onTapGesture { toggleChromeFromTap() }
                         .padding(.top, topChromeReserve)
                         .padding(.bottom, bottomChromeReserve)
                         .zIndex(1)
                 }
-
-                // Mute + fullscreen ALWAYS on top of chrome/tap layers so hits never get stolen.
-                VStack {
-                    HStack(spacing: 10) {
-                        Spacer(minLength: 0)
-                        chromeIconButton(
-                            systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill"
-                        ) {
-                            isMuted.toggle()
-                            bridge.controller?.setMuted(isMuted)
-                            bridge.publishMuted(isMuted)
-                            // Feed binding already updates appState.feedVideosMuted when shared.
-                            scheduleChromeHide()
-                        }
-                        if allowsFullscreen {
-                            chromeIconButton(systemName: "arrow.up.left.and.arrow.down.right") {
-                                showFullscreen = true
-                                chromeHideTask?.cancel()
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.top, 12)
-                    Spacer(minLength: 0)
-                }
-                .padding(.top, topChromeReserve)
-                .padding(.bottom, bottomChromeReserve)
-                .zIndex(50)
-                .allowsHitTesting(true)
             }
         }
         .fullScreenCover(isPresented: $showFullscreen) {
@@ -415,10 +416,10 @@ struct MatteryaHubPlayerView: View {
             }
         }
         .onChange(of: showsControls) { _, visible in
-            if visible {
+            if visible, !tapToRevealControls {
                 showChrome = true
                 scheduleChromeHide()
-            } else {
+            } else if !visible {
                 // Mini player: hide chrome but keep the AVPlayer actively rendering.
                 chromeHideTask?.cancel()
                 showChrome = false
@@ -462,15 +463,10 @@ struct MatteryaHubPlayerView: View {
     /// Center transport (like the provided Hubs chrome): −10s · play/pause · +10s, scrubber bottom.
     private var hubChrome: some View {
         ZStack {
-            // Tap empty area to hide chrome (transport + scrubber sit above this layer).
+            // Tap empty film: dismiss chrome early (before 3s) when tap-to-reveal.
             Color.clear
                 .contentShape(Rectangle())
-                .onTapGesture {
-                    withAnimation(.easeInOut(duration: 0.18)) {
-                        showChrome = false
-                    }
-                    chromeHideTask?.cancel()
-                }
+                .onTapGesture { toggleChromeFromTap() }
 
             // TRUE center: skip back · large play · skip forward
             HStack(spacing: 40) {
@@ -577,13 +573,27 @@ struct MatteryaHubPlayerView: View {
         .buttonStyle(.plain)
     }
 
+    private func toggleChromeFromTap() {
+        guard showsControls else { return }
+        let next = !showChrome
+        withAnimation(.easeInOut(duration: 0.18)) {
+            showChrome = next
+        }
+        if next {
+            scheduleChromeHide()
+        } else {
+            chromeHideTask?.cancel()
+            chromeHideTask = nil
+        }
+    }
+
     private func scheduleChromeHide() {
         chromeHideTask?.cancel()
         // Stay up while paused so center play / ±10s never vanish mid-pause.
         guard bridge.isPlaying else { return }
-        // Tap anywhere on film toggles chrome; idle auto-hides (feed + watch).
+        // Idle 3s auto-hide; earlier tap dismisses via toggleChromeFromTap.
         chromeHideTask = Task {
-            try? await Task.sleep(nanoseconds: 3_200_000_000)
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
             guard !Task.isCancelled, !isScrubbing else { return }
             await MainActor.run {
                 guard bridge.isPlaying else { return }

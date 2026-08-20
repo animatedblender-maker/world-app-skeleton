@@ -507,6 +507,7 @@ struct PlayFeedLinkCard: View {
                     bottomChromeReserve: 0,
                     sharesFeedMute: true,
                     autoplaySurface: autoplaySurface,
+                    tapToRevealControls: true,
                     onViewed: { Task { await PostsService.shared.recordView(post) } }
                 )
             }

@@ -16,6 +16,8 @@ struct VideoPlayerView: View {
     var loops: Bool = false
     var muted: Bool = false
     var showsControls: Bool = false
+    /// Feed hubs: chrome hidden until tap; auto-hides after 3s; tap again dismisses early.
+    var tapToRevealControls: Bool = false
     var allowsFullscreen: Bool = false
     var startTime: Double? = nil
     /// When false, teardown won't write a lower position over an existing resume point (mini player).
@@ -149,10 +151,7 @@ struct VideoPlayerView: View {
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 guard showsControls else { return }
-                                withAnimation(.easeInOut(duration: 0.18)) {
-                                    showChrome.toggle()
-                                }
-                                scheduleChromeHide()
+                                toggleChromeFromTap()
                             }
                     } else if loadFailed {
                         unavailableState
@@ -193,10 +192,8 @@ struct VideoPlayerView: View {
                     Color.clear
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            withAnimation(.easeInOut(duration: 0.18)) {
-                                showChrome = false
-                            }
-                            chromeTask?.cancel()
+                            // Second tap (or tap empty film) dismisses before the 3s timer.
+                            toggleChromeFromTap()
                         }
                     MatteryaVideoControls(
                         isPlaying: isPlaying,
@@ -223,9 +220,11 @@ struct VideoPlayerView: View {
             liveGate.isActive = isActive
             liveGate.userWantsPause = userWantsPause
             liveGate.onProgress = onProgress
-            // In-feed transport must appear immediately (not after a tap).
-            if showsControls {
+            // Feed hubs: start hidden until tap. Other surfaces keep chrome when enabled.
+            if showsControls, !tapToRevealControls {
                 showChrome = true
+            } else {
+                showChrome = false
             }
             // ALWAYS start covered — readyToPlay / warm-at-0 ≠ painted frames (black flash).
             showPosterCover = true
@@ -711,12 +710,26 @@ struct VideoPlayerView: View {
         scheduleChromeHide()
     }
 
+    private func toggleChromeFromTap() {
+        guard showsControls else { return }
+        let next = !showChrome
+        withAnimation(.easeInOut(duration: 0.18)) {
+            showChrome = next
+        }
+        if next {
+            scheduleChromeHide()
+        } else {
+            chromeTask?.cancel()
+            chromeTask = nil
+        }
+    }
+
     private func scheduleChromeHide() {
         guard showsControls else { return }
         chromeTask?.cancel()
-        // Tap video → show; idle → hide (feed hubs + fullscreen).
+        // Tap video → show; idle 3s → hide (or earlier tap dismisses).
         chromeTask = Task {
-            try? await Task.sleep(nanoseconds: 3_500_000_000)
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 withAnimation(.easeInOut(duration: 0.2)) {
@@ -1854,6 +1867,8 @@ struct InFrameVideoPlayer: View {
     var showsControls: Bool = true
     /// When true, only a mute chip is shown (Sparks feed) — no scrubber / play-pause.
     var muteOnlyControls: Bool = false
+    /// Feed hubs: chrome hidden until tap; 3s auto-hide; tap again dismisses.
+    var tapToRevealControls: Bool = false
     /// Full-bleed fill — never black bars on sides/top.
     var fillsFrame: Bool = true
     /// Top strip for mute so fill doesn’t crop the control.
@@ -1895,6 +1910,7 @@ struct InFrameVideoPlayer: View {
         forceSilentUntilUnmute: Bool = false,
         sharesFeedMute: Bool = true,
         autoplaySurface: FeedAutoplaySurface = .home,
+        tapToRevealControls: Bool = false,
         onViewed: (() -> Void)? = nil,
         onVideoSize: ((CGSize) -> Void)? = nil
     ) {
@@ -1914,6 +1930,7 @@ struct InFrameVideoPlayer: View {
         self.bottomChromeReserve = bottomChromeReserve
         self.sharesFeedMute = sharesFeedMute
         self.autoplaySurface = autoplaySurface
+        self.tapToRevealControls = tapToRevealControls
         self.onViewed = onViewed
         self.onVideoSize = onVideoSize
         // Initial mute: prefer global feed mute when sharing; else constructor flag.
@@ -1998,6 +2015,7 @@ struct InFrameVideoPlayer: View {
                             fillsFrame: fillsFrame,
                             topChromeReserve: topChromeReserve,
                             bottomChromeReserve: bottomChromeReserve,
+                            tapToRevealControls: tapToRevealControls,
                             isMuted: Binding(
                                 get: { isMuted },
                                 set: { newValue in
@@ -2035,6 +2053,7 @@ struct InFrameVideoPlayer: View {
                             loops: loops,
                             muted: isMuted,
                             showsControls: transportChrome,
+                            tapToRevealControls: tapToRevealControls,
                             allowsFullscreen: false,
                             sharesFeedMute: sharesFeedMute,
                             fillsFrame: fillsFrame,
