@@ -32,6 +32,17 @@ export type Frame0Size = (typeof FRAME0_SIZES)[number];
 /** Default list / Sparks / Hubs poster. */
 export const FRAME0_DEFAULT_SIZE: Frame0Size = 512;
 
+/**
+ * Preserve **display** aspect (= what AVPlayer shows), not raw coded pixels.
+ * - Apply sample aspect ratio (SAR) so anamorphic files don't look squashed/stretched
+ * - Fit long edge to `size` without distorting (force_original_aspect_ratio=decrease)
+ * ffmpeg autorotates by stream displaymatrix by default when filtering.
+ */
+export function frame0ScaleFilter(longEdge: Frame0Size): string {
+  // setsar=1 after expanding iw*sar so poster W/H matches on-screen video.
+  return `scale=iw*sar:ih,setsar=1,scale=${longEdge}:${longEdge}:force_original_aspect_ratio=decrease`;
+}
+
 /** Resolve ffmpeg binary: FFMPEG_PATH → ffmpeg-static → PATH `ffmpeg`. */
 export function resolveFfmpegPath(): string {
   const fromEnv = process.env.FFMPEG_PATH?.trim();
@@ -144,11 +155,18 @@ async function resolvePosterUrl(key: string): Promise<string> {
   }
 }
 
+export type ProcessFrame0Options = {
+  /** Re-encode even if frame0_*.webp already exist (fix wrong aspect). */
+  force?: boolean;
+};
+
 /**
  * Extract FRAME 0 → WebP ladder → R2 → update posts.thumb_url (+ shares).
+ * Poster display aspect must match the video's on-screen aspect (SAR + rotation).
  */
 export async function processFrame0(
-  payload: MediaProcessPayload
+  payload: MediaProcessPayload,
+  opts: ProcessFrame0Options = {}
 ): Promise<MediaReadyPayload> {
   if (!r2Configured()) {
     throw new Error('R2 not configured');
@@ -165,7 +183,7 @@ export async function processFrame0(
   if (!videoKey) throw new Error('missing r2Key');
 
   const outputKeys = FRAME0_SIZES.map((s) => frame0ObjectKey(videoKey, s));
-  const already = await frame0DerivativesExist(videoKey, bucket);
+  const already = opts.force ? false : await frame0DerivativesExist(videoKey, bucket);
 
   if (!already) {
     const workDir = await mkdtemp(join(tmpdir(), 'matterya-frame0-'));
@@ -177,7 +195,8 @@ export async function processFrame0(
         const outKey = frame0ObjectKey(videoKey, size);
         const localWebp = join(workDir, `frame0_${size}.webp`);
 
-        // Seek before -i; force first decoded frame only — never scene-detect.
+        // Seek before -i; first displayed frame only — never scene-detect / mid-clip.
+        // SAR normalize so poster aspect === what players show (not coded WxH alone).
         await runCmd(ffmpegBin, [
           '-y',
           '-ss',
@@ -187,7 +206,7 @@ export async function processFrame0(
           '-frames:v',
           '1',
           '-vf',
-          `scale=${size}:-2`,
+          frame0ScaleFilter(size),
           '-c:v',
           'libwebp',
           '-quality',

@@ -113,7 +113,11 @@ Emergency: `MEDIA_WORKER_INPROCESS=true` + `FRAME0_ZERO_WORKER=false` re-enables
 ## ffmpeg extract (canonical)
 
 ```bash
-ffmpeg -y -ss 0 -i "$SRC" -frames:v 1 -vf "scale=W:-2" -c:v libwebp -quality 80 "frame0_W.webp"
+# Normalize SAR so poster aspect == on-screen video (AVPlayer), then fit long edge.
+ffmpeg -y -ss 0 -i "$SRC" -frames:v 1 \
+  -vf "scale=iw*sar:ih,setsar=1,scale=W:W:force_original_aspect_ratio=decrease" \
+  -c:v libwebp -quality 80 "frame0_W.webp"
 ```
 
-Long-edge **256 / 512 / 1080**. Seek before `-i`; never scene-detect.
+Long-edge **256 / 512 / 1080**. Seek before `-i`; never scene-detect.  
+Re-extract wrong-aspect posters: `npm run media:frame0-backfill -- --force --limit=50`

@@ -36,6 +36,8 @@ function argValue(args: string[], name: string): string | undefined {
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
 const viaKafka = args.includes('--via-kafka');
+/** Re-extract even when frame0_*.webp exist (fix SAR/aspect mismatches). */
+const force = args.includes('--force');
 const limit = Math.max(1, Number(argValue(args, '--limit') || 50) || 50);
 const concurrencyRaw = Number(argValue(args, '--concurrency') || 4) || 4;
 const concurrency = Math.min(8, Math.max(1, concurrencyRaw));
@@ -69,7 +71,7 @@ if (!viaKafka && !dryRun && !hasFf) {
 const rows = await listPostsNeedingFrame0(limit);
 console.log(
   `[frame0-backfill] mode=${viaKafka ? 'kafka-enqueue' : 'inline'} ` +
-    `candidates=${rows.length} dryRun=${dryRun} limit=${limit} concurrency=${concurrency} ` +
+    `candidates=${rows.length} dryRun=${dryRun} force=${force} limit=${limit} concurrency=${concurrency} ` +
     `ffmpeg=${hasFf ? resolveFfmpegPath() : 'n/a'}`
 );
 
@@ -103,24 +105,27 @@ if (viaKafka) {
   const results = await mapPool(rows, dryRun ? 1 : concurrency, async (row) => {
     const bucket = getBucket();
     if (dryRun) {
-      const exists = await frame0DerivativesExist(row.r2Key, bucket).catch(() => false);
+      const exists = !force && (await frame0DerivativesExist(row.r2Key, bucket).catch(() => false));
       console.log(
         `  would ${exists ? 'refresh-db' : 'extract'} post=${row.postId} key=${row.r2Key}`
       );
       return exists ? ('skipped' as const) : ('ok' as const);
     }
     try {
-      const existed = await frame0DerivativesExist(row.r2Key, bucket);
-      const ready = await processFrame0({
-        postId: row.postId,
-        r2Bucket: bucket,
-        r2Key: row.r2Key,
-        source: 'backfill',
-        requestedOutputs: 'frame0',
-        mediaPath: row.mediaPath,
-        requestedBy: 'frame0-backfill-cli',
-        requestedAt: new Date().toISOString(),
-      });
+      const existed = !force && (await frame0DerivativesExist(row.r2Key, bucket));
+      const ready = await processFrame0(
+        {
+          postId: row.postId,
+          r2Bucket: bucket,
+          r2Key: row.r2Key,
+          source: 'backfill',
+          requestedOutputs: 'frame0',
+          mediaPath: row.mediaPath,
+          requestedBy: 'frame0-backfill-cli',
+          requestedAt: new Date().toISOString(),
+        },
+        { force }
+      );
       console.log(
         `  ${existed ? 'refreshed' : 'ready'} post=${row.postId} outputs=${ready.outputs.length} thumb=${ready.thumbPath}`
       );

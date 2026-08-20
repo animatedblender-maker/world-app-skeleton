@@ -101,13 +101,14 @@ enum MediaURLResolver {
         return imageURL(for: post)
     }
 
-    /// Prefer server `frame0_*.webp` / media JSON `posters.512` (true t=0 pixels).
+    /// Prefer server `frame0_*.webp` / media JSON `posters` (true t=0 pixels, same aspect as film).
     static func frame0PosterURL(for post: CountryPost) -> URL? {
-        if let thumb = resolve(post.thumbURL), !isVideoURL(thumb), looksLikeFrame0Poster(thumb) {
-            return thumb
-        }
+        // Prefer embedded ladder (1080 → 512 → 256) when present — same aspect, sharper on Sparks.
         if let embedded = embeddedFrame0PosterURL(from: post.mediaURL) {
             return embedded
+        }
+        if let thumb = resolve(post.thumbURL), !isVideoURL(thumb), looksLikeFrame0Poster(thumb) {
+            return thumb
         }
         return nil
     }
@@ -121,6 +122,7 @@ enum MediaURLResolver {
     }
 
     /// media_url JSON may include `posters: { "256"|"512"|"1080": url }` after MediaReady.
+    /// Prefer larger Frame 0 so aspect/pixels match the film (1080 → 512 → 256).
     static func embeddedFrame0PosterURL(from mediaURL: String?) -> URL? {
         guard let raw = mediaURL?.trimmingCharacters(in: .whitespacesAndNewlines),
               raw.hasPrefix("{"),
@@ -128,7 +130,7 @@ enum MediaURLResolver {
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
         if let posters = obj["posters"] as? [String: Any] {
-            for key in ["512", "1080", "256"] {
+            for key in ["1080", "512", "256"] {
                 if let s = posters[key] as? String, let u = resolve(s), !isVideoURL(u) {
                     return u
                 }
