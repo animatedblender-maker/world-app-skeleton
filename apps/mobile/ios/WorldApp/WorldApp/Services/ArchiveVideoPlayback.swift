@@ -522,8 +522,8 @@ struct MatteryaHubPlayerView: View {
                         .frame(width: 42, alignment: .trailing)
                 }
                 .padding(.horizontal, 16)
-                // Stay inside the 16:9 stage — social actions sit under the feed card.
-                .padding(.bottom, 10)
+                // Timeline sits in bottomChromeReserve under the film (fully visible).
+                .padding(.bottom, 14)
                 .padding(.top, 18)
                 .background(
                     LinearGradient(

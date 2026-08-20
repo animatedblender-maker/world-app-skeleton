@@ -47,6 +47,16 @@ enum FacebookMediaLayout {
         return min(max(h, minFeedMediaHeight), maxFeedMediaHeight)
     }
 
+    /// On-film timeline strip under the 16:9 picture (scrubber must not crop the film).
+    static let hubFeedChromeReserve: CGFloat = 56
+
+    /// Full Hubs feed stage = 16:9 film + timeline reserve. Social actions sit under this.
+    static func hubFeedStageHeight(
+        forWidth width: CGFloat = UIScreen.main.bounds.width
+    ) -> CGFloat {
+        hubFeedVideoHeight(forWidth: width) + hubFeedChromeReserve
+    }
+
     /// Clamp aspect ratios so a bad media metadata value can't blow out the card.
     static func clampedAspect(_ aspect: CGFloat) -> CGFloat {
         guard aspect.isFinite, aspect > 0.05 else { return photoPortraitAspect }

@@ -107,51 +107,12 @@ struct VideoPlayerView: View {
     }
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .bottom) {
             softVideoFloor
 
-            // Single film box — fill the card; chrome overlays centered on the picture.
-            ZStack {
-                if let posterURL {
-                    CachedAsyncImage(
-                        url: posterURL,
-                        maxPixelSize: 900,
-                        contentMode: fillsFrame ? .fill : .fit,
-                        placeholder: AnyView(softVideoFloor)
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipped()
-                    .allowsHitTesting(false)
-                }
-
-                if shouldShowAd, let placement {
-                    AdPrerollView(
-                        placement: placement,
-                        countryCode: countryCode,
-                        contentCountryCode: contentCountryCode,
-                        postID: postID,
-                        onComplete: { adFinished = true }
-                    )
-                } else if let player {
-                    MatteryaVideoSurface(player: player, fillsFrame: fillsFrame)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .clipped()
-                        .opacity(shouldShowPosterCover ? 0.01 : 1)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            guard showsControls else { return }
-                            withAnimation(.easeInOut(duration: 0.18)) {
-                                showChrome.toggle()
-                            }
-                            scheduleChromeHide()
-                        }
-                } else if loadFailed {
-                    unavailableState
-                } else if posterURL == nil {
-                    ProgressView().tint(Theme.accentBright)
-                }
-
-                if shouldShowPosterCover {
+            // Film on top; optional bottom reserve so timeline never crops the picture.
+            VStack(spacing: 0) {
+                ZStack {
                     if let posterURL {
                         CachedAsyncImage(
                             url: posterURL,
@@ -162,14 +123,62 @@ struct VideoPlayerView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .clipped()
                         .allowsHitTesting(false)
-                    } else {
-                        softVideoFloor
-                            .allowsHitTesting(false)
                     }
+
+                    if shouldShowAd, let placement {
+                        AdPrerollView(
+                            placement: placement,
+                            countryCode: countryCode,
+                            contentCountryCode: contentCountryCode,
+                            postID: postID,
+                            onComplete: { adFinished = true }
+                        )
+                    } else if let player {
+                        MatteryaVideoSurface(player: player, fillsFrame: fillsFrame)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .clipped()
+                            .opacity(shouldShowPosterCover ? 0.01 : 1)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                guard showsControls else { return }
+                                withAnimation(.easeInOut(duration: 0.18)) {
+                                    showChrome.toggle()
+                                }
+                                scheduleChromeHide()
+                            }
+                    } else if loadFailed {
+                        unavailableState
+                    } else if posterURL == nil {
+                        ProgressView().tint(Theme.accentBright)
+                    }
+
+                    if shouldShowPosterCover {
+                        if let posterURL {
+                            CachedAsyncImage(
+                                url: posterURL,
+                                maxPixelSize: 900,
+                                contentMode: fillsFrame ? .fill : .fit,
+                                placeholder: AnyView(softVideoFloor)
+                            )
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .clipped()
+                            .allowsHitTesting(false)
+                        } else {
+                            softVideoFloor
+                                .allowsHitTesting(false)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                if bottomChromeReserve > 0 {
+                    Color.black
+                        .frame(height: bottomChromeReserve)
+                        .allowsHitTesting(false)
                 }
             }
 
-            // Transport overlays the film — play centered, scrubber on bottom edge.
+            // Transport overlays the stage — scrubber sits in the reserve / bottom edge.
             if shouldShowChrome {
                 ZStack {
                     Color.clear
@@ -1668,8 +1677,8 @@ private struct MatteryaVideoControls: View {
                         .frame(width: 42, alignment: .trailing)
                 }
                 .padding(.horizontal, 14)
-                // Keep scrubber inside the 16:9 film — social actions sit under the card (Sparks-like).
-                .padding(.bottom, isFullscreen ? 0 : 10)
+                // Sit in the chrome reserve under the 16:9 film (not cropped, not on social row).
+                .padding(.bottom, isFullscreen ? 0 : 14)
                 .padding(.top, 10)
                 .safeAreaPadding(.bottom, isFullscreen ? 10 : 0)
                 .background(
