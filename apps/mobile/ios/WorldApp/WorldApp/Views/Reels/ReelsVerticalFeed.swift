@@ -377,10 +377,11 @@ struct ReelsPagerCard: View {
                     handleSingleTapPause()
                 }
 
+            // Fullscreen fill: inset more so capsule ends never sit under pager edge-clip.
             sparkDock
-                .padding(.horizontal, 16)
+                .padding(.horizontal, useFill ? 20 : 16)
                 .padding(.bottom, max(10, bottomInset - 4))
-                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .bottom)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // Film + chrome draw under the Dynamic Island; top chrome is overlaid separately.
@@ -600,60 +601,62 @@ struct ReelsPagerCard: View {
         }
     }
 
-    /// Frosted paper dock — same Matterya card, translucent so film stays immersive.
+    /// Meta card + action chips. Actions sit *outside* the frosted rounded card so
+    /// fullscreen aspectFill never slices capsule ends against the card’s corner clip.
     private var sparkDock: some View {
         VStack(alignment: .leading, spacing: 8) {
-            authorRow
+            VStack(alignment: .leading, spacing: 8) {
+                authorRow
 
-            if let text = post.sparkDisplayCaption, !text.isEmpty {
-                Text(text)
-                    .font(.system(.subheadline, design: .serif))
-                    .foregroundStyle(Theme.paper.opacity(0.94))
-                    .shadow(color: Theme.ink.opacity(0.45), radius: 6, y: 1)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
+                if let text = post.sparkDisplayCaption, !text.isEmpty {
+                    Text(text)
+                        .font(.system(.subheadline, design: .serif))
+                        .foregroundStyle(Theme.paper.opacity(0.94))
+                        .shadow(color: Theme.ink.opacity(0.45), radius: 6, y: 1)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if isActive {
+                    SparksTimelineBar(
+                        currentSeconds: progressSeconds,
+                        durationSeconds: durationSeconds,
+                        isScrubbing: $isScrubbingTimeline,
+                        onSeek: { seconds in
+                            progressSeconds = seconds
+                            seekToSeconds = seconds
+                        }
+                    )
+                }
             }
-
-            // Timeline sits *above* Like / Chat / Keep / Send (not under the actions).
-            if isActive {
-                SparksTimelineBar(
-                    currentSeconds: progressSeconds,
-                    durationSeconds: durationSeconds,
-                    isScrubbing: $isScrubbingTimeline,
-                    onSeek: { seconds in
-                        progressSeconds = seconds
-                        seekToSeconds = seconds
-                    }
-                )
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .environment(\.colorScheme, .dark)
             }
+            .background {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Theme.paper.opacity(0.14))
+            }
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(Theme.paper.opacity(0.22), lineWidth: 0.5)
+            )
 
-            // Action ribbon — must never overflow the card (overflow was slicing L/R capsules).
+            // Outside the material card — equal chips, full rounded ends always visible.
             sparkActionsRow
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 10)
-        .padding(.bottom, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(.ultraThinMaterial)
-                .environment(\.colorScheme, .dark)
-        }
-        .background {
-            // Warm paper wash — Matterya, not pure iOS glass.
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Theme.paper.opacity(0.14))
-        }
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Theme.paper.opacity(0.22), lineWidth: 0.5)
-        )
-        .shadow(color: Theme.ink.opacity(0.22), radius: 6, y: 5)
+        .shadow(color: Theme.ink.opacity(0.18), radius: 6, y: 4)
     }
 
-    /// Like / Chat / Keep / Send — equal flexible chips; compact counts so capsules aren’t sliced.
+    /// Like / Chat / Keep / Send — flexible chips inside a known max width (see GeometryReader).
     private var sparkActionsRow: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 6) {
             sparkAction(
                 icon: post.likedByMe ? "heart.fill" : "heart",
                 label: post.likeCount > 0 ? Self.compactCount(post.likeCount) : "Like",
@@ -710,25 +713,33 @@ struct ReelsPagerCard: View {
         Button(action: action) {
             HStack(spacing: 3) {
                 Image(systemName: icon)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 12, weight: .semibold))
                     .scaleEffect(scale)
                 Text(label)
                     .font(.caption2.weight(.bold))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.65)
+                    .minimumScaleFactor(0.6)
                     .allowsTightening(true)
             }
             .foregroundStyle(accent)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
             .frame(maxWidth: .infinity)
-            .background(Theme.paper.opacity(0.12), in: Capsule())
-            .overlay(Capsule().stroke(Theme.paper.opacity(0.14), lineWidth: 0.5))
-            // Clip label/icon to the capsule — never bleed past the chip edge.
-            .clipShape(Capsule())
+            .background {
+                Capsule(style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .environment(\.colorScheme, .dark)
+            }
+            .background {
+                Capsule(style: .continuous)
+                    .fill(Theme.paper.opacity(0.14))
+            }
+            .overlay(
+                Capsule(style: .continuous)
+                    .stroke(Theme.paper.opacity(0.22), lineWidth: 0.5)
+            )
         }
         .buttonStyle(.plain)
-        .layoutPriority(0)
     }
 
     /// 12487 → "12.5K" so four/five chips fit without side-slicing.
@@ -876,12 +887,14 @@ struct ReelsPagerCard: View {
                             .foregroundStyle(Theme.paper)
                             .shadow(color: Theme.ink.opacity(0.4), radius: 4, y: 1)
                             .lineLimit(1)
+                            .truncationMode(.tail)
                         HStack(spacing: 6) {
                             if let handle = post.author?.username, !handle.isEmpty {
                                 Text("@\(handle)")
                                     .font(.caption2.weight(.medium))
                                     .foregroundStyle(Theme.paper.opacity(0.7))
                                     .lineLimit(1)
+                                    .truncationMode(.tail)
                             }
                             if post.countryCode != nil || post.countryName != nil {
                                 Text("·")
@@ -891,19 +904,24 @@ struct ReelsPagerCard: View {
                                     .font(.caption2.weight(.medium))
                                     .foregroundStyle(Theme.paper.opacity(0.65))
                                     .lineLimit(1)
+                                    .truncationMode(.tail)
                             }
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             .buttonStyle(.plain)
-
-            Spacer(minLength: 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(0)
 
             if post.authorID != appState.currentProfile?.userID, !post.authorID.isEmpty {
                 FollowButton(userID: post.authorID, compact: true, onDark: true)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(1)
             }
         }
+        .frame(maxWidth: .infinity)
     }
 
     private func toggleSave() async {

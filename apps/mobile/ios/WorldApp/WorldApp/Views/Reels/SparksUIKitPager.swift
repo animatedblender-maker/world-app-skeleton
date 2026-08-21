@@ -133,6 +133,8 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         // Prefetch cells so configure + warm-pool claim happen before the page lands.
         cv.isPrefetchingEnabled = true
         cv.prefetchDataSource = self
+        // Fullscreen fill Sparks: don't slice dock chips that draw near the page edge.
+        cv.clipsToBounds = false
         return cv
     }()
 
