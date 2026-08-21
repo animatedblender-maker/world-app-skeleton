@@ -289,8 +289,21 @@ struct ReelsPagerCard: View {
     @State private var videoNaturalSize: CGSize = .zero
     /// Locked after first real size so gravity does not thrash mid-play.
     @State private var gravityLocked = false
-    /// Start as fill (most Sparks are vertical + covers notch); may drop to fit for wide clips.
-    @State private var useFill = true
+    /// Optimistic gravity before `onVideoSize`. Default **fit** so landscape ShortForm never
+    /// mounts zoom-cropped (clips the bottom dock). `onAppear` / size callback may switch to fill
+    /// for true vertical TikTok packs.
+    @State private var useFill: Bool = false
+
+    /// Prefer fit until measured when the pack is likely landscape (ShortForm / wide DAR).
+    private var prefersFillUntilMeasured: Bool {
+        let blobs = [post.mediaURL, post.thumbURL, post.primaryMediaURL, post.linkURL]
+            .compactMap { $0?.lowercased() }
+            .joined(separator: " ")
+        // YouTube ShortForm on R2 is frequently 16:9 / 4:3 — never optimistic-fill those.
+        if blobs.contains("shortform/") { return false }
+        if blobs.contains("/longform/") { return false }
+        return true
+    }
 
     /// Sparks vertical player: always start at 0 on focus (instant TikTok-style sessions).
     /// Feed→Sparks handoff still continues mid-clip via SparkWarmPool continue flag + claim.
@@ -333,11 +346,18 @@ struct ReelsPagerCard: View {
         guard size.width > 2, size.height > 2 else { return }
         if gravityLocked { return }
         videoNaturalSize = size
+        // Always re-evaluate from real pixels — never keep an optimistic zoom.
         useFill = SparksStageLayout.shouldFillWithoutCrop(
             videoSize: size,
             stageSize: SparksStageLayout.physicalScreenSize
         )
         gravityLocked = true
+    }
+
+    private func resetGravityForCurrentPost() {
+        videoNaturalSize = .zero
+        gravityLocked = false
+        useFill = prefersFillUntilMeasured
     }
 
     var body: some View {
@@ -386,6 +406,10 @@ struct ReelsPagerCard: View {
             }
         }
         .onAppear {
+            // ShortForm must not mount already zoom-cropped (landscape packs).
+            if !gravityLocked {
+                useFill = prefersFillUntilMeasured
+            }
             if let url = sparkPlayURL {
                 SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
             }
@@ -397,9 +421,7 @@ struct ReelsPagerCard: View {
             isScrubbingTimeline = false
             isPaused = false
             hidePauseGlyph(animated: false)
-            videoNaturalSize = .zero
-            gravityLocked = false
-            useFill = true
+            resetGravityForCurrentPost()
             if let url = sparkPlayURL {
                 SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
             }

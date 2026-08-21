@@ -60,16 +60,17 @@ enum SparksStageLayout {
     static let maxLandscapeCropFraction: CGFloat = 0.12
 
     static func shouldFillWithoutCrop(videoSize: CGSize, stageSize: CGSize) -> Bool {
-        // Optimistic fill until size is known (vertical Sparks + notch coverage).
+        // Unknown size: caller decides optimistic default (ShortForm → fit, TikTok → fill).
         guard videoSize.width > 2, videoSize.height > 2 else { return true }
         guard stageSize.width > 2, stageSize.height > 2 else { return true }
 
-        // Portrait / near-square — same as Facebook Reels: always fill the stage.
-        if videoSize.height >= videoSize.width * 0.92 {
+        // True portrait (taller than wide) — fill the stage (TikTok / Reels).
+        // Require clear portrait so 4:3 / 16:9 ShortForm never zoom-crops the dock.
+        if videoSize.height > videoSize.width * 1.05 {
             return true
         }
 
-        // Landscape / wide: fill only when it barely crops.
+        // Landscape / square / 4:3: fill only when crop is tiny.
         let scaleFit = min(stageSize.width / videoSize.width, stageSize.height / videoSize.height)
         let scaleFill = max(stageSize.width / videoSize.width, stageSize.height / videoSize.height)
         guard scaleFill > 0.0001 else { return false }
