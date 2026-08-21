@@ -89,6 +89,7 @@ import {
   handleFrame0Status,
   handleFrame0Run,
 } from './ops/ops-page.js';
+import { handlePosterBatch, handlePosterGet } from './media/poster-route.js';
 import { kafkaEnabled } from './kafka/config.js';
 
 type AuthedUser = {
@@ -314,6 +315,7 @@ app.get('/health', (_req: Request, res: Response) =>
       contentPipeline: true,
       contentPipelinePage: true,
       r2PlaybackResolve: true,
+      r2PosterResolve: true,
       recsysRank: true,
       recsysWarehouse: true,
       hubsSlugShelves: true,
@@ -325,6 +327,16 @@ app.get('/health', (_req: Request, res: Response) =>
     contentPipeline: getPipelineStatus(),
   })
 );
+
+// ─── Instant Frame 0 posters from R2 pack path ───────────────────────────────
+// GET  /v1/poster/:postId  → { url, key }   (…/frame0_512.webp signed)
+// POST /v1/poster/batch    → { posters: { [postId]: url } }
+app.get('/v1/poster/:postId', (req, res) => {
+  void handlePosterGet(req, res);
+});
+app.post('/v1/poster/batch', (req, res) => {
+  void handlePosterBatch(req, res);
+});
 
 // ─── Live R2 playback (never serve a dead signed URL) ─────────────────────────
 // GET /v1/playback/:postId → { url, media_url, r2_key }

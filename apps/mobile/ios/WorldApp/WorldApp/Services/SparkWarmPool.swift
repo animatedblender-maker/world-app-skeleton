@@ -107,16 +107,27 @@ final class SparkWarmPool {
                     }
                 }
             }
+            let band = Array(posts[resolveLo..<resolveHi])
             ImageCache.shared.prefetchPostThumbnails(
-                Array(posts[resolveLo..<resolveHi]),
+                band,
                 maxPixelSize: 360,
                 aggressive: !MediaBudget.isConstrained
             )
-            // Client Frame 0 for the same band — swipe must not land on black.
-            for post in posts[resolveLo..<resolveHi] {
-                let url = post.playableVideoURL ?? MediaURLResolver.videoURL(for: post)
-                guard let url else { continue }
-                Task { _ = await VideoFrameCache.shared.image(for: post.id, videoURL: url) }
+            // Instant Frame 0 via R2 pack path (one batch round-trip), then ImageCache.
+            Task {
+                let ids = band.map(\.id)
+                await Frame0PosterResolver.shared.prefetch(postIDs: ids)
+                var urls: [URL] = []
+                for id in ids {
+                    if let u = await Frame0PosterResolver.shared.posterURL(postID: id) {
+                        urls.append(u)
+                    }
+                }
+                if !urls.isEmpty {
+                    await MainActor.run {
+                        ImageCache.shared.prefetch(urls, maxPixelSize: 512)
+                    }
+                }
             }
         }
 

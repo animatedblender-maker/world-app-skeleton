@@ -81,11 +81,22 @@ struct FrameZeroFallbackPoster: View {
     var fillsFrame: Bool = true
 
     @State private var frameImage: UIImage?
+    @State private var remotePosterURL: URL?
 
     var body: some View {
         ZStack {
             Color.black
-            if let frameImage {
+            // Instant path: signed …/frame0_512.webp from R2 pack slug (server-derived).
+            if let remotePosterURL {
+                CachedAsyncImage(
+                    url: remotePosterURL,
+                    maxPixelSize: 720,
+                    contentMode: fillsFrame ? .fill : .fit,
+                    placeholder: AnyView(Color.clear)
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+            } else if let frameImage {
                 Image(uiImage: frameImage)
                     .resizable()
                     .aspectRatio(contentMode: fillsFrame ? .fill : .fit)
@@ -94,6 +105,12 @@ struct FrameZeroFallbackPoster: View {
             }
         }
         .task(id: "\(postID)|\(videoURL.absoluteString)") {
+            // 1) Pack-path Frame 0 (instant when object exists).
+            if let signed = await Frame0PosterResolver.shared.posterURL(postID: postID) {
+                remotePosterURL = signed
+                return
+            }
+            // 2) Client t=0 extract only if R2 poster missing.
             frameImage = await VideoFrameCache.shared.image(for: postID, videoURL: videoURL)
         }
     }
