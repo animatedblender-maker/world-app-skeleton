@@ -569,18 +569,19 @@ struct ReelsPagerCard: View {
             }
             .allowsHitTesting(false)
 
-            // Soft off-white gold play — fades in, holds briefly, fades out & disappears.
-            // No glow. Video stays frozen underneath while paused.
-            Image(systemName: "play.fill")
+            // Soft off-white gold — pause icon when pausing, play icon when resuming.
+            // Fades in, holds briefly, fades out (same color as before).
+            Image(systemName: isPaused ? "pause.fill" : "play.fill")
                 .font(.system(size: 64, weight: .semibold))
                 .foregroundStyle(
                     Color(red: 0.96, green: 0.93, blue: 0.86).opacity(0.72)
                 )
-                .offset(x: 3) // optical center for play triangle
+                .offset(x: isPaused ? 0 : 3) // optical center for play triangle only
                 .opacity(showPauseGlyph ? 1 : 0)
                 .scaleEffect(showPauseGlyph ? 1 : 0.92)
                 .allowsHitTesting(false)
                 .animation(.easeInOut(duration: 0.22), value: showPauseGlyph)
+                .animation(nil, value: isPaused)
 
             if showLikeBurst {
                 Image(systemName: "heart.fill")
@@ -803,15 +804,12 @@ struct ReelsPagerCard: View {
 
     private func togglePause() {
         isPaused.toggle()
-        if isPaused {
-            flashPauseGlyph()
-        } else {
-            hidePauseGlyph(animated: true)
-        }
+        // Pause → show pause glyph; play → show play glyph (same flash style).
+        flashTransportGlyph()
     }
 
-    /// Fade play glyph in, hold a beat, then fade out and disappear (pause state remains).
-    private func flashPauseGlyph() {
+    /// Fade transport glyph in, hold a beat, then fade out.
+    private func flashTransportGlyph() {
         pauseGlyphTask?.cancel()
         withAnimation(.easeInOut(duration: 0.2)) {
             showPauseGlyph = true
