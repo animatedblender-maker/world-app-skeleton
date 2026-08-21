@@ -648,20 +648,22 @@ struct ReelsPagerCard: View {
         .padding(.bottom, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
+            // Very light frost — film stays readable through the dock (TikTok-style).
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(.ultraThinMaterial)
                 .environment(\.colorScheme, .dark)
+                .opacity(0.42)
         }
         .background {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Theme.paper.opacity(0.14))
+                .fill(Theme.ink.opacity(0.18))
         }
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Theme.paper.opacity(0.22), lineWidth: 0.5)
+                .stroke(Theme.paper.opacity(0.12), lineWidth: 0.5)
         )
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .shadow(color: Theme.ink.opacity(0.18), radius: 6, y: 4)
+        .shadow(color: Theme.ink.opacity(0.10), radius: 5, y: 3)
     }
 
     /// Like / Chat / Keep / Send — flexible chips inside a known max width (see GeometryReader).
@@ -739,14 +741,15 @@ struct ReelsPagerCard: View {
                 Capsule(style: .continuous)
                     .fill(.ultraThinMaterial)
                     .environment(\.colorScheme, .dark)
+                    .opacity(0.35)
             }
             .background {
                 Capsule(style: .continuous)
-                    .fill(Theme.paper.opacity(0.14))
+                    .fill(Theme.ink.opacity(0.22))
             }
             .overlay(
                 Capsule(style: .continuous)
-                    .stroke(Theme.paper.opacity(0.22), lineWidth: 0.5)
+                    .stroke(Theme.paper.opacity(0.14), lineWidth: 0.5)
             )
         }
         .buttonStyle(.plain)
