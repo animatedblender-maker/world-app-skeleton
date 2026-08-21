@@ -102,13 +102,14 @@ services:
         value: matterya-sparks
       - key: R2_ENDPOINT
         sync: false
-      # Zero-worker Frame 0: CLI backfill + client upload (no permanent ffmpeg consumer).
+      # Zero-worker Frame 0: no permanent Kafka ffmpeg consumer.
+      # New posts get Frame 0 inline in the content pipeline; Ops/CLI --all backfills the rest.
       - key: FRAME0_ZERO_WORKER
         value: "true"
       - key: MEDIA_WORKER_INPROCESS
         value: "false"
 
-  # Frame 0 backfill: run on Mac/CI — npm run media:frame0-backfill (see docs/MEDIA_FRAME0.md).
+  # Frame 0 backlog: npm run media:frame0-backfill -- --all (see docs/MEDIA_FRAME0.md).
   # Do not add a paid Background Worker for Frame 0.
 
   # Every 6h: discover new R2 packs, create owned Sparks + feed shares, re-sign URLs.

@@ -59,6 +59,12 @@ export type PipelineOptions = {
   resignOnly?: boolean;
   /** Only discover/ingest (skip resign) */
   ingestOnly?: boolean;
+  /**
+   * Extract Frame 0 posters inline when creating new catalog posts.
+   * Default: true (no permanent worker — ffmpeg runs in this pipeline process).
+   * Set false to skip (legacy CLI-only Frame 0).
+   */
+  frame0Inline?: boolean;
 };
 
 export type PipelineStats = {
@@ -67,6 +73,9 @@ export type PipelineStats = {
   discovered: number;
   insertedOriginals: number;
   insertedShares: number;
+  /** Frame 0 posters extracted during this ingest tick */
+  frame0Done: number;
+  frame0Failed: number;
   /** Share bodies rewritten to real R2 meta captions */
   repairedCaptions: number;
   /** Posts whose comment threads were expanded from full R2 comments.json */

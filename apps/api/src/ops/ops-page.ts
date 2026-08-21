@@ -291,8 +291,9 @@ function opsHtml(activeTab: 'overview' | 'pipeline' | 'frame0'): string {
         <span class="pill ${st.running ? 'run' : 'ok'}" id="ovPipe">Pipeline ${st.running ? 'running…' : 'idle'}</span>
         <span class="pill" id="ovF0">Frame 0 …</span>
         <p class="muted" style="margin-top:12px">
-          <strong>Pipeline</strong> discovers R2 packs → owned posts + feed/hub shares.<br/>
-          <strong>Frame 0</strong> extracts the first video frame → WebP posters on R2 + <code>thumb_url</code> (no black cold-start).
+          <strong>Pipeline</strong> discovers <em>all</em> new R2 packs → owned posts + feed/hub shares
+          <em>and</em> extracts Frame 0 posters inline (no permanent worker).<br/>
+          <strong>Frame 0</strong> tab is for backfilling older posts that still lack posters.
         </p>
       </div>
       <div class="two">
@@ -313,10 +314,10 @@ function opsHtml(activeTab: 'overview' | 'pipeline' | 'frame0'): string {
         <div class="card">
           <strong>What to do</strong>
           <ul class="help">
-            <li>New videos on R2? → <em>Pipeline → Run now</em></li>
-            <li>Black screens / missing posters? → <em>Frame 0 → Backfill ALL</em></li>
+            <li>New videos on R2? → <em>Pipeline → Run now</em> (unlimited + Frame 0 on each new post)</li>
+            <li>Old posts still black? → <em>Frame 0 → Backfill ALL</em></li>
             <li>Expired play links? → <em>Pipeline → Re-sign URLs</em></li>
-            <li>Progress page auto-refreshes every 2s while a batch runs</li>
+            <li>Both tabs auto-refresh while work runs</li>
           </ul>
           <p class="meta" id="ovMeta"></p>
         </div>
@@ -329,7 +330,10 @@ function opsHtml(activeTab: 'overview' | 'pipeline' | 'frame0'): string {
         <span class="pill ${st.r2Configured ? 'ok' : 'bad'}">R2 ${st.r2Configured ? 'ready' : 'missing env'}</span>
         <span class="pill ${st.kafkaEnabled ? 'ok' : ''}">Kafka ${st.kafkaEnabled ? 'on' : 'off (inline)'}</span>
         <span class="pill ${st.running ? 'run' : 'ok'}" id="pipePill">Pipeline ${st.running ? 'running…' : 'idle'}</span>
-        <p class="muted" style="margin-top:10px">Pulls Sparks (TikTok + ShortForm) and LongForm (Hubs) from R2 into Supabase as owned posts + shares.</p>
+        <p class="muted" style="margin-top:10px">
+          Floods <strong>all</strong> new Sparks (TikTok + ShortForm) and LongForm (Hubs) from R2 into Supabase,
+          creates feed/hub shares, and extracts <strong>Frame 0</strong> posters in the same run.
+        </p>
       </div>
       <div class="card">
         <strong>Run pipeline</strong>
@@ -792,8 +796,9 @@ export async function handlePipelineRunStream(req: Request, res: Response): Prom
     const stats = await runPipelineNow({
       dryRun,
       resignOnly,
-      maxResign: 2000,
+      // Unlimited originals / shares / resigns; Frame 0 inline on each new post.
       maxMs: 0,
+      frame0Inline: true,
       source: 'ops-ui-stream',
     });
     send({ done: true, ok: !!stats.ok, stats });

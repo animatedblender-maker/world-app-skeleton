@@ -84,7 +84,10 @@ FRAME0_ZERO_WORKER=true
 MEDIA_WORKER_INPROCESS=false
 ```
 
-With `FRAME0_ZERO_WORKER=true`, catalog ingest **does not** enqueue Kafka Frame 0 jobs (run CLI periodically or after big R2 imports).
+With `FRAME0_ZERO_WORKER=true`, catalog ingest **does not** enqueue a Kafka media worker.
+Instead the **content pipeline extracts Frame 0 inline** when it creates each new post
+(Ops → Pipeline → Run now / cron). Use the Frame 0 tab / CLI `--all` only to backfill
+older posts that still lack posters.
 
 ---
 

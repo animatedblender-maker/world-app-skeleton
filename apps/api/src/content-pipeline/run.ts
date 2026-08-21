@@ -1,7 +1,7 @@
 import type { S3Client } from '@aws-sdk/client-s3';
 import { pool } from '../db.js';
 import { emitContentPosted } from '../engagement/engagement.service.js';
-import { enqueueMediaProcessJob } from '../media/enqueue.js';
+import { processFrame0 } from '../media/frame0.js';
 import {
   createR2Client,
   discoverPacks,
@@ -34,6 +34,8 @@ function emptyStats(dryRun: boolean): PipelineStats {
     discovered: 0,
     insertedOriginals: 0,
     insertedShares: 0,
+    frame0Done: 0,
+    frame0Failed: 0,
     repairedCaptions: 0,
     repairedComments: 0,
     skippedNoOwner: 0,
@@ -66,10 +68,17 @@ export async function runContentPipeline(opts: PipelineOptions = {}): Promise<Pi
     opts.maxShares != null && Number.isFinite(opts.maxShares) && opts.maxShares > 0
       ? opts.maxShares
       : Number.POSITIVE_INFINITY;
-  const maxResign = opts.maxResign ?? 500;
+  // Unlimited resigns by default (same flood philosophy as originals/shares).
+  // Cap SQL LIMIT at 1e6 so Postgres never sees Infinity.
+  const maxResign =
+    opts.maxResign != null && Number.isFinite(opts.maxResign) && opts.maxResign > 0
+      ? opts.maxResign
+      : 1_000_000;
   // 0 / unset = no time budget (keep going until all new packs are in).
   const maxMs =
     opts.maxMs != null && Number.isFinite(opts.maxMs) && opts.maxMs > 0 ? opts.maxMs : 0;
+  /** Inline Frame 0 on every new post (default on — no permanent Kafka media worker). */
+  const frame0Inline = opts.frame0Inline !== false;
   const stats = emptyStats(dryRun);
 
   const timedOut = () => maxMs > 0 && Date.now() - started > maxMs;
@@ -80,7 +89,7 @@ export async function runContentPipeline(opts: PipelineOptions = {}): Promise<Pi
     'step'
   );
   pipelineLog(
-    `Limits: maxOriginals=${Number.isFinite(maxOriginals) ? maxOriginals : 'ALL'} maxShares=${Number.isFinite(maxShares) ? maxShares : 'ALL'} maxResign=${maxResign} maxMs=${maxMs || 'none'}`,
+    `Limits: maxOriginals=${Number.isFinite(maxOriginals) ? maxOriginals : 'ALL'} maxShares=${Number.isFinite(maxShares) ? maxShares : 'ALL'} maxResign=${maxResign >= 1_000_000 ? 'ALL' : maxResign} maxMs=${maxMs || 'none'} · frame0Inline=${frame0Inline}`,
     'info'
   );
 
@@ -205,6 +214,8 @@ export async function runContentPipeline(opts: PipelineOptions = {}): Promise<Pi
           categoryId,
           dryRun,
           owners: poolOwners,
+          frame0Inline: frame0Inline && !dryRun,
+          stats,
         });
         if (result === 'ok' || result === 'ok_shared') {
           stats.insertedOriginals += 1;
@@ -321,7 +332,7 @@ export async function runContentPipeline(opts: PipelineOptions = {}): Promise<Pi
   }
   pipelineLog('──────────────────────────────────────', 'step');
   pipelineLog(
-    `DONE ok=${stats.ok} · discovered=${stats.discovered} · originals=+${stats.insertedOriginals} · shares=+${stats.insertedShares} · captionsFixed=${stats.repairedCaptions} · commentsFixed=${stats.repairedComments} · resigned=${stats.resigned} · noOwner=${stats.skippedNoOwner} · existing=${stats.skippedExisting} · ${stats.ms}ms`,
+    `DONE ok=${stats.ok} · discovered=${stats.discovered} · originals=+${stats.insertedOriginals} · shares=+${stats.insertedShares} · frame0=+${stats.frame0Done}/fail=${stats.frame0Failed} · captionsFixed=${stats.repairedCaptions} · commentsFixed=${stats.repairedComments} · resigned=${stats.resigned} · noOwner=${stats.skippedNoOwner} · existing=${stats.skippedExisting} · ${stats.ms}ms`,
     stats.ok ? 'ok' : 'error'
   );
   if (stats.errors.length) {
@@ -378,9 +389,12 @@ async function ingestOriginal(
     categoryId: string | null;
     dryRun: boolean;
     owners: ProfileOwner[];
+    /** Extract Frame 0 inline after post (+ shares) exist. */
+    frame0Inline?: boolean;
+    stats?: PipelineStats;
   }
 ): Promise<'ok' | 'ok_shared' | 'incomplete' | 'skip'> {
-  const { pack, author, categoryId, dryRun, owners } = opts;
+  const { pack, author, categoryId, dryRun, owners, frame0Inline, stats } = opts;
 
   // Require video object (list already filtered by video.mp4 key presence).
   const metaRaw = await getObjectJson(client, pack.metaKey);
@@ -533,29 +547,9 @@ async function ingestOriginal(
     mediaUrl,
   });
 
-  // Frame 0: zero-worker mode skips Kafka (use CLI backfill). Else optional enqueue.
-  void enqueueMediaProcessJob({
-    postId,
-    r2Key: pack.videoKey,
-    mediaPath: pack.mediaPath,
-    source: 'catalog',
-    requestedOutputs: 'frame0',
-    requestedBy: 'content-pipeline',
-    asUploadCompleted: true,
-  }).then((r) => {
-    if (r.enqueued) {
-      pipelineLog(`  frame0 enqueued event=${r.eventId}`, 'ok');
-    } else if (
-      r.error &&
-      r.error !== 'kafka_disabled' &&
-      r.error !== 'frame0_zero_worker'
-    ) {
-      pipelineLog(`  frame0 enqueue skipped: ${r.error}`, 'warn');
-    }
-  });
-
   // Immediate feed share for density — same original caption.
   // Sparks → `__spark_share__|` (Spark card). LongForm → `__hub_origin__|` (Hubs badge + Shared from).
+  let sharedOk = false;
   if (pack.kind === 'spark') {
     const shared = await createSparkShare({
       originId: postId,
@@ -569,10 +563,8 @@ async function ingestOriginal(
       dryRun: false,
       seed: pack.mediaPath,
     });
-    return shared ? 'ok_shared' : 'ok';
-  }
-
-  if (pack.kind === 'longform') {
+    sharedOk = !!shared;
+  } else if (pack.kind === 'longform') {
     const shared = await createHubOriginShare({
       originId: postId,
       originMediaUrl: mediaUrl,
@@ -587,10 +579,32 @@ async function ingestOriginal(
       dryRun: false,
       seed: pack.mediaPath,
     });
-    return shared ? 'ok_shared' : 'ok';
+    sharedOk = !!shared;
   }
 
-  return 'ok';
+  // Frame 0 inline (zero permanent worker): extract after shares exist so thumbs propagate.
+  if (frame0Inline) {
+    try {
+      pipelineLog(`  frame0 extract…`, 'step');
+      const ready = await processFrame0({
+        postId,
+        r2Bucket: getBucket(),
+        r2Key: pack.videoKey,
+        source: 'catalog',
+        requestedOutputs: 'frame0',
+        mediaPath: pack.mediaPath,
+        requestedBy: 'content-pipeline',
+        requestedAt: new Date().toISOString(),
+      });
+      if (stats) stats.frame0Done += 1;
+      pipelineLog(`  frame0 ready thumb=${ready.thumbPath}`, 'ok');
+    } catch (err: any) {
+      if (stats) stats.frame0Failed += 1;
+      pipelineLog(`  frame0 FAILED: ${err?.message ?? err}`, 'warn');
+    }
+  }
+
+  return sharedOk ? 'ok_shared' : 'ok';
 }
 
 /**

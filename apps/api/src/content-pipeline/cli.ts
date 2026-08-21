@@ -1,8 +1,9 @@
 /**
  * Local / ops CLI:
- *   npx tsx src/content-pipeline/cli.ts              # flood ALL new R2 packs
+ *   npx tsx src/content-pipeline/cli.ts              # flood ALL new R2 packs + Frame 0
  *   npx tsx src/content-pipeline/cli.ts --dry-run
  *   npx tsx src/content-pipeline/cli.ts --resign-only
+ *   npx tsx src/content-pipeline/cli.ts --no-frame0  # skip inline Frame 0
  *   npx tsx src/content-pipeline/cli.ts --cap-40     # optional throttle
  *   npx tsx src/content-pipeline/cli.ts --timed      # 50s soft deadline
  */
@@ -29,8 +30,10 @@ const stats = await runContentPipeline({
   // undefined = ALL new packs (flood Matterya)
   maxOriginals: cap,
   maxShares: cap != null ? cap * 2 : undefined,
-  maxResign: 2000,
+  // undefined = resign ALL R2 rows that need it
+  maxResign: undefined,
   maxMs: args.has('--timed') ? 50_000 : 0,
+  frame0Inline: !args.has('--no-frame0'),
 });
 
 console.log(JSON.stringify(stats, null, 2));
