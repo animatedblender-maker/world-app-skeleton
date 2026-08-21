@@ -160,20 +160,29 @@ struct VideoPlayerView: View {
                     }
 
                     if shouldShowPosterCover {
-                        if let posterURL {
-                            CachedAsyncImage(
-                                url: posterURL,
-                                maxPixelSize: 900,
-                                contentMode: fillsFrame ? .fill : .fit,
-                                placeholder: AnyView(softVideoFloor)
-                            )
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .clipped()
-                            .allowsHitTesting(false)
-                        } else {
+                        ZStack {
                             softVideoFloor
+                            if let postID {
+                                FrameZeroFallbackPoster(
+                                    postID: postID,
+                                    videoURL: url,
+                                    fillsFrame: fillsFrame
+                                )
                                 .allowsHitTesting(false)
+                            }
+                            if let posterURL {
+                                CachedAsyncImage(
+                                    url: posterURL,
+                                    maxPixelSize: 900,
+                                    contentMode: fillsFrame ? .fill : .fit,
+                                    placeholder: AnyView(Color.clear)
+                                )
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .clipped()
+                                .allowsHitTesting(false)
+                            }
                         }
+                        .allowsHitTesting(false)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1968,14 +1977,13 @@ struct InFrameVideoPlayer: View {
         showsControls && !muteOnlyControls && playGate
     }
 
-    /// Poster / letterbox floor — remote thumb, else client Frame 0, else black.
-    /// Frame 0 extract only while `playGate` (winner) — extracting on every neighbor kills scroll.
+    /// Poster / letterbox floor — remote thumb over client Frame 0 over black.
+    /// Always extract client Frame 0 when we have a post id (shares often lack thumb_url).
     @ViewBuilder
     private var posterFloor: some View {
         ZStack {
             Color.black
-            // Client t=0 underlay while remote thumb loads / when thumb_url missing.
-            if playGate, let postID {
+            if let postID {
                 FrameZeroFallbackPoster(postID: postID, videoURL: url, fillsFrame: fillsFrame)
                     .allowsHitTesting(false)
             }

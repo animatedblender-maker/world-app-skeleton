@@ -792,15 +792,25 @@ struct FacebookPostCard: View {
         // Same poster resolve as Sparks feed card (self → shared origin → resolver).
         let poster = MediaURLResolver.posterURL(for: post)
             ?? post.sharedPost.flatMap { MediaURLResolver.posterURL(for: $0.asCountryPost) }
-        // Sparks full-player pattern: black + Frame 0 poster under film; InFrame holds until frames.
+        // Always keep a Frame 0 underlay — remote thumb can be missing/slow on shares.
+        let isHubFilm = PlayPlatformBridge.isHubFeedCardVideo(post)
+            || PlayPlatformBridge.isHubCatalogContent(post)
+            || isHubOriginShareCard
         ZStack {
             Color.black
+            FrameZeroFallbackPoster(
+                postID: post.id,
+                videoURL: url,
+                fillsFrame: !isHubFilm
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .allowsHitTesting(false)
             if let poster {
                 CachedAsyncImage(
                     url: poster,
                     maxPixelSize: 720,
-                    contentMode: .fill,
-                    placeholder: AnyView(Color.black)
+                    contentMode: isHubFilm ? .fit : .fill,
+                    placeholder: AnyView(Color.clear)
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
@@ -817,14 +827,18 @@ struct FacebookPostCard: View {
                 loops: true,
                 preferArchivePlayer: useArchivePath,
                 showsControls: true,
-                // Fill the 16:9 film; chrome overlays (play centered, scrubber on bottom edge).
-                fillsFrame: true,
+                // Hubs shares: fit (no zoom-crop). Sparks: fill the card.
+                fillsFrame: !isHubFilm,
                 bottomChromeReserve: 0,
                 autoplaySurface: autoplaySurface,
                 onViewed: { Task { await PostsService.shared.recordView(post) } }
             )
         }
         .background(Color.black)
+        .onAppear {
+            // Kick client Frame 0 before autoplay wins focus (kills black cold start).
+            Task { _ = await VideoFrameCache.shared.image(for: post.id, videoURL: url) }
+        }
     }
 
     private var actions: some View {

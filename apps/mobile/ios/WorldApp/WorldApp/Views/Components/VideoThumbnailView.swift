@@ -104,8 +104,11 @@ final class VideoFrameCache {
     static let shared = VideoFrameCache()
 
     private var memory: [String: UIImage] = [:]
-    private var inflightKeys = Set<String>()
-    private let maxConcurrent = 2
+    /// In-flight extractors — waiters join instead of returning nil (nil = black poster).
+    private var inflight: [String: Task<UIImage?, Never>] = [:]
+    private var activeCount = 0
+    private let maxConcurrent = 3
+    private var gateWaiters: [CheckedContinuation<Void, Never>] = []
     private let directoryURL: URL = {
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         return base.appendingPathComponent("VideoFrameCache", isDirectory: true)
@@ -123,43 +126,77 @@ final class VideoFrameCache {
             return disk
         }
 
-        while inflightKeys.count >= maxConcurrent {
-            try? await Task.sleep(nanoseconds: 120_000_000)
+        if let existing = inflight[key] {
+            return await existing.value
         }
-        guard !inflightKeys.contains(key) else { return nil }
-        inflightKeys.insert(key)
-        defer { inflightKeys.remove(key) }
 
-        let playback = await MediaURLResolver.playbackConfiguration(for: videoURL)
-        let playURL = playback.url
-        let headers = playback.headers
+        await acquireSlot()
+        if let cached = memory[key] {
+            releaseSlot()
+            return cached
+        }
+        if let existing = inflight[key] {
+            releaseSlot()
+            return await existing.value
+        }
 
-        // Never block MainActor with AVAssetImageGenerator (Hubs freeze root cause).
-        let image: UIImage? = await Task.detached(priority: .utility) {
-            let asset: AVURLAsset
-            if let headers {
-                asset = AVURLAsset(
-                    url: playURL,
-                    options: ["AVURLAssetHTTPHeaderFieldsKey": headers]
-                )
-            } else {
-                asset = AVURLAsset(url: playURL)
+        let task = Task<UIImage?, Never> { @MainActor in
+            defer {
+                inflight[key] = nil
+                releaseSlot()
             }
-            let generator = AVAssetImageGenerator(asset: asset)
-            generator.appliesPreferredTrackTransform = true
-            generator.maximumSize = CGSize(width: 640, height: 640)
-            generator.requestedTimeToleranceBefore = .zero
-            generator.requestedTimeToleranceAfter = CMTime(seconds: 0.25, preferredTimescale: 600)
-            guard let cgImage = try? generator.copyCGImage(at: .zero, actualTime: nil) else {
-                return nil
-            }
-            return UIImage(cgImage: cgImage)
-        }.value
+            let playback = await MediaURLResolver.playbackConfiguration(for: videoURL)
+            let playURL = playback.url
+            let headers = playback.headers
 
-        guard let image else { return nil }
-        memory[key] = image
-        saveToDisk(image: image, key: key)
-        return image
+            // Never block MainActor with AVAssetImageGenerator (Hubs freeze root cause).
+            let image: UIImage? = await Task.detached(priority: .utility) {
+                let asset: AVURLAsset
+                if let headers {
+                    asset = AVURLAsset(
+                        url: playURL,
+                        options: ["AVURLAssetHTTPHeaderFieldsKey": headers]
+                    )
+                } else {
+                    asset = AVURLAsset(url: playURL)
+                }
+                let generator = AVAssetImageGenerator(asset: asset)
+                generator.appliesPreferredTrackTransform = true
+                generator.maximumSize = CGSize(width: 720, height: 720)
+                generator.requestedTimeToleranceBefore = .zero
+                generator.requestedTimeToleranceAfter = CMTime(seconds: 0.35, preferredTimescale: 600)
+                guard let cgImage = try? generator.copyCGImage(at: .zero, actualTime: nil) else {
+                    return nil
+                }
+                return UIImage(cgImage: cgImage)
+            }.value
+
+            guard let image else { return nil }
+            memory[key] = image
+            saveToDisk(image: image, key: key)
+            return image
+        }
+        inflight[key] = task
+        return await task.value
+    }
+
+    private func acquireSlot() async {
+        if activeCount < maxConcurrent {
+            activeCount += 1
+            return
+        }
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            gateWaiters.append(cont)
+        }
+        activeCount += 1
+    }
+
+    private func releaseSlot() {
+        activeCount = max(0, activeCount - 1)
+        if !gateWaiters.isEmpty {
+            let next = gateWaiters.removeFirst()
+            next.resume()
+        }
     }
 
     private func cacheKey(postID: String, videoURL: URL) -> String {

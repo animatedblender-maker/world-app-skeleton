@@ -412,6 +412,8 @@ struct ReelsPagerCard: View {
             }
             if let url = sparkPlayURL {
                 SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
+                // Prefetch client Frame 0 before focus paint (kills black cold start).
+                Task { _ = await VideoFrameCache.shared.image(for: post.id, videoURL: url) }
             }
         }
         .onChange(of: post.id) { _, _ in

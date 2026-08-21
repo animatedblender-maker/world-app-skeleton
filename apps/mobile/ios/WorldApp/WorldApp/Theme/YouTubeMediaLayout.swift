@@ -522,6 +522,9 @@ struct PlayFeedLinkCard: View {
             .id("hub-feed-\(playPost.id)")
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.black)
+            .onAppear {
+              Task { _ = await VideoFrameCache.shared.image(for: playPost.id, videoURL: url) }
+            }
             // Open Hubs via badge; taps on film toggle chrome inside the player.
         } else {
             YouTubeVideoThumbnail(

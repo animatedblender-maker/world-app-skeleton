@@ -713,15 +713,33 @@ async function createHubOriginShare(opts: {
     if (delHits.length) return false;
   } catch { /* ignore */ }
 
+  // Copy Frame 0 thumb from origin when present (avoids black cold-start on hub shares).
+  let originThumbUrl: string | null = null;
+  let originThumbPath: string | null = null;
+  try {
+    const { rows: oThumb } = await pool.query<{
+      thumb_url: string | null;
+      thumb_path: string | null;
+    }>(`select thumb_url, thumb_path from public.posts where id = $1::uuid limit 1`, [
+      opts.originId,
+    ]);
+    originThumbUrl = oThumb[0]?.thumb_url ?? null;
+    originThumbPath = oThumb[0]?.thumb_path ?? null;
+  } catch {
+    /* ignore */
+  }
+
   const { rows } = await pool.query<{ id: string }>(
     `
     insert into public.posts
       (author_id, category_id, country_name, country_code, city_name,
        title, body, media_type, media_url, media_path, shared_post_id, visibility,
+       thumb_url, thumb_path,
        like_count, comment_count, created_at, updated_at, moderation_status)
     values
       ($1, $2, $3, $4, $5,
        $6, $7, 'video', $8, $9, $10::uuid, 'public',
+       $12, $13,
        0, 0, $11::timestamptz, $11::timestamptz, 'active')
     returning id
     `,
@@ -737,6 +755,8 @@ async function createHubOriginShare(opts: {
       sharePath,
       opts.originId,
       createdAt,
+      originThumbUrl,
+      originThumbPath,
     ]
   );
 
@@ -841,15 +861,33 @@ async function createSparkShare(opts: {
   // Fresh timestamp so the home feed (newest-first) shows this share immediately.
   const createdAt = new Date().toISOString();
 
+  // Copy Frame 0 thumb from origin when present (avoids black cold-start on spark shares).
+  let sparkThumbUrl: string | null = null;
+  let sparkThumbPath: string | null = null;
+  try {
+    const { rows: oThumb } = await pool.query<{
+      thumb_url: string | null;
+      thumb_path: string | null;
+    }>(`select thumb_url, thumb_path from public.posts where id = $1::uuid limit 1`, [
+      opts.originId,
+    ]);
+    sparkThumbUrl = oThumb[0]?.thumb_url ?? null;
+    sparkThumbPath = oThumb[0]?.thumb_path ?? null;
+  } catch {
+    /* ignore */
+  }
+
   const { rows } = await pool.query<{ id: string }>(
     `
     insert into public.posts
       (author_id, category_id, country_name, country_code, city_name,
        title, body, media_type, media_url, media_path, shared_post_id, visibility,
+       thumb_url, thumb_path,
        like_count, comment_count, created_at, updated_at, moderation_status)
     values
       ($1, $2, $3, $4, $5,
        $6, $7, 'video', $8, $9, $10::uuid, 'public',
+       $12, $13,
        0, 0, $11::timestamptz, $11::timestamptz, 'active')
     returning id
     `,
@@ -865,6 +903,8 @@ async function createSparkShare(opts: {
       sharePath,
       opts.originId,
       createdAt,
+      sparkThumbUrl,
+      sparkThumbPath,
     ]
   );
 
