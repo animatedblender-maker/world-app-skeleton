@@ -612,59 +612,55 @@ struct ReelsPagerCard: View {
         max(240, SparksStageLayout.physicalScreenSize.width - 32)
     }
 
-    /// Meta card + action chips. Width is forced by `dockWidth` in `body`.
+    /// Meta card + action chips (all inside one frosted box). Width forced by `dockWidth`.
     private var sparkDock: some View {
         VStack(alignment: .leading, spacing: 8) {
-            VStack(alignment: .leading, spacing: 8) {
-                authorRow
+            authorRow
 
-                if let text = post.sparkDisplayCaption, !text.isEmpty {
-                    Text(text)
-                        .font(.system(.subheadline, design: .serif))
-                        .foregroundStyle(Theme.paper.opacity(0.94))
-                        .shadow(color: Theme.ink.opacity(0.45), radius: 6, y: 1)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+            if let text = post.sparkDisplayCaption, !text.isEmpty {
+                Text(text)
+                    .font(.system(.subheadline, design: .serif))
+                    .foregroundStyle(Theme.paper.opacity(0.94))
+                    .shadow(color: Theme.ink.opacity(0.45), radius: 6, y: 1)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
 
-                if isActive {
-                    SparksTimelineBar(
-                        currentSeconds: progressSeconds,
-                        durationSeconds: durationSeconds,
-                        isScrubbing: $isScrubbingTimeline,
-                        onSeek: { seconds in
-                            progressSeconds = seconds
-                            seekToSeconds = seconds
-                        }
-                    )
-                    .frame(maxWidth: .infinity)
-                }
+            // Timeline above Like / Chat / Keep / Send (all inside the same box).
+            if isActive {
+                SparksTimelineBar(
+                    currentSeconds: progressSeconds,
+                    durationSeconds: durationSeconds,
+                    isScrubbing: $isScrubbingTimeline,
+                    onSeek: { seconds in
+                        progressSeconds = seconds
+                        seekToSeconds = seconds
+                    }
+                )
+                .frame(maxWidth: .infinity)
             }
-            .padding(.horizontal, 12)
-            .padding(.top, 10)
-            .padding(.bottom, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(.ultraThinMaterial)
-                    .environment(\.colorScheme, .dark)
-            }
-            .background {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(Theme.paper.opacity(0.14))
-            }
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(Theme.paper.opacity(0.22), lineWidth: 0.5)
-            )
-            .clipped()
 
-            // Outside the material card — equal chips, full rounded ends always visible.
             sparkActionsRow
         }
+        .padding(.horizontal, 12)
+        .padding(.top, 10)
+        .padding(.bottom, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .clipped()
+        .background {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .environment(\.colorScheme, .dark)
+        }
+        .background {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Theme.paper.opacity(0.14))
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Theme.paper.opacity(0.22), lineWidth: 0.5)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .shadow(color: Theme.ink.opacity(0.18), radius: 6, y: 4)
     }
 
