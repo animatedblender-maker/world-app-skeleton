@@ -794,9 +794,7 @@ export async function handlePipelineRunStream(req: Request, res: Response): Prom
       resignOnly,
       maxResign: 2000,
       maxMs: 0,
-      requestedBy: 'ops-ui',
       source: 'ops-ui-stream',
-      forceInline: true,
     });
     send({ done: true, ok: !!stats.ok, stats });
   } catch (err: any) {
