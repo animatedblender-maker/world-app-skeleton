@@ -80,6 +80,7 @@ import {
   handlePipelineClearLog,
   handlePipelineGet,
   handlePipelineLogin,
+  handlePipelineLogStream,
   handlePipelineLogout,
   handlePipelineRun,
   handlePipelineRunStream,
@@ -283,6 +284,10 @@ app.post('/pipeline/run', (req, res) => {
 /** Live SSE log stream for the ops page */
 app.post('/pipeline/run-stream', (req, res) => {
   void handlePipelineRunStream(req, res);
+});
+/** Re-attach to live log without starting a new run (browser network blip). */
+app.get('/pipeline/log-stream', (req, res) => {
+  void handlePipelineLogStream(req, res);
 });
 app.post('/pipeline/clear-log', handlePipelineClearLog);
 app.get('/pipeline/status', (req, res) => {

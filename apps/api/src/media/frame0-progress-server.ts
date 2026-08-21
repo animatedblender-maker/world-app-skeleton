@@ -18,6 +18,7 @@ import {
   handlePipelineLogin,
   handlePipelineLogout,
   handlePipelineClearLog,
+  handlePipelineLogStream,
   handlePipelineRunStream,
 } from '../ops/ops-page.js';
 
@@ -38,6 +39,9 @@ app.get('/pipeline/logout', handlePipelineLogout);
 app.post('/pipeline/clear-log', handlePipelineClearLog);
 app.post('/pipeline/run-stream', (req, res) => {
   void handlePipelineRunStream(req, res);
+});
+app.get('/pipeline/log-stream', (req, res) => {
+  void handlePipelineLogStream(req, res);
 });
 
 app.get('/frame0', (req, res) => {

@@ -315,9 +315,9 @@ function opsHtml(activeTab: 'overview' | 'pipeline' | 'frame0'): string {
           <strong>What to do</strong>
           <ul class="help">
             <li>New videos on R2? → <em>Pipeline → Run now</em> (lists <strong>entire</strong> R2, ingests every missing pack + Frame 0)</li>
+            <li>Browser “network error”? → <em>Reconnect log</em> (run keeps going; already-posted packs stay)</li>
             <li>Old posts still black? → <em>Frame 0 → Backfill ALL</em></li>
             <li>Expired play links? → <em>Pipeline → Re-sign URLs</em></li>
-            <li>Both tabs auto-refresh while work runs</li>
           </ul>
           <p class="meta" id="ovMeta"></p>
         </div>
@@ -351,11 +351,15 @@ function opsHtml(activeTab: 'overview' | 'pipeline' | 'frame0'): string {
         <strong>Run pipeline</strong>
         <div class="row">
           <button type="button" id="btnRun">Run now</button>
+          <button type="button" class="secondary" id="btnReconnect">Reconnect log</button>
           <button type="button" class="secondary" id="btnDry">Dry run</button>
           <button type="button" class="secondary" id="btnResign">Re-sign URLs only</button>
           <button type="button" class="secondary" id="btnKafka" ${!st.kafkaEnabled ? 'disabled' : ''}>Queue via Kafka</button>
           <button type="button" class="secondary" id="btnClear">Clear log</button>
         </div>
+        <p class="muted" style="margin-top:8px;font-size:13px">
+          Network blip only drops the <em>live log</em> — the server keeps ingesting. Reconnect log (or Run now) reattaches without losing DB progress. Next Run skips packs already posted.
+        </p>
         <p id="pipeStatus" class="muted" style="margin-top:10px;font-weight:650;min-height:1.2em"></p>
       </div>
       <div class="card">
@@ -617,11 +621,117 @@ function opsHtml(activeTab: 'overview' | 'pipeline' | 'frame0'): string {
       logEl.scrollTop = logEl.scrollHeight;
       notePipeLog(line.msg || '');
     }
-    async function runStream(mode) {
+    let pipeAbort = null;
+    let pipeReconnecting = false;
+
+    function handlePipeEvent(data) {
+      if (data.heartbeat) {
+        setPipeRunning(!!data.running);
+        if (data.running) {
+          $('pipeStatus').textContent = 'Running on server — live log attached';
+          $('pipeStatus').style.color = '';
+        }
+        return;
+      }
+      if (data.msg) appendPipe(data);
+      if (data.done) {
+        $('pipeStatus').textContent = data.idle
+          ? 'Idle — nothing running (safe to Run now)'
+          : (data.ok ? 'Done — pull-to-refresh the app' : 'Finished with errors');
+        $('pipeStatus').style.color = data.idle ? '' : (data.ok ? '#166534' : '#b91c1c');
+        const st = data.stats || {};
+        if (!data.idle) {
+          const originals = Number(st.insertedOriginals || pipeProg.cur || 0);
+          const total = Number(st.discovered || pipeProg.total || originals);
+          setPipeProgress({
+            phase: 'done',
+            cur: originals || pipeProg.cur,
+            total: total || pipeProg.total,
+          });
+          if ($('pipeBar')) $('pipeBar').style.width = '100%';
+          if ($('pipeMeta') && st.frame0Done != null) {
+            $('pipeMeta').textContent = 'frame0 +' + st.frame0Done + ' · fail ' + (st.frame0Failed || 0) + ' · shares +' + (st.insertedShares || 0);
+          }
+          if (data.stats) {
+            $('lastRun').innerHTML = '<pre class="stats">' + escapeHtml(JSON.stringify({ at: new Date().toISOString(), stats: data.stats }, null, 2)) + '</pre>';
+          }
+        }
+        setPipeRunning(false);
+      }
+    }
+
+    async function readSSE(res) {
+      if (!res.ok || !res.body) {
+        const t = await res.text();
+        throw new Error('HTTP ' + res.status + ' ' + t.slice(0, 200));
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const parts = buf.split('\\n\\n');
+        buf = parts.pop() || '';
+        for (const chunk of parts) {
+          for (const ln of chunk.split('\\n')) {
+            if (!ln.startsWith('data: ')) continue;
+            try { handlePipeEvent(JSON.parse(ln.slice(6))); } catch (_) {}
+          }
+        }
+      }
+    }
+
+    /** Re-attach live log without starting a new ingest (progress stays in DB). */
+    async function reconnectLog(opts) {
+      const quiet = !!(opts && opts.quiet);
+      if (pipeReconnecting) return;
+      pipeReconnecting = true;
+      if (pipeAbort) try { pipeAbort.abort(); } catch (_) {}
+      pipeAbort = new AbortController();
       setPipeRunning(true);
-      pipeProg = { cur: 0, total: 0, phase: 'starting', startedAt: Date.now() };
-      setPipeProgress({});
-      $('pipeStatus').textContent = 'Starting…';
+      if (!quiet) {
+        $('pipeStatus').textContent = 'Reconnecting to live log…';
+        $('pipeStatus').style.color = '';
+        appendPipe({ t: new Date().toISOString(), level: 'info', msg: 'Reconnecting log (not restarting pipeline)…' });
+      }
+      try {
+        const res = await fetch('/pipeline/log-stream', {
+          method: 'GET',
+          headers: { 'Accept': 'text/event-stream' },
+          credentials: 'same-origin',
+          signal: pipeAbort.signal,
+        });
+        await readSSE(res);
+      } catch (e) {
+        if (e && e.name === 'AbortError') return;
+        appendPipe({ t: new Date().toISOString(), level: 'error', msg: 'Reconnect failed: ' + String(e && e.message || e) });
+        $('pipeStatus').textContent = 'Connection lost — click Reconnect log (ingest may still be running)';
+        $('pipeStatus').style.color = '#b91c1c';
+        setPipeRunning(false);
+        // Auto-retry a few times while the server job may still be alive.
+        setTimeout(() => {
+          fetch('/pipeline/status', { credentials: 'same-origin' })
+            .then((r) => r.json())
+            .then((j) => { if (j && j.running) reconnectLog({ quiet: true }); })
+            .catch(() => {});
+        }, 4000);
+      } finally {
+        pipeReconnecting = false;
+      }
+    }
+
+    async function runStream(mode) {
+      if (pipeAbort) try { pipeAbort.abort(); } catch (_) {}
+      pipeAbort = new AbortController();
+      setPipeRunning(true);
+      // Keep counters if reattaching; only reset when starting a fresh mode run.
+      if (mode !== 'reattach') {
+        pipeProg = { cur: 0, total: 0, phase: 'starting', startedAt: Date.now() };
+        setPipeProgress({});
+      }
+      $('pipeStatus').textContent = mode === 'reattach' ? 'Reattaching…' : 'Starting…';
       $('pipeStatus').style.color = '';
       try {
         const body = new URLSearchParams();
@@ -633,61 +743,22 @@ function opsHtml(activeTab: 'overview' | 'pipeline' | 'frame0'): string {
           headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'text/event-stream' },
           body: body.toString(),
           credentials: 'same-origin',
+          signal: pipeAbort.signal,
         });
-        if (!res.ok || !res.body) {
-          const t = await res.text();
-          appendPipe({ t: new Date().toISOString(), level: 'error', msg: 'HTTP ' + res.status + ' ' + t.slice(0, 200) });
-          $('pipeStatus').textContent = 'Failed to start';
-          $('pipeStatus').style.color = '#b91c1c';
-          setPipeRunning(false);
-          return;
-        }
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buf = '';
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-          const parts = buf.split('\\n\\n');
-          buf = parts.pop() || '';
-          for (const chunk of parts) {
-            for (const ln of chunk.split('\\n')) {
-              if (!ln.startsWith('data: ')) continue;
-              try {
-                const data = JSON.parse(ln.slice(6));
-                if (data.msg) appendPipe(data);
-                if (data.done) {
-                  $('pipeStatus').textContent = data.ok ? 'Done — pull-to-refresh the app' : 'Finished with errors';
-                  $('pipeStatus').style.color = data.ok ? '#166534' : '#b91c1c';
-                  const st = data.stats || {};
-                  const originals = Number(st.insertedOriginals || pipeProg.cur || 0);
-                  const total = Number(st.discovered || pipeProg.total || originals);
-                  setPipeProgress({
-                    phase: 'done',
-                    cur: originals || pipeProg.cur,
-                    total: total || pipeProg.total,
-                  });
-                  if ($('pipeBar')) $('pipeBar').style.width = '100%';
-                  if ($('pipeMeta') && st.frame0Done != null) {
-                    $('pipeMeta').textContent = 'frame0 +' + st.frame0Done + ' · fail ' + (st.frame0Failed || 0) + ' · shares +' + (st.insertedShares || 0);
-                  }
-                  if (data.stats) {
-                    $('lastRun').innerHTML = '<pre class="stats">' + escapeHtml(JSON.stringify({ at: new Date().toISOString(), stats: data.stats }, null, 2)) + '</pre>';
-                  }
-                }
-              } catch (_) {}
-            }
-          }
-        }
+        await readSSE(res);
       } catch (e) {
+        if (e && e.name === 'AbortError') return;
         appendPipe({ t: new Date().toISOString(), level: 'error', msg: String(e && e.message || e) });
-        $('pipeStatus').textContent = 'Connection error';
+        $('pipeStatus').textContent = 'Network error — reconnecting log (server keeps going)…';
         $('pipeStatus').style.color = '#b91c1c';
+        // Do not lose progress: reattach to whatever is still running.
+        setTimeout(() => reconnectLog({ quiet: true }), 800);
+        return;
       }
       setPipeRunning(false);
     }
     $('btnRun')?.addEventListener('click', () => runStream('run'));
+    $('btnReconnect')?.addEventListener('click', () => reconnectLog({}));
     $('btnDry')?.addEventListener('click', () => runStream('dry'));
     $('btnResign')?.addEventListener('click', () => runStream('resign'));
     $('btnKafka')?.addEventListener('click', () => runStream('kafka'));
@@ -695,6 +766,10 @@ function opsHtml(activeTab: 'overview' | 'pipeline' | 'frame0'): string {
       if ($('pipeLog')) $('pipeLog').innerHTML = '<span class="muted">Log cleared.</span>';
       fetch('/pipeline/clear-log', { method: 'POST', credentials: 'same-origin' });
     });
+    // Page refresh mid-run → auto reattach.
+    if (${st.running ? 'true' : 'false'}) {
+      reconnectLog({ quiet: true });
+    }
   </script>
 </body>
 </html>`;
@@ -796,6 +871,89 @@ export function handlePipelineClearLog(req: Request, res: Response): void {
   res.json({ ok: true });
 }
 
+/**
+ * Re-attach to a live (or just-finished) pipeline log without starting a new run.
+ * Replays the in-memory buffer, then tails until idle / client disconnect.
+ */
+export async function handlePipelineLogStream(req: Request, res: Response): Promise<void> {
+  if (!hasOpsAccess(req)) {
+    res.status(401).end();
+    return;
+  }
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+
+  let closed = false;
+  const send = (obj: Record<string, unknown>) => {
+    if (closed) return;
+    try {
+      res.write(`data: ${JSON.stringify(obj)}\n\n`);
+    } catch {
+      closed = true;
+    }
+  };
+
+  send({
+    t: new Date().toISOString(),
+    level: 'info',
+    msg: 'Reconnected to pipeline log (no new run started — already-ingested packs stay in DB)',
+  });
+
+  // Replay so the progress bar can rebuild after a browser blip.
+  for (const line of getPipelineLogBuffer()) {
+    send({ t: line.t, level: line.level, msg: line.msg, replay: true });
+  }
+
+  const unsub = subscribePipelineLog((line) => {
+    send({ t: line.t, level: line.level, msg: line.msg });
+  });
+
+  let sawRunning = getPipelineStatus().running;
+  send({ heartbeat: true, running: sawRunning });
+
+  let tick: ReturnType<typeof setInterval> | null = null;
+  const finish = (payload?: Record<string, unknown>) => {
+    if (closed) return;
+    if (payload) send(payload);
+    closed = true;
+    if (tick) clearInterval(tick);
+    unsub();
+    try {
+      res.end();
+    } catch {
+      /* ignore */
+    }
+  };
+  req.on('close', () => finish());
+
+  tick = setInterval(() => {
+    if (closed) return;
+    const running = getPipelineStatus().running;
+    if (running) sawRunning = true;
+    send({ heartbeat: true, running });
+    if (!running && sawRunning) {
+      const last = getPipelineStatus().lastRun;
+      finish({
+        done: true,
+        ok: !!(last?.stats?.ok ?? true),
+        stats: last?.stats,
+        reattached: true,
+      });
+    }
+  }, 2000);
+
+  // If nothing is running, keep the socket briefly so the client gets the replay, then end.
+  if (!sawRunning) {
+    setTimeout(() => {
+      if (!closed && !getPipelineStatus().running) {
+        finish({ done: true, ok: true, idle: true, reattached: true });
+      }
+    }, 1500);
+  }
+}
+
 export async function handlePipelineRunStream(req: Request, res: Response): Promise<void> {
   if (!hasOpsAccess(req)) {
     res.status(401).end();
@@ -806,9 +964,19 @@ export async function handlePipelineRunStream(req: Request, res: Response): Prom
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders?.();
 
+  let closed = false;
   const send = (obj: Record<string, unknown>) => {
-    res.write(`data: ${JSON.stringify(obj)}\n\n`);
+    if (closed) return;
+    try {
+      res.write(`data: ${JSON.stringify(obj)}\n\n`);
+    } catch {
+      closed = true;
+    }
   };
+
+  req.on('close', () => {
+    closed = true;
+  });
 
   const unsub = subscribePipelineLog((line) => {
     send({ t: line.t, level: line.level, msg: line.msg });
@@ -823,6 +991,31 @@ export async function handlePipelineRunStream(req: Request, res: Response): Prom
     String(req.body?.resignOnly ?? req.query.resignOnly ?? '') === 'true';
 
   try {
+    // Browser blip mid-run: attach to the existing job instead of failing / double-starting.
+    if (getPipelineStatus().running) {
+      send({
+        t: new Date().toISOString(),
+        level: 'warn',
+        msg: 'Pipeline already running — reattached to live log (progress kept; already-posted packs are skipped)',
+      });
+      for (const line of getPipelineLogBuffer()) {
+        send({ t: line.t, level: line.level, msg: line.msg, replay: true });
+      }
+      await new Promise<void>((resolve) => {
+        const tick = setInterval(() => {
+          if (closed || !getPipelineStatus().running) {
+            clearInterval(tick);
+            resolve();
+          } else {
+            send({ heartbeat: true, running: true });
+          }
+        }, 2000);
+      });
+      const last = getPipelineStatus().lastRun;
+      send({ done: true, ok: !!(last?.stats?.ok ?? true), stats: last?.stats, reattached: true });
+      return;
+    }
+
     send({ t: new Date().toISOString(), level: 'info', msg: `Pipeline starting (mode=${mode})…` });
     if (!r2Configured()) {
       send({
@@ -861,6 +1054,7 @@ export async function handlePipelineRunStream(req: Request, res: Response): Prom
         msg: 'Kafka enqueue failed — falling back to inline run',
       });
     }
+    // Client disconnect does NOT cancel this — posts already written stay in Supabase.
     const stats = await runPipelineNow({
       dryRun,
       resignOnly,
@@ -879,7 +1073,11 @@ export async function handlePipelineRunStream(req: Request, res: Response): Prom
     send({ done: true, ok: false });
   } finally {
     unsub();
-    res.end();
+    try {
+      res.end();
+    } catch {
+      /* ignore */
+    }
   }
 }
 
