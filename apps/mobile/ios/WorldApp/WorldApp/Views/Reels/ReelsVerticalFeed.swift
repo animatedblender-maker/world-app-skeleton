@@ -627,58 +627,13 @@ struct ReelsPagerCard: View {
                 )
             }
 
-            // Horizontal action ribbon — compact glass chips.
-            // Never pause the Spark for Like / Chat / Keep / Send.
-            HStack(spacing: 5) {
-                sparkAction(
-                    icon: post.likedByMe ? "heart.fill" : "heart",
-                    label: post.likeCount > 0 ? "\(post.likeCount)" : "Like",
-                    accent: post.likedByMe ? Theme.like : Theme.paper,
-                    scale: likeButtonScale
-                ) {
-                    keepPlayingThroughUIAction()
-                    triggerLike(fromButton: true)
-                }
-                sparkAction(
-                    icon: "bubble.right",
-                    label: post.commentCount > 0 ? "\(post.commentCount)" : "Chat",
-                    accent: Theme.paper
-                ) {
-                    keepPlayingThroughUIAction()
-                    // Warm thread *before* the sheet paints so comments are already there.
-                    CommentsWarmCache.shared.warm(post.id)
-                    onOpenComments()
-                    reassertPlayback()
-                }
-                sparkAction(
-                    icon: appState.isPostSaved(post.id) ? "bookmark.fill" : "bookmark",
-                    label: appState.isPostSaved(post.id) ? "Kept" : "Keep",
-                    accent: appState.isPostSaved(post.id) ? Theme.accentBright : Theme.paper
-                ) {
-                    keepPlayingThroughUIAction()
-                    Task { await toggleSave() }
-                }
-                sparkAction(
-                    icon: "arrowshape.turn.up.right",
-                    label: "Send",
-                    accent: Theme.paper
-                ) {
-                    // Overlay share — do not pause or dismiss the Spark.
-                    keepPlayingThroughUIAction()
-                    appState.presentShareSheet(for: post)
-                    reassertPlayback()
-                }
-                if showsOpenPostAction {
-                    sparkAction(icon: "arrow.up.right", label: "Open", accent: Theme.paper) {
-                        keepPlayingThroughUIAction()
-                        onOpenPost()
-                    }
-                }
-            }
+            // Action ribbon — must never overflow the card (overflow was slicing L/R capsules).
+            sparkActionsRow
         }
         .padding(.horizontal, 12)
         .padding(.top, 10)
         .padding(.bottom, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(.ultraThinMaterial)
@@ -689,14 +644,60 @@ struct ReelsPagerCard: View {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(Theme.paper.opacity(0.14))
         }
-        // Force material to the rounded path — prevents hard L/R chops on fill film.
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(Theme.paper.opacity(0.22), lineWidth: 0.5)
         )
-        // Downward-only soft shadow (stays inside side inset even if a parent clips).
         .shadow(color: Theme.ink.opacity(0.22), radius: 6, y: 5)
+    }
+
+    /// Like / Chat / Keep / Send — equal flexible chips; compact counts so capsules aren’t sliced.
+    private var sparkActionsRow: some View {
+        HStack(spacing: 4) {
+            sparkAction(
+                icon: post.likedByMe ? "heart.fill" : "heart",
+                label: post.likeCount > 0 ? Self.compactCount(post.likeCount) : "Like",
+                accent: post.likedByMe ? Theme.like : Theme.paper,
+                scale: likeButtonScale
+            ) {
+                keepPlayingThroughUIAction()
+                triggerLike(fromButton: true)
+            }
+            sparkAction(
+                icon: "bubble.right",
+                label: post.commentCount > 0 ? Self.compactCount(post.commentCount) : "Chat",
+                accent: Theme.paper
+            ) {
+                keepPlayingThroughUIAction()
+                CommentsWarmCache.shared.warm(post.id)
+                onOpenComments()
+                reassertPlayback()
+            }
+            sparkAction(
+                icon: appState.isPostSaved(post.id) ? "bookmark.fill" : "bookmark",
+                label: appState.isPostSaved(post.id) ? "Kept" : "Keep",
+                accent: appState.isPostSaved(post.id) ? Theme.accentBright : Theme.paper
+            ) {
+                keepPlayingThroughUIAction()
+                Task { await toggleSave() }
+            }
+            sparkAction(
+                icon: "arrowshape.turn.up.right",
+                label: "Send",
+                accent: Theme.paper
+            ) {
+                keepPlayingThroughUIAction()
+                appState.presentShareSheet(for: post)
+                reassertPlayback()
+            }
+            if showsOpenPostAction {
+                sparkAction(icon: "arrow.up.right", label: "Open", accent: Theme.paper) {
+                    keepPlayingThroughUIAction()
+                    onOpenPost()
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
     }
 
     private func sparkAction(
@@ -707,23 +708,42 @@ struct ReelsPagerCard: View {
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            HStack(spacing: 4) {
+            HStack(spacing: 3) {
                 Image(systemName: icon)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 11, weight: .semibold))
                     .scaleEffect(scale)
                 Text(label)
                     .font(.caption2.weight(.bold))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.85)
+                    .minimumScaleFactor(0.65)
+                    .allowsTightening(true)
             }
             .foregroundStyle(accent)
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 5)
             .padding(.vertical, 6)
             .frame(maxWidth: .infinity)
             .background(Theme.paper.opacity(0.12), in: Capsule())
             .overlay(Capsule().stroke(Theme.paper.opacity(0.14), lineWidth: 0.5))
+            // Clip label/icon to the capsule — never bleed past the chip edge.
+            .clipShape(Capsule())
         }
         .buttonStyle(.plain)
+        .layoutPriority(0)
+    }
+
+    /// 12487 → "12.5K" so four/five chips fit without side-slicing.
+    private static func compactCount(_ n: Int) -> String {
+        let v = abs(n)
+        switch v {
+        case 1_000_000...:
+            let m = Double(v) / 1_000_000
+            return m >= 10 ? String(format: "%.0fM", m) : String(format: "%.1fM", m)
+        case 1_000...:
+            let k = Double(v) / 1_000
+            return k >= 10 ? String(format: "%.0fK", k) : String(format: "%.1fK", k)
+        default:
+            return "\(v)"
+        }
     }
 
     /// Update Sparks timeline from AVPlayer ticks.
