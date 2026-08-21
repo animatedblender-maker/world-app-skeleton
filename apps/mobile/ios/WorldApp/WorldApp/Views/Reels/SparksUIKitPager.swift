@@ -635,7 +635,10 @@ private final class SparksPageCell: UICollectionViewCell {
         super.init(frame: frame)
         backgroundColor = .black
         contentView.backgroundColor = .black
-        contentView.clipsToBounds = true
+        // Do NOT clip the cell — that sliced the frosted dock’s L/R rounded corners
+        // on fullscreen (aspectFill) Sparks. Film is clipped inside SwiftUI instead.
+        clipsToBounds = false
+        contentView.clipsToBounds = false
         // No safe-area layout margins on the cell.
         contentView.insetsLayoutMarginsFromSafeArea = false
         insetsLayoutMarginsFromSafeArea = false
@@ -696,11 +699,13 @@ private final class SparksPageCell: UICollectionViewCell {
         if let host {
             host.rootView = root
             host.view.backgroundColor = .black
+            host.view.clipsToBounds = false
             host.additionalSafeAreaInsets = .zero
             host.view.insetsLayoutMarginsFromSafeArea = false
         } else {
             let hc = UIHostingController(rootView: root)
             hc.view.backgroundColor = .black
+            hc.view.clipsToBounds = false
             hc.view.insetsLayoutMarginsFromSafeArea = false
             hc.additionalSafeAreaInsets = .zero
             if #available(iOS 16.4, *) {
@@ -721,6 +726,10 @@ private final class SparksPageCell: UICollectionViewCell {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        // UIKit may re-assert cell clipping on reuse/layout — keep dock corners intact.
+        clipsToBounds = false
+        contentView.clipsToBounds = false
+        host?.view.clipsToBounds = false
         host?.view.frame = contentView.bounds
         host?.additionalSafeAreaInsets = .zero
     }

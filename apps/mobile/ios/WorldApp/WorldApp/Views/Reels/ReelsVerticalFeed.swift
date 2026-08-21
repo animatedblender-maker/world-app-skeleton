@@ -361,10 +361,12 @@ struct ReelsPagerCard: View {
     }
 
     var body: some View {
-        ZStack {
-            // Film fills the page; chrome floats on top (YouTube Shorts / TikTok).
+        // Dock is a ZStack sibling (not under a parent `.clipped()`), so fullscreen
+        // fill Sparks never slice the frosted card’s L/R rounded corners.
+        ZStack(alignment: .bottom) {
             filmStage
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
                 .contentShape(Rectangle())
                 .onTapGesture(count: 2) {
                     pendingSingleTap?.cancel()
@@ -374,18 +376,15 @@ struct ReelsPagerCard: View {
                 .onTapGesture(count: 1) {
                     handleSingleTapPause()
                 }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipped()
-        // Film + chrome draw under the Dynamic Island; top chrome is overlaid separately.
-        .ignoresSafeArea(.all)
-        .overlay(alignment: .bottom) {
-            // Inset ≥ dock shadow so cell clipsToBounds cannot slice L/R rounded corners.
+
             sparkDock
-                .padding(.horizontal, 18)
+                .padding(.horizontal, 16)
                 .padding(.bottom, max(10, bottomInset - 4))
                 .fixedSize(horizontal: false, vertical: true)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Film + chrome draw under the Dynamic Island; top chrome is overlaid separately.
+        .ignoresSafeArea(.all)
         .animation(MatteryaMotion.like, value: showLikeBurst)
         .onChange(of: isActive) { _, active in
             if !active {
@@ -690,12 +689,14 @@ struct ReelsPagerCard: View {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(Theme.paper.opacity(0.14))
         }
+        // Force material to the rounded path — prevents hard L/R chops on fill film.
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(Theme.paper.opacity(0.22), lineWidth: 0.5)
         )
-        // Keep shadow inside the 18pt side inset (pager cell clipsToBounds).
-        .shadow(color: Theme.ink.opacity(0.16), radius: 8, y: 4)
+        // Downward-only soft shadow (stays inside side inset even if a parent clips).
+        .shadow(color: Theme.ink.opacity(0.22), radius: 6, y: 5)
     }
 
     private func sparkAction(
