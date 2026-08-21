@@ -241,21 +241,37 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         guard gestureRecognizer === dismissPan else { return true }
         // Don't steal when comments/share chrome disables scroll (parent sets isScrollEnabled false).
         guard collectionView.isScrollEnabled else { return false }
+
+        // Never start dismiss from the bottom dock — timeline scrub + Like/Chat/Keep/Send
+        // are horizontal and must not close Sparks.
+        if let pan = dismissPan {
+            let loc = pan.location(in: view)
+            let h = view.bounds.height
+            let dockZone = max(bottomInset + 220, h * 0.34)
+            if loc.y >= h - dockZone {
+                return false
+            }
+            // Top progress rail / status area — also leave alone.
+            if loc.y < 72 {
+                return false
+            }
+        }
+
         let v = dismissPan?.velocity(in: view) ?? .zero
         let t = dismissPan?.translation(in: view) ?? .zero
         // Prefer velocity at begin; fall back to small translation sample.
         let dx = abs(v.x) > 20 ? v.x : t.x
         let dy = abs(v.y) > 20 ? v.y : t.y
-        // Must be clearly horizontal and rightward.
-        return dx > 0 && abs(dx) > abs(dy) * 1.15
+        // Must be clearly horizontal and rightward — and only on the film, not the dock.
+        return dx > 0 && abs(dx) > abs(dy) * 1.25
     }
 
     func gestureRecognizer(
         _ gestureRecognizer: UIGestureRecognizer,
         shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
     ) -> Bool {
-        // Allow vertical collection pan to run; we only begin when horizontal wins.
-        if gestureRecognizer === dismissPan { return true }
+        // Dismiss must not run beside dock/timeline pans (that closed Sparks mid-scrub).
+        if gestureRecognizer === dismissPan { return false }
         return false
     }
 

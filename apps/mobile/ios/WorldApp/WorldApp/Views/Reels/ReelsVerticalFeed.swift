@@ -208,17 +208,17 @@ private struct SparksTimelineBar: View {
                 }
                 .frame(maxHeight: .infinity, alignment: .center)
                 .contentShape(Rectangle())
-                // simultaneous so vertical page swipes always win over scrub.
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 14, coordinateSpace: .local)
+                // High-priority so horizontal scrub wins over page dismiss / vertical paging.
+                .highPriorityGesture(
+                    DragGesture(minimumDistance: 8, coordinateSpace: .local)
                         .onChanged { value in
                             let w = max(geo.size.width, 1)
                             let dx = abs(value.translation.width)
                             let dy = abs(value.translation.height)
                             if !isScrubbing {
                                 // Strictly horizontal only — never compete with Sparks paging.
-                                if dy > 8, dy >= dx { return }
-                                if dx < 12 { return }
+                                if dy > 10, dy >= dx { return }
+                                if dx < 8 { return }
                             }
                             isScrubbing = true
                             dragFraction = min(1, max(0, value.location.x / w))
@@ -239,7 +239,8 @@ private struct SparksTimelineBar: View {
                         }
                 )
             }
-            .frame(height: 18)
+            // Taller hit target — easier scrub without starting a dismiss swipe.
+            .frame(height: 28)
         }
         .animation(.easeOut(duration: 0.12), value: isScrubbing)
         .accessibilityLabel("Spark timeline")
