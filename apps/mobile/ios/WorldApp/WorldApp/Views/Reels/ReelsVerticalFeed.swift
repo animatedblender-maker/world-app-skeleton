@@ -49,7 +49,8 @@ struct ReelsVerticalFeed: View {
                     activeIndex: activeIndex,
                     viewerCountryCode: viewerCountryCode
                 )
-                .padding(.top, 54)
+                // Sit just under the status bar / Dynamic Island.
+                .padding(.top, 58)
                 .padding(.horizontal, 16)
             }
         }
@@ -1411,8 +1412,9 @@ struct ReelsScrollViewer: View {
         .animation(MatteryaMotion.sheet, value: appState.sharePostSheet?.id)
         .animation(MatteryaMotion.sheet, value: commentsPostID)
         .toolbar(.hidden, for: .navigationBar)
-        // Status bar hidden so film can paint under the Dynamic Island.
-        .statusBarHidden(true)
+        // Keep time / battery / Wi‑Fi visible — people check them while watching.
+        .statusBarHidden(false)
+        .preferredColorScheme(.dark)
         .persistentSystemOverlays(.hidden)
         .onChange(of: activeIndex) { _, idx in
             // Idle-warm comments for the focused Spark so Chat is instant.

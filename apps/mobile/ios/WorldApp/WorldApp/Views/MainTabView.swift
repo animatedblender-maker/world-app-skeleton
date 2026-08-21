@@ -234,11 +234,12 @@ struct MainTabView: View {
         )) { context in
             ReelsScrollViewer(context: context)
                 .withAppState(appState)
-                // Edge-to-edge from first paint — no safe-area reflow after video mounts.
+                // Edge-to-edge film; status bar stays visible (time / battery / Wi‑Fi).
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .ignoresSafeArea(.all)
-                .statusBarHidden(true)
-                .persistentSystemOverlays(.hidden)
+                .statusBarHidden(false)
+                .preferredColorScheme(.dark) // light status-bar glyphs on black film
+                .persistentSystemOverlays(.hidden) // home indicator may auto-hide; clock stays
                 .presentationBackground(.black)
         }
         // Hubs is a real tab — never present it as a fullScreenCover (that hid the tab bar).
