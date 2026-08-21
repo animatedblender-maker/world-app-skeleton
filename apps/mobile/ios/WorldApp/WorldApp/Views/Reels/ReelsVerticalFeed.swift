@@ -380,12 +380,16 @@ struct ReelsPagerCard: View {
                     handleSingleTapPause()
                 }
 
-            sparkDock
-                .padding(.horizontal, 16)
-                .padding(.bottom, max(10, bottomInset - 4))
-                // Hard cap to the page width — never spill past the screen edges.
-                .frame(maxWidth: .infinity, alignment: .bottom)
-                .clipped()
+            // Lock dock to *physical screen* width — SwiftUI’s proposed width can be
+            // wider than the phone on some fullscreen packs; that spilled L/R.
+            HStack(spacing: 0) {
+                Spacer(minLength: 0)
+                sparkDock
+                    .frame(width: Self.dockWidth)
+                    .clipped()
+                Spacer(minLength: 0)
+            }
+            .padding(.bottom, max(10, bottomInset - 4))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
@@ -603,8 +607,12 @@ struct ReelsPagerCard: View {
         }
     }
 
-    /// Meta card + action chips. Actions sit *outside* the frosted rounded card so
-    /// fullscreen aspectFill never slices capsule ends against the card’s corner clip.
+    /// Fixed on-screen width for the dock (16pt inset each side of the phone).
+    private static var dockWidth: CGFloat {
+        max(240, SparksStageLayout.physicalScreenSize.width - 32)
+    }
+
+    /// Meta card + action chips. Width is forced by `dockWidth` in `body`.
     private var sparkDock: some View {
         VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 8) {
@@ -616,7 +624,8 @@ struct ReelsPagerCard: View {
                         .foregroundStyle(Theme.paper.opacity(0.94))
                         .shadow(color: Theme.ink.opacity(0.45), radius: 6, y: 1)
                         .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
                 if isActive {
@@ -629,6 +638,7 @@ struct ReelsPagerCard: View {
                             seekToSeconds = seconds
                         }
                     )
+                    .frame(maxWidth: .infinity)
                 }
             }
             .padding(.horizontal, 12)
@@ -648,11 +658,13 @@ struct ReelsPagerCard: View {
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .stroke(Theme.paper.opacity(0.22), lineWidth: 0.5)
             )
+            .clipped()
 
             // Outside the material card — equal chips, full rounded ends always visible.
             sparkActionsRow
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .clipped()
         .shadow(color: Theme.ink.opacity(0.18), radius: 6, y: 4)
     }
 
