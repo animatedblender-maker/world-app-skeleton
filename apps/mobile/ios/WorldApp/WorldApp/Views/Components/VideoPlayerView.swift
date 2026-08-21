@@ -2234,11 +2234,11 @@ struct InFrameVideoPlayer: View {
         syncPlayGate(immediate: win)
     }
 
-    /// Lift outer poster only after paint proof + short settle (no start blink).
+    /// Lift outer poster as soon as AV reports painted frames (minimal settle).
     private func markInFrameFramesReady() {
         guard !framesReady else { return }
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 48_000_000)
+            try? await Task.sleep(nanoseconds: 16_000_000)
             guard playGate, shouldPlay else { return }
             framesReady = true
         }
@@ -2249,8 +2249,18 @@ struct InFrameVideoPlayer: View {
         if shouldPlay {
             deactivateTask?.cancel()
             deactivateTask = nil
+            let wasOff = !playGate
             // Keep framesReady false until onFramesReady / playing (no black flash).
             playGate = true
+            // Enter-frame: kick warm + audio the same tick we become winner (don't wait onChange).
+            if wasOff {
+                if let postID {
+                    SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: true)
+                }
+                if !isMuted {
+                    activatePlaybackAudioIfNeeded(unmuted: true)
+                }
+            }
             return
         }
         // Hard stop when leaving feed surface, Sparks open, or continuous Hubs (mini/expanded).
@@ -2315,8 +2325,8 @@ struct InFrameVideoPlayer: View {
         }
 
         let ratio = FeedVideoFocus.visibleRatio(for: frame)
-        // Approaching focus → deep-warm (fire-and-forget — never await on scroll).
-        if ratio >= 0.22, let postID {
+        // Entering frame → warm immediately so play can start on the next focus tick.
+        if ratio >= 0.08, let postID {
             if !SparkWarmPool.shared.hasWarmOrInflight(postID: postID) {
                 SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: true)
             }
@@ -2324,7 +2334,7 @@ struct InFrameVideoPlayer: View {
                 ArchiveVideoPlayback.warmResolve(url)
             }
             // CDN edge warm once per approach (utility — does not block UI).
-            if ratio >= 0.35, ratio - lastReportedRatio > 0.05 || lastReportedRatio < 0 {
+            if ratio >= 0.20, ratio - lastReportedRatio > 0.05 || lastReportedRatio < 0 {
                 Task(priority: .utility) {
                     await RecommendationClient.warmPlaybackURLs([postID])
                 }

@@ -58,12 +58,13 @@ final class FeedVideoFocus {
     private var silenceWhenEmptyTask: Task<Void, Never>?
 
     /// Must be at least this visible to *start* (or take over) autoplay.
-    /// Tall Spark cards rarely hit 50%+ of screen height — 0.22 still means "in frame".
-    private let minVisibleToPlay: CGFloat = 0.22
-    /// Keep current winner until it drops below this (more than ~78% off-screen).
-    private let minVisibleToKeep: CGFloat = 0.18
+    /// Low on purpose: product wants play the moment the card enters the frame.
+    private let minVisibleToPlay: CGFloat = 0.10
+    /// Keep current winner until it drops below this (~85% off-screen).
+    private let minVisibleToKeep: CGFloat = 0.12
     /// Challenger must beat the current winner by this much to steal focus.
-    private let stealEpsilon: CGFloat = 0.08
+    /// Small so the next card takes over quickly while scrolling.
+    private let stealEpsilon: CGFloat = 0.04
     /// Ignore this many consecutive near-zero layout reports before clearing a candidate.
     private let zeroGlitchTolerance = 6
 
