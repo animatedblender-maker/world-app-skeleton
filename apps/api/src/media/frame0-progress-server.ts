@@ -13,7 +13,13 @@ import {
   handleFrame0Login,
   handleFrame0Logout,
   handleFrame0Status,
-} from './frame0-progress.js';
+  handleFrame0Run,
+  handlePipelineGet,
+  handlePipelineLogin,
+  handlePipelineLogout,
+  handlePipelineClearLog,
+  handlePipelineRunStream,
+} from '../ops/ops-page.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '..', '..', '.env'), override: true });
@@ -23,7 +29,17 @@ const app = express();
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
-app.get('/', (_req, res) => res.redirect(302, '/frame0'));
+app.get('/', (_req, res) => res.redirect(302, '/pipeline'));
+app.get('/pipeline', (req, res) => {
+  void handlePipelineGet(req, res);
+});
+app.post('/pipeline/login', handlePipelineLogin);
+app.get('/pipeline/logout', handlePipelineLogout);
+app.post('/pipeline/clear-log', handlePipelineClearLog);
+app.post('/pipeline/run-stream', (req, res) => {
+  void handlePipelineRunStream(req, res);
+});
+
 app.get('/frame0', (req, res) => {
   void handleFrame0Get(req, res);
 });
@@ -32,10 +48,13 @@ app.get('/frame0/logout', handleFrame0Logout);
 app.get('/frame0/status', (req, res) => {
   void handleFrame0Status(req, res);
 });
-app.get('/pipeline', (_req, res) => res.redirect(302, '/frame0'));
-app.get('/reports', (_req, res) => res.redirect(302, '/frame0'));
+app.post('/frame0/run', (req, res) => {
+  void handleFrame0Run(req, res);
+});
+app.get('/reports', (_req, res) => res.redirect(302, '/pipeline'));
 
 app.listen(port, '127.0.0.1', () => {
-  console.log(`[frame0-progress] http://127.0.0.1:${port}/frame0`);
-  console.log(`[frame0-progress] password = CONTENT_PIPELINE_PASSWORD / REPORTS_PAGE_PASSWORD (default 54isamr!)`);
+  console.log(`[ops] http://127.0.0.1:${port}/pipeline`);
+  console.log(`[ops] Frame 0 tab: http://127.0.0.1:${port}/frame0`);
+  console.log(`[ops] password = CONTENT_PIPELINE_PASSWORD / REPORTS_PAGE_PASSWORD (default 54isamr!)`);
 });

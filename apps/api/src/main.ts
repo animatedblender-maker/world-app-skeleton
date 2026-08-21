@@ -83,13 +83,12 @@ import {
   handlePipelineLogout,
   handlePipelineRun,
   handlePipelineRunStream,
-} from './content-pipeline/pipeline-page.js';
-import {
   handleFrame0Get,
   handleFrame0Login,
   handleFrame0Logout,
   handleFrame0Status,
-} from './media/frame0-progress.js';
+  handleFrame0Run,
+} from './ops/ops-page.js';
 import { kafkaEnabled } from './kafka/config.js';
 
 type AuthedUser = {
@@ -299,6 +298,9 @@ app.post('/frame0/login', handleFrame0Login);
 app.get('/frame0/logout', handleFrame0Logout);
 app.get('/frame0/status', (req, res) => {
   void handleFrame0Status(req, res);
+});
+app.post('/frame0/run', (req, res) => {
+  void handleFrame0Run(req, res);
 });
 
 // ✅ health endpoint (typed _req to avoid implicit any)

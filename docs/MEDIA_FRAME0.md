@@ -59,18 +59,22 @@ Flags:
 
 Idempotent: existing `frame0_*.webp` → refresh DB thumbs only; skip re-encode.
 
-### Progress page
+### Ops UI (Pipeline + Frame 0)
 
-Live catalog % + current batch counters + log tail (same password as `/pipeline` / `/reports`):
+Unified dashboard (same password as Reports):
 
 ```bash
 cd apps/api
 npm run media:frame0-progress
-# → http://127.0.0.1:4091/frame0
+# → http://127.0.0.1:4091/pipeline   (Overview / Pipeline / Frame 0 tabs)
+# → http://127.0.0.1:4091/frame0     (opens Frame 0 tab)
 ```
 
-On the API host after deploy: `https://api.matterya.com/frame0`
+On the API host after deploy:
+- `https://api.matterya.com/pipeline`
+- `https://api.matterya.com/frame0`
 
+From the **Frame 0** tab you can start a backfill (limit / concurrency / force) without the CLI.
 Progress files: `/tmp/matterya-frame0/progress.json` + `backfill.log` (override with `FRAME0_PROGRESS_DIR`).
 
 Env for zero-worker API (optional after backfill):

@@ -660,7 +660,9 @@ export async function handleFrame0Status(req: Request, res: Response): Promise<v
   }
   try {
     const payload = await getFrame0StatusPayload();
-    res.json(payload);
+    // Lazy import avoids circular deps with frame0-runner at module load.
+    const { isFrame0BackfillRunning } = await import('./frame0-runner.js');
+    res.json({ ...payload, runnerBusy: isFrame0BackfillRunning() });
   } catch (err: any) {
     res.status(500).json({ error: err?.message ?? 'status_failed' });
   }
