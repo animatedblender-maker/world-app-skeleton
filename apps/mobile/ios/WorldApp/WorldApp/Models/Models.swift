@@ -86,7 +86,12 @@ struct PostMediaPayload: Sendable {
                 types = urls.map { inferMediaType(from: $0) }
             }
 
+            let kind = (object["kind"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            // Pipeline writes kind=spark; older rows may omit reel:true — treat both as Sparks.
             let reel = boolValue(object["reel"])
+                || kind == "spark"
+                || kind == "reel"
+                || types.contains(where: { $0.lowercased() == "reel" || $0.lowercased() == "spark" })
             let story = boolValue(object["story"])
             let expiresAt = parseDate(object["expires_at"] as? String)
                 ?? parseDate(object["signed_at"] as? String)

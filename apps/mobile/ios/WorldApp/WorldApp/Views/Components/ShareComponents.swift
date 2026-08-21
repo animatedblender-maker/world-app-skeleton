@@ -167,17 +167,6 @@ struct SparkFeedCard: View {
                     .contentShape(Rectangle())
                     .onTapGesture { openFullPlayer() }
             }
-            .zIndex(20)
-
-            // Always-on chrome — outside the film clip so every Spark shows both.
-            HStack(alignment: .top) {
-                SparksOriginBadge(compact: true)
-                    .allowsHitTesting(false)
-                Spacer(minLength: 0)
-                SparkFeedMuteButton()
-            }
-            .padding(10)
-            .zIndex(80)
         }
         .frame(minWidth: 0, maxWidth: .infinity)
         .frame(height: cardHeight)
@@ -191,6 +180,17 @@ struct SparkFeedCard: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+        // Badge + mute AFTER clipShape — never cropped by film/corner clip (was missing on many cards).
+        .overlay(alignment: .top) {
+            HStack(alignment: .top, spacing: 8) {
+                SparksOriginBadge(compact: true)
+                    .allowsHitTesting(false)
+                Spacer(minLength: 0)
+                SparkFeedMuteButton()
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+        }
         .contentShape(Rectangle())
         .overlay {
             if !edgeToEdge {
@@ -249,8 +249,8 @@ struct SparksOriginBadge: View {
     }
 }
 
-/// Feed Sparks mute chip — lives on `SparkFeedCard` (not inside the clipped film).
-private struct SparkFeedMuteButton: View {
+/// Feed Sparks mute chip — card overlay (always visible above film).
+struct SparkFeedMuteButton: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
@@ -258,10 +258,11 @@ private struct SparkFeedMuteButton: View {
             appState.feedVideosMuted.toggle()
         } label: {
             Image(systemName: appState.feedVideosMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: 14, weight: .bold))
                 .foregroundStyle(.white)
-                .frame(width: 34, height: 34)
-                .background(Theme.ink.opacity(0.45), in: Circle())
+                .frame(width: 36, height: 36)
+                .background(Color.black.opacity(0.55), in: Circle())
+                .overlay(Circle().stroke(Color.white.opacity(0.35), lineWidth: 0.5))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(appState.feedVideosMuted ? "Unmute" : "Mute")

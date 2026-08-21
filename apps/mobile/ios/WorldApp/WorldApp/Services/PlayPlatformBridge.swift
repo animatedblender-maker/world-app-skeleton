@@ -424,8 +424,37 @@ enum PlayPlatformBridge {
     static func isSparkFeedCard(_ post: CountryPost) -> Bool {
         if post.isStory { return false }
         if post.isSparkFeedShare || SparkShareMarker.isMarked(post.body) { return true }
-        if post.isReel || isReelVideo(post) { return true }
-        if let embed = post.sharedPost?.asCountryPost, embed.isReel || isReelVideo(embed) {
+        if post.isReel || post.isSpark || isReelVideo(post) { return true }
+        if let embed = post.sharedPost?.asCountryPost,
+           embed.isReel || embed.isSpark || isReelVideo(embed) || looksLikeCatalogSparkMedia(embed) {
+            return true
+        }
+        // Catalog Sparks sometimes land as media_type=video with kind/path markers only.
+        if looksLikeCatalogSparkMedia(post) { return true }
+        return false
+    }
+
+    /// R2 ShortForm / kind=spark / spark path — even when reel flag was dropped on resign.
+    static func looksLikeCatalogSparkMedia(_ post: CountryPost) -> Bool {
+        guard post.hasVideo || post.playableVideoURL != nil else { return false }
+        if isHubFeedCardVideo(post) || isHubOriginShare(post) || isR2LongFormMedia(post) {
+            return false
+        }
+        let blobs = [
+            post.mediaURL,
+            post.mediaPath,
+            post.thumbURL,
+            post.primaryMediaURL,
+        ]
+        .compactMap { $0?.lowercased() }
+        .joined(separator: " ")
+        if blobs.contains("shortform/") { return true }
+        if blobs.contains("\"kind\":\"spark\"") || blobs.contains("\"kind\": \"spark\"") {
+            return true
+        }
+        if blobs.contains("r2_spark") || blobs.contains("r2_focus_seed") {
+            // Focus seeds are Sparks unless clearly LongForm.
+            if blobs.contains("longform/") { return false }
             return true
         }
         return false
