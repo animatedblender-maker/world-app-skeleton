@@ -380,8 +380,9 @@ struct ReelsPagerCard: View {
         // Film + chrome draw under the Dynamic Island; top chrome is overlaid separately.
         .ignoresSafeArea(.all)
         .overlay(alignment: .bottom) {
+            // Inset ≥ dock shadow so cell clipsToBounds cannot slice L/R rounded corners.
             sparkDock
-                .padding(.horizontal, 12)
+                .padding(.horizontal, 18)
                 .padding(.bottom, max(10, bottomInset - 4))
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -693,7 +694,8 @@ struct ReelsPagerCard: View {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(Theme.paper.opacity(0.22), lineWidth: 0.5)
         )
-        .shadow(color: Theme.ink.opacity(0.18), radius: 14, y: 6)
+        // Keep shadow inside the 18pt side inset (pager cell clipsToBounds).
+        .shadow(color: Theme.ink.opacity(0.16), radius: 8, y: 4)
     }
 
     private func sparkAction(
