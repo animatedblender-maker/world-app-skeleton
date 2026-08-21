@@ -99,34 +99,58 @@ private struct ReelCard: View {
     var body: some View {
         ZStack(alignment: .bottomLeading) {
             if let url = post.playableVideoURL {
-                if ArchiveVideoPlayback.isArchiveURL(url) || post.isHubSeedVideo {
-                    ArchiveVideoPlayerView(
-                        url: url,
-                        posterURL: post.posterImageURL,
-                        isActive: isActive,
-                        muted: false,
-                        // Sparks sessions start at 0; preload neighbors for instant swipe.
-                        startTime: 0,
-                        fillsFrame: false,
-                        postID: post.id
-                    )
-                    .ignoresSafeArea()
-                    .background(Color.black)
-                } else {
-                    VideoPlayerView(
-                        url: url,
-                        posterURL: post.posterImageURL,
-                        placement: "reel",
-                        countryCode: country.iso,
-                        contentCountryCode: post.countryCode ?? country.iso,
+                let poster = MediaURLResolver.posterURL(for: post) ?? post.posterImageURL
+                ZStack {
+                    Color.black
+                    FrameZeroFallbackPoster(
                         postID: post.id,
-                        adsEnabled: false,
-                        isActive: isActive,
-                        loops: true,
-                        muted: false,
+                        videoURL: url,
                         fillsFrame: false
                     )
                     .ignoresSafeArea()
+                    .allowsHitTesting(false)
+                    if let poster {
+                        CachedAsyncImage(
+                            url: poster,
+                            maxPixelSize: 900,
+                            contentMode: .fit,
+                            placeholder: AnyView(Color.clear)
+                        )
+                        .ignoresSafeArea()
+                        .allowsHitTesting(false)
+                    }
+                    if ArchiveVideoPlayback.isArchiveURL(url) || post.isHubSeedVideo {
+                        ArchiveVideoPlayerView(
+                            url: url,
+                            posterURL: poster,
+                            isActive: isActive,
+                            muted: false,
+                            // Sparks sessions start at 0; preload neighbors for instant swipe.
+                            startTime: 0,
+                            fillsFrame: false,
+                            postID: post.id
+                        )
+                        .ignoresSafeArea()
+                    } else {
+                        VideoPlayerView(
+                            url: url,
+                            posterURL: poster,
+                            placement: "reel",
+                            countryCode: country.iso,
+                            contentCountryCode: post.countryCode ?? country.iso,
+                            postID: post.id,
+                            adsEnabled: false,
+                            isActive: isActive,
+                            loops: true,
+                            muted: false,
+                            fillsFrame: false
+                        )
+                        .ignoresSafeArea()
+                    }
+                }
+                .background(Color.black)
+                .onAppear {
+                    Task { _ = await VideoFrameCache.shared.image(for: post.id, videoURL: url) }
                 }
             }
 

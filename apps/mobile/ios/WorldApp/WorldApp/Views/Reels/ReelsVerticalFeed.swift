@@ -426,6 +426,7 @@ struct ReelsPagerCard: View {
             resetGravityForCurrentPost()
             if let url = sparkPlayURL {
                 SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
+                Task { _ = await VideoFrameCache.shared.image(for: post.id, videoURL: url) }
             }
         }
         .onDisappear {
@@ -440,13 +441,21 @@ struct ReelsPagerCard: View {
         }
     }
 
+    /// Prefer server Frame 0, then nested shared origin, then raw posterImageURL.
+    private var sparkPosterURL: URL? {
+        MediaURLResolver.posterURL(for: post)
+            ?? post.sharedPost.flatMap { MediaURLResolver.posterURL(for: $0.asCountryPost) }
+            ?? post.posterImageURL
+    }
+
     /// Full-stage under the notch. Portrait fills; wide clips fit when fill would crop hard.
     private var filmStage: some View {
         ZStack {
             Color.black
 
-            // Client Frame 0 underlay while remote thumb loads (avoids black cold start).
-            if isActive, let url = sparkPlayURL {
+            // Always underlay Frame 0 on every pager cell (neighbors too) — swipe must not
+            // land on black while remote thumb / AV catch up.
+            if let url = sparkPlayURL {
                 FrameZeroFallbackPoster(
                     postID: post.id,
                     videoURL: url,
@@ -456,7 +465,7 @@ struct ReelsPagerCard: View {
                 .allowsHitTesting(false)
             }
 
-            if let poster = post.posterImageURL {
+            if let poster = sparkPosterURL {
                 CachedAsyncImage(
                     url: poster,
                     maxPixelSize: 900,
@@ -473,7 +482,7 @@ struct ReelsPagerCard: View {
                     if ArchiveVideoPlayback.isArchiveURL(url) || post.isHubSeedVideo {
                         ArchiveVideoPlayerView(
                             url: url,
-                            posterURL: post.posterImageURL,
+                            posterURL: sparkPosterURL,
                             isActive: isActive,
                             muted: false,
                             startTime: resumeStartTime,
@@ -494,7 +503,7 @@ struct ReelsPagerCard: View {
                     } else {
                         VideoPlayerView(
                             url: url,
-                            posterURL: post.posterImageURL,
+                            posterURL: sparkPosterURL,
                             placement: "reel",
                             countryCode: post.countryCode,
                             contentCountryCode: post.countryCode,

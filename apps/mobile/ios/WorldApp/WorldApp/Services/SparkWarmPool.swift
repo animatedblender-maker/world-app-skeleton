@@ -112,6 +112,12 @@ final class SparkWarmPool {
                 maxPixelSize: 360,
                 aggressive: !MediaBudget.isConstrained
             )
+            // Client Frame 0 for the same band — swipe must not land on black.
+            for post in posts[resolveLo..<resolveHi] {
+                let url = post.playableVideoURL ?? MediaURLResolver.videoURL(for: post)
+                guard let url else { continue }
+                Task { _ = await VideoFrameCache.shared.image(for: post.id, videoURL: url) }
+            }
         }
 
         let lo = max(0, index - behind)
