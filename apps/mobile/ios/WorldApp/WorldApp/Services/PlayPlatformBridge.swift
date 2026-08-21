@@ -444,9 +444,9 @@ enum PlayPlatformBridge {
         if HubChannelPostMarker.isMarked(post.body) { return false }
         let blobs = [
             post.mediaURL,
-            post.mediaPath,
             post.thumbURL,
             post.primaryMediaURL,
+            post.mediaPayload?.r2Key,
         ]
         .compactMap { $0?.lowercased() }
         .joined(separator: " ")
