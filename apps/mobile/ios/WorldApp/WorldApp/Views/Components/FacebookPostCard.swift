@@ -792,28 +792,30 @@ struct FacebookPostCard: View {
         // Same poster resolve as Sparks feed card (self → shared origin → resolver).
         let poster = MediaURLResolver.posterURL(for: post)
             ?? post.sharedPost.flatMap { MediaURLResolver.posterURL(for: $0.asCountryPost) }
-        // Always keep a Frame 0 underlay — remote thumb can be missing/slow on shares.
         let isHubFilm = PlayPlatformBridge.isHubFeedCardVideo(post)
             || PlayPlatformBridge.isHubCatalogContent(post)
             || isHubOriginShareCard
         ZStack {
             Color.black
-            FrameZeroFallbackPoster(
-                postID: post.id,
-                videoURL: url,
-                fillsFrame: !isHubFilm
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .allowsHitTesting(false)
             if let poster {
                 CachedAsyncImage(
                     url: poster,
                     maxPixelSize: 720,
                     contentMode: isHubFilm ? .fit : .fill,
-                    placeholder: AnyView(Color.clear)
+                    placeholder: AnyView(Color.black)
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
+                .allowsHitTesting(false)
+            } else {
+                // No thumb_url yet — pack-path Frame 0 only (no full-video download).
+                FrameZeroFallbackPoster(
+                    postID: post.id,
+                    videoURL: url,
+                    fillsFrame: !isHubFilm,
+                    allowClientExtract: false
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .allowsHitTesting(false)
             }
             InFrameVideoPlayer(
@@ -835,10 +837,6 @@ struct FacebookPostCard: View {
             )
         }
         .background(Color.black)
-        .onAppear {
-            // Kick client Frame 0 before autoplay wins focus (kills black cold start).
-            Task { _ = await VideoFrameCache.shared.image(for: post.id, videoURL: url) }
-        }
     }
 
     private var actions: some View {

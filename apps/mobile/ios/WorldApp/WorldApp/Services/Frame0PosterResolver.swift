@@ -13,6 +13,10 @@ actor Frame0PosterResolver {
     private var cache: [String: CacheEntry] = [:]
     private var inflight: [String: Task<URL?, Never>] = [:]
     private let cacheTTL: TimeInterval = 6 * 3600
+    /// Cap parallel single-poster GETs — neighbors were opening dozens of connections.
+    private var activeFetches = 0
+    private let maxConcurrentFetches = 4
+    private var fetchWaiters: [CheckedContinuation<Void, Never>] = []
 
     /// Signed Frame 0 URL for a post (derived from media_path / r2_key on the server).
     func posterURL(postID: String, fallback: URL? = nil) async -> URL? {
@@ -26,13 +30,42 @@ actor Frame0PosterResolver {
             return await existing.value ?? fallback
         }
 
+        await acquireFetchSlot()
+        if let hit = cache[key], Date().timeIntervalSince(hit.cachedAt) < cacheTTL {
+            releaseFetchSlot()
+            return hit.url
+        }
+        if let existing = inflight[key] {
+            releaseFetchSlot()
+            return await existing.value ?? fallback
+        }
+
         let task = Task { () -> URL? in
-            await self.fetchAndCache(postID: key, fallback: fallback)
+            defer { Task { await self.releaseFetchSlot() } }
+            return await self.fetchAndCache(postID: key, fallback: fallback)
         }
         inflight[key] = task
         let result = await task.value
         inflight[key] = nil
         return result
+    }
+
+    private func acquireFetchSlot() async {
+        if activeFetches < maxConcurrentFetches {
+            activeFetches += 1
+            return
+        }
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            fetchWaiters.append(cont)
+        }
+        activeFetches += 1
+    }
+
+    private func releaseFetchSlot() {
+        activeFetches = max(0, activeFetches - 1)
+        if !fetchWaiters.isEmpty {
+            fetchWaiters.removeFirst().resume()
+        }
     }
 
     /// Warm a Sparks/Hubs window — one round-trip for many posts.

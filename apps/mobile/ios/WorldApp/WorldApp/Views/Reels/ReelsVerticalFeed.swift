@@ -412,8 +412,6 @@ struct ReelsPagerCard: View {
             }
             if let url = sparkPlayURL {
                 SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
-                // Prefetch client Frame 0 before focus paint (kills black cold start).
-                Task { _ = await VideoFrameCache.shared.image(for: post.id, videoURL: url) }
             }
         }
         .onChange(of: post.id) { _, _ in
@@ -426,7 +424,6 @@ struct ReelsPagerCard: View {
             resetGravityForCurrentPost()
             if let url = sparkPlayURL {
                 SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
-                Task { _ = await VideoFrameCache.shared.image(for: post.id, videoURL: url) }
             }
         }
         .onDisappear {
@@ -453,27 +450,26 @@ struct ReelsPagerCard: View {
         ZStack {
             Color.black
 
-            // Always underlay Frame 0 on every pager cell (neighbors too) — swipe must not
-            // land on black while remote thumb / AV catch up.
-            if let url = sparkPlayURL {
-                FrameZeroFallbackPoster(
-                    postID: post.id,
-                    videoURL: url,
-                    fillsFrame: useFill
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .allowsHitTesting(false)
-            }
-
+            // Prefer existing thumb; otherwise pack-path Frame 0 (API). Never AV-extract
+            // on every neighbor — that downloaded full videos and froze the pager.
             if let poster = sparkPosterURL {
                 CachedAsyncImage(
                     url: poster,
                     maxPixelSize: 900,
                     contentMode: useFill ? .fill : .fit,
-                    placeholder: AnyView(Color.clear)
+                    placeholder: AnyView(Color.black)
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
+                .allowsHitTesting(false)
+            } else if let url = sparkPlayURL {
+                FrameZeroFallbackPoster(
+                    postID: post.id,
+                    videoURL: url,
+                    fillsFrame: useFill,
+                    allowClientExtract: isActive
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .allowsHitTesting(false)
             }
 

@@ -107,26 +107,19 @@ final class SparkWarmPool {
                     }
                 }
             }
-            let band = Array(posts[resolveLo..<resolveHi])
-            ImageCache.shared.prefetchPostThumbnails(
-                band,
-                maxPixelSize: 360,
-                aggressive: !MediaBudget.isConstrained
-            )
-            // Instant Frame 0 via R2 pack path (one batch round-trip), then ImageCache.
-            Task {
-                let ids = band.map(\.id)
-                await Frame0PosterResolver.shared.prefetch(postIDs: ids)
-                var urls: [URL] = []
-                for id in ids {
-                    if let u = await Frame0PosterResolver.shared.posterURL(postID: id) {
-                        urls.append(u)
-                    }
-                }
-                if !urls.isEmpty {
-                    await MainActor.run {
-                        ImageCache.shared.prefetch(urls, maxPixelSize: 512)
-                    }
+            // Tight thumb band only — wide Frame0+AV storms caused R2 timeouts / black UI.
+            let thumbHi = min(posts.count, index + ahead + 2)
+            let thumbLo = max(0, index - behind)
+            if thumbLo < thumbHi {
+                let band = Array(posts[thumbLo..<thumbHi])
+                ImageCache.shared.prefetchPostThumbnails(
+                    band,
+                    maxPixelSize: 360,
+                    aggressive: false
+                )
+                // One batch poster resolve for the same tight window (no per-id fan-out).
+                Task {
+                    await Frame0PosterResolver.shared.prefetch(postIDs: band.map(\.id))
                 }
             }
         }

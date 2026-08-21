@@ -476,24 +476,24 @@ struct PlayFeedLinkCard: View {
             let useArchivePath = ArchiveVideoPlayback.isArchiveURL(url)
             ZStack {
                 Color.black
-                // Client t=0 while remote Frame 0 loads — kills black cold start on hub shares.
-                FrameZeroFallbackPoster(
-                    postID: playPost.id,
-                    videoURL: url,
-                    fillsFrame: false
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .allowsHitTesting(false)
-                // Same as Hubs watch: fit the whole frame (not aspectFill zoom/crop).
                 if let poster {
                     CachedAsyncImage(
                         url: poster,
                         maxPixelSize: 720,
                         contentMode: .fit,
-                        placeholder: AnyView(Color.clear)
+                        placeholder: AnyView(Color.black)
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .clipped()
+                    .allowsHitTesting(false)
+                } else {
+                    FrameZeroFallbackPoster(
+                        postID: playPost.id,
+                        videoURL: url,
+                        fillsFrame: false,
+                        allowClientExtract: false
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .allowsHitTesting(false)
                 }
 
@@ -522,9 +522,6 @@ struct PlayFeedLinkCard: View {
             .id("hub-feed-\(playPost.id)")
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.black)
-            .onAppear {
-              Task { _ = await VideoFrameCache.shared.image(for: playPost.id, videoURL: url) }
-            }
             // Open Hubs via badge; taps on film toggle chrome inside the player.
         } else {
             YouTubeVideoThumbnail(

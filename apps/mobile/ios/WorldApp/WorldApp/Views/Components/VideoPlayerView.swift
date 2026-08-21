@@ -162,14 +162,6 @@ struct VideoPlayerView: View {
                     if shouldShowPosterCover {
                         ZStack {
                             softVideoFloor
-                            if let postID {
-                                FrameZeroFallbackPoster(
-                                    postID: postID,
-                                    videoURL: url,
-                                    fillsFrame: fillsFrame
-                                )
-                                .allowsHitTesting(false)
-                            }
                             if let posterURL {
                                 CachedAsyncImage(
                                     url: posterURL,
@@ -179,6 +171,14 @@ struct VideoPlayerView: View {
                                 )
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                                 .clipped()
+                                .allowsHitTesting(false)
+                            } else if let postID {
+                                FrameZeroFallbackPoster(
+                                    postID: postID,
+                                    videoURL: url,
+                                    fillsFrame: fillsFrame,
+                                    allowClientExtract: isActive
+                                )
                                 .allowsHitTesting(false)
                             }
                         }
@@ -1977,16 +1977,11 @@ struct InFrameVideoPlayer: View {
         showsControls && !muteOnlyControls && playGate
     }
 
-    /// Poster / letterbox floor — remote thumb over client Frame 0 over black.
-    /// Always extract client Frame 0 when we have a post id (shares often lack thumb_url).
+    /// Poster floor — prefer existing `posterURL`; otherwise pack-path Frame 0 (no video download).
     @ViewBuilder
     private var posterFloor: some View {
         ZStack {
             Color.black
-            if let postID {
-                FrameZeroFallbackPoster(postID: postID, videoURL: url, fillsFrame: fillsFrame)
-                    .allowsHitTesting(false)
-            }
             if let posterURL {
                 CachedAsyncImage(
                     url: posterURL,
@@ -1996,6 +1991,14 @@ struct InFrameVideoPlayer: View {
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
+                .allowsHitTesting(false)
+            } else if let postID {
+                FrameZeroFallbackPoster(
+                    postID: postID,
+                    videoURL: url,
+                    fillsFrame: fillsFrame,
+                    allowClientExtract: false
+                )
                 .allowsHitTesting(false)
             }
         }

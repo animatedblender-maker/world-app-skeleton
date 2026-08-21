@@ -79,6 +79,11 @@ struct FrameZeroFallbackPoster: View {
     let postID: String
     let videoURL: URL
     var fillsFrame: Bool = true
+    /// When false (default), only fetch signed `frame0_*.webp` — never download the full
+    /// video for AV extract. Full-video extract storms R2 and freezes Sparks/feed.
+    var allowClientExtract: Bool = false
+    /// Skip network if the post already has a usable remote poster URL.
+    var seedPosterURL: URL? = nil
 
     @State private var frameImage: UIImage?
     @State private var remotePosterURL: URL?
@@ -86,10 +91,9 @@ struct FrameZeroFallbackPoster: View {
     var body: some View {
         ZStack {
             Color.black
-            // Instant path: signed …/frame0_512.webp from R2 pack slug (server-derived).
-            if let remotePosterURL {
+            if let url = remotePosterURL ?? seedPosterURL {
                 CachedAsyncImage(
-                    url: remotePosterURL,
+                    url: url,
                     maxPixelSize: 720,
                     contentMode: fillsFrame ? .fill : .fit,
                     placeholder: AnyView(Color.clear)
@@ -104,13 +108,17 @@ struct FrameZeroFallbackPoster: View {
                     .clipped()
             }
         }
-        .task(id: "\(postID)|\(videoURL.absoluteString)") {
-            // 1) Pack-path Frame 0 (instant when object exists).
+        .task(id: "\(postID)|\(videoURL.absoluteString)|\(allowClientExtract)") {
+            if let seed = seedPosterURL {
+                remotePosterURL = seed
+                return
+            }
+            // Pack-path Frame 0 only (cheap). Do not AV-extract on every cell.
             if let signed = await Frame0PosterResolver.shared.posterURL(postID: postID) {
                 remotePosterURL = signed
                 return
             }
-            // 2) Client t=0 extract only if R2 poster missing.
+            guard allowClientExtract else { return }
             frameImage = await VideoFrameCache.shared.image(for: postID, videoURL: videoURL)
         }
     }
@@ -124,7 +132,7 @@ final class VideoFrameCache {
     /// In-flight extractors — waiters join instead of returning nil (nil = black poster).
     private var inflight: [String: Task<UIImage?, Never>] = [:]
     private var activeCount = 0
-    private let maxConcurrent = 3
+    private let maxConcurrent = 1
     private var gateWaiters: [CheckedContinuation<Void, Never>] = []
     private let directoryURL: URL = {
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]

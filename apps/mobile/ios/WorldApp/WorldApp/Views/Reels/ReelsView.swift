@@ -102,19 +102,21 @@ private struct ReelCard: View {
                 let poster = MediaURLResolver.posterURL(for: post) ?? post.posterImageURL
                 ZStack {
                     Color.black
-                    FrameZeroFallbackPoster(
-                        postID: post.id,
-                        videoURL: url,
-                        fillsFrame: false
-                    )
-                    .ignoresSafeArea()
-                    .allowsHitTesting(false)
                     if let poster {
                         CachedAsyncImage(
                             url: poster,
                             maxPixelSize: 900,
                             contentMode: .fit,
-                            placeholder: AnyView(Color.clear)
+                            placeholder: AnyView(Color.black)
+                        )
+                        .ignoresSafeArea()
+                        .allowsHitTesting(false)
+                    } else {
+                        FrameZeroFallbackPoster(
+                            postID: post.id,
+                            videoURL: url,
+                            fillsFrame: false,
+                            allowClientExtract: isActive
                         )
                         .ignoresSafeArea()
                         .allowsHitTesting(false)
@@ -149,9 +151,6 @@ private struct ReelCard: View {
                     }
                 }
                 .background(Color.black)
-                .onAppear {
-                    Task { _ = await VideoFrameCache.shared.image(for: post.id, videoURL: url) }
-                }
             }
 
             LinearGradient(colors: [.clear, .black.opacity(0.7)], startPoint: .center, endPoint: .bottom)
