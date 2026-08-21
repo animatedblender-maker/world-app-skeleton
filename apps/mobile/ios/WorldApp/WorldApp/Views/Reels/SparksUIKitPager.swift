@@ -133,8 +133,8 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         // Prefetch cells so configure + warm-pool claim happen before the page lands.
         cv.isPrefetchingEnabled = true
         cv.prefetchDataSource = self
-        // Fullscreen fill Sparks: don't slice dock chips that draw near the page edge.
-        cv.clipsToBounds = false
+        // Keep each page’s chrome inside the screen (dock was spilling L/R when false).
+        cv.clipsToBounds = true
         return cv
     }()
 
@@ -637,10 +637,10 @@ private final class SparksPageCell: UICollectionViewCell {
         super.init(frame: frame)
         backgroundColor = .black
         contentView.backgroundColor = .black
-        // Do NOT clip the cell — that sliced the frosted dock’s L/R rounded corners
-        // on fullscreen (aspectFill) Sparks. Film is clipped inside SwiftUI instead.
-        clipsToBounds = false
-        contentView.clipsToBounds = false
+        // Must clip to the page frame — otherwise ignoresSafeArea overflow draws the
+        // Like/Chat/Keep/Send dock stretched past the left/right screen edges.
+        clipsToBounds = true
+        contentView.clipsToBounds = true
         // No safe-area layout margins on the cell.
         contentView.insetsLayoutMarginsFromSafeArea = false
         insetsLayoutMarginsFromSafeArea = false
@@ -691,8 +691,8 @@ private final class SparksPageCell: UICollectionViewCell {
             )
             // Optimistic fill (vertical Sparks); card may switch to fit for wide clips only.
             .environment(\.sparksPlayerFillsFrame, true)
+            // Fill the cell only — never `.ignoresSafeArea` here (that spilled the dock L/R).
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .ignoresSafeArea(.all)
         )
         if let appState {
             root = AnyView(root.environment(appState))
@@ -701,13 +701,13 @@ private final class SparksPageCell: UICollectionViewCell {
         if let host {
             host.rootView = root
             host.view.backgroundColor = .black
-            host.view.clipsToBounds = false
+            host.view.clipsToBounds = true
             host.additionalSafeAreaInsets = .zero
             host.view.insetsLayoutMarginsFromSafeArea = false
         } else {
             let hc = UIHostingController(rootView: root)
             hc.view.backgroundColor = .black
-            hc.view.clipsToBounds = false
+            hc.view.clipsToBounds = true
             hc.view.insetsLayoutMarginsFromSafeArea = false
             hc.additionalSafeAreaInsets = .zero
             if #available(iOS 16.4, *) {
@@ -728,10 +728,9 @@ private final class SparksPageCell: UICollectionViewCell {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        // UIKit may re-assert cell clipping on reuse/layout — keep dock corners intact.
-        clipsToBounds = false
-        contentView.clipsToBounds = false
-        host?.view.clipsToBounds = false
+        clipsToBounds = true
+        contentView.clipsToBounds = true
+        host?.view.clipsToBounds = true
         host?.view.frame = contentView.bounds
         host?.additionalSafeAreaInsets = .zero
     }

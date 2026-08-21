@@ -361,8 +361,10 @@ struct ReelsPagerCard: View {
     }
 
     var body: some View {
-        // Dock is a ZStack sibling (not under a parent `.clipped()`), so fullscreen
-        // fill Sparks never slice the frosted card’s L/R rounded corners.
+        // IMPORTANT: do NOT `.ignoresSafeArea(.all)` on this card.
+        // Combined with UIHostingController safeAreaRegions=[], that expanded the
+        // layout *wider than the screen* so the dock looked stretched off L/R.
+        // Edge-to-edge film comes from the pager host (safeAreaRegions = []), not here.
         ZStack(alignment: .bottom) {
             filmStage
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -377,15 +379,15 @@ struct ReelsPagerCard: View {
                     handleSingleTapPause()
                 }
 
-            // Fullscreen fill: inset more so capsule ends never sit under pager edge-clip.
             sparkDock
-                .padding(.horizontal, useFill ? 20 : 16)
+                .padding(.horizontal, 16)
                 .padding(.bottom, max(10, bottomInset - 4))
+                // Hard cap to the page width — never spill past the screen edges.
                 .frame(maxWidth: .infinity, alignment: .bottom)
+                .clipped()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Film + chrome draw under the Dynamic Island; top chrome is overlaid separately.
-        .ignoresSafeArea(.all)
+        .clipped()
         .animation(MatteryaMotion.like, value: showLikeBurst)
         .onChange(of: isActive) { _, active in
             if !active {
@@ -559,7 +561,6 @@ struct ReelsPagerCard: View {
                 )
                 .frame(height: 160)
             }
-            .ignoresSafeArea()
             .allowsHitTesting(false)
 
             // Soft off-white gold play — fades in, holds briefly, fades out & disappears.
