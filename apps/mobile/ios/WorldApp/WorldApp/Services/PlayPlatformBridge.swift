@@ -435,11 +435,13 @@ enum PlayPlatformBridge {
     }
 
     /// R2 ShortForm / kind=spark / spark path — even when reel flag was dropped on resign.
+    ///
+    /// Must **not** call `isHubFeedCardVideo` / `isSparkFeedCard` (those call back here → crash).
     static func looksLikeCatalogSparkMedia(_ post: CountryPost) -> Bool {
         guard post.hasVideo || post.playableVideoURL != nil else { return false }
-        if isHubFeedCardVideo(post) || isHubOriginShare(post) || isR2LongFormMedia(post) {
-            return false
-        }
+        // Inline hub exclusions — never call isHubFeedCardVideo (cycles through isSparkFeedCard).
+        if isHubOriginShare(post) || isR2LongFormMedia(post) { return false }
+        if HubChannelPostMarker.isMarked(post.body) { return false }
         let blobs = [
             post.mediaURL,
             post.mediaPath,
@@ -448,13 +450,12 @@ enum PlayPlatformBridge {
         ]
         .compactMap { $0?.lowercased() }
         .joined(separator: " ")
+        if blobs.contains("longform/") { return false }
         if blobs.contains("shortform/") { return true }
         if blobs.contains("\"kind\":\"spark\"") || blobs.contains("\"kind\": \"spark\"") {
             return true
         }
         if blobs.contains("r2_spark") || blobs.contains("r2_focus_seed") {
-            // Focus seeds are Sparks unless clearly LongForm.
-            if blobs.contains("longform/") { return false }
             return true
         }
         return false
