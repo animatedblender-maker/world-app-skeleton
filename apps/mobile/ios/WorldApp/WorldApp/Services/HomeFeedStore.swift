@@ -611,33 +611,22 @@ final class HomeFeedStore {
             hasMore = true
         }
 
-        // Thumbs + light AV warm for the next spark/hub so focus claim is instant.
+        // Thumbs for nearby rows; Sparks-style 5-ahead AV sliding window on shared hubs/sparks.
         let ahead = fling ? 3 : 5
         let end = min(displayedPosts.count, index + ahead)
         if index < end {
             let window = Array(displayedPosts[index..<end])
             ImageCache.shared.prefetchFeedMedia(window, maxPixelSize: fling ? 280 : 360)
             if !fling {
-                var warmed = 0
-                var warmIDs: [String] = []
-                for post in window {
-                    guard warmed < 3 else { break }
-                    guard let url = post.playableVideoURL else { continue }
-                    let isSpark = post.isSpark || post.isReel || PlayPlatformBridge.isSparkFeedCard(post)
-                    let isHub = PlayPlatformBridge.isHubFeedCardVideo(post)
-                        || PlayPlatformBridge.isHubOriginShare(post)
-                    guard isSpark || isHub || post.hasVideo else { continue }
-                    warmIDs.append(post.id)
-                    SparkWarmPool.shared.warmSingle(
-                        postID: post.id,
-                        url: url,
-                        deep: warmed == 0
-                    )
-                    warmed += 1
-                }
-                if !warmIDs.isEmpty {
-                    Task(priority: .utility) {
-                        await RecommendationClient.warmPlaybackURLs(warmIDs)
+                let videos = Self.feedWarmVideoQueue(from: displayedPosts)
+                if let videoIndex = Self.feedWarmIndex(for: post, in: videos, feedIndex: index, feed: displayedPosts) {
+                    SparkWarmPool.shared.prepareFeedWindow(posts: videos, around: videoIndex)
+                    let hi = min(videos.count, videoIndex + SparkWarmPool.MediaBudget.playerAheadFeed + 1)
+                    let warmIDs = Array(videos[videoIndex..<hi].map(\.id))
+                    if !warmIDs.isEmpty {
+                        Task(priority: .utility) {
+                            await RecommendationClient.warmPlaybackURLs(warmIDs)
+                        }
                     }
                 }
             }
@@ -975,32 +964,58 @@ final class HomeFeedStore {
     /// Deep-preroll the first feed videos, then wait briefly so autoplay can claim
     /// a decoded frame (Instagram-style — no black/thumb blink on the winner).
     private func warmHead() async {
-        // Posters first (cheap). Limit R2 video warm — parallel MP4 GETs were timing out (-1001)
-        // and starving Frame 0 / first paint (black screens on feed + Sparks).
+        // Posters first (cheap). Sliding 5-ahead window fills under the concurrent warm cap
+        // (same policy as Sparks — no parallel MP4 storm).
         let head = Array(posts.prefix(max(firstWindow + 2, 12)))
         ImageCache.shared.prefetchFeedMedia(head, maxPixelSize: 360)
-        var videoIDs: [String] = []
-        var warmed = 0
-        for post in head {
-            guard warmed < 2 else { break }
-            guard let url = post.playableVideoURL else { continue }
-            let isSpark = post.isSpark || post.isReel || PlayPlatformBridge.isSparkFeedCard(post)
-            let isHub = PlayPlatformBridge.isHubFeedCardVideo(post)
-                || PlayPlatformBridge.isHubOriginShare(post)
-            guard isSpark || isHub || post.hasVideo else { continue }
-            videoIDs.append(post.id)
-            SparkWarmPool.shared.warmSingle(postID: post.id, url: url, deep: warmed == 0)
-            if ArchiveVideoPlayback.isArchiveURL(url) {
+        let videos = Self.feedWarmVideoQueue(from: posts)
+        guard !videos.isEmpty else { return }
+        SparkWarmPool.shared.prepareFeedWindow(posts: videos, around: 0)
+        for post in videos.prefix(SparkWarmPool.MediaBudget.playerAheadFeed + 1) {
+            if let url = post.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) {
                 ArchiveVideoPlayback.warmResolve(url)
             }
-            warmed += 1
         }
-        if let first = videoIDs.first {
-            Task(priority: .utility) {
-                await RecommendationClient.warmPlaybackURLs([first])
+        let readyIDs = Array(videos.prefix(2).map(\.id))
+        Task(priority: .utility) {
+            await RecommendationClient.warmPlaybackURLs(readyIDs)
+        }
+        await SparkWarmPool.shared.awaitReady(postIDs: Array(readyIDs.prefix(1)), timeout: 0.35)
+    }
+
+    /// Shared Sparks / Hubs (and any playable video) cards — feed warm queue skips text/image rows.
+    static func isFeedWarmVideo(_ post: CountryPost) -> Bool {
+        guard post.playableVideoURL != nil || post.hasVideo else { return false }
+        if post.isSpark || post.isReel || PlayPlatformBridge.isSparkFeedCard(post) { return true }
+        if PlayPlatformBridge.isHubFeedCardVideo(post) || PlayPlatformBridge.isHubOriginShare(post) {
+            return true
+        }
+        return post.hasVideo && post.playableVideoURL != nil
+    }
+
+    static func feedWarmVideoQueue(from posts: [CountryPost]) -> [CountryPost] {
+        posts.filter(isFeedWarmVideo)
+    }
+
+    /// Index in the video-only queue for sliding-window warm. If the visible row is not a
+    /// video, warm from the next upcoming shared Sparks/Hubs card.
+    static func feedWarmIndex(
+        for post: CountryPost,
+        in videos: [CountryPost],
+        feedIndex: Int,
+        feed: [CountryPost]
+    ) -> Int? {
+        guard !videos.isEmpty else { return nil }
+        if let hit = videos.firstIndex(where: { $0.id == post.id }) {
+            return hit
+        }
+        guard feedIndex < feed.count else { return 0 }
+        for row in feed[feedIndex...] {
+            if let hit = videos.firstIndex(where: { $0.id == row.id }) {
+                return hit
             }
-            await SparkWarmPool.shared.awaitReady(postIDs: [first], timeout: 0.35)
         }
+        return videos.indices.last
     }
 
     /// Opaque cursor for GraphQL `before` (created_at timestamptz).

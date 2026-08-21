@@ -1318,10 +1318,45 @@ final class AppState {
             if ArchiveVideoPlayback.isArchiveURL(url) {
                 ArchiveVideoPlayback.warmResolve(url)
             }
-            SparkWarmPool.shared.warmSingle(postID: watchPost.id, url: url, deep: true)
         }
+        // Same Sparks policy: keep next 5 hubs ready (shelf + session catalog). Never re-warm overlap.
+        warmHubsPlaybackWindow(around: presentation)
         ImageCache.shared.prefetchPostThumbnails([watchPost], maxPixelSize: 720)
         NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
+    }
+
+    /// Sliding 5-ahead warm for Hubs continuous / related taps (For you shelf + session catalog).
+    func warmHubsPlaybackWindow(around post: CountryPost) {
+        let presentation = PlayPlatformBridge.hubWatchPresentation(for: post)
+        func hubsWarmVideos(_ posts: [CountryPost]) -> [CountryPost] {
+            posts.filter { candidate in
+                guard candidate.playableVideoURL != nil || candidate.hasVideo else { return false }
+                // Prefer long-form hubs queue; still allow sparks that open from hubs strip.
+                return !candidate.isStory
+            }
+        }
+        let forYou = hubsWarmVideos(SlugShelfStore.shared.cachedPosts(for: SlugShelfStore.forYouKey))
+        let session = hubsWarmVideos(PostsService.shared.hubsSessionCatalog)
+        var source = !forYou.isEmpty ? forYou : session
+        if source.isEmpty {
+            source = [presentation]
+            if post.id != presentation.id { source.append(post) }
+        }
+        // Ensure the playing id is in the queue even if it came from feed share / chat.
+        if !source.contains(where: { $0.id == presentation.id }) {
+            source.insert(presentation, at: 0)
+        }
+        let index = source.firstIndex(where: {
+            $0.id == presentation.id || $0.id == post.id || $0.sharedPostID == post.id
+        }) ?? 0
+        SparkWarmPool.shared.prepareHubsWindow(posts: source, around: index)
+        let hi = min(source.count, index + SparkWarmPool.MediaBudget.playerAheadHubs + 1)
+        let warmIDs = Array(source[index..<hi].map(\.id))
+        if !warmIDs.isEmpty {
+            Task(priority: .utility) {
+                await RecommendationClient.warmPlaybackURLs(warmIDs)
+            }
+        }
     }
 
     /// Collapse to mini — **playback keeps running** (same continuous AVPlayer, only layout changes).

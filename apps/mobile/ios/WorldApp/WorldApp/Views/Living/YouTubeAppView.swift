@@ -683,9 +683,15 @@ struct YouTubeAppView: View {
                                 YouTubeVideoListRow(post: post, onTap: {
                                     openVideo(post)
                                 }, onAppearRow: {
-                                    // Scroll path must stay empty of network/AV/image storms.
-                                    // Only grow the local window near the end (no prefetch here).
+                                    // Grow local window near the end; settled scroll warms 5 ahead
+                                    // (same Sparks sliding window — concurrent warm cap avoids storms).
                                     ensureMoreForYou(around: index)
+                                    if !ScrollBudget.isFlinging {
+                                        SparkWarmPool.shared.prepareHubsWindow(
+                                            posts: stableDiscoverVideos,
+                                            around: index
+                                        )
+                                    }
                                 })
                                 .padding(.bottom, 18)
                             }
@@ -1464,18 +1470,25 @@ struct YouTubeAppView: View {
         }
     }
 
-    /// Prefetch posters only — keep this light so it never competes with first paint.
+    /// Prefetch posters first; then slide a 5-ahead AV window (capped concurrent warms).
     private func butterWarmHubCatalog(_ videos: [CountryPost]) {
         let thumbPx = YouTubeMediaLayout.hubsListThumbMaxPixel
         let head = stableDiscoverVideos.isEmpty
             ? videos.filter { !$0.isReel && $0.playableVideoURL != nil }
             : stableDiscoverVideos
-        // First screen only — never warm AVPlayers here.
         ImageCache.shared.prefetchPostThumbnails(
             Array(head.prefix(6)),
             maxPixelSize: thumbPx,
             aggressive: false
         )
+        // After first paint — park next 5 hubs so openVideo claims without black flash.
+        Task(priority: .utility) {
+            try? await Task.sleep(nanoseconds: 280_000_000)
+            guard appState.selectedTab == .hubs else { return }
+            let queue = head.filter { $0.playableVideoURL != nil || $0.hasVideo }
+            guard !queue.isEmpty else { return }
+            SparkWarmPool.shared.prepareHubsWindow(posts: queue, around: 0)
+        }
         // Sparks strip thumbs later — never compete with For you.
         Task(priority: .background) {
             try? await Task.sleep(nanoseconds: 1_200_000_000)
@@ -1799,7 +1812,7 @@ struct YouTubeAppView: View {
             watchPost = post
         }
         EngagementTracker.shared.hubVideoOpened(watchPost)
-        // Continuous layer owns AV — no warm-pool on open (froze mini/max).
+        // Continuous layer owns AV; startHubPlayback slides a 5-ahead warm window for related taps.
         appState.startHubPlayback(watchPost, expanded: true)
         // No easeInOut on the whole hubs tree — that lagged related taps + minimize.
         // .id(watchPost.id) on YouTubeWatchView resets scroll to title/comments (not related).

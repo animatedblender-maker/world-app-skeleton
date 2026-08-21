@@ -1,14 +1,16 @@
 import AVFoundation
 import Foundation
 
-/// Keeps **nearby Sparks / feed videos** fully buffered so play is instant on focus.
+/// Keeps **nearby Sparks / feed / hubs videos** fully buffered so play is instant on focus.
 ///
-/// ## Sliding window (Sparks)
+/// ## Sliding window (Sparks, feed shares, hubs)
 /// While watching index `i`, keep players for `[i-1 … i+5]` parked/claimed.
-/// On swipe to `i+1`, the window becomes `[i … i+6]`:
+/// On advance to `i+1`, the window becomes `[i … i+6]`:
 /// - already-warmed ids in the overlap are **kept** (never re-downloaded)
 /// - only the new edge (`i+6`) is warmed
 /// - the trailing id that left the window is evicted
+///
+/// Same policy for home-feed shared Sparks/Hubs cards and Hubs For you / related.
 ///
 /// Cards **claim** a player when visible, and **park** it back (item intact) when they
 /// scroll away — scrolling back reclaims the same buffered player instead of cold-start.
@@ -25,17 +27,20 @@ final class SparkWarmPool {
         static var isConstrained: Bool { physicalGB < 3.6 }
         static var isMid: Bool { physicalGB < 5.6 }
 
-        /// Full first-frame preroll depth (feed home).
-        static var deepPrerollFeed: Int { isConstrained ? 1 : 2 }
-        /// Sparks: deep-preroll the whole ahead window (butter swipe).
+        /// Product: while focused on one clip, keep the next **five** ready.
+        static var playerAhead: Int { isConstrained ? 3 : 5 }
+        /// Feed shared Sparks/Hubs — same 5-ahead sliding window as Sparks.
+        static var playerAheadFeed: Int { playerAhead }
+        /// Sparks vertical + hubs For you / related.
+        static var playerAheadSparks: Int { playerAhead }
+        static var playerAheadHubs: Int { playerAhead }
+        /// Deep-preroll the whole ahead window (butter swipe / tap).
+        static var deepPrerollFeed: Int { playerAheadFeed }
         static var deepPrerollSparks: Int { playerAheadSparks }
+        static var deepPrerollHubs: Int { playerAheadHubs }
         /// Parked slots ≈ ahead + behind + spare (claimed players are separate).
         /// 5 ahead + 1 behind + 1 spare = 7 mid/high; constrained keeps 5.
         static var maxSlots: Int { isConstrained ? 5 : (isMid ? 7 : 9) }
-        /// How far ahead to keep players mounted.
-        static var playerAheadFeed: Int { isConstrained ? 1 : 2 }
-        /// Product: while watching one Spark, keep the next **five** ready.
-        static var playerAheadSparks: Int { isConstrained ? 3 : 5 }
         static var playerBehind: Int { 1 }
         /// Max simultaneous R2 warms — sliding window still fills to 5, just not all at once.
         static var maxConcurrentWarms: Int { isConstrained ? 2 : 3 }
@@ -43,12 +48,12 @@ final class SparkWarmPool {
         static var forwardBufferLight: Double { isConstrained ? 2 : 3 }
     }
 
-    /// Default Sparks player window (adaptive).
+    /// Default Sparks / hubs player window (adaptive).
     static var playerAhead: Int { MediaBudget.playerAheadSparks }
     static var playerBehind: Int { MediaBudget.playerBehind }
     /// Full preroll (first-frame ready) for this many neighbors ahead of focus.
     static var deepPrerollAhead: Int { MediaBudget.deepPrerollSparks }
-    /// Feed-specific deep preroll (stricter than Sparks).
+    /// Feed shared hubs/sparks deep preroll (same depth as Sparks).
     static var deepPrerollFeed: Int { MediaBudget.deepPrerollFeed }
 
     private struct Slot {
@@ -80,7 +85,7 @@ final class SparkWarmPool {
         )
     }
 
-    /// Home feed / profile: **tight** window — deep preroll 2–4 only.
+    /// Home feed shared Sparks / Hubs — same 5-ahead sliding window (video-filtered queue).
     func prepareFeedWindow(posts: [CountryPost], around index: Int) {
         prepare(
             posts: posts,
@@ -88,6 +93,17 @@ final class SparkWarmPool {
             ahead: MediaBudget.playerAheadFeed,
             behind: MediaBudget.playerBehind,
             deepPrerollLimit: MediaBudget.deepPrerollFeed
+        )
+    }
+
+    /// Hubs For you shelf + related / up-next while watching.
+    func prepareHubsWindow(posts: [CountryPost], around index: Int) {
+        prepare(
+            posts: posts,
+            around: index,
+            ahead: MediaBudget.playerAheadHubs,
+            behind: MediaBudget.playerBehind,
+            deepPrerollLimit: MediaBudget.deepPrerollHubs
         )
     }
 

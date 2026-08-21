@@ -830,11 +830,17 @@ struct YouTubeWatchView: View {
     private func warmRelatedAround(_ item: RelatedShelfItem) {
         guard let idx = relatedWindow.firstIndex(where: { $0.id == item.id }) else { return }
         ScrollBudget.noteCellAppear()
-        // Mid-fling: skip prefetch (cells paint from memory). Settled: next 2–3 only.
+        // Mid-fling: skip prefetch (cells paint from memory). Settled: 5-ahead sliding window.
         guard !ScrollBudget.isFlinging else { return }
-        let end = min(relatedWindow.count, idx + 3)
+        let ahead = SparkWarmPool.MediaBudget.playerAheadHubs
+        let end = min(relatedWindow.count, idx + ahead + 1)
         guard idx < end else { return }
         warmRelatedMedia(prefix: end - idx, from: Array(relatedWindow[idx..<end]), resolveArchive: false)
+        // AV sliding window on related queue — tap next hubs without black cold-start.
+        SparkWarmPool.shared.prepareHubsWindow(
+            posts: relatedWindow.map(\.post),
+            around: idx
+        )
     }
 
     private func warmRelatedMedia(
@@ -844,15 +850,18 @@ struct YouTubeWatchView: View {
     ) {
         let slice = items ?? Array(relatedWindow.prefix(prefix))
         let posts = slice.map(\.post)
-        // Thumbnails only (cheap JPEG posters). Match list maxPixelSize.
+        // Thumbnails (cheap JPEG posters). Match list maxPixelSize.
         ImageCache.shared.prefetchPostThumbnails(
             posts,
             maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel,
             aggressive: false
         )
+        // First page of related: park 5 ahead under the concurrent warm cap.
+        if relatedWindow.count <= 16 || resolveArchive {
+            SparkWarmPool.shared.prepareHubsWindow(posts: relatedWindow.map(\.post), around: 0)
+        }
         guard resolveArchive else { return }
-        // At most the next play candidate — never a bulk CDN storm under the player.
-        for post in posts.prefix(1) {
+        for post in posts.prefix(SparkWarmPool.MediaBudget.playerAheadHubs + 1) {
             if let url = post.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) {
                 ArchiveVideoPlayback.warmResolve(url)
             }
