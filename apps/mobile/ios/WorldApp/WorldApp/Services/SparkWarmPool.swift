@@ -3,14 +3,15 @@ import Foundation
 
 /// Keeps **nearby Sparks / feed videos** fully buffered so play is instant on focus.
 ///
+/// ## Sliding window (Sparks)
+/// While watching index `i`, keep players for `[i-1 … i+5]` parked/claimed.
+/// On swipe to `i+1`, the window becomes `[i … i+6]`:
+/// - already-warmed ids in the overlap are **kept** (never re-downloaded)
+/// - only the new edge (`i+6`) is warmed
+/// - the trailing id that left the window is evicted
+///
 /// Cards **claim** a player when visible, and **park** it back (item intact) when they
 /// scroll away — scrolling back reclaims the same buffered player instead of cold-start.
-///
-/// Player bulk policy (memory-aware, IG-class):
-/// - **Feed:** deep preroll only 2–4 ahead (device tier) — never 8–32 AVPlayers
-/// - **Sparks:** slightly wider window; still capped on low-RAM devices
-/// - Light-load outer ring so claim rarely cold-starts mid-scroll
-/// - Catalog/queue growth is separate — this only buffers AVPlayers
 @MainActor
 final class SparkWarmPool {
     static let shared = SparkWarmPool()
@@ -24,17 +25,20 @@ final class SparkWarmPool {
         static var isConstrained: Bool { physicalGB < 3.6 }
         static var isMid: Bool { physicalGB < 5.6 }
 
-        // Tight windows — wide concurrent R2 MP4 warms caused -1001 timeouts + black screens.
         /// Full first-frame preroll depth (feed home).
         static var deepPrerollFeed: Int { isConstrained ? 1 : 2 }
-        /// Sparks: keep N+1 ready; do not storm 7–10 parallel downloads.
-        static var deepPrerollSparks: Int { isConstrained ? 1 : 2 }
-        /// Parked player slots (claimed not counted).
-        static var maxSlots: Int { isConstrained ? 4 : (isMid ? 6 : 8) }
-        /// How far ahead to keep *any* player item mounted (light or deep).
+        /// Sparks: deep-preroll the whole ahead window (butter swipe).
+        static var deepPrerollSparks: Int { playerAheadSparks }
+        /// Parked slots ≈ ahead + behind + spare (claimed players are separate).
+        /// 5 ahead + 1 behind + 1 spare = 7 mid/high; constrained keeps 5.
+        static var maxSlots: Int { isConstrained ? 5 : (isMid ? 7 : 9) }
+        /// How far ahead to keep players mounted.
         static var playerAheadFeed: Int { isConstrained ? 1 : 2 }
-        static var playerAheadSparks: Int { isConstrained ? 2 : 3 }
+        /// Product: while watching one Spark, keep the next **five** ready.
+        static var playerAheadSparks: Int { isConstrained ? 3 : 5 }
         static var playerBehind: Int { 1 }
+        /// Max simultaneous R2 warms — sliding window still fills to 5, just not all at once.
+        static var maxConcurrentWarms: Int { isConstrained ? 2 : 3 }
         static var forwardBufferDeep: Double { isConstrained ? 4 : 6 }
         static var forwardBufferLight: Double { isConstrained ? 2 : 3 }
     }
@@ -59,10 +63,13 @@ final class SparkWarmPool {
     private var inUse = Set<String>()
     private var maxSlots: Int { MediaBudget.maxSlots }
     private var forwardBufferSeconds: Double { MediaBudget.forwardBufferDeep }
+    /// Serialize warm starts so we fill the 5-ahead window without opening 5 R2 pipes at once.
+    private var activeWarms = 0
+    private var warmWaiters: [CheckedContinuation<Void, Never>] = []
 
     private init() {}
 
-    /// Convenience for Sparks player — adaptive bulk ahead/behind.
+    /// Convenience for Sparks player — sliding window: 5 ahead + 1 behind.
     func preparePlayerWindow(posts: [CountryPost], around index: Int) {
         prepare(
             posts: posts,
@@ -160,10 +167,11 @@ final class SparkWarmPool {
                     return u
                 }()
             guard let url else { continue }
-            if inUse.contains(post.id) { continue }
+            // Sliding window: never re-warm what is already parked / claimed / in-flight.
+            if hasWarmOrInflight(postID: post.id) || inUse.contains(post.id) { continue }
             let postIndex = posts.firstIndex(where: { $0.id == post.id }) ?? index
             let distanceAhead = postIndex - index
-            // Deep only for the next N ahead (not behind) — behind was doubling CPU cost.
+            // Deep preroll for ahead clips; behind stays light (rare reverse swipe).
             let deep = distanceAhead >= 0 && distanceAhead <= deepLimit
             Task { await warm(postID: post.id, sourceURL: url, deepPreroll: deep) }
         }
@@ -372,11 +380,35 @@ final class SparkWarmPool {
 
     // MARK: - Private
 
+    private func acquireWarmSlot() async {
+        if activeWarms < MediaBudget.maxConcurrentWarms {
+            activeWarms += 1
+            return
+        }
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            warmWaiters.append(cont)
+        }
+        activeWarms += 1
+    }
+
+    private func releaseWarmSlot() {
+        activeWarms = max(0, activeWarms - 1)
+        if !warmWaiters.isEmpty {
+            warmWaiters.removeFirst().resume()
+        }
+    }
+
     private func warm(postID: String, sourceURL: URL, deepPreroll: Bool) async {
         if slots[postID] != nil || inUse.contains(postID) { return }
         guard !warming.contains(postID) else { return }
         warming.insert(postID)
-        defer { warming.remove(postID) }
+        await acquireWarmSlot()
+        defer {
+            warming.remove(postID)
+            releaseWarmSlot()
+        }
+        // Re-check after waiting in the warm queue — another pass may have filled the slot.
+        if slots[postID] != nil || inUse.contains(postID) { return }
 
         // Warm with the URL we already have — do NOT await GraphQL per neighbor
         // (that froze feed/Sparks loading and caused ghost audio from stalled players).
