@@ -336,6 +336,17 @@ function opsHtml(activeTab: 'overview' | 'pipeline' | 'frame0'): string {
         </p>
       </div>
       <div class="card">
+        <strong>Ingest progress</strong>
+        <div class="bar" style="margin-top:10px"><i id="pipeBar"></i></div>
+        <p class="eta" id="pipeEta">Idle — click Run now</p>
+        <div class="grid" style="margin-top:12px">
+          <div class="stat"><div class="n" id="pipeCur">0</div><div class="l">Current</div></div>
+          <div class="stat"><div class="n" id="pipeTotal">—</div><div class="l">New packs</div></div>
+          <div class="stat"><div class="n" id="pipePhase">—</div><div class="l">Phase</div></div>
+        </div>
+        <p class="meta" id="pipeMeta"></p>
+      </div>
+      <div class="card">
         <strong>Run pipeline</strong>
         <div class="row">
           <button type="button" id="btnRun">Run now</button>
@@ -533,8 +544,49 @@ function opsHtml(activeTab: 'overview' | 'pipeline' | 'frame0'): string {
       startFrame0(false);
     });
 
-    // ── Pipeline stream (existing behavior) ─────────────────────────
+    // ── Pipeline stream + progress bar ───────────────────────────────
     const pipeButtons = ['btnRun','btnDry','btnResign','btnKafka'].map((id) => $(id));
+    let pipeProg = { cur: 0, total: 0, phase: 'idle', startedAt: 0 };
+
+    function setPipeProgress(partial) {
+      pipeProg = { ...pipeProg, ...partial };
+      const cur = pipeProg.cur || 0;
+      const total = pipeProg.total || 0;
+      const pct = total > 0 ? Math.min(100, Math.round((cur / total) * 1000) / 10) : (pipeProg.phase === 'done' ? 100 : 0);
+      if ($('pipeBar')) $('pipeBar').style.width = pct + '%';
+      if ($('pipeCur')) $('pipeCur').textContent = fmt(cur);
+      if ($('pipeTotal')) $('pipeTotal').textContent = total > 0 ? fmt(total) : '—';
+      if ($('pipePhase')) $('pipePhase').textContent = pipeProg.phase || '—';
+      let eta = pipeProg.phase === 'idle' ? 'Idle — click Run now'
+        : pipeProg.phase === 'done' ? ('Done · ' + fmt(cur) + (total ? ' / ' + fmt(total) : '') + ' packs')
+        : (total > 0 ? (fmt(cur) + ' / ' + fmt(total) + ' · ' + pct + '%') : (pipeProg.phase + '…'));
+      if (pipeProg.startedAt && cur > 0 && total > cur && pipeProg.phase === 'ingest') {
+        const elapsed = (Date.now() - pipeProg.startedAt) / 1000;
+        const rate = cur / Math.max(1, elapsed);
+        const left = (total - cur) / Math.max(0.01, rate);
+        eta += ' · ~' + Math.ceil(left / 60) + ' min left @ ' + rate.toFixed(2) + '/s';
+      }
+      if ($('pipeEta')) $('pipeEta').textContent = eta;
+    }
+
+    function notePipeLog(msg) {
+      const s = String(msg || '');
+      const newPacks = s.match(/New packs to ingest:\\s*(\\d+)/i);
+      if (newPacks) setPipeProgress({ total: Number(newPacks[1]), cur: 0, phase: 'ingest' });
+      const step = s.match(/\\[(\\d+)\\/(\\d+)\\]/);
+      if (step) {
+        setPipeProgress({ cur: Number(step[1]), total: Number(step[2]), phase: /frame0/i.test(s) ? 'frame0' : 'ingest' });
+        if ($('pipeMeta')) $('pipeMeta').textContent = s.slice(0, 180);
+      }
+      if (/Discovering complete packs/i.test(s)) setPipeProgress({ phase: 'discover', cur: 0 });
+      if (/Re-sign|Refreshing up to|Media URL refresh/i.test(s)) setPipeProgress({ phase: 'resign' });
+      if (/frame0 extract/i.test(s)) setPipeProgress({ phase: 'frame0' });
+      if (s.includes('DONE ok=')) {
+        setPipeProgress({ phase: 'done', cur: pipeProg.total || pipeProg.cur });
+        if ($('pipeBar')) $('pipeBar').style.width = '100%';
+      }
+    }
+
     function setPipeRunning(on) {
       pipeButtons.forEach((b) => {
         if (!b) return;
@@ -562,9 +614,12 @@ function opsHtml(activeTab: 'overview' | 'pipeline' | 'frame0'): string {
       div.innerHTML = '<span class="t">' + t + '</span><span class="' + level + '">' + escapeHtml(line.msg || '') + '</span>';
       logEl.appendChild(div);
       logEl.scrollTop = logEl.scrollHeight;
+      notePipeLog(line.msg || '');
     }
     async function runStream(mode) {
       setPipeRunning(true);
+      pipeProg = { cur: 0, total: 0, phase: 'starting', startedAt: Date.now() };
+      setPipeProgress({});
       $('pipeStatus').textContent = 'Starting…';
       $('pipeStatus').style.color = '';
       try {
@@ -604,6 +659,18 @@ function opsHtml(activeTab: 'overview' | 'pipeline' | 'frame0'): string {
                 if (data.done) {
                   $('pipeStatus').textContent = data.ok ? 'Done — pull-to-refresh the app' : 'Finished with errors';
                   $('pipeStatus').style.color = data.ok ? '#166534' : '#b91c1c';
+                  const st = data.stats || {};
+                  const originals = Number(st.insertedOriginals || pipeProg.cur || 0);
+                  const total = Number(st.discovered || pipeProg.total || originals);
+                  setPipeProgress({
+                    phase: 'done',
+                    cur: originals || pipeProg.cur,
+                    total: total || pipeProg.total,
+                  });
+                  if ($('pipeBar')) $('pipeBar').style.width = '100%';
+                  if ($('pipeMeta') && st.frame0Done != null) {
+                    $('pipeMeta').textContent = 'frame0 +' + st.frame0Done + ' · fail ' + (st.frame0Failed || 0) + ' · shares +' + (st.insertedShares || 0);
+                  }
                   if (data.stats) {
                     $('lastRun').innerHTML = '<pre class="stats">' + escapeHtml(JSON.stringify({ at: new Date().toISOString(), stats: data.stats }, null, 2)) + '</pre>';
                   }
