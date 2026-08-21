@@ -84,84 +84,81 @@ struct SparkFeedCard: View {
         ZStack(alignment: .topLeading) {
             Color.black
 
-            if let url = playURL {
-                // Same Sparks full-player stack: Frame 0 underlay + gravity from natural size.
-                ZStack {
-                    Color.black
-                    if let posterURL {
-                        CachedAsyncImage(
-                            url: posterURL,
-                            maxPixelSize: 900,
-                            contentMode: useFill ? .fill : .fit,
-                            placeholder: AnyView(Color.black)
-                        )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .clipped()
-                        .allowsHitTesting(false)
-                    }
-                    InFrameVideoPlayer(
-                        url: url,
-                        posterURL: posterURL,
-                        placement: "reel",
-                        countryCode: post.countryCode,
-                        contentCountryCode: post.countryCode,
-                        postID: post.id,
-                        muted: appState.feedVideosMuted,
-                        loops: true,
-                        preferArchivePlayer: ArchiveVideoPlayback.isArchiveURL(url),
-                        showsControls: false,
-                        muteOnlyControls: true,
-                        fillsFrame: useFill,
-                        sharesFeedMute: true,
-                        autoplaySurface: autoplaySurface,
-                        onViewed: { Task { await PostsService.shared.recordView(post) } },
-                        onVideoSize: { size in
-                            guard size.width > 2, size.height > 2 else { return }
-                            let stage = stageSize.width > 2 ? stageSize : CGSize(
-                                width: UIScreen.main.bounds.width,
-                                height: cardHeight
+            // Film only — clipped. Badge + mute live ABOVE this layer so fill/fit
+            // never crops them off on landscape / ShortForm packs.
+            Group {
+                if let url = playURL {
+                    ZStack {
+                        Color.black
+                        if let posterURL {
+                            CachedAsyncImage(
+                                url: posterURL,
+                                maxPixelSize: 900,
+                                contentMode: useFill ? .fill : .fit,
+                                placeholder: AnyView(Color.black)
                             )
-                            useFill = SparksStageLayout.shouldFillWithoutCrop(
-                                videoSize: size,
-                                stageSize: stage
-                            )
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .clipped()
+                            .allowsHitTesting(false)
                         }
+                        InFrameVideoPlayer(
+                            url: url,
+                            posterURL: posterURL,
+                            placement: "reel",
+                            countryCode: post.countryCode,
+                            contentCountryCode: post.countryCode,
+                            postID: post.id,
+                            muted: appState.feedVideosMuted,
+                            loops: true,
+                            preferArchivePlayer: ArchiveVideoPlayback.isArchiveURL(url),
+                            showsControls: false,
+                            // Chrome is drawn by SparkFeedCard overlays (always visible).
+                            muteOnlyControls: false,
+                            fillsFrame: useFill,
+                            topChromeReserve: 52,
+                            sharesFeedMute: true,
+                            autoplaySurface: autoplaySurface,
+                            onViewed: { Task { await PostsService.shared.recordView(post) } },
+                            onVideoSize: { size in
+                                guard size.width > 2, size.height > 2 else { return }
+                                let stage = stageSize.width > 2 ? stageSize : CGSize(
+                                    width: UIScreen.main.bounds.width,
+                                    height: cardHeight
+                                )
+                                useFill = SparksStageLayout.shouldFillWithoutCrop(
+                                    videoSize: size,
+                                    stageSize: stage
+                                )
+                            }
+                        )
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.black)
+                    .clipped()
+                    .animation(nil, value: useFill)
+                } else {
+                    VideoThumbnailView(
+                        post: post,
+                        maxPixelSize: 720,
+                        contentMode: .fill,
+                        showsPlayIcon: true,
+                        playIconSize: 36,
+                        placeholder: AnyView(
+                            Rectangle().fill(Theme.canvasDeep)
+                        )
                     )
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.black)
-                .clipped()
-                .animation(nil, value: useFill)
-                // Media session 09: poster only on mount — winner path installs the player.
-            } else {
-                VideoThumbnailView(
-                    post: post,
-                    maxPixelSize: 720,
-                    contentMode: .fill,
-                    showsPlayIcon: true,
-                    playIconSize: 36,
-                    placeholder: AnyView(
-                        Rectangle().fill(Theme.canvasDeep)
-                    )
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
-                .task {
-                    // Expired / missing media — try a live post fetch so the card can play.
-                    guard let remote = try? await PostsService.shared.getPostByID(post.id),
-                          remote.playableVideoURL != nil
-                    else { return }
-                    // Soft publish so feed re-renders with a playable URL.
-                    PostsService.shared.publishPostChange(remote)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+                    .task {
+                        guard let remote = try? await PostsService.shared.getPostByID(post.id),
+                              remote.playableVideoURL != nil
+                        else { return }
+                        PostsService.shared.publishPostChange(remote)
+                    }
                 }
             }
 
-            SparksOriginBadge(compact: true)
-                .padding(10)
-                .zIndex(70)
-                .allowsHitTesting(false)
-
-            // Tap opens full Sparks player; leave top strip free for mute chip + badge.
+            // Tap opens full Sparks; top strip reserved for badge + mute (not tappable-away).
             VStack(spacing: 0) {
                 Color.clear
                     .frame(height: 52)
@@ -171,6 +168,16 @@ struct SparkFeedCard: View {
                     .onTapGesture { openFullPlayer() }
             }
             .zIndex(20)
+
+            // Always-on chrome — outside the film clip so every Spark shows both.
+            HStack(alignment: .top) {
+                SparksOriginBadge(compact: true)
+                    .allowsHitTesting(false)
+                Spacer(minLength: 0)
+                SparkFeedMuteButton()
+            }
+            .padding(10)
+            .zIndex(80)
         }
         .frame(minWidth: 0, maxWidth: .infinity)
         .frame(height: cardHeight)
@@ -183,7 +190,6 @@ struct SparkFeedCard: View {
                     }
             }
         }
-        .clipped()
         .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
         .contentShape(Rectangle())
         .overlay {
@@ -240,6 +246,25 @@ struct SparksOriginBadge: View {
         )
         .shadow(color: .black.opacity(0.28), radius: 6, y: 2)
         .accessibilityLabel(MatteryaCopy.sparks)
+    }
+}
+
+/// Feed Sparks mute chip — lives on `SparkFeedCard` (not inside the clipped film).
+private struct SparkFeedMuteButton: View {
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        Button {
+            appState.feedVideosMuted.toggle()
+        } label: {
+            Image(systemName: appState.feedVideosMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 34, height: 34)
+                .background(Theme.ink.opacity(0.45), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(appState.feedVideosMuted ? "Unmute" : "Mute")
     }
 }
 
