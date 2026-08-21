@@ -11,9 +11,9 @@
     "render-build": "npm ci --no-workspaces --include=dev && npm run build",
     "content-pipeline": "tsx src/content-pipeline/cli.ts",
     "content-pipeline:dry": "tsx src/content-pipeline/cli.ts --dry-run",
-    "media:frame0-backfill": "tsx src/media/frame0-backfill.ts",
-    "media:frame0-backfill:dry": "tsx src/media/frame0-backfill.ts --dry-run",
-    "media:frame0-backfill:batch": "tsx src/media/frame0-backfill.ts --concurrency=4",
+    "media:frame0-backfill": "tsx src/media/frame0-backfill.ts --all",
+    "media:frame0-backfill:dry": "tsx src/media/frame0-backfill.ts --all --dry-run",
+    "media:frame0-backfill:batch": "tsx src/media/frame0-backfill.ts --all --concurrency=4",
     "media:frame0-progress": "tsx src/media/frame0-progress-server.ts",
     "docker:media-worker:build": "docker build -f Dockerfile.media-worker -t matterya-media-worker ."
   },

@@ -76,7 +76,12 @@ export async function startFrame0Backfill(
     };
   }
 
-  const limit = Math.max(1, Math.min(500, Number(opts.limit) || 50));
+  // limit <= 0 → all needing posts (no batch cap).
+  const rawLimit = Number(opts.limit);
+  const limit =
+    Number.isFinite(rawLimit) && rawLimit <= 0
+      ? 0
+      : Math.max(1, Number.isFinite(rawLimit) ? rawLimit : 0);
   const concurrency = Math.min(8, Math.max(1, Number(opts.concurrency) || 4));
   const requestedBy = opts.requestedBy || 'ops-ui';
 
@@ -89,7 +94,7 @@ export async function startFrame0Backfill(
     let failed = 0;
     let bumpChain: Promise<void> = Promise.resolve();
 
-    const rows = await listPostsNeedingFrame0(limit);
+    const rows = await listPostsNeedingFrame0(limit <= 0 ? 0 : limit);
     await logLine(
       `[frame0-backfill] mode=inline source=${requestedBy} candidates=${rows.length} ` +
         `dryRun=${dryRun} force=${force} limit=${limit} concurrency=${concurrency} ` +

@@ -307,14 +307,14 @@ function opsHtml(activeTab: 'overview' | 'pipeline' | 'frame0'): string {
           </div>
           <div class="row">
             <button type="button" id="ovGoF0">Open Frame 0</button>
-            <button type="button" class="secondary" id="ovQuick50">Backfill 50 Sparks</button>
+            <button type="button" class="secondary" id="ovQuickAll">Backfill ALL</button>
           </div>
         </div>
         <div class="card">
           <strong>What to do</strong>
           <ul class="help">
             <li>New videos on R2? → <em>Pipeline → Run now</em></li>
-            <li>Black screens / missing posters? → <em>Frame 0 → Start backfill</em></li>
+            <li>Black screens / missing posters? → <em>Frame 0 → Backfill ALL</em></li>
             <li>Expired play links? → <em>Pipeline → Re-sign URLs</em></li>
             <li>Progress page auto-refreshes every 2s while a batch runs</li>
           </ul>
@@ -379,10 +379,11 @@ function opsHtml(activeTab: 'overview' | 'pipeline' | 'frame0'): string {
         <div class="row">
           <label class="field">Limit
             <select id="f0Limit">
-              <option value="20">20</option>
-              <option value="50" selected>50</option>
+              <option value="0" selected>All needing</option>
+              <option value="50">50</option>
               <option value="100">100</option>
               <option value="200">200</option>
+              <option value="500">500</option>
             </select>
           </label>
           <label class="field">Concurrency
@@ -485,7 +486,7 @@ function opsHtml(activeTab: 'overview' | 'pipeline' | 'frame0'): string {
 
         $('f0Start').disabled = busy;
         $('f0Dry').disabled = busy;
-        $('ovQuick50').disabled = busy;
+        if ($('ovQuickAll')) $('ovQuickAll').disabled = busy;
       } catch (e) {
         $('f0Eta').textContent = 'Status error: ' + e;
       }
@@ -494,7 +495,7 @@ function opsHtml(activeTab: 'overview' | 'pipeline' | 'frame0'): string {
     setInterval(tickFrame0, 2000);
 
     async function startFrame0(dry) {
-      const limit = Number($('f0Limit').value || 50);
+      const limit = Number($('f0Limit').value || 0);
       const concurrency = Number($('f0Conc').value || 4);
       const force = $('f0Force').checked;
       $('f0Action').textContent = dry ? 'Starting dry run…' : 'Starting backfill…';
@@ -523,8 +524,8 @@ function opsHtml(activeTab: 'overview' | 'pipeline' | 'frame0'): string {
     }
     $('f0Start')?.addEventListener('click', () => startFrame0(false));
     $('f0Dry')?.addEventListener('click', () => startFrame0(true));
-    $('ovQuick50')?.addEventListener('click', () => {
-      $('f0Limit').value = '50';
+    $('ovQuickAll')?.addEventListener('click', () => {
+      $('f0Limit').value = '0';
       startFrame0(false);
     });
 
@@ -691,8 +692,10 @@ export async function handleFrame0Run(req: Request, res: Response): Promise<void
     return;
   }
   const body = (req.body || {}) as Record<string, unknown>;
+  const rawLimit = Number(body.limit ?? req.query.limit ?? 0);
   const result = await startFrame0Backfill({
-    limit: Number(body.limit ?? req.query.limit) || 50,
+    // 0 / NaN → all needing posts
+    limit: Number.isFinite(rawLimit) ? rawLimit : 0,
     concurrency: Number(body.concurrency ?? req.query.concurrency) || 4,
     force: body.force === true || body.force === '1' || String(req.query.force) === '1',
     dryRun: body.dryRun === true || body.dryRun === '1' || String(req.query.dryRun) === '1',

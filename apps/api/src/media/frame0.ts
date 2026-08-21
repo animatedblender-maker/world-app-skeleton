@@ -498,7 +498,7 @@ async function listPostsNeedingFrame0Pg(
       created_at desc
     limit $1
     `,
-    [limit]
+    [Math.max(1, limit)]
   );
   return mapFrame0Candidates(rows);
 }
@@ -518,21 +518,26 @@ async function listPostsNeedingFrame0Rest(
   const rows = await postsRest<Array<{ id: string; media_path: string; media_url: string | null }>>(
     filter
   );
-  return mapFrame0Candidates(rows ?? []).slice(0, limit);
+  const mapped = mapFrame0Candidates(rows ?? []);
+  return limit > 0 && limit < 1_000_000 ? mapped.slice(0, limit) : mapped;
 }
 
-/** Rows missing Frame 0 posters (catalog originals). */
+/**
+ * Rows missing Frame 0 posters (catalog originals).
+ * Pass `limit <= 0` (or omit a huge number) to claim **all** needing posts.
+ */
 export async function listPostsNeedingFrame0(limit = 50): Promise<
   Array<{ postId: string; mediaPath: string; r2Key: string }>
 > {
+  const effective = limit <= 0 ? 1_000_000 : limit;
   try {
-    return await listPostsNeedingFrame0Pg(limit);
+    return await listPostsNeedingFrame0Pg(effective);
   } catch (err) {
     if (!isPgUnavailable(err) || !supabaseAdminConfigured()) throw err;
     console.warn(
       `[frame0] pg unavailable (${err instanceof Error ? err.message : err}); listing via Supabase REST`
     );
-    return listPostsNeedingFrame0Rest(limit);
+    return listPostsNeedingFrame0Rest(effective);
   }
 }
 

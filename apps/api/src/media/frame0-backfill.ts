@@ -5,6 +5,7 @@
  *
  *   cd apps/api
  *   npm run media:frame0-backfill
+ *   npm run media:frame0-backfill -- --all
  *   npm run media:frame0-backfill -- --limit=20
  *   npm run media:frame0-backfill -- --dry-run
  *   npm run media:frame0-backfill -- --concurrency=4
@@ -52,7 +53,10 @@ const dryRun = args.includes('--dry-run');
 const viaKafka = args.includes('--via-kafka');
 /** Re-extract even when frame0_*.webp exist (fix SAR/aspect mismatches). */
 const force = args.includes('--force');
-const limit = Math.max(1, Number(argValue(args, '--limit') || 50) || 50);
+/** `--all`, `--limit=0`, or omit `--limit` → every post missing Frame 0. */
+const limitArg = argValue(args, '--limit');
+const all = args.includes('--all') || limitArg === '0' || limitArg === undefined;
+const limit = all ? 0 : Math.max(1, Number(limitArg) || 0);
 const concurrencyRaw = Number(argValue(args, '--concurrency') || 4) || 4;
 const concurrency = Math.min(8, Math.max(1, concurrencyRaw));
 
