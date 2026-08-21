@@ -41,12 +41,13 @@ actor Frame0PosterResolver {
         }
 
         let task = Task { () -> URL? in
-            defer { Task { await self.releaseFetchSlot() } }
-            return await self.fetchAndCache(postID: key, fallback: fallback)
+            await self.fetchAndCache(postID: key, fallback: fallback)
         }
         inflight[key] = task
         let result = await task.value
         inflight[key] = nil
+        // Back on the actor after the child task — sync release (no nested await).
+        releaseFetchSlot()
         return result
     }
 
