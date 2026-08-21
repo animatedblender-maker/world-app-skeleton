@@ -141,7 +141,10 @@ export async function runContentPipeline(opts: PipelineOptions = {}): Promise<Pi
       return stats;
     }
 
-    pipelineLog('Discovering complete packs in R2 (Sparks incl. ShortForm + LongForm)…', 'step');
+    pipelineLog(
+      'Discovering ALL complete packs in R2 (paginate every prefix — Sparks + ShortForm + LongForm)…',
+      'step'
+    );
     const packs = await discoverPacks(client);
     stats.discovered = packs.length;
     const sparkTikTok = packs.filter(

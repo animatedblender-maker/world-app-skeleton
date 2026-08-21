@@ -4,6 +4,7 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { pipelineLog } from './log.js';
 import type { PackKind, R2Pack } from './types.js';
 
 /** R2 practical max for presigned GET. */
@@ -92,18 +93,28 @@ export async function getObjectJson(client: S3Client, key: string): Promise<unkn
  *
  * ShortForm is Sparks — same product surface, different R2 folder only.
  * @see AGENT_HANDOFF_YOUTUBE_SHORTFORM.md
+ *
+ * Default: **paginate every prefix to completion** (no 5k object truncations).
+ * Optional `maxPacksPerPrefix` only for dry-run / throttle — not used by Ops flood.
  */
 export async function discoverPacks(
   client: S3Client,
-  opts: { maxKeysPerPrefix?: number } = {}
+  opts: { maxPacksPerPrefix?: number; maxKeysPerPrefix?: number } = {}
 ): Promise<R2Pack[]> {
-  const maxKeys = opts.maxKeysPerPrefix ?? 5000;
+  // Legacy alias: maxKeysPerPrefix meant “stop after N listed objects” and silently
+  // dropped most of the bucket once frame0_*.webp inflated key counts. Prefer pack cap.
+  const maxPacks =
+    opts.maxPacksPerPrefix != null && opts.maxPacksPerPrefix > 0
+      ? opts.maxPacksPerPrefix
+      : opts.maxKeysPerPrefix != null && opts.maxKeysPerPrefix > 0
+        ? opts.maxKeysPerPrefix
+        : 0; // 0 = unlimited
   const packs: R2Pack[] = [];
   const seen = new Set<string>();
 
   for (const c of FOCUS_COUNTRIES) {
     // Sparks (TikTok) under country root — only Country/<id>/video.mp4 (depth 1)
-    const sparkIds = await listVideoPackIds(client, `${c.folder}/`, maxKeys, {
+    const sparkIds = await listVideoPackIds(client, `${c.folder}/`, maxPacks, {
       depth: 1,
     });
     for (const videoId of sparkIds) {
@@ -126,7 +137,7 @@ export async function discoverPacks(
     }
 
     // YouTube Shorts live under ShortForm/ but are **Sparks** in the app.
-    const sfIds = await listVideoPackIds(client, `ShortForm/${c.folder}/`, maxKeys);
+    const sfIds = await listVideoPackIds(client, `ShortForm/${c.folder}/`, maxPacks);
     for (const videoId of sfIds) {
       const videoKey = `ShortForm/${c.folder}/${videoId}/video.mp4`;
       const mediaPath = `r2:${getBucket()}/${videoKey}`;
@@ -146,7 +157,7 @@ export async function discoverPacks(
     }
 
     // LongForm (YouTube long) — Hubs only
-    const lfIds = await listVideoPackIds(client, `LongForm/${c.folder}/`, maxKeys);
+    const lfIds = await listVideoPackIds(client, `LongForm/${c.folder}/`, maxPacks);
     for (const videoId of lfIds) {
       const videoKey = `LongForm/${c.folder}/${videoId}/video.mp4`;
       const mediaPath = `r2:${getBucket()}/${videoKey}`;
@@ -176,15 +187,19 @@ export function packKindFromR2Key(key: string): PackKind {
   return 'spark';
 }
 
+/**
+ * Paginate R2 until the prefix is exhausted (or optional pack-id cap).
+ * @param maxPacks 0 = unlimited (default for pipeline flood)
+ */
 async function listVideoPackIds(
   client: S3Client,
   prefix: string,
-  maxKeys: number,
+  maxPacks: number,
   opts: { depth?: number } = {}
 ): Promise<string[]> {
   const ids = new Set<string>();
   let token: string | undefined;
-  let listed = 0;
+  let pages = 0;
   // depth=1: only keys like `prefix/<id>/video.mp4` (not nested ShortForm under a country root)
   const depth = opts.depth;
   do {
@@ -196,9 +211,9 @@ async function listVideoPackIds(
         MaxKeys: 1000,
       })
     );
+    pages += 1;
     for (const obj of page.Contents ?? []) {
       const key = obj.Key || '';
-      listed += 1;
       // …/<id>/video.mp4
       const m = key.match(/\/([^/]+)\/video\.mp4$/i);
       if (!m?.[1]) continue;
@@ -210,10 +225,18 @@ async function listVideoPackIds(
         if (parts.length !== depth + 1) continue;
       }
       ids.add(m[1]);
+      if (maxPacks > 0 && ids.size >= maxPacks) {
+        return [...ids];
+      }
     }
     token = page.IsTruncated ? page.NextContinuationToken : undefined;
-    if (listed >= maxKeys) break;
   } while (token);
+  if (pages > 1 || ids.size > 200) {
+    pipelineLog(
+      `Listed ${ids.size} video pack(s) under ${prefix} (${pages} ListObjects page(s))`,
+      'info'
+    );
+  }
   return [...ids];
 }
 
