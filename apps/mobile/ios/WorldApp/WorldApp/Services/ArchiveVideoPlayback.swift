@@ -296,7 +296,6 @@ struct MatteryaHubPlayerView: View {
                     fillsFrame: fillsFrame,
                     postID: postID,
                     bridge: bridge,
-                    protectAsContinuousHubs: protectAsContinuousHubs,
                     onReady: {
                         bridge.publishReady(playing: true)
                         DispatchQueue.main.async {
@@ -320,7 +319,8 @@ struct MatteryaHubPlayerView: View {
                                 duration: duration > 0 ? duration : nil
                             )
                         }
-                    }
+                    },
+                    protectAsContinuousHubs: protectAsContinuousHubs
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
