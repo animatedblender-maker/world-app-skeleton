@@ -115,14 +115,16 @@ struct PostCommentsView: View {
     private struct ReplyTarget {
         /// Thread anchor sent to the API (always the top-level comment).
         let threadRootID: String
+        /// Row that shows the inline reply composer underneath.
+        let anchorCommentID: String
         let authorName: String
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            // Composer first — post without scrolling (feed cards + Sparks overlay).
-            if showsComposer {
-                composer
+            // New top-level comment only — replies render under the target row.
+            if showsComposer, replyTarget == nil {
+                composer(isReply: false)
             }
 
             // Show spinner while demo threads / GraphQL load — avoids a false "no comments" flash.
@@ -145,6 +147,15 @@ struct PostCommentsView: View {
                         onToggleLike: { Task { await toggleLike(item.comment) } },
                         onOpenProfile: { openCommentAuthor(item.comment) }
                     )
+
+                    // Reply composer sits directly under the comment being answered.
+                    if showsComposer,
+                       let replyTarget,
+                       replyTarget.anchorCommentID == item.comment.id {
+                        composer(isReply: true)
+                            .padding(.leading, CommentThreadLayout.indent(for: 1))
+                            .padding(.bottom, 4)
+                    }
                 }
 
                 if let maxVisibleComments,
@@ -168,6 +179,8 @@ struct PostCommentsView: View {
                 }
             }
         }
+        // Always Matterya paper ink — Sparks full-screen uses .dark and made TextField white-on-white.
+        .environment(\.colorScheme, .light)
         .dismissKeyboardOnTap()
         .task(id: postID) {
             // Paint warm cache immediately so Chat / feed expand never flash empty.
@@ -187,54 +200,56 @@ struct PostCommentsView: View {
         return Array(threadedComments.prefix(maxVisibleComments))
     }
 
-    private var composerIndent: CGFloat {
-        guard replyTarget != nil else { return 0 }
-        return CommentThreadLayout.indent(for: 1)
-    }
-
-    private var composer: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if let replyTarget {
+    /// Flat field — no white bubble box; ink text always readable.
+    @ViewBuilder
+    private func composer(isReply: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if isReply, let replyTarget {
                 HStack(spacing: 6) {
                     Text("Replying to")
                         .foregroundStyle(Theme.inkMuted)
                     Text("@\(replyTarget.authorName)")
                         .foregroundStyle(Theme.accent)
                         .fontWeight(.semibold)
-                    Button("Cancel") { self.replyTarget = nil }
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Theme.inkMuted)
+                    Button("Cancel") {
+                        self.replyTarget = nil
+                        commentDraft = ""
+                        composerFocused = false
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.inkMuted)
                 }
                 .font(.caption)
             }
 
-            HStack(alignment: .top, spacing: 8) {
+            HStack(alignment: .bottom, spacing: 8) {
                 AvatarView(
                     url: appState.currentProfile?.avatarURL,
                     seed: appState.currentProfile?.userID ?? "me",
-                    size: replyTarget == nil ? 32 : 26
+                    size: isReply ? 26 : 32
                 )
 
                 TextField(
-                    replyTarget == nil ? "Write a comment…" : "Write a reply…",
+                    isReply ? "Write a reply…" : "Write a comment…",
                     text: $commentDraft,
                     axis: .vertical
                 )
                 .lineLimit(1...4)
                 .font(.subheadline)
+                .foregroundStyle(Theme.ink)
+                .tint(Theme.accent)
                 .focused($composerFocused)
                 .submitLabel(.done)
                 .onSubmit {
                     composerFocused = false
                     Keyboard.dismiss()
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .background(Theme.surface)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(Theme.border, lineWidth: 0.5)
-                )
+                .padding(.vertical, 8)
+                .overlay(alignment: .bottom) {
+                    Rectangle()
+                        .fill(Theme.border.opacity(0.85))
+                        .frame(height: 0.5)
+                }
 
                 if !commentDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Button {
@@ -249,7 +264,6 @@ struct PostCommentsView: View {
                 }
             }
         }
-        .padding(.leading, composerIndent)
         .padding(.top, 4)
     }
 
@@ -270,8 +284,13 @@ struct PostCommentsView: View {
     private func startReply(to comment: PostComment, depth: Int) {
         replyTarget = ReplyTarget(
             threadRootID: CommentThreadBuilder.threadRootID(for: comment, in: comments),
+            anchorCommentID: comment.id,
             authorName: comment.author?.username ?? authorName(comment)
         )
+        commentDraft = ""
+        DispatchQueue.main.async {
+            composerFocused = true
+        }
     }
 
     private func loadComments() async {
