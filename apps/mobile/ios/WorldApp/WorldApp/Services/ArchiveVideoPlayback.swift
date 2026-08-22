@@ -228,6 +228,8 @@ struct MatteryaHubPlayerView: View {
     var onProgress: ((Double, Double) -> Void)? = nil
 
     var allowsFullscreen: Bool = true
+    /// Keep the same AVPlayer when Sparks opens over hubs mini (resume mid-clip, no black).
+    var protectAsContinuousHubs: Bool = false
 
     @StateObject private var bridge = ArchivePlayerBridge()
     @State private var showChrome = false
@@ -249,6 +251,7 @@ struct MatteryaHubPlayerView: View {
         tapToRevealControls: Bool = false,
         isMuted: Binding<Bool> = .constant(false),
         allowsFullscreen: Bool = true,
+        protectAsContinuousHubs: Bool = false,
         onReady: (() -> Void)? = nil,
         onPlayingChange: ((Bool) -> Void)? = nil,
         onProgress: ((Double, Double) -> Void)? = nil
@@ -266,6 +269,7 @@ struct MatteryaHubPlayerView: View {
         self.tapToRevealControls = tapToRevealControls
         self._isMuted = isMuted
         self.allowsFullscreen = allowsFullscreen
+        self.protectAsContinuousHubs = protectAsContinuousHubs
         self.onReady = onReady
         self.onPlayingChange = onPlayingChange
         self.onProgress = onProgress
@@ -290,7 +294,9 @@ struct MatteryaHubPlayerView: View {
                     startTime: startTime,
                     loops: loops,
                     fillsFrame: fillsFrame,
+                    postID: postID,
                     bridge: bridge,
+                    protectAsContinuousHubs: protectAsContinuousHubs,
                     onReady: {
                         bridge.publishReady(playing: true)
                         DispatchQueue.main.async {
@@ -942,6 +948,8 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
     var restartFromBeginningToken: UInt = 0
     /// User pause while page is still focused — freeze frame, don't deactivate / seek to 0.
     var isPausedByUser: Bool = false
+    /// Hubs continuous mini/watch — keep AVPlayer across Sparks open/close.
+    var protectAsContinuousHubs: Bool = false
 
     final class Coordinator {
         var lastURL: URL?
@@ -962,6 +970,7 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
         let vc = ArchiveVideoPlayerController()
         vc.loops = loops
         vc.postID = postID
+        vc.protectAsContinuousHubs = protectAsContinuousHubs
         vc.restartsFromBeginningOnFocus = restartFromBeginningToken > 0
         vc.onReady = onReady
         vc.onFailed = onFailed
@@ -992,6 +1001,7 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
         vc.applyVideoGravity(videoGravity)
         vc.loops = loops
         vc.postID = postID
+        vc.protectAsContinuousHubs = protectAsContinuousHubs
         vc.restartsFromBeginningOnFocus = restartFromBeginningToken > 0
         vc.onReady = onReady
         vc.onFailed = onFailed
@@ -1120,6 +1130,8 @@ final class ArchiveVideoPlayerController: UIViewController {
     var loops = true
     /// Used to claim a pre-buffered player from SparkWarmPool.
     var postID: String?
+    /// Global Hubs mini/watch — survive Sparks open/close without remount (no black flash).
+    var protectAsContinuousHubs = false
 
     /// User intent — survives SwiftUI re-renders during pull-down drag.
     private var userWantsPlayback = true
@@ -1265,6 +1277,11 @@ final class ArchiveVideoPlayerController: UIViewController {
 
     /// When true (Sparks player), becoming focused always seeks to t=0.
     var restartsFromBeginningOnFocus = false
+
+    private func noteContinuousProtection(_ avPlayer: AVPlayer) {
+        guard protectAsContinuousHubs else { return }
+        MediaPlaybackCoordinator.shared.protectContinuous(avPlayer)
+    }
 
     func setActive(_ active: Bool) {
         if active {
@@ -1659,6 +1676,7 @@ final class ArchiveVideoPlayerController: UIViewController {
         player = claimed
         resolvedPlayURL = original
         MediaPlaybackCoordinator.shared.register(claimed)
+        noteContinuousProtection(claimed)
         if autoplay {
             configureAudioSession()
         }
@@ -1876,6 +1894,7 @@ final class ArchiveVideoPlayerController: UIViewController {
         player = claimed
         resolvedPlayURL = original
         MediaPlaybackCoordinator.shared.register(claimed)
+        noteContinuousProtection(claimed)
         // Sparks / warm-pool: soft-seek to 0 only when not already there (avoids black flash).
         let forcedStart = restartsFromBeginningOnFocus ? 0 : startTime
         if restartsFromBeginningOnFocus || forcedStart < 0.5 {
@@ -2061,6 +2080,7 @@ final class ArchiveVideoPlayerController: UIViewController {
         resolvedPlayURL = url
         mutedFlag = muted
         MediaPlaybackCoordinator.shared.register(newPlayer)
+        noteContinuousProtection(newPlayer)
         if userWantsPlayback {
             configureAudioSession()
         }

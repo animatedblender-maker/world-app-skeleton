@@ -226,8 +226,11 @@ struct MainTabView: View {
             get: { appState.reelsViewerContext },
             set: { newValue in
                 if newValue == nil {
-                    // Dismiss Sparks → hard-stop any DB/Archive players immediately.
-                    MediaPlaybackCoordinator.shared.stopAllPlayback()
+                    // Dismiss Sparks → kill Spark players only; keep hubs mini AVPlayer + item.
+                    let keep = MediaPlaybackCoordinator.shared.continuousHubPlayer
+                    MediaPlaybackCoordinator.shared.stopAllPlayback(except: keep)
+                    SparkWarmPool.shared.silenceAllBuffered()
+                    appState.resumeHubPlaybackAfterSparks()
                 }
                 appState.reelsViewerContext = newValue
             }

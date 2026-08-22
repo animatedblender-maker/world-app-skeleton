@@ -313,6 +313,8 @@ struct GlobalHubPlaybackLayer: View {
                     fillsFrame: !expanded,
                     isMuted: mutedBinding,
                     allowsFullscreen: showControls,
+                    // Survive Sparks open/close — resume mini mid-clip without black remount.
+                    protectAsContinuousHubs: true,
                     onReady: {
                         Task { await PostsService.shared.recordView(post) }
                         // Re-assert play if something paused us during mount.
@@ -324,6 +326,8 @@ struct GlobalHubPlaybackLayer: View {
                         }
                     },
                     onPlayingChange: { playing in
+                        // Don't clear playing while Sparks is open (we paused intentionally).
+                        if appState.reelsViewerContext != nil, !playing { return }
                         appState.hubPlaybackPlaying = playing
                     }
                 )

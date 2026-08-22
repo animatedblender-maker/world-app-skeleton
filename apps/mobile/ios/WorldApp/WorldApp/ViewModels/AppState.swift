@@ -1653,7 +1653,10 @@ final class AppState {
         // that wiped the warm first-frame the feed card already decoded (slow open).
         FeedVideoFocus.shared.resetAll()
         MediaPlaybackCoordinator.shared.silenceForSparkPageChange()
-        hubPlaybackPlaying = false
+        // Pause hubs mini only — keep the same AVPlayer + item so close resumes mid-clip.
+        if hubPlaybackPost != nil {
+            hubPlaybackPlaying = false
+        }
         var seeds = seedPosts
         if seeds.isEmpty {
             // Small instant seed — expand in background after first frame.
@@ -1666,6 +1669,21 @@ final class AppState {
             startingPost: startingPost,
             seedPosts: seeds
         )
+    }
+
+    /// After Sparks full-screen closes — resume hubs mini from the paused frame (no remount / black).
+    func resumeHubPlaybackAfterSparks() {
+        guard hubPlaybackPost != nil else { return }
+        hubPlaybackPlaying = true
+        MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(userMuted: hubPlaybackMuted)
+        NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
+        // Second kick after the cover dismiss animation settles.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+            guard let self, self.hubPlaybackPost != nil else { return }
+            self.hubPlaybackPlaying = true
+            MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(userMuted: self.hubPlaybackMuted)
+            NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
+        }
     }
 
     /// Open endless Sparks from a feed card / share / chat / Hubs / strip.
