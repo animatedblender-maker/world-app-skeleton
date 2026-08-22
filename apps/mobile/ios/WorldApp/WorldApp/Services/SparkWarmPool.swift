@@ -233,6 +233,13 @@ final class SparkWarmPool {
         if continuingIDs.remove(old) != nil { continuingIDs.insert(neu) }
     }
 
+    /// Claim any parked continuing handoff player (share/origin id race).
+    func claimFirstContinuing() -> AVPlayer? {
+        let id = continuingIDs.first { slots[$0] != nil }
+        guard let id else { return nil }
+        return claim(postID: id)
+    }
+
     /// Hand a fully buffered player to the visible card (removes it from the pool).
     /// Caller must treat the player as **paused at t≈0** (pool enforces that before parking).
     /// Returns nil if the parked item is missing or already failed (forces a clean cold start).
@@ -253,11 +260,19 @@ final class SparkWarmPool {
             return nil
         }
         inUse.insert(postID)
-        // Soft pause for handoff; keep playhead (continue) or t≈0 (normal park).
-        player.pause()
+        let wasContinuing = continuingIDs.contains(postID)
         player.isMuted = true
         player.volume = 0
-        player.rate = 0
+        if wasContinuing {
+            // Keep decoding mid-clip — claim installs and unmutes without a t=0 blink.
+            if player.rate < 0.05 {
+                player.safePlayImmediately(atRate: 1.0)
+            }
+        } else {
+            // Normal park contract: silent at t≈0.
+            player.pause()
+            player.rate = 0
+        }
         return player
     }
 

@@ -798,9 +798,9 @@ struct VideoPlayerView: View {
 
         if player == nil {
             loadFailed = false
-            // Instagram-speed: claim warm-pool by postID when the item is still healthy.
+            // Instagram-speed: claim warm-pool by postID (or any continuing handoff id).
             var installedClaim = false
-            if let postID, let claimed = SparkWarmPool.shared.claim(postID: postID) {
+            if let claimed = claimHandoffPlayer() {
                 installClaimedPlayer(claimed)
                 installedClaim = true
             }
@@ -1006,15 +1006,16 @@ struct VideoPlayerView: View {
                     loadFailed = false
                     updateDuration(from: item)
                     reportVideoSizeIfNeeded(from: item)
+                    // Seek BEFORE any play — never play-from-0 then jump to click time.
                     let resumeAt = resolvedStartTime()
                     if resumeAt > 0.5 {
-                        // Hubs resume only — Sparks always 0 (never start mid then snap).
                         await newPlayer.seek(
                             to: CMTime(seconds: resumeAt, preferredTimescale: 600),
                             toleranceBefore: .zero,
                             toleranceAfter: .zero
                         )
                         currentSeconds = resumeAt
+                        showPosterCover = false
                     } else if restartFromBeginningToken > 0 || loops {
                         // Cold Spark path: lock exact start before first play.
                         await newPlayer.seek(
@@ -1050,7 +1051,15 @@ struct VideoPlayerView: View {
 
         player = newPlayer
         MediaPlaybackCoordinator.shared.register(newPlayer)
-        if liveGate.isActive, !liveGate.userWantsPause {
+        let resumeAt = resolvedStartTime()
+        if resumeAt > 0.5 {
+            // Never play-from-0 then jump — wait for readyToPlay seek, then kick.
+            newPlayer.pause()
+            newPlayer.isMuted = true
+            newPlayer.volume = 0
+            isPlaying = false
+            showPosterCover = true
+        } else if liveGate.isActive, !liveGate.userWantsPause {
             kickAudiblePlayback(on: newPlayer)
         } else {
             // Inactive preload: stay silent but keep the item warming.
@@ -1059,6 +1068,14 @@ struct VideoPlayerView: View {
             newPlayer.volume = 0
             isPlaying = false
         }
+    }
+
+    /// Claim parked continue player for this post or any id still marked continuing.
+    private func claimHandoffPlayer() -> AVPlayer? {
+        if let postID, let claimed = SparkWarmPool.shared.claim(postID: postID) {
+            return claimed
+        }
+        return SparkWarmPool.shared.claimFirstContinuing()
     }
 
     /// Observe end-of-item and restart from t=0 while this Spark is focused.

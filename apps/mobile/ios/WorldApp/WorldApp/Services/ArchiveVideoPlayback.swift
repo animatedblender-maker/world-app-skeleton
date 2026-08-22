@@ -1664,7 +1664,9 @@ final class ArchiveVideoPlayerController: UIViewController {
 
         // Instagram-speed: claim a pre-buffered player before any CDN resolve.
         // Install + play synchronously so the first painted frame is video, not black/poster.
-        if let postID, let claimed = SparkWarmPool.shared.claim(postID: postID) {
+        let claimed = postID.flatMap { SparkWarmPool.shared.claim(postID: $0) }
+            ?? SparkWarmPool.shared.claimFirstContinuing()
+        if let claimed {
             installClaimedPlayerSync(claimed, original: url, muted: muted, startTime: startTime, autoplay: autoplay)
             return
         }
