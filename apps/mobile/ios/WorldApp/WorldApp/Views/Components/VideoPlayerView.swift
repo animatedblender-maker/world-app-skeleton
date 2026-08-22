@@ -277,6 +277,13 @@ struct VideoPlayerView: View {
                   player.status != .failed
             else { return }
             persistPlaybackPosition()
+            // Stamp the same playhead on every handoff id (share → origin).
+            let sec = SafeNumeric.nonNegativeSeconds(currentSeconds)
+            if sec >= 0.05 {
+                for id in ids where id != postID {
+                    YouTubeCatalogService.shared.notePlaybackPosition(sec, for: id, duration: nil)
+                }
+            }
             SparkWarmPool.shared.parkContinuing(postID: postID, player: player)
             // Detach without destroying the item (pool owns it now).
             removeTimeObserver()

@@ -273,9 +273,13 @@ struct GlobalHubPlaybackLayer: View {
 
     @ViewBuilder
     private func playerSurface(for post: CountryPost, showControls: Bool) -> some View {
-        // Resume from feed playhead (any >0.2s) so open continues where the user left off.
+        // Resume from feed playhead so open continues where the user left off.
+        let parkedT = SparkWarmPool.shared.parkedPlayer(for: post.id)?.currentTime().seconds
         let stored = YouTubeCatalogService.shared.playbackPosition(for: post.id)
-        let resumeAt = stored > 0.2 ? stored : 0
+        let resumeAt: Double = {
+            if let parkedT, parkedT.isFinite, parkedT > 0.05 { return parkedT }
+            return stored > 0.05 ? stored : 0
+        }()
         if let url = post.playableVideoURL {
             let poster = MediaURLResolver.posterURL(for: post) ?? post.posterImageURL
             // One Hubs chrome for every long-form surface (R2 + Archive):

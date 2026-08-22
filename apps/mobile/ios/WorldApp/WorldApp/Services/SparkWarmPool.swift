@@ -198,28 +198,39 @@ final class SparkWarmPool {
         slots[postID]?.player
     }
 
-    /// Move a parked warm slot from one id → another (feed share id → Sparks origin id).
-    /// Lets feed→Sparks open claim the same decoded player without a cold start.
+    /// Move a parked warm slot from one id → another (feed share id → Sparks/Hubs origin id).
+    /// Lets feed→full-player open claim the **same** decoded player mid-playhead.
     func rekey(from oldID: String, to newID: String) {
         let old = oldID.trimmingCharacters(in: .whitespacesAndNewlines)
         let neu = newID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !old.isEmpty, !neu.isEmpty, old != neu else { return }
-        if slots[neu] != nil {
-            // Prefer keeping the destination; drop the old duplicate.
-            if let discarded = slots.removeValue(forKey: old) {
-                discarded.player.pause()
-                discarded.player.replaceCurrentItem(with: nil)
-                MediaPlaybackCoordinator.shared.unregister(discarded.player)
+
+        let oldIsContinuing = continuingIDs.contains(old)
+
+        // If both slots exist: keep the mid-clip handoff player, drop the cold warm.
+        if slots[old] != nil, slots[neu] != nil {
+            if oldIsContinuing {
+                evict(neu)
+            } else {
+                evict(old)
+                if inUse.remove(old) != nil { inUse.insert(neu) }
+                if continuingIDs.remove(old) != nil { continuingIDs.insert(neu) }
+                return
             }
+        } else if slots[neu] != nil, slots[old] == nil {
             if inUse.remove(old) != nil { inUse.insert(neu) }
+            if continuingIDs.remove(old) != nil { continuingIDs.insert(neu) }
             return
         }
+
         guard let slot = slots.removeValue(forKey: old) else {
             if inUse.remove(old) != nil { inUse.insert(neu) }
+            if continuingIDs.remove(old) != nil { continuingIDs.insert(neu) }
             return
         }
         slots[neu] = Slot(postID: neu, player: slot.player, parkedAt: slot.parkedAt)
         if inUse.remove(old) != nil { inUse.insert(neu) }
+        if continuingIDs.remove(old) != nil { continuingIDs.insert(neu) }
     }
 
     /// Hand a fully buffered player to the visible card (removes it from the pool).

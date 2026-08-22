@@ -89,6 +89,15 @@ final class AppState {
         SparkWarmPool.shared.clearContinueFlag(postID: postID)
     }
 
+    /// Copy feed playhead onto the destination id Sparks/Hubs will claim.
+    private func syncPlaybackPosition(from oldID: String, to newID: String) {
+        guard oldID != newID else { return }
+        let t = YouTubeCatalogService.shared.playbackPosition(for: oldID)
+        guard t > 0.05 else { return }
+        YouTubeCatalogService.shared.notePlaybackPosition(t, for: newID, duration: nil)
+        markContinuePlayback(for: [newID])
+    }
+
     // MARK: - Global hub continuous playback (survives tabs + minimize)
     /// Active long-form hubs video. Owned by `GlobalHubPlaybackLayer` (single AVPlayer).
     var hubPlaybackPost: CountryPost?
@@ -1282,6 +1291,11 @@ final class AppState {
         )
         if presentation.id != watchPost.id {
             SparkWarmPool.shared.rekey(from: watchPost.id, to: presentation.id)
+            syncPlaybackPosition(from: watchPost.id, to: presentation.id)
+        }
+        for id in handoffIDs where id != presentation.id {
+            SparkWarmPool.shared.rekey(from: id, to: presentation.id)
+            syncPlaybackPosition(from: id, to: presentation.id)
         }
 
         // Intent first — GlobalHubPlaybackLayer mounts with isActive true (no silent first frame).
@@ -1728,17 +1742,20 @@ final class AppState {
         // Mark continue + sync-export live feed player into the warm pool (same runloop).
         var handoffIDs = [start.id]
         if let from = fromFeedPost { handoffIDs.append(from.id) }
-        markContinuePlayback(for: handoffIDs)
+        let ids = Array(Set(handoffIDs))
+        markContinuePlayback(for: ids)
         NotificationCenter.default.post(
             name: .matteryaExportPlaybackForHandoff,
             object: nil,
-            userInfo: ["postIDs": Array(Set(handoffIDs))]
+            userInfo: ["postIDs": ids]
         )
         if let from = fromFeedPost, from.id != start.id {
             SparkWarmPool.shared.rekey(from: from.id, to: start.id)
+            syncPlaybackPosition(from: from.id, to: start.id)
         }
 
         // Tiny instant queue — first paint never waits on ranking / catalog.
+        // Skip overwriting the continuing park (prepare respects hasWarmOrInflight).
         let seeds = Self.instantSparksSeedQueue(starting: start, limit: 16)
         SparkWarmPool.shared.preparePlayerWindow(posts: seeds, around: 0)
         // Paint Sparks UI immediately — claim hits the exported live buffer.

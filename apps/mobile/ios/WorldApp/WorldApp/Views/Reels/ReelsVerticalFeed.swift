@@ -313,7 +313,8 @@ struct ReelsPagerCard: View {
     /// Feed→Sparks handoff still continues mid-clip via SparkWarmPool continue flag + claim.
     private var restartFromBeginningToken: UInt {
         // If feed exported a live buffer for this id, do not force t=0 (seamless open).
-        if SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: post.id) {
+        if SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: post.id)
+            || appState.shouldContinuePlayback(for: post.id) {
             return 0
         }
         return isActive ? max(1, focusGeneration) : 0
@@ -321,11 +322,16 @@ struct ReelsPagerCard: View {
 
     /// Only used for feed→Sparks continue; normal Sparks swipe uses restart token → 0.
     private var resumeStartTime: Double {
-        if SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: post.id) {
-            let t = YouTubeCatalogService.shared.playbackPosition(for: post.id)
-            return t > 0.2 ? t : 0
+        guard SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: post.id)
+            || appState.shouldContinuePlayback(for: post.id)
+        else { return 0 }
+        // Prefer live parked playhead (exact feed moment) over stale catalog.
+        if let parked = SparkWarmPool.shared.parkedPlayer(for: post.id) {
+            let t = parked.currentTime().seconds
+            if t.isFinite, t > 0.05 { return t }
         }
-        return 0
+        let t = YouTubeCatalogService.shared.playbackPosition(for: post.id)
+        return t > 0.05 ? t : 0
     }
 
     /// Best-effort play URL — primary resolver plus raw media/thumb fallbacks.

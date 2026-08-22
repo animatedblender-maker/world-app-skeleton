@@ -1146,6 +1146,7 @@ final class ArchiveVideoPlayerController: UIViewController {
     /// Epoch captured when this surface last became active (invalidated on page change).
     private var activePageEpoch: UInt64 = 0
     private var interruptResumeObserver: NSObjectProtocol?
+    private var exportHandoffObserver: NSObjectProtocol?
 
     var isPlaying: Bool {
         (player?.rate ?? 0) > 0.01
@@ -1169,6 +1170,17 @@ final class ArchiveVideoPlayerController: UIViewController {
         super.viewDidLoad()
         view.backgroundColor = Self.softFloor
         view.clipsToBounds = true
+
+        // Feed → Sparks/Hubs: park live buffer mid-playhead (same as VideoPlayerView).
+        exportHandoffObserver = NotificationCenter.default.addObserver(
+            forName: .matteryaExportPlaybackForHandoff,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            Task { @MainActor in
+                self?.exportForHandoff(note)
+            }
+        }
 
         // Match video gravity (updated in applyVideoGravity) — avoid poster/video framing jump.
         // Default fill so Sparks never flash fit→fill on first layout.
@@ -1579,17 +1591,55 @@ final class ArchiveVideoPlayerController: UIViewController {
         }
     }
 
+    private func exportForHandoff(_ note: Notification) {
+        guard let ids = note.userInfo?["postIDs"] as? [String],
+              let postID,
+              ids.contains(postID),
+              let player,
+              player.currentItem != nil,
+              player.status != .failed
+        else { return }
+        let sec = currentSeconds
+        if sec >= 0.05 {
+            var dur: Double?
+            if let item = player.currentItem {
+                let d = CMTimeGetSeconds(item.duration)
+                if d.isFinite, d > 0 { dur = d }
+            }
+            YouTubeCatalogService.shared.notePlaybackPosition(sec, for: postID, duration: dur)
+            for id in ids where id != postID {
+                YouTubeCatalogService.shared.notePlaybackPosition(sec, for: id, duration: dur)
+            }
+        }
+        SparkWarmPool.shared.parkContinuing(postID: postID, player: player)
+        // Detach without destroying the item (pool owns it now).
+        removeObservers()
+        playerLayer?.removeFromSuperlayer()
+        playerLayer = nil
+        self.player = nil
+        onPlayingChanged?(false)
+    }
+
     func teardown() {
         loadTask?.cancel()
         loadTask = nil
+        if let exportHandoffObserver {
+            NotificationCenter.default.removeObserver(exportHandoffObserver)
+            self.exportHandoffObserver = nil
+        }
         removeObservers()
         if let player {
             player.pause()
             player.isMuted = true
             player.volume = 0
             if let postID, player.currentItem != nil, player.status != .failed {
-                // Park buffered item for instant scroll-back (feed Sparks + hubs shares).
-                SparkWarmPool.shared.park(postID: postID, player: player)
+                // Export handoff already parked continuing + cleared `player`. Scroll-away parks at 0.
+                if SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: postID)
+                    || SparkWarmPool.shared.isParked(postID: postID, player: player) {
+                    SparkWarmPool.shared.parkContinuing(postID: postID, player: player)
+                } else {
+                    SparkWarmPool.shared.park(postID: postID, player: player)
+                }
             } else {
                 if let postID {
                     SparkWarmPool.shared.release(postID: postID)
