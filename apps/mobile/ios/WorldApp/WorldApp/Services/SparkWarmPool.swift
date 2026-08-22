@@ -283,15 +283,15 @@ final class SparkWarmPool {
 
     private func parkInternal(postID: String, player: AVPlayer, continueFromCurrentTime: Bool) {
         inUse.remove(postID)
-        player.pause()
-        player.isMuted = true
-        player.volume = 0
-        player.rate = 0
 
         guard player.currentItem != nil,
               player.status != .failed,
               player.currentItem?.status != .failed
         else {
+            player.pause()
+            player.isMuted = true
+            player.volume = 0
+            player.rate = 0
             player.replaceCurrentItem(with: nil)
             MediaPlaybackCoordinator.shared.unregister(player)
             return
@@ -299,6 +299,10 @@ final class SparkWarmPool {
 
         // Already have a fresher buffer for this id — drop the incoming one.
         if let existing = slots[postID], existing.player !== player {
+            player.pause()
+            player.isMuted = true
+            player.volume = 0
+            player.rate = 0
             player.replaceCurrentItem(with: nil)
             MediaPlaybackCoordinator.shared.unregister(player)
             return
@@ -321,8 +325,19 @@ final class SparkWarmPool {
         slots[postID] = Slot(postID: postID, player: player, parkedAt: Date())
         if continueFromCurrentTime {
             continuingIDs.insert(postID)
+            // Butter handoff: stay muted but KEEP decoding frames while the cover opens.
+            // Claim will unmute — no black/poster gap.
+            player.isMuted = true
+            player.volume = 0
+            if player.rate < 0.05 {
+                player.safePlayImmediately(atRate: 1.0)
+            }
         } else {
             continuingIDs.remove(postID)
+            player.pause()
+            player.isMuted = true
+            player.volume = 0
+            player.rate = 0
             // Snap to exact 0 + decode first frame while parked (never free-play into the clip).
             Task { await silentBufferFill(postID: postID, player: player) }
         }

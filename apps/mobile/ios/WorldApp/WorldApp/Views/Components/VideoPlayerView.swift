@@ -836,10 +836,6 @@ struct VideoPlayerView: View {
 
     @MainActor
     private func installClaimedPlayer(_ claimed: AVPlayer) {
-        // Warm pool kept it muted/paused at t≈0. Never free-play then seek — that was the
-        // “wrong position → adjust → play” glitch on every Spark.
-        claimed.pause()
-        claimed.rate = 0
         claimed.automaticallyWaitsToMinimizeStalling = false
         claimed.actionAtItemEnd = loops ? .none : .pause
         MediaPlaybackCoordinator.shared.register(claimed)
@@ -847,6 +843,39 @@ struct VideoPlayerView: View {
         let gate = liveGate
         let needsExactStart = restartFromBeginningToken > 0 || loops
         let alreadyAtStart = SparkWarmPool.isAtStart(claimed)
+
+        // Feed → Sparks/Hubs handoff FIRST — never pause/poster over a live mid-clip buffer.
+        let continueMid = postID.map { SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: $0) } ?? false
+            || (postID.map { appState.shouldContinuePlayback(for: $0) } ?? false)
+        if continueMid {
+            if let postID {
+                SparkWarmPool.shared.clearContinueFlag(postID: postID)
+                appState.clearContinuePlayback(for: postID)
+            }
+            let t = claimed.currentTime().seconds
+            currentSeconds = t.isFinite ? max(0, t) : 0
+            showPosterCover = false
+            player = claimed
+            if let item = claimed.currentItem {
+                item.preferredForwardBufferDuration = 8
+                updateDuration(from: item)
+                reportVideoSizeIfNeeded(from: item)
+                attachLoopObserver(for: item, player: claimed, gate: gate)
+            }
+            attachTimeObserver(to: claimed)
+            if liveGate.isActive, !liveGate.userWantsPause {
+                _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
+                    keeping: claimed,
+                    pageEpoch: liveGate.pageEpoch
+                )
+                kickAudiblePlayback(on: claimed)
+            }
+            return
+        }
+
+        // Warm pool at t≈0: pause until playhead confirmed, then play.
+        claimed.pause()
+        claimed.rate = 0
 
         if liveGate.isActive {
             _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
@@ -894,23 +923,6 @@ struct VideoPlayerView: View {
 
         // Keep poster up — kickAudiblePlayback reveals only after frames paint.
         showPosterCover = true
-
-        // Feed → Sparks/Hubs handoff: keep mid-clip playhead (do not seek to 0).
-        let continueMid = postID.map { SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: $0) } ?? false
-        if continueMid {
-            if let postID {
-                SparkWarmPool.shared.clearContinueFlag(postID: postID)
-                appState.clearContinuePlayback(for: postID)
-            }
-            let t = claimed.currentTime().seconds
-            currentSeconds = t.isFinite ? max(0, t) : 0
-            // Already has a painted frame — skip poster cover for seamless continue.
-            showPosterCover = false
-            if liveGate.isActive, !liveGate.userWantsPause {
-                kickAudiblePlayback(on: claimed)
-            }
-            return
-        }
 
         // If already at t≈0 (warm pool contract), play immediately — no seek, no jump.
         if alreadyAtStart || !needsExactStart {
@@ -2056,10 +2068,16 @@ struct InFrameVideoPlayer: View {
                             allowsFullscreen: false,
                             onReady: {
                                 onViewed?()
+                                // Handoff / claim already painting — lift outer poster immediately.
+                                framesReady = true
                             },
                             onPlayingChange: { playing in
                                 // Kick ≠ painted frames — never lift cover here (blink source).
-                                if !playing { framesReady = false }
+                                if playing {
+                                    framesReady = true
+                                } else {
+                                    framesReady = false
+                                }
                             },
                             onProgress: { _, _ in
                                 // Cover lifts only via paint-ready paths (not wall-clock).

@@ -1328,15 +1328,15 @@ final class AppState {
         // Continuous Hubs player (mini or full) owns audio — kill feed/profile autoplay.
         FeedVideoFocus.shared.resetAll()
         YouTubeCatalogService.shared.recordWatch(watchPost.id)
-        if let url = watchPost.playableVideoURL {
-            if ArchiveVideoPlayback.isArchiveURL(url) {
+        NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
+        // Defer neighbor warm / thumb prefetch — never block the continuing claim paint.
+        Task(priority: .utility) { @MainActor in
+            if let url = watchPost.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) {
                 ArchiveVideoPlayback.warmResolve(url)
             }
+            self.warmHubsPlaybackWindow(around: presentation)
+            ImageCache.shared.prefetchPostThumbnails([watchPost], maxPixelSize: 720)
         }
-        // Same Sparks policy: keep next 5 hubs ready (shelf + session catalog). Never re-warm overlap.
-        warmHubsPlaybackWindow(around: presentation)
-        ImageCache.shared.prefetchPostThumbnails([watchPost], maxPixelSize: 720)
-        NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
     }
 
     /// Sliding 5-ahead warm for Hubs continuous / related taps (For you shelf + session catalog).
@@ -1666,7 +1666,12 @@ final class AppState {
         // Soft handoff: clear feed focus, but do NOT pauseAll / silenceAllBuffered —
         // that wiped the warm first-frame the feed card already decoded (slow open).
         FeedVideoFocus.shared.resetAll()
-        MediaPlaybackCoordinator.shared.silenceForSparkPageChange()
+        let continuing = shouldContinuePlayback(for: startingPost.id)
+            || SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: startingPost.id)
+        // Continuing handoff: skip page-silence (would hitch the live buffer) + skip cover anim.
+        if !continuing {
+            MediaPlaybackCoordinator.shared.silenceForSparkPageChange()
+        }
         // Pause hubs mini only — keep the same AVPlayer + item so close resumes mid-clip.
         if hubPlaybackPost != nil {
             hubPlaybackPlaying = false
@@ -1674,15 +1679,23 @@ final class AppState {
         var seeds = seedPosts
         if seeds.isEmpty {
             // Small instant seed — expand in background after first frame.
-            seeds = Self.instantSparksSeedQueue(starting: startingPost, limit: 24)
+            seeds = continuing
+                ? [ReelsRankingEngine.resolvePlayerStart(startingPost)]
+                : Self.instantSparksSeedQueue(starting: startingPost, limit: 24)
         }
         if !seeds.contains(where: { $0.id == startingPost.id }) {
             seeds.insert(ReelsRankingEngine.resolvePlayerStart(startingPost), at: 0)
         }
-        reelsViewerContext = ReelsViewerContext(
-            startingPost: startingPost,
-            seedPosts: seeds
-        )
+        var transaction = Transaction()
+        if continuing {
+            transaction.disablesAnimations = true
+        }
+        withTransaction(transaction) {
+            reelsViewerContext = ReelsViewerContext(
+                startingPost: startingPost,
+                seedPosts: seeds
+            )
+        }
     }
 
     /// After Sparks full-screen closes — resume hubs mini from the paused frame (no remount / black).
@@ -1754,26 +1767,18 @@ final class AppState {
             syncPlaybackPosition(from: from.id, to: start.id)
         }
 
-        // Tiny instant queue — first paint never waits on ranking / catalog.
-        // Skip overwriting the continuing park (prepare respects hasWarmOrInflight).
-        let seeds = Self.instantSparksSeedQueue(starting: start, limit: 16)
-        SparkWarmPool.shared.preparePlayerWindow(posts: seeds, around: 0)
-        // Paint Sparks UI immediately — claim hits the exported live buffer.
+        // Butter: open with ONLY the continuing clip — no catalog rank / warm on the tap path.
+        let seeds = [start]
         openReelsViewer(startingPost: start, seedPosts: seeds)
 
-        // Catalog expand strictly off the open path (no await before first paint).
+        // Neighbors + catalog strictly after first paint (never block the continuing claim).
         Task(priority: .utility) { @MainActor in
-            if let from = fromFeedPost, from.id != start.id {
-                SparkWarmPool.shared.rekey(from: from.id, to: start.id)
-            }
-            SparkWarmPool.shared.preparePlayerWindow(posts: seeds, around: 0)
+            let expanded = Self.instantSparksSeedQueue(starting: start, limit: 16)
+            SparkWarmPool.shared.preparePlayerWindow(posts: expanded, around: 0)
             _ = await PostsService.shared.loadSparksDiscoveryCatalog(
-                forceRefresh: seeds.count < 12,
+                forceRefresh: false,
                 deep: false
             )
-            if seeds.count < 12 {
-                _ = await PostsService.shared.beginFreshSparksSession(preferStart: start)
-            }
         }
     }
 
