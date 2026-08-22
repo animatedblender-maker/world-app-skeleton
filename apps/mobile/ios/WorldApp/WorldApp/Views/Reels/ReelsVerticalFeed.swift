@@ -297,6 +297,10 @@ struct ReelsPagerCard: View {
     /// mounts zoom-cropped (clips the bottom dock). `onAppear` / size callback may switch to fill
     /// for true vertical TikTok packs.
     @State private var useFill: Bool = false
+    /// Feed→Sparks continue: sticky for this focus so clearing pool flags doesn't flip
+    /// `restartFromBeginningToken` and force seek-to-0 (that was the black blink).
+    @State private var feedHandoffSticky = false
+    @State private var handoffResumeSeconds: Double = 0
 
     /// Prefer fit until measured when the pack is likely landscape (ShortForm / wide DAR).
     private var prefersFillUntilMeasured: Bool {
@@ -309,22 +313,24 @@ struct ReelsPagerCard: View {
         return true
     }
 
+    private var isFeedHandoffContinue: Bool {
+        feedHandoffSticky
+            || SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: post.id)
+            || appState.shouldContinuePlayback(for: post.id)
+    }
+
     /// Sparks vertical player: always start at 0 on focus (instant TikTok-style sessions).
     /// Feed→Sparks handoff still continues mid-clip via SparkWarmPool continue flag + claim.
     private var restartFromBeginningToken: UInt {
-        // If feed exported a live buffer for this id, do not force t=0 (seamless open).
-        if SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: post.id)
-            || appState.shouldContinuePlayback(for: post.id) {
-            return 0
-        }
+        // Sticky handoff must stay at 0 for the whole first focus — never flip mid-mount.
+        if isFeedHandoffContinue { return 0 }
         return isActive ? max(1, focusGeneration) : 0
     }
 
     /// Only used for feed→Sparks continue; normal Sparks swipe uses restart token → 0.
     private var resumeStartTime: Double {
-        guard SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: post.id)
-            || appState.shouldContinuePlayback(for: post.id)
-        else { return 0 }
+        guard isFeedHandoffContinue else { return 0 }
+        if handoffResumeSeconds > 0.05 { return handoffResumeSeconds }
         // Prefer live parked playhead (exact feed moment) over stale catalog.
         if let parked = SparkWarmPool.shared.parkedPlayer(for: post.id) {
             let t = parked.currentTime().seconds
@@ -332,6 +338,21 @@ struct ReelsPagerCard: View {
         }
         let t = YouTubeCatalogService.shared.playbackPosition(for: post.id)
         return t > 0.05 ? t : 0
+    }
+
+    private func captureFeedHandoffIfNeeded() {
+        guard !feedHandoffSticky else { return }
+        guard SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: post.id)
+            || appState.shouldContinuePlayback(for: post.id)
+        else { return }
+        if let parked = SparkWarmPool.shared.parkedPlayer(for: post.id) {
+            let t = parked.currentTime().seconds
+            if t.isFinite, t > 0.05 { handoffResumeSeconds = t }
+        }
+        if handoffResumeSeconds < 0.05 {
+            handoffResumeSeconds = YouTubeCatalogService.shared.playbackPosition(for: post.id)
+        }
+        feedHandoffSticky = true
     }
 
     /// Best-effort play URL — primary resolver plus raw media/thumb fallbacks.
@@ -410,36 +431,46 @@ struct ReelsPagerCard: View {
                 pendingSingleTap?.cancel()
                 seekToSeconds = nil
                 isScrubbingTimeline = false
+                // Next focus is a normal swipe — allow t=0 restart again.
+                feedHandoffSticky = false
+                handoffResumeSeconds = 0
             } else {
                 // Focus start is owned by focusGeneration — only reset local UI state here.
+                captureFeedHandoffIfNeeded()
                 isPaused = false
                 hidePauseGlyph(animated: false)
-                progressSeconds = 0
+                if !feedHandoffSticky {
+                    progressSeconds = 0
+                }
                 seekToSeconds = nil
                 isScrubbingTimeline = false
-                if let url = sparkPlayURL {
+                if let url = sparkPlayURL, !feedHandoffSticky {
                     SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
                 }
             }
         }
         .onAppear {
+            captureFeedHandoffIfNeeded()
             // ShortForm must not mount already zoom-cropped (landscape packs).
             if !gravityLocked {
                 useFill = prefersFillUntilMeasured
             }
-            if let url = sparkPlayURL {
+            if let url = sparkPlayURL, !feedHandoffSticky {
                 SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
             }
         }
         .onChange(of: post.id) { _, _ in
-            progressSeconds = 0
+            feedHandoffSticky = false
+            handoffResumeSeconds = 0
+            captureFeedHandoffIfNeeded()
+            progressSeconds = feedHandoffSticky ? handoffResumeSeconds : 0
             durationSeconds = 0
             seekToSeconds = nil
             isScrubbingTimeline = false
             isPaused = false
             hidePauseGlyph(animated: false)
             resetGravityForCurrentPost()
-            if let url = sparkPlayURL {
+            if let url = sparkPlayURL, !feedHandoffSticky {
                 SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
             }
         }
@@ -467,27 +498,28 @@ struct ReelsPagerCard: View {
         ZStack {
             Color.black
 
-            // Prefer existing thumb; otherwise pack-path Frame 0 (API). Never AV-extract
-            // on every neighbor — that downloaded full videos and froze the pager.
-            if let poster = sparkPosterURL {
-                CachedAsyncImage(
-                    url: poster,
-                    maxPixelSize: 900,
-                    contentMode: useFill ? .fill : .fit,
-                    placeholder: AnyView(Color.black)
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
-                .allowsHitTesting(false)
-            } else if let url = sparkPlayURL {
-                FrameZeroFallbackPoster(
-                    postID: post.id,
-                    videoURL: url,
-                    fillsFrame: useFill,
-                    allowClientExtract: isActive
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .allowsHitTesting(false)
+            // NEVER show Frame 0 / poster during feed handoff — that blinks t=0 then jumps mid-clip.
+            if !isFeedHandoffContinue {
+                if let poster = sparkPosterURL {
+                    CachedAsyncImage(
+                        url: poster,
+                        maxPixelSize: 900,
+                        contentMode: useFill ? .fill : .fit,
+                        placeholder: AnyView(Color.black)
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+                    .allowsHitTesting(false)
+                } else if let url = sparkPlayURL {
+                    FrameZeroFallbackPoster(
+                        postID: post.id,
+                        videoURL: url,
+                        fillsFrame: useFill,
+                        allowClientExtract: isActive
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .allowsHitTesting(false)
+                }
             }
 
             if let url = sparkPlayURL {
@@ -495,7 +527,8 @@ struct ReelsPagerCard: View {
                     if ArchiveVideoPlayback.isArchiveURL(url) || post.isHubSeedVideo {
                         ArchiveVideoPlayerView(
                             url: url,
-                            posterURL: sparkPosterURL,
+                            // No poster underlay on handoff — claim paints immediately.
+                            posterURL: isFeedHandoffContinue ? nil : sparkPosterURL,
                             isActive: isActive,
                             muted: false,
                             startTime: resumeStartTime,
@@ -516,7 +549,7 @@ struct ReelsPagerCard: View {
                     } else {
                         VideoPlayerView(
                             url: url,
-                            posterURL: sparkPosterURL,
+                            posterURL: isFeedHandoffContinue ? nil : sparkPosterURL,
                             placement: "reel",
                             countryCode: post.countryCode,
                             contentCountryCode: post.countryCode,

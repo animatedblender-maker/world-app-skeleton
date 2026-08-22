@@ -512,6 +512,13 @@ struct VideoPlayerView: View {
         isPlaying = true
         isRestartSeeking = false
         reportViewIfNeeded()
+        // Mid-clip handoff already has painted frames — drop poster instantly (no 64ms blink).
+        let t = player.currentTime().seconds
+        if t.isFinite, t >= 0.25 {
+            showPosterCover = false
+            onFramesReady?()
+            return
+        }
         // IG/YT: never drop poster on readyToPlay alone — black AV layer until first frames.
         if playerHasPaintedFrames(player) {
             markPosterCoverReady()
@@ -533,6 +540,12 @@ struct VideoPlayerView: View {
     @MainActor
     private func markPosterCoverReady() {
         guard showPosterCover else { return }
+        // Mid-clip: no settle delay.
+        if let player, player.currentTime().seconds.isFinite, player.currentTime().seconds >= 0.25 {
+            showPosterCover = false
+            onFramesReady?()
+            return
+        }
         // Settle: keep poster on top for a couple display frames AFTER paint proof,
         // so dropping the cover never reveals a still-black AVPlayerLayer (the blink).
         let player = self.player
