@@ -61,6 +61,7 @@ import {
   ingestMetricBatch,
   metricsPrometheusText,
   metricsSummary,
+  resetMetrics,
 } from './recommendation/metrics-ingest.js';
 import {
   handleReportsDataGet,
@@ -815,6 +816,19 @@ app.get('/v1/metrics/summary', async (req: Request, res: Response) => {
     return res.json({ ok: true, ...metricsSummary() });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message ?? 'summary_failed' });
+  }
+});
+
+/** Clear in-memory milestone ring (stale p95 after telemetry fixes). Secret required. */
+app.post('/v1/metrics/reset', async (req: Request, res: Response) => {
+  try {
+    if (!metricsReadAuthorized(req)) {
+      return res.status(401).json({ error: 'unauthorized' });
+    }
+    const result = resetMetrics();
+    return res.json({ ok: true, ...result });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'reset_failed' });
   }
 });
 

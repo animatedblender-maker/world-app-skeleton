@@ -199,3 +199,24 @@ curl -sS -H "x-cron-secret: YOUR_SECRET" \
 ```
 
 Or call with a logged-in user Bearer token.
+
+### Reset in-memory samples (after telemetry fixes)
+
+API keeps a rolling ring — old dirty p95s stick until wiped or redeployed:
+
+```bash
+curl -sS -X POST -H "x-cron-secret: YOUR_SECRET" \
+  https://api.matterya.com/v1/metrics/reset
+```
+
+Expect `{"ok":true,"clearedSamples":N,"clearedNames":M}`. Then smoke the app and refresh Grafana.
+
+### PDF #2 read (2026-08-23, after telemetry hygiene)
+
+| Milestone | n | p50 | p95 | Read |
+|-----------|---|-----|-----|------|
+| reel_swipe_first_frame | 84 | 4.43 ms | **8.96 ms** | Butter — fix worked |
+| sparks_open_first_frame | 2 | 7.5 ms | 8.0 ms | Butter |
+| sparks_feed_handoff_first_frame | 3 | 8.3 ms | 7.41 s | p95 still old ring sample |
+| hubs_feed_handoff_first_frame | 7 | 3.95 ms | 2.92 s | p50 butter; p95 ring dirt |
+| hubs_first_useful | 2 | 0 ms | 1.54 min | wipe ring then remeasure |

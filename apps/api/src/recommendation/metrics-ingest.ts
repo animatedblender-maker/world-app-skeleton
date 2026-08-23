@@ -58,6 +58,15 @@ function percentile(sorted: number[], p: number): number {
   return sorted[idx] ?? 0;
 }
 
+/** Wipe in-memory samples (Grafana dirty p95 from stale client marks). Ops only. */
+export function resetMetrics(): { clearedSamples: number; clearedNames: number } {
+  const clearedSamples = ring.length;
+  const clearedNames = byName.size;
+  ring.length = 0;
+  byName.clear();
+  return { clearedSamples, clearedNames };
+}
+
 export function ingestMetricBatch(body: MetricBatchIn): { accepted: number; rejected: number } {
   const sessionId = String(body.sessionId ?? '').slice(0, 128) || 'anon';
   const appVersion = String(body.appVersion ?? '').slice(0, 32);

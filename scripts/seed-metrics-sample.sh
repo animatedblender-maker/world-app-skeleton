@@ -44,3 +44,6 @@ curl -sS -H "x-cron-secret: $SECRET" "$API/v1/metrics/summary" | head -c 1200
 echo
 echo
 echo "Done. Refresh Grafana dashboard Matterya Butter-Smooth SLOs."
+echo
+echo "To wipe dirty in-memory samples first:"
+echo "  curl -sS -X POST -H \"x-cron-secret: \$METRICS_SUMMARY_SECRET\" \"$API/v1/metrics/reset\""
