@@ -1619,7 +1619,7 @@ struct ReelsScrollViewer: View {
         var next = posts
         next.removeAll { $0.id == post.id }
         if next.isEmpty {
-            dismiss()
+            dismissSparks()
             return
         }
         let newIndex = min(activeIndex, next.count - 1)
