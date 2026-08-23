@@ -554,29 +554,12 @@ final class HomeFeedStore {
     /// Drop offline Reddit / catalog fakes; keep real UUID-backed posts only
     /// (includes DE Million Post Corpus seeds + their comments).
     /// **Keeps R2 Sparks** — they render as SparkFeedCard on the main feed.
-    /// Prefer unviewed, but never starve the list — top up heavily with least-recently-viewed.
+    /// Unviewed first via rankForDiscovery — but NEVER drop viewed posts from the pool
+    /// (that starved Home to a handful of old cards after Sparks browsing).
     private static func liveOnlyPosts(_ posts: [CountryPost]) -> [CountryPost] {
         let base = posts.excludingDeletedPosts().forHomeFeed()
-        let unviewed = base.filter { !SparkDiscoveryEngine.isViewed($0) }
-        // Was 8 — after viewing a few Sparks the feed collapsed to a handful of old cards.
-        let minHead = 48
-        if unviewed.count >= minHead { return unviewed }
-        if unviewed.isEmpty {
-            // Library exhausted for this page — least-recent first (still a usable list).
-            return SparkDiscoveryEngine.rankForDiscovery(base)
-        }
-        // Keep every unviewed, then fill with least-recently-viewed until minHead.
-        var seen = Set(unviewed.map(\.id))
-        var out = unviewed
-        let fillers = SparkDiscoveryEngine.rankForDiscovery(
-            base.filter { SparkDiscoveryEngine.isViewed($0) }
-        )
-        let target = max(minHead, min(base.count, 80))
-        for post in fillers where seen.insert(post.id).inserted {
-            out.append(post)
-            if out.count >= target { break }
-        }
-        return out
+        guard !base.isEmpty else { return [] }
+        return SparkDiscoveryEngine.rankForDiscovery(base)
     }
 
     // MARK: - Scroll / prefetch
@@ -840,25 +823,15 @@ final class HomeFeedStore {
         var seen = existingIDs
         var contentKeys = seenContent
         let pageDeduped = pageItems.dedupeHomeFeedContent()
-        for post in pageDeduped {
-            // Prefer unviewed, but don't drop the whole page if everything was glance-viewed.
-            guard !SparkDiscoveryEngine.isViewed(post) else { continue }
+        // Append everything new from the page (unviewed first via rank) — do not hard-skip viewed.
+        for post in SparkDiscoveryEngine.rankForDiscovery(pageDeduped) {
             guard seen.insert(post.id).inserted else { continue }
             guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
             appended.append(post)
-        }
-        // Starved page (all viewed/dupes): still append least-recently-viewed from this page.
-        if appended.count < max(6, pageSize / 3) {
-            let fillers = SparkDiscoveryEngine.rankForDiscovery(pageDeduped)
-            for post in fillers {
-                guard seen.insert(post.id).inserted else { continue }
-                guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
-                appended.append(post)
-                if appended.count >= pageSize { break }
-            }
+            if appended.count >= pageSize { break }
         }
 
-        // Empty / all-dupes: unique R2 top-up (Sparks + Hubs), including mild LRV fillers.
+        // Empty / all-dupes: unique R2 top-up (Sparks + Hubs).
         if appended.isEmpty {
             recyclePass += 1
             let forceDeep = recyclePass == 1 || recyclePass % 4 == 0

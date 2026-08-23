@@ -199,7 +199,9 @@ struct FeedView: View {
                                 post,
                                 surface: RecommendationSurface.homeForYou.rawValue
                             )
-                            Task { await PostsService.shared.recordView(post) }
+                            // Do NOT markWatched on fleeting appear — that starved Home
+                            // (90-day suppress + load-more excluded every watched Spark).
+                            // Meaningful views still record via video onViewed / Sparks watch.
                         }
                         .onDisappear {
                             EngagementTracker.shared.feedPostDisappeared(post)
