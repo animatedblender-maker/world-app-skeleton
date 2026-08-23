@@ -321,6 +321,18 @@ struct GlobalHubPlaybackLayer: View {
                     protectAsContinuousHubs: true,
                     onReady: {
                         Task { await PostsService.shared.recordView(post) }
+                        if appState.shouldContinuePlayback(for: post.id)
+                            || SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: post.id)
+                            || SparkWarmPool.shared.lastClaimWasContinuing {
+                            PerformanceTelemetry.milestone(
+                                "hubs_feed_handoff_first_frame",
+                                surface: "hubs",
+                                from: "hubs_feed_handoff_start",
+                                meta: ["post": String(post.id.prefix(12))]
+                            )
+                            PerformanceTelemetry.flushSoon()
+                            appState.clearContinuePlayback(for: post.id)
+                        }
                         // Re-assert play if something paused us during mount.
                         if appState.hubPlaybackPlaying {
                             NotificationCenter.default.post(

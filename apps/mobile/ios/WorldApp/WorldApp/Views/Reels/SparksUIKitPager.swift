@@ -621,6 +621,7 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         if posts.indices.contains(clamped) {
             SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: clamped)
         }
+        PerformanceTelemetry.mark("reel_swipe_start")
         MediaPlaybackCoordinator.shared.silenceForSparkPageChange()
         focusGeneration &+= 1
         // Leaving the feed-handoff page — later reconfigure must restart at t=0.

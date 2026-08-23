@@ -313,6 +313,8 @@ struct ReelsPagerCard: View {
     /// `restartFromBeginningToken` and force seek-to-0 (that was the black blink).
     @State private var feedHandoffSticky: Bool
     @State private var handoffResumeSeconds: Double
+    /// Emit open/handoff/swipe first-frame milestones once per focus paint.
+    @State private var didEmitPaintMetrics = false
 
     init(
         post: CountryPost,
@@ -411,6 +413,42 @@ struct ReelsPagerCard: View {
         feedHandoffSticky = true
     }
 
+    /// Butter-smooth SLOs: open / feed handoff / swipe → first painted frame.
+    private func noteSparkFirstPaint() {
+        guard isActive, !didEmitPaintMetrics else { return }
+        didEmitPaintMetrics = true
+        let meta = ["post": String(post.id.prefix(12))]
+        let handoff = isFeedHandoffContinue || continueFromFeed
+        if handoff {
+            PerformanceTelemetry.milestone(
+                "sparks_feed_handoff_first_frame",
+                surface: "sparks",
+                from: "sparks_feed_handoff_start",
+                meta: meta
+            )
+            PerformanceTelemetry.milestone(
+                "sparks_open_first_frame",
+                surface: "sparks",
+                from: "sparks_open_start",
+                meta: meta.merging(["path": "open_continue"]) { _, n in n }
+            )
+        } else {
+            PerformanceTelemetry.milestone(
+                "sparks_open_first_frame",
+                surface: "sparks",
+                from: "sparks_open_start",
+                meta: meta.merging(["path": "open_instant"]) { _, n in n }
+            )
+            PerformanceTelemetry.milestone(
+                "reel_swipe_first_frame",
+                surface: "sparks",
+                from: "reel_swipe_start",
+                meta: meta
+            )
+        }
+        PerformanceTelemetry.flushSoon()
+    }
+
     /// Best-effort play URL — primary resolver plus raw media/thumb fallbacks.
     private var sparkPlayURL: URL? {
         if let url = post.playableVideoURL { return url }
@@ -490,8 +528,10 @@ struct ReelsPagerCard: View {
                 // Next focus is a normal swipe — allow t=0 restart again.
                 feedHandoffSticky = false
                 handoffResumeSeconds = 0
+                didEmitPaintMetrics = false
             } else {
                 // Focus start is owned by focusGeneration — only reset local UI state here.
+                didEmitPaintMetrics = false
                 captureFeedHandoffIfNeeded()
                 isPaused = false
                 hidePauseGlyph(animated: false)
@@ -518,6 +558,7 @@ struct ReelsPagerCard: View {
         .onChange(of: post.id) { _, _ in
             feedHandoffSticky = false
             handoffResumeSeconds = 0
+            didEmitPaintMetrics = false
             captureFeedHandoffIfNeeded()
             progressSeconds = feedHandoffSticky ? handoffResumeSeconds : 0
             durationSeconds = 0
@@ -592,7 +633,10 @@ struct ReelsPagerCard: View {
                             fillsFrame: useFill,
                             postID: post.id,
                             interactive: false,
-                            onReady: { Task { await PostsService.shared.recordView(post) } },
+                            onReady: {
+                                noteSparkFirstPaint()
+                                Task { await PostsService.shared.recordView(post) }
+                            },
                             onProgress: { current, duration in
                                 applyTimelineProgress(current: current, duration: duration)
                             },
@@ -618,6 +662,7 @@ struct ReelsPagerCard: View {
                             fillsFrame: useFill,
                             preloadsWhenInactive: true,
                             onViewed: { Task { await PostsService.shared.recordView(post) } },
+                            onFramesReady: { noteSparkFirstPaint() },
                             onProgress: { current, duration in
                                 applyTimelineProgress(current: current, duration: duration)
                             },
@@ -1530,7 +1575,14 @@ struct ReelsScrollViewer: View {
         }
         .task {
             // Open must paint immediately — never await warm/network on the critical path.
+            // First-frame SLOs emit from the active card's onReady / onFramesReady.
             PerformanceTelemetry.markIfAbsent("sparks_open_start")
+            if context.continueFromFeed {
+                PerformanceTelemetry.markIfAbsent("sparks_feed_handoff_start")
+            } else {
+                // Cold open: treat mount as swipe start so first card still records.
+                PerformanceTelemetry.markIfAbsent("reel_swipe_start")
+            }
             // Feed handoff: do NOT prepare on the same turn as claim (evict race).
             if !context.continueFromFeed {
                 SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
@@ -1538,15 +1590,6 @@ struct ReelsScrollViewer: View {
             if posts.indices.contains(activeIndex) {
                 CommentsWarmCache.shared.warm(posts[activeIndex].id)
             }
-            PerformanceTelemetry.milestone(
-                "reel_swipe_first_frame",
-                surface: "sparks",
-                from: "sparks_open_start",
-                meta: [
-                    "path": context.continueFromFeed ? "open_continue" : "open_instant",
-                    "queue": "\(posts.count)",
-                ]
-            )
 
             // Everything else off the open path.
             Task { @MainActor in

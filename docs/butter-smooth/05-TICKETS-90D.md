@@ -12,8 +12,8 @@ Format: `ID | Epic | Title | Depends | Ship gate | Your action?`
 | BS-004 | E1 | Wire shell + feed milestones (no UI change) | BS-002 | cold start metrics | smoke phone |
 | BS-005 | E1 | GET /v1/config flags | BS-001 | client reads version | **push** |
 | BS-006 | E1 | Inventory doc: sync hops / N+1 / OFFSET | BS-001 | written | — |
-| BS-007 | E8 | Grafana Cloud step 1 (account) | BS-003 | you have URL | **you create account** |
-| BS-008 | E8 | Grafana dashboards for milestones | BS-007 | p50/p95 visible | guided |
+| BS-007 | E8 | Grafana Cloud step 1 (account) | BS-003 | you have URL | **done** |
+| BS-008 | E8 | Grafana Step 3 dashboard import | BS-007 | `Matterya Butter-Smooth SLOs` live | **you: import JSON + `grafana step3 done`** |
 
 ## Days 31–60
 

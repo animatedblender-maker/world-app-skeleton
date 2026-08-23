@@ -1284,6 +1284,7 @@ final class AppState {
         let presentation = PlayPlatformBridge.hubWatchPresentation(for: watchPost)
         let handoffIDs = [watchPost.id, presentation.id]
         markContinuePlayback(for: handoffIDs)
+        PerformanceTelemetry.mark("hubs_feed_handoff_start")
         NotificationCenter.default.post(
             name: .matteryaExportPlaybackForHandoff,
             object: nil,
@@ -1669,6 +1670,7 @@ final class AppState {
         let continuing = shouldContinuePlayback(for: startingPost.id)
             || SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: startingPost.id)
             || SparkWarmPool.shared.hasContinuingParked
+        PerformanceTelemetry.markIfAbsent("sparks_open_start")
         // Continuing handoff: skip page-silence (would hitch the live buffer) + skip cover anim.
         if !continuing {
             MediaPlaybackCoordinator.shared.silenceForSparkPageChange()
@@ -1772,6 +1774,8 @@ final class AppState {
         if let from = fromFeedPost { handoffIDs.append(from.id) }
         let ids = Array(Set(handoffIDs))
         markContinuePlayback(for: ids)
+        PerformanceTelemetry.mark("sparks_feed_handoff_start")
+        PerformanceTelemetry.mark("sparks_open_start")
         NotificationCenter.default.post(
             name: .matteryaExportPlaybackForHandoff,
             object: nil,

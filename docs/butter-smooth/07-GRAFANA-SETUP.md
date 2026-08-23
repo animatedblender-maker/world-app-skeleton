@@ -99,57 +99,71 @@ Reply: **`grafana step2 done`** when 2a–2d work (or paste any error text).
 
 ---
 
-## Step 3 — First dashboard (YOU — follow exactly)
+## Step 3 — First dashboard (YOU — prefer Import)
 
-### 3a. Create dashboard
+**Do this now.** Prefer the Import path (3A). Manual panels are only a fallback (3B).
+
+### Before you open Grafana (fills empty panels)
+
+1. **Rebuild iOS** from latest `ios-native` (handoff + swipe milestones).  
+2. Use the app ~60s: open feed, tap a playing Spark, swipe Sparks, open a Hub from feed.  
+3. **Optional seed** (no phone needed) — in Terminal, with your Render secret:
+
+```bash
+cd /path/to/world-app-skeleton
+chmod +x scripts/seed-metrics-sample.sh
+METRICS_SUMMARY_SECRET='YOUR_SECRET' ./scripts/seed-metrics-sample.sh
+```
+
+You should see `"ok":true` and a `rows` array with names like `sparks_feed_handoff_first_frame`.
+
+### 3A. Import dashboard (recommended)
 
 1. Open `https://maroonbroccoli500.grafana.net/`
-2. Left menu → **Dashboards**
-3. **New** → **New dashboard**
-4. **Add visualization** (or **Add** → **Visualization**)
+2. Left menu → **Dashboards** → **New** → **Import**
+3. Upload / paste JSON from the repo file:  
+   `docs/butter-smooth/grafana/matterya-butter-smooth-slos.json`  
+   (open the file → Select All → Copy → paste into Grafana **Import via panel json**)
+4. When asked for a data source, pick **Matterya Metrics** (your Infinity DS from Step 2)  
+   - If the dropdown is empty: cancel, confirm Infinity DS name, re-import.
+5. **Import**
+6. Open the dashboard → gear (⚙️) → **Auto refresh** → `30s` → **Save dashboard**  
+   Title should stay: **`Matterya Butter-Smooth SLOs`**
 
-### 3b. Wire Infinity to Matterya summary
+**Expected panels**
 
-1. Top data source dropdown → **Matterya Metrics** (your custom one)
-2. Query type: **JSON** (or **UQL** if shown; prefer JSON)
-3. **URL**: `https://api.matterya.com/v1/metrics/summary`  
-   (full URL; do not use relative path only)
-4. Method: **GET**
-5. Parser / Root:
-   - Parsing options → **Rows/Root** (or “Root selector”): `rows`
-6. Format: **Table**
-7. **Run query** / refresh
+| Panel | Milestone |
+|-------|-----------|
+| Table | all `name / count / p50 / p95 / p99` |
+| Stat | `sparks_feed_handoff_first_frame` p95 |
+| Stat | `reel_swipe_first_frame` p95 |
+| Stat | `hubs_feed_handoff_first_frame` p95 |
+| Stat | `app_start_to_feed_visible` p95 |
+| Stat | `hubs_first_useful` / `message_local_visible` / `app_start_to_shell` / `sparks_open_first_frame` |
 
-**Expected:** table with columns like `name`, `count`, `p50`, `p95`, `p99`  
-If empty: use the iOS app for 30–60s (feed, hubs, messages), then refresh the panel.
+If Stat panels say N/A: table may still work — filter by name after the seed/smoke. Infinity filter syntax varies by plugin version; the **table** is the source of truth.
 
-### 3c. Panel settings
+### 3B. Manual fallback (only if Import fails)
 
-1. Visualization type (right): **Table**
-2. Title: `Client milestones p50/p95/p99 (ms)`
-3. **Apply** (top right)
+1. **Dashboards** → **New** → **New dashboard** → **Add visualization**
+2. Data source → **Matterya Metrics**
+3. Type **JSON** · URL `https://api.matterya.com/v1/metrics/summary` · Method **GET**  
+   Root / Rows selector: `rows` · Format **Table** · Run query
+4. Title: `Client milestones p50/p95/p99 (ms)` → Apply → Save as `Matterya Butter-Smooth SLOs`
+5. Auto refresh `30s`
 
-### 3d. Optional second panel — single milestone
+### Step 3 done gate
 
-1. **Add** → **Visualization** again  
-2. Same data source + URL + root `rows`  
-3. Visualization: **Stat** or **Bar gauge**  
-4. Transform (if available): **Filter data by values** → Field `name` → equal `app_start_to_feed_visible`  
-5. Show field: `p95`  
-6. Title: `Feed visible p95 (ms)`  
-7. Apply  
+Reply in chat: **`grafana step3 done`**  
+(optional: paste that the table shows handoff/swipe rows, or a screenshot)
 
-Repeat for: `app_start_to_shell`, `reel_swipe_first_frame`, `message_local_visible`, `message_server_ack` when those names appear in the table.
+---
 
-### 3e. Save
+## Step 3 status
 
-1. **Save dashboard** (top right)  
-2. Name: `Matterya Butter-Smooth SLOs`  
-3. Save  
-
-### 3f. Auto-refresh
-
-Dashboard settings (gear) → **Auto refresh** → `30s` or `1m` → Save  
+- [ ] Dashboard imported / created: `Matterya Butter-Smooth SLOs`
+- [ ] Auto-refresh 30s
+- [ ] Table shows live rows after iOS smoke or seed script
 
 ---
 
@@ -157,7 +171,8 @@ Dashboard settings (gear) → **Auto refresh** → `30s` or `1m` → Save
 
 - Metrics live **in API memory** until we add long-term storage: Render redeploy **clears** samples.  
 - Multiple Render instances would split memory (fine for early SLOs).  
-- Empty `rows` until the **new iOS build** uploads milestones.
+- Empty `rows` until the **new iOS build** uploads milestones (or you run the seed script).  
+- Infinity import may ask you to **re-select** `Matterya Metrics` if the UID differs from the JSON placeholder.
 
 ---
 
@@ -166,7 +181,6 @@ Dashboard settings (gear) → **Auto refresh** → `30s` or `1m` → Save
 After using the app for a minute:
 
 ```bash
-# If you set CONTENT_CRON_SECRET on Render:
 curl -sS -H "x-cron-secret: YOUR_SECRET" \
   https://api.matterya.com/v1/metrics/summary | head -c 800
 ```

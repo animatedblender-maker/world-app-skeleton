@@ -1,0 +1,561 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_MATTERYA_METRICS",
+      "label": "Matterya Metrics",
+      "description": "Infinity data source with x-cron-secret → api.matterya.com/v1/metrics/summary",
+      "type": "datasource",
+      "pluginId": "yesoreyeram-infinity-datasource",
+      "pluginName": "Infinity"
+    }
+  ],
+  "__requires": [
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "10.0.0"
+    },
+    {
+      "type": "datasource",
+      "id": "yesoreyeram-infinity-datasource",
+      "name": "Infinity",
+      "version": "2.0.0"
+    },
+    {
+      "type": "panel",
+      "id": "table",
+      "name": "Table",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "stat",
+      "name": "Stat",
+      "version": ""
+    }
+  ],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Matterya butter-smooth client SLOs (p50/p95/p99 ms). Source: GET /v1/metrics/summary via Infinity. In-memory on API — Render redeploy clears samples.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${DS_MATTERYA_METRICS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": {
+            "align": "auto",
+            "cellOptions": { "type": "auto" },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 150 },
+              { "color": "red", "value": 500 }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "name" },
+            "properties": [{ "id": "custom.width", "value": 280 }, { "id": "unit", "value": "string" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "count" },
+            "properties": [{ "id": "unit", "value": "short" }, { "id": "custom.width", "value": 80 }]
+          }
+        ]
+      },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+        "showHeader": true,
+        "sortBy": [{ "desc": false, "displayName": "name" }]
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "columns": [
+            { "selector": "name", "text": "name", "type": "string" },
+            { "selector": "count", "text": "count", "type": "number" },
+            { "selector": "p50", "text": "p50", "type": "number" },
+            { "selector": "p95", "text": "p95", "type": "number" },
+            { "selector": "p99", "text": "p99", "type": "number" }
+          ],
+          "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${DS_MATTERYA_METRICS}" },
+          "filters": [],
+          "format": "table",
+          "global_query_id": "",
+          "parser": "backend",
+          "refId": "A",
+          "root_selector": "rows",
+          "source": "url",
+          "type": "json",
+          "url": "https://api.matterya.com/v1/metrics/summary",
+          "url_options": {
+            "data": "",
+            "method": "GET"
+          }
+        }
+      ],
+      "title": "Client milestones p50 / p95 / p99 (ms)",
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${DS_MATTERYA_METRICS}" },
+      "description": "Target: warm p95 < 150ms (01-SLOS)",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 150 },
+              { "color": "red", "value": 400 }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 12 },
+      "id": 2,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/^p95$/", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "columns": [
+            { "selector": "name", "text": "name", "type": "string" },
+            { "selector": "p95", "text": "p95", "type": "number" }
+          ],
+          "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${DS_MATTERYA_METRICS}" },
+          "filters": [
+            { "field": "name", "operator": "=", "value": "sparks_feed_handoff_first_frame" }
+          ],
+          "format": "table",
+          "parser": "backend",
+          "refId": "A",
+          "root_selector": "rows",
+          "source": "url",
+          "type": "json",
+          "url": "https://api.matterya.com/v1/metrics/summary",
+          "url_options": { "method": "GET" }
+        }
+      ],
+      "title": "Sparks feed handoff p95",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${DS_MATTERYA_METRICS}" },
+      "description": "Target: warm p95 < 150ms",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 150 },
+              { "color": "red", "value": 400 }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 12 },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/^p95$/", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "columns": [
+            { "selector": "name", "text": "name", "type": "string" },
+            { "selector": "p95", "text": "p95", "type": "number" }
+          ],
+          "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${DS_MATTERYA_METRICS}" },
+          "filters": [
+            { "field": "name", "operator": "=", "value": "reel_swipe_first_frame" }
+          ],
+          "format": "table",
+          "parser": "backend",
+          "refId": "A",
+          "root_selector": "rows",
+          "source": "url",
+          "type": "json",
+          "url": "https://api.matterya.com/v1/metrics/summary",
+          "url_options": { "method": "GET" }
+        }
+      ],
+      "title": "Sparks swipe first frame p95",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${DS_MATTERYA_METRICS}" },
+      "description": "Target: warm p95 < 150ms",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 150 },
+              { "color": "red", "value": 400 }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 12 },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/^p95$/", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "columns": [
+            { "selector": "name", "text": "name", "type": "string" },
+            { "selector": "p95", "text": "p95", "type": "number" }
+          ],
+          "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${DS_MATTERYA_METRICS}" },
+          "filters": [
+            { "field": "name", "operator": "=", "value": "hubs_feed_handoff_first_frame" }
+          ],
+          "format": "table",
+          "parser": "backend",
+          "refId": "A",
+          "root_selector": "rows",
+          "source": "url",
+          "type": "json",
+          "url": "https://api.matterya.com/v1/metrics/summary",
+          "url_options": { "method": "GET" }
+        }
+      ],
+      "title": "Hubs feed handoff p95",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${DS_MATTERYA_METRICS}" },
+      "description": "Target: cached p95 < 100ms perceived",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 100 },
+              { "color": "red", "value": 800 }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 12 },
+      "id": 5,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/^p95$/", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "columns": [
+            { "selector": "name", "text": "name", "type": "string" },
+            { "selector": "p95", "text": "p95", "type": "number" }
+          ],
+          "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${DS_MATTERYA_METRICS}" },
+          "filters": [
+            { "field": "name", "operator": "=", "value": "app_start_to_feed_visible" }
+          ],
+          "format": "table",
+          "parser": "backend",
+          "refId": "A",
+          "root_selector": "rows",
+          "source": "url",
+          "type": "json",
+          "url": "https://api.matterya.com/v1/metrics/summary",
+          "url_options": { "method": "GET" }
+        }
+      ],
+      "title": "Feed visible p95",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${DS_MATTERYA_METRICS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 300 },
+              { "color": "red", "value": 1000 }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 17 },
+      "id": 6,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/^p95$/", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "columns": [
+            { "selector": "name", "text": "name", "type": "string" },
+            { "selector": "p95", "text": "p95", "type": "number" }
+          ],
+          "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${DS_MATTERYA_METRICS}" },
+          "filters": [
+            { "field": "name", "operator": "=", "value": "hubs_first_useful" }
+          ],
+          "format": "table",
+          "parser": "backend",
+          "refId": "A",
+          "root_selector": "rows",
+          "source": "url",
+          "type": "json",
+          "url": "https://api.matterya.com/v1/metrics/summary",
+          "url_options": { "method": "GET" }
+        }
+      ],
+      "title": "Hubs first useful p95",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${DS_MATTERYA_METRICS}" },
+      "description": "Target: < 50ms",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 50 },
+              { "color": "red", "value": 200 }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 17 },
+      "id": 7,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/^p95$/", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "columns": [
+            { "selector": "name", "text": "name", "type": "string" },
+            { "selector": "p95", "text": "p95", "type": "number" }
+          ],
+          "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${DS_MATTERYA_METRICS}" },
+          "filters": [
+            { "field": "name", "operator": "=", "value": "message_local_visible" }
+          ],
+          "format": "table",
+          "parser": "backend",
+          "refId": "A",
+          "root_selector": "rows",
+          "source": "url",
+          "type": "json",
+          "url": "https://api.matterya.com/v1/metrics/summary",
+          "url_options": { "method": "GET" }
+        }
+      ],
+      "title": "Message local visible p95",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${DS_MATTERYA_METRICS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 800 },
+              { "color": "red", "value": 2000 }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 17 },
+      "id": 8,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/^p95$/", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "columns": [
+            { "selector": "name", "text": "name", "type": "string" },
+            { "selector": "p95", "text": "p95", "type": "number" }
+          ],
+          "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${DS_MATTERYA_METRICS}" },
+          "filters": [
+            { "field": "name", "operator": "=", "value": "app_start_to_shell" }
+          ],
+          "format": "table",
+          "parser": "backend",
+          "refId": "A",
+          "root_selector": "rows",
+          "source": "url",
+          "type": "json",
+          "url": "https://api.matterya.com/v1/metrics/summary",
+          "url_options": { "method": "GET" }
+        }
+      ],
+      "title": "App shell p95",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${DS_MATTERYA_METRICS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 200 },
+              { "color": "red", "value": 800 }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 17 },
+      "id": 9,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/^p95$/", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "columns": [
+            { "selector": "name", "text": "name", "type": "string" },
+            { "selector": "p95", "text": "p95", "type": "number" }
+          ],
+          "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${DS_MATTERYA_METRICS}" },
+          "filters": [
+            { "field": "name", "operator": "=", "value": "sparks_open_first_frame" }
+          ],
+          "format": "table",
+          "parser": "backend",
+          "refId": "A",
+          "root_selector": "rows",
+          "source": "url",
+          "type": "json",
+          "url": "https://api.matterya.com/v1/metrics/summary",
+          "url_options": { "method": "GET" }
+        }
+      ],
+      "title": "Sparks open first frame p95",
+      "type": "stat"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["matterya", "butter-smooth", "slo"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Matterya Butter-Smooth SLOs",
+  "uid": "matterya-butter-smooth-slos",
+  "version": 1,
+  "weekStart": ""
+}

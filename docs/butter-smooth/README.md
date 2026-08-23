@@ -11,15 +11,16 @@
 | [04-SERVICE-CONTRACTS.md](./04-SERVICE-CONTRACTS.md) | API contracts |
 | [05-TICKETS-90D.md](./05-TICKETS-90D.md) | 90-day tickets |
 | [06-INVENTORY-D1.md](./06-INVENTORY-D1.md) | Sync/N+1 inventory |
-| [07-GRAFANA-SETUP.md](./07-GRAFANA-SETUP.md) | Grafana (resume **step 3** after media gate) |
+| [07-GRAFANA-SETUP.md](./07-GRAFANA-SETUP.md) | Grafana — **you: Step 3 Import now** |
+| [grafana/matterya-butter-smooth-slos.json](./grafana/matterya-butter-smooth-slos.json) | Importable Step 3 dashboard |
 | [08-HUBS-A-Z-AUDIT.md](./08-HUBS-A-Z-AUDIT.md) | Hubs play URL / shelf audit |
 | [09-MEDIA-SESSION.md](./09-MEDIA-SESSION.md) | **Locked:** one player, feed poster-only |
 
 ## Sequence (current)
 
-1. **Media session re-foundation** (`09`) — feed freeze / hubs dual-stack  
-2. **Grafana step 3+** — resume butter-smooth observability  
-3. Remaining epics / SLOs as before  
+1. Media session re-foundation (`09`) — done / in flight  
+2. **Grafana Step 3** — import dashboard + iOS smoke → reply `grafana step3 done`  
+3. Remaining epics / SLOs with measured p95s  
 
 ## Your actions (only when agent asks)
 

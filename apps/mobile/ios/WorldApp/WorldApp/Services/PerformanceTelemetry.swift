@@ -68,6 +68,12 @@ enum PerformanceTelemetry {
             meta: meta
         )
     }
+
+    /// Flush soon so Grafana Step 3 fills during a 30–60s smoke (handoff / swipe).
+    @MainActor
+    static func flushSoon(delaySec: Double = 1.5) {
+        store.flushSoon(delaySec: delaySec)
+    }
 }
 
 // MARK: - Background store
@@ -168,12 +174,15 @@ private final class MetricsStore: @unchecked Sendable {
         let start = t0 ?? (end - Double(max(0, durationMs)) / 1000)
 
         lock.lock()
+        // Once-per-session: cold-start / first-useful only.
+        // Handoff + swipe must repeat every interaction for Grafana SLOs.
         let oncePerSession =
             name.hasPrefix("app_")
-            || name.hasPrefix("hubs_")
+            || name == "hubs_first_useful"
+            || name == "hubs_interactive"
             || name.hasPrefix("profile_")
             || name.hasPrefix("messages_inbox")
-            || name == "reel_swipe_first_frame"
+            || name == "sparks_open_first_frame"
         if oncePerSession {
             if emittedNames.contains(name) {
                 lock.unlock()
@@ -196,12 +205,28 @@ private final class MetricsStore: @unchecked Sendable {
                 meta: meta
             )
         )
+        let urgent =
+            name.contains("handoff")
+            || name == "reel_swipe_first_frame"
+            || name == "sparks_open_first_frame"
         let shouldSchedule = !flushScheduled && !isFlushing
         if shouldSchedule { flushScheduled = true }
         lock.unlock()
 
         if shouldSchedule {
-            scheduleFlush(delaySec: 8)
+            scheduleFlush(delaySec: urgent ? 1.5 : 8)
+        } else if urgent {
+            flushSoon(delaySec: 1.5)
+        }
+    }
+
+    func flushSoon(delaySec: Double = 1.5) {
+        lock.lock()
+        let shouldSchedule = !flushScheduled && !isFlushing
+        if shouldSchedule { flushScheduled = true }
+        lock.unlock()
+        if shouldSchedule {
+            scheduleFlush(delaySec: max(0.3, delaySec))
         }
     }
 

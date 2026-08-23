@@ -14,6 +14,9 @@
 | `app_start_to_feed_interactive` | start → scroll responds | p95 &lt; 1.5 s cold |
 | `feed_nav_first_useful` | tab/back → useful item | warm &lt; 150 ms |
 | `reel_swipe_first_frame` | Sparks swipe → first decoded frame | warm p95 &lt; 150 ms |
+| `sparks_open_first_frame` | Sparks open → first painted frame | warm p95 &lt; 200 ms |
+| `sparks_feed_handoff_first_frame` | Feed mid-clip → Sparks continue paint | warm p95 &lt; 150 ms |
+| `hubs_feed_handoff_first_frame` | Feed mid-clip → Hubs continue paint | warm p95 &lt; 150 ms |
 | `reel_rebuffer_ratio` | rebuffer time / play time | &lt; 2% warm path |
 | `message_local_visible` | send tap → bubble on screen | &lt; 50 ms |
 | `message_server_ack` | send tap → server ack | p95 &lt; 500 ms good network |
