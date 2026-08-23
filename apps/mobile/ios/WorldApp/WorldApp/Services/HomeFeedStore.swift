@@ -403,12 +403,21 @@ final class HomeFeedStore {
     /// Keep a deep post pool so scroll rarely hits "loading more".
     private func ensureBufferedPool() async {
         var guardPasses = 0
-        while posts.count < minBufferedPool, hasMore, guardPasses < 5 {
+        var stagnant = 0
+        var lastCount = posts.count
+        while posts.count < minBufferedPool, hasMore, guardPasses < 12 {
             guardPasses += 1
             let gen = generation
             // Force network — don't only expand the local window.
             await loadMore(generation: gen, forceNetwork: true)
             guard gen == generation else { return }
+            if posts.count <= lastCount {
+                stagnant += 1
+                if stagnant >= 3 { break }
+            } else {
+                stagnant = 0
+                lastCount = posts.count
+            }
         }
     }
 
@@ -452,7 +461,7 @@ final class HomeFeedStore {
             posts = head + tail
             // Critical: do NOT reset windowLimit — that was the “feed refreshed” jump.
         }
-        nextCursor = Self.cursor(from: posts.last)
+        // Keep opaque /v1/feed cursor — never overwrite with ISO (that re-fetched page 1 forever).
         hasMore = true
         ContentCache.shared.setPosts(
             Array(posts.prefix(ContentCache.maxCachedPosts)),
@@ -756,8 +765,8 @@ final class HomeFeedStore {
 
         let filtered = await rankForSessionAsync(live)
         applyPosts(filtered, replace: true, sessionId: feedSessionId, alreadyRanked: true)
-        nextCursor = Self.cursor(from: filtered.last)
         // Always more — R2 library + network continue after this head.
+        // Do not invent an ISO cursor here (breaks /v1/feed paging).
         hasMore = true
         didPaint = !posts.isEmpty
         Task { await warmHead() }
@@ -898,8 +907,10 @@ final class HomeFeedStore {
         withTransaction(t) {
             windowLimit = min(posts.count, max(windowLimit + appended.count, windowLimit + windowPageSize))
         }
-        // Prefer network cursor (not spark top-up dates) so we don't re-walk the head.
-        nextCursor = pageNextCursor ?? Self.cursor(from: posts.last)
+        // Prefer network cursor only — never invent ISO from last post (re-walks thin page 1).
+        if let pageNextCursor {
+            nextCursor = pageNextCursor
+        }
         hasMore = true
         ContentCache.shared.setPosts(Array(posts.prefix(ContentCache.maxCachedPosts)), for: .homeFeed)
         // Media session 09: page append = thumbs only (no AV pool).
@@ -938,9 +949,7 @@ final class HomeFeedStore {
                 }
             }
         }
-        if !ordered.isEmpty {
-            nextCursor = Self.cursor(from: ordered.last)
-        }
+        // Preserve existing nextCursor from Surface/GraphQL — don't clobber with ISO.
         hasMore = true
     }
 

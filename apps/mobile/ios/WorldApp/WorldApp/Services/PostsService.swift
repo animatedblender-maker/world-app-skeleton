@@ -3034,24 +3034,19 @@ enum SparkDiscoveryEngine {
             discovery: discoveryMixed,
             seed: sessionSeed
         )
-        let minHead = 12
         let recycled = viewedPool
             .sorted { $0.1 < $1.1 }
             .map(\.0)
 
-        if fresh.count >= minHead {
-            return fresh
+        // Always keep a deep mix — truncating to 12 fresh cards starved Home after Sparks browse.
+        let target = min(max(unique.count, 1), 120)
+        var seenOut = Set(fresh.map(\.id))
+        var out = fresh
+        for post in recycled where seenOut.insert(post.id).inserted {
+            out.append(post)
+            if out.count >= target { break }
         }
-        if !fresh.isEmpty {
-            // Unviewed first, then least-recently-viewed fillers so the list is usable.
-            var seen = Set(fresh.map(\.id))
-            var out = fresh
-            for post in recycled where seen.insert(post.id).inserted {
-                out.append(post)
-                if out.count >= minHead { break }
-            }
-            return out
-        }
+        if !out.isEmpty { return out }
 
         // Last resort only (library exhausted): least-recently-viewed, then rotate by seed
         // so two opens never show the exact same recycle order.
