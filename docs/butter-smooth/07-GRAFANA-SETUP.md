@@ -161,9 +161,9 @@ Reply in chat: **`grafana step3 done`**
 
 ## Step 3 status
 
-- [ ] Dashboard imported / created: `Matterya Butter-Smooth SLOs`
-- [ ] Auto-refresh 30s
-- [ ] Table shows live rows after iOS smoke or seed script
+- [x] Dashboard imported / created: `Matterya Butter-Smooth SLOs` (product owner — confirmed)
+- [x] Auto-refresh / import done
+- [ ] Table shows live rows after iOS smoke or seed script (confirm when you have samples)
 
 ---
 

@@ -19,8 +19,8 @@
 ## Sequence (current)
 
 1. Media session re-foundation (`09`) — done / in flight  
-2. **Grafana Step 3** — import dashboard + iOS smoke → reply `grafana step3 done`  
-3. Remaining epics / SLOs with measured p95s  
+2. **Grafana Step 3** — dashboard imported (`Matterya Butter-Smooth SLOs`) ✅  
+3. Smoke iOS → confirm table rows → use p95s to drive remaining epics / SLOs  
 
 ## Your actions (only when agent asks)
 
