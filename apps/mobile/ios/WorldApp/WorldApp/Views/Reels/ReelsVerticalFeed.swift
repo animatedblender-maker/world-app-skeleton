@@ -662,10 +662,10 @@ struct ReelsPagerCard: View {
                             fillsFrame: useFill,
                             preloadsWhenInactive: true,
                             onViewed: { Task { await PostsService.shared.recordView(post) } },
-                            onFramesReady: { noteSparkFirstPaint() },
                             onProgress: { current, duration in
                                 applyTimelineProgress(current: current, duration: duration)
                             },
+                            onFramesReady: { noteSparkFirstPaint() },
                             onVideoSize: { noteVideoSize($0) },
                             seekToSeconds: seekToSeconds,
                             onSeekConsumed: { seekToSeconds = nil },
