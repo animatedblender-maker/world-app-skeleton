@@ -163,7 +163,20 @@ Reply in chat: **`grafana step3 done`**
 
 - [x] Dashboard imported / created: `Matterya Butter-Smooth SLOs` (product owner — confirmed)
 - [x] Auto-refresh / import done
-- [ ] Table shows live rows after iOS smoke or seed script (confirm when you have samples)
+- [x] Table showed live rows (PDF `grafanapdf-2026-08-23.pdf`)
+- [ ] Re-smoke after telemetry hygiene fix (stale `markIfAbsent` / processStart fallback inflated p95s)
+
+### First PDF read (2026-08-23) — treat as **dirty**
+
+| Milestone | n | p50 | p95 | Note |
+|-----------|---|-----|-----|------|
+| hubs_feed_handoff_first_frame | 1 | 3.11 ms | 3.11 ms | Real butter |
+| sparks_feed_handoff_first_frame | 2 | 7.5 ms | 7.41 s | p95 likely stale mark |
+| reel_swipe_first_frame | 7 | 4.50 ms | 4.14 s | skew — remeasure |
+| hubs_first_useful | 1 | 1.54 min | 1.54 min | **instrumentation bug** |
+| app_start_to_shell | 1 | 9.53 ms | 9.53 ms | OK |
+| app_start_to_feed_visible | 1 | 2.58 s | 2.58 s | cold path — revisit after clean smoke |
+| Stat panels | — | No data | — | Infinity filter; table is source of truth |
 
 ---
 

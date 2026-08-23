@@ -1576,12 +1576,13 @@ struct ReelsScrollViewer: View {
         .task {
             // Open must paint immediately — never await warm/network on the critical path.
             // First-frame SLOs emit from the active card's onReady / onFramesReady.
+            // Handoff start is marked at tap (presentGlobalSparks). Only seed missing marks here.
             PerformanceTelemetry.markIfAbsent("sparks_open_start")
             if context.continueFromFeed {
                 PerformanceTelemetry.markIfAbsent("sparks_feed_handoff_start")
             } else {
                 // Cold open: treat mount as swipe start so first card still records.
-                PerformanceTelemetry.markIfAbsent("reel_swipe_start")
+                PerformanceTelemetry.mark("reel_swipe_start")
             }
             // Feed handoff: do NOT prepare on the same turn as claim (evict race).
             if !context.continueFromFeed {

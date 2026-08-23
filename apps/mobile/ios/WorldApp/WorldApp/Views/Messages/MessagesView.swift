@@ -75,7 +75,7 @@ struct MessagesView: View {
             isAuthenticated: appState.isAuthenticated
         )) {
             guard appState.isAuthenticated, appState.isSessionReady else { return }
-            PerformanceTelemetry.markIfAbsent("messages_task_start")
+            PerformanceTelemetry.mark("messages_task_start")
             if !conversations.isEmpty {
                 PerformanceTelemetry.milestone(
                     "messages_inbox_visible",

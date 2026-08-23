@@ -1670,7 +1670,8 @@ final class AppState {
         let continuing = shouldContinuePlayback(for: startingPost.id)
             || SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: startingPost.id)
             || SparkWarmPool.shared.hasContinuingParked
-        PerformanceTelemetry.markIfAbsent("sparks_open_start")
+        // Fresh open mark every present (consumed on first-frame emit).
+        PerformanceTelemetry.mark("sparks_open_start")
         // Continuing handoff: skip page-silence (would hitch the live buffer) + skip cover anim.
         if !continuing {
             MediaPlaybackCoordinator.shared.silenceForSparkPageChange()

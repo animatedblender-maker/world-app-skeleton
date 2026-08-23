@@ -42,7 +42,7 @@ struct ProfileView: View {
         }
         .task(id: ProfileLoadToken(userID: profileUserID, generation: appState.contentLoadGeneration)) {
             // Instant paint from cache, then parallel network — never sequential waterfall.
-            PerformanceTelemetry.markIfAbsent("profile_task_start")
+            PerformanceTelemetry.mark("profile_task_start")
             paintProfileFromCache()
             PerformanceTelemetry.milestone(
                 "profile_interactive",

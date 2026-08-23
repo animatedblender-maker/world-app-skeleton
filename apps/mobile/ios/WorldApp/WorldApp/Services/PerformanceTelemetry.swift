@@ -26,6 +26,9 @@ enum PerformanceTelemetry {
     static func markIfAbsent(_ name: String) { store.markIfAbsent(name) }
 
     @MainActor
+    static func clearMark(_ name: String) { store.clearMark(name) }
+
+    @MainActor
     static func milestoneFromLaunch(
         _ name: String,
         surface: String,
@@ -131,6 +134,12 @@ private final class MetricsStore: @unchecked Sendable {
         lock.unlock()
     }
 
+    func clearMark(_ name: String) {
+        lock.lock()
+        marks.removeValue(forKey: name)
+        lock.unlock()
+    }
+
     func milestoneFromLaunch(
         _ name: String,
         surface: String,
@@ -154,10 +163,38 @@ private final class MetricsStore: @unchecked Sendable {
     ) {
         let t1 = Date().timeIntervalSince1970
         lock.lock()
-        let t0 = marks[markName] ?? processStart
+        // Never fall back to processStart for named marks — that produced fake multi-minute p95s
+        // when hubs_task_start / handoff marks were missing or stale across tab remounts.
+        guard let t0 = marks[markName] else {
+            lock.unlock()
+            return
+        }
+        // Consume interaction marks so a later paint cannot reuse an old tap timestamp.
+        if Self.shouldConsumeMark(markName) {
+            marks.removeValue(forKey: markName)
+        }
         lock.unlock()
         let duration = Self.safeMs(t1 - t0)
         record(name: name, surface: surface, durationMs: duration, t0: t0, t1: t1, ok: ok, meta: meta)
+    }
+
+    private static func shouldConsumeMark(_ markName: String) -> Bool {
+        markName.contains("handoff")
+            || markName == "reel_swipe_start"
+            || markName == "sparks_open_start"
+    }
+
+    /// Interaction SLOs must not poison p95 with abandoned-session / stale-mark outliers.
+    private static func isStaleInteractionSample(name: String, durationMs: Int) -> Bool {
+        let capMs: Int
+        if name.contains("handoff") || name == "reel_swipe_first_frame" || name == "sparks_open_first_frame" {
+            capMs = 15_000
+        } else if name.hasPrefix("hubs_") || name.hasPrefix("messages_") || name.hasPrefix("profile_") {
+            capMs = 60_000
+        } else {
+            return false
+        }
+        return durationMs > capMs
     }
 
     func record(
@@ -172,6 +209,11 @@ private final class MetricsStore: @unchecked Sendable {
     ) {
         let end = t1 ?? Date().timeIntervalSince1970
         let start = t0 ?? (end - Double(max(0, durationMs)) / 1000)
+
+        // Drop absurd outliers (stale markIfAbsent / processStart fallback era).
+        if Self.isStaleInteractionSample(name: name, durationMs: durationMs) {
+            return
+        }
 
         lock.lock()
         // Once-per-session: cold-start / first-useful only.

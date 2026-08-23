@@ -458,7 +458,9 @@ struct YouTubeAppView: View {
             try? await Task.sleep(nanoseconds: 80_000_000)
             guard !Task.isCancelled else { return }
 
-            PerformanceTelemetry.markIfAbsent("hubs_task_start")
+            // Fresh mark every task run — markIfAbsent made hubs_first_useful look like minutes
+            // when the tab stayed mounted and .task re-fired later.
+            PerformanceTelemetry.mark("hubs_task_start")
             await consumePendingLivingVideoIfNeeded()
             // 1) Instant paint (session / disk) — never blocks.
             paintInstantHubsIfPossible()
