@@ -1668,6 +1668,7 @@ final class AppState {
         FeedVideoFocus.shared.resetAll()
         let continuing = shouldContinuePlayback(for: startingPost.id)
             || SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: startingPost.id)
+            || SparkWarmPool.shared.hasContinuingParked
         // Continuing handoff: skip page-silence (would hitch the live buffer) + skip cover anim.
         if !continuing {
             MediaPlaybackCoordinator.shared.silenceForSparkPageChange()
@@ -1686,16 +1687,30 @@ final class AppState {
         if !seeds.contains(where: { $0.id == startingPost.id }) {
             seeds.insert(ReelsRankingEngine.resolvePlayerStart(startingPost), at: 0)
         }
+        // Instant overlay (no fullScreenCover slide) — same runloop paint as hubs tab switch.
         var transaction = Transaction()
-        if continuing {
-            transaction.disablesAnimations = true
-        }
+        transaction.disablesAnimations = true
         withTransaction(transaction) {
             reelsViewerContext = ReelsViewerContext(
                 startingPost: startingPost,
-                seedPosts: seeds
+                seedPosts: seeds,
+                continueFromFeed: continuing
             )
         }
+    }
+
+    /// Close Sparks overlay — kill Spark players only; hubs mini stays protected.
+    func closeReelsViewer() {
+        guard reelsViewerContext != nil else { return }
+        let keep = MediaPlaybackCoordinator.shared.continuousHubPlayer
+        MediaPlaybackCoordinator.shared.stopAllPlayback(except: keep)
+        SparkWarmPool.shared.silenceAllBuffered()
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            reelsViewerContext = nil
+        }
+        resumeHubPlaybackAfterSparks()
     }
 
     /// After Sparks full-screen closes — resume hubs mini from the paused frame (no remount / black).
@@ -1768,6 +1783,16 @@ final class AppState {
         }
 
         // Butter: open with ONLY the continuing clip — no catalog rank / warm on the tap path.
+        // Solo the parked buffer NOW (still muted) so Sparks mounts onto a live decoder.
+        if let parked = SparkWarmPool.shared.parkedPlayer(for: start.id)
+            ?? (fromFeedPost.flatMap { SparkWarmPool.shared.parkedPlayer(for: $0.id) }) {
+            _ = MediaPlaybackCoordinator.shared.soloSparkAudio(keeping: parked)
+            parked.isMuted = true
+            parked.volume = 0
+            if parked.rate < 0.05 {
+                parked.safePlayImmediately(atRate: 1.0)
+            }
+        }
         let seeds = [start]
         openReelsViewer(startingPost: start, seedPosts: seeds)
 

@@ -1733,23 +1733,29 @@ final class ArchiveVideoPlayerController: UIViewController {
             configureAudioSession()
         }
         spinner.stopAnimating()
-        // Keep poster until playback is actually painting (readyToPlay ≠ frames).
-        posterView.isHidden = false
         errorLabel.isHidden = true
         // Do not layoutIfNeeded with zero bounds — wait for viewDidLayoutSubviews.
 
-        let continueMid = postID.map { SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: $0) } ?? false
+        let claimWasContinuing = SparkWarmPool.shared.takeLastClaimWasContinuing()
+        let t = claimed.currentTime().seconds
+        let midClipHead = t.isFinite && t > 0.45
+        let continueMid = claimWasContinuing
+            || midClipHead
+            || (postID.map { SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: $0) } ?? false)
+            || SparkWarmPool.shared.hasContinuingParked
         if continueMid, let postID {
             SparkWarmPool.shared.clearContinueFlag(postID: postID)
         }
         let forcedStart = restartsFromBeginningOnFocus ? 0 : startTime
-        let t = claimed.currentTime().seconds
         // Wide near-zero: warm park is rarely exact 0 — skip seek to kill swipe flash.
         let nearZero = t.isFinite && t >= 0 && t < 1.0
         // Feed→full handoff: never seek away from the live playhead.
         let needsSeek = !continueMid
             && (restartsFromBeginningOnFocus || forcedStart < 0.5)
             && !nearZero
+
+        // Handoff: hide poster BEFORE play — never flash Frame 0 under mid-clip.
+        posterView.isHidden = continueMid
 
         if autoplay, userWantsPlayback {
             _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
@@ -1766,7 +1772,6 @@ final class ArchiveVideoPlayerController: UIViewController {
 
         if continueMid, userWantsPlayback {
             lastKnownSeconds = t.isFinite ? max(0, t) : 0
-            // Already has a painted frame — skip poster for seamless continue.
             posterView.isHidden = true
             claimed.safePlayImmediately(atRate: 1.0)
             didKickPlayback = true

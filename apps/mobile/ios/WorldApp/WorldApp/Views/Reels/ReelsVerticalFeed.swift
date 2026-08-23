@@ -24,6 +24,8 @@ struct ReelsVerticalFeed: View {
     var onOpenComments: ((String) -> Void)? = nil
     /// Swipe right to close the Sparks full-screen viewer.
     var onDismiss: (() -> Void)? = nil
+    /// First page continues mid-clip from the feed card (skip warm-window race on open).
+    var continueFromFeedPostID: String? = nil
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -39,7 +41,8 @@ struct ReelsVerticalFeed: View {
                 onOpenComments: onOpenComments,
                 onLikeToggle: { post in Task { await toggleLike(post) } },
                 onOpenPost: { post in openPost(post) },
-                onDismiss: onDismiss
+                onDismiss: onDismiss,
+                continueFromFeedPostID: continueFromFeedPostID
             )
             .ignoresSafeArea(.all)
 
@@ -62,7 +65,14 @@ struct ReelsVerticalFeed: View {
             // the warm buffer made open feel like a cold start.
             if posts.indices.contains(activeIndex) {
                 recordView(at: activeIndex)
-                SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
+                // Defer neighbor warm on feed handoff — prepare() used to race/evict the live buffer.
+                if continueFromFeedPostID != nil {
+                    DispatchQueue.main.async {
+                        SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
+                    }
+                } else {
+                    SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
+                }
             }
         }
         .onDisappear {
@@ -82,7 +92,7 @@ struct ReelsVerticalFeed: View {
     }
 
     private func openPost(_ post: CountryPost) {
-        appState.reelsViewerContext = nil
+        appState.closeReelsViewer()
         appState.openPostInFeed(postID: post.id)
     }
 
@@ -268,6 +278,8 @@ struct ReelsPagerCard: View {
     var bottomInset: CGFloat = Theme.tabBarHeight + 12
     var showsOpenPostAction = true
     var viewerCountryCode: String? = nil
+    /// Mount already mid-clip from Home feed (sticky — never flip restart token).
+    var continueFromFeed: Bool = false
     var onLikeToggle: () -> Void
     var onOpenPost: () -> Void
     var onOpenComments: () -> Void = {}
@@ -285,7 +297,7 @@ struct ReelsPagerCard: View {
     @State private var likeButtonScale: CGFloat = 1
     @State private var pendingSingleTap: DispatchWorkItem?
     /// Sparks timeline (YouTube Shorts–style bottom scrubber).
-    @State private var progressSeconds: Double = 0
+    @State private var progressSeconds: Double
     @State private var durationSeconds: Double = 0
     @State private var seekToSeconds: Double? = nil
     @State private var isScrubbingTimeline = false
@@ -299,8 +311,49 @@ struct ReelsPagerCard: View {
     @State private var useFill: Bool = false
     /// Feed→Sparks continue: sticky for this focus so clearing pool flags doesn't flip
     /// `restartFromBeginningToken` and force seek-to-0 (that was the black blink).
-    @State private var feedHandoffSticky = false
-    @State private var handoffResumeSeconds: Double = 0
+    @State private var feedHandoffSticky: Bool
+    @State private var handoffResumeSeconds: Double
+
+    init(
+        post: CountryPost,
+        isActive: Bool,
+        focusGeneration: UInt = 0,
+        bottomInset: CGFloat = Theme.tabBarHeight + 12,
+        showsOpenPostAction: Bool = true,
+        viewerCountryCode: String? = nil,
+        continueFromFeed: Bool = false,
+        onLikeToggle: @escaping () -> Void,
+        onOpenPost: @escaping () -> Void,
+        onOpenComments: @escaping () -> Void = {}
+    ) {
+        self.post = post
+        self.isActive = isActive
+        self.focusGeneration = focusGeneration
+        self.bottomInset = bottomInset
+        self.showsOpenPostAction = showsOpenPostAction
+        self.viewerCountryCode = viewerCountryCode
+        self.continueFromFeed = continueFromFeed
+        self.onLikeToggle = onLikeToggle
+        self.onOpenPost = onOpenPost
+        self.onOpenComments = onOpenComments
+        var resume = 0.0
+        if continueFromFeed {
+            if let parked = SparkWarmPool.shared.parkedPlayer(for: post.id) {
+                let t = parked.currentTime().seconds
+                if t.isFinite, t > 0.05 { resume = t }
+            }
+            if resume < 0.05 {
+                resume = YouTubeCatalogService.shared.playbackPosition(for: post.id)
+            }
+        }
+        _feedHandoffSticky = State(initialValue: continueFromFeed)
+        _handoffResumeSeconds = State(initialValue: resume)
+        if continueFromFeed, resume > 0.05 {
+            _progressSeconds = State(initialValue: resume)
+        } else {
+            _progressSeconds = State(initialValue: 0)
+        }
+    }
 
     /// Prefer fit until measured when the pack is likely landscape (ShortForm / wide DAR).
     private var prefersFillUntilMeasured: Bool {
@@ -342,8 +395,11 @@ struct ReelsPagerCard: View {
 
     private func captureFeedHandoffIfNeeded() {
         guard !feedHandoffSticky else { return }
-        guard SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: post.id)
+        guard continueFromFeed
+            || SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: post.id)
             || appState.shouldContinuePlayback(for: post.id)
+            || SparkWarmPool.shared.hasContinuingParked
+            || SparkWarmPool.shared.lastClaimWasContinuing
         else { return }
         if let parked = SparkWarmPool.shared.parkedPlayer(for: post.id) {
             let t = parked.currentTime().seconds
@@ -1351,7 +1407,6 @@ private enum SparksQueueBudget {
 
 struct ReelsScrollViewer: View {
     @Environment(AppState.self) private var appState
-    @Environment(\.dismiss) private var dismiss
 
     let context: ReelsViewerContext
 
@@ -1378,6 +1433,10 @@ struct ReelsScrollViewer: View {
         }
         _posts = State(initialValue: seed)
         _activeIndex = State(initialValue: max(0, seed.firstIndex(where: { $0.id == context.startingPost.id }) ?? 0))
+    }
+
+    private func dismissSparks() {
+        appState.closeReelsViewer()
     }
 
     var body: some View {
@@ -1410,13 +1469,16 @@ struct ReelsScrollViewer: View {
                         CommentsWarmCache.shared.warm(id)
                         commentsPostID = id
                     },
-                    onDismiss: { dismiss() }
+                    onDismiss: { dismissSparks() },
+                    continueFromFeedPostID: context.continueFromFeed
+                        ? context.startingPost.id
+                        : nil
                 )
             }
 
             SparksTopChrome(
                 post: posts.indices.contains(activeIndex) ? posts[activeIndex] : nil,
-                onClose: { dismiss() },
+                onClose: { dismissSparks() },
                 onNotInterested: { skipCurrentSpark(kind: .notInterested) },
                 onHide: { skipCurrentSpark(kind: .hide) }
             )
@@ -1469,7 +1531,10 @@ struct ReelsScrollViewer: View {
         .task {
             // Open must paint immediately — never await warm/network on the critical path.
             PerformanceTelemetry.markIfAbsent("sparks_open_start")
-            SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
+            // Feed handoff: do NOT prepare on the same turn as claim (evict race).
+            if !context.continueFromFeed {
+                SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
+            }
             if posts.indices.contains(activeIndex) {
                 CommentsWarmCache.shared.warm(posts[activeIndex].id)
             }
@@ -1477,11 +1542,19 @@ struct ReelsScrollViewer: View {
                 "reel_swipe_first_frame",
                 surface: "sparks",
                 from: "sparks_open_start",
-                meta: ["path": "open_instant", "queue": "\(posts.count)"]
+                meta: [
+                    "path": context.continueFromFeed ? "open_continue" : "open_instant",
+                    "queue": "\(posts.count)",
+                ]
             )
 
             // Everything else off the open path.
             Task { @MainActor in
+                if context.continueFromFeed {
+                    // Let claim + first paint finish, then warm neighbors.
+                    try? await Task.sleep(nanoseconds: 80_000_000)
+                    SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
+                }
                 seedFromWarmCatalogIfNeeded()
                 await ensureBulkQueueAhead(target: max(24, SparksQueueBudget.minQueueAhead))
                 SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)

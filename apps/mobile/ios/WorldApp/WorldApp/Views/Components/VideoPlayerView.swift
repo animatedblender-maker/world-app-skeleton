@@ -235,11 +235,13 @@ struct VideoPlayerView: View {
             } else {
                 showChrome = false
             }
-            // ALWAYS start covered — readyToPlay / warm-at-0 ≠ painted frames (black flash).
-            showPosterCover = true
-            if let player, liveGate.isActive, !liveGate.userWantsPause {
-                revealPlayerWhenFramesReady(player)
-            }
+            // Feed→Sparks continue: never start covered — claim already has painted frames.
+            let handoffContinue = postID.map {
+                SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: $0)
+                    || appState.shouldContinuePlayback(for: $0)
+                    || SparkWarmPool.shared.hasContinuingParked
+            } ?? SparkWarmPool.shared.hasContinuingParked
+            showPosterCover = !handoffContinue
             if isActive {
                 liveGate.pageEpoch = MediaPlaybackCoordinator.shared.sparkPageEpoch
             }
@@ -248,6 +250,9 @@ struct VideoPlayerView: View {
             configureAudioSession()
             // Buffer the moment the cell mounts (feed + Sparks) — don't wait for focus.
             handleActivationOrMount(forceRebuild: player?.currentItem == nil)
+            if !handoffContinue, let player, liveGate.isActive, !liveGate.userWantsPause {
+                revealPlayerWhenFramesReady(player)
+            }
             // Chrome starts hidden — only a tap reveals transport (no scroll noise).
             reportVideoSizeIfNeeded(from: player?.currentItem)
         }
@@ -858,15 +863,20 @@ struct VideoPlayerView: View {
         let alreadyAtStart = SparkWarmPool.isAtStart(claimed)
 
         // Feed → Sparks/Hubs handoff FIRST — never pause/poster over a live mid-clip buffer.
-        let continueMid = postID.map { SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: $0) } ?? false
+        let claimWasContinuing = SparkWarmPool.shared.takeLastClaimWasContinuing()
+        let t0 = claimed.currentTime().seconds
+        let midClipHead = t0.isFinite && t0 > 0.45
+        let continueMid = claimWasContinuing
+            || midClipHead
+            || (postID.map { SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: $0) } ?? false)
             || (postID.map { appState.shouldContinuePlayback(for: $0) } ?? false)
+            || SparkWarmPool.shared.hasContinuingParked
         if continueMid {
             if let postID {
                 SparkWarmPool.shared.clearContinueFlag(postID: postID)
                 appState.clearContinuePlayback(for: postID)
             }
-            let t = claimed.currentTime().seconds
-            currentSeconds = t.isFinite ? max(0, t) : 0
+            currentSeconds = t0.isFinite ? max(0, t0) : 0
             showPosterCover = false
             player = claimed
             if let item = claimed.currentItem {

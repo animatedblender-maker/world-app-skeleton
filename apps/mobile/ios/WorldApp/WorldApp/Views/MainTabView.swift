@@ -109,6 +109,20 @@ struct MainTabView: View {
                     .frame(maxWidth: .infinity)
                     .zIndex(70)
             }
+
+            // Sparks: instant overlay (not fullScreenCover) — same frame as hubs expand.
+            if let context = appState.reelsViewerContext {
+                ReelsScrollViewer(context: context)
+                    .withAppState(appState)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .ignoresSafeArea(.all)
+                    .statusBarHidden(false)
+                    .preferredColorScheme(.dark)
+                    .persistentSystemOverlays(.hidden)
+                    .background(Color.black.ignoresSafeArea(.all))
+                    .transition(.identity)
+                    .zIndex(300)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onPreferenceChange(HubContinuousVideoSlotKey.self) { frame in
@@ -221,29 +235,6 @@ struct MainTabView: View {
             // Moments viewer kept for legacy data but not linked from feed.
             StoriesViewerView(context: context)
                 .withAppState(appState)
-        }
-        .fullScreenCover(item: Binding(
-            get: { appState.reelsViewerContext },
-            set: { newValue in
-                if newValue == nil {
-                    // Dismiss Sparks → kill Spark players only; keep hubs mini AVPlayer + item.
-                    let keep = MediaPlaybackCoordinator.shared.continuousHubPlayer
-                    MediaPlaybackCoordinator.shared.stopAllPlayback(except: keep)
-                    SparkWarmPool.shared.silenceAllBuffered()
-                    appState.resumeHubPlaybackAfterSparks()
-                }
-                appState.reelsViewerContext = newValue
-            }
-        )) { context in
-            ReelsScrollViewer(context: context)
-                .withAppState(appState)
-                // Edge-to-edge film; status bar stays visible (time / battery / Wi‑Fi).
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .ignoresSafeArea(.all)
-                .statusBarHidden(false)
-                .preferredColorScheme(.dark) // light status-bar glyphs on black film
-                .persistentSystemOverlays(.hidden) // home indicator may auto-hide; clock stays
-                .presentationBackground(.black)
         }
         // Hubs is a real tab — never present it as a fullScreenCover (that hid the tab bar).
         .onChange(of: appState.isPlayPresented) { _, presented in

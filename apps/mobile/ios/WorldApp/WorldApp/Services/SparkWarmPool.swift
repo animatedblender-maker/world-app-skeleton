@@ -155,6 +155,8 @@ final class SparkWarmPool {
         let protectHi = min(posts.count, index + max(ahead, deepLimit) + 1)
         let protectLo = max(0, index - behind)
         var keep = Set(window.map(\.id)).union(inUse)
+        // Never evict a mid-clip feed→Sparks/Hubs handoff — even if share id ≠ origin id.
+        keep.formUnion(continuingIDs)
         if protectLo < protectHi {
             for p in posts[protectLo..<protectHi] {
                 keep.insert(p.id)
@@ -184,7 +186,12 @@ final class SparkWarmPool {
                 }()
             guard let url else { continue }
             // Sliding window: never re-warm what is already parked / claimed / in-flight.
-            if hasWarmOrInflight(postID: post.id) || inUse.contains(post.id) { continue }
+            // Also never touch a continuing handoff buffer (would race claim / seek to 0).
+            if hasWarmOrInflight(postID: post.id)
+                || inUse.contains(post.id)
+                || continuingIDs.contains(post.id) {
+                continue
+            }
             let postIndex = posts.firstIndex(where: { $0.id == post.id }) ?? index
             let distanceAhead = postIndex - index
             // Deep preroll for ahead clips; behind stays light (rare reverse swipe).
@@ -240,6 +247,23 @@ final class SparkWarmPool {
         return claim(postID: id)
     }
 
+    /// True when a mid-clip handoff player is parked (feed→Sparks/Hubs).
+    var hasContinuingParked: Bool {
+        continuingIDs.contains { slots[$0] != nil }
+    }
+
+    /// Set on successful claim when the slot was a mid-clip handoff.
+    /// Survives after the slot leaves `continuingIDs` / `slots` so install can still
+    /// treat the player as continue (share id ≠ Sparks origin id race).
+    private(set) var lastClaimWasContinuing = false
+
+    /// Consume sticky continue-claim flag (one-shot for the install path).
+    func takeLastClaimWasContinuing() -> Bool {
+        let v = lastClaimWasContinuing
+        lastClaimWasContinuing = false
+        return v
+    }
+
     /// Hand a fully buffered player to the visible card (removes it from the pool).
     /// Caller must treat the player as **paused at t≈0** (pool enforces that before parking).
     /// Returns nil if the parked item is missing or already failed (forces a clean cold start).
@@ -247,7 +271,10 @@ final class SparkWarmPool {
     /// Important: only mark `inUse` on a **successful** claim. Marking it when the slot
     /// is missing blocked re-warm forever → “Video unavailable” for clips that worked before.
     func claim(postID: String) -> AVPlayer? {
-        guard let slot = slots.removeValue(forKey: postID) else { return nil }
+        guard let slot = slots.removeValue(forKey: postID) else {
+            lastClaimWasContinuing = false
+            return nil
+        }
         let player = slot.player
         // Never hand out a dead item — that became “Video unavailable” for good Sparks.
         if player.currentItem == nil
@@ -257,10 +284,12 @@ final class SparkWarmPool {
             player.replaceCurrentItem(with: nil)
             MediaPlaybackCoordinator.shared.unregister(player)
             continuingIDs.remove(postID)
+            lastClaimWasContinuing = false
             return nil
         }
         inUse.insert(postID)
-        let wasContinuing = continuingIDs.contains(postID)
+        let wasContinuing = continuingIDs.remove(postID) != nil
+        lastClaimWasContinuing = wasContinuing
         player.isMuted = true
         player.volume = 0
         if wasContinuing {

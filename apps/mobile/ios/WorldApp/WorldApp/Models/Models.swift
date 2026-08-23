@@ -1135,8 +1135,16 @@ struct ReelsViewerContext: Identifiable {
     let id = UUID()
     let startingPost: CountryPost
     let seedPosts: [CountryPost]
+    /// Feed card was mid-play — Sparks must claim the same buffer (no sheet anim / t=0).
+    let continueFromFeed: Bool
 
     var startingPostID: String { startingPost.id }
+
+    init(startingPost: CountryPost, seedPosts: [CountryPost], continueFromFeed: Bool = false) {
+        self.startingPost = startingPost
+        self.seedPosts = seedPosts
+        self.continueFromFeed = continueFromFeed
+    }
 }
 
 enum CreateContentSheet: String, Identifiable {

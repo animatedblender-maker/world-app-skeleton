@@ -28,6 +28,8 @@ struct SparksUIKitPager: UIViewControllerRepresentable {
     var onOpenPost: ((CountryPost) -> Void)? = nil
     /// Swipe / grab right to close Sparks (YouTube / IG style).
     var onDismiss: (() -> Void)? = nil
+    /// Feed→Sparks: seed the first page as mid-clip continue (one-shot).
+    var continueFromFeedPostID: String? = nil
 
     func makeUIViewController(context: Context) -> SparksPagerViewController {
         let vc = SparksPagerViewController()
@@ -41,7 +43,8 @@ struct SparksUIKitPager: UIViewControllerRepresentable {
             showsOpenPostAction: showsOpenPostAction,
             viewerCountryCode: viewerCountryCode,
             isScrollEnabled: isScrollEnabled,
-            appState: appState
+            appState: appState,
+            continueFromFeedPostID: continueFromFeedPostID
         )
         return vc
     }
@@ -57,7 +60,8 @@ struct SparksUIKitPager: UIViewControllerRepresentable {
             showsOpenPostAction: showsOpenPostAction,
             viewerCountryCode: viewerCountryCode,
             isScrollEnabled: isScrollEnabled,
-            appState: appState
+            appState: appState,
+            continueFromFeedPostID: continueFromFeedPostID
         )
     }
 
@@ -102,6 +106,10 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
     private var focusGeneration: UInt = 1
     private var isApplyingScroll = false
     private var lastPostedIDs: [String] = []
+    /// One-shot feed→Sparks continue id (cleared after first active configure).
+    private var pendingContinueFromFeedPostID: String?
+    /// Keep passing continue=true on reconfigure until the user swipes away.
+    private var appliedContinueFromFeedPostID: String?
     /// Right-swipe dismiss (does not fight vertical paging).
     private var dismissPan: UIPanGestureRecognizer?
 
@@ -324,12 +332,19 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         showsOpenPostAction: Bool,
         viewerCountryCode: String?,
         isScrollEnabled: Bool,
-        appState: AppState?
+        appState: AppState?,
+        continueFromFeedPostID: String? = nil
     ) {
         self.bottomInset = bottomInset
         self.showsOpenPostAction = showsOpenPostAction
         self.viewerCountryCode = viewerCountryCode
         self.appState = appState
+        // Only seed once per Sparks open — never re-arm continue after swipe / catalog expand.
+        if let continueFromFeedPostID,
+           pendingContinueFromFeedPostID == nil,
+           appliedContinueFromFeedPostID == nil {
+            pendingContinueFromFeedPostID = continueFromFeedPostID
+        }
         collectionView.isScrollEnabled = isScrollEnabled
 
         let ids = posts.map(\.id)
@@ -429,6 +444,17 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         }.joined(separator: "|")
     }
 
+    /// Sticky continue flag for the feed-handoff post until focus leaves that page.
+    private func continueFromFeedFlag(for postID: String, isActive: Bool) -> Bool {
+        guard isActive else { return false }
+        if let pending = pendingContinueFromFeedPostID, pending == postID {
+            pendingContinueFromFeedPostID = nil
+            appliedContinueFromFeedPostID = postID
+            return true
+        }
+        return appliedContinueFromFeedPostID == postID
+    }
+
     private func refreshVisibleCells() {
         for cell in collectionView.visibleCells {
             guard let page = cell as? SparksPageCell,
@@ -445,6 +471,7 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
                 showsOpenPostAction: showsOpenPostAction,
                 viewerCountryCode: viewerCountryCode,
                 appState: appState,
+                continueFromFeed: continueFromFeedFlag(for: post.id, isActive: active),
                 // Resolve post at tap time from live array (never capture stale likedByMe).
                 onLikeToggle: { [weak self] in
                     guard let self, self.posts.indices.contains(item) else { return }
@@ -488,6 +515,7 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
             showsOpenPostAction: showsOpenPostAction,
             viewerCountryCode: viewerCountryCode,
             appState: appState,
+            continueFromFeed: continueFromFeedFlag(for: post.id, isActive: active),
             onLikeToggle: { [weak self] in
                 guard let self, self.posts.indices.contains(item) else { return }
                 self.coordinator?.likeToggle(self.posts[item])
@@ -555,6 +583,7 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
             showsOpenPostAction: showsOpenPostAction,
             viewerCountryCode: viewerCountryCode,
             appState: appState,
+            continueFromFeed: continueFromFeedFlag(for: post.id, isActive: active),
             onLikeToggle: { [weak self] in
                 self?.coordinator?.likeToggle(post)
             },
@@ -566,6 +595,7 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
             }
         )
         // Prefetch AV bulk as cells approach the viewport (before page commit).
+        // Continuing handoff slots are protected from eviction inside prepare().
         SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: indexPath.item)
         // Queue catalog bulk early — endless scroll must never hit a hard wall.
         if indexPath.item >= max(0, posts.count - 24) {
@@ -593,6 +623,11 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         }
         MediaPlaybackCoordinator.shared.silenceForSparkPageChange()
         focusGeneration &+= 1
+        // Leaving the feed-handoff page — later reconfigure must restart at t=0.
+        if let applied = appliedContinueFromFeedPostID,
+           !posts.indices.contains(clamped) || posts[clamped].id != applied {
+            appliedContinueFromFeedPostID = nil
+        }
         activeIndex = clamped
         coordinator?.setActiveIndex(clamped)
         refreshVisibleCells()
@@ -674,16 +709,18 @@ private final class SparksPageCell: UICollectionViewCell {
         showsOpenPostAction: Bool,
         viewerCountryCode: String?,
         appState: AppState?,
+        continueFromFeed: Bool = false,
         onLikeToggle: @escaping () -> Void,
         onOpenPost: @escaping () -> Void,
         onOpenComments: @escaping () -> Void
     ) {
-        let sig = "\(post.id)|\(isActive ? 1 : 0)|\(focusGeneration)|\(Int(bottomInset))|\(showsOpenPostAction ? 1 : 0)|\(post.likedByMe ? 1 : 0)|\(post.likeCount)|\(post.commentCount)"
+        let sig = "\(post.id)|\(isActive ? 1 : 0)|\(focusGeneration)|\(Int(bottomInset))|\(showsOpenPostAction ? 1 : 0)|\(continueFromFeed ? 1 : 0)|\(post.likedByMe ? 1 : 0)|\(post.likeCount)|\(post.commentCount)"
         lastPost = post
         lastBottomInset = bottomInset
         lastShowsOpen = showsOpenPostAction
         lastViewer = viewerCountryCode
         lastAppState = appState
+        lastContinueFromFeed = continueFromFeed
         lastLike = onLikeToggle
         lastOpen = onOpenPost
         lastComments = onOpenComments
@@ -701,6 +738,7 @@ private final class SparksPageCell: UICollectionViewCell {
                 bottomInset: bottomInset,
                 showsOpenPostAction: showsOpenPostAction,
                 viewerCountryCode: viewerCountryCode,
+                continueFromFeed: continueFromFeed,
                 onLikeToggle: onLikeToggle,
                 onOpenPost: onOpenPost,
                 onOpenComments: onOpenComments
@@ -762,6 +800,7 @@ private final class SparksPageCell: UICollectionViewCell {
             showsOpenPostAction: lastShowsOpen,
             viewerCountryCode: lastViewer,
             appState: lastAppState,
+            continueFromFeed: false,
             onLikeToggle: lastLike ?? {},
             onOpenPost: lastOpen ?? {},
             onOpenComments: lastComments ?? {}
@@ -773,6 +812,7 @@ private final class SparksPageCell: UICollectionViewCell {
     private var lastShowsOpen = false
     private var lastViewer: String?
     private var lastAppState: AppState?
+    private var lastContinueFromFeed = false
     private var lastLike: (() -> Void)?
     private var lastOpen: (() -> Void)?
     private var lastComments: (() -> Void)?
@@ -781,6 +821,7 @@ private final class SparksPageCell: UICollectionViewCell {
     override func prepareForReuse() {
         super.prepareForReuse()
         lastConfigureSignature = nil
+        lastContinueFromFeed = false
         // Drop active flag so recycled cells never keep ghost audio.
         if let post = lastPost {
             configure(
@@ -791,6 +832,7 @@ private final class SparksPageCell: UICollectionViewCell {
                 showsOpenPostAction: lastShowsOpen,
                 viewerCountryCode: lastViewer,
                 appState: lastAppState,
+                continueFromFeed: false,
                 onLikeToggle: lastLike ?? {},
                 onOpenPost: lastOpen ?? {},
                 onOpenComments: lastComments ?? {}
