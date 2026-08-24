@@ -563,12 +563,31 @@ final class HomeFeedStore {
     /// Drop offline Reddit / catalog fakes; keep real UUID-backed posts only
     /// (includes DE Million Post Corpus seeds + their comments).
     /// **Keeps R2 Sparks** — they render as SparkFeedCard on the main feed.
-    /// Unviewed first via rankForDiscovery — but NEVER drop viewed posts from the pool
-    /// (that starved Home to a handful of old cards after Sparks browsing).
+    /// Prefer **never-viewed** (newer suggestions). If the page is thin after Sparks
+    /// browsing, top up with least-recently-viewed — never put recycled ahead of fresh.
     private static func liveOnlyPosts(_ posts: [CountryPost]) -> [CountryPost] {
         let base = posts.excludingDeletedPosts().forHomeFeed()
         guard !base.isEmpty else { return [] }
-        return SparkDiscoveryEngine.rankForDiscovery(base)
+        let unviewed = base.filter { !SparkDiscoveryEngine.isViewed($0) }
+        // Keep a usable head without flooding Home with the same watched clips.
+        let minHead = 36
+        if unviewed.count >= minHead {
+            return SparkDiscoveryEngine.rankForDiscovery(unviewed)
+        }
+        if unviewed.isEmpty {
+            return SparkDiscoveryEngine.rankForDiscovery(base)
+        }
+        var seen = Set(unviewed.map(\.id))
+        var out = SparkDiscoveryEngine.rankForDiscovery(unviewed)
+        let fillers = SparkDiscoveryEngine.rankForDiscovery(
+            base.filter { SparkDiscoveryEngine.isViewed($0) }
+        )
+        let target = max(minHead, min(base.count, 80))
+        for post in fillers where seen.insert(post.id).inserted {
+            out.append(post)
+            if out.count >= target { break }
+        }
+        return out
     }
 
     // MARK: - Scroll / prefetch
@@ -832,15 +851,24 @@ final class HomeFeedStore {
         var seen = existingIDs
         var contentKeys = seenContent
         let pageDeduped = pageItems.dedupeHomeFeedContent()
-        // Append everything new from the page (unviewed first via rank) — do not hard-skip viewed.
+        // Suggest newer first: take unviewed from this page, then LRV fill if starved.
         for post in SparkDiscoveryEngine.rankForDiscovery(pageDeduped) {
+            guard !SparkDiscoveryEngine.isViewed(post) else { continue }
             guard seen.insert(post.id).inserted else { continue }
             guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
             appended.append(post)
             if appended.count >= pageSize { break }
         }
+        if appended.count < max(6, pageSize / 3) {
+            for post in SparkDiscoveryEngine.rankForDiscovery(pageDeduped) {
+                guard seen.insert(post.id).inserted else { continue }
+                guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
+                appended.append(post)
+                if appended.count >= pageSize { break }
+            }
+        }
 
-        // Empty / all-dupes: unique R2 top-up (Sparks + Hubs).
+        // Empty / all-dupes: unique R2 top-up (Sparks + Hubs) — discovery prefers unviewed.
         if appended.isEmpty {
             recyclePass += 1
             let forceDeep = recyclePass == 1 || recyclePass % 4 == 0

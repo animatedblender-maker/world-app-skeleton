@@ -1921,14 +1921,16 @@ struct ReelsScrollViewer: View {
             return
         }
 
-        // Second remote bulk if catalog was empty of unviewed — don't over-exclude viewed.
+        // Second remote bulk — still exclude watched so we suggest newer, not the same head.
         let more = await PostsService.shared.fetchDiscoverSparks(
             limit: min(120, bulk + 20),
-            excluding: Array(existingIDs.prefix(400))
+            excluding: Array(existingIDs.prefix(400)) + SparkDiscoveryEngine.viewedIDList(limit: 600)
         )
         if !more.isEmpty {
             let before = posts.count
-            applyExpandedFeed(SparkDiscoveryEngine.rankForDiscovery(more, excluding: existingIDs))
+            let ranked = SparkDiscoveryEngine.rankForDiscovery(more, excluding: existingIDs)
+                .filter { !SparkDiscoveryEngine.isViewed($0) }
+            applyExpandedFeed(ranked.isEmpty ? SparkDiscoveryEngine.rankForDiscovery(more, excluding: existingIDs) : ranked)
             if posts.count > before {
                 hasMorePages = true
                 SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)

@@ -630,57 +630,57 @@ final class PostsService {
     private var homeFeedSparkOrder: [CountryPost] = []
 
     /// Draw Hubs-badge long-form / `__hub_origin__|` shares for Home (not Sparks).
-    /// Keeps 16:9 Hubs cards in the mix when Spark top-up would otherwise dominate.
+    /// Suggests **unviewed** first (same discovery rule as Sparks); LRV fill only if starved.
     func homeFeedHubTopUp(excluding: Set<String>, limit: Int, forceRefresh: Bool = false) async -> [CountryPost] {
         guard limit > 0 else { return [] }
-        // Only exclude what's already on the Home list — not the entire 90-day viewed set
-        // (that starved Home after browsing Sparks).
-        var seen = excluding
+        var seen = excluding.union(Set(SparkDiscoveryEngine.viewedIDList(limit: 800)))
         var out: [CountryPost] = []
+
+        func absorb(_ ranked: [CountryPost], allowViewed: Bool) {
+            for post in ranked {
+                guard PlayPlatformBridge.isHubFeedCardVideo(post)
+                    || PlayPlatformBridge.isHubOriginShare(post)
+                    || post.isHubOriginFeedShare
+                else { continue }
+                guard post.playableVideoURL != nil || post.hasVideo else { continue }
+                if !allowViewed, SparkDiscoveryEngine.isViewed(post) { continue }
+                guard seen.insert(post.id).inserted else { continue }
+                out.append(post)
+                if out.count >= limit { return }
+            }
+        }
 
         let longform = await fetchFocusMarketHubLongform(
             limitPerCountry: forceRefresh ? 120 : 60,
             topUpRecent: true
         )
-        let ranked = SparkDiscoveryEngine.rankForDiscovery(longform, excluding: seen)
-        for post in ranked {
-            guard PlayPlatformBridge.isHubFeedCardVideo(post)
-                || PlayPlatformBridge.isHubOriginShare(post)
-                || post.isHubOriginFeedShare
-            else { continue }
-            guard post.playableVideoURL != nil || post.hasVideo else { continue }
-            guard seen.insert(post.id).inserted else { continue }
-            out.append(post)
-            if out.count >= limit { break }
-        }
+        absorb(SparkDiscoveryEngine.rankForDiscovery(longform, excluding: seen), allowViewed: false)
 
         if out.count < limit {
-            // Recent feed walk often has `__hub_origin__|` shares the channel catalog misses.
             let recent = await fetchRecentFeedPosts(limit: 120, preferSparkShares: false)
-            for post in SparkDiscoveryEngine.rankForDiscovery(recent, excluding: seen) {
-                guard PlayPlatformBridge.isHubFeedCardVideo(post)
-                    || PlayPlatformBridge.isHubOriginShare(post)
-                else { continue }
-                guard seen.insert(post.id).inserted else { continue }
-                out.append(post)
-                if out.count >= limit { break }
-            }
+            absorb(SparkDiscoveryEngine.rankForDiscovery(recent, excluding: seen), allowViewed: false)
+        }
+        // Library exhausted for this request — least-recently-viewed only.
+        if out.count < max(2, limit / 3) {
+            seen = excluding
+            absorb(SparkDiscoveryEngine.rankForDiscovery(longform, excluding: seen), allowViewed: true)
         }
         return out
     }
 
     /// Draw the next slice of R2 Sparks for the main feed (SparkFeedCard).
-    /// Prefers unseen, but still returns clips if the viewed set is huge (endless Home).
+    /// Hard prefer unviewed (server exclude + local skip); recycle only when unviewed dry.
     func homeFeedSparkTopUp(excluding: Set<String>, limit: Int, forceRefresh: Bool = false) async -> [CountryPost] {
         guard limit > 0 else { return [] }
 
         var out: [CountryPost] = []
-        var seen = excluding
+        var seen = excluding.union(Set(SparkDiscoveryEngine.viewedIDList(limit: 800)))
         let remote = await fetchDiscoverSparks(
             limit: max(limit * 2, 40),
-            excluding: Array(seen.prefix(400))
+            excluding: Array(seen.prefix(800))
         )
         for post in SparkDiscoveryEngine.rankForDiscovery(remote, excluding: seen) {
+            guard !SparkDiscoveryEngine.isViewed(post) else { continue }
             guard seen.insert(post.id).inserted else { continue }
             guard post.playableVideoURL != nil || post.hasVideo || !(post.mediaURL ?? "").isEmpty else { continue }
             out.append(post)
@@ -691,7 +691,6 @@ final class PostsService {
             _ = await loadSparksDiscoveryCatalog(forceRefresh: forceRefresh, deep: sparksSessionCatalog.count < 40)
         }
         if homeFeedSparkOrder.isEmpty || forceRefresh || homeFeedSparkOffset >= homeFeedSparkOrder.count {
-            // Rank unseen first, then shuffle — never pure recycle of the same dozen.
             homeFeedSparkOrder = SparkDiscoveryEngine.rankForDiscovery(sparksSessionCatalog)
             homeFeedSparkOffset = 0
         }
@@ -703,13 +702,19 @@ final class PostsService {
 
         var attempts = 0
         let maxAttempts = max(homeFeedSparkOrder.count * 2, limit * 4)
+        var allowViewedPass = false
         while out.count < limit, attempts < maxAttempts, !homeFeedSparkOrder.isEmpty {
             attempts += 1
             if homeFeedSparkOffset >= homeFeedSparkOrder.count {
-                // New remote sample instead of reshuffling the same list forever.
-                let more = await fetchDiscoverSparks(limit: 60, excluding: Array(seen.prefix(200)))
+                let more = await fetchDiscoverSparks(limit: 60, excluding: Array(seen.prefix(800)))
                 if !more.isEmpty {
                     homeFeedSparkOrder = SparkDiscoveryEngine.rankForDiscovery(more, excluding: seen)
+                    homeFeedSparkOffset = 0
+                } else if !allowViewedPass {
+                    // Unviewed dry — one recycle pass (LRV via rankForDiscovery).
+                    allowViewedPass = true
+                    seen = excluding
+                    homeFeedSparkOrder = SparkDiscoveryEngine.rankForDiscovery(sparksSessionCatalog)
                     homeFeedSparkOffset = 0
                 } else {
                     homeFeedSparkOrder.shuffle()
@@ -720,6 +725,10 @@ final class PostsService {
             let post = homeFeedSparkOrder[homeFeedSparkOffset]
             homeFeedSparkOffset += 1
             if seen.contains(post.id) { continue }
+            if !allowViewedPass, SparkDiscoveryEngine.isViewed(post) {
+                seen.insert(post.id)
+                continue
+            }
             seen.insert(post.id)
             guard post.playableVideoURL != nil || post.hasVideo || !(post.mediaURL ?? "").isEmpty else { continue }
             out.append(post)
