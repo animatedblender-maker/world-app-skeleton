@@ -961,14 +961,13 @@ export class PostsService {
     const total = Math.max(0, parseInt(countRows[0]?.n || '0', 10) || 0);
     if (total === 0) return [];
 
-    const maxOffset = Math.max(0, total - safeLimit);
-    const offset = maxOffset > 0 ? Math.floor(Math.random() * (maxOffset + 1)) : 0;
-
-    const params: any[] = [safeLimit, viewer, offset];
+    // True random sample (not chronological OFFSET into newest-first) — OFFSET+created_at
+    // kept returning the same “recent band” and clients saw the same Sparks forever.
+    const params: any[] = [safeLimit, viewer];
     let excludeClause = '';
     if (exclude.length) {
       params.push(exclude);
-      excludeClause = `and p.id <> all($4::uuid[])`;
+      excludeClause = `and p.id <> all($3::uuid[])`;
     }
 
     const { rows } = await pool.query(
@@ -1048,20 +1047,13 @@ export class PostsService {
           )
         )
         ${excludeClause}
-      order by p.created_at desc, p.id desc
-      offset $3
+      order by random()
       limit $1
       `,
       params
     );
 
-    // Shuffle the page so offset windows don't feel chronological.
-    const presented = await presentPostRows(rows as PostRow[]);
-    for (let i = presented.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [presented[i], presented[j]] = [presented[j], presented[i]];
-    }
-    return presented;
+    return presentPostRows(rows as PostRow[]);
   }
 
   async postById(postId: string, viewerId: string | null): Promise<PostRow | null> {

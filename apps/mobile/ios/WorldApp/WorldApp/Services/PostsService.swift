@@ -497,17 +497,19 @@ final class PostsService {
         var seen = Set(catalog.map(\.id))
         let watchedExclude = SparkDiscoveryEngine.viewedIDList(limit: 800)
 
-        // Random DB windows — always pass watched ids so the server skips them.
-        for _ in 0..<8 {
-            var exclude = Array(seen.prefix(200))
+        // Many random DB windows — always pass watched ids so the server skips them.
+        for _ in 0..<14 {
+            var exclude = Array(seen.prefix(300))
             exclude.append(contentsOf: watchedExclude)
             let sample = await fetchDiscoverSparks(limit: 80, excluding: exclude)
             if sample.isEmpty { break }
+            var added = 0
             for post in sample where seen.insert(post.id).inserted {
                 guard ReelsRankingEngine.isSparkEligible(post) else { continue }
-                // Prefer never-viewed into the pool; still keep for last-resort tail.
                 catalog.append(post)
+                added += 1
             }
+            if added == 0 { break }
         }
 
         var before: String? = nil

@@ -295,9 +295,14 @@ final class HomeFeedStore {
             userEngagedThisSession = false
             feedSessionId = UUID().uuidString
             recyclePass = 0
-            // Remount list from top with a brand-new order (no sticky window tail).
             windowLimit = firstWindow
+            // Drop sticky head — reusing old posts+cache was the “same videos forever” bug.
+            posts = []
+            didPaint = false
+            ContentCache.shared.invalidate(.homeFeed)
+            SparkDiscoveryEngine.beginNewBrowseSession()
             await refreshSessionRankingContext()
+            isBootstrapping = true
         } else if posts.isEmpty {
             feedSessionId = UUID().uuidString
             await refreshSessionRankingContext()
@@ -306,38 +311,49 @@ final class HomeFeedStore {
             await refreshFollowingContextOnly()
         }
 
-        // 1) Instant paint from cache only when empty or forced reshape.
+        // 1) Instant paint from cache only when empty (never on pull-to-refresh).
         let paintedBefore = didPaint && !posts.isEmpty
-        if forceReplace || posts.isEmpty {
-            // Force reshape: pool = previous posts + disk cache, then **re-rank with new seed**.
-            var pool: [CountryPost] = forceReplace ? posts : []
+        if !forceReplace, posts.isEmpty {
             if let cached = ContentCache.shared.posts(for: .homeFeed) {
-                pool.append(contentsOf: Self.liveOnlyPosts(cached))
-            }
-            if pool.isEmpty {
-                pool = posts
-            }
-            pool = Self.liveOnlyPosts(
-                BlockService.shared.filterPosts(pool.excludingMoments().forHomeFeed())
-            )
-            if !pool.isEmpty {
-                let rankedPool = await rankForSessionAsync(pool)
-                applyPosts(Array(rankedPool.prefix(80)), replace: true, sessionId: feedSessionId, alreadyRanked: true)
-                isBootstrapping = false
-                didPaint = true
-                // Never block first paint on AV warm — warm in parallel.
-                Task { await warmHead() }
+                let pool = Self.liveOnlyPosts(
+                    BlockService.shared.filterPosts(cached.excludingMoments().forHomeFeed())
+                )
+                if !pool.isEmpty {
+                    let rankedPool = await rankForSessionAsync(pool)
+                    applyPosts(Array(rankedPool.prefix(80)), replace: true, sessionId: feedSessionId, alreadyRanked: true)
+                    isBootstrapping = false
+                    didPaint = true
+                    Task { await warmHead() }
+                } else {
+                    isBootstrapping = true
+                }
             } else {
                 isBootstrapping = true
             }
         }
 
-        // 2) Network — thin /v1/feed first, GraphQL fallback. Never hard-replace while watching.
-        // Pull a wider first page so viewed-filter still leaves a usable head.
+        // 2) Network — thin /v1/feed alone is always the same newest-48; weave discovery samples.
         let liveRaw: [CountryPost]
-        if let thin = await SurfacePageClient.fetchHomeFeed(limit: 48, cursor: nil), !thin.items.isEmpty {
+        if forceReplace {
+            // Full diversity path (following + markets + discoverSparks random windows).
+            liveRaw = await PostsService.shared.fetchNetworkHomePosts(limit: 120)
+            if let thin = await SurfacePageClient.fetchHomeFeed(limit: 48, cursor: nil) {
+                nextCursor = thin.nextCursor
+            }
+        } else if let thin = await SurfacePageClient.fetchHomeFeed(limit: 48, cursor: nil), !thin.items.isEmpty {
             nextCursor = thin.nextCursor
-            liveRaw = thin.items
+            let exclude = Set(thin.items.map(\.id))
+            async let sparkTop = PostsService.shared.homeFeedSparkTopUp(
+                excluding: exclude,
+                limit: 28,
+                forceRefresh: true
+            )
+            async let hubTop = PostsService.shared.homeFeedHubTopUp(
+                excluding: exclude,
+                limit: 12,
+                forceRefresh: true
+            )
+            liveRaw = thin.items + (await sparkTop) + (await hubTop)
         } else {
             liveRaw = await PostsService.shared.fetchFirstPaintHomePosts(limit: 64)
         }
@@ -357,17 +373,13 @@ final class HomeFeedStore {
             print("[HomeFeed] freshSession soft-merge live=\(live.count) pool=\(posts.count) window=\(windowLimit) engaged=\(userEngagedThisSession)")
             #endif
         } else {
-            // Rank the full raw+pool first (session order tops up thin unviewed), then liveOnly.
-            let realBatch = Self.liveOnlyPosts(liveRaw + posts)
+            // Replace from network discovery mix only — do not re-append stale `posts`.
+            let realBatch = Self.liveOnlyPosts(liveRaw)
             var capped = Array((await rankForSessionAsync(realBatch)).prefix(min(max(realBatch.count, 1), 90)))
-            // Safety net: if rank still starved, fall back to liveOnlyPosts of the raw page.
             if capped.count < 8, liveRaw.count > capped.count {
-                let fallback = Self.liveOnlyPosts(liveRaw + posts + capped)
-                if fallback.count > capped.count {
-                    capped = Array((await rankForSessionAsync(fallback)).prefix(90))
-                }
+                capped = Array((await rankForSessionAsync(Self.liveOnlyPosts(liveRaw))).prefix(90))
                 if capped.count < 8 {
-                    capped = Array(fallback.prefix(90))
+                    capped = Array(liveRaw.dedupeHomeFeedContent().prefix(90))
                 }
             }
 
@@ -778,8 +790,11 @@ final class HomeFeedStore {
         recyclePass = 0
         await refreshSessionRankingContext()
 
-        // Pull-to-refresh: new session seed + following-first ranking.
-        let live = Self.liveOnlyPosts(await PostsService.shared.fetchNetworkHomePosts(limit: 100))
+        // Pull-to-refresh: discovery mix (not thin chronological head alone).
+        posts = []
+        ContentCache.shared.invalidate(.homeFeed)
+        SparkDiscoveryEngine.beginNewBrowseSession()
+        let live = Self.liveOnlyPosts(await PostsService.shared.fetchNetworkHomePosts(limit: 120))
         guard gen == generation else { return }
 
         let filtered = await rankForSessionAsync(live)
