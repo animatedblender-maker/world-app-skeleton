@@ -15,6 +15,8 @@ export type RemoteFlags = {
   kill_server_rank: boolean;
   feed_snapshot_max_age_hours: number;
   feed_soft_stale_minutes: number;
+  /** Text moderation MVP — rules + stub/http provider. */
+  moderation_text_enabled: boolean;
 };
 
 const DEFAULT_FLAGS: RemoteFlags = {
@@ -29,11 +31,12 @@ const DEFAULT_FLAGS: RemoteFlags = {
   kill_server_rank: false,
   feed_snapshot_max_age_hours: 24,
   feed_soft_stale_minutes: 10,
+  moderation_text_enabled: true,
 };
 
 /** Bump when flag defaults change so clients refresh. */
 export const CONFIG_VERSION =
-  process.env.MATTERYA_CONFIG_VERSION?.trim() || '2026-08-17.1';
+  process.env.MATTERYA_CONFIG_VERSION?.trim() || '2026-08-25.1';
 
 const TTL_SEC = Math.min(
   Math.max(Number(process.env.MATTERYA_CONFIG_TTL_SEC) || 60, 15),
@@ -78,6 +81,10 @@ export function getRemoteConfig(clientVersion?: string | null): {
     feed_soft_stale_minutes: envNum(
       'FLAG_FEED_SOFT_STALE_MIN',
       DEFAULT_FLAGS.feed_soft_stale_minutes
+    ),
+    moderation_text_enabled: envBool(
+      'MODERATION_TEXT_ENABLED',
+      DEFAULT_FLAGS.moderation_text_enabled
     ),
   };
 

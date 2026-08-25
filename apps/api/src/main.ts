@@ -568,6 +568,28 @@ app.post('/admin/reports/:postId/action', async (req: Request, res: Response) =>
   }
 });
 
+/** Text-moderation REVIEW/HELD/LIMITED queue (requires moderation_results migration). */
+app.get('/admin/moderation/queue', async (req: Request, res: Response) => {
+  if (!hasAdminAccess(req)) return res.status(401).json({ error: 'unauthorized' });
+  try {
+    const { listModerationQueue } = await import('./moderation/index.js');
+    const limit = Number(req.query.limit ?? 40);
+    return res.json({ ok: true, items: await listModerationQueue(limit) });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'failed' });
+  }
+});
+
+app.get('/admin/moderation/metrics', async (req: Request, res: Response) => {
+  if (!hasAdminAccess(req)) return res.status(401).json({ error: 'unauthorized' });
+  try {
+    const { moderationMetricsSnapshot } = await import('./moderation/index.js');
+    return res.json(moderationMetricsSnapshot());
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'failed' });
+  }
+});
+
 app.get('/admin/overview', async (req: Request, res: Response) => {
   if (!hasAdminAccess(req)) return res.status(401).json({ error: 'unauthorized' });
   try {

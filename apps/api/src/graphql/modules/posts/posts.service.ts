@@ -1234,6 +1234,20 @@ export class PostsService {
     const post = await this.postByIdForViewer(createdId, actorId);
     if (!post) throw new Error('Newly created post not found.');
 
+    // Text-first moderation (rules → provider → policy). Never blocks publish path.
+    const modText = [input.title?.trim() || '', bodyValue].filter(Boolean).join('\n').trim();
+    if (modText && visibility === 'public' && !isMoment) {
+      void import('../../../moderation/index.js')
+        .then(({ scheduleTextModeration }) => {
+          scheduleTextModeration({
+            entityType: 'post',
+            entityId: String(createdId),
+            text: modText,
+          });
+        })
+        .catch(() => {});
+    }
+
     // Immediate platform sync → Kafka + Uploads report (feed / Spark / Hubs / share).
     void this.emitUploadEvent({
       actorId,
@@ -1736,6 +1750,16 @@ export class PostsService {
 
     const comment = await this.commentById(commentId, userId);
     if (!comment) throw new Error('Comment not found.');
+
+    void import('../../../moderation/index.js')
+      .then(({ scheduleTextModeration }) => {
+        scheduleTextModeration({
+          entityType: 'comment',
+          entityId: String(commentId),
+          text: trimmed,
+        });
+      })
+      .catch(() => {});
 
     void emitServerEngagement({
       entityId: userId,
