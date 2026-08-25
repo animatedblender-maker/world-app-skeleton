@@ -497,15 +497,16 @@ final class PostsService {
         var seen = Set(catalog.map(\.id))
         let watchedExclude = SparkDiscoveryEngine.viewedIDList(limit: 800)
 
-        // Many random DB windows — always pass watched ids so the server skips them.
-        for _ in 0..<14 {
+        // A few random DB windows (not 14 — that stormed the API when DB was slow).
+        for _ in 0..<4 {
             var exclude = Array(seen.prefix(300))
             exclude.append(contentsOf: watchedExclude)
-            let sample = await fetchDiscoverSparks(limit: 80, excluding: exclude)
+            let sample = await fetchDiscoverSparks(limit: 60, excluding: exclude)
             if sample.isEmpty { break }
             var added = 0
             for post in sample where seen.insert(post.id).inserted {
                 guard ReelsRankingEngine.isSparkEligible(post) else { continue }
+                if SparkDiscoveryEngine.isViewed(post) { continue }
                 catalog.append(post)
                 added += 1
             }
@@ -662,8 +663,8 @@ final class PostsService {
             let recent = await fetchRecentFeedPosts(limit: 120, preferSparkShares: false)
             absorb(SparkDiscoveryEngine.rankForDiscovery(recent, excluding: seen), allowViewed: false)
         }
-        // Library exhausted for this request — least-recently-viewed only.
-        if out.count < max(2, limit / 3) {
+        // Only recycle when zero unviewed hubs were found for this request.
+        if out.isEmpty {
             seen = excluding
             absorb(SparkDiscoveryEngine.rankForDiscovery(longform, excluding: seen), allowViewed: true)
         }
@@ -704,30 +705,25 @@ final class PostsService {
 
         var attempts = 0
         let maxAttempts = max(homeFeedSparkOrder.count * 2, limit * 4)
-        var allowViewedPass = false
         while out.count < limit, attempts < maxAttempts, !homeFeedSparkOrder.isEmpty {
             attempts += 1
             if homeFeedSparkOffset >= homeFeedSparkOrder.count {
                 let more = await fetchDiscoverSparks(limit: 60, excluding: Array(seen.prefix(800)))
                 if !more.isEmpty {
                     homeFeedSparkOrder = SparkDiscoveryEngine.rankForDiscovery(more, excluding: seen)
+                        .filter { !SparkDiscoveryEngine.isViewed($0) }
                     homeFeedSparkOffset = 0
-                } else if !allowViewedPass {
-                    // Unviewed dry — one recycle pass (LRV via rankForDiscovery).
-                    allowViewedPass = true
-                    seen = excluding
-                    homeFeedSparkOrder = SparkDiscoveryEngine.rankForDiscovery(sparksSessionCatalog)
-                    homeFeedSparkOffset = 0
+                    if homeFeedSparkOrder.isEmpty { break }
                 } else {
-                    homeFeedSparkOrder.shuffle()
-                    homeFeedSparkOffset = 0
+                    // Unviewed library dry for this top-up — stop (don't recycle mid-feed).
+                    break
                 }
             }
             guard homeFeedSparkOrder.indices.contains(homeFeedSparkOffset) else { break }
             let post = homeFeedSparkOrder[homeFeedSparkOffset]
             homeFeedSparkOffset += 1
             if seen.contains(post.id) { continue }
-            if !allowViewedPass, SparkDiscoveryEngine.isViewed(post) {
+            if SparkDiscoveryEngine.isViewed(post) {
                 seen.insert(post.id)
                 continue
             }
@@ -3038,29 +3034,18 @@ enum SparkDiscoveryEngine {
             : seededShuffle(otherUnviewed, seed: sessionSeed)
         let discoveryMixed = weaveSparkAndHubFormats(otherFresh, seed: sessionSeed)
 
-        // Prefer unviewed, but never starve first paint to 1–2 cards (API pages are mostly viewed).
-        // Weave discovery into the head (IG-style mix) — not mine→follows→explore forever.
+        // HARD RULE (product): never re-show viewed while any unviewed remain.
         let fresh = weaveHomeFeed(
             primary: mineFresh + followFresh,
             discovery: discoveryMixed,
             seed: sessionSeed
         )
+        if !fresh.isEmpty { return fresh }
+
+        // Library exhausted — least-recently-viewed, rotate by session so opens differ.
         let recycled = viewedPool
             .sorted { $0.1 < $1.1 }
             .map(\.0)
-
-        // Always keep a deep mix — truncating to 12 fresh cards starved Home after Sparks browse.
-        let target = min(max(unique.count, 1), 120)
-        var seenOut = Set(fresh.map(\.id))
-        var out = fresh
-        for post in recycled where seenOut.insert(post.id).inserted {
-            out.append(post)
-            if out.count >= target { break }
-        }
-        if !out.isEmpty { return out }
-
-        // Last resort only (library exhausted): least-recently-viewed, then rotate by seed
-        // so two opens never show the exact same recycle order.
         guard recycled.count > 1, sessionSeed != 0 else { return recycled }
         let rot = Int(sessionSeed % UInt64(recycled.count))
         return Array(recycled[rot...]) + Array(recycled[..<rot])
