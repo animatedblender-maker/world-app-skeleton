@@ -690,12 +690,18 @@ final class PostsService {
             if out.count >= limit { return out }
         }
 
-        if forceRefresh || sparksSessionCatalog.count < 80 {
-            _ = await loadSparksDiscoveryCatalog(forceRefresh: forceRefresh, deep: sparksSessionCatalog.count < 40)
-        }
-        if homeFeedSparkOrder.isEmpty || forceRefresh || homeFeedSparkOffset >= homeFeedSparkOrder.count {
-            homeFeedSparkOrder = SparkDiscoveryEngine.rankForDiscovery(sparksSessionCatalog)
-            homeFeedSparkOffset = 0
+        // Never deep-load catalog on the feed open path — discoverSparks above is enough.
+        if homeFeedSparkOrder.isEmpty || homeFeedSparkOffset >= homeFeedSparkOrder.count {
+            let rankedRemote = SparkDiscoveryEngine.rankForDiscovery(remote, excluding: seen)
+                .filter { !SparkDiscoveryEngine.isViewed($0) }
+            if !rankedRemote.isEmpty {
+                homeFeedSparkOrder = rankedRemote
+                homeFeedSparkOffset = 0
+            } else if !sparksSessionCatalog.isEmpty {
+                homeFeedSparkOrder = SparkDiscoveryEngine.rankForDiscovery(sparksSessionCatalog)
+                    .filter { !SparkDiscoveryEngine.isViewed($0) }
+                homeFeedSparkOffset = 0
+            }
         }
         if homeFeedSparkOrder.isEmpty {
             let hub = await fetchFocusMarketHubSparks(limitPerAuthor: 200)

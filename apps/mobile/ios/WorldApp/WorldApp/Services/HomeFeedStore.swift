@@ -296,119 +296,100 @@ final class HomeFeedStore {
             feedSessionId = UUID().uuidString
             recyclePass = 0
             windowLimit = firstWindow
-            // Drop sticky head — reusing old posts+cache was the “same videos forever” bug.
-            posts = []
-            didPaint = false
             ContentCache.shared.invalidate(.homeFeed)
             SparkDiscoveryEngine.beginNewBrowseSession()
             await refreshSessionRankingContext()
-            isBootstrapping = true
+            // Keep showing current rows until thin paint — never blank the UI for 4s+ GraphQL.
         } else if posts.isEmpty {
             feedSessionId = UUID().uuidString
             await refreshSessionRankingContext()
         } else {
-            // Already showing rows — keep session seed so the head order stays stable.
             await refreshFollowingContextOnly()
         }
 
-        // 1) Instant paint from cache only when empty (never on pull-to-refresh).
         let paintedBefore = didPaint && !posts.isEmpty
-        if !forceReplace, posts.isEmpty {
-            if let cached = ContentCache.shared.posts(for: .homeFeed) {
-                let pool = Self.liveOnlyPosts(
-                    BlockService.shared.filterPosts(cached.excludingMoments().forHomeFeed())
-                )
-                if !pool.isEmpty {
-                    let rankedPool = await rankForSessionAsync(pool)
-                    applyPosts(Array(rankedPool.prefix(80)), replace: true, sessionId: feedSessionId, alreadyRanked: true)
-                    isBootstrapping = false
-                    didPaint = true
-                    Task { await warmHead() }
-                } else {
-                    isBootstrapping = true
-                }
+
+        // 1) Instant paint from disk when empty (cold open).
+        if posts.isEmpty, let cached = ContentCache.shared.posts(for: .homeFeed) {
+            let pool = Self.liveOnlyPosts(
+                BlockService.shared.filterPosts(cached.excludingMoments().forHomeFeed())
+            )
+            if !pool.isEmpty {
+                let rankedPool = await rankForSessionAsync(pool)
+                applyPosts(Array(rankedPool.prefix(80)), replace: true, sessionId: feedSessionId, alreadyRanked: true)
+                isBootstrapping = false
+                didPaint = true
+                Task { await warmHead() }
             } else {
                 isBootstrapping = true
             }
         }
 
-        // 2) Network — thin /v1/feed alone is always the same newest-48; weave discovery samples.
-        let liveRaw: [CountryPost]
-        if forceReplace {
-            // Full diversity path (following + markets + discoverSparks random windows).
-            liveRaw = await PostsService.shared.fetchNetworkHomePosts(limit: 120)
-            if let thin = await SurfacePageClient.fetchHomeFeed(limit: 48, cursor: nil) {
-                nextCursor = thin.nextCursor
-            }
-        } else if let thin = await SurfacePageClient.fetchHomeFeed(limit: 48, cursor: nil), !thin.items.isEmpty {
-            nextCursor = thin.nextCursor
-            let exclude = Set(thin.items.map(\.id))
-            async let sparkTop = PostsService.shared.homeFeedSparkTopUp(
-                excluding: exclude,
-                limit: 28,
-                forceRefresh: true
-            )
-            async let hubTop = PostsService.shared.homeFeedHubTopUp(
-                excluding: exclude,
-                limit: 12,
-                forceRefresh: true
-            )
-            liveRaw = thin.items + (await sparkTop) + (await hubTop)
-        } else {
-            liveRaw = await PostsService.shared.fetchFirstPaintHomePosts(limit: 64)
-        }
-        let live = Self.liveOnlyPosts(liveRaw)
+        // 2) FAST path: thin /v1/feed only (~0.5s) — paint now. Discovery top-up is background.
+        let thin = await SurfacePageClient.fetchHomeFeed(limit: 48, cursor: nil)
         guard gen == generation else { return }
-
-        let preserveHead = !forceReplace
-            && (paintedBefore || userEngagedThisSession || (didPaint && !posts.isEmpty))
-
-        if preserveHead {
-            await softMergePreservingHead(live)
-            isBootstrapping = false
-            didPaint = true
-            hasMore = true
-            recyclePass = 0
-            #if DEBUG
-            print("[HomeFeed] freshSession soft-merge live=\(live.count) pool=\(posts.count) window=\(windowLimit) engaged=\(userEngagedThisSession)")
-            #endif
-        } else {
-            // Replace from network discovery mix only — do not re-append stale `posts`.
-            let realBatch = Self.liveOnlyPosts(liveRaw)
-            var capped = Array((await rankForSessionAsync(realBatch)).prefix(min(max(realBatch.count, 1), 90)))
-            if capped.count < 8, liveRaw.count > capped.count {
-                capped = Array((await rankForSessionAsync(Self.liveOnlyPosts(liveRaw))).prefix(90))
-                if capped.count < 8 {
-                    capped = Array(liveRaw.dedupeHomeFeedContent().prefix(90))
+        var liveRaw: [CountryPost] = []
+        if let thin, !thin.items.isEmpty {
+            nextCursor = thin.nextCursor
+            liveRaw = thin.items
+            let fast = Self.liveOnlyPosts(liveRaw)
+            let rankedFast = await rankForSessionAsync(fast.isEmpty ? liveRaw : fast)
+            let head = Array(rankedFast.prefix(48))
+            if !head.isEmpty {
+                let preserveHead = !forceReplace
+                    && (paintedBefore || userEngagedThisSession)
+                if preserveHead {
+                    await softMergePreservingHead(head)
+                } else {
+                    applyPosts(head, replace: true, sessionId: feedSessionId, alreadyRanked: true)
+                    ContentCache.shared.setPosts(posts, for: .homeFeed)
                 }
+                isBootstrapping = false
+                didPaint = true
+                hasMore = true
+                Task { await warmHead() }
             }
-
-            if !capped.isEmpty {
-                applyPosts(capped, replace: true, sessionId: feedSessionId, alreadyRanked: true)
+        } else if posts.isEmpty {
+            // Thin failed — one lighter GraphQL first-paint (not full 120 mix).
+            liveRaw = await PostsService.shared.fetchFirstPaintHomePosts(limit: 48)
+            guard gen == generation else { return }
+            let ranked = await rankForSessionAsync(Self.liveOnlyPosts(liveRaw))
+            if !ranked.isEmpty {
+                applyPosts(Array(ranked.prefix(48)), replace: true, sessionId: feedSessionId, alreadyRanked: true)
                 ContentCache.shared.setPosts(posts, for: .homeFeed)
                 didPaint = true
-                Task { await warmHead() }
-                hasMore = true
-                recyclePass = 0
-                #if DEBUG
-                print("[HomeFeed] freshSession replace total=\(capped.count) raw=\(liveRaw.count) live=\(live.count) following=\(sessionFollowingIDs.count) seed=\(sessionRankSeed)")
-                #endif
-            } else if posts.isEmpty {
-                applyPosts([], replace: true, sessionId: feedSessionId)
-                ContentCache.shared.invalidate(.homeFeed)
-                hasMore = true
             }
+            isBootstrapping = false
         }
 
         isBootstrapping = false
-        // Thin head after viewed-filter → immediately page for more (don’t spin on 1 card).
-        if posts.count < 12 {
-            hasMore = true
-            requestLoadMore()
-        }
-        // Facebook-style: never leave the user waiting at the tail — fill the pool in background.
-        Task(priority: .utility) { [weak self] in
-            await self?.ensureBufferedPool()
+        recyclePass = 0
+
+        // 3) Background: unviewed Sparks/Hubs top-up + buffer (never block first paint).
+        Task(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            let exclude = Set(self.posts.map(\.id))
+            async let sparkTop = PostsService.shared.homeFeedSparkTopUp(
+                excluding: exclude,
+                limit: 36,
+                forceRefresh: false
+            )
+            async let hubTop = PostsService.shared.homeFeedHubTopUp(
+                excluding: exclude,
+                limit: 14,
+                forceRefresh: false
+            )
+            let extra = (await sparkTop) + (await hubTop)
+            guard gen == self.generation, !extra.isEmpty else {
+                if self.posts.count < 12 { self.requestLoadMore() }
+                await self.ensureBufferedPool()
+                return
+            }
+            await self.softMergePreservingHead(extra)
+            if self.posts.count < 16 {
+                self.requestLoadMore()
+            }
+            await self.ensureBufferedPool()
         }
     }
 
@@ -779,15 +760,19 @@ final class HomeFeedStore {
         recyclePass = 0
         await refreshSessionRankingContext()
 
-        // Pull-to-refresh: discovery mix (not thin chronological head alone).
-        posts = []
+        // Same fast path as fresh session — thin first, discovery in background.
         ContentCache.shared.invalidate(.homeFeed)
         SparkDiscoveryEngine.beginNewBrowseSession()
-        let live = Self.liveOnlyPosts(await PostsService.shared.fetchNetworkHomePosts(limit: 120))
+        let thin = await SurfacePageClient.fetchHomeFeed(limit: 48, cursor: nil)
         guard gen == generation else { return }
-
-        let filtered = await rankForSessionAsync(live)
-        applyPosts(filtered, replace: true, sessionId: feedSessionId, alreadyRanked: true)
+        var liveRaw = thin?.items ?? []
+        if let thin { nextCursor = thin.nextCursor }
+        if liveRaw.isEmpty {
+            liveRaw = await PostsService.shared.fetchFirstPaintHomePosts(limit: 48)
+        }
+        let live = Self.liveOnlyPosts(liveRaw)
+        let filtered = await rankForSessionAsync(live.isEmpty ? liveRaw : live)
+        applyPosts(Array(filtered.prefix(48)), replace: true, sessionId: feedSessionId, alreadyRanked: true)
         // Always more — R2 library + network continue after this head.
         // Do not invent an ISO cursor here (breaks /v1/feed paging).
         hasMore = true
