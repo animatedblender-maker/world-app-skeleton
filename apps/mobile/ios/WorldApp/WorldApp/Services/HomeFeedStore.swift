@@ -605,16 +605,17 @@ final class HomeFeedStore {
             hasMore = true
         }
 
-        // Thumbs for nearby rows; Sparks-style 5-ahead AV sliding window on shared hubs/sparks.
-        let ahead = fling ? 3 : 5
-        let end = min(displayedPosts.count, index + ahead)
+        // Thumbs wide; AV sliding window (device-adaptive) on shared hubs/sparks.
+        let thumbAhead = fling ? 8 : SparkWarmPool.MediaBudget.thumbAhead
+        let end = min(displayedPosts.count, index + thumbAhead)
         if index < end {
             let window = Array(displayedPosts[index..<end])
             ImageCache.shared.prefetchFeedMedia(window, maxPixelSize: fling ? 280 : 360)
-            if !fling {
-                let videos = Self.feedWarmVideoQueue(from: displayedPosts)
-                if let videoIndex = Self.feedWarmIndex(for: post, in: videos, feedIndex: index, feed: displayedPosts) {
-                    SparkWarmPool.shared.prepareFeedWindow(posts: videos, around: videoIndex)
+            // Keep warming AV during light fling (smaller ahead) — skip only hard fling storms.
+            let videos = Self.feedWarmVideoQueue(from: displayedPosts)
+            if let videoIndex = Self.feedWarmIndex(for: post, in: videos, feedIndex: index, feed: displayedPosts) {
+                SparkWarmPool.shared.prepareFeedWindow(posts: videos, around: videoIndex)
+                if !fling {
                     let hi = min(videos.count, videoIndex + SparkWarmPool.MediaBudget.playerAheadFeed + 1)
                     let warmIDs = Array(videos[videoIndex..<hi].map(\.id))
                     if !warmIDs.isEmpty {
@@ -1002,7 +1003,9 @@ final class HomeFeedStore {
                 ArchiveVideoPlayback.warmResolve(url)
             }
         }
-        let readyIDs = Array(videos.prefix(2).map(\.id))
+        let readyIDs = Array(
+            videos.prefix(min(4, SparkWarmPool.MediaBudget.playerAheadFeed)).map(\.id)
+        )
         Task(priority: .utility) {
             await RecommendationClient.warmPlaybackURLs(readyIDs)
         }

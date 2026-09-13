@@ -4,11 +4,9 @@ import Foundation
 /// Keeps **nearby Sparks / feed / hubs videos** fully buffered so play is instant on focus.
 ///
 /// ## Sliding window (Sparks, feed shares, hubs)
-/// While watching index `i`, keep players for `[i-1 … i+5]` parked/claimed.
-/// On advance to `i+1`, the window becomes `[i … i+6]`:
-/// - already-warmed ids in the overlap are **kept** (never re-downloaded)
-/// - only the new edge (`i+6`) is warmed
-/// - the trailing id that left the window is evicted
+/// While watching index `i`, keep players for `[i-1 … i+N]` parked/claimed
+/// (`N` = MediaBudget.playerAhead — 4…10 by device RAM).
+/// On advance: overlap kept, only the new edge warmed, trailing edge evicted.
 ///
 /// Same policy for home-feed shared Sparks/Hubs cards and Hubs For you / related.
 ///
@@ -27,26 +25,40 @@ final class SparkWarmPool {
         static var isConstrained: Bool { physicalGB < 3.6 }
         static var isMid: Bool { physicalGB < 5.6 }
 
-        /// Product: while focused on one clip, keep the next **five** AV players ready.
-        static var playerAhead: Int { isConstrained ? 3 : 5 }
-        /// Feed shared Sparks/Hubs — same 5-ahead sliding window as Sparks.
+        /// How many AV players to keep ready ahead of focus (butter-smooth vs RAM).
+        /// Constrained ≈ iPhone 11 class; mid ≈ 4–6GB; else flagship.
+        static var playerAhead: Int {
+            if isConstrained { return 4 }
+            if isMid { return 7 }
+            return 10
+        }
         static var playerAheadFeed: Int { playerAhead }
-        /// Sparks vertical + hubs For you / related.
         static var playerAheadSparks: Int { playerAhead }
         static var playerAheadHubs: Int { playerAhead }
-        /// Thumbs / Frame 0: preload a wide band (not full library — caps RAM/R2).
-        static var thumbAhead: Int { isConstrained ? 24 : 48 }
+        /// Thumbs / Frame 0: wide band (cheap vs AV).
+        static var thumbAhead: Int {
+            if isConstrained { return 32 }
+            if isMid { return 48 }
+            return 64
+        }
         /// Deep-preroll the whole ahead window (butter swipe / tap).
         static var deepPrerollFeed: Int { playerAheadFeed }
         static var deepPrerollSparks: Int { playerAheadSparks }
         static var deepPrerollHubs: Int { playerAheadHubs }
         /// Parked slots ≈ ahead + behind + spare (claimed players are separate).
-        /// 5 ahead + 1 behind + 1 spare = 7 mid/high; constrained keeps 5.
-        static var maxSlots: Int { isConstrained ? 5 : (isMid ? 7 : 9) }
-        static var playerBehind: Int { 1 }
-        /// Max simultaneous R2 warms — sliding window still fills to 5, just not all at once.
-        static var maxConcurrentWarms: Int { isConstrained ? 2 : 3 }
-        static var forwardBufferDeep: Double { isConstrained ? 4 : 6 }
+        static var maxSlots: Int {
+            if isConstrained { return 7 }
+            if isMid { return 11 }
+            return 14
+        }
+        static var playerBehind: Int { isConstrained ? 1 : 2 }
+        /// Cap parallel R2 pipes so deeper windows stay butter-smooth.
+        static var maxConcurrentWarms: Int {
+            if isConstrained { return 2 }
+            if isMid { return 3 }
+            return 4
+        }
+        static var forwardBufferDeep: Double { isConstrained ? 5 : (isMid ? 7 : 9) }
         static var forwardBufferLight: Double { isConstrained ? 2 : 3 }
     }
 
@@ -70,13 +82,13 @@ final class SparkWarmPool {
     private var inUse = Set<String>()
     private var maxSlots: Int { MediaBudget.maxSlots }
     private var forwardBufferSeconds: Double { MediaBudget.forwardBufferDeep }
-    /// Serialize warm starts so we fill the 5-ahead window without opening 5 R2 pipes at once.
+    /// Serialize warm starts so we fill the ahead window without opening N R2 pipes at once.
     private var activeWarms = 0
     private var warmWaiters: [CheckedContinuation<Void, Never>] = []
 
     private init() {}
 
-    /// Convenience for Sparks player — sliding window: 5 ahead + 1 behind.
+    /// Convenience for Sparks player — sliding AV window (device-adaptive ahead).
     func preparePlayerWindow(posts: [CountryPost], around index: Int) {
         prepare(
             posts: posts,
@@ -87,7 +99,7 @@ final class SparkWarmPool {
         )
     }
 
-    /// Home feed shared Sparks / Hubs — same 5-ahead sliding window (video-filtered queue).
+    /// Home feed shared Sparks / Hubs — same adaptive AV window (video-filtered queue).
     func prepareFeedWindow(posts: [CountryPost], around index: Int) {
         prepare(
             posts: posts,
