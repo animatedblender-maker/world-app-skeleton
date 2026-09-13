@@ -773,8 +773,6 @@ final class HomeFeedStore {
         let live = Self.liveOnlyPosts(liveRaw)
         let filtered = await rankForSessionAsync(live.isEmpty ? liveRaw : live)
         applyPosts(Array(filtered.prefix(48)), replace: true, sessionId: feedSessionId, alreadyRanked: true)
-        // Always more — R2 library + network continue after this head.
-        // Do not invent an ISO cursor here (breaks /v1/feed paging).
         hasMore = true
         didPaint = !posts.isEmpty
         Task { await warmHead() }
@@ -782,6 +780,23 @@ final class HomeFeedStore {
             ContentCache.shared.setPosts(posts, for: .homeFeed)
         } else {
             ContentCache.shared.invalidate(.homeFeed)
+        }
+        Task(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            let exclude = Set(self.posts.map(\.id))
+            async let sparkTop = PostsService.shared.homeFeedSparkTopUp(
+                excluding: exclude, limit: 36, forceRefresh: false
+            )
+            async let hubTop = PostsService.shared.homeFeedHubTopUp(
+                excluding: exclude, limit: 14, forceRefresh: false
+            )
+            let extra = (await sparkTop) + (await hubTop)
+            guard gen == self.generation, !extra.isEmpty else {
+                await self.ensureBufferedPool()
+                return
+            }
+            await self.softMergePreservingHead(extra)
+            await self.ensureBufferedPool()
         }
         #if DEBUG
         print("[HomeFeed] hardRefresh live=\(live.count) total=\(filtered.count)")
