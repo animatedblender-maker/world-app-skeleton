@@ -112,10 +112,11 @@ struct SparkFeedCard: View {
                             loops: true,
                             preferArchivePlayer: ArchiveVideoPlayback.isArchiveURL(url),
                             showsControls: false,
-                            // Chrome is drawn by SparkFeedCard overlays (always visible).
+                            // Chrome is drawn by SparkFeedCard overlays on top of the film —
+                            // never reserve a black strip (that was the top gap on feed Sparks).
                             muteOnlyControls: false,
                             fillsFrame: useFill,
-                            topChromeReserve: 52,
+                            topChromeReserve: 0,
                             sharesFeedMute: true,
                             autoplaySurface: autoplaySurface,
                             onViewed: { Task { await PostsService.shared.recordView(post) } },
