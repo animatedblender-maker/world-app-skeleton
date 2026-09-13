@@ -222,8 +222,16 @@ struct YouTubeAppView: View {
             stableHomeVideos = window
             stableDiscoverVideos = window
         }
-        // Never prefetch mid-scroll grow — thumbs load lazily via AsyncImage.
-        _ = warmThumbs
+        if warmThumbs {
+            ImageCache.shared.prefetchPostThumbnails(
+                window,
+                maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel,
+                aggressive: false
+            )
+            Task {
+                await Frame0PosterResolver.shared.prefetch(postIDs: window.map(\.id))
+            }
+        }
     }
 
     private func scheduleSettledHubsTopUp() {
@@ -1472,17 +1480,20 @@ struct YouTubeAppView: View {
         }
     }
 
-    /// Prefetch posters first; then slide a 5-ahead AV window (capped concurrent warms).
+    /// Prefetch Frame0/thumbs for the whole For-you window; AV only 5-ahead.
     private func butterWarmHubCatalog(_ videos: [CountryPost]) {
         let thumbPx = YouTubeMediaLayout.hubsListThumbMaxPixel
         let head = stableDiscoverVideos.isEmpty
             ? videos.filter { !$0.isReel && $0.playableVideoURL != nil }
             : stableDiscoverVideos
-        ImageCache.shared.prefetchPostThumbnails(
-            Array(head.prefix(6)),
-            maxPixelSize: thumbPx,
-            aggressive: false
+        let poolBand = Array(
+            (hubsForYouPool.isEmpty ? head : hubsForYouPool)
+                .prefix(SparkWarmPool.MediaBudget.thumbAhead)
         )
+        ImageCache.shared.prefetchPostThumbnails(poolBand, maxPixelSize: thumbPx, aggressive: false)
+        Task {
+            await Frame0PosterResolver.shared.prefetch(postIDs: poolBand.map(\.id))
+        }
         // After first paint — park next 5 hubs so openVideo claims without black flash.
         Task(priority: .utility) {
             try? await Task.sleep(nanoseconds: 280_000_000)
@@ -1491,17 +1502,20 @@ struct YouTubeAppView: View {
             guard !queue.isEmpty else { return }
             SparkWarmPool.shared.prepareHubsWindow(posts: queue, around: 0)
         }
-        // Sparks strip thumbs later — never compete with For you.
+        // Sparks strip thumbs — wide band, after For you.
         Task(priority: .background) {
             try? await Task.sleep(nanoseconds: 1_200_000_000)
             guard appState.selectedTab == .hubs, appState.hubPlaybackPost == nil else { return }
-            let sparks = videos.filter(\.isReel)
+            let sparks = Array(
+                videos.filter(\.isReel).prefix(SparkWarmPool.MediaBudget.thumbAhead)
+            )
             if !sparks.isEmpty {
                 ImageCache.shared.prefetchPostThumbnails(
-                    Array(sparks.prefix(6)),
+                    sparks,
                     maxPixelSize: 240,
                     aggressive: false
                 )
+                await Frame0PosterResolver.shared.prefetch(postIDs: sparks.map(\.id))
             }
         }
     }

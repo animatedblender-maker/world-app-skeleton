@@ -84,17 +84,19 @@ final class SlugShelfStore {
         return await loadPage(key: key, slug: key, force: false, append: true)
     }
 
-    /// Prefetch neighbor shelf thumbs only (no full catalog).
+    /// Prefetch neighbor shelf thumbs + Frame 0 (slug sliding warm).
     func warmNeighbor(of slug: String?) {
         let parent = normalizeSlug(slug ?? "daily")
         let neighbor = Self.neighbor(of: parent)
         Task(priority: .utility) {
             let page = await loadShelf(neighbor, force: false)
+            let band = Array(page.items.prefix(SparkWarmPool.MediaBudget.thumbAhead))
             ImageCache.shared.prefetchPostThumbnails(
-                Array(page.items.prefix(8)),
+                band,
                 maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel,
                 aggressive: false
             )
+            await Frame0PosterResolver.shared.prefetch(postIDs: band.map(\.id))
         }
     }
 
@@ -194,12 +196,18 @@ final class SlugShelfStore {
         shelves[key] = state
         pruneShelves(keeping: key)
 
-        // Warm only this page head.
+        // Warm full slug page thumbs + Frame 0 (AV stays 5-ahead via prepareHubsWindow).
+        let warmBand = Array(
+            (append ? remote.items : state.posts).prefix(SparkWarmPool.MediaBudget.thumbAhead)
+        )
         ImageCache.shared.prefetchPostThumbnails(
-            Array(remote.items.prefix(8)),
+            warmBand,
             maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel,
             aggressive: false
         )
+        Task {
+            await Frame0PosterResolver.shared.prefetch(postIDs: warmBand.map(\.id))
+        }
 
         return Page(
             items: append ? remote.items : state.posts,

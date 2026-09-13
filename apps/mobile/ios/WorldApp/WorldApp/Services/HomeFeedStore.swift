@@ -938,7 +938,15 @@ final class HomeFeedStore {
         hasMore = true
         ContentCache.shared.setPosts(Array(posts.prefix(ContentCache.maxCachedPosts)), for: .homeFeed)
         // Media session 09: page append = thumbs only (no AV pool).
-        ImageCache.shared.prefetchFeedMedia(Array(appended.prefix(8)), maxPixelSize: 360)
+        ImageCache.shared.prefetchFeedMedia(
+            Array(appended.prefix(SparkWarmPool.MediaBudget.thumbAhead)),
+            maxPixelSize: 360
+        )
+        Task {
+            await Frame0PosterResolver.shared.prefetch(
+                postIDs: Array(appended.prefix(SparkWarmPool.MediaBudget.thumbAhead).map(\.id))
+            )
+        }
         #if DEBUG
         print("[HomeFeed] loadMore +\(appended.count) pool=\(posts.count) window=\(windowLimit) recycle=\(recyclePass)")
         #endif
@@ -977,15 +985,17 @@ final class HomeFeedStore {
         hasMore = true
     }
 
-    /// Deep-preroll the first feed videos, then wait briefly so autoplay can claim
-    /// a decoded frame (Instagram-style — no black/thumb blink on the winner).
+    /// Thumbs/Frame0 for the whole visible pool; AV only 5-ahead (slug warm policy).
     private func warmHead() async {
-        // Posters first (cheap). Sliding 5-ahead window fills under the concurrent warm cap
-        // (same policy as Sparks — no parallel MP4 storm).
-        let head = Array(posts.prefix(max(firstWindow + 2, 12)))
-        ImageCache.shared.prefetchFeedMedia(head, maxPixelSize: 360)
+        let thumbCap = SparkWarmPool.MediaBudget.thumbAhead
+        let thumbBand = Array(posts.prefix(max(windowLimit, thumbCap)))
+        ImageCache.shared.prefetchFeedMedia(thumbBand, maxPixelSize: 360)
+        Task {
+            await Frame0PosterResolver.shared.prefetch(postIDs: thumbBand.map(\.id))
+        }
         let videos = Self.feedWarmVideoQueue(from: posts)
         guard !videos.isEmpty else { return }
+        // AV sliding window only — posters already covered above.
         SparkWarmPool.shared.prepareFeedWindow(posts: videos, around: 0)
         for post in videos.prefix(SparkWarmPool.MediaBudget.playerAheadFeed + 1) {
             if let url = post.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) {

@@ -27,13 +27,15 @@ final class SparkWarmPool {
         static var isConstrained: Bool { physicalGB < 3.6 }
         static var isMid: Bool { physicalGB < 5.6 }
 
-        /// Product: while focused on one clip, keep the next **five** ready.
+        /// Product: while focused on one clip, keep the next **five** AV players ready.
         static var playerAhead: Int { isConstrained ? 3 : 5 }
         /// Feed shared Sparks/Hubs — same 5-ahead sliding window as Sparks.
         static var playerAheadFeed: Int { playerAhead }
         /// Sparks vertical + hubs For you / related.
         static var playerAheadSparks: Int { playerAhead }
         static var playerAheadHubs: Int { playerAhead }
+        /// Thumbs / Frame 0: preload a wide band (not full library — caps RAM/R2).
+        static var thumbAhead: Int { isConstrained ? 24 : 48 }
         /// Deep-preroll the whole ahead window (butter swipe / tap).
         static var deepPrerollFeed: Int { playerAheadFeed }
         static var deepPrerollSparks: Int { playerAheadSparks }
@@ -130,9 +132,9 @@ final class SparkWarmPool {
                     }
                 }
             }
-            // Tight thumb band only — wide Frame0+AV storms caused R2 timeouts / black UI.
-            let thumbHi = min(posts.count, index + ahead + 2)
+            // Thumbs + Frame 0: wide session band (cheap). AV buffers stay tight below.
             let thumbLo = max(0, index - behind)
+            let thumbHi = min(posts.count, index + MediaBudget.thumbAhead + 1)
             if thumbLo < thumbHi {
                 let band = Array(posts[thumbLo..<thumbHi])
                 ImageCache.shared.prefetchPostThumbnails(
@@ -140,7 +142,6 @@ final class SparkWarmPool {
                     maxPixelSize: 360,
                     aggressive: false
                 )
-                // One batch poster resolve for the same tight window (no per-id fan-out).
                 Task {
                     await Frame0PosterResolver.shared.prefetch(postIDs: band.map(\.id))
                 }

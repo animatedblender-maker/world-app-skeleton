@@ -77,7 +77,7 @@ actor Frame0PosterResolver {
                     .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                     .filter { !$0.isEmpty }
             )
-        ).prefix(24)
+        )
         guard !ids.isEmpty else { return }
 
         let missing = ids.filter { id in
@@ -86,20 +86,29 @@ actor Frame0PosterResolver {
         }
         guard !missing.isEmpty else { return }
 
-        do {
-            let posters = try await fetchBatch(postIDs: Array(missing))
-            let now = Date()
-            for (id, urlString) in posters {
-                guard let url = URL(string: urlString), url.scheme != nil else { continue }
-                cache[id] = CacheEntry(url: url, cachedAt: now)
+        // Chunk so a large Feed/Sparks/Hubs window does not one-shot the API.
+        let chunkSize = 40
+        var offset = 0
+        while offset < missing.count {
+            let end = min(offset + chunkSize, missing.count)
+            let chunk = Array(missing[offset..<end])
+            offset = end
+            do {
+                let posters = try await fetchBatch(postIDs: chunk)
+                let now = Date()
+                for (id, urlString) in posters {
+                    guard let url = URL(string: urlString), url.scheme != nil else { continue }
+                    cache[id] = CacheEntry(url: url, cachedAt: now)
+                }
+                if cache.count > 6000, let first = cache.keys.first {
+                    cache.removeValue(forKey: first)
+                }
+            } catch {
+                #if DEBUG
+                print("[Frame0Poster] batch failed: \(error.localizedDescription)")
+                #endif
+                break
             }
-            if cache.count > 6000, let first = cache.keys.first {
-                cache.removeValue(forKey: first)
-            }
-        } catch {
-            #if DEBUG
-            print("[Frame0Poster] batch failed: \(error.localizedDescription)")
-            #endif
         }
     }
 

@@ -1588,6 +1588,12 @@ struct ReelsScrollViewer: View {
             if !context.continueFromFeed {
                 SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
             }
+            // Frame 0 / thumbs for the whole open queue (AV still 5-ahead inside prepare).
+            Task {
+                await Frame0PosterResolver.shared.prefetch(
+                    postIDs: Array(posts.prefix(SparkWarmPool.MediaBudget.thumbAhead).map(\.id))
+                )
+            }
             if posts.indices.contains(activeIndex) {
                 CommentsWarmCache.shared.warm(posts[activeIndex].id)
             }
@@ -1874,6 +1880,16 @@ struct ReelsScrollViewer: View {
             posts.append(contentsOf: appended)
             // Do NOT reassign activeIndex — even to the same id's index. Stale preserveIDs
             // from network start were snapping the user back to the entry spark.
+        }
+        ImageCache.shared.prefetchPostThumbnails(
+            Array(appended.prefix(SparkWarmPool.MediaBudget.thumbAhead)),
+            maxPixelSize: 360,
+            aggressive: false
+        )
+        Task {
+            await Frame0PosterResolver.shared.prefetch(
+                postIDs: Array(appended.prefix(SparkWarmPool.MediaBudget.thumbAhead).map(\.id))
+            )
         }
     }
 
