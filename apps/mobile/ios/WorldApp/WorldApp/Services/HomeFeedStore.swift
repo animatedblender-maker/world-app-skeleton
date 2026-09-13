@@ -433,31 +433,34 @@ final class HomeFeedStore {
         }
     }
 
-    /// Append / weave network rows **under** the visible head — never remounts what the user is watching.
+    /// Weave network rows under a **small** live pin — never pin a long viewed head
+    /// (that was the “same feed forever” bug vs unviewed-until-exhausted).
     private func softMergePreservingHead(_ incoming: [CountryPost]) async {
         let clean = Self.liveOnlyPosts(
             BlockService.shared.filterPosts(incoming.excludingMoments().forHomeFeed())
         )
         guard !clean.isEmpty else { return }
 
-        // Pin everything already on screen (and a little buffer) in its current order.
-        let pinCount = max(windowLimit, firstWindow, min(posts.count, 16))
+        // Rank unviewed-first across incoming + pool.
+        let ranked = await rankForSessionAsync(clean + posts)
+        let hasFresh = ranked.contains { !SparkDiscoveryEngine.isViewed($0) }
+
+        // Only pin what the user is literally on (≤3). Drop the rest of a viewed sticky head.
+        let pinCount = userEngagedThisSession ? min(3, posts.count) : 0
         let head = Array(posts.prefix(pinCount))
         var seen = Set(head.map(\.id))
         var contentKeys = Set(head.map(\.homeFeedContentKey))
 
-        // Rank the rest of the library for the tail only.
-        let ranked = await rankForSessionAsync(clean + posts)
         var tail: [CountryPost] = []
         tail.reserveCapacity(ranked.count)
         for post in ranked {
+            if hasFresh, SparkDiscoveryEngine.isViewed(post) { continue }
             guard seen.insert(post.id).inserted else { continue }
             guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
             tail.append(post)
         }
 
         guard !tail.isEmpty || head.count != posts.count else {
-            // Still refresh disk cache with current pool.
             if !posts.isEmpty {
                 ContentCache.shared.setPosts(
                     Array(posts.prefix(ContentCache.maxCachedPosts)),
@@ -471,9 +474,11 @@ final class HomeFeedStore {
         t.disablesAnimations = true
         withTransaction(t) {
             posts = head + tail
-            // Critical: do NOT reset windowLimit — that was the “feed refreshed” jump.
+            // Shrink window if we dropped a bloated viewed head.
+            if !userEngagedThisSession {
+                windowLimit = min(windowLimit, max(firstWindow, min(posts.count, firstWindow)))
+            }
         }
-        // Keep opaque /v1/feed cursor — never overwrite with ISO (that re-fetched page 1 forever).
         hasMore = true
         ContentCache.shared.setPosts(
             Array(posts.prefix(ContentCache.maxCachedPosts)),

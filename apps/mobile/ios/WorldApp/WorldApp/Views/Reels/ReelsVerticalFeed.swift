@@ -1960,42 +1960,12 @@ struct ReelsScrollViewer: View {
             }
         }
 
-        // Fast endless path: library already absorbed into the queue — rotate, don't stall on network.
-        if posts.count >= 12 {
-            recyclePass += 1
-            let recentOnly = Set(posts.suffix(20).map(\.id))
-            let pool: [CountryPost]
-            if catalog.isEmpty {
-                pool = await PostsService.shared.loadSparksDiscoveryCatalog(
-                    forceRefresh: recyclePass % 3 == 1,
-                    deep: true
-                )
-            } else {
-                pool = catalog
-            }
-            let recycled = ReelsRankingEngine.nextBatch(
-                from: pool,
-                excluding: recentOnly,
-                limit: bulk,
-                viewerCountry: appState.currentProfile?.countryCode,
-                followingIDs: appState.followingIDs,
-                tail: tail,
-                allowRecycle: true
-            )
-            if !recycled.isEmpty {
-                rotateInRecycled(recycled)
-            } else {
-                rotateQueueForEndless()
-            }
-            SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
-            hasMorePages = true
-            return
-        }
-
-        // Thin /v1/sparks first (light pages) — GraphQL catalog only if empty.
+        // Thin /v1/sparks — unviewed only.
         if let thin = await SurfacePageClient.fetchSparks(limit: min(bulk, 24), cursor: feedCursor),
            !thin.items.isEmpty {
-            let fresh = thin.items.filter { !existingIDs.contains($0.id) }
+            let fresh = thin.items.filter {
+                !existingIDs.contains($0.id) && !SparkDiscoveryEngine.isViewed($0)
+            }
             if !fresh.isEmpty {
                 applyExpandedFeed(ReelsRankingEngine.sessionFreshOrder(fresh))
                 feedCursor = thin.nextCursor ?? feedCursor
@@ -2003,6 +1973,7 @@ struct ReelsScrollViewer: View {
                 SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
                 return
             }
+            feedCursor = thin.nextCursor ?? feedCursor
         }
 
         let page = await PostsService.shared.loadReelsFeedPage(
@@ -2013,19 +1984,41 @@ struct ReelsScrollViewer: View {
             viewerCountry: appState.currentProfile?.countryCode,
             followingIDs: appState.followingIDs,
             tail: tail,
-            allowRecycle: true
+            allowRecycle: false
         )
-
-        if !page.posts.isEmpty {
-            applyExpandedFeed(ReelsRankingEngine.sessionFreshOrder(page.posts))
+        let pageFresh = page.posts.filter { !SparkDiscoveryEngine.isViewed($0) }
+        if !pageFresh.isEmpty {
+            applyExpandedFeed(ReelsRankingEngine.sessionFreshOrder(pageFresh))
             feedCursor = page.nextCursor ?? feedCursor
             hasMorePages = true
             SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
             return
         }
 
+        // LAST RESORT only: every unviewed source dry → recycle least-recent.
         recyclePass += 1
-        rotateQueueForEndless()
+        let recentOnly = Set(posts.suffix(20).map(\.id))
+        let pool = catalog.isEmpty
+            ? await PostsService.shared.loadSparksDiscoveryCatalog(
+                forceRefresh: recyclePass % 3 == 1,
+                deep: true
+            )
+            : catalog
+        let recycled = ReelsRankingEngine.nextBatch(
+            from: pool,
+            excluding: recentOnly,
+            limit: bulk,
+            viewerCountry: appState.currentProfile?.countryCode,
+            followingIDs: appState.followingIDs,
+            tail: tail,
+            allowRecycle: true
+        )
+        if !recycled.isEmpty {
+            rotateInRecycled(recycled)
+        } else {
+            rotateQueueForEndless()
+        }
+        SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
         hasMorePages = true
     }
 
