@@ -226,6 +226,8 @@ struct MatteryaHubPlayerView: View {
     var onPlayingChange: ((Bool) -> Void)? = nil
     /// Progress for Frame 0 hold (feed/hubs) — current seconds, duration.
     var onProgress: ((Double, Double) -> Void)? = nil
+    /// Natural video size — feed Spark cards resize stage from this.
+    var onVideoSize: ((CGSize) -> Void)? = nil
 
     var allowsFullscreen: Bool = true
     /// Keep the same AVPlayer when Sparks opens over hubs mini (resume mid-clip, no black).
@@ -254,7 +256,8 @@ struct MatteryaHubPlayerView: View {
         protectAsContinuousHubs: Bool = false,
         onReady: (() -> Void)? = nil,
         onPlayingChange: ((Bool) -> Void)? = nil,
-        onProgress: ((Double, Double) -> Void)? = nil
+        onProgress: ((Double, Double) -> Void)? = nil,
+        onVideoSize: ((CGSize) -> Void)? = nil
     ) {
         self.url = url
         self.posterURL = posterURL
@@ -273,6 +276,7 @@ struct MatteryaHubPlayerView: View {
         self.onReady = onReady
         self.onPlayingChange = onPlayingChange
         self.onProgress = onProgress
+        self.onVideoSize = onVideoSize
         _showChrome = State(initialValue: showsControls && !tapToRevealControls)
     }
 
@@ -320,6 +324,7 @@ struct MatteryaHubPlayerView: View {
                             )
                         }
                     },
+                    onVideoSize: onVideoSize,
                     protectAsContinuousHubs: protectAsContinuousHubs
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

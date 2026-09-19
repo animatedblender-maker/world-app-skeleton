@@ -57,11 +57,6 @@ struct SparkFeedCard: View {
 
     private var corner: CGFloat { edgeToEdge ? 0 : 12 }
 
-    /// Near-9:16 feed stage — same immersion as full Sparks, not a short 4:5 crop box.
-    private var cardHeight: CGFloat {
-        FacebookMediaLayout.sparkFeedCardHeight()
-    }
-
     /// Best playable URL: post → resolver → shared original (feed shares often only stamp origin).
     private var playURL: URL? {
         if let u = post.playableVideoURL ?? MediaURLResolver.videoURL(for: post) { return u }
@@ -76,10 +71,52 @@ struct SparkFeedCard: View {
             ?? post.sharedPost.flatMap { MediaURLResolver.posterURL(for: $0.asCountryPost) }
     }
 
-    /// Fit until measured — default fill zoomed ShortForm/landscape on first frame (out of proportion).
+    /// width/height once known — drives card height so first frame isn't forced into wrong box.
     @State private var stageSize: CGSize = .zero
+    @State private var mediaAspect: CGFloat? = nil
     @State private var useFill = false
     @State private var gravityLocked = false
+
+    private var cardWidth: CGFloat {
+        stageSize.width > 2 ? stageSize.width : UIScreen.main.bounds.width
+    }
+
+    /// Portrait → near 9:16; landscape → true 16:9. Unknown → 9:16 (Sparks default).
+    private var cardHeight: CGFloat {
+        let w = cardWidth
+        guard let a = mediaAspect, a.isFinite, a > 0.05 else {
+            return FacebookMediaLayout.sparkFeedCardHeight(forWidth: w)
+        }
+        if a >= 1.0 {
+            // Landscape / square ShortForm — never keep a tall 9:16 letterbox stage.
+            return FacebookMediaLayout.hubFeedVideoHeight(forWidth: w)
+        }
+        let natural = w / a
+        let maxH = FacebookMediaLayout.sparkFeedCardHeight(forWidth: w)
+        return min(max(natural, FacebookMediaLayout.minFeedMediaHeight), maxH)
+    }
+
+    private func applyVideoSize(_ size: CGSize) {
+        guard !gravityLocked else { return }
+        guard size.width > 2, size.height > 2 else { return }
+        let aspect = size.width / size.height
+        guard aspect.isFinite, aspect > 0.05 else { return }
+        mediaAspect = aspect
+        let w = cardWidth
+        let stageH: CGFloat
+        if aspect >= 1.0 {
+            stageH = FacebookMediaLayout.hubFeedVideoHeight(forWidth: w)
+        } else {
+            let natural = w / aspect
+            let maxH = FacebookMediaLayout.sparkFeedCardHeight(forWidth: w)
+            stageH = min(max(natural, FacebookMediaLayout.minFeedMediaHeight), maxH)
+        }
+        useFill = SparksStageLayout.shouldFillWithoutCrop(
+            videoSize: size,
+            stageSize: CGSize(width: w, height: stageH)
+        )
+        gravityLocked = true
+    }
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -121,19 +158,7 @@ struct SparkFeedCard: View {
                             sharesFeedMute: true,
                             autoplaySurface: autoplaySurface,
                             onViewed: { Task { await PostsService.shared.recordView(post) } },
-                            onVideoSize: { size in
-                                guard !gravityLocked else { return }
-                                guard size.width > 2, size.height > 2 else { return }
-                                let stage = stageSize.width > 2 ? stageSize : CGSize(
-                                    width: UIScreen.main.bounds.width,
-                                    height: cardHeight
-                                )
-                                useFill = SparksStageLayout.shouldFillWithoutCrop(
-                                    videoSize: size,
-                                    stageSize: stage
-                                )
-                                gravityLocked = true
-                            }
+                            onVideoSize: { applyVideoSize($0) }
                         )
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -174,6 +199,7 @@ struct SparkFeedCard: View {
         }
         .frame(minWidth: 0, maxWidth: .infinity)
         .frame(height: cardHeight)
+        .animation(nil, value: mediaAspect)
         .background {
             GeometryReader { geo in
                 Color.clear
@@ -204,6 +230,11 @@ struct SparkFeedCard: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityHint("Opens \(MatteryaCopy.sparks) full-screen player")
+        .onChange(of: post.id) { _, _ in
+            mediaAspect = nil
+            useFill = false
+            gravityLocked = false
+        }
     }
 
     private func openFullPlayer() {

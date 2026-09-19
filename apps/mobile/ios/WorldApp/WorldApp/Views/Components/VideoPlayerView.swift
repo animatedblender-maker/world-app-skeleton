@@ -2121,7 +2121,8 @@ struct InFrameVideoPlayer: View {
                             },
                             onProgress: { _, _ in
                                 // Cover lifts only via paint-ready paths (not wall-clock).
-                            }
+                            },
+                            onVideoSize: onVideoSize
                         )
                     } else {
                         VideoPlayerView(
