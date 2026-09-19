@@ -291,6 +291,8 @@ final class HomeFeedStore {
         isRefreshing = true
         defer { isRefreshing = false }
 
+        let paintedBefore = didPaint && !posts.isEmpty
+
         if forceReplace {
             userEngagedThisSession = false
             feedSessionId = UUID().uuidString
@@ -298,25 +300,27 @@ final class HomeFeedStore {
             windowLimit = firstWindow
             ContentCache.shared.invalidate(.homeFeed)
             SparkDiscoveryEngine.beginNewBrowseSession()
-            await refreshSessionRankingContext()
-            // Keep showing current rows until thin paint — never blank the UI for 4s+ GraphQL.
+            sessionRankSeed = UInt64.random(in: 1...UInt64.max)
+                ^ UInt64(Date().timeIntervalSince1970 * 1_000_000)
+            // Do NOT await followingIDs here — that blocked first paint.
         } else if posts.isEmpty {
             feedSessionId = UUID().uuidString
-            await refreshSessionRankingContext()
-        } else {
-            await refreshFollowingContextOnly()
+            sessionRankSeed = UInt64.random(in: 1...UInt64.max)
+                ^ UInt64(Date().timeIntervalSince1970 * 1_000_000)
         }
 
-        let paintedBefore = didPaint && !posts.isEmpty
-
-        // 1) Instant paint from disk when empty (cold open).
+        // 1) Instant disk paint BEFORE any network / follow lookup.
         if posts.isEmpty, let cached = ContentCache.shared.posts(for: .homeFeed) {
             let pool = Self.liveOnlyPosts(
                 BlockService.shared.filterPosts(cached.excludingMoments().forHomeFeed())
             )
             if !pool.isEmpty {
-                let rankedPool = await rankForSessionAsync(pool)
-                applyPosts(Array(rankedPool.prefix(80)), replace: true, sessionId: feedSessionId, alreadyRanked: true)
+                applyPosts(
+                    Array(rankForSessionSync(pool).prefix(48)),
+                    replace: true,
+                    sessionId: feedSessionId,
+                    alreadyRanked: true
+                )
                 isBootstrapping = false
                 didPaint = true
                 Task { await warmHead() }
@@ -325,16 +329,20 @@ final class HomeFeedStore {
             }
         }
 
-        // 2) FAST path: thin /v1/feed only (~0.5s) — paint now. Discovery top-up is background.
-        let thin = await SurfacePageClient.fetchHomeFeed(limit: 48, cursor: nil)
+        // Parallel: following refresh + thin feed (don't serialize).
+        async let followingRefresh: Void = refreshFollowingContextOnly()
+        async let thinFetch = SurfacePageClient.fetchHomeFeed(limit: 36, cursor: nil)
+
+        let thin = await thinFetch
+        _ = await followingRefresh
         guard gen == generation else { return }
-        var liveRaw: [CountryPost] = []
+
+        // 2) Thin /v1/feed — sync rank (36 items) so we don't hop Task.detached.
         if let thin, !thin.items.isEmpty {
             nextCursor = thin.nextCursor
-            liveRaw = thin.items
-            let fast = Self.liveOnlyPosts(liveRaw)
-            let rankedFast = await rankForSessionAsync(fast.isEmpty ? liveRaw : fast)
-            let head = Array(rankedFast.prefix(48))
+            let fast = Self.liveOnlyPosts(thin.items)
+            let rankedFast = rankForSessionSync(fast.isEmpty ? thin.items : fast)
+            let head = Array(rankedFast.prefix(36))
             if !head.isEmpty {
                 let preserveHead = !forceReplace
                     && (paintedBefore || userEngagedThisSession)
@@ -350,33 +358,32 @@ final class HomeFeedStore {
                 Task { await warmHead() }
             }
         } else if posts.isEmpty {
-            // Thin failed — one lighter GraphQL first-paint (not full 120 mix).
-            liveRaw = await PostsService.shared.fetchFirstPaintHomePosts(limit: 48)
+            let liveRaw = await PostsService.shared.fetchFirstPaintHomePosts(limit: 36)
             guard gen == generation else { return }
-            let ranked = await rankForSessionAsync(Self.liveOnlyPosts(liveRaw))
+            let ranked = rankForSessionSync(Self.liveOnlyPosts(liveRaw))
             if !ranked.isEmpty {
-                applyPosts(Array(ranked.prefix(48)), replace: true, sessionId: feedSessionId, alreadyRanked: true)
+                applyPosts(Array(ranked.prefix(36)), replace: true, sessionId: feedSessionId, alreadyRanked: true)
                 ContentCache.shared.setPosts(posts, for: .homeFeed)
                 didPaint = true
+                Task { await warmHead() }
             }
-            isBootstrapping = false
         }
 
         isBootstrapping = false
         recyclePass = 0
 
-        // 3) Background: unviewed Sparks/Hubs top-up + buffer (never block first paint).
-        Task(priority: .userInitiated) { [weak self] in
+        // 3) Background discovery — low priority so it never steals first-paint bandwidth.
+        Task(priority: .utility) { [weak self] in
             guard let self else { return }
             let exclude = Set(self.posts.map(\.id))
             async let sparkTop = PostsService.shared.homeFeedSparkTopUp(
                 excluding: exclude,
-                limit: 36,
+                limit: 28,
                 forceRefresh: false
             )
             async let hubTop = PostsService.shared.homeFeedHubTopUp(
                 excluding: exclude,
-                limit: 14,
+                limit: 10,
                 forceRefresh: false
             )
             let extra = (await sparkTop) + (await hubTop)
@@ -772,8 +779,8 @@ final class HomeFeedStore {
             liveRaw = await PostsService.shared.fetchFirstPaintHomePosts(limit: 48)
         }
         let live = Self.liveOnlyPosts(liveRaw)
-        let filtered = await rankForSessionAsync(live.isEmpty ? liveRaw : live)
-        applyPosts(Array(filtered.prefix(48)), replace: true, sessionId: feedSessionId, alreadyRanked: true)
+        let filtered = rankForSessionSync(live.isEmpty ? liveRaw : live)
+        applyPosts(Array(filtered.prefix(36)), replace: true, sessionId: feedSessionId, alreadyRanked: true)
         hasMore = true
         didPaint = !posts.isEmpty
         Task { await warmHead() }
@@ -988,28 +995,28 @@ final class HomeFeedStore {
 
     /// Thumbs/Frame0 for the whole visible pool; AV only 5-ahead (slug warm policy).
     private func warmHead() async {
-        let thumbCap = SparkWarmPool.MediaBudget.thumbAhead
-        let thumbBand = Array(posts.prefix(max(windowLimit, thumbCap)))
-        ImageCache.shared.prefetchFeedMedia(thumbBand, maxPixelSize: 360)
-        Task {
-            await Frame0PosterResolver.shared.prefetch(postIDs: thumbBand.map(\.id))
-        }
+        // Cheap thumbs only on the critical path — Frame0 + URL warm deferred.
+        let thumbBand = Array(posts.prefix(max(windowLimit, 16)))
+        ImageCache.shared.prefetchFeedMedia(thumbBand, maxPixelSize: 320)
         let videos = Self.feedWarmVideoQueue(from: posts)
         guard !videos.isEmpty else { return }
-        // AV sliding window only — posters already covered above.
         SparkWarmPool.shared.prepareFeedWindow(posts: videos, around: 0)
         for post in videos.prefix(SparkWarmPool.MediaBudget.playerAheadFeed + 1) {
             if let url = post.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) {
                 ArchiveVideoPlayback.warmResolve(url)
             }
         }
-        let readyIDs = Array(
-            videos.prefix(min(4, SparkWarmPool.MediaBudget.playerAheadFeed)).map(\.id)
-        )
+        // Never awaitReady here — that blocked feed open for up to 350ms+ per session.
         Task(priority: .utility) {
-            await RecommendationClient.warmPlaybackURLs(readyIDs)
+            let band = Array(self.posts.prefix(SparkWarmPool.MediaBudget.thumbAhead))
+            await Frame0PosterResolver.shared.prefetch(postIDs: band.map(\.id))
+            let warmIDs = Array(
+                Self.feedWarmVideoQueue(from: self.posts)
+                    .prefix(SparkWarmPool.MediaBudget.playerAheadFeed + 1)
+                    .map(\.id)
+            )
+            await RecommendationClient.warmPlaybackURLs(warmIDs)
         }
-        await SparkWarmPool.shared.awaitReady(postIDs: Array(readyIDs.prefix(1)), timeout: 0.35)
     }
 
     /// Shared Sparks / Hubs (and any playable video) cards — feed warm queue skips text/image rows.

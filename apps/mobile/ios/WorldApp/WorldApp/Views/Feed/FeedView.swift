@@ -61,8 +61,8 @@ struct FeedView: View {
             await refreshStrips(network: true)
         }
         .task(id: "\(appState.contentLoadGeneration)-\(appState.feedFreshSessionToken)") {
-            // Coalesce rapid generation bumps (share / country) so we don't cancel mid-fetch.
-            try? await Task.sleep(nanoseconds: 80_000_000)
+            // Short coalesce — keep open snappy.
+            try? await Task.sleep(nanoseconds: 30_000_000)
             guard !Task.isCancelled else { return }
 
             // App open / away: reshape. contentLoadGeneration also fires on share — still reshape

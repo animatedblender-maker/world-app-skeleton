@@ -25,15 +25,15 @@ final class SparkWarmPool {
         static var isConstrained: Bool { physicalGB < 3.6 }
         static var isMid: Bool { physicalGB < 5.6 }
 
-        /// How many AV players to keep ready ahead of focus (butter-smooth vs RAM).
-        /// Constrained ≈ iPhone 11 class; mid ≈ 4–6GB; else flagship.
+        /// Feed / Hubs: adaptive ahead by RAM.
         static var playerAhead: Int {
             if isConstrained { return 4 }
             if isMid { return 7 }
-            return 10
+            return 8
         }
         static var playerAheadFeed: Int { playerAhead }
-        static var playerAheadSparks: Int { playerAhead }
+        /// Sparks full-screen player: always warm the next **10** for butter swipes.
+        static var playerAheadSparks: Int { 10 }
         static var playerAheadHubs: Int { playerAhead }
         /// Thumbs / Frame 0: wide band (cheap vs AV).
         static var thumbAhead: Int {
@@ -41,22 +41,21 @@ final class SparkWarmPool {
             if isMid { return 48 }
             return 64
         }
-        /// Deep-preroll the whole ahead window (butter swipe / tap).
         static var deepPrerollFeed: Int { playerAheadFeed }
         static var deepPrerollSparks: Int { playerAheadSparks }
         static var deepPrerollHubs: Int { playerAheadHubs }
-        /// Parked slots ≈ ahead + behind + spare (claimed players are separate).
+        /// Parked slots must fit Sparks 10-ahead + behind + spare.
         static var maxSlots: Int {
-            if isConstrained { return 7 }
-            if isMid { return 11 }
-            return 14
+            if isConstrained { return 12 }
+            if isMid { return 14 }
+            return 16
         }
         static var playerBehind: Int { isConstrained ? 1 : 2 }
-        /// Cap parallel R2 pipes so deeper windows stay butter-smooth.
+        /// Cap parallel R2 pipes (window fills serially under the cap).
         static var maxConcurrentWarms: Int {
-            if isConstrained { return 2 }
-            if isMid { return 3 }
-            return 4
+            if isConstrained { return 3 }
+            if isMid { return 4 }
+            return 5
         }
         static var forwardBufferDeep: Double { isConstrained ? 5 : (isMid ? 7 : 9) }
         static var forwardBufferLight: Double { isConstrained ? 2 : 3 }
