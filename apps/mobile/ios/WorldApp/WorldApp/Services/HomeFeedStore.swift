@@ -288,61 +288,63 @@ final class HomeFeedStore {
         errorMessage = nil
         nextCursor = nil
         hasMore = true
-        isRefreshing = true
-        defer { isRefreshing = false }
-
         let paintedBefore = didPaint && !posts.isEmpty
+        // Only show refresh chrome when the list was already on screen (pull / reshape).
+        isRefreshing = forceReplace && paintedBefore
 
         if forceReplace {
             userEngagedThisSession = false
             feedSessionId = UUID().uuidString
             recyclePass = 0
             windowLimit = firstWindow
-            ContentCache.shared.invalidate(.homeFeed)
+            // Keep disk cache for instant paint — overwrite after thin succeeds.
             SparkDiscoveryEngine.beginNewBrowseSession()
             sessionRankSeed = UInt64.random(in: 1...UInt64.max)
                 ^ UInt64(Date().timeIntervalSince1970 * 1_000_000)
-            // Do NOT await followingIDs here — that blocked first paint.
         } else if posts.isEmpty {
             feedSessionId = UUID().uuidString
             sessionRankSeed = UInt64.random(in: 1...UInt64.max)
                 ^ UInt64(Date().timeIntervalSince1970 * 1_000_000)
         }
 
-        // 1) Instant disk paint BEFORE any network / follow lookup.
-        if posts.isEmpty, let cached = ContentCache.shared.posts(for: .homeFeed) {
-            let pool = Self.liveOnlyPosts(
-                BlockService.shared.filterPosts(cached.excludingMoments().forHomeFeed())
-            )
-            if !pool.isEmpty {
-                applyPosts(
-                    Array(rankForSessionSync(pool).prefix(48)),
-                    replace: true,
-                    sessionId: feedSessionId,
-                    alreadyRanked: true
+        // 1) Instant disk paint — never wait on GraphQL / Frame0 / strip discover.
+        if posts.isEmpty || forceReplace {
+            if let cached = ContentCache.shared.posts(for: .homeFeed) {
+                let pool = Self.liveOnlyPosts(
+                    BlockService.shared.filterPosts(cached.excludingMoments().forHomeFeed())
                 )
-                isBootstrapping = false
-                didPaint = true
-                Task { await warmHead() }
-            } else {
+                if !pool.isEmpty {
+                    applyPosts(
+                        Array(rankForSessionSync(pool).prefix(24)),
+                        replace: true,
+                        sessionId: feedSessionId,
+                        alreadyRanked: true
+                    )
+                    isBootstrapping = false
+                    didPaint = true
+                    isRefreshing = false
+                    Task { await warmHead(lite: true) }
+                } else if posts.isEmpty {
+                    isBootstrapping = true
+                }
+            } else if posts.isEmpty {
                 isBootstrapping = true
             }
         }
 
-        // Parallel: following refresh + thin feed (don't serialize).
-        async let followingRefresh: Void = refreshFollowingContextOnly()
-        async let thinFetch = SurfacePageClient.fetchHomeFeed(limit: 36, cursor: nil)
+        // 2) Thin feed only on the critical path (following refresh off-path).
+        Task(priority: .utility) { await self.refreshFollowingContextOnly() }
+        let thin = await SurfacePageClient.fetchHomeFeed(limit: 24, cursor: nil)
+        guard gen == generation else {
+            isRefreshing = false
+            return
+        }
 
-        let thin = await thinFetch
-        _ = await followingRefresh
-        guard gen == generation else { return }
-
-        // 2) Thin /v1/feed — sync rank (36 items) so we don't hop Task.detached.
         if let thin, !thin.items.isEmpty {
             nextCursor = thin.nextCursor
             let fast = Self.liveOnlyPosts(thin.items)
             let rankedFast = rankForSessionSync(fast.isEmpty ? thin.items : fast)
-            let head = Array(rankedFast.prefix(36))
+            let head = Array(rankedFast.prefix(24))
             if !head.isEmpty {
                 let preserveHead = !forceReplace
                     && (paintedBefore || userEngagedThisSession)
@@ -355,44 +357,49 @@ final class HomeFeedStore {
                 isBootstrapping = false
                 didPaint = true
                 hasMore = true
-                Task { await warmHead() }
+                Task { await warmHead(lite: true) }
             }
         } else if posts.isEmpty {
-            let liveRaw = await PostsService.shared.fetchFirstPaintHomePosts(limit: 36)
-            guard gen == generation else { return }
+            let liveRaw = await PostsService.shared.fetchFirstPaintHomePosts(limit: 24)
+            guard gen == generation else {
+                isRefreshing = false
+                return
+            }
             let ranked = rankForSessionSync(Self.liveOnlyPosts(liveRaw))
             if !ranked.isEmpty {
-                applyPosts(Array(ranked.prefix(36)), replace: true, sessionId: feedSessionId, alreadyRanked: true)
+                applyPosts(Array(ranked.prefix(24)), replace: true, sessionId: feedSessionId, alreadyRanked: true)
                 ContentCache.shared.setPosts(posts, for: .homeFeed)
                 didPaint = true
-                Task { await warmHead() }
+                Task { await warmHead(lite: true) }
             }
         }
 
         isBootstrapping = false
+        isRefreshing = false
         recyclePass = 0
 
-        // 3) Background discovery — low priority so it never steals first-paint bandwidth.
+        // 3) Heavy work AFTER first paint — never compete with thin feed.
         Task(priority: .utility) { [weak self] in
             guard let self else { return }
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            guard gen == self.generation else { return }
+            await self.warmHead(lite: false)
             let exclude = Set(self.posts.map(\.id))
             async let sparkTop = PostsService.shared.homeFeedSparkTopUp(
                 excluding: exclude,
-                limit: 28,
+                limit: 20,
                 forceRefresh: false
             )
             async let hubTop = PostsService.shared.homeFeedHubTopUp(
                 excluding: exclude,
-                limit: 10,
+                limit: 8,
                 forceRefresh: false
             )
             let extra = (await sparkTop) + (await hubTop)
-            guard gen == self.generation, !extra.isEmpty else {
-                if self.posts.count < 12 { self.requestLoadMore() }
-                await self.ensureBufferedPool()
-                return
+            guard gen == self.generation else { return }
+            if !extra.isEmpty {
+                await self.softMergePreservingHead(extra)
             }
-            await self.softMergePreservingHead(extra)
             if self.posts.count < 16 {
                 self.requestLoadMore()
             }
@@ -993,48 +1000,45 @@ final class HomeFeedStore {
         hasMore = true
     }
 
-    /// Warm before scroll: thumbs + Frame0 for the first window, AV sliding window,
-    /// and slug-neighbor shelves for any Hubs cards in the head.
-    private func warmHead() async {
-        let headLimit = max(windowLimit, firstWindow, 12)
-        let thumbBand = Array(posts.prefix(max(headLimit, SparkWarmPool.MediaBudget.thumbAhead)))
-        ImageCache.shared.prefetchFeedMedia(Array(thumbBand.prefix(headLimit)), maxPixelSize: 360)
-        ImageCache.shared.prefetchPostThumbnails(
-            Array(thumbBand.prefix(headLimit)),
-            maxPixelSize: 420,
-            aggressive: true
-        )
+    /// `lite`: first 2–3 videos + 12 thumbs only (open path).
+    /// Full: deeper AV window + Frame0 + slug neighbor (after paint).
+    private func warmHead(lite: Bool) async {
+        let thumbN = lite ? 12 : min(SparkWarmPool.MediaBudget.thumbAhead, 32)
+        let avN = lite ? 3 : SparkWarmPool.MediaBudget.playerAheadFeed
+        let thumbBand = Array(posts.prefix(thumbN))
+        ImageCache.shared.prefetchFeedMedia(thumbBand, maxPixelSize: lite ? 280 : 360)
+        if !lite {
+            ImageCache.shared.prefetchPostThumbnails(thumbBand, maxPixelSize: 360, aggressive: false)
+        }
 
         let videos = Self.feedWarmVideoQueue(from: posts)
         if !videos.isEmpty {
-            // Park players for the first window *before* the user scrolls.
             SparkWarmPool.shared.prepareFeedWindow(posts: videos, around: 0)
-            for post in videos.prefix(SparkWarmPool.MediaBudget.playerAheadFeed + 1) {
+            for post in videos.prefix(avN + 1) {
                 if let url = post.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) {
                     ArchiveVideoPlayback.warmResolve(url)
                 }
             }
         }
 
-        // Frame0 + CDN resolves — do not await on the open path.
-        Task(priority: .userInitiated) {
+        guard !lite else { return }
+
+        Task(priority: .utility) {
             await Frame0PosterResolver.shared.prefetch(
-                postIDs: Array(thumbBand.prefix(headLimit).map(\.id))
+                postIDs: Array(thumbBand.prefix(16).map(\.id))
             )
             let warmIDs = Array(
                 Self.feedWarmVideoQueue(from: self.posts)
-                    .prefix(SparkWarmPool.MediaBudget.playerAheadFeed + 1)
+                    .prefix(avN + 1)
                     .map(\.id)
             )
             await RecommendationClient.warmPlaybackURLs(warmIDs)
         }
 
-        // Slug shelves: warm neighbor of the first hub card so chip/For-you feels instant.
-        if let hub = posts.prefix(headLimit).first(where: {
+        if let hub = posts.prefix(12).first(where: {
             PlayPlatformBridge.isHubFeedCardVideo($0) || PlayPlatformBridge.isHubOriginShare($0)
         }) {
-            let slug = hub.hubSlug
-                ?? YouTubeCatalogService.parentHubSlug(for: hub)
+            let slug = hub.hubSlug ?? YouTubeCatalogService.parentHubSlug(for: hub)
             SlugShelfStore.shared.warmNeighbor(of: slug)
         }
     }

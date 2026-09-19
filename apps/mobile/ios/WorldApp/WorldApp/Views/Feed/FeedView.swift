@@ -80,13 +80,9 @@ struct FeedView: View {
             let freshBump = appState.feedFreshSessionToken != lastHandledFreshToken
             lastHandledFreshToken = appState.feedFreshSessionToken
             let forceReshape = freshBump || !store.didPaint || store.displayedPosts.isEmpty
-            // Keep existing strip tiles visible during reshape — clearing left empty grey boxes.
+            // Cache strips only on open — discoverSparks raced thin feed and made load feel ages.
             paintStripsFromCache()
-            // Sparks-for-you thumbs immediately (parallel with feed fetch).
-            Task { @MainActor in
-                await refreshFeedReels(network: true)
-                prefetchStripThumbnails()
-            }
+            prefetchStripThumbnails()
             await store.beginFreshSession(forceReplace: forceReshape)
             guard !Task.isCancelled else { return }
             paintStripsFromCache()
@@ -99,9 +95,11 @@ struct FeedView: View {
                     "didPaint": store.didPaint ? "1" : "0",
                 ]
             )
-            // Hubs rails after first paint (lighter than Sparks rail).
+            // Strip network + hubs rails after first paint (staggered).
             Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 400_000_000)
+                try? await Task.sleep(nanoseconds: 800_000_000)
+                await refreshFeedReels(network: true)
+                prefetchStripThumbnails()
                 refreshNewOnPlay()
                 await refreshContinueWatching(network: false)
                 prefetchStripThumbnails()
@@ -396,17 +394,9 @@ struct FeedView: View {
         let snapshot = PostsService.shared.sparksCatalogSnapshot()
         let pool: [CountryPost]
         if network {
-            // One small random sample + light catalog grow — not a full player session.
-            // Capture snapshot.count only — never mutate a var across async-let boundaries.
-            let forceRefresh = snapshot.count < 20
-            async let sample = PostsService.shared.fetchDiscoverSparks(limit: 24)
-            async let light = PostsService.shared.loadSparksDiscoveryCatalog(
-                forceRefresh: forceRefresh,
-                deep: false
-            )
-            let remote = await sample
-            let catalog = await light
-            pool = remote + catalog + snapshot
+            // One small discover sample only — never also deep-load catalog on open.
+            let remote = await PostsService.shared.fetchDiscoverSparks(limit: 16)
+            pool = remote + snapshot
         } else if snapshot.count > 1 {
             var shuffled = snapshot
             shuffled.shuffle()
@@ -428,10 +418,8 @@ struct FeedView: View {
         }
         if !merged.isEmpty {
             feedReels = merged
-            // Prefetch EVERY Sparks-for-you tile immediately (Frame0 + posters).
-            ImageCache.shared.prefetchFeedMedia(merged, maxPixelSize: 360)
-            ImageCache.shared.prefetchPostThumbnails(merged, maxPixelSize: 420, aggressive: true)
-            Task {
+            ImageCache.shared.prefetchPostThumbnails(merged, maxPixelSize: 360, aggressive: false)
+            Task(priority: .utility) {
                 await Frame0PosterResolver.shared.prefetch(postIDs: merged.map(\.id))
             }
         }
