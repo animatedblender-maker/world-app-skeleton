@@ -1002,7 +1002,7 @@ final class HomeFeedStore {
 
     /// `lite`: first 2–3 videos + 12 thumbs only (open path).
     /// Full: deeper AV window + Frame0 + slug neighbor (after paint).
-    private func warmHead(lite: Bool) async {
+    private func warmHead(lite: Bool = false) async {
         let thumbN = lite ? 12 : min(SparkWarmPool.MediaBudget.thumbAhead, 32)
         let avN = lite ? 3 : SparkWarmPool.MediaBudget.playerAheadFeed
         let thumbBand = Array(posts.prefix(thumbN))
