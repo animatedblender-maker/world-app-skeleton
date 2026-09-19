@@ -80,14 +80,17 @@ struct FeedView: View {
             let freshBump = appState.feedFreshSessionToken != lastHandledFreshToken
             lastHandledFreshToken = appState.feedFreshSessionToken
             let forceReshape = freshBump || !store.didPaint || store.displayedPosts.isEmpty
-            if forceReshape {
-                feedReels = []
-                continueWatching = []
-                newOnPlay = []
+            // Keep existing strip tiles visible during reshape — clearing left empty grey boxes.
+            paintStripsFromCache()
+            // Sparks-for-you thumbs immediately (parallel with feed fetch).
+            Task { @MainActor in
+                await refreshFeedReels(network: true)
+                prefetchStripThumbnails()
             }
             await store.beginFreshSession(forceReplace: forceReshape)
             guard !Task.isCancelled else { return }
             paintStripsFromCache()
+            prefetchStripThumbnails()
             PerformanceTelemetry.milestoneFromLaunch(
                 "app_start_to_feed_interactive",
                 surface: "feed",
@@ -96,11 +99,12 @@ struct FeedView: View {
                     "didPaint": store.didPaint ? "1" : "0",
                 ]
             )
-            // Defer strip network well after first paint — hubs longform + deep Sparks
-            // were hitching the feed open (loadLivingVideos × N + 600-item catalog).
+            // Hubs rails after first paint (lighter than Sparks rail).
             Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 1_200_000_000)
-                await refreshStrips(network: true)
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                refreshNewOnPlay()
+                await refreshContinueWatching(network: false)
+                prefetchStripThumbnails()
             }
         }
         .onAppear {
@@ -352,6 +356,8 @@ struct FeedView: View {
             }
             if !reels.isEmpty {
                 feedReels = reels
+                ImageCache.shared.prefetchPostThumbnails(reels, maxPixelSize: 420, aggressive: true)
+                Task { await Frame0PosterResolver.shared.prefetch(postIDs: reels.map(\.id)) }
             }
         }
 
@@ -422,8 +428,26 @@ struct FeedView: View {
         }
         if !merged.isEmpty {
             feedReels = merged
-            // Thumbnails only — do not deep-warm AVPlayers for the whole strip.
-            ImageCache.shared.prefetchFeedMedia(Array(merged.prefix(4)), maxPixelSize: 280)
+            // Prefetch EVERY Sparks-for-you tile immediately (Frame0 + posters).
+            ImageCache.shared.prefetchFeedMedia(merged, maxPixelSize: 360)
+            ImageCache.shared.prefetchPostThumbnails(merged, maxPixelSize: 420, aggressive: true)
+            Task {
+                await Frame0PosterResolver.shared.prefetch(postIDs: merged.map(\.id))
+            }
+        }
+    }
+
+    /// Warm all visible top-rail posters so tiles never sit empty.
+    private func prefetchStripThumbnails() {
+        let sparks = feedReels
+        let hubs = newOnPlay + continueWatching
+        if !sparks.isEmpty {
+            ImageCache.shared.prefetchPostThumbnails(sparks, maxPixelSize: 420, aggressive: true)
+            Task { await Frame0PosterResolver.shared.prefetch(postIDs: sparks.map(\.id)) }
+        }
+        if !hubs.isEmpty {
+            ImageCache.shared.prefetchPostThumbnails(hubs, maxPixelSize: 360, aggressive: true)
+            Task { await Frame0PosterResolver.shared.prefetch(postIDs: hubs.map(\.id)) }
         }
     }
 

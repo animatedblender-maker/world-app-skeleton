@@ -24,6 +24,15 @@ struct VideoThumbnailView: View {
                     contentMode: contentMode,
                     placeholder: placeholder
                 )
+            } else if let videoURL = post.playableVideoURL ?? MediaURLResolver.videoURL(for: post) {
+                // R2 Sparks often lack thumb_url until Frame0 is signed — never leave blank tiles.
+                FrameZeroFallbackPoster(
+                    postID: post.id,
+                    videoURL: videoURL,
+                    fillsFrame: contentMode == .fill,
+                    allowClientExtract: extractFrameIfNeeded,
+                    seedPosterURL: nil
+                )
             } else if let frameImage {
                 Image(uiImage: frameImage)
                     .resizable()
@@ -61,10 +70,11 @@ struct VideoThumbnailView: View {
     }
 
     private var needsFrameExtraction: Bool {
-        // Only when no remote poster (R2 LongForm uses YouTube CDN; Sparks may extract one frame).
+        // Only when no remote poster AND Frame0 path is not already handling the cell.
+        // Strip tiles use FrameZeroFallbackPoster instead of per-tile AV extract.
         extractFrameIfNeeded
             && resolvedPosterURL == nil
-            && post.playableVideoURL != nil
+            && (post.playableVideoURL ?? MediaURLResolver.videoURL(for: post)) == nil
     }
 
     @MainActor

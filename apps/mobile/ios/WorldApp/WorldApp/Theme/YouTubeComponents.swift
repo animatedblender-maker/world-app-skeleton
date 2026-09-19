@@ -291,7 +291,8 @@ private struct SparksTileChrome: View {
                 contentMode: .fill,
                 showsPlayIcon: false,
                 playIconSize: playIconSize,
-                extractFrameIfNeeded: true,
+                // Frame0 API only — never AV-extract 12 strip tiles (R2 storm / blank forever).
+                extractFrameIfNeeded: false,
                 placeholder: AnyView(
                     LinearGradient(
                         colors: [Theme.canvasMuted, Theme.canvasDeep],
