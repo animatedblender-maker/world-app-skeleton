@@ -76,9 +76,10 @@ struct SparkFeedCard: View {
             ?? post.sharedPost.flatMap { MediaURLResolver.posterURL(for: $0.asCountryPost) }
     }
 
-    /// Match full Sparks player: fill portrait; fit wide clips so they aren't hard-cropped.
+    /// Fit until measured — default fill zoomed ShortForm/landscape on first frame (out of proportion).
     @State private var stageSize: CGSize = .zero
-    @State private var useFill = true
+    @State private var useFill = false
+    @State private var gravityLocked = false
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -121,6 +122,7 @@ struct SparkFeedCard: View {
                             autoplaySurface: autoplaySurface,
                             onViewed: { Task { await PostsService.shared.recordView(post) } },
                             onVideoSize: { size in
+                                guard !gravityLocked else { return }
                                 guard size.width > 2, size.height > 2 else { return }
                                 let stage = stageSize.width > 2 ? stageSize : CGSize(
                                     width: UIScreen.main.bounds.width,
@@ -130,6 +132,7 @@ struct SparkFeedCard: View {
                                     videoSize: size,
                                     stageSize: stage
                                 )
+                                gravityLocked = true
                             }
                         )
                     }

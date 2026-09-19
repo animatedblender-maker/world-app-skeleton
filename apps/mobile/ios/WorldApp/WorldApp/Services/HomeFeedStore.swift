@@ -993,29 +993,49 @@ final class HomeFeedStore {
         hasMore = true
     }
 
-    /// Thumbs/Frame0 for the whole visible pool; AV only 5-ahead (slug warm policy).
+    /// Warm before scroll: thumbs + Frame0 for the first window, AV sliding window,
+    /// and slug-neighbor shelves for any Hubs cards in the head.
     private func warmHead() async {
-        // Cheap thumbs only on the critical path — Frame0 + URL warm deferred.
-        let thumbBand = Array(posts.prefix(max(windowLimit, 16)))
-        ImageCache.shared.prefetchFeedMedia(thumbBand, maxPixelSize: 320)
+        let headLimit = max(windowLimit, firstWindow, 12)
+        let thumbBand = Array(posts.prefix(max(headLimit, SparkWarmPool.MediaBudget.thumbAhead)))
+        ImageCache.shared.prefetchFeedMedia(Array(thumbBand.prefix(headLimit)), maxPixelSize: 360)
+        ImageCache.shared.prefetchPostThumbnails(
+            Array(thumbBand.prefix(headLimit)),
+            maxPixelSize: 420,
+            aggressive: true
+        )
+
         let videos = Self.feedWarmVideoQueue(from: posts)
-        guard !videos.isEmpty else { return }
-        SparkWarmPool.shared.prepareFeedWindow(posts: videos, around: 0)
-        for post in videos.prefix(SparkWarmPool.MediaBudget.playerAheadFeed + 1) {
-            if let url = post.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) {
-                ArchiveVideoPlayback.warmResolve(url)
+        if !videos.isEmpty {
+            // Park players for the first window *before* the user scrolls.
+            SparkWarmPool.shared.prepareFeedWindow(posts: videos, around: 0)
+            for post in videos.prefix(SparkWarmPool.MediaBudget.playerAheadFeed + 1) {
+                if let url = post.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) {
+                    ArchiveVideoPlayback.warmResolve(url)
+                }
             }
         }
-        // Never awaitReady here — that blocked feed open for up to 350ms+ per session.
-        Task(priority: .utility) {
-            let band = Array(self.posts.prefix(SparkWarmPool.MediaBudget.thumbAhead))
-            await Frame0PosterResolver.shared.prefetch(postIDs: band.map(\.id))
+
+        // Frame0 + CDN resolves — do not await on the open path.
+        Task(priority: .userInitiated) {
+            await Frame0PosterResolver.shared.prefetch(
+                postIDs: Array(thumbBand.prefix(headLimit).map(\.id))
+            )
             let warmIDs = Array(
                 Self.feedWarmVideoQueue(from: self.posts)
                     .prefix(SparkWarmPool.MediaBudget.playerAheadFeed + 1)
                     .map(\.id)
             )
             await RecommendationClient.warmPlaybackURLs(warmIDs)
+        }
+
+        // Slug shelves: warm neighbor of the first hub card so chip/For-you feels instant.
+        if let hub = posts.prefix(headLimit).first(where: {
+            PlayPlatformBridge.isHubFeedCardVideo($0) || PlayPlatformBridge.isHubOriginShare($0)
+        }) {
+            let slug = hub.hubSlug
+                ?? YouTubeCatalogService.parentHubSlug(for: hub)
+            SlugShelfStore.shared.warmNeighbor(of: slug)
         }
     }
 
