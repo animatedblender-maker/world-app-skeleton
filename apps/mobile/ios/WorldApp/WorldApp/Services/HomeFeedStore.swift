@@ -619,24 +619,15 @@ final class HomeFeedStore {
             hasMore = true
         }
 
-        // Thumbs wide; AV sliding window (device-adaptive) on shared hubs/sparks.
-        let thumbAhead = fling ? 8 : SparkWarmPool.MediaBudget.thumbAhead
+        // Media session 09: feed list = posters only. NO SparkWarmPool / AV on scroll.
+        let thumbAhead = fling ? 4 : 8
         let end = min(displayedPosts.count, index + thumbAhead)
         if index < end {
             let window = Array(displayedPosts[index..<end])
             ImageCache.shared.prefetchFeedMedia(window, maxPixelSize: fling ? 280 : 360)
-            // Keep warming AV during light fling (smaller ahead) — skip only hard fling storms.
-            let videos = Self.feedWarmVideoQueue(from: displayedPosts)
-            if let videoIndex = Self.feedWarmIndex(for: post, in: videos, feedIndex: index, feed: displayedPosts) {
-                SparkWarmPool.shared.prepareFeedWindow(posts: videos, around: videoIndex)
-                if !fling {
-                    let hi = min(videos.count, videoIndex + SparkWarmPool.MediaBudget.playerAheadFeed + 1)
-                    let warmIDs = Array(videos[videoIndex..<hi].map(\.id))
-                    if !warmIDs.isEmpty {
-                        Task(priority: .utility) {
-                            await RecommendationClient.warmPlaybackURLs(warmIDs)
-                        }
-                    }
+            if !fling {
+                Task(priority: .utility) {
+                    await Frame0PosterResolver.shared.prefetch(postIDs: window.map(\.id))
                 }
             }
         }
@@ -1000,42 +991,18 @@ final class HomeFeedStore {
         hasMore = true
     }
 
-    /// `lite`: first 2–3 videos + 12 thumbs only (open path).
-    /// Full: deeper AV window + Frame0 + slug neighbor (after paint).
+    /// Media session 09: feed head = thumbs + Frame0 only. Never prepareFeedWindow here.
+    /// `lite` = open path (smaller band); full = after paint (visible + 8 ahead).
     private func warmHead(lite: Bool = false) async {
-        let thumbN = lite ? 12 : min(SparkWarmPool.MediaBudget.thumbAhead, 32)
-        let avN = lite ? 3 : SparkWarmPool.MediaBudget.playerAheadFeed
+        let thumbN = lite ? 12 : min(max(windowLimit, firstWindow) + 8, 24)
         let thumbBand = Array(posts.prefix(thumbN))
         ImageCache.shared.prefetchFeedMedia(thumbBand, maxPixelSize: lite ? 280 : 360)
-        if !lite {
-            ImageCache.shared.prefetchPostThumbnails(thumbBand, maxPixelSize: 360, aggressive: false)
-        }
-
-        let videos = Self.feedWarmVideoQueue(from: posts)
-        if !videos.isEmpty {
-            SparkWarmPool.shared.prepareFeedWindow(posts: videos, around: 0)
-            for post in videos.prefix(avN + 1) {
-                if let url = post.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) {
-                    ArchiveVideoPlayback.warmResolve(url)
-                }
-            }
-        }
-
-        guard !lite else { return }
-
+        ImageCache.shared.prefetchPostThumbnails(thumbBand, maxPixelSize: 360, aggressive: false)
         Task(priority: .utility) {
-            await Frame0PosterResolver.shared.prefetch(
-                postIDs: Array(thumbBand.prefix(16).map(\.id))
-            )
-            let warmIDs = Array(
-                Self.feedWarmVideoQueue(from: self.posts)
-                    .prefix(avN + 1)
-                    .map(\.id)
-            )
-            await RecommendationClient.warmPlaybackURLs(warmIDs)
+            await Frame0PosterResolver.shared.prefetch(postIDs: thumbBand.map(\.id))
         }
-
-        if let hub = posts.prefix(12).first(where: {
+        // Slug neighbor thumbs only (no AV) for first hub card in head.
+        if !lite, let hub = posts.prefix(12).first(where: {
             PlayPlatformBridge.isHubFeedCardVideo($0) || PlayPlatformBridge.isHubOriginShare($0)
         }) {
             let slug = hub.hubSlug ?? YouTubeCatalogService.parentHubSlug(for: hub)

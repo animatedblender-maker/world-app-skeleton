@@ -1,9 +1,9 @@
 # Media Session contract (locked)
 
-**Status:** Greenlit 2026-08-18  
+**Status:** Greenlit 2026-08-18 · **Re-enforced 2026-09-22** (reset after warm/load thrash)  
 **Branch:** `ios-native`  
 **UI rule:** No visual redesign. Same cards, mini chrome, expand/minimize look.  
-**After this lands:** resume butter-smooth plan at **Grafana step 3** and onward.
+**Do not retune ahead windows daily** — Sparks = 5 ahead / deep 2; feed = posters only.
 
 ---
 
@@ -44,7 +44,7 @@ Sparks vertical                 →  Sparks path (windowed warm OK; not feed lis
 
 1. **Feed list cells never create `AVPlayer` until they are the focus winner** (`playGate == true`).  
 2. **Non-winners mount poster only** — no `VideoPlayerView`, no `MatteryaHubPlayerView`, no warm pool claim.  
-3. **`SparkWarmPool` is not used on home feed scroll / warmHead / loadMore** (Sparks path may still use it).  
+3. **`SparkWarmPool` is not used on home feed scroll / warmHead / loadMore** — `prepareFeedWindow` is a **no-op**. Sparks vertical may use `preparePlayerWindow` (5 ahead, deep 2).  
 4. **Archive/R2 resolve** only when installing the winner player (or hubs continuous open) — not on every cell appear.  
 5. **Hubs open / mini / max** use continuous layer only; frame morph, contentID-only rehost.  
 6. **Scroll hot path:** thumbs + window grow; no `recordView` / engagement network mid-fling.  

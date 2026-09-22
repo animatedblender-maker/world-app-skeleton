@@ -25,39 +25,24 @@ final class SparkWarmPool {
         static var isConstrained: Bool { physicalGB < 3.6 }
         static var isMid: Bool { physicalGB < 5.6 }
 
-        /// Feed / Hubs: adaptive ahead by RAM.
-        static var playerAhead: Int {
-            if isConstrained { return 4 }
-            if isMid { return 7 }
-            return 8
-        }
-        static var playerAheadFeed: Int { playerAhead }
-        /// Sparks full-screen player: always warm the next **10** for butter swipes.
-        static var playerAheadSparks: Int { 10 }
-        static var playerAheadHubs: Int { playerAhead }
-        /// Thumbs / Frame 0: wide band (cheap vs AV).
-        static var thumbAhead: Int {
-            if isConstrained { return 32 }
-            if isMid { return 48 }
-            return 64
-        }
-        static var deepPrerollFeed: Int { playerAheadFeed }
-        static var deepPrerollSparks: Int { playerAheadSparks }
-        static var deepPrerollHubs: Int { playerAheadHubs }
-        /// Parked slots must fit Sparks 10-ahead + behind + spare.
-        static var maxSlots: Int {
-            if isConstrained { return 12 }
-            if isMid { return 14 }
-            return 16
-        }
-        static var playerBehind: Int { isConstrained ? 1 : 2 }
-        /// Cap parallel R2 pipes (window fills serially under the cap).
-        static var maxConcurrentWarms: Int {
-            if isConstrained { return 3 }
-            if isMid { return 4 }
-            return 5
-        }
-        static var forwardBufferDeep: Double { isConstrained ? 5 : (isMid ? 7 : 9) }
+        /// IG-style Sparks window — 5 deep-ready beats 10 half-warm. Do not retune daily.
+        static var playerAhead: Int { 5 }
+        /// Feed list must NOT use AV warm (media session 09) — kept for API compat only.
+        static var playerAheadFeed: Int { 0 }
+        static var playerAheadSparks: Int { 5 }
+        static var playerAheadHubs: Int { 5 }
+        /// Thumbs / Frame 0 ahead of focus (Sparks player + shelves).
+        static var thumbAhead: Int { isConstrained ? 12 : 16 }
+        /// Deep-preroll next 2 (first-frame ready); rest of window light-buffer.
+        static var deepPrerollFeed: Int { 0 }
+        static var deepPrerollSparks: Int { 2 }
+        static var deepPrerollHubs: Int { 2 }
+        /// 5 ahead + 1 behind + spare.
+        static var maxSlots: Int { isConstrained ? 7 : 8 }
+        static var playerBehind: Int { 1 }
+        /// Cap parallel R2 pipes — never storm on open.
+        static var maxConcurrentWarms: Int { isConstrained ? 2 : 3 }
+        static var forwardBufferDeep: Double { isConstrained ? 5 : 7 }
         static var forwardBufferLight: Double { isConstrained ? 2 : 3 }
     }
 
@@ -98,15 +83,12 @@ final class SparkWarmPool {
         )
     }
 
-    /// Home feed shared Sparks / Hubs — same adaptive AV window (video-filtered queue).
+    /// **Deprecated for Home feed** (media session 09: posters only).
+    /// No-op so stray call sites cannot reintroduce feed AV storms.
     func prepareFeedWindow(posts: [CountryPost], around index: Int) {
-        prepare(
-            posts: posts,
-            around: index,
-            ahead: MediaBudget.playerAheadFeed,
-            behind: MediaBudget.playerBehind,
-            deepPrerollLimit: MediaBudget.deepPrerollFeed
-        )
+        _ = posts
+        _ = index
+        // Intentionally empty — feed list must not warm AVPlayers.
     }
 
     /// Hubs For you shelf + related / up-next while watching.
