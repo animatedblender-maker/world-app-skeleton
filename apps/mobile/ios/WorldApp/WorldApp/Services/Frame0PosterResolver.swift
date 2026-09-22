@@ -1,5 +1,34 @@
 import Foundation
 
+/// MainActor mirror of Frame0 signed URLs so SwiftUI can paint first frames
+/// immediately after `Frame0PosterResolver.prefetch` (lives in this file so Xcode
+/// target membership matches — do not split into an unlisted .swift file).
+@MainActor
+enum Frame0PosterCache {
+    private static var map: [String: URL] = [:]
+
+    static func url(for postID: String) -> URL? {
+        let key = postID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return nil }
+        return map[key]
+    }
+
+    static func store(_ postID: String, _ url: URL) {
+        let key = postID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return }
+        map[key] = url
+        if map.count > 4000, let first = map.keys.first {
+            map.removeValue(forKey: first)
+        }
+    }
+
+    static func storeBatch(_ posters: [String: URL]) {
+        for (id, url) in posters {
+            store(id, url)
+        }
+    }
+}
+
 /// Instant Frame 0 posters from the R2 pack path (server signs `…/frame0_512.webp`).
 /// Prefer this over AVAssetImageGenerator — no client decode wait.
 actor Frame0PosterResolver {
@@ -96,20 +125,22 @@ actor Frame0PosterResolver {
             do {
                 let posters = try await fetchBatch(postIDs: chunk)
                 let now = Date()
-                var mirrored: [String: URL] = [:]
+                var mirroredMutable: [String: URL] = [:]
                 for (id, urlString) in posters {
                     guard let url = URL(string: urlString), url.scheme != nil else { continue }
                     cache[id] = CacheEntry(url: url, cachedAt: now)
-                    mirrored[id] = url
+                    mirroredMutable[id] = url
                 }
                 if cache.count > 6000, let first = cache.keys.first {
                     cache.removeValue(forKey: first)
                 }
+                let mirrored = mirroredMutable
                 if !mirrored.isEmpty {
-                    await MainActor.run { Frame0PosterCache.storeBatch(mirrored) }
-                    // Warm CDN bytes so first paint is not an empty black box.
+                    let urls = Array(mirrored.values)
                     await MainActor.run {
-                        ImageCache.shared.prefetch(Array(mirrored.values), maxPixelSize: 420)
+                        Frame0PosterCache.storeBatch(mirrored)
+                        // Warm CDN bytes so first paint is not an empty black box.
+                        ImageCache.shared.prefetch(urls, maxPixelSize: 420)
                     }
                 }
             } catch {
