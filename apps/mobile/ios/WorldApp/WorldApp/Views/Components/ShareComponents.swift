@@ -128,6 +128,7 @@ struct SparkFeedCard: View {
                 if let url = playURL {
                     ZStack {
                         Color.black
+                        // Always show Frame 0 (or thumb) under the player — never leave black.
                         if let posterURL {
                             CachedAsyncImage(
                                 url: posterURL,
@@ -138,10 +139,20 @@ struct SparkFeedCard: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .clipped()
                             .allowsHitTesting(false)
+                        } else {
+                            FrameZeroFallbackPoster(
+                                postID: post.id,
+                                videoURL: url,
+                                fillsFrame: useFill,
+                                allowClientExtract: false,
+                                seedPosterURL: Frame0PosterCache.url(for: post.id)
+                            )
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .allowsHitTesting(false)
                         }
                         InFrameVideoPlayer(
                             url: url,
-                            posterURL: posterURL,
+                            posterURL: posterURL ?? Frame0PosterCache.url(for: post.id),
                             placement: "reel",
                             countryCode: post.countryCode,
                             contentCountryCode: post.countryCode,

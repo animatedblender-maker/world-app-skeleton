@@ -96,12 +96,21 @@ actor Frame0PosterResolver {
             do {
                 let posters = try await fetchBatch(postIDs: chunk)
                 let now = Date()
+                var mirrored: [String: URL] = [:]
                 for (id, urlString) in posters {
                     guard let url = URL(string: urlString), url.scheme != nil else { continue }
                     cache[id] = CacheEntry(url: url, cachedAt: now)
+                    mirrored[id] = url
                 }
                 if cache.count > 6000, let first = cache.keys.first {
                     cache.removeValue(forKey: first)
+                }
+                if !mirrored.isEmpty {
+                    await MainActor.run { Frame0PosterCache.storeBatch(mirrored) }
+                    // Warm CDN bytes so first paint is not an empty black box.
+                    await MainActor.run {
+                        ImageCache.shared.prefetch(Array(mirrored.values), maxPixelSize: 420)
+                    }
                 }
             } catch {
                 #if DEBUG
@@ -126,6 +135,7 @@ actor Frame0PosterResolver {
             if cache.count > 6000, let first = cache.keys.first {
                 cache.removeValue(forKey: first)
             }
+            await MainActor.run { Frame0PosterCache.store(postID, url) }
             return url
         } catch {
             #if DEBUG

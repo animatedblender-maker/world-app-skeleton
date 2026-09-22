@@ -2056,7 +2056,8 @@ struct InFrameVideoPlayer: View {
                     postID: postID,
                     videoURL: url,
                     fillsFrame: fillsFrame,
-                    allowClientExtract: false
+                    allowClientExtract: false,
+                    seedPosterURL: Frame0PosterCache.url(for: postID)
                 )
                 .allowsHitTesting(false)
             }

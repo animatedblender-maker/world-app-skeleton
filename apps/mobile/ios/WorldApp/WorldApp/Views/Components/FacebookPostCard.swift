@@ -792,6 +792,7 @@ struct FacebookPostCard: View {
         // Same poster resolve as Sparks feed card (self → shared origin → resolver).
         let poster = MediaURLResolver.posterURL(for: post)
             ?? post.sharedPost.flatMap { MediaURLResolver.posterURL(for: $0.asCountryPost) }
+            ?? Frame0PosterCache.url(for: post.id)
         let isHubFilm = PlayPlatformBridge.isHubFeedCardVideo(post)
             || PlayPlatformBridge.isHubCatalogContent(post)
             || isHubOriginShareCard
@@ -813,7 +814,8 @@ struct FacebookPostCard: View {
                     postID: post.id,
                     videoURL: url,
                     fillsFrame: !isHubFilm,
-                    allowClientExtract: false
+                    allowClientExtract: false,
+                    seedPosterURL: Frame0PosterCache.url(for: post.id)
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .allowsHitTesting(false)

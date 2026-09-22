@@ -101,7 +101,7 @@ struct FrameZeroFallbackPoster: View {
     var body: some View {
         ZStack {
             Color.black
-            if let url = remotePosterURL ?? seedPosterURL {
+            if let url = remotePosterURL ?? seedPosterURL ?? Frame0PosterCache.url(for: postID) {
                 CachedAsyncImage(
                     url: url,
                     maxPixelSize: 720,
@@ -118,8 +118,14 @@ struct FrameZeroFallbackPoster: View {
                     .clipped()
             }
         }
+        .onAppear {
+            if remotePosterURL == nil,
+               let cached = seedPosterURL ?? Frame0PosterCache.url(for: postID) {
+                remotePosterURL = cached
+            }
+        }
         .task(id: "\(postID)|\(videoURL.absoluteString)|\(allowClientExtract)") {
-            if let seed = seedPosterURL {
+            if let seed = seedPosterURL ?? Frame0PosterCache.url(for: postID) {
                 remotePosterURL = seed
                 return
             }
