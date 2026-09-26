@@ -1480,7 +1480,7 @@ struct YouTubeAppView: View {
         }
     }
 
-    /// Prefetch Frame0/thumbs for the whole For-you window; AV only 5-ahead.
+    /// Media session 09: Hubs list = posters/Frame0 only. AV warm only in Watch/related.
     private func butterWarmHubCatalog(_ videos: [CountryPost]) {
         let thumbPx = YouTubeMediaLayout.hubsListThumbMaxPixel
         let head = stableDiscoverVideos.isEmpty
@@ -1494,15 +1494,7 @@ struct YouTubeAppView: View {
         Task {
             await Frame0PosterResolver.shared.prefetch(postIDs: poolBand.map(\.id))
         }
-        // After first paint — park next 5 hubs so openVideo claims without black flash.
-        Task(priority: .utility) {
-            try? await Task.sleep(nanoseconds: 280_000_000)
-            guard appState.selectedTab == .hubs else { return }
-            let queue = head.filter { $0.playableVideoURL != nil || $0.hasVideo }
-            guard !queue.isEmpty else { return }
-            SparkWarmPool.shared.prepareHubsWindow(posts: queue, around: 0)
-        }
-        // Sparks strip thumbs — wide band, after For you.
+        // Sparks strip thumbs — after For you posters.
         Task(priority: .background) {
             try? await Task.sleep(nanoseconds: 1_200_000_000)
             guard appState.selectedTab == .hubs, appState.hubPlaybackPost == nil else { return }
