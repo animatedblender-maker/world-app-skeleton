@@ -5,18 +5,27 @@ import { Router } from '@angular/router';
 import { BottomTabsComponent } from '../components/bottom-tabs.component';
 import { MatteryaPostCardComponent } from '../components/matterya-post-card.component';
 import { MatteryaTopbarComponent } from '../components/matterya-topbar.component';
+import { SparksStripComponent } from '../components/sparks-strip.component';
 import { AuthService } from '../core/services/auth.service';
 import { FollowService } from '../core/services/follow.service';
 import { LocationService } from '../core/services/location.service';
 import { PostsService } from '../core/services/posts.service';
 import { ProfileService } from '../core/services/profile.service';
+import { R2PlaybackService } from '../core/services/r2-playback.service';
+import { SurfacePageService } from '../core/services/surface-page.service';
 import type { CountryPost } from '../core/models/post.model';
 import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util';
 
 @Component({
   selector: 'app-feed-page',
   standalone: true,
-  imports: [CommonModule, BottomTabsComponent, MatteryaTopbarComponent, MatteryaPostCardComponent],
+  imports: [
+    CommonModule,
+    BottomTabsComponent,
+    MatteryaTopbarComponent,
+    MatteryaPostCardComponent,
+    SparksStripComponent,
+  ],
   template: `
     <div class="feed-shell">
       <app-matterya-topbar
@@ -26,13 +35,16 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
       ></app-matterya-topbar>
 
       <main class="feed-body">
-        <section class="sparks-entry" *ngIf="homeCountry">
-          <div class="sparks-copy">
-            <div class="sparks-title">Matterya Sparks</div>
-            <div class="sparks-sub">Short videos from {{ homeCountry }} and beyond</div>
-          </div>
-          <button type="button" class="sparks-go" (click)="openSparks()">Watch Sparks</button>
-        </section>
+        <!-- iOS FeedView: Sparks for you horizontal strip -->
+        <app-sparks-strip
+          *ngIf="sparksRail.length"
+          title="Sparks for you"
+          subtitle="Swipe the world on Matterya"
+          [posts]="sparksRail"
+          [showsBrand]="false"
+          (open)="openSpark($event)"
+          (brandTap)="openSparks()"
+        ></app-sparks-strip>
 
         <div class="feed-state" *ngIf="loading">Loading feed…</div>
         <div class="feed-state error" *ngIf="!loading && error">{{ error }}</div>
@@ -40,7 +52,7 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
           Your feed is quiet. Posts from everywhere will show up here as people share.
         </div>
 
-        <!-- iOS FacebookPostCard parity — Hubs badge lives on the card media -->
+        <!-- iOS FacebookPostCard parity — Sparks render as tall reel cards -->
         <app-matterya-post-card
           *ngFor="let post of posts; trackBy: trackById"
           [post]="post"
@@ -71,42 +83,10 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
         /* ~60% of content pane on desktop; full width on small screens */
         max-width: 100%;
         margin: 0 auto;
-        padding: 0 8px 24px;
+        padding: 0 0 24px;
         width: 100%;
         box-sizing: border-box;
         --m-feed-card-gap: 0px;
-      }
-      .sparks-entry {
-        margin: 12px 0;
-        padding: 12px 16px;
-        border-radius: 8px;
-        background: var(--m-surface, #fefdfb);
-        border: 0.5px solid var(--m-border, #ddd8d1);
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        justify-content: space-between;
-      }
-      .sparks-title {
-        font-family: 'Iowan Old Style', Palatino, Georgia, serif;
-        font-size: 18px;
-        color: var(--m-ink, #2c2825);
-      }
-      .sparks-sub {
-        font-size: 12px;
-        color: var(--m-ink-muted, #948b82);
-        margin-top: 2px;
-      }
-      .sparks-go {
-        border: 0;
-        border-radius: 10px;
-        background: var(--m-ink, #2c2825);
-        color: var(--m-surface, #fefdfb);
-        font-weight: 650;
-        font-size: 13px;
-        padding: 10px 14px;
-        cursor: pointer;
-        white-space: nowrap;
       }
       .feed-state {
         padding: 48px 24px;
@@ -133,16 +113,13 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
           padding: 16px 0 48px;
           --m-feed-card-gap: 0px;
         }
-        .sparks-entry {
-          margin: 0 0 12px;
-          border-radius: 8px;
-        }
       }
     `,
   ],
 })
 export class FeedPageComponent implements OnInit {
   posts: CountryPost[] = [];
+  sparksRail: CountryPost[] = [];
   loading = true;
   error = '';
   homeCountry: string | null = null;
@@ -152,6 +129,8 @@ export class FeedPageComponent implements OnInit {
 
   constructor(
     private postsService: PostsService,
+    private surface: SurfacePageService,
+    private playback: R2PlaybackService,
     private auth: AuthService,
     private profiles: ProfileService,
     private follow: FollowService,
@@ -265,8 +244,22 @@ export class FeedPageComponent implements OnInit {
   }
 
   openSparks(): void {
-    if (!this.homeCountry) return;
-    void this.router.navigate(['/sparks', this.homeCountry]);
+    const code = this.homeCountry || this.sparksRail[0]?.country_code || 'WORLD';
+    void this.router.navigate(['/sparks', code], {
+      state: { seedPosts: this.sparksRail.slice(0, 24), seedCountry: code },
+    });
+  }
+
+  openSpark(post: CountryPost): void {
+    const country = post.country_code || this.homeCountry || 'WORLD';
+    void this.router.navigate(['/sparks', country], {
+      queryParams: { post: post.id },
+      state: {
+        seedPosts: [post, ...this.sparksRail.filter((p) => p.id !== post.id)].slice(0, 24),
+        seedCountry: country,
+        countryName: post.country_name,
+      },
+    });
   }
 
 
@@ -342,25 +335,41 @@ export class FeedPageComponent implements OnInit {
       this.homeCountry = countryCode;
       this.paint();
 
-      // Primary path: recent posts only (fast). Secondary enrich runs after spinner clears.
-      const feed = await this.withTimeout(
-        this.postsService.listRecent(40),
-        8000,
-        'recentPosts'
-      ).catch(() => [] as CountryPost[]);
+      // iOS path: thin /v1/feed first (Sparks + posts), GraphQL recent as fallback.
+      // Keep Sparks on Home (SparkFeedCard) — Moments only are excluded.
+      const thin = await this.withTimeout(
+        this.surface.fetchHomeFeed(36),
+        6000,
+        'thinFeed'
+      ).catch(() => null);
 
-      const filtered = (feed || []).filter(
-        (p) => !this.postsService.isMoment(p) && !this.postsService.isSpark(p)
-      );
-      this.posts = filtered;
+      let feed = (thin?.items || []).filter((p) => !this.postsService.isMoment(p));
+      if (!feed.length) {
+        feed = await this.withTimeout(
+          this.postsService.listRecent(40),
+          8000,
+          'recentPosts'
+        )
+          .then((rows) => (rows || []).filter((p) => !this.postsService.isMoment(p)))
+          .catch(() => [] as CountryPost[]);
+      }
+
+      // Freshen R2 play URLs so Spark cards actually play (thin pages can ship expired presigns).
+      feed = await this.playback.freshenPosts(feed, 12).catch(() => feed);
+
+      this.posts = feed;
+      this.sparksRail = feed
+        .filter((p) => this.postsService.isSpark(p))
+        .slice(0, 12);
       this.loading = false;
       this.paint();
 
-      // Optional country posts — never block the spinner.
+      // Optional country posts + sparks top-up — never block the spinner.
       void this.loadSecondary(authorId, countryCode, followingIds);
     } catch (e: any) {
       this.error = e?.message || 'Feed unavailable';
       this.posts = [];
+      this.sparksRail = [];
       this.loading = false;
       this.paint();
     } finally {
@@ -376,33 +385,56 @@ export class FeedPageComponent implements OnInit {
     _followingIds: string[]
   ): Promise<void> {
     try {
-      if (!countryCode) return;
-      const extra = await this.withTimeout(
-        this.postsService.listByCountry(countryCode, 20, {
-          demoLimit: 10,
-          skipComments: true,
-        }),
-        6000,
-        'countryFeed'
-      ).catch(() => [] as CountryPost[]);
-
-      if (extra?.length) {
-        const seen = new Set(this.posts.map((p) => p.id));
-        const merged = [...this.posts];
-        for (const post of extra) {
-          if (!post?.id || seen.has(post.id)) continue;
-          if (this.postsService.isMoment(post) || this.postsService.isSpark(post)) continue;
-          seen.add(post.id);
-          merged.push(post);
-        }
-        merged.sort((a, b) => {
-          const ta = Date.parse(a.created_at || '') || 0;
-          const tb = Date.parse(b.created_at || '') || 0;
-          return tb - ta;
-        });
-        this.posts = merged.slice(0, 50);
-        this.paint();
+      const extras: CountryPost[] = [];
+      if (countryCode) {
+        const country = await this.withTimeout(
+          this.postsService.listByCountry(countryCode, 20, {
+            demoLimit: 10,
+            skipComments: true,
+          }),
+          6000,
+          'countryFeed'
+        ).catch(() => [] as CountryPost[]);
+        extras.push(...(country || []));
       }
+
+      // World Sparks top-up for the rail (iOS discoverSparks /v1/sparks).
+      if (this.sparksRail.length < 8) {
+        const sparksPage = await this.withTimeout(
+          this.surface.fetchSparks(16),
+          6000,
+          'sparksRail'
+        ).catch(() => null);
+        if (sparksPage?.items?.length) {
+          const freshened = await this.playback
+            .freshenPosts(sparksPage.items, 12)
+            .catch(() => sparksPage.items);
+          extras.push(...freshened);
+        }
+      }
+
+      if (!extras.length) return;
+
+      const seen = new Set(this.posts.map((p) => p.id));
+      const merged = [...this.posts];
+      for (const post of extras) {
+        if (!post?.id || seen.has(post.id)) continue;
+        if (this.postsService.isMoment(post)) continue;
+        seen.add(post.id);
+        merged.push(post);
+      }
+      merged.sort((a, b) => {
+        const ta = Date.parse(a.created_at || '') || 0;
+        const tb = Date.parse(b.created_at || '') || 0;
+        return tb - ta;
+      });
+      this.posts = merged.slice(0, 50);
+      if (!this.sparksRail.length) {
+        this.sparksRail = this.posts
+          .filter((p) => this.postsService.isSpark(p))
+          .slice(0, 12);
+      }
+      this.paint();
     } catch {
       // secondary is best-effort
     }

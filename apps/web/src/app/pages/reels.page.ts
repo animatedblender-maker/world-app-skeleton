@@ -7,6 +7,8 @@ import { Subscription } from 'rxjs';
 import { VideoPlayerComponent } from '../components/video-player.component';
 import { AuthService } from '../core/services/auth.service';
 import { PostsService } from '../core/services/posts.service';
+import { R2PlaybackService } from '../core/services/r2-playback.service';
+import { SurfacePageService } from '../core/services/surface-page.service';
 import { CountryPost, PostComment } from '../core/models/post.model';
 import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util';
 
@@ -140,13 +142,6 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
                     <path d="M12 16V4M8 8l4-4 4 4" stroke-linecap="round" stroke-linejoin="round" />
                   </svg>
                   <span class="rail-label">Share</span>
-                </button>
-
-                <button type="button" class="rail-btn" (click)="openPost(post)" aria-label="Open post">
-                  <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-                    <path d="M7 17L17 7M9 7h8v8" stroke-linecap="round" stroke-linejoin="round" />
-                  </svg>
-                  <span class="rail-label">Open</span>
                 </button>
               </div>
             </div>
@@ -334,7 +329,8 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
         transition: background 0.18s ease, max-width 0.18s ease;
       }
       .progress-seg.active {
-        background: #5eb8ff;
+        /* iOS Theme.reelsAccent = accentBright */
+        background: var(--m-accent-bright, #7b6347);
         max-width: 18px;
         flex: 0 0 18px;
       }
@@ -480,7 +476,7 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
         width: 6px;
         height: 6px;
         border-radius: 50%;
-        background: #5eb8ff;
+        background: var(--m-accent-bright, #7b6347);
       }
       .reel-actions {
         flex: 0 0 auto;
@@ -754,12 +750,17 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
   private querySub?: Subscription;
   private pendingScrollId: string | null = null;
   private muteListener?: (event: Event) => void;
+  private sparksCursor: string | null = null;
+  private loadingMore = false;
+  private resolvedSrc = new Map<string, string>();
 
   constructor(
     private route: ActivatedRoute,
     private router: Router,
     private auth: AuthService,
     private postsService: PostsService,
+    private surface: SurfacePageService,
+    private playback: R2PlaybackService,
     private cdr: ChangeDetectorRef
   ) {}
 
@@ -821,7 +822,19 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
     if (idx !== this.activeIndex) {
       this.activeIndex = idx;
       const post = this.videoPosts[idx];
-      if (post) this.recordView(post);
+      if (post) {
+        this.recordView(post);
+        void this.ensurePlayable(post);
+        // Warm next few (iOS SparkWarmPool window).
+        for (let i = 1; i <= 3; i++) {
+          const next = this.videoPosts[idx + i];
+          if (next) void this.ensurePlayable(next);
+        }
+      }
+    }
+    // iOS onNearEnd — request next catalog well before the tail.
+    if (idx >= this.videoPosts.length - 6) {
+      void this.loadMoreReels();
     }
   }
 
@@ -1033,16 +1046,11 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
   }
 
   private async loadReels(): Promise<void> {
-    if (!this.countryCode) {
-      this.error = 'Missing country.';
-      this.loading = false;
-      this.paint();
-      return;
-    }
     this.loading = true;
     this.error = '';
     this.posts = [];
     this.videoPosts = [];
+    this.sparksCursor = null;
     this.paint();
 
     const hardStop = window.setTimeout(() => {
@@ -1052,39 +1060,138 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
         this.error = 'Sparks is taking too long. Try again.';
       }
       this.paint();
-    }, 10000);
+    }, 12000);
 
     try {
-      const posts = await this.withTimeout(
-        this.postsService.listByCountry(this.countryCode, 80, {
-          demoLimit: 40,
-          skipComments: true,
-        }),
-        8000,
-        'sparksCountry'
-      ).catch(() => [] as CountryPost[]);
+      // iOS: thin /v1/sparks + discoverSparks (world discovery), not country-only.
+      const thin = await this.withTimeout(
+        this.surface.fetchSparks(24),
+        7000,
+        'thinSparks'
+      ).catch(() => null);
 
-      this.posts = posts ?? [];
-      const sparks = this.posts.filter(
-        (post) => this.postsService.isSpark(post) && !!this.reelMediaSrc(post)
-      );
-      const videos = this.posts.filter(
-        (post) =>
-          !this.postsService.isMoment(post) &&
-          !this.postsService.isSpark(post) &&
-          !!this.reelMediaSrc(post)
-      );
-      // No recommender yet — reshuffle every open so Sparks always feel new.
-      const pool = sparks.length ? sparks : videos;
-      this.videoPosts = this.shufflePosts(pool);
-      this.countryName =
-        this.posts.find((post) => post.country_name)?.country_name || this.countryCode;
+      let pool: CountryPost[] = thin?.items || [];
+      this.sparksCursor = thin?.nextCursor ?? null;
+
+      if (this.countryCode && this.countryCode !== 'WORLD') {
+        const country = await this.withTimeout(
+          this.postsService.listByCountry(this.countryCode, 40, {
+            demoLimit: 20,
+            skipComments: true,
+          }),
+          7000,
+          'sparksCountry'
+        ).catch(() => [] as CountryPost[]);
+        const countrySparks = (country || []).filter(
+          (p) => this.postsService.isSpark(p) || !!this.rawVideoUrl(p)
+        );
+        pool = this.mergeUnique(countrySparks, pool);
+        this.countryName =
+          countrySparks.find((p) => p.country_name)?.country_name || this.countryCode;
+      }
+
+      if (pool.length < 12) {
+        const discovered = await this.withTimeout(
+          this.postsService.discoverSparks(
+            24,
+            pool.map((p) => p.id)
+          ),
+          8000,
+          'discoverSparks'
+        ).catch(() => [] as CountryPost[]);
+        pool = this.mergeUnique(pool, discovered);
+      }
+
+      pool = await this.playback.freshenPosts(pool, 12).catch(() => pool);
+      for (const p of pool) {
+        const src = this.playback.resolvedSrc(p) || this.rawVideoUrl(p);
+        if (src) this.resolvedSrc.set(p.id, src);
+      }
+
+      this.posts = pool;
+      const playable = pool.filter((p) => !!this.reelMediaSrc(p));
+      this.videoPosts = this.shufflePosts(playable);
+      if (!this.countryName) {
+        this.countryName =
+          this.videoPosts.find((p) => p.country_name)?.country_name ||
+          this.countryCode ||
+          'World';
+      }
       this.tryScrollToPending();
+      // Prefetch first window play URLs.
+      for (const p of this.videoPosts.slice(0, 5)) {
+        void this.ensurePlayable(p);
+      }
     } catch (e: any) {
       this.error = e?.message ?? String(e);
     } finally {
       window.clearTimeout(hardStop);
       this.loading = false;
+      this.paint();
+    }
+  }
+
+  /** iOS ReelsVerticalFeed.loadMoreReels — append next /v1/sparks page. */
+  private async loadMoreReels(): Promise<void> {
+    if (this.loadingMore || this.loading) return;
+    this.loadingMore = true;
+    try {
+      const page = await this.surface.fetchSparks(20, this.sparksCursor);
+      if (!page?.items?.length) {
+        const discovered = await this.postsService
+          .discoverSparks(
+            20,
+            this.videoPosts.map((p) => p.id)
+          )
+          .catch(() => [] as CountryPost[]);
+        if (!discovered.length) return;
+        const freshened = await this.playback.freshenPosts(discovered, 12).catch(() => discovered);
+        this.appendPlayable(freshened);
+        return;
+      }
+      this.sparksCursor = page.nextCursor;
+      const freshened = await this.playback.freshenPosts(page.items, 12).catch(() => page.items);
+      this.appendPlayable(freshened);
+    } finally {
+      this.loadingMore = false;
+      this.paint();
+    }
+  }
+
+  private appendPlayable(batch: CountryPost[]): void {
+    const seen = new Set(this.videoPosts.map((p) => p.id));
+    const added: CountryPost[] = [];
+    for (const post of batch) {
+      if (!post?.id || seen.has(post.id)) continue;
+      const src = this.playback.resolvedSrc(post) || this.rawVideoUrl(post);
+      if (!src) continue;
+      this.resolvedSrc.set(post.id, src);
+      seen.add(post.id);
+      added.push(post);
+    }
+    if (!added.length) return;
+    this.videoPosts = [...this.videoPosts, ...added];
+    this.posts = this.mergeUnique(this.posts, added);
+  }
+
+  private mergeUnique(primary: CountryPost[], extra: CountryPost[]): CountryPost[] {
+    const seen = new Set<string>();
+    const out: CountryPost[] = [];
+    for (const post of [...primary, ...extra]) {
+      if (!post?.id || seen.has(post.id)) continue;
+      seen.add(post.id);
+      out.push(post);
+    }
+    return out;
+  }
+
+  private async ensurePlayable(post: CountryPost): Promise<void> {
+    if (!post?.id) return;
+    if (this.resolvedSrc.has(post.id)) return;
+    const fallback = this.rawVideoUrl(post);
+    const url = await this.playback.playURL(post.id, fallback);
+    if (url) {
+      this.resolvedSrc.set(post.id, url);
       this.paint();
     }
   }
@@ -1110,17 +1217,30 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
       countryName?: string | null;
     };
     const seedCountry = String(state.seedCountry || '').toUpperCase();
-    if (seedCountry && seedCountry !== this.countryCode) return false;
+    if (seedCountry && seedCountry !== this.countryCode && this.countryCode !== 'WORLD') {
+      return false;
+    }
     const seedPosts = Array.isArray(state.seedPosts) ? state.seedPosts : [];
-    const videos = seedPosts.filter((post) => !!this.reelMediaSrc(post));
+    const videos = seedPosts.filter((post) => !!this.rawVideoUrl(post) || !!post.media_url);
     if (!videos.length) return false;
-    // Keep first seed (opened clip) first; shuffle the rest.
+    // Keep first seed (opened clip) first; shuffle the rest — iOS feed→Sparks handoff.
     const [head, ...rest] = videos;
     this.videoPosts = head ? [head, ...this.shufflePosts(rest)] : this.shufflePosts(videos);
     this.countryName = state.countryName || this.countryName;
     this.loading = false;
     this.error = '';
     this.paint();
+    // Background: freshen seed URLs + pull discovery neighbors (iOS warm window).
+    void (async () => {
+      const freshened = await this.playback.freshenPosts(this.videoPosts, 12).catch(() => this.videoPosts);
+      for (const p of freshened) {
+        const src = this.playback.resolvedSrc(p) || this.rawVideoUrl(p);
+        if (src) this.resolvedSrc.set(p.id, src);
+      }
+      this.videoPosts = freshened.filter((p) => !!this.reelMediaSrc(p));
+      this.paint();
+      await this.loadMoreReels();
+    })();
     return true;
   }
 
@@ -1166,6 +1286,12 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
   }
 
   reelMediaSrc(post: CountryPost): string {
+    const cached = this.resolvedSrc.get(post.id) || this.playback.resolvedSrc(post);
+    if (cached && /\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(cached)) return cached;
+    return this.rawVideoUrl(post);
+  }
+
+  private rawVideoUrl(post: CountryPost): string {
     const urls = this.postMediaUrls(post).map((u) => resolveMediaUrl(u)).filter(Boolean);
     if (!urls.length) return '';
     const types = this.postMediaTypes(post);

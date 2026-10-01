@@ -528,9 +528,8 @@ export class CountryFeedPageComponent implements OnInit {
         demoLimit: 40,
         skipComments: true,
       });
-      this.posts = (list || []).filter(
-        (p) => !this.postsService.isMoment(p) && !this.postsService.isSpark(p)
-      );
+      // iOS CountryFeedView keeps Sparks (tap → full Sparks player); Moments stay off.
+      this.posts = (list || []).filter((p) => !this.postsService.isMoment(p));
     } catch (e: any) {
       this.loadError = e?.message || 'Posts unavailable';
       this.posts = [];
@@ -554,7 +553,7 @@ export class CountryFeedPageComponent implements OnInit {
       for (const batch of batches) {
         for (const p of batch) {
           if (!p?.id || seen.has(p.id)) continue;
-          if (this.postsService.isMoment(p) || this.postsService.isSpark(p)) continue;
+          if (this.postsService.isMoment(p)) continue;
           seen.add(p.id);
           merged.push(p);
         }

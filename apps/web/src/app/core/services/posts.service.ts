@@ -5,7 +5,10 @@ import { CountryPost, PostComment, PostLike } from '../models/post.model';
 import { PostEventsService } from './post-events.service';
 import { DemoDatasetService } from './demo-dataset.service';
 import { SUPABASE_URL } from '../../config/supabase.config';
-import { resolveAvatarUrl as resolveAvatarMediaUrl } from '../utils/media-url.util';
+import {
+  resolveAvatarUrl as resolveAvatarMediaUrl,
+  resolveMediaUrl,
+} from '../utils/media-url.util';
 import { HubsSeedService } from '../../hubs/hubs-seed.service';
 
 @Injectable({ providedIn: 'root' })
@@ -318,7 +321,8 @@ export class PostsService {
     for (const batch of batches) {
       for (const post of batch) {
         if (!post?.id || seen.has(post.id)) continue;
-        if (this.isMoment(post) || this.isSpark(post)) continue;
+        // iOS HomeFeedStore keeps R2 Sparks (SparkFeedCard); only Moments stay off Home.
+        if (this.isMoment(post)) continue;
         seen.add(post.id);
         merged.push(post);
       }
@@ -330,6 +334,56 @@ export class PostsService {
       return tb - ta;
     });
     return merged.slice(0, maxPosts);
+  }
+
+  /** Mirrors iOS PostsService.fetchDiscoverSparks — full library sample, not recent head. */
+  async discoverSparks(limit = 24, excludeIds: string[] = []): Promise<CountryPost[]> {
+    const query = `
+      query DiscoverSparks($limit: Int, $exclude_ids: [ID!]) {
+        discoverSparks(limit: $limit, exclude_ids: $exclude_ids) {
+          id
+          title
+          body
+          media_type
+          media_url
+          thumb_url
+          shared_post_id
+          visibility
+          like_count
+          comment_count
+          liked_by_me
+          created_at
+          updated_at
+          author_id
+          country_name
+          country_code
+          city_name
+          author {
+            user_id
+            display_name
+            username
+            avatar_url
+            country_name
+            country_code
+          }
+        }
+      }
+    `;
+    try {
+      const { discoverSparks } = await this.withTimeout(
+        this.gql.request<{ discoverSparks: any[] }>(query, {
+          limit: Math.max(1, Math.min(40, limit || 24)),
+          exclude_ids: excludeIds.filter(Boolean).slice(0, 80),
+        }),
+        8000,
+        'discoverSparks'
+      );
+      return (discoverSparks ?? [])
+        .map((row) => this.mapPost(row))
+        .filter((p) => this.isSpark(p) || !!resolveMediaUrl(p.media_url || ''));
+    } catch {
+      return [];
+    }
   }
 
   async listForAuthor(userId: string, limit = 25): Promise<CountryPost[]> {
