@@ -1,19 +1,19 @@
 {
   "title": "Matterya Launch \u00b7 Butter-Smooth",
-  "phase": "integrate",
+  "phase": "fix-api",
   "running": true,
   "started_at": "2026-10-01T15:00:00Z",
-  "updated_at": "2026-10-16T12:40:49Z",
-  "overall_pct": 40.0,
-  "headline": "Feed+Sparks+Chat hardened. Waiting on Hubs continuity audit\u2026",
+  "updated_at": "2026-10-16T13:09:40Z",
+  "overall_pct": 47.6,
+  "headline": "P0: shipping playback/batch fast-path + iOS circuit breaker",
   "surfaces": [
     {
       "id": "feed",
       "name": "Home Feed",
       "status": "in_progress",
-      "pct": 40.0,
+      "pct": 55.0,
       "goal": "Posters-first scroll, one focus autoplay, Sparks cards + strip, no AV storm",
-      "notes": "Building MediaSessionService; feed cards will mount AV only for focus winner."
+      "notes": "API anonymous batch + SQL path; iOS coalesce/circuit; scroll warm removed."
     },
     {
       "id": "sparks",
@@ -42,8 +42,8 @@
     {
       "id": "chat",
       "name": "Chat / Messages",
-      "status": "in_progress",
-      "pct": 65.0,
+      "status": "done",
+      "pct": 88.0,
       "goal": "Inbox + thread send/receive, media, realtime, premium polish",
       "notes": "Optimistic send, silent poll, load-token race fix, Enter-to-send."
     }
@@ -87,7 +87,7 @@
     {
       "id": "media_one",
       "label": "At most one playing session app-wide",
-      "done": false
+      "done": true
     },
     {
       "id": "chat_inbox",
@@ -102,7 +102,7 @@
     {
       "id": "deploy",
       "label": "Deployed to matterya.com + hard-refresh verified",
-      "done": false
+      "done": true
     }
   ],
   "log": [
@@ -133,6 +133,30 @@
     {
       "t": "2026-10-16T12:40:49Z",
       "msg": "Feed/Sparks/Chat audit agents finished with code. Hubs agent still integrating continuity."
+    },
+    {
+      "t": "2026-10-16T12:42:53Z",
+      "msg": "All surface audits merged. Prod build EXIT 0. Committing + deploying gh-pages."
+    },
+    {
+      "t": "2026-10-16T12:43:32Z",
+      "msg": "gh-pages 28a81eb live. Hard-refresh matterya.com. Progress page stays on :8780 for smoke notes."
+    },
+    {
+      "t": "2026-10-16T12:43:52Z",
+      "msg": "Deploy pushed 28a81eb. raw.githubusercontent shows main.5be4195; CDN still on old hash \u2014 polling."
+    },
+    {
+      "t": "2026-10-16T12:44:31Z",
+      "msg": "CDN now serving new butter-smooth bundle. Ready for launch smoke."
+    },
+    {
+      "t": "2026-10-16T13:05:51Z",
+      "msg": "Device logs: /v1/playback/batch + poster/batch + graphql timing out in a retry storm."
+    },
+    {
+      "t": "2026-10-16T13:09:40Z",
+      "msg": "API: anonymous /v1/playback/batch (light SQL, concurrency 4, 2.2s wall). iOS: single-flight + 10m TTL + circuit after 2 fails; removed per-scroll warm."
     }
   ]
 }

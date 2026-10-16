@@ -2400,12 +2400,9 @@ struct InFrameVideoPlayer: View {
             if usesArchivePath {
                 ArchiveVideoPlayback.warmResolve(url)
             }
-            // CDN edge warm once per approach (utility — does not block UI).
-            if ratio >= 0.20, ratio - lastReportedRatio > 0.05 || lastReportedRatio < 0 {
-                Task(priority: .utility) {
-                    await RecommendationClient.warmPlaybackURLs([postID])
-                }
-            }
+            // Do NOT call /v1/playback/batch from scroll visibility.
+            // That created a timeout storm (one request per cell approach) that
+            // starved GraphQL + poster/batch. Hubs/Sparks warm via AppState window.
         }
         // Skip tiny noise; still re-check winner (pause only when >70% off-screen).
         if abs(ratio - lastReportedRatio) < 0.03, lastReportedRatio >= 0 {

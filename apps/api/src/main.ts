@@ -346,16 +346,54 @@ app.post('/v1/poster/batch', (req, res) => {
 
 // ─── Live R2 playback (never serve a dead signed URL) ─────────────────────────
 // GET /v1/playback/:postId → { url, media_url, r2_key }
-// Prefer GraphQL playbackMedia; this REST path is for simple clients / debugging.
+// Light SQL + resolvePlaybackForPostRow (anonymous OK). Avoid heavy postByIdForViewer.
 app.get('/v1/playback/:postId', async (req: Request, res: Response) => {
   try {
     const postId = String(req.params.postId || '').trim();
-    if (!postId) return res.status(400).json({ error: 'post_id_required' });
-    const user = await getUserFromRequest(req);
-    const { PostsService } = await import('./graphql/modules/posts/posts.service.js');
-    const media = await new PostsService().playbackMedia(postId, user?.id ?? null);
-    if (!media) return res.status(404).json({ error: 'not_found' });
-    return res.json({ ok: true, ...media });
+    const uuidRe =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (!uuidRe.test(postId)) return res.status(400).json({ error: 'post_id_required' });
+
+    const { resolvePlaybackForPostRow } = await import('./media/r2-playback.js');
+    const { rows } = await pool.query<{
+      id: string;
+      media_url: string | null;
+      media_path: string | null;
+      shared_media_url: string | null;
+      shared_media_path: string | null;
+    }>(
+      `
+      select
+        p.id::text as id,
+        p.media_url,
+        p.media_path,
+        sp.media_url as shared_media_url,
+        sp.media_path as shared_media_path
+      from public.posts p
+      left join public.posts sp on sp.id = p.shared_post_id
+      where p.id = $1::uuid
+      limit 1
+      `,
+      [postId]
+    );
+    const row = rows[0];
+    if (!row) return res.status(404).json({ error: 'not_found' });
+    const media = await resolvePlaybackForPostRow({
+      id: row.id,
+      media_url: row.media_url,
+      media_path: row.media_path,
+      shared_post: row.shared_media_url
+        ? { media_url: row.shared_media_url, media_path: row.shared_media_path }
+        : null,
+    });
+    if (!media?.url) return res.status(404).json({ error: 'not_found' });
+    return res.json({
+      ok: true,
+      post_id: postId,
+      url: media.url,
+      media_url: media.media_url,
+      r2_key: media.key || null,
+    });
   } catch (err: any) {
     console.error('[playback]', err?.message ?? err);
     return res.status(500).json({ error: 'playback_failed', message: err?.message ?? 'error' });
@@ -365,39 +403,89 @@ app.get('/v1/playback/:postId', async (req: Request, res: Response) => {
 /**
  * Batch freshen play URLs for feed head / Sparks window (CDN edge warm).
  * POST /v1/playback/batch  body: { postIds: string[] }  max 12
- * Returns currently-valid play URLs so clients can Range-GET the first KB.
+ *
+ * Fast path (launch-critical):
+ * - Anonymous OK (same as GET /v1/playback/:id)
+ * - One SQL for media rows (no heavy postByIdForViewer per id)
+ * - Cap concurrent R2 presigns; hard wall-clock so iOS 3.5s clients get partial OK
  */
 app.post('/v1/playback/batch', async (req: Request, res: Response) => {
+  const started = Date.now();
   try {
-    const user = await getUserFromRequest(req);
-    if (!user?.id) return res.status(401).json({ error: 'unauthenticated' });
     const raw: unknown[] = Array.isArray(req.body?.postIds) ? req.body.postIds : [];
+    const uuidRe =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
     const postIds: string[] = [
       ...new Set(
         raw
           .map((x) => String(x ?? '').trim())
-          .filter((s): s is string => s.length > 0)
+          .filter((s): s is string => uuidRe.test(s))
       ),
     ].slice(0, 12);
-    if (postIds.length === 0) return res.json({ ok: true, items: [] });
+    if (postIds.length === 0) return res.json({ ok: true, items: [], count: 0 });
 
-    const { PostsService } = await import('./graphql/modules/posts/posts.service.js');
-    const svc = new PostsService();
-    const items = await Promise.all(
-      postIds.map(async (id) => {
-        try {
-          const media = await svc.playbackMedia(id, user.id);
-          if (!media?.url) return null;
-          return { id, url: media.url as string, r2_key: (media as any).r2_key ?? null };
-        } catch {
-          return null;
-        }
-      })
+    const { resolvePlaybackForPostRow } = await import('./media/r2-playback.js');
+    const { rows } = await pool.query<{
+      id: string;
+      media_url: string | null;
+      media_path: string | null;
+      shared_media_url: string | null;
+      shared_media_path: string | null;
+    }>(
+      `
+      select
+        p.id::text as id,
+        p.media_url,
+        p.media_path,
+        sp.media_url as shared_media_url,
+        sp.media_path as shared_media_path
+      from public.posts p
+      left join public.posts sp on sp.id = p.shared_post_id
+      where p.id = any($1::uuid[])
+      `,
+      [postIds]
     );
+
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const items: Array<{ id: string; url: string; r2_key: string | null }> = [];
+    const WALL_MS = 2200;
+    const CONCURRENCY = 4;
+    let cursor = 0;
+
+    async function worker(): Promise<void> {
+      while (cursor < postIds.length) {
+        if (Date.now() - started > WALL_MS) return;
+        const i = cursor++;
+        const id = postIds[i];
+        const row = byId.get(id);
+        if (!row) continue;
+        try {
+          const media = await resolvePlaybackForPostRow({
+            id: row.id,
+            media_url: row.media_url,
+            media_path: row.media_path,
+            shared_post: row.shared_media_url
+              ? { media_url: row.shared_media_url, media_path: row.shared_media_path }
+              : null,
+          });
+          if (!media?.url) continue;
+          items.push({ id, url: media.url, r2_key: media.key || null });
+        } catch {
+          // skip bad row
+        }
+      }
+    }
+
+    await Promise.all(
+      Array.from({ length: Math.min(CONCURRENCY, postIds.length) }, () => worker())
+    );
+
     return res.json({
       ok: true,
-      items: items.filter(Boolean),
-      count: items.filter(Boolean).length,
+      items,
+      count: items.length,
+      partial: items.length < postIds.length,
+      ms: Date.now() - started,
     });
   } catch (err: any) {
     console.error('[playback/batch]', err?.message ?? err);
