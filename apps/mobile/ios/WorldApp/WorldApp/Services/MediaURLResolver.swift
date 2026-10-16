@@ -118,11 +118,9 @@ enum MediaURLResolver {
     }
 
     /// Prefer server `frame0_*.webp` / media JSON `posters` (true t=0 pixels, same aspect as film).
+    /// Note: do not read `Frame0PosterCache` here — it is `@MainActor` and this helper is sync/nonisolated
+    /// (ImageCache prefetch). Views on MainActor should prefer `Frame0PosterCache.url(for:)` first.
     static func frame0PosterURL(for post: CountryPost) -> URL? {
-        // Live Frame0 cache (fresh signed from /v1/poster/batch) beats stale JSON embeds.
-        if let cached = Frame0PosterCache.url(for: post.id), isUsablePosterURL(cached) {
-            return cached
-        }
         // Prefer embedded ladder (1080 → 512 → 256) when still valid.
         if let embedded = embeddedFrame0PosterURL(from: post.mediaURL), isUsablePosterURL(embedded) {
             return embedded

@@ -281,7 +281,9 @@ struct GlobalHubPlaybackLayer: View {
             return stored > 0.05 ? stored : 0
         }()
         if let url = post.playableVideoURL {
-            let poster = MediaURLResolver.posterURL(for: post) ?? post.posterImageURL
+            let poster = Frame0PosterCache.url(for: post.id)
+                ?? MediaURLResolver.posterURL(for: post)
+                ?? post.posterImageURL
             // One Hubs chrome for every long-form surface (R2 + Archive):
             // center play · −10s · +10s · bottom scrubber (MatteryaHubPlayerView).
             // Sparks pattern: Frame 0 poster under film until AV paints.
