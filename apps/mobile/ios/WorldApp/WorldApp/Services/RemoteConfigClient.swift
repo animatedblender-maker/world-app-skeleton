@@ -44,7 +44,8 @@ enum RemoteConfigClient {
         guard let url = comps?.url else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
-        req.timeoutInterval = 3
+        // Non-critical flags; still allow cold-start headroom (was 3s → false timeouts).
+        req.timeoutInterval = 8
         // Cached token only — never ensureValidToken (refresh on MainActor freezes UI).
         if let token = AuthService.shared.accessToken(), !token.isEmpty {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")

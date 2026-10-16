@@ -46,6 +46,12 @@ actor Frame0PosterResolver {
     private var activeFetches = 0
     private let maxConcurrentFetches = 4
     private var fetchWaiters: [CheckedContinuation<Void, Never>] = []
+    /// Coalesce overlapping prefetch windows (Feed + Hubs + Sparks open-path).
+    private var batchInFlight = false
+    private var pendingBatchIDs: Set<String> = []
+    private var consecutiveBatchFailures = 0
+    private var batchCircuitOpenUntil: Date = .distantPast
+    private let batchCircuitCooldown: TimeInterval = 20
 
     /// Signed Frame 0 URL for a post (derived from media_path / r2_key on the server).
     func posterURL(postID: String, fallback: URL? = nil) async -> URL? {
@@ -99,13 +105,15 @@ actor Frame0PosterResolver {
     }
 
     /// Warm a Sparks/Hubs window — one round-trip for many posts.
+    /// Single-flight + circuit: overlapping Feed/Hubs/Sparks calls merge into one batch.
     func prefetch(postIDs: [String]) async {
-        let ids = Array(
-            Set(
-                postIDs
-                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                    .filter { !$0.isEmpty }
-            )
+        let now = Date()
+        if now < batchCircuitOpenUntil { return }
+
+        let ids = Set(
+            postIDs
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
         )
         guard !ids.isEmpty else { return }
 
@@ -115,20 +123,29 @@ actor Frame0PosterResolver {
         }
         guard !missing.isEmpty else { return }
 
+        pendingBatchIDs.formUnion(missing)
+        if batchInFlight { return }
+        batchInFlight = true
+
         // Chunk so a large Feed/Sparks/Hubs window does not one-shot the API.
-        let chunkSize = 40
-        var offset = 0
-        while offset < missing.count {
-            let end = min(offset + chunkSize, missing.count)
-            let chunk = Array(missing[offset..<end])
-            offset = end
+        let chunkSize = 24
+        while !pendingBatchIDs.isEmpty {
+            if Date() < batchCircuitOpenUntil {
+                pendingBatchIDs.removeAll()
+                break
+            }
+            let snapshot = Array(pendingBatchIDs).prefix(chunkSize)
+            pendingBatchIDs.subtract(snapshot)
+            let chunk = Array(snapshot)
+            guard !chunk.isEmpty else { break }
             do {
                 let posters = try await fetchBatch(postIDs: chunk)
-                let now = Date()
+                consecutiveBatchFailures = 0
+                let stamped = Date()
                 var mirroredMutable: [String: URL] = [:]
                 for (id, urlString) in posters {
                     guard let url = URL(string: urlString), url.scheme != nil else { continue }
-                    cache[id] = CacheEntry(url: url, cachedAt: now)
+                    cache[id] = CacheEntry(url: url, cachedAt: stamped)
                     mirroredMutable[id] = url
                 }
                 if cache.count > 6000, let first = cache.keys.first {
@@ -144,11 +161,28 @@ actor Frame0PosterResolver {
                     }
                 }
             } catch {
+                consecutiveBatchFailures += 1
+                if consecutiveBatchFailures >= 2 {
+                    batchCircuitOpenUntil = Date().addingTimeInterval(batchCircuitCooldown)
+                    consecutiveBatchFailures = 0
+                    pendingBatchIDs.removeAll()
+                    #if DEBUG
+                    print("[Frame0Poster] batch circuit open \(Int(batchCircuitCooldown))s")
+                    #endif
+                }
                 #if DEBUG
                 print("[Frame0Poster] batch failed: \(error.localizedDescription)")
                 #endif
                 break
             }
+        }
+
+        batchInFlight = false
+        // IDs queued while the last chunk ran — drain without dropping.
+        if !pendingBatchIDs.isEmpty, Date() >= batchCircuitOpenUntil {
+            let leftover = Array(pendingBatchIDs)
+            pendingBatchIDs.removeAll()
+            await prefetch(postIDs: leftover)
         }
     }
 
@@ -210,7 +244,8 @@ actor Frame0PosterResolver {
         }
         var req = URLRequest(url: endpoint)
         req.httpMethod = "POST"
-        req.timeoutInterval = 10
+        // Match Surface cold-start headroom; parallel open-path used to trip 10s.
+        req.timeoutInterval = 12
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let token = await MainActor.run(body: { AuthService.shared.accessToken() }) {

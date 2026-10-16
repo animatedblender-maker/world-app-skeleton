@@ -51,7 +51,8 @@ enum SurfacePageClient {
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
         req.setValue("application/json", forHTTPHeaderField: "Accept")
-        req.timeoutInterval = 4
+        // Render cold / DB hiccup can be 5–8s; 4s caused false [Surface] fail storms.
+        req.timeoutInterval = 12
         // Cached token only — never stall first paint on token refresh.
         if let token = await MainActor.run(body: { AuthService.shared.accessToken() }) {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
