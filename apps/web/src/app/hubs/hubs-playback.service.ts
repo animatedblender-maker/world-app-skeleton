@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core';
 import { BehaviorSubject } from 'rxjs';
 import type { CountryPost } from '../core/models/post.model';
+import { MediaSessionService } from '../core/services/media-session.service';
 import { HubsCatalogService } from './hubs-catalog.service';
 
 export type HubsPlaybackState = {
@@ -26,7 +27,10 @@ export class HubsPlaybackService {
   private readonly state$ = new BehaviorSubject<HubsPlaybackState>(initial);
   readonly changes$ = this.state$.asObservable();
 
-  constructor(private catalog: HubsCatalogService) {}
+  constructor(
+    private catalog: HubsCatalogService,
+    private mediaSession: MediaSessionService
+  ) {}
 
   get snapshot(): HubsPlaybackState {
     return this.state$.value;
@@ -59,6 +63,7 @@ export class HubsPlaybackService {
 
   start(post: CountryPost, expanded = true): void {
     this.catalog.recordWatch(post.id);
+    this.mediaSession.claimHubs(post.id);
     this.state$.next({
       post,
       expanded,
@@ -70,16 +75,27 @@ export class HubsPlaybackService {
   minimize(): void {
     const s = this.state$.value;
     if (!s.post) return;
+    // Keep hubs session exclusive while docked — feed/Sparks must not autoplay.
+    this.mediaSession.claimHubs(s.post.id);
     this.state$.next({ ...s, expanded: false });
   }
 
   expand(): void {
     const s = this.state$.value;
     if (!s.post) return;
+    this.mediaSession.claimHubs(s.post.id);
     this.state$.next({ ...s, expanded: true, playing: true });
   }
 
+  /** Re-assert hubs ownership after Sparks/feed temporarily took the session. */
+  reclaimSession(): void {
+    const s = this.state$.value;
+    if (!s.post) return;
+    this.mediaSession.claimHubs(s.post.id);
+  }
+
   stop(): void {
+    this.mediaSession.releaseHubs();
     this.state$.next({ ...initial, muted: this.state$.value.muted });
   }
 

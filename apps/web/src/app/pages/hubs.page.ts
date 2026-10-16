@@ -12,7 +12,7 @@ import { AuthService } from '../core/services/auth.service';
 import { FollowService } from '../core/services/follow.service';
 import { LocationService } from '../core/services/location.service';
 import { ProfileService } from '../core/services/profile.service';
-import { resolveAvatarUrl } from '../core/utils/media-url.util';
+import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util';
 import {
   HUBS_HOME_FILTERS,
   HubsCatalogService,
@@ -808,7 +808,8 @@ export class HubsPageComponent implements OnInit {
   }
 
   thumb(post: CountryPost): string | null {
-    return post.thumb_url || this.catalog.mediaUrl(post) || null;
+    const t = this.catalog.posterUrl(post);
+    return t ? resolveMediaUrl(t) || t : null;
   }
 
   avatar(channel: HubsChannel): string | null {

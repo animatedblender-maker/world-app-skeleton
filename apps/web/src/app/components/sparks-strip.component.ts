@@ -1,7 +1,8 @@
 import { CommonModule } from '@angular/common';
-import { Component, EventEmitter, Input, Output } from '@angular/core';
+import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, Output, SimpleChanges } from '@angular/core';
 
 import type { CountryPost } from '../core/models/post.model';
+import { Frame0PosterService } from '../core/services/frame0-poster.service';
 import { resolveMediaUrl } from '../core/utils/media-url.util';
 
 /** Ports iOS SparksHorizontalStrip — same chrome on Feed and Hubs. */
@@ -27,8 +28,8 @@ import { resolveMediaUrl } from '../core/utils/media-url.util';
           *ngFor="let p of posts; trackBy: track"
           (click)="open.emit(p)"
         >
-          <!-- iOS: play overlays removed — clean posters only -->
-          <img *ngIf="thumb(p)" [src]="thumb(p)" alt="" />
+          <!-- iOS: play overlays removed — clean posters / Frame0 only -->
+          <img *ngIf="thumb(p)" [src]="thumb(p)" alt="" loading="lazy" decoding="async" />
         </button>
       </div>
     </section>
@@ -100,7 +101,7 @@ import { resolveMediaUrl } from '../core/utils/media-url.util';
     `,
   ],
 })
-export class SparksStripComponent {
+export class SparksStripComponent implements OnChanges {
   @Input() posts: CountryPost[] = [];
   @Input() title = 'Sparks for you';
   @Input() subtitle = 'Swipe the world on Matterya';
@@ -108,12 +109,34 @@ export class SparksStripComponent {
   @Output() open = new EventEmitter<CountryPost>();
   @Output() brandTap = new EventEmitter<void>();
 
+  constructor(
+    private frame0: Frame0PosterService,
+    private cdr: ChangeDetectorRef
+  ) {}
+
+  ngOnChanges(changes: SimpleChanges): void {
+    if (changes['posts'] && this.posts?.length) {
+      void this.frame0.prefetch(this.posts.map((p) => p.id)).then(() => {
+        try {
+          this.cdr.detectChanges();
+        } catch {
+          // destroyed
+        }
+      });
+    }
+  }
+
   track(_: number, p: CountryPost): string {
     return p.id;
   }
 
+  /** Image poster only — never fall back to video media_url. */
   thumb(p: CountryPost): string | null {
-    const t = p.thumb_url || p.media_url;
-    return t ? resolveMediaUrl(t) || t : null;
+    const raw = String(p.thumb_url || '').trim();
+    if (raw && !raw.startsWith('{') && !raw.startsWith('[')) {
+      const url = resolveMediaUrl(raw) || raw;
+      if (url && !/\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(url)) return url;
+    }
+    return this.frame0.url(p.id);
   }
 }

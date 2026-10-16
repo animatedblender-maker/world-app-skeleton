@@ -1,8 +1,17 @@
 import { CommonModule } from '@angular/common';
-import { Component, EventEmitter, Input, OnChanges, Output, SimpleChanges } from '@angular/core';
+import {
+  ChangeDetectorRef,
+  Component,
+  EventEmitter,
+  Input,
+  OnChanges,
+  Output,
+  SimpleChanges,
+} from '@angular/core';
 import { Router } from '@angular/router';
 
 import type { CountryPost } from '../core/models/post.model';
+import { Frame0PosterService } from '../core/services/frame0-poster.service';
 import { PostsService } from '../core/services/posts.service';
 import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util';
 import { HubsCatalogService } from '../hubs/hubs-catalog.service';
@@ -75,22 +84,36 @@ import { VideoPlayerComponent } from './video-player.component';
             </span>
             <span class="hubs-label">Hubs</span>
           </button>
-          <app-video-player
-            *ngIf="mediaSrc"
-            class="feed-media-player"
-            [class.reel-player]="isReel"
-            [src]="mediaSrc"
-            [poster]="poster"
-            [adPlacement]="null"
-            [adCountryCode]="post.country_code || null"
-            [adPostId]="post.id"
-            [showsControls]="!isReel"
-            [allowsFullscreen]="!isReel"
-            [showMute]="true"
-            [preload]="'metadata'"
-            centerOverlayMode="always"
-            (videoTap)="onVideoTap()"
-          ></app-video-player>
+
+          <!-- Butter-smooth: poster floor until this card is the feed focus winner. -->
+          <ng-container *ngIf="playGate; else posterFloor">
+            <app-video-player
+              *ngIf="mediaSrc"
+              class="feed-media-player"
+              [class.reel-player]="isReel"
+              [src]="mediaSrc"
+              [poster]="poster"
+              [adPlacement]="null"
+              [adCountryCode]="post.country_code || null"
+              [adPostId]="post.id"
+              [showsControls]="!isReel"
+              [allowsFullscreen]="!isReel"
+              [showMute]="true"
+              [preload]="'metadata'"
+              centerOverlayMode="always"
+              (videoTap)="onVideoTap()"
+            ></app-video-player>
+          </ng-container>
+          <ng-template #posterFloor>
+            <button type="button" class="poster-floor" (click)="onPosterTap()" aria-label="Play">
+              <img *ngIf="poster" class="poster-img" [src]="poster" alt="" loading="lazy" decoding="async" />
+              <span class="poster-play" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="28" height="28">
+                  <path fill="currentColor" d="M8 5.5v13l11-6.5L8 5.5z" />
+                </svg>
+              </span>
+            </button>
+          </ng-template>
         </ng-container>
         <ng-template #imageTpl>
           <img
@@ -362,6 +385,45 @@ import { VideoPlayerComponent } from './video-player.component';
         height: auto;
         max-height: min(520px, 68vh);
       }
+      .poster-floor {
+        position: absolute;
+        inset: 0;
+        border: 0;
+        padding: 0;
+        margin: 0;
+        background: #0c0a09;
+        cursor: pointer;
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+      .poster-img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+      }
+      .media.video .poster-img {
+        object-fit: contain;
+        background: #000;
+      }
+      .poster-play {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        width: 64px;
+        height: 64px;
+        border-radius: 50%;
+        background: rgba(20, 18, 16, 0.42);
+        color: #fff;
+        display: grid;
+        place-items: center;
+        backdrop-filter: blur(6px);
+        -webkit-backdrop-filter: blur(6px);
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+        pointer-events: none;
+      }
       .media.video app-video-player,
       .media.reel app-video-player,
       .media.video .feed-media-player,
@@ -526,8 +588,14 @@ import { VideoPlayerComponent } from './video-player.component';
 export class MatteryaPostCardComponent implements OnChanges {
   @Input({ required: true }) post!: CountryPost;
   @Input() edgeToEdge = true;
+  /**
+   * iOS playGate — mount AV only for the single feed focus winner.
+   * When false, render Frame0/poster floor (butter-smooth scroll).
+   */
+  @Input() playGate = false;
   @Output() liked = new EventEmitter<CountryPost>();
   @Output() changed = new EventEmitter<CountryPost>();
+  @Output() requestPlay = new EventEmitter<CountryPost>();
 
   saved = false;
   /** iOS expandsCommentsInline — stay on the feed card */
@@ -538,6 +606,8 @@ export class MatteryaPostCardComponent implements OnChanges {
    * Null until image loads (CSS fallback uses 4:5 max).
    */
   photoFrameH: number | null = null;
+  /** Resolved Frame0 URL when thumb_url is missing (R2 Sparks). */
+  private frame0Poster: string | null = null;
 
   /** FacebookMediaLayout.maxFeedMediaHeight */
   private readonly maxFeedMediaHeight = 520;
@@ -546,6 +616,8 @@ export class MatteryaPostCardComponent implements OnChanges {
   constructor(
     private posts: PostsService,
     private catalog: HubsCatalogService,
+    private frame0: Frame0PosterService,
+    private cdr: ChangeDetectorRef,
     private router: Router
   ) {}
 
@@ -554,6 +626,10 @@ export class MatteryaPostCardComponent implements OnChanges {
       this.saved = this.catalog.isSaved(this.post.id);
       this.photoFrameH = null;
       this.commentsExpanded = false;
+      this.frame0Poster = this.frame0.url(this.post.id);
+      if (this.isVideo && !this.posterFromThumb()) {
+        void this.resolveFrame0();
+      }
     }
   }
 
@@ -692,8 +768,33 @@ export class MatteryaPostCardComponent implements OnChanges {
     return resolveMediaUrl(this.post.media_url || this.post.thumb_url || '');
   }
 
+  /** Poster only — never a video URL (avoids <img src=mp4> storms). */
   get poster(): string | null {
-    return this.post.thumb_url ? resolveMediaUrl(this.post.thumb_url) || this.post.thumb_url : null;
+    return this.posterFromThumb() || this.frame0Poster || this.frame0.url(this.post?.id || '') || null;
+  }
+
+  private posterFromThumb(): string | null {
+    const raw = String(this.post?.thumb_url || '').trim();
+    if (!raw) return null;
+    const url = resolveMediaUrl(raw) || raw;
+    if (!url) return null;
+    // Reject JSON payloads / obvious video URLs used as thumbs.
+    if (url.startsWith('{') || url.startsWith('[')) return null;
+    if (/\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(url)) return null;
+    return url;
+  }
+
+  private async resolveFrame0(): Promise<void> {
+    const id = this.post?.id;
+    if (!id) return;
+    const url = await this.frame0.resolve(id).catch(() => null);
+    if (!url || this.post?.id !== id) return;
+    this.frame0Poster = url;
+    try {
+      this.cdr.detectChanges();
+    } catch {
+      // destroyed
+    }
   }
 
   openAuthor(): void {
@@ -734,6 +835,19 @@ export class MatteryaPostCardComponent implements OnChanges {
   onVideoTap(): void {
     if (this.posts.isSpark(this.post)) this.openPost();
     else if (this.isLongFormHub) void this.router.navigate(['/hubs', 'watch', this.hubsWatchId()]);
+  }
+
+  onPosterTap(): void {
+    if (this.posts.isSpark(this.post)) {
+      this.openPost();
+      return;
+    }
+    if (this.isLongFormHub) {
+      void this.router.navigate(['/hubs', 'watch', this.hubsWatchId()]);
+      return;
+    }
+    // Request feed focus so parent mounts the player for this card.
+    this.requestPlay.emit(this.post);
   }
 
   async toggleLike(): Promise<void> {

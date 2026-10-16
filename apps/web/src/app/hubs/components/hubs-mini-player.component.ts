@@ -1,5 +1,11 @@
 import { CommonModule } from '@angular/common';
-import { Component, OnDestroy, OnInit } from '@angular/core';
+import {
+  Component,
+  ElementRef,
+  OnDestroy,
+  OnInit,
+  ViewChild,
+} from '@angular/core';
 import { NavigationEnd, Router } from '@angular/router';
 import { Subscription, filter } from 'rxjs';
 
@@ -8,8 +14,8 @@ import { HubsCatalogService } from '../hubs-catalog.service';
 import { HubsPlaybackService, type HubsPlaybackState } from '../hubs-playback.service';
 
 /**
- * Hubs mini player — iOS-inspired bar, scaled up on large screens so it stays
- * proportional to desktop viewports (not a phone-sized 196×110 strip).
+ * Hubs mini player — continuous film while docked (GlobalHubPlaybackLayer mini).
+ * Same content + playhead as watch; expand remounts watch from saved position.
  */
 @Component({
   selector: 'app-hubs-mini-player',
@@ -19,7 +25,18 @@ import { HubsPlaybackService, type HubsPlaybackState } from '../hubs-playback.se
     <div class="mini-wrap" *ngIf="show" role="region" aria-label="Hubs mini player">
       <div class="mini">
         <button type="button" class="thumb-btn" (click)="expand()" aria-label="Expand video">
-          <img *ngIf="thumb" [src]="thumb" alt="" />
+          <video
+            #film
+            class="film"
+            playsinline
+            webkit-playsinline
+            [attr.poster]="thumb || null"
+            (timeupdate)="onTime()"
+            (play)="onNativePlay()"
+            (pause)="onNativePause()"
+            (click)="$event.stopPropagation(); expand()"
+          ></video>
+          <img *ngIf="thumb && !filmReady" class="poster-floor" [src]="thumb" alt="" />
           <span class="expand-badge" aria-hidden="true">⤢</span>
         </button>
         <div class="side">
@@ -28,14 +45,26 @@ import { HubsPlaybackService, type HubsPlaybackState } from '../hubs-playback.se
             <div class="sub">{{ author }}</div>
           </button>
           <div class="controls">
-            <button type="button" class="circle play" (click)="togglePlay()" [attr.aria-label]="state.playing ? 'Pause' : 'Play'">
+            <button
+              type="button"
+              class="circle play"
+              (click)="togglePlay()"
+              [attr.aria-label]="state.playing ? 'Pause' : 'Play'"
+            >
               {{ state.playing ? '❚❚' : '▶' }}
             </button>
-            <button type="button" class="circle mute" (click)="toggleMute()" [attr.aria-label]="state.muted ? 'Unmute' : 'Mute'">
+            <button
+              type="button"
+              class="circle mute"
+              (click)="toggleMute()"
+              [attr.aria-label]="state.muted ? 'Unmute' : 'Mute'"
+            >
               {{ state.muted ? '🔇' : '🔊' }}
             </button>
             <span class="flex"></span>
-            <button type="button" class="circle close" (click)="stop()" aria-label="Close mini player">✕</button>
+            <button type="button" class="circle close" (click)="stop()" aria-label="Close mini player">
+              ✕
+            </button>
           </div>
         </div>
       </div>
@@ -81,16 +110,29 @@ import { HubsPlaybackService, type HubsPlaybackState } from '../hubs-playback.se
         cursor: pointer;
         box-shadow: 0 3px 8px rgba(44, 40, 37, 0.16);
       }
-      .thumb-btn img {
+      .thumb-btn .film,
+      .thumb-btn .poster-floor {
+        position: absolute;
+        inset: 0;
         width: 100%;
         height: 100%;
         object-fit: cover;
+        object-position: center center;
         display: block;
+        background: #171412;
+      }
+      .thumb-btn .poster-floor {
+        z-index: 1;
+        pointer-events: none;
+      }
+      .thumb-btn .film {
+        z-index: 2;
       }
       .expand-badge {
         position: absolute;
         right: 8px;
         bottom: 8px;
+        z-index: 3;
         width: 26px;
         height: 26px;
         border-radius: 999px;
@@ -99,6 +141,7 @@ import { HubsPlaybackService, type HubsPlaybackState } from '../hubs-playback.se
         font-size: 12px;
         display: grid;
         place-items: center;
+        pointer-events: none;
       }
       .side {
         flex: 1;
@@ -166,7 +209,6 @@ import { HubsPlaybackService, type HubsPlaybackState } from '../hubs-playback.se
         color: var(--m-ink-muted, #948b82);
         font-size: 12px;
       }
-      /* Phone: slightly tighter */
       @media (max-width: 520px) {
         .thumb-btn {
           width: 148px;
@@ -177,7 +219,6 @@ import { HubsPlaybackService, type HubsPlaybackState } from '../hubs-playback.se
           height: 36px;
         }
       }
-      /* Tablet / desktop: much larger so it matches big screens */
       @media (min-width: 700px) {
         .mini-wrap {
           bottom: calc(var(--tabs-safe, 0px) + 16px);
@@ -268,6 +309,13 @@ export class HubsMiniPlayerComponent implements OnInit, OnDestroy {
   private onWatchRoute = false;
   private sub?: Subscription;
   private routeSub?: Subscription;
+  private boundPostId: string | null = null;
+  private boundSrc = '';
+  private startApplied = false;
+  private syncing = false;
+  filmReady = false;
+
+  @ViewChild('film') filmRef?: ElementRef<HTMLVideoElement>;
 
   constructor(
     private playback: HubsPlaybackService,
@@ -279,15 +327,35 @@ export class HubsMiniPlayerComponent implements OnInit, OnDestroy {
     this.onWatchRoute = this.isWatchUrl(this.router.url);
     this.sub = this.playback.changes$.subscribe((s) => {
       this.state = s;
+      // Defer DOM sync until *ngIf has created the <video>.
+      this.queueFilmSync();
     });
     this.routeSub = this.router.events
       .pipe(filter((e): e is NavigationEnd => e instanceof NavigationEnd))
       .subscribe((e) => {
         this.onWatchRoute = this.isWatchUrl(e.urlAfterRedirects || e.url);
+        this.queueFilmSync();
       });
   }
 
+  private filmSyncTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private queueFilmSync(): void {
+    if (this.filmSyncTimer != null) {
+      clearTimeout(this.filmSyncTimer);
+    }
+    this.filmSyncTimer = setTimeout(() => {
+      this.filmSyncTimer = null;
+      this.syncFilm();
+    }, 0);
+  }
+
   ngOnDestroy(): void {
+    if (this.filmSyncTimer != null) {
+      clearTimeout(this.filmSyncTimer);
+      this.filmSyncTimer = null;
+    }
+    this.persistPosition(true);
     this.sub?.unsubscribe();
     this.routeSub?.unsubscribe();
   }
@@ -312,12 +380,19 @@ export class HubsMiniPlayerComponent implements OnInit, OnDestroy {
 
   get thumb(): string | null {
     if (!this.state.post) return null;
-    const t = this.state.post.thumb_url || this.catalog.mediaUrl(this.state.post);
+    const t = this.catalog.posterUrl(this.state.post);
     return t ? resolveMediaUrl(t) || t : null;
+  }
+
+  get mediaSrc(): string {
+    if (!this.state.post) return '';
+    const raw = this.catalog.mediaUrl(this.state.post);
+    return resolveMediaUrl(raw) || raw || '';
   }
 
   expand(): void {
     if (!this.state.post) return;
+    this.persistPosition(true);
     this.playback.expand();
     void this.router.navigate(['/hubs', 'watch', this.state.post.id]);
   }
@@ -328,9 +403,137 @@ export class HubsMiniPlayerComponent implements OnInit, OnDestroy {
 
   toggleMute(): void {
     this.playback.toggleMute();
+    const muted = this.playback.muted;
+    try {
+      (window as any).__videoMuted = muted;
+      window.dispatchEvent(new CustomEvent('video-player-mute', { detail: muted }));
+    } catch {
+      // SSR / non-browser
+    }
   }
 
   stop(): void {
+    this.persistPosition(true);
+    this.teardownFilm();
     this.playback.stop();
+  }
+
+  onTime(): void {
+    this.persistPosition(false);
+  }
+
+  onNativePlay(): void {
+    if (this.syncing) return;
+    if (!this.state.playing) this.playback.setPlaying(true);
+  }
+
+  onNativePause(): void {
+    if (this.syncing) return;
+    // Ignore pause while tearing down / navigating to watch.
+    if (!this.show) return;
+    if (this.state.playing) this.playback.setPlaying(false);
+  }
+
+  private syncFilm(): void {
+    if (!this.show || !this.state.post) {
+      this.teardownFilm();
+      return;
+    }
+    const video = this.filmRef?.nativeElement;
+    if (!video) return;
+
+    const postId = this.state.post.id;
+    const src = this.mediaSrc;
+    if (!src) return;
+
+    if (this.boundPostId !== postId || this.boundSrc !== src) {
+      this.boundPostId = postId;
+      this.boundSrc = src;
+      this.startApplied = false;
+      this.filmReady = false;
+      video.poster = this.thumb || '';
+      video.src = src;
+      video.load();
+    }
+
+    video.muted = !!this.state.muted;
+    this.applyStartTime(video);
+
+    this.syncing = true;
+    try {
+      if (this.state.playing) {
+        void video.play().then(
+          () => {
+            this.filmReady = true;
+          },
+          () => {
+            // Autoplay may require muted — keep poster floor visible.
+          }
+        );
+      } else if (!video.paused) {
+        video.pause();
+      }
+    } finally {
+      this.syncing = false;
+    }
+  }
+
+  private applyStartTime(video: HTMLVideoElement): void {
+    if (this.startApplied || !this.state.post) return;
+    const t = this.catalog.playbackPosition(this.state.post.id);
+    if (!Number.isFinite(t) || t < 1) {
+      this.startApplied = true;
+      return;
+    }
+    const apply = () => {
+      try {
+        if (Number.isFinite(video.duration) && video.duration > 0 && t >= video.duration - 1) {
+          this.startApplied = true;
+          return;
+        }
+        video.currentTime = t;
+        this.startApplied = true;
+      } catch {
+        // seek may fail until buffered
+      }
+    };
+    if (video.readyState >= 1) apply();
+    else {
+      const once = () => {
+        video.removeEventListener('loadedmetadata', once);
+        apply();
+      };
+      video.addEventListener('loadedmetadata', once);
+    }
+  }
+
+  private persistPosition(force: boolean): void {
+    const video = this.filmRef?.nativeElement;
+    const post = this.state.post;
+    if (!video || !post) return;
+    const t = video.currentTime || 0;
+    if (t < 0.5) return;
+    if (force) {
+      this.catalog.savePlaybackPosition(t, post.id, video.duration);
+    } else {
+      this.catalog.notePlaybackPosition(t, post.id, video.duration);
+    }
+  }
+
+  private teardownFilm(): void {
+    const video = this.filmRef?.nativeElement;
+    if (video) {
+      try {
+        video.pause();
+        video.removeAttribute('src');
+        video.load();
+      } catch {
+        // ignore
+      }
+    }
+    this.boundPostId = null;
+    this.boundSrc = '';
+    this.startApplied = false;
+    this.filmReady = false;
   }
 }

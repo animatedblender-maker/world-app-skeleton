@@ -121,7 +121,7 @@ export class HubsVideoRowComponent {
   constructor(public catalog: HubsCatalogService) {}
 
   get thumb(): string | null {
-    const t = this.post.thumb_url || this.catalog.mediaUrl(this.post);
+    const t = this.catalog.posterUrl(this.post);
     return t ? resolveMediaUrl(t) || t : null;
   }
 

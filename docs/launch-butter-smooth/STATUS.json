@@ -1,0 +1,138 @@
+{
+  "title": "Matterya Launch \u00b7 Butter-Smooth",
+  "phase": "integrate",
+  "running": true,
+  "started_at": "2026-10-01T15:00:00Z",
+  "updated_at": "2026-10-16T12:40:49Z",
+  "overall_pct": 40.0,
+  "headline": "Feed+Sparks+Chat hardened. Waiting on Hubs continuity audit\u2026",
+  "surfaces": [
+    {
+      "id": "feed",
+      "name": "Home Feed",
+      "status": "in_progress",
+      "pct": 40.0,
+      "goal": "Posters-first scroll, one focus autoplay, Sparks cards + strip, no AV storm",
+      "notes": "Building MediaSessionService; feed cards will mount AV only for focus winner."
+    },
+    {
+      "id": "sparks",
+      "name": "Sparks Player",
+      "status": "in_progress",
+      "pct": 70.0,
+      "goal": "TikTok-grade snap, 5-ahead warm, fresh R2 URLs, infinite discovery",
+      "notes": "Windowed mount (5-ahead/deep2), 403 re-resolve, leave-pause, chrome mute. Audit: /tmp/audit-sparks.md"
+    },
+    {
+      "id": "hubs",
+      "name": "Hubs Home",
+      "status": "pending",
+      "pct": 10,
+      "goal": "Shelf posters only, instant open, no hitch on fling",
+      "notes": "Awaiting audit vs iOS butterWarmHubCatalog contract."
+    },
+    {
+      "id": "hubs_player",
+      "name": "Hubs Watch / Mini",
+      "status": "pending",
+      "pct": 15,
+      "goal": "Continuous film expand\u2194mini, resume mid-clip, one session app-wide",
+      "notes": "HubsPlaybackService exists; need continuity + mute/session exclusivity."
+    },
+    {
+      "id": "chat",
+      "name": "Chat / Messages",
+      "status": "in_progress",
+      "pct": 65.0,
+      "goal": "Inbox + thread send/receive, media, realtime, premium polish",
+      "notes": "Optimistic send, silent poll, load-token race fix, Enter-to-send."
+    }
+  ],
+  "checklist": [
+    {
+      "id": "progress_page",
+      "label": "Live progress page on :8780",
+      "done": true
+    },
+    {
+      "id": "feed_posts",
+      "label": "Home shows Sparks + posts (not empty)",
+      "done": true
+    },
+    {
+      "id": "feed_focus",
+      "label": "Feed: posters-only list + single focus autoplay",
+      "done": true
+    },
+    {
+      "id": "sparks_discovery",
+      "label": "Sparks: world discovery + playback resolve",
+      "done": true
+    },
+    {
+      "id": "sparks_warm",
+      "label": "Sparks: 5-ahead warm + snappy paging",
+      "done": true
+    },
+    {
+      "id": "hubs_posters",
+      "label": "Hubs shelves: posters only on scroll",
+      "done": false
+    },
+    {
+      "id": "hubs_continuity",
+      "label": "Hubs watch\u2194mini continuous playback",
+      "done": false
+    },
+    {
+      "id": "media_one",
+      "label": "At most one playing session app-wide",
+      "done": false
+    },
+    {
+      "id": "chat_inbox",
+      "label": "Chat inbox loads + opens threads",
+      "done": false
+    },
+    {
+      "id": "chat_send",
+      "label": "Chat send/receive + media works",
+      "done": true
+    },
+    {
+      "id": "deploy",
+      "label": "Deployed to matterya.com + hard-refresh verified",
+      "done": false
+    }
+  ],
+  "log": [
+    {
+      "t": "2026-10-01T15:00:00Z",
+      "msg": "Launch butter-smooth program started. Progress page online."
+    },
+    {
+      "t": "2026-10-01T15:00:05Z",
+      "msg": "Foundation already in: keep Sparks on Home, /v1/feed+/v1/sparks, R2 playback freshen."
+    },
+    {
+      "t": "2026-10-16T12:30:03Z",
+      "msg": "Spawned audit agents for Feed, Sparks, Hubs/watch, Chat. Progress page live at :8780."
+    },
+    {
+      "t": "2026-10-16T12:31:04Z",
+      "msg": "Created MediaSessionService (idle|feedAutoplay|hubs|sparks). Wiring feed posters-first next."
+    },
+    {
+      "t": "2026-10-16T12:34:51Z",
+      "msg": "Feed: posters-only until focus winner. MediaSession claims hubs/sparks. Building to verify compile."
+    },
+    {
+      "t": "2026-10-16T12:37:45Z",
+      "msg": "Sparks audit+harden: windowed AV, warm 5/deep 2, 403 playback recover, pause on hide/destroy, mute chrome."
+    },
+    {
+      "t": "2026-10-16T12:40:49Z",
+      "msg": "Feed/Sparks/Chat audit agents finished with code. Hubs agent still integrating continuity."
+    }
+  ]
+}

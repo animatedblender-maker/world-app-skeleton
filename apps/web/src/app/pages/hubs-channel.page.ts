@@ -385,7 +385,7 @@ export class HubsChannelPageComponent implements OnInit {
   }
 
   thumb(p: CountryPost): string | null {
-    const t = p.thumb_url || this.catalog.mediaUrl(p);
+    const t = this.catalog.posterUrl(p);
     return t ? resolveMediaUrl(t) || t : null;
   }
 

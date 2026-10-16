@@ -749,7 +749,8 @@ import { HubsPlaybackService } from '../hubs/hubs-playback.service';
           --watch-pad-x: 16px;
           --watch-pad-y: 16px;
           --watch-side: clamp(400px, 34vw, 540px);
-          --watch-player-max-h: min(96vh, 1040px);
+          /* Keep compact 16:9 stage — title/comments own the rest of the viewport. */
+          --watch-player-max-h: min(42vh, 560px);
           --watch-title: 28px;
           --watch-body: 17px;
           --watch-comment: 16px;
@@ -763,7 +764,7 @@ import { HubsPlaybackService } from '../hubs/hubs-playback.service';
           --watch-gap: 24px;
           --watch-pad-x: 16px;
           --watch-side: clamp(420px, 32vw, 560px);
-          --watch-player-max-h: min(98vh, 1100px);
+          --watch-player-max-h: min(42vh, 600px);
           --watch-title: 30px;
           --watch-body: 18px;
           --watch-comment: 16px;
@@ -1593,7 +1594,10 @@ export class HubsWatchPageComponent implements OnInit, OnDestroy {
       }
       this.mediaSrc = resolveMediaUrl(this.catalog.mediaUrl(post)) || this.catalog.mediaUrl(post);
       this.videoAspectRatio = 16 / 9;
-      this.poster = post.thumb_url ? resolveMediaUrl(post.thumb_url) || post.thumb_url : null;
+      {
+        const posterRaw = this.catalog.posterUrl(post);
+        this.poster = posterRaw ? resolveMediaUrl(posterRaw) || posterRaw : null;
+      }
       this.avatar = post.author?.avatar_url
         ? resolveAvatarUrl(post.author.avatar_url) || post.author.avatar_url
         : null;
@@ -1730,7 +1734,7 @@ export class HubsWatchPageComponent implements OnInit, OnDestroy {
   }
 
   thumbOf(p: CountryPost): string | null {
-    const t = p.thumb_url || this.catalog.mediaUrl(p);
+    const t = this.catalog.posterUrl(p);
     return t ? resolveMediaUrl(t) || t : null;
   }
 

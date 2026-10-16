@@ -626,6 +626,19 @@ export class HubsCatalogService {
     return raw;
   }
 
+  /**
+   * Shelf / mini / list poster only (09 media session).
+   * Never returns a playable video URL — shelves stay image-only while scrolling.
+   */
+  posterUrl(post: CountryPost | null | undefined): string | null {
+    if (!post) return null;
+    const t = String(post.thumb_url || '').trim();
+    if (!t) return null;
+    if (t.startsWith('{') || t.startsWith('[')) return null;
+    if (/\.(mp4|webm|m3u8|mov)(\?|$)/i.test(t)) return null;
+    return t;
+  }
+
   private hubSlugOf(post: CountryPost): string | null {
     if (String(post.external_ref_type || '').toLowerCase() === 'hub') {
       return (post.external_ref_id || '').toLowerCase() || null;

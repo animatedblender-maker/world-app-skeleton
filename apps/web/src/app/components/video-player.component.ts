@@ -696,6 +696,8 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
   @Output() viewed = new EventEmitter<void>();
   @Output() timeUpdate = new EventEmitter<{ currentTime: number; duration: number }>();
   @Output() playState = new EventEmitter<boolean>();
+  /** Fired when the content stream errors (e.g. expired R2 403) so parents can re-resolve. */
+  @Output() mediaError = new EventEmitter<{ code?: number; message?: string }>();
   @ViewChild('videoEl', { static: true }) videoRef!: ElementRef<HTMLVideoElement>;
   private startTimeApplied = false;
 
@@ -776,8 +778,8 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
         ...this.qualityOptions,
       ];
     }
-    // Drop optional alternates that 404 so the menu only lists playable streams.
-    void this.pruneUnreachableQualities();
+    // Do not HEAD/Range-probe on mount — that storms Archive CDNs mid-feed.
+    // Prune lazily when the quality menu opens.
   }
 
   /**
@@ -854,6 +856,9 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
   toggleQualityMenu(event: Event): void {
     event.stopPropagation();
     this.qualityMenuOpen = !this.qualityMenuOpen;
+    if (this.qualityMenuOpen) {
+      void this.pruneUnreachableQualities();
+    }
     this.revealControls();
   }
 
@@ -1208,7 +1213,6 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
         country: this.adCountryCode,
         contentCountry: this.adContentCountryCode,
       });
-      const video = this.videoRef?.nativeElement;
       if (video && this.adRetryCount < 1) {
         this.adRetryCount += 1;
         setTimeout(() => {
@@ -1218,7 +1222,14 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
         return;
       }
       this.finishAd();
+      return;
     }
+    // Content stream failed (often expired R2 403) — let Sparks/feed re-resolve /v1/playback.
+    const mediaErr = video?.error;
+    this.mediaError.emit({
+      code: mediaErr?.code,
+      message: mediaErr?.message || 'media_error',
+    });
   }
 
   onEnded(): void {

@@ -21,7 +21,7 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
   standalone: true,
   imports: [CommonModule, FormsModule, VideoPlayerComponent, BottomTabsComponent],
   template: `
-    <div class="wrap">
+    <div class="wrap" [class.thread-open]="!!activeConversation">
       <div class="card">
         <div class="layout" [class.thread-only]="mobileThreadOnly">
           <aside class="panel">
@@ -48,7 +48,7 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
             <button
               class="conversation"
               type="button"
-              *ngFor="let convo of conversations"
+              *ngFor="let convo of conversations; trackBy: trackConversationById"
               [class.active]="convo.id === activeConversationId"
               [class.unread]="isConversationUnread(convo)"
               (click)="selectConversation(convo, true)"
@@ -168,6 +168,7 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
                       <div
                         class="message"
                         [class.me]="message.sender_id === meId"
+                        [class.pending]="isPendingMessage(message)"
                         [attr.id]="'msg-' + message.id"
                       >
                         <div class="bubble-col">
@@ -207,7 +208,7 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
                             <span class="message-read" *ngIf="isLastReadOwn(message)">Read</span>
                           </div>
 
-                          <div class="message-tools" *ngIf="!isEditing(message)">
+                          <div class="message-tools" *ngIf="!isEditing(message) && !isPendingMessage(message)">
                             <button type="button" class="tool" (click)="startReply(message)">Reply</button>
                             <button
                               type="button"
@@ -298,6 +299,7 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
                   maxlength="2000"
                   rows="1"
                   (input)="onMessageInput($event)"
+                  (keydown.enter)="onComposerEnter($event)"
                 ></textarea>
                 <button
                   class="composer-send"
@@ -404,6 +406,7 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       flex-direction:column;
       background:var(--m-paper, #f8f6f2);
     }
+    .wrap.thread-open{ padding-bottom:0; }
     .card{
       position:relative;
       z-index:1;
@@ -681,6 +684,7 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
       justify-content:flex-start;
     }
     .message.me{ justify-content:flex-end; }
+    .message.pending{ opacity:0.72; }
     .bubble-col{
       display:flex;
       flex-direction:column;
@@ -1365,6 +1369,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   private callStartAt: number | null = null;
   private callLogSent = false;
   private destroyed = false;
+  private messagesLoadToken = 0;
   private readonly REACTION_PREFIX = '__react__|';
   private readonly REPLY_PREFIX = '__reply__|';
   private reactionsByMessage = new Map<string, { count: number; likedByMe: boolean }>();
@@ -1390,6 +1395,11 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     void this.push.syncIfGranted();
     const user = await this.auth.getUser();
     this.meId = user?.id ?? null;
+    if (!this.meId) {
+      this.conversationError = 'Sign in to view messages.';
+      this.forceUi();
+      return;
+    }
     this.forceUi();
     this.wsConnected = this.callService.connected;
     this.callSignalSub = this.callService.signals$.subscribe((msg) => {
@@ -1479,13 +1489,16 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     this.forceUi();
   };
 
-  async loadConversations(selectId?: string | null): Promise<void> {
-    this.loadingConversations = true;
-    this.conversationError = '';
-    this.forceUi();
+  async loadConversations(selectId?: string | null, silent = false): Promise<void> {
+    if (!silent) {
+      this.loadingConversations = true;
+      this.conversationError = '';
+      this.forceUi();
+    }
 
     try {
       const serverConvos = await this.messagesService.listConversations();
+      if (this.destroyed) return;
       const pending = this.pendingConversation;
       const serverHasPending =
         !!pending && serverConvos.some((item) => item.id === pending.id);
@@ -1534,9 +1547,13 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
         void this.loadMessages(this.activeConversationId, true);
       }
     } catch (e: any) {
-      this.conversationError = e?.message ?? String(e);
+      if (!silent) {
+        this.conversationError = e?.message ?? String(e);
+      } else {
+        console.warn('[messages] poll conversations failed', e);
+      }
     } finally {
-      this.loadingConversations = false;
+      if (!silent) this.loadingConversations = false;
       this.forceUi();
     }
   }
@@ -1544,9 +1561,9 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   private startPolling(): void {
     if (this.pollTimer) return;
     this.pollTimer = window.setInterval(() => {
-      void this.loadConversations();
+      void this.loadConversations(undefined, true);
       void this.refreshUnreadConversations();
-      if (this.activeConversationId) {
+      if (this.activeConversationId && !this.messageBusy && !this.editBusy) {
         void this.loadMessages(this.activeConversationId, true);
       }
     }, 6000);
@@ -2286,8 +2303,16 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   }
 
   async selectConversation(convo: Conversation, syncUrl: boolean): Promise<void> {
+    const switching =
+      !!this.activeConversationId && this.activeConversationId !== convo.id;
     this.activeConversation = convo;
     this.activeConversationId = convo.id;
+    if (switching) {
+      this.messages = [];
+      this.messageError = '';
+      this.replyingTo = null;
+      this.cancelEditMessage();
+    }
     this.enterThreadView();
     this.forceUi();
     if (syncUrl) {
@@ -2314,22 +2339,20 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       return;
     }
     if (this.pendingConversation?.id === convoId) {
-      this.activeConversation = this.pendingConversation;
-      this.activeConversationId = convoId;
-      this.enterThreadView();
-      this.forceUi();
-      await this.loadMessages(convoId, false);
-      this.scrollToBottom();
-      window.setTimeout(() => this.scrollToBottom(), 80);
+      await this.selectConversation(this.pendingConversation, false);
       return;
     }
     const fetched = await this.fetchConversationById(convoId);
     if (fetched) {
       this.upsertConversation(fetched);
-      this.enterThreadView();
-      this.forceUi();
       await this.selectConversation(fetched, false);
       return;
+    }
+    if (this.activeConversationId !== convoId) {
+      this.messages = [];
+      this.messageError = '';
+      this.replyingTo = null;
+      this.cancelEditMessage();
     }
     this.activeConversationId = convoId;
     this.enterThreadView();
@@ -2355,6 +2378,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
 
   private async loadMessages(conversationId: string, silent: boolean): Promise<void> {
     if (!conversationId) return;
+    const loadToken = ++this.messagesLoadToken;
     if (!silent) {
       this.loadingMessages = true;
       this.messageError = '';
@@ -2363,11 +2387,20 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     const prevLastId = this.messages[this.messages.length - 1]?.id ?? null;
     let shouldScroll = false;
     try {
-      const fetched = await this.messagesService.listMessages(conversationId, 300);
+      const limit = silent ? 80 : 300;
+      const fetched = await this.messagesService.listMessages(conversationId, limit);
+      if (this.destroyed || loadToken !== this.messagesLoadToken) return;
+      if (this.activeConversationId !== conversationId) return;
       if (silent) {
         this.messages = this.mergeMessages(conversationId, this.messages, fetched, 200);
       } else {
-        this.messages = fetched;
+        const pending = this.messages.filter(
+          (msg) =>
+            msg.conversation_id === conversationId && String(msg.id || '').startsWith('pending-')
+        );
+        this.messages = pending.length
+          ? this.mergeMessages(conversationId, pending, fetched, 300)
+          : fetched;
       }
       this.rebuildReactions();
       const nextLastId = this.messages[this.messages.length - 1]?.id ?? null;
@@ -2376,40 +2409,75 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
         await this.markConversationNotificationsRead(conversationId);
       }
     } catch (e: any) {
-      this.messageError = e?.message ?? String(e);
+      if (this.destroyed || loadToken !== this.messagesLoadToken) return;
+      if (this.activeConversationId !== conversationId) return;
+      if (!silent) {
+        this.messageError = e?.message ?? String(e);
+      } else {
+        console.warn('[messages] poll messages failed', e);
+      }
     } finally {
-      this.loadingMessages = false;
+      if (!silent && loadToken === this.messagesLoadToken) {
+        this.loadingMessages = false;
+      }
       this.forceUi();
-      if (shouldScroll) {
+      if (shouldScroll && this.activeConversationId === conversationId) {
         this.scrollToBottom();
       }
     }
   }
 
   async sendMessage(): Promise<void> {
-    if (!this.activeConversationId || this.messageBusy) return;
-    let body = this.messageDraft.trim();
-    if (!body && !this.messageMediaFile) return;
+    if (!this.activeConversationId || this.messageBusy || !this.meId) return;
+    const conversationId = this.activeConversationId;
+    const draft = this.messageDraft.trim();
+    const mediaFile = this.messageMediaFile;
+    const mediaPreview = this.messageMediaPreview;
+    const mediaType = this.messageMediaType;
+    if (!draft && !mediaFile) return;
+
+    let body = draft;
     if (this.replyingTo) {
       body = this.buildReplyBody(this.replyingTo, body);
     }
 
+    const pendingId = `pending-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const optimistic: Message = {
+      id: pendingId,
+      conversation_id: conversationId,
+      sender_id: this.meId,
+      body,
+      media_type: mediaType,
+      media_path: null,
+      media_url: mediaPreview || null,
+      media_name: mediaFile?.name ?? null,
+      media_mime: mediaFile?.type ?? null,
+      media_size: mediaFile?.size ?? null,
+      created_at: new Date().toISOString(),
+      sender: null,
+    };
+
     this.messageBusy = true;
     this.messageError = '';
     this.messageMediaError = '';
+    this.messageDraft = '';
+    this.replyingTo = null;
+    this.messages = [...this.messages, optimistic];
+    this.bumpConversation(optimistic);
+    this.resetMessageInput();
+    // Keep local preview until upload finishes; clear file handle after queueing UI.
+    this.messageMediaFile = null;
     this.forceUi();
+    this.scrollToBottom();
 
     try {
       let media:
         | { type: string; path: string; name?: string | null; mime?: string | null; size?: number | null }
         | undefined;
-      if (this.messageMediaFile) {
+      if (mediaFile) {
         try {
-          const uploaded = await this.mediaService.uploadMessageMedia(
-            this.messageMediaFile,
-            this.activeConversationId
-          );
-          const type = this.messageMediaFile.type.startsWith('video/') ? 'video' : 'image';
+          const uploaded = await this.mediaService.uploadMessageMedia(mediaFile, conversationId);
+          const type = mediaFile.type.startsWith('video/') ? 'video' : 'image';
           media = {
             type,
             path: uploaded.path,
@@ -2418,6 +2486,11 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
             size: uploaded.size,
           };
         } catch (uploadError: any) {
+          this.messages = this.messages.filter((msg) => msg.id !== pendingId);
+          this.messageDraft = draft;
+          this.messageMediaFile = mediaFile;
+          this.messageMediaType = mediaType;
+          this.messageMediaPreview = mediaPreview;
           this.messageMediaError =
             uploadError?.message ?? 'Upload failed. Check your bucket policy and file type.';
           this.messageBusy = false;
@@ -2425,16 +2498,27 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
           return;
         }
       }
-      const sent = await this.messagesService.sendMessage(this.activeConversationId, body, media);
-      this.messages = [...this.messages, sent];
-      this.messageDraft = '';
-      this.replyingTo = null;
-      this.resetMessageInput();
+
+      const sent = await this.messagesService.sendMessage(conversationId, body, media);
+      if (this.destroyed) return;
       this.clearMedia();
-      this.bumpConversation(sent);
-      this.scrollToBottom();
+      if (this.activeConversationId === conversationId) {
+        const withoutPending = this.messages.filter((msg) => msg.id !== pendingId);
+        this.messages = this.mergeMessages(conversationId, withoutPending, [sent], 200);
+        this.bumpConversation(sent);
+        this.scrollToBottom();
+      }
     } catch (e: any) {
-      this.messageError = e?.message ?? String(e);
+      this.messages = this.messages.filter((msg) => msg.id !== pendingId);
+      if (this.activeConversationId === conversationId) {
+        this.messageDraft = draft;
+        if (mediaFile) {
+          this.messageMediaFile = mediaFile;
+          this.messageMediaType = mediaType;
+          this.messageMediaPreview = mediaPreview;
+        }
+        this.messageError = e?.message ?? String(e);
+      }
     } finally {
       this.messageBusy = false;
       this.forceUi();
@@ -2443,6 +2527,13 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
 
   canSendMessage(): boolean {
     return !!(this.messageDraft.trim() || this.messageMediaFile);
+  }
+
+  onComposerEnter(event: Event): void {
+    const keyEvent = event as KeyboardEvent;
+    if (keyEvent.shiftKey) return;
+    keyEvent.preventDefault();
+    void this.sendMessage();
   }
 
   onMessageInput(event?: Event): void {
@@ -2493,8 +2584,11 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     }
     const merged = Array.from(map.values());
     merged.sort((a, b) => this.messageEpoch(a.created_at) - this.messageEpoch(b.created_at));
-    if (merged.length > maxItems) return merged.slice(-maxItems);
-    return merged;
+    if (merged.length <= maxItems) return merged;
+    const pending = merged.filter((msg) => String(msg.id || '').startsWith('pending-'));
+    const solid = merged.filter((msg) => !String(msg.id || '').startsWith('pending-'));
+    const keepSolid = Math.max(0, maxItems - pending.length);
+    return [...solid.slice(-keepSolid), ...pending];
   }
 
   private messageEpoch(value: string): number {
@@ -2507,6 +2601,14 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
 
   trackMessageById(index: number, message: Message): string | number {
     return message?.id ?? index;
+  }
+
+  trackConversationById(index: number, convo: Conversation): string | number {
+    return convo?.id ?? index;
+  }
+
+  isPendingMessage(message: Message | null | undefined): boolean {
+    return !!message && String(message.id || '').startsWith('pending-');
   }
 
   triggerMediaPicker(): void {
@@ -3056,7 +3158,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
 
   startEditMessage(message: Message): void {
     if (!this.meId || message.sender_id !== this.meId) return;
-    if (this.isCallLogMessage(message)) return;
+    if (this.isPendingMessage(message) || this.isCallLogMessage(message)) return;
     const body = String(message.body ?? '').trim();
     if (!body) return;
     this.editingMessageId = message.id;
@@ -3096,6 +3198,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
 
   async deleteMessage(message: Message): Promise<void> {
     if (!this.meId || message.sender_id !== this.meId) return;
+    if (this.isPendingMessage(message)) return;
     const confirmed = typeof window !== 'undefined' ? window.confirm('Delete this message?') : true;
     if (!confirmed) return;
     this.messageError = '';

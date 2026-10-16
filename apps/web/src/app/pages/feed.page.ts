@@ -1,18 +1,29 @@
 import { CommonModule } from '@angular/common';
-import { ChangeDetectorRef, Component, OnInit } from '@angular/core';
+import {
+  AfterViewChecked,
+  ChangeDetectorRef,
+  Component,
+  ElementRef,
+  OnDestroy,
+  OnInit,
+  ViewChild,
+} from '@angular/core';
 import { Router } from '@angular/router';
+import { Subscription } from 'rxjs';
 
 import { BottomTabsComponent } from '../components/bottom-tabs.component';
 import { MatteryaPostCardComponent } from '../components/matterya-post-card.component';
 import { MatteryaTopbarComponent } from '../components/matterya-topbar.component';
 import { SparksStripComponent } from '../components/sparks-strip.component';
 import { AuthService } from '../core/services/auth.service';
-import { FollowService } from '../core/services/follow.service';
 import { LocationService } from '../core/services/location.service';
+import { Frame0PosterService } from '../core/services/frame0-poster.service';
+import { MediaSessionService } from '../core/services/media-session.service';
 import { PostsService } from '../core/services/posts.service';
 import { ProfileService } from '../core/services/profile.service';
 import { R2PlaybackService } from '../core/services/r2-playback.service';
 import { SurfacePageService } from '../core/services/surface-page.service';
+import { HubsPlaybackService } from '../hubs/hubs-playback.service';
 import type { CountryPost } from '../core/models/post.model';
 import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util';
 
@@ -34,7 +45,7 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
         (notifications)="openNotifications()"
       ></app-matterya-topbar>
 
-      <main class="feed-body">
+      <main class="feed-body" #feedBody>
         <!-- iOS FeedView: Sparks for you horizontal strip -->
         <app-sparks-strip
           *ngIf="sparksRail.length"
@@ -52,13 +63,21 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
           Your feed is quiet. Posts from everywhere will show up here as people share.
         </div>
 
-        <!-- iOS FacebookPostCard parity — Sparks render as tall reel cards -->
-        <app-matterya-post-card
+        <!-- iOS FacebookPostCard parity — Sparks as cards; AV only on focus winner -->
+        <div
+          class="feed-card-slot"
           *ngFor="let post of posts; trackBy: trackById"
-          [post]="post"
-          [edgeToEdge]="false"
-          (changed)="onPostChanged($event)"
-        ></app-matterya-post-card>
+          [attr.data-post-id]="post.id"
+          [attr.data-has-video]="isVideoPost(post) ? '1' : null"
+        >
+          <app-matterya-post-card
+            [post]="post"
+            [edgeToEdge]="false"
+            [playGate]="focusPostId === post.id && isVideoPost(post)"
+            (changed)="onPostChanged($event)"
+            (requestPlay)="onRequestPlay($event)"
+          ></app-matterya-post-card>
+        </div>
       </main>
 
       <app-bottom-tabs></app-bottom-tabs>
@@ -98,6 +117,10 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
       .feed-state.error {
         color: var(--m-danger, #ea000b);
       }
+      .feed-card-slot {
+        content-visibility: auto;
+        contain-intrinsic-size: 720px;
+      }
       /* Desktop: posts column = 60% of content pane, centered */
       @media (min-width: 900px) {
         .feed-shell {
@@ -117,7 +140,9 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
     `,
   ],
 })
-export class FeedPageComponent implements OnInit {
+export class FeedPageComponent implements OnInit, AfterViewChecked, OnDestroy {
+  @ViewChild('feedBody') feedBody?: ElementRef<HTMLElement>;
+
   posts: CountryPost[] = [];
   sparksRail: CountryPost[] = [];
   loading = true;
@@ -126,23 +151,56 @@ export class FeedPageComponent implements OnInit {
   meId: string | null = null;
   myAvatar: string | null = null;
   myInitials = 'ME';
+  /** Single feed focus winner — only this card mounts AV (iOS playGate). */
+  focusPostId: string | null = null;
+
+  private focusObserver: IntersectionObserver | null = null;
+  private observedIds = new Set<string>();
+  private ratios = new Map<string, number>();
+  private hubsSub?: Subscription;
+  private focusRaf = 0;
 
   constructor(
     private postsService: PostsService,
     private surface: SurfacePageService,
     private playback: R2PlaybackService,
+    private frame0: Frame0PosterService,
+    private mediaSession: MediaSessionService,
+    private hubsPlayback: HubsPlaybackService,
     private auth: AuthService,
     private profiles: ProfileService,
-    private follow: FollowService,
     private location: LocationService,
     private router: Router,
     private cdr: ChangeDetectorRef
   ) {}
 
-
   async ngOnInit(): Promise<void> {
     // Fire-and-forget so a hung network never blocks bootstrap forever.
     void this.refresh();
+    this.hubsSub = this.hubsPlayback.changes$.subscribe((s) => {
+      if (s.post) {
+        this.mediaSession.claimHubs(s.post.id);
+        // Mini/expanded hubs owns AV — clear feed focus so cards stay posters.
+        if (this.focusPostId) {
+          this.focusPostId = null;
+          this.paint();
+        }
+      } else if (this.mediaSession.hubsOwns) {
+        this.mediaSession.releaseHubs();
+      }
+    });
+  }
+
+  ngAfterViewChecked(): void {
+    this.ensureFocusObserver();
+  }
+
+  ngOnDestroy(): void {
+    this.hubsSub?.unsubscribe();
+    this.focusObserver?.disconnect();
+    this.focusObserver = null;
+    if (this.focusRaf) cancelAnimationFrame(this.focusRaf);
+    this.mediaSession.releaseFeed(this.focusPostId);
   }
 
   private paint(): void {
@@ -158,12 +216,117 @@ export class FeedPageComponent implements OnInit {
     return post.id;
   }
 
+  isVideoPost(post: CountryPost): boolean {
+    return this.isVideo(post);
+  }
+
+  onRequestPlay(post: CountryPost): void {
+    if (!post?.id || this.hubsPlayback.isActive) return;
+    this.setFocus(post.id);
+  }
+
   onPostChanged(post: CountryPost): void {
     const i = this.posts.findIndex((p) => p.id === post.id);
     if (i >= 0) {
       this.posts[i] = post;
       this.paint();
     }
+  }
+
+  private ensureFocusObserver(): void {
+    const root = this.feedBody?.nativeElement;
+    if (!root || typeof IntersectionObserver === 'undefined') return;
+    if (!this.focusObserver) {
+      this.focusObserver = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            const id = (entry.target as HTMLElement).dataset['postId'];
+            if (!id) continue;
+            if (entry.isIntersecting) {
+              this.ratios.set(id, entry.intersectionRatio);
+            } else {
+              this.ratios.delete(id);
+            }
+          }
+          this.scheduleFocusPick();
+        },
+        {
+          root: null,
+          // Prefer cards near viewport center.
+          rootMargin: '-28% 0px -28% 0px',
+          threshold: [0, 0.15, 0.35, 0.55, 0.75, 1],
+        }
+      );
+    }
+    const slots = root.querySelectorAll<HTMLElement>('.feed-card-slot[data-has-video="1"]');
+    for (const el of Array.from(slots)) {
+      const id = el.dataset['postId'];
+      if (!id || this.observedIds.has(id)) continue;
+      this.focusObserver.observe(el);
+      this.observedIds.add(id);
+    }
+  }
+
+  private scheduleFocusPick(): void {
+    if (this.focusRaf) return;
+    this.focusRaf = requestAnimationFrame(() => {
+      this.focusRaf = 0;
+      this.pickFocusWinner();
+    });
+  }
+
+  private pickFocusWinner(): void {
+    if (this.hubsPlayback.isActive || this.mediaSession.sparksOwns) {
+      if (this.focusPostId) {
+        this.focusPostId = null;
+        this.mediaSession.releaseFeed();
+        this.paint();
+      }
+      return;
+    }
+    let bestId: string | null = null;
+    let bestRatio = 0;
+    for (const [id, ratio] of this.ratios) {
+      if (ratio > bestRatio) {
+        bestRatio = ratio;
+        bestId = id;
+      }
+    }
+    // Require meaningful visibility before mounting AV.
+    if (!bestId || bestRatio < 0.2) {
+      if (this.focusPostId) {
+        this.mediaSession.releaseFeed(this.focusPostId);
+        this.focusPostId = null;
+        this.paint();
+      }
+      return;
+    }
+    if (bestId !== this.focusPostId) {
+      this.setFocus(bestId, bestRatio);
+    } else {
+      this.mediaSession.claimFeed(bestId, bestRatio);
+    }
+  }
+
+  private setFocus(postId: string, score = 1): void {
+    if (this.focusPostId === postId) {
+      this.mediaSession.claimFeed(postId, score);
+      return;
+    }
+    if (!this.mediaSession.claimFeed(postId, score)) return;
+    this.focusPostId = postId;
+    // Freshen play URL for the winner only (not the whole feed).
+    const post = this.posts.find((p) => p.id === postId);
+    if (post) {
+      void this.playback.freshenPosts([post], 1).then((rows) => {
+        const fresh = rows[0];
+        if (!fresh) return;
+        const i = this.posts.findIndex((p) => p.id === fresh.id);
+        if (i >= 0) this.posts[i] = fresh;
+        this.paint();
+      });
+    }
+    this.paint();
   }
 
   displayName(post: CountryPost): string {
@@ -303,33 +466,24 @@ export class FeedPageComponent implements OnInit {
       this.meId = user?.id ?? null;
       let countryCode = this.location.getCachedLocation()?.countryCode?.trim().toUpperCase() || null;
       let authorId = this.meId;
-      let followingIds: string[] = [];
+      // followingIds stay off the critical path (iOS: refresh follows in parallel / after paint).
+      const followingIds: string[] = [];
 
       if (this.meId) {
-        try {
-          const { meProfile } = await this.withTimeout(this.profiles.meProfile(), 4000, 'profile');
-          if (meProfile?.country_code) {
-            countryCode = String(meProfile.country_code).trim().toUpperCase();
-          }
-          authorId = meProfile?.user_id || this.meId;
-          this.myAvatar =
-            resolveAvatarUrl(meProfile?.avatar_url, meProfile?.username || meProfile?.user_id || this.meId) ||
-            null;
-          const name = meProfile?.display_name || meProfile?.username || user?.email || 'ME';
-          this.myInitials = String(name).slice(0, 2).toUpperCase();
-          this.paint();
-        } catch {
-          // keep cached
-        }
-        try {
-          followingIds = await this.withTimeout(
-            this.follow.listFollowingIds(this.meId),
-            3000,
-            'following'
-          );
-        } catch {
-          followingIds = [];
-        }
+        // Profile is best-effort and must not block thin /v1/feed.
+        void this.withTimeout(this.profiles.meProfile(), 4000, 'profile')
+          .then(({ meProfile }) => {
+            if (meProfile?.country_code) {
+              this.homeCountry = String(meProfile.country_code).trim().toUpperCase();
+            }
+            this.myAvatar =
+              resolveAvatarUrl(meProfile?.avatar_url, meProfile?.username || meProfile?.user_id || this.meId) ||
+              null;
+            const name = meProfile?.display_name || meProfile?.username || user?.email || 'ME';
+            this.myInitials = String(name).slice(0, 2).toUpperCase();
+            this.paint();
+          })
+          .catch(() => undefined);
       }
 
       this.homeCountry = countryCode;
@@ -354,17 +508,22 @@ export class FeedPageComponent implements OnInit {
           .catch(() => [] as CountryPost[]);
       }
 
-      // Freshen R2 play URLs so Spark cards actually play (thin pages can ship expired presigns).
-      feed = await this.playback.freshenPosts(feed, 12).catch(() => feed);
-
+      // Paint posters first — do NOT await AV URL freshen on the open path.
       this.posts = feed;
       this.sparksRail = feed
         .filter((p) => this.postsService.isSpark(p))
         .slice(0, 12);
+      this.focusPostId = null;
+      this.ratios.clear();
+      this.observedIds.clear();
+      this.focusObserver?.disconnect();
+      this.focusObserver = null;
       this.loading = false;
       this.paint();
 
-      // Optional country posts + sparks top-up — never block the spinner.
+      // After first paint: Frame0 thumbs only, then optional secondary top-up.
+      // Playback freshen happens for the focus winner in setFocus (no AV storm).
+      void this.warmPostersAfterPaint();
       void this.loadSecondary(authorId, countryCode, followingIds);
     } catch (e: any) {
       this.error = e?.message || 'Feed unavailable';
@@ -376,6 +535,18 @@ export class FeedPageComponent implements OnInit {
       window.clearTimeout(hardStop);
       this.loading = false;
       this.paint();
+    }
+  }
+
+  /** Thumbs / Frame0 only — mirrors iOS warmHead(lite). */
+  private async warmPostersAfterPaint(): Promise<void> {
+    try {
+      const videoIds = this.posts.filter((p) => this.isVideo(p)).slice(0, 24).map((p) => p.id);
+      const railIds = this.sparksRail.map((p) => p.id);
+      await this.frame0.prefetch([...railIds, ...videoIds]);
+      this.paint();
+    } catch {
+      // best-effort
     }
   }
 
@@ -406,10 +577,9 @@ export class FeedPageComponent implements OnInit {
           'sparksRail'
         ).catch(() => null);
         if (sparksPage?.items?.length) {
-          const freshened = await this.playback
-            .freshenPosts(sparksPage.items, 12)
-            .catch(() => sparksPage.items);
-          extras.push(...freshened);
+          // Posters only for rail top-up — no playback freshen storm.
+          extras.push(...sparksPage.items);
+          void this.frame0.prefetch(sparksPage.items.map((p) => p.id));
         }
       }
 
@@ -434,6 +604,9 @@ export class FeedPageComponent implements OnInit {
           .filter((p) => this.postsService.isSpark(p))
           .slice(0, 12);
       }
+      this.observedIds.clear();
+      this.focusObserver?.disconnect();
+      this.focusObserver = null;
       this.paint();
     } catch {
       // secondary is best-effort

@@ -6,9 +6,11 @@ import { Subscription } from 'rxjs';
 
 import { VideoPlayerComponent } from '../components/video-player.component';
 import { AuthService } from '../core/services/auth.service';
+import { MediaSessionService } from '../core/services/media-session.service';
 import { PostsService } from '../core/services/posts.service';
 import { R2PlaybackService } from '../core/services/r2-playback.service';
 import { SurfacePageService } from '../core/services/surface-page.service';
+import { HubsPlaybackService } from '../hubs/hubs-playback.service';
 import { CountryPost, PostComment } from '../core/models/post.model';
 import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util';
 
@@ -30,12 +32,31 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
           <span class="island-place">{{ countryName || countryCode || 'World' }}</span>
         </div>
 
-        <button type="button" class="chrome-btn" (click)="goGlobe()" aria-label="Open globe">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7">
-            <circle cx="12" cy="12" r="9" />
-            <path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" stroke-linecap="round" />
-          </svg>
-        </button>
+        <div class="chrome-right">
+          <button
+            type="button"
+            class="chrome-btn"
+            (click)="toggleGlobalMute()"
+            [attr.aria-label]="reelMuted ? 'Unmute' : 'Mute'"
+          >
+            <svg *ngIf="!reelMuted" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8">
+              <path d="M4 10h4l5-4v12l-5-4H4z"></path>
+              <path d="M16 9a3 3 0 0 1 0 6"></path>
+              <path d="M18.5 6.5a6 6 0 0 1 0 11"></path>
+            </svg>
+            <svg *ngIf="reelMuted" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8">
+              <path d="M4 10h4l5-4v12l-5-4H4z"></path>
+              <line x1="16" y1="8" x2="21" y2="13"></line>
+              <line x1="21" y1="8" x2="16" y2="13"></line>
+            </svg>
+          </button>
+          <button type="button" class="chrome-btn" (click)="goGlobe()" aria-label="Open globe">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" stroke-linecap="round" />
+            </svg>
+          </button>
+        </div>
       </header>
 
       <div class="progress-rail" *ngIf="videoPosts.length > 1" aria-hidden="true">
@@ -60,7 +81,17 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
           [attr.data-index]="i"
         >
           <div class="reel-frame">
+            <!-- Poster-only outside warm window (iOS: no AV until slot claim). -->
+            <img
+              *ngIf="!shouldMountPlayer(i) && posterFor(post)"
+              class="reel-poster"
+              [src]="posterFor(post)!"
+              alt=""
+              loading="lazy"
+            />
+            <div *ngIf="!shouldMountPlayer(i) && !posterFor(post)" class="reel-poster" aria-hidden="true"></div>
             <app-video-player
+              *ngIf="shouldMountPlayer(i)"
               class="reel-player controls-hidden"
               [src]="reelMediaSrc(post)"
               [poster]="posterFor(post)"
@@ -68,10 +99,11 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
               [adCountryCode]="post.country_code ?? countryCode"
               [adContentCountryCode]="post.country_code ?? countryCode"
               [adPostId]="post.id"
-              preload="auto"
+              [preload]="preloadFor(i)"
               centerOverlayMode="on-click"
               [showMute]="false"
               (viewed)="recordView(post)"
+              (mediaError)="onReelMediaError(post)"
             ></app-video-player>
 
             <div class="reel-gradient" aria-hidden="true"></div>
@@ -258,10 +290,16 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
         right: 0;
         z-index: 8;
         display: grid;
-        grid-template-columns: 44px 1fr 44px;
+        grid-template-columns: 44px 1fr auto;
         align-items: center;
         gap: 10px;
         padding: calc(env(safe-area-inset-top) + 8px) 14px 0;
+        pointer-events: none;
+      }
+      .chrome-right {
+        display: flex;
+        align-items: center;
+        gap: 8px;
         pointer-events: none;
       }
       .chrome-btn {
@@ -339,6 +377,7 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
         height: 100%;
         overflow-y: auto;
         scroll-snap-type: y mandatory;
+        scroll-behavior: auto;
         overscroll-behavior-y: contain;
         -webkit-overflow-scrolling: touch;
         scrollbar-width: none;
@@ -377,6 +416,15 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
       .reel-player {
         width: 100%;
         height: 100%;
+      }
+      .reel-poster {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        background: #000;
+        pointer-events: none;
       }
       :host ::ng-deep app-video-player.reel-player .mute-toggle {
         display: none !important;
@@ -745,14 +793,21 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
   commentReplyTarget: Record<string, { commentId: string; authorName: string } | null> = {};
   commentLikeBusy: Record<string, Record<string, boolean>> = {};
 
+  /** iOS SparkWarmPool.MediaBudget — do not retune daily. */
+  private static readonly WARM_AHEAD = 5;
+  private static readonly DEEP_AHEAD = 2;
+  private static readonly WARM_BEHIND = 1;
+
   private seeded = false;
   private routeSub?: Subscription;
   private querySub?: Subscription;
   private pendingScrollId: string | null = null;
   private muteListener?: (event: Event) => void;
+  private visibilityListener?: () => void;
   private sparksCursor: string | null = null;
   private loadingMore = false;
   private resolvedSrc = new Map<string, string>();
+  private recoveringIds = new Set<string>();
 
   constructor(
     private route: ActivatedRoute,
@@ -761,6 +816,8 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
     private postsService: PostsService,
     private surface: SurfacePageService,
     private playback: R2PlaybackService,
+    private mediaSession: MediaSessionService,
+    private hubsPlayback: HubsPlaybackService,
     private cdr: ChangeDetectorRef
   ) {}
 
@@ -777,11 +834,21 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
   }
 
   ngOnInit(): void {
+    // Sparks owns the single app-wide session — silence hubs mini while open.
+    if (this.hubsPlayback.isActive) this.hubsPlayback.setPlaying(false);
+    this.mediaSession.claimSparks();
     this.reelMuted = this.readGlobalMute();
     this.muteListener = (event: Event) => {
       this.reelMuted = !!(event as CustomEvent<boolean>).detail;
+      this.paint();
     };
     window.addEventListener('video-player-mute', this.muteListener);
+    this.visibilityListener = () => {
+      if (typeof document !== 'undefined' && document.hidden) {
+        this.pauseAllReelVideos();
+      }
+    };
+    document.addEventListener('visibilitychange', this.visibilityListener);
     void this.loadMe();
     this.routeSub = this.route.paramMap.subscribe((params) => {
       this.countryCode = (params.get('country') || '').toUpperCase();
@@ -793,6 +860,7 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
         void this.loadReels();
       } else {
         this.tryScrollToPending();
+        this.warmPlaybackWindow(this.activeIndex);
       }
     });
     this.querySub = this.route.queryParamMap.subscribe((params) => {
@@ -802,11 +870,21 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.pauseAllReelVideos();
     this.routeSub?.unsubscribe();
     this.querySub?.unsubscribe();
     if (this.muteListener) {
       window.removeEventListener('video-player-mute', this.muteListener);
       this.muteListener = undefined;
+    }
+    if (this.visibilityListener) {
+      document.removeEventListener('visibilitychange', this.visibilityListener);
+      this.visibilityListener = undefined;
+    }
+    this.mediaSession.releaseSparks();
+    // If hubs mini is still alive, restore exclusive hubs ownership (paused).
+    if (this.hubsPlayback.isActive) {
+      this.hubsPlayback.reclaimSession();
     }
   }
 
@@ -823,19 +901,72 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
       this.activeIndex = idx;
       const post = this.videoPosts[idx];
       if (post) {
+        this.mediaSession.claimSparks(post.id);
         this.recordView(post);
-        void this.ensurePlayable(post);
-        // Warm next few (iOS SparkWarmPool window).
-        for (let i = 1; i <= 3; i++) {
-          const next = this.videoPosts[idx + i];
-          if (next) void this.ensurePlayable(next);
-        }
+        this.warmPlaybackWindow(idx);
       }
     }
     // iOS onNearEnd — request next catalog well before the tail.
     if (idx >= this.videoPosts.length - 6) {
       void this.loadMoreReels();
     }
+  }
+
+  /** Mount AV only for behind + warm ahead (iOS maxSlots band). */
+  shouldMountPlayer(index: number): boolean {
+    const i = this.activeIndex;
+    return index >= i - ReelsPageComponent.WARM_BEHIND && index <= i + ReelsPageComponent.WARM_AHEAD;
+  }
+
+  /** Deep next 2 get full preload; outer warm band stays metadata-light. */
+  preloadFor(index: number): 'auto' | 'metadata' | 'none' {
+    const delta = index - this.activeIndex;
+    if (delta >= 0 && delta <= ReelsPageComponent.DEEP_AHEAD) return 'auto';
+    if (this.shouldMountPlayer(index)) return 'metadata';
+    return 'none';
+  }
+
+  toggleGlobalMute(): void {
+    const next = !this.readGlobalMute();
+    this.reelMuted = next;
+    try {
+      (window as any).__videoMuted = next;
+    } catch {
+      // ignore
+    }
+    window.dispatchEvent(new CustomEvent('video-player-mute', { detail: next }));
+  }
+
+  /** Expired R2 / 403 — invalidate cache and re-resolve /v1/playback. */
+  onReelMediaError(post: CountryPost): void {
+    if (!post?.id || this.recoveringIds.has(post.id)) return;
+    this.recoveringIds.add(post.id);
+    void this.ensurePlayable(post, true).finally(() => {
+      window.setTimeout(() => this.recoveringIds.delete(post.id), 4000);
+    });
+  }
+
+  private warmPlaybackWindow(index: number): void {
+    const lo = Math.max(0, index - ReelsPageComponent.WARM_BEHIND);
+    const hi = Math.min(this.videoPosts.length, index + ReelsPageComponent.WARM_AHEAD + 1);
+    for (let i = lo; i < hi; i++) {
+      const post = this.videoPosts[i];
+      if (post) void this.ensurePlayable(post);
+    }
+    this.paint();
+  }
+
+  private pauseAllReelVideos(): void {
+    const root = this.feedRef?.nativeElement;
+    if (!root) return;
+    const videos = root.querySelectorAll('video');
+    videos.forEach((video) => {
+      try {
+        if (!video.paused && !video.ended) video.pause();
+      } catch {
+        // ignore
+      }
+    });
   }
 
   goBack(): void {
@@ -1118,10 +1249,9 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
           'World';
       }
       this.tryScrollToPending();
-      // Prefetch first window play URLs.
-      for (const p of this.videoPosts.slice(0, 5)) {
-        void this.ensurePlayable(p);
-      }
+      const first = this.videoPosts[0];
+      if (first) this.mediaSession.claimSparks(first.id);
+      this.warmPlaybackWindow(this.activeIndex);
     } catch (e: any) {
       this.error = e?.message ?? String(e);
     } finally {
@@ -1185,9 +1315,13 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
     return out;
   }
 
-  private async ensurePlayable(post: CountryPost): Promise<void> {
+  private async ensurePlayable(post: CountryPost, force = false): Promise<void> {
     if (!post?.id) return;
-    if (this.resolvedSrc.has(post.id)) return;
+    if (!force && this.resolvedSrc.has(post.id)) return;
+    if (force) {
+      this.resolvedSrc.delete(post.id);
+      this.playback.invalidate(post.id);
+    }
     const fallback = this.rawVideoUrl(post);
     const url = await this.playback.playURL(post.id, fallback);
     if (url) {
