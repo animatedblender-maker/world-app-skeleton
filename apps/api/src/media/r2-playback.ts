@@ -61,17 +61,28 @@ export function publicObjectUrl(key: string): string | null {
 
 /**
  * Resolve a durable play URL for an R2 object key.
- * Prefer **real presigned GET** when credentials exist (public r2.dev often 403).
- * Public base is last-resort only (or when R2_FORCE_PUBLIC=1).
+ *
+ * Prefer **public R2_PUBLIC_BASE_URL** when configured: AVPlayer issues HEAD first,
+ * and GET-only cloudflarestorage.com presigns return 403 on HEAD → iOS error
+ * "You do not have permission to access the requested resource."
+ * Public pub-*.r2.dev allows HEAD + Range GET.
+ *
+ * Presign is fallback when no public base (or R2_PREFER_PUBLIC=0).
  */
 export async function resolvePlayUrlForKey(key: string): Promise<string | null> {
   const clean = key.replace(/^\/+/, '').trim();
   if (!clean) return null;
 
   const forcePublic = process.env.R2_FORCE_PUBLIC === '1' || process.env.R2_FORCE_PUBLIC === 'true';
-  if (forcePublic) {
-    const permanent = publicObjectUrl(clean);
-    if (permanent) return permanent;
+  const preferPublic =
+    forcePublic ||
+    process.env.R2_PREFER_PUBLIC === '1' ||
+    process.env.R2_PREFER_PUBLIC === 'true' ||
+    process.env.R2_PREFER_PUBLIC !== '0';
+
+  const permanent = publicObjectUrl(clean);
+  if (permanent && preferPublic) {
+    return permanent;
   }
 
   const now = Date.now();
@@ -99,7 +110,7 @@ export async function resolvePlayUrlForKey(key: string): Promise<string | null> 
   }
 
   // No credentials / presign failed → try public base (may 403 if bucket private).
-  return publicObjectUrl(clean);
+  return permanent;
 }
 
 /** Extract R2 object key from media_url JSON / path / plain signed URL path. */
@@ -162,14 +173,23 @@ function existingPlayUrlStillFresh(mediaUrl: string | null | undefined): string 
   if (!candidate) return null;
   try {
     const u = new URL(candidate);
-    // Unsigned R2 hosts are NOT trustworthy — pub-*.r2.dev often 403 when ACL is private.
-    // Force re-presign so Hubs/feed always get a live signed GET.
+    // Signed cloudflarestorage GETs break AVPlayer (HEAD → 403). When a public base
+    // exists, force freshen so shelves/playback return pub-*.r2.dev instead.
+    if (
+      r2PublicBaseUrl() &&
+      u.hostname.includes('r2.cloudflarestorage.com') &&
+      (u.searchParams.has('X-Amz-Signature') || u.searchParams.has('X-Amz-Algorithm'))
+    ) {
+      return null;
+    }
+    // Unsigned R2 hosts: keep pub-*.r2.dev (public ACL). Re-resolve bare
+    // cloudflarestorage without signature (incomplete).
     if (!u.searchParams.has('X-Amz-Signature') && !u.searchParams.has('X-Amz-Algorithm')) {
-      if (
-        u.hostname.includes('r2.dev') ||
-        u.hostname.includes('r2.cloudflarestorage.com')
-      ) {
+      if (u.hostname.includes('r2.cloudflarestorage.com')) {
         return null;
+      }
+      if (u.hostname.includes('r2.dev')) {
+        return candidate;
       }
       // Non-R2 public (supabase / custom CDN) — keep.
       if (u.hostname.includes('supabase') || u.hostname.includes('matterya.com')) {

@@ -1188,12 +1188,13 @@ struct VideoPlayerView: View {
             if let postID {
                 await R2PlaybackResolver.shared.invalidate(postID: postID)
                 if let live = await R2PlaybackResolver.shared.playURL(postID: postID, fallback: nil) {
-                    configuredURL = live
-                    installPlayer(using: MediaPlaybackConfiguration(url: live, headers: nil))
+                    let play = MediaURLResolver.r2PublicPlaybackURL(from: live) ?? live
+                    configuredURL = play
+                    installPlayer(using: MediaPlaybackConfiguration(url: play, headers: nil))
                     return
                 }
             }
-            // 1b) Full resolve of the card’s original URL (Archive / Supabase).
+            // 1b) Full resolve of the card’s original URL (Archive / Supabase / R2 public).
             let primary = await MediaURLResolver.playbackConfiguration(for: url, postID: postID)
             if primary.url != failedURL || primary.headers != nil {
                 installPlayer(using: primary)
@@ -1211,8 +1212,9 @@ struct VideoPlayerView: View {
                 installPlayer(using: fallback)
                 return
             }
-            // 4) Plain original URL once more (transient CDN flake).
-            installPlayer(using: MediaPlaybackConfiguration(url: url, headers: nil))
+            // 4) Prefer public R2 rewrite, else original (transient CDN flake).
+            let plain = MediaURLResolver.r2PublicPlaybackURL(from: url) ?? url
+            installPlayer(using: MediaPlaybackConfiguration(url: plain, headers: nil))
             return
         }
 
@@ -1226,8 +1228,9 @@ struct VideoPlayerView: View {
             if let postID {
                 await R2PlaybackResolver.shared.invalidate(postID: postID)
                 if let live = await R2PlaybackResolver.shared.playURL(postID: postID, fallback: url) {
-                    configuredURL = live
-                    installPlayer(using: MediaPlaybackConfiguration(url: live, headers: nil))
+                    let play = MediaURLResolver.r2PublicPlaybackURL(from: live) ?? live
+                    configuredURL = play
+                    installPlayer(using: MediaPlaybackConfiguration(url: play, headers: nil))
                     return
                 }
             }

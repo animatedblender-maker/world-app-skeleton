@@ -296,8 +296,7 @@ enum MediaURLResolver {
     }
 
     /// Resolve a play configuration.
-    /// - R2 **signed** URLs: play immediately if still valid; only hit API when near/past expiry.
-    /// - (Previously every play awaited GraphQL → stuck loading + feed lag + ghost audio.)
+    /// - R2 **signed** cloudflarestorage URLs: rewrite to public r2.dev (AVPlayer HEAD works).
     /// - Archive / Supabase: existing CDN/auth paths.
     static func playbackConfiguration(for url: URL, postID: String? = nil) async -> MediaPlaybackConfiguration {
         // Never run video CDN resolution on image posters (thumbs / services/img).
@@ -305,21 +304,27 @@ enum MediaURLResolver {
             return MediaPlaybackConfiguration(url: url, headers: nil)
         }
 
-        // R2: always live-resolve when we have a post id and the URL is unsigned public
-        // (pub-*.r2.dev often 403) or a dying presign. Never hand AVPlayer a dead public link.
+        // GET-only R2 presigns return 403 on HEAD — AVPlayer then shows
+        // "You do not have permission to access the requested resource."
+        // Public pub-*.r2.dev allows HEAD+Range; rewrite before handing to AVPlayer.
+        if let publicURL = r2PublicPlaybackURL(from: url) {
+            return MediaPlaybackConfiguration(url: publicURL, headers: nil)
+        }
+
+        // R2: live-resolve when unsigned/dying; still rewrite any signed result to public.
         if looksLikeR2HostedURL(url), let postID, !postID.isEmpty {
             let needsLive =
                 !isPresignedObjectURL(url)
                 || isPresignExpiredOrNearExpiry(url, slackSeconds: 3600)
             if needsLive {
                 if let live = await R2PlaybackResolver.shared.playURL(postID: postID, fallback: nil) {
-                    // Prefer live only when it is actually signed / different host — avoid
-                    // caching the same 403 public URL forever.
-                    if live != url || isPresignedObjectURL(live) {
-                        return MediaPlaybackConfiguration(url: live, headers: nil)
+                    let play = r2PublicPlaybackURL(from: live) ?? live
+                    if play != url || isPresignedObjectURL(live) {
+                        return MediaPlaybackConfiguration(url: play, headers: nil)
                     }
                 }
             } else if isPresignedObjectURL(url) {
+                // Should have been rewritten above; keep as last resort.
                 return MediaPlaybackConfiguration(url: url, headers: nil)
             }
         }
@@ -353,6 +358,28 @@ enum MediaURLResolver {
             || lower.contains("matterya-sparks")
             || lower.contains("r2.dev")
             || lower.contains("\"r2_key\"")
+    }
+
+    /// Map a GET-presigned `*.r2.cloudflarestorage.com/.../matterya-sparks/<key>?X-Amz-…`
+    /// URL to the public `pub-*.r2.dev/<key>` form AVPlayer can HEAD.
+    static func r2PublicPlaybackURL(from url: URL) -> URL? {
+        guard let host = url.host?.lowercased(),
+              host.contains("r2.cloudflarestorage.com")
+        else { return nil }
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        let isPresign = items.contains {
+            $0.name == "X-Amz-Signature" || $0.name == "X-Amz-Algorithm"
+        }
+        guard isPresign else { return nil }
+
+        var parts = url.path.split(separator: "/").map(String.init)
+        if parts.first == "matterya-sparks" {
+            parts.removeFirst()
+        }
+        guard !parts.isEmpty else { return nil }
+        let key = parts.joined(separator: "/")
+        let base = AppConfig.r2PublicBaseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return URL(string: "\(base)/\(key)")
     }
 
     static func playbackFallbackConfiguration(for url: URL) -> MediaPlaybackConfiguration? {

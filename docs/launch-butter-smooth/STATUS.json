@@ -1,11 +1,11 @@
 {
   "title": "Matterya Launch \u00b7 Butter-Smooth",
-  "phase": "fix-client",
+  "phase": "fix-hubs-play",
   "running": true,
   "started_at": "2026-10-01T15:00:00Z",
-  "updated_at": "2026-10-16T16:34:41Z",
-  "overall_pct": 51.6,
-  "headline": "Device recovered after cold miss \u2014 feed 40 items; hush engagement cancel spam",
+  "updated_at": "2026-10-16T21:22:24Z",
+  "overall_pct": 58.6,
+  "headline": "Hubs play fix: rewrite GET-presign R2 \u2192 public r2.dev (AVPlayer HEAD 403)",
   "surfaces": [
     {
       "id": "feed",
@@ -34,10 +34,10 @@
     {
       "id": "hubs_player",
       "name": "Hubs Watch / Mini",
-      "status": "pending",
-      "pct": 15,
+      "status": "in_progress",
+      "pct": 50.0,
       "goal": "Continuous film expand\u2194mini, resume mid-clip, one session app-wide",
-      "notes": "HubsPlaybackService exists; need continuity + mute/session exclusivity."
+      "notes": "Same R2 HEAD/AVPlayer permission error."
     },
     {
       "id": "chat",
@@ -173,6 +173,10 @@
     {
       "t": "2026-10-16T16:34:41Z",
       "msg": "Same session: early -1001 then [Surface] /v1/feed items=40, Sparks 201\u2192641, loadMore. API warm ~0.3\u20130.6s from Mac."
+    },
+    {
+      "t": "2026-10-16T21:22:24Z",
+      "msg": "Hubs 'no permission for requested resource' = AVPlayer HEAD on GET-only R2 presign. Fix: play via pub-*.r2.dev."
     }
   ]
 }

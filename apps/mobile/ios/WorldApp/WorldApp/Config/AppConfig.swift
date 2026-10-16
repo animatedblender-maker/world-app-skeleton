@@ -6,6 +6,9 @@ enum AppConfig {
     static let supabaseAnonKey = "sb_publishable_17VL78hCv9BVez2c4lIqFQ_MUv1iOHb"
     static let graphqlEndpoint = "https://api.matterya.com/graphql"
     static let apiBaseURL = "https://api.matterya.com"
+    /// Public R2 base (HEAD+GET). Signed cloudflarestorage.com GETs 403 on HEAD → AVPlayer
+    /// "You do not have permission to access the requested resource."
+    static let r2PublicBaseURL = "https://pub-0af7dfb233b3438f90451ac0261b6009.r2.dev"
     static let demoDatasetBaseURL = "https://matterya.com"
     /// PERMANENTLY OFF — never load Reddit JSONL (bundled or remote). Backend GraphQL only.
     static let useDemoDataset = false
