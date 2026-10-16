@@ -1,19 +1,19 @@
 {
   "title": "Matterya Launch \u00b7 Butter-Smooth",
-  "phase": "fix-api",
+  "phase": "smoke",
   "running": true,
   "started_at": "2026-10-01T15:00:00Z",
-  "updated_at": "2026-10-16T13:09:40Z",
-  "overall_pct": 47.6,
-  "headline": "P0: shipping playback/batch fast-path + iOS circuit breaker",
+  "updated_at": "2026-10-16T13:11:55Z",
+  "overall_pct": 50.6,
+  "headline": "P0 playback storm fixed \u2014 anon batch live (~1.6s); rebuild iOS for circuit breaker",
   "surfaces": [
     {
       "id": "feed",
       "name": "Home Feed",
       "status": "in_progress",
-      "pct": 55.0,
+      "pct": 70.0,
       "goal": "Posters-first scroll, one focus autoplay, Sparks cards + strip, no AV storm",
-      "notes": "API anonymous batch + SQL path; iOS coalesce/circuit; scroll warm removed."
+      "notes": "API a0c9b29 live: anon batch 200 ~1.6s. iOS needs rebuild for circuit/single-flight + no scroll warm."
     },
     {
       "id": "sparks",
@@ -157,6 +157,14 @@
     {
       "t": "2026-10-16T13:09:40Z",
       "msg": "API: anonymous /v1/playback/batch (light SQL, concurrency 4, 2.2s wall). iOS: single-flight + 10m TTL + circuit after 2 fails; removed per-scroll warm."
+    },
+    {
+      "t": "2026-10-16T13:10:21Z",
+      "msg": "Pushed a0c9b29 to ios-native. Live batch still 401 (pre-deploy). Single playback anon OK ~0.3s. Polling Render."
+    },
+    {
+      "t": "2026-10-16T13:11:55Z",
+      "msg": "Render live: anonymous POST /v1/playback/batch \u2192 200 in ~1.6s (6 ids). Rebuild WorldApp from ios-native a0c9b29 to stop client retry storm."
     }
   ]
 }
