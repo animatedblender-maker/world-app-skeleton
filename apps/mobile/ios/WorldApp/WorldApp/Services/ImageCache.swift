@@ -87,7 +87,10 @@ final class ImageCache: @unchecked Sendable {
     }
 
     func prefetchPostThumbnails(_ posts: [CountryPost], maxPixelSize: CGFloat = 420, aggressive: Bool = false) {
-        let urls = posts.compactMap { MediaURLResolver.hubsListPosterURL(for: $0) }
+        let urls = posts.compactMap { post -> URL? in
+            guard let u = MediaURLResolver.hubsListPosterURL(for: post) else { return nil }
+            return MediaURLResolver.isUsablePosterURL(u) ? u : nil
+        }
         prefetch(urls, maxPixelSize: maxPixelSize, aggressive: aggressive)
     }
 

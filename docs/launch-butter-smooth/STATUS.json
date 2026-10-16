@@ -1,11 +1,11 @@
 {
   "title": "Matterya Launch \u00b7 Butter-Smooth",
-  "phase": "fix-hubs-play",
+  "phase": "fix-hubs-r2",
   "running": true,
   "started_at": "2026-10-01T15:00:00Z",
-  "updated_at": "2026-10-16T21:22:24Z",
-  "overall_pct": 58.6,
-  "headline": "Hubs play fix: rewrite GET-presign R2 \u2192 public r2.dev (AVPlayer HEAD 403)",
+  "updated_at": "2026-10-16T21:36:27Z",
+  "overall_pct": 59.6,
+  "headline": "CRITICAL: stop serving pub-*.r2.dev (CF1010) \u2014 back to signed R2 for hubs play+thumbs",
   "surfaces": [
     {
       "id": "feed",
@@ -35,9 +35,9 @@
       "id": "hubs_player",
       "name": "Hubs Watch / Mini",
       "status": "in_progress",
-      "pct": 50.0,
+      "pct": 55.0,
       "goal": "Continuous film expand\u2194mini, resume mid-clip, one session app-wide",
-      "notes": "Same R2 HEAD/AVPlayer permission error."
+      "notes": "Archive hub player now live-resolves R2 before AVPlayer."
     },
     {
       "id": "chat",
@@ -177,6 +177,10 @@
     {
       "t": "2026-10-16T21:22:24Z",
       "msg": "Hubs 'no permission for requested resource' = AVPlayer HEAD on GET-only R2 presign. Fix: play via pub-*.r2.dev."
+    },
+    {
+      "t": "2026-10-16T21:36:27Z",
+      "msg": "Hubs broken: API returned pub-*.r2.dev (CF 1010). Thumbs same. Revert prefer-public; hubs resolve signed; skip dead poster URLs."
     }
   ]
 }

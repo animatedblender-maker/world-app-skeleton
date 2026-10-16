@@ -145,6 +145,8 @@ actor Frame0PosterResolver {
                 var mirroredMutable: [String: URL] = [:]
                 for (id, urlString) in posters {
                     guard let url = URL(string: urlString), url.scheme != nil else { continue }
+                    // Never cache banned pub-*.r2.dev posters (CF 1010).
+                    if MediaURLResolver.isBlockedR2PublicURL(url) { continue }
                     cache[id] = CacheEntry(url: url, cachedAt: stamped)
                     mirroredMutable[id] = url
                 }

@@ -1187,10 +1187,10 @@ struct VideoPlayerView: View {
             didRetryWithPublicURL = true
             if let postID {
                 await R2PlaybackResolver.shared.invalidate(postID: postID)
-                if let live = await R2PlaybackResolver.shared.playURL(postID: postID, fallback: nil) {
-                    let play = MediaURLResolver.r2PublicPlaybackURL(from: live) ?? live
-                    configuredURL = play
-                    installPlayer(using: MediaPlaybackConfiguration(url: play, headers: nil))
+                if let live = await R2PlaybackResolver.shared.playURL(postID: postID, fallback: nil),
+                   !MediaURLResolver.isBlockedR2PublicURL(live) {
+                    configuredURL = live
+                    installPlayer(using: MediaPlaybackConfiguration(url: live, headers: nil))
                     return
                 }
             }
@@ -1212,9 +1212,10 @@ struct VideoPlayerView: View {
                 installPlayer(using: fallback)
                 return
             }
-            // 4) Prefer public R2 rewrite, else original (transient CDN flake).
-            let plain = MediaURLResolver.r2PublicPlaybackURL(from: url) ?? url
-            installPlayer(using: MediaPlaybackConfiguration(url: plain, headers: nil))
+            // 4) Plain original once more (skip banned pub-*.r2.dev).
+            if !MediaURLResolver.isBlockedR2PublicURL(url) {
+                installPlayer(using: MediaPlaybackConfiguration(url: url, headers: nil))
+            }
             return
         }
 
@@ -1227,10 +1228,10 @@ struct VideoPlayerView: View {
             }
             if let postID {
                 await R2PlaybackResolver.shared.invalidate(postID: postID)
-                if let live = await R2PlaybackResolver.shared.playURL(postID: postID, fallback: url) {
-                    let play = MediaURLResolver.r2PublicPlaybackURL(from: live) ?? live
-                    configuredURL = play
-                    installPlayer(using: MediaPlaybackConfiguration(url: play, headers: nil))
+                if let live = await R2PlaybackResolver.shared.playURL(postID: postID, fallback: url),
+                   !MediaURLResolver.isBlockedR2PublicURL(live) {
+                    configuredURL = live
+                    installPlayer(using: MediaPlaybackConfiguration(url: live, headers: nil))
                     return
                 }
             }

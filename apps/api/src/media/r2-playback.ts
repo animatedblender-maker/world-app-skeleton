@@ -62,27 +62,17 @@ export function publicObjectUrl(key: string): string | null {
 /**
  * Resolve a durable play URL for an R2 object key.
  *
- * Prefer **public R2_PUBLIC_BASE_URL** when configured: AVPlayer issues HEAD first,
- * and GET-only cloudflarestorage.com presigns return 403 on HEAD → iOS error
- * "You do not have permission to access the requested resource."
- * Public pub-*.r2.dev allows HEAD + Range GET.
- *
- * Presign is fallback when no public base (or R2_PREFER_PUBLIC=0).
+ * Always mint a **signed GET** when credentials exist. `pub-*.r2.dev` is currently
+ * CF 1010 / 403 for this bucket — never prefer it unless R2_FORCE_PUBLIC=1.
  */
 export async function resolvePlayUrlForKey(key: string): Promise<string | null> {
   const clean = key.replace(/^\/+/, '').trim();
   if (!clean) return null;
 
   const forcePublic = process.env.R2_FORCE_PUBLIC === '1' || process.env.R2_FORCE_PUBLIC === 'true';
-  const preferPublic =
-    forcePublic ||
-    process.env.R2_PREFER_PUBLIC === '1' ||
-    process.env.R2_PREFER_PUBLIC === 'true' ||
-    process.env.R2_PREFER_PUBLIC !== '0';
-
-  const permanent = publicObjectUrl(clean);
-  if (permanent && preferPublic) {
-    return permanent;
+  if (forcePublic) {
+    const permanent = publicObjectUrl(clean);
+    if (permanent) return permanent;
   }
 
   const now = Date.now();
@@ -109,8 +99,8 @@ export async function resolvePlayUrlForKey(key: string): Promise<string | null> 
     }
   }
 
-  // No credentials / presign failed → try public base (may 403 if bucket private).
-  return permanent;
+  // No credentials / presign failed → last-resort public (often 403).
+  return publicObjectUrl(clean);
 }
 
 /** Extract R2 object key from media_url JSON / path / plain signed URL path. */
@@ -173,23 +163,14 @@ function existingPlayUrlStillFresh(mediaUrl: string | null | undefined): string 
   if (!candidate) return null;
   try {
     const u = new URL(candidate);
-    // Signed cloudflarestorage GETs break AVPlayer (HEAD → 403). When a public base
-    // exists, force freshen so shelves/playback return pub-*.r2.dev instead.
-    if (
-      r2PublicBaseUrl() &&
-      u.hostname.includes('r2.cloudflarestorage.com') &&
-      (u.searchParams.has('X-Amz-Signature') || u.searchParams.has('X-Amz-Algorithm'))
-    ) {
+    // pub-*.r2.dev is CF 1010/403 for this bucket — never treat as fresh; re-presign.
+    if (u.hostname.includes('r2.dev')) {
       return null;
     }
-    // Unsigned R2 hosts: keep pub-*.r2.dev (public ACL). Re-resolve bare
-    // cloudflarestorage without signature (incomplete).
+    // Unsigned cloudflarestorage (no signature) is incomplete — re-presign.
     if (!u.searchParams.has('X-Amz-Signature') && !u.searchParams.has('X-Amz-Algorithm')) {
       if (u.hostname.includes('r2.cloudflarestorage.com')) {
         return null;
-      }
-      if (u.hostname.includes('r2.dev')) {
-        return candidate;
       }
       // Non-R2 public (supabase / custom CDN) — keep.
       if (u.hostname.includes('supabase') || u.hostname.includes('matterya.com')) {

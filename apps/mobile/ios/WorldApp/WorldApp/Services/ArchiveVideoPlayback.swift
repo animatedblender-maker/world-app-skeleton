@@ -1683,7 +1683,17 @@ final class ArchiveVideoPlayerController: UIViewController {
         spinner.stopAnimating()
         loadTask = Task { [weak self] in
             guard let self else { return }
-            let playURL = await ArchiveVideoPlayback.resolvedPlaybackURL(for: url)
+            // Hubs R2 long-form: resolve via /v1/playback (fresh signed). Raw shelf URLs are
+            // often pub-*.r2.dev (CF 1010) or expired embeds — that yields AVPlayer permission errors.
+            let playURL: URL
+            if MediaURLResolver.looksLikeR2HostedURL(url), let postID = self.postID, !postID.isEmpty {
+                let config = await MediaURLResolver.playbackConfiguration(for: url, postID: postID)
+                playURL = config.url
+            } else if ArchiveVideoPlayback.isArchiveURL(url) {
+                playURL = await ArchiveVideoPlayback.resolvedPlaybackURL(for: url)
+            } else {
+                playURL = url
+            }
             guard !Task.isCancelled else { return }
             await self.installPlayer(url: playURL, original: url, muted: muted, startTime: startTime)
             if !autoplay {

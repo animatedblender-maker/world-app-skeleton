@@ -23,7 +23,12 @@ actor R2PlaybackResolver {
         guard !key.isEmpty else { return fallback }
 
         if let hit = cache[key], Date().timeIntervalSince(hit.cachedAt) < cacheTTL {
-            return hit.url
+            // Drop banned pub-*.r2.dev cache entries (CF 1010) so we re-fetch a signed URL.
+            if MediaURLResolver.isBlockedR2PublicURL(hit.url) {
+                cache.removeValue(forKey: key)
+            } else {
+                return hit.url
+            }
         }
         if let existing = inflight[key] {
             return await existing.value ?? fallback
@@ -41,7 +46,8 @@ actor R2PlaybackResolver {
     private func fetchAndCache(postID: String, fallback: URL?) async -> URL? {
         do {
             let media = try await fetchPlaybackMedia(postID: postID)
-            if let url = URL(string: media.url), url.scheme != nil {
+            if let url = URL(string: media.url), url.scheme != nil,
+               !MediaURLResolver.isBlockedR2PublicURL(url) {
                 cache[postID] = CacheEntry(url: url, mediaURLPayload: media.media_url, cachedAt: Date())
                 if cache.count > 4000, let first = cache.keys.first {
                     cache.removeValue(forKey: first)
@@ -53,7 +59,10 @@ actor R2PlaybackResolver {
             print("[R2Playback] resolve failed \(postID.prefix(8)): \(error.localizedDescription)")
             #endif
         }
-        return fallback
+        if let fallback, !MediaURLResolver.isBlockedR2PublicURL(fallback) {
+            return fallback
+        }
+        return nil
     }
 
     /// Drop cache so the next play re-fetches (after 403 / unavailable).

@@ -119,11 +119,16 @@ enum MediaURLResolver {
 
     /// Prefer server `frame0_*.webp` / media JSON `posters` (true t=0 pixels, same aspect as film).
     static func frame0PosterURL(for post: CountryPost) -> URL? {
-        // Prefer embedded ladder (1080 → 512 → 256) when present — same aspect, sharper on Sparks.
-        if let embedded = embeddedFrame0PosterURL(from: post.mediaURL) {
+        // Live Frame0 cache (fresh signed from /v1/poster/batch) beats stale JSON embeds.
+        if let cached = Frame0PosterCache.url(for: post.id), isUsablePosterURL(cached) {
+            return cached
+        }
+        // Prefer embedded ladder (1080 → 512 → 256) when still valid.
+        if let embedded = embeddedFrame0PosterURL(from: post.mediaURL), isUsablePosterURL(embedded) {
             return embedded
         }
-        if let thumb = resolve(post.thumbURL), !isVideoURL(thumb), looksLikeFrame0Poster(thumb) {
+        if let thumb = resolve(post.thumbURL), !isVideoURL(thumb), looksLikeFrame0Poster(thumb),
+           isUsablePosterURL(thumb) {
             return thumb
         }
         return nil
@@ -296,7 +301,7 @@ enum MediaURLResolver {
     }
 
     /// Resolve a play configuration.
-    /// - R2 **signed** cloudflarestorage URLs: rewrite to public r2.dev (AVPlayer HEAD works).
+    /// - R2: always live-resolve when URL is pub-*.r2.dev (CF 1010) or expired/near-expiry presign.
     /// - Archive / Supabase: existing CDN/auth paths.
     static func playbackConfiguration(for url: URL, postID: String? = nil) async -> MediaPlaybackConfiguration {
         // Never run video CDN resolution on image posters (thumbs / services/img).
@@ -304,27 +309,19 @@ enum MediaURLResolver {
             return MediaPlaybackConfiguration(url: url, headers: nil)
         }
 
-        // GET-only R2 presigns return 403 on HEAD — AVPlayer then shows
-        // "You do not have permission to access the requested resource."
-        // Public pub-*.r2.dev allows HEAD+Range; rewrite before handing to AVPlayer.
-        if let publicURL = r2PublicPlaybackURL(from: url) {
-            return MediaPlaybackConfiguration(url: publicURL, headers: nil)
-        }
-
-        // R2: live-resolve when unsigned/dying; still rewrite any signed result to public.
+        // R2: pub-*.r2.dev is 403/CF1010; expired signed GETs also fail. Fresh-presign via API.
         if looksLikeR2HostedURL(url), let postID, !postID.isEmpty {
             let needsLive =
-                !isPresignedObjectURL(url)
+                isBlockedR2PublicURL(url)
+                || !isPresignedObjectURL(url)
                 || isPresignExpiredOrNearExpiry(url, slackSeconds: 3600)
             if needsLive {
-                if let live = await R2PlaybackResolver.shared.playURL(postID: postID, fallback: nil) {
-                    let play = r2PublicPlaybackURL(from: live) ?? live
-                    if play != url || isPresignedObjectURL(live) {
-                        return MediaPlaybackConfiguration(url: play, headers: nil)
-                    }
+                if let live = await R2PlaybackResolver.shared.playURL(postID: postID, fallback: nil),
+                   isPresignedObjectURL(live),
+                   !isBlockedR2PublicURL(live) {
+                    return MediaPlaybackConfiguration(url: live, headers: nil)
                 }
             } else if isPresignedObjectURL(url) {
-                // Should have been rewritten above; keep as last resort.
                 return MediaPlaybackConfiguration(url: url, headers: nil)
             }
         }
@@ -360,26 +357,18 @@ enum MediaURLResolver {
             || lower.contains("\"r2_key\"")
     }
 
-    /// Map a GET-presigned `*.r2.cloudflarestorage.com/.../matterya-sparks/<key>?X-Amz-…`
-    /// URL to the public `pub-*.r2.dev/<key>` form AVPlayer can HEAD.
-    static func r2PublicPlaybackURL(from url: URL) -> URL? {
-        guard let host = url.host?.lowercased(),
-              host.contains("r2.cloudflarestorage.com")
-        else { return nil }
-        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
-        let isPresign = items.contains {
-            $0.name == "X-Amz-Signature" || $0.name == "X-Amz-Algorithm"
-        }
-        guard isPresign else { return nil }
+    /// `pub-*.r2.dev` is CF 1010 / 403 for matterya-sparks — never hand to AVPlayer/ImageCache.
+    static func isBlockedR2PublicURL(_ url: URL) -> Bool {
+        (url.host ?? "").lowercased().contains("r2.dev")
+    }
 
-        var parts = url.path.split(separator: "/").map(String.init)
-        if parts.first == "matterya-sparks" {
-            parts.removeFirst()
+    /// Poster usable for list/player chrome (not expired, not banned public host).
+    static func isUsablePosterURL(_ url: URL) -> Bool {
+        if isBlockedR2PublicURL(url) { return false }
+        if isPresignedObjectURL(url), isPresignExpiredOrNearExpiry(url, slackSeconds: 120) {
+            return false
         }
-        guard !parts.isEmpty else { return nil }
-        let key = parts.joined(separator: "/")
-        let base = AppConfig.r2PublicBaseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        return URL(string: "\(base)/\(key)")
+        return true
     }
 
     static func playbackFallbackConfiguration(for url: URL) -> MediaPlaybackConfiguration? {
