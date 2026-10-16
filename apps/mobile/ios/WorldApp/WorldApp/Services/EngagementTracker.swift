@@ -327,10 +327,22 @@ final class EngagementTracker {
                 #endif
             }
         } catch {
+            let ns = error as NSError
+            let cancelled =
+                ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled
+                || (error as? URLError)?.code == .cancelled
+            if cancelled {
+                // Debounced flush / view teardown — put events back, stay quiet.
+                queue.insert(contentsOf: batch, at: 0)
+                if queue.count > 200 {
+                    queue.removeLast(queue.count - 200)
+                }
+                return
+            }
             #if DEBUG
             print("[EngagementTracker] batch failed: \(error.localizedDescription)")
             #endif
-            // Drop on network failure — next session continues (avoid infinite retry storms)
+            // Drop on hard network failure — next session continues (avoid retry storms)
         }
     }
 

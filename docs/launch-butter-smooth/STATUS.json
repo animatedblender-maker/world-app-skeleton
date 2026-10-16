@@ -3,9 +3,9 @@
   "phase": "fix-client",
   "running": true,
   "started_at": "2026-10-01T15:00:00Z",
-  "updated_at": "2026-10-16T16:21:23Z",
+  "updated_at": "2026-10-16T16:34:41Z",
   "overall_pct": 51.6,
-  "headline": "iOS: raise feed/config timeouts + Frame0 batch coalesce (cold API was 5.6s > 4s client)",
+  "headline": "Device recovered after cold miss \u2014 feed 40 items; hush engagement cancel spam",
   "surfaces": [
     {
       "id": "feed",
@@ -169,6 +169,10 @@
     {
       "t": "2026-10-16T16:21:23Z",
       "msg": "Device logs: feed/config/poster/graphql -1001. From Mac API OK but cold feed hit 5.6s; SurfacePageClient was 4s \u2014 false timeout storm."
+    },
+    {
+      "t": "2026-10-16T16:34:41Z",
+      "msg": "Same session: early -1001 then [Surface] /v1/feed items=40, Sparks 201\u2192641, loadMore. API warm ~0.3\u20130.6s from Mac."
     }
   ]
 }
