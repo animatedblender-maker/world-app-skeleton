@@ -583,11 +583,21 @@ struct ReelsPagerCard: View {
         }
     }
 
-    /// Prefer server Frame 0, then nested shared origin, then raw posterImageURL.
+    /// Prefer live Frame0 cache, then resolver, then nested shared origin.
     private var sparkPosterURL: URL? {
-        MediaURLResolver.posterURL(for: post)
-            ?? post.sharedPost.flatMap { MediaURLResolver.posterURL(for: $0.asCountryPost) }
-            ?? post.posterImageURL
+        if let cached = Frame0PosterCache.url(for: post.id),
+           MediaURLResolver.isUsablePosterURL(cached) {
+            return cached
+        }
+        if let url = MediaURLResolver.posterURL(for: post),
+           MediaURLResolver.isUsablePosterURL(url) {
+            return url
+        }
+        if let shared = post.sharedPost.flatMap({ MediaURLResolver.posterURL(for: $0.asCountryPost) }),
+           MediaURLResolver.isUsablePosterURL(shared) {
+            return shared
+        }
+        return nil
     }
 
     /// Full-stage under the notch. Portrait fills; wide clips fit when fill would crop hard.
@@ -608,11 +618,13 @@ struct ReelsPagerCard: View {
                     .clipped()
                     .allowsHitTesting(false)
                 } else if let url = sparkPlayURL {
+                    // Pack-path Frame 0 only — never AV-extract on swipe (R2 storm / freeze).
                     FrameZeroFallbackPoster(
                         postID: post.id,
                         videoURL: url,
                         fillsFrame: useFill,
-                        allowClientExtract: isActive
+                        allowClientExtract: false,
+                        seedPosterURL: Frame0PosterCache.url(for: post.id)
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .allowsHitTesting(false)

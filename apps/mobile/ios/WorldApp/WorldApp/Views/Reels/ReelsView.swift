@@ -99,7 +99,17 @@ private struct ReelCard: View {
     var body: some View {
         ZStack(alignment: .bottomLeading) {
             if let url = post.playableVideoURL {
-                let poster = MediaURLResolver.posterURL(for: post) ?? post.posterImageURL
+                let poster: URL? = {
+                    if let cached = Frame0PosterCache.url(for: post.id),
+                       MediaURLResolver.isUsablePosterURL(cached) {
+                        return cached
+                    }
+                    if let resolved = MediaURLResolver.posterURL(for: post),
+                       MediaURLResolver.isUsablePosterURL(resolved) {
+                        return resolved
+                    }
+                    return nil
+                }()
                 ZStack {
                     Color.black
                     if let poster {
@@ -116,7 +126,8 @@ private struct ReelCard: View {
                             postID: post.id,
                             videoURL: url,
                             fillsFrame: false,
-                            allowClientExtract: isActive
+                            allowClientExtract: false,
+                            seedPosterURL: Frame0PosterCache.url(for: post.id)
                         )
                         .ignoresSafeArea()
                         .allowsHitTesting(false)

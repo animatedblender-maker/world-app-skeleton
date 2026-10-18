@@ -236,12 +236,13 @@ struct ConversationView: View {
             }
             // Seed from conversation members while the network refresh loads.
             if peerLastReadAt == nil, let me = currentUserID {
-                peerLastReadAt = conversation.otherMember(currentUserID: me)?.lastReadAt            }
-            // If we already painted from cache, soft-refresh without a blocking spinner.
-            await callManager.ensureSignalingReady()
+                peerLastReadAt = conversation.otherMember(currentUserID: me)?.lastReadAt
+            }
+            // Never block chat open / send on call WebSocket — warm signaling in parallel.
+            Task { await callManager.ensureSignalingReady() }
             await loadMessages()
-            // Keep read receipts fresh while this chat is open.
-            await pollPeerReadReceipts()
+            // Silent receive + read receipts while this chat is open.
+            await pollOpenConversation()
         }
         .alert("Call unavailable", isPresented: Binding(
             get: { callManager.errorMessage != nil && !callManager.showUI },
@@ -287,13 +288,58 @@ struct ConversationView: View {
         ChatShareRouting.open(share, appState: appState)
     }
 
-    /// Poll peer `last_read_at` so "Read" appears soon after they open the chat.
-    private func pollPeerReadReceipts() async {
+    /// Silent message + read-receipt poll while the thread is open (no spinner / error flash).
+    private func pollOpenConversation() async {
+        var ticks = 0
         while !Task.isCancelled {
-            // Gentle interval — aggressive polling made chat feel laggy.
-            try? await Task.sleep(nanoseconds: 15_000_000_000)
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
             guard !Task.isCancelled else { return }
-            await refreshPeerReadReceipt()
+            // Skip while a send is in flight so pending bubbles aren't raced.
+            if isSending { continue }
+            await silentRefreshMessages()
+            ticks += 1
+            // Read receipts can be slower — every ~12s.
+            if ticks % 2 == 0 {
+                await refreshPeerReadReceipt()
+            }
+        }
+    }
+
+    private func silentRefreshMessages() async {
+        do {
+            let localHold = await MainActor.run { () -> [Message] in
+                messages.filter {
+                    $0.id.hasPrefix("pending-") || $0.id.hasPrefix("local-call-")
+                }
+            }
+            let loaded = try await MessagesService.shared.listMessages(conversationID: conversation.id)
+            await MainActor.run {
+                var next = loaded
+                for local in localHold {
+                    let already = next.contains(where: { $0.id == local.id })
+                        || (local.isCallLog && next.contains(where: {
+                            $0.isCallLog
+                                && $0.body == local.body
+                                && $0.senderID == local.senderID
+                        }))
+                    if !already {
+                        next.append(local)
+                    }
+                }
+                let previousIDs = Set(messages.map(\.id))
+                let grew = next.contains { !previousIDs.contains($0.id) }
+                messages = next
+                MessagesService.shared.storeMessages(
+                    next,
+                    peerReadAt: peerLastReadAt,
+                    for: conversation.id
+                )
+                if grew {
+                    requestScrollToBottom()
+                }
+            }
+        } catch {
+            // Silent — network blips must not paint thread errors.
         }
     }
 
@@ -557,44 +603,52 @@ struct ConversationView: View {
         defer { isSending = false }
 
         let sendT0 = Date().timeIntervalSince1970
-        let usesPlaceholder = pendingMediaData == nil
-        let placeholderID = usesPlaceholder ? "pending-\(UUID().uuidString)" : nil
-        if usesPlaceholder, let placeholderID {
-            let now = ISO8601DateFormatter().string(from: Date())
-            let placeholder = Message(
-                id: placeholderID,
-                conversationID: conversation.id,
-                senderID: currentUserID ?? "",
-                body: body,
-                mediaType: nil,
-                mediaPath: nil,
-                mediaURL: nil,
-                mediaName: nil,
-                createdAt: now,
-                updatedAt: now,
-                sender: nil
-            )
-            messages.append(placeholder)
-            persistMessageCache()
-            requestScrollToBottom()
-            // Local bubble on screen — butter-smooth target < 50 ms.
-            let localMs = max(0, Int((Date().timeIntervalSince1970 - sendT0) * 1000))
-            PerformanceTelemetry.record(
-                name: "message_local_visible",
-                surface: "messages",
-                durationMs: localMs,
-                t0: sendT0,
-                ok: true
-            )
-        }
+        let mediaData = pendingMediaData
+        let placeholderID = "pending-\(UUID().uuidString)"
+        let localMediaURL: String? = {
+            guard let mediaData else { return nil }
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("chat-pending-\(placeholderID).jpg")
+            try? mediaData.write(to: url, options: .atomic)
+            return url.absoluteString
+        }()
+        let now = ISO8601DateFormatter().string(from: Date())
+        let placeholder = Message(
+            id: placeholderID,
+            conversationID: conversation.id,
+            senderID: currentUserID ?? "",
+            body: body,
+            mediaType: mediaData == nil ? nil : "image",
+            mediaPath: nil,
+            mediaURL: localMediaURL,
+            mediaName: mediaData == nil ? nil : "image.jpg",
+            createdAt: now,
+            updatedAt: now,
+            sender: nil
+        )
+        messages.append(placeholder)
+        persistMessageCache()
+        requestScrollToBottom()
+        // Local bubble on screen — butter-smooth target < 50 ms.
+        let localMs = max(0, Int((Date().timeIntervalSince1970 - sendT0) * 1000))
+        PerformanceTelemetry.record(
+            name: "message_local_visible",
+            surface: "messages",
+            durationMs: localMs,
+            t0: sendT0,
+            ok: true
+        )
         draft = ""
         let savedReply = replyingTo
+        let savedMediaData = mediaData
+        let savedMediaImage = pendingMediaImage
+        clearPendingMedia()
         replyingTo = nil
         composerFocused = false
         Keyboard.dismiss()
 
         do {
-            if let data = pendingMediaData {
+            if let data = savedMediaData {
                 let upload = try await MediaService.shared.uploadMessageMedia(
                     data: data,
                     conversationID: conversation.id,
@@ -610,21 +664,13 @@ struct ConversationView: View {
                     mediaMime: upload.mime,
                     mediaSize: upload.size
                 )
-                if let placeholderID {
-                    replacePendingMessage(id: placeholderID, with: message)
-                } else {
-                    messages.append(message)
-                    persistMessageCache()
+                replacePendingMessage(id: placeholderID, with: message)
+                if let localMediaURL, let fileURL = URL(string: localMediaURL) {
+                    try? FileManager.default.removeItem(at: fileURL)
                 }
-                clearPendingMedia()
             } else {
                 let message = try await MessagesService.shared.sendMessage(conversationID: conversation.id, body: body)
-                if let placeholderID {
-                    replacePendingMessage(id: placeholderID, with: message)
-                } else {
-                    messages.append(message)
-                    persistMessageCache()
-                }
+                replacePendingMessage(id: placeholderID, with: message)
             }
             notifyConversationChanged()
             requestScrollToBottom()
@@ -641,12 +687,17 @@ struct ConversationView: View {
                 persistMessageCache()
             }
         } catch {
-            if let placeholderID {
-                messages.removeAll { $0.id == placeholderID }
-                persistMessageCache()
+            messages.removeAll { $0.id == placeholderID }
+            persistMessageCache()
+            if let localMediaURL, let fileURL = URL(string: localMediaURL) {
+                try? FileManager.default.removeItem(at: fileURL)
             }
             draft = body
             replyingTo = savedReply
+            if let savedMediaData {
+                pendingMediaData = savedMediaData
+                pendingMediaImage = savedMediaImage
+            }
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }

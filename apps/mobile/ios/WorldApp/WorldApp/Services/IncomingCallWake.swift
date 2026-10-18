@@ -60,7 +60,8 @@ enum IncomingCallWake {
             callType: payload.callType,
             callID: payload.callID,
             roomName: payload.roomName,
-            callerName: payload.displayName
+            callerName: payload.displayName,
+            presentedViaCallKit: false
         )
 
         guard staged else { return false }
@@ -71,6 +72,7 @@ enum IncomingCallWake {
                 from: payload.from,
                 reportToCallKit: false
             )
+            CallSessionManager.shared.presentInAppIncomingUI()
         }
         return true
     }
@@ -93,7 +95,8 @@ enum IncomingCallWake {
             callType: payload.callType,
             callID: payload.callID,
             roomName: payload.roomName,
-            callerName: payload.displayName
+            callerName: payload.displayName,
+            presentedViaCallKit: true
         )
 
         if staged {

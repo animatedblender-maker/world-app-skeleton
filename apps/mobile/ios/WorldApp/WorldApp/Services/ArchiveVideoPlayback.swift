@@ -1121,6 +1121,8 @@ final class ArchiveVideoPlayerController: UIViewController {
     private var didRetry = false
     private var didKickPlayback = false
     private var resolvedPlayURL: URL?
+    /// Retains GET-only R2 resource loader for the active AVURLAsset.
+    private var r2ResourceLoader: R2PresignedResourceLoader?
 
     private let posterView = UIImageView()
     private let spinner = UIActivityIndicatorView(style: .large)
@@ -1685,16 +1687,34 @@ final class ArchiveVideoPlayerController: UIViewController {
             guard let self else { return }
             // Hubs R2 long-form: resolve via /v1/playback (fresh signed). Raw shelf URLs are
             // often pub-*.r2.dev (CF 1010) or expired embeds — that yields AVPlayer permission errors.
-            let playURL: URL
+            var playURL: URL
             if MediaURLResolver.looksLikeR2HostedURL(url), let postID = self.postID, !postID.isEmpty {
                 let config = await MediaURLResolver.playbackConfiguration(for: url, postID: postID)
                 playURL = config.url
+                // Never hand banned pub-*.r2.dev to AVPlayer — force another live resolve.
+                if MediaURLResolver.isBlockedR2PublicURL(playURL) {
+                    await R2PlaybackResolver.shared.invalidate(postID: postID)
+                    if let live = await R2PlaybackResolver.shared.playURL(postID: postID, fallback: nil),
+                       !MediaURLResolver.isBlockedR2PublicURL(live) {
+                        playURL = live
+                    }
+                }
             } else if ArchiveVideoPlayback.isArchiveURL(url) {
                 playURL = await ArchiveVideoPlayback.resolvedPlaybackURL(for: url)
             } else {
                 playURL = url
             }
             guard !Task.isCancelled else { return }
+            if MediaURLResolver.isBlockedR2PublicURL(playURL) {
+                await self.handleFailure(
+                    message: "You do not have permission to access the requested resource.",
+                    original: url,
+                    attempted: playURL,
+                    muted: muted,
+                    startTime: startTime
+                )
+                return
+            }
             await self.installPlayer(url: playURL, original: url, muted: muted, startTime: startTime)
             if !autoplay {
                 self.userWantsPlayback = false
@@ -1725,10 +1745,13 @@ final class ArchiveVideoPlayerController: UIViewController {
         playerLayer?.removeFromSuperlayer()
         didKickPlayback = false
         userWantsPlayback = autoplay
+        r2ResourceLoader = nil
 
         claimed.automaticallyWaitsToMinimizeStalling = false
         claimed.actionAtItemEnd = loops ? .none : .pause
         mutedFlag = muted
+        // Keep GET-only R2 proxy alive after warm-pool Slot is removed.
+        r2ResourceLoader = SparkWarmPool.shared.takePendingResourceLoader(for: claimed)
 
         let layer = AVPlayerLayer(player: claimed)
         // Gravity + frame match the host view only — NEVER UIScreen.main.bounds
@@ -2111,16 +2134,12 @@ final class ArchiveVideoPlayerController: UIViewController {
         }
         playerLayer?.removeFromSuperlayer()
         didKickPlayback = false
+        r2ResourceLoader = nil
 
         // Important: no custom HTTP headers — Archive CDN + AVPlayer + headers = hang on poster.
-        let asset = AVURLAsset(
-            url: url,
-            options: [
-                AVURLAssetAllowsCellularAccessKey: true,
-                AVURLAssetAllowsExpensiveNetworkAccessKey: true,
-                AVURLAssetAllowsConstrainedNetworkAccessKey: true,
-            ]
-        )
+        // GET-only R2/S3 presigns 403 on HEAD — proxy via matterya-r2:// so Range GET answers.
+        let (asset, loader) = R2PresignedPlayback.makeAsset(for: url)
+        r2ResourceLoader = loader
 
         // Kick playable/duration off the hot path (don’t await — Archive CDN is slow).
         Task(priority: .utility) {
@@ -2254,9 +2273,25 @@ final class ArchiveVideoPlayerController: UIViewController {
         muted: Bool,
         startTime: Double
     ) async {
-        // One retry: re-resolve archive.org/download → CDN (or flip back to the other URL).
+        // One retry: R2 → /v1/playback; archive → CDN flip.
         if !didRetry {
             didRetry = true
+            let looksR2 = MediaURLResolver.looksLikeR2HostedURL(original)
+                || MediaURLResolver.looksLikeR2HostedURL(attempted)
+                || MediaURLResolver.isBlockedR2PublicURL(attempted)
+            let permissionDenied = message.localizedCaseInsensitiveContains("permission")
+            if (looksR2 || permissionDenied), let postID, !postID.isEmpty {
+                await R2PlaybackResolver.shared.invalidate(postID: postID)
+                if let live = await R2PlaybackResolver.shared.playURL(postID: postID, fallback: nil),
+                   !MediaURLResolver.isBlockedR2PublicURL(live),
+                   live.absoluteString != attempted.absoluteString {
+                    #if DEBUG
+                    print("[ArchiveVideo] R2 playback retry \(attempted.host ?? "") → \(live.host ?? "")")
+                    #endif
+                    await installPlayer(url: live, original: original, muted: muted, startTime: startTime)
+                    return
+                }
+            }
             let retryURL: URL
             if attempted == original {
                 retryURL = await ArchiveVideoPlayback.resolvedPlaybackURL(for: original)
@@ -2308,15 +2343,20 @@ final class ArchiveVideoPlayerController: UIViewController {
     private func loadPoster(_ url: URL?) {
         posterView.isHidden = false
         posterView.image = nil
-        guard let url else { return }
+        // Reject banned pub-*.r2.dev / expired embeds — fall through to Frame0 below.
+        let usable = url.flatMap { MediaURLResolver.isUsablePosterURL($0) ? $0 : nil }
         Task {
-            do {
-                let (data, _) = try await URLSession.shared.data(from: url)
-                if let image = UIImage(data: data) {
+            if let usable {
+                if let image = await ImageCache.shared.image(for: usable, maxPixelSize: 900) {
                     self.posterView.image = image
+                    return
                 }
-            } catch {
-                // Keep black / spinner.
+            }
+            if let postID,
+               let signed = await Frame0PosterResolver.shared.posterURL(postID: postID),
+               MediaURLResolver.isUsablePosterURL(signed),
+               let image = await ImageCache.shared.image(for: signed, maxPixelSize: 900) {
+                self.posterView.image = image
             }
         }
     }

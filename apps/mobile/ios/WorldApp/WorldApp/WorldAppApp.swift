@@ -66,12 +66,13 @@ struct WorldAppApp: App {
                 Task { @MainActor in
                     Keyboard.installDismissOnOutsideTap()
                     CallSessionManager.shared.handleAppDidBecomeActive()
-                    VoIPPushService.shared.bootstrap()
-                    await appState.handleBecameActive()
-                    await PushNotificationService.shared.syncWithServer(force: true)
+                    // Never warm PushKit/CallKit on the login screen — hangs email/password typing.
                     if appState.isAuthenticated {
+                        VoIPPushService.shared.bootstrap()
                         CallSessionManager.shared.bootstrap()
+                        await PushNotificationService.shared.syncWithServer(force: true)
                     }
+                    await appState.handleBecameActive()
                 }
             }
         }

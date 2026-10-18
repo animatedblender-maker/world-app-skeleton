@@ -765,20 +765,44 @@ final class PushNotificationService: NSObject, UNUserNotificationCenterDelegate 
 
     @MainActor
     private func routeIncomingCallPayload(_ payload: [String: Any], presentInAppUI: Bool) async -> Bool {
-        guard
-            let conversationID = stringValue(payload["conversationId"]),
-            let from = stringValue(payload["from"])
-        else {
+        // Accept camelCase + snake_case + nested custom/data (same as IncomingCallWake / VoIP).
+        let conversationID =
+            extractConversationID(from: payload)
+            ?? stringValue(payload["conversationId"])
+            ?? stringValue(payload["conversationID"])
+            ?? stringValue(payload["conversation_id"])
+        let from =
+            stringValue(payload["from"])
+            ?? stringValue(payload["callerId"])
+            ?? stringValue(payload["callerID"])
+            ?? stringValue(payload["caller_id"])
+            ?? stringValue(payload["senderId"])
+            ?? stringValue(payload["sender_id"])
+        guard let conversationID, let from else {
             logger.error("Call push missing conversationId/from: \(payload.keys.joined(separator: ","), privacy: .public)")
             return false
         }
 
-        let callType = stringValue(payload["callType"]) ?? "audio"
-        let callID = stringValue(payload["callId"]) ?? stringValue(payload["callID"])
-        let roomName = stringValue(payload["roomName"]) ?? stringValue(payload["room"])
+        let callType =
+            stringValue(payload["callType"])
+            ?? stringValue(payload["call_type"])
+            ?? stringValue(payload["kind"])
+            ?? "audio"
+        let callID =
+            stringValue(payload["callId"])
+            ?? stringValue(payload["callID"])
+            ?? stringValue(payload["call_id"])
+            ?? stringValue(payload["sessionId"])
+            ?? stringValue(payload["session_id"])
+        let roomName =
+            stringValue(payload["roomName"])
+            ?? stringValue(payload["room_name"])
+            ?? stringValue(payload["room"])
         let displayName =
             stringValue(payload["title"])
             ?? stringValue(payload["callerName"])
+            ?? stringValue(payload["caller_name"])
+            ?? stringValue(payload["name"])
             ?? "Incoming call"
 
         if let me = AuthService.shared.currentUser?.id, from == me { return true }
@@ -791,7 +815,8 @@ final class PushNotificationService: NSObject, UNUserNotificationCenterDelegate 
             callType: callType,
             callID: callID,
             roomName: roomName,
-            callerName: displayName
+            callerName: displayName,
+            presentedViaCallKit: !presentInAppUI
         ) else {
             if !presentInAppUI {
                 CallKitManager.shared.requestEndCall(for: conversationID)

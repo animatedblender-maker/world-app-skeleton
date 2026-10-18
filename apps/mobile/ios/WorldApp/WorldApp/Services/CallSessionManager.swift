@@ -91,8 +91,9 @@ final class CallSessionManager: NSObject {
         cleanup(notifyRemote: isActive || isConnecting)
     }
 
+    /// Tap-ready even while the call WS is still connecting — `startCall` awaits ensureConnected.
     var canStartCall: Bool {
-        !isActive && !isConnecting && !isIncoming && isSignalingConnected
+        !isActive && !isConnecting && !isIncoming
     }
 
     var showFullCallUI: Bool {
@@ -249,7 +250,8 @@ final class CallSessionManager: NSObject {
         callType: String,
         callID: String?,
         roomName: String?,
-        callerName: String? = nil
+        callerName: String? = nil,
+        presentedViaCallKit: Bool? = nil
     ) -> Bool {
         if let me = AuthService.shared.currentUser?.id, userID == me { return false }
         if isActive { return false }
@@ -282,10 +284,13 @@ final class CallSessionManager: NSObject {
         hasEndedCurrentCall = false
 
         let appIsActive = UIApplication.shared.applicationState == .active
-        incomingPresentedViaCallKit = !appIsActive
+        // VoIP pushes must always report CallKit; optional override for that path.
+        let viaCallKit = presentedViaCallKit ?? !appIsActive
+        incomingPresentedViaCallKit = viaCallKit
         isMinimized = false
-        showUI = appIsActive
-        if appIsActive {
+        // In-app ring only when CallKit is not owning the presentation.
+        showUI = appIsActive && !viaCallKit
+        if showUI {
             CallSoundService.shared.start(.incomingRing)
         }
 
@@ -369,7 +374,8 @@ final class CallSessionManager: NSObject {
             callType: callType,
             callID: callID,
             roomName: roomName,
-            callerName: callerName
+            callerName: callerName,
+            presentedViaCallKit: reportToCallKit
         ) else { return }
 
         await finalizeIncomingCallPresentation(

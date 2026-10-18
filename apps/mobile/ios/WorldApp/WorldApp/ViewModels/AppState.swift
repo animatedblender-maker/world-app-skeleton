@@ -220,13 +220,15 @@ final class AppState {
         markSessionReady()
 
         // Background only — UI already on MainTab for returning users.
+        // VoIP/CallKit stay off the first-paint path (AppDelegate already yields; incoming-call wake is immediate).
         Task(priority: .utility) {
             await AppPermissionsService.shared.requestEssentialPermissionsOnLaunch()
+            await Task.yield()
+            VoIPPushService.shared.bootstrap()
+            CallSessionManager.shared.bootstrap()
+            await registerPushInBackgroundAsync()
         }
-        VoIPPushService.shared.bootstrap()
-        CallSessionManager.shared.bootstrap()
         startPolling()
-        registerPushInBackground()
         flushPendingPushRoute()
         Task { await finishSessionWarmup() }
         // Config is non-critical — delay so it never races first feed paint / auth.

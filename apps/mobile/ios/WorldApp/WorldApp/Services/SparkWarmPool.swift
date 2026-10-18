@@ -58,12 +58,16 @@ final class SparkWarmPool {
         let postID: String
         let player: AVPlayer
         let parkedAt: Date
+        /// Retains GET-only R2 resource loader while the warm slot lives.
+        let r2ResourceLoader: R2PresignedResourceLoader?
     }
 
     private var slots: [String: Slot] = [:]
     private var warming = Set<String>()
     /// Visible owners currently holding a claimed player — never re-warm these.
     private var inUse = Set<String>()
+    /// Loaders handed off on claim — install must take them or AV Range proxy dies.
+    private var pendingClaimLoaders: [ObjectIdentifier: R2PresignedResourceLoader] = [:]
     private var maxSlots: Int { MediaBudget.maxSlots }
     private var forwardBufferSeconds: Double { MediaBudget.forwardBufferDeep }
     /// Serialize warm starts so we fill the ahead window without opening N R2 pipes at once.
@@ -229,7 +233,12 @@ final class SparkWarmPool {
             if continuingIDs.remove(old) != nil { continuingIDs.insert(neu) }
             return
         }
-        slots[neu] = Slot(postID: neu, player: slot.player, parkedAt: slot.parkedAt)
+        slots[neu] = Slot(
+            postID: neu,
+            player: slot.player,
+            parkedAt: slot.parkedAt,
+            r2ResourceLoader: slot.r2ResourceLoader
+        )
         if inUse.remove(old) != nil { inUse.insert(neu) }
         if continuingIDs.remove(old) != nil { continuingIDs.insert(neu) }
     }
@@ -284,6 +293,9 @@ final class SparkWarmPool {
         inUse.insert(postID)
         let wasContinuing = continuingIDs.remove(postID) != nil
         lastClaimWasContinuing = wasContinuing
+        if let loader = slot.r2ResourceLoader {
+            pendingClaimLoaders[ObjectIdentifier(player)] = loader
+        }
         player.isMuted = true
         player.volume = 0
         if wasContinuing {
@@ -297,6 +309,11 @@ final class SparkWarmPool {
             player.rate = 0
         }
         return player
+    }
+
+    /// Install path must retain this for the claimed player's asset lifetime.
+    func takePendingResourceLoader(for player: AVPlayer) -> R2PresignedResourceLoader? {
+        pendingClaimLoaders.removeValue(forKey: ObjectIdentifier(player))
     }
 
     /// Mark a post as on-screen even when cold-starting (no pool hit).
@@ -360,7 +377,8 @@ final class SparkWarmPool {
         }
 
         MediaPlaybackCoordinator.shared.register(player)
-        slots[postID] = Slot(postID: postID, player: player, parkedAt: Date())
+        // Parked from a live surface — loader already retained by that controller if any.
+        slots[postID] = Slot(postID: postID, player: player, parkedAt: Date(), r2ResourceLoader: nil)
         if continueFromCurrentTime {
             continuingIDs.insert(postID)
             // Butter handoff: stay muted but KEEP decoding frames while the cover opens.
@@ -478,7 +496,12 @@ final class SparkWarmPool {
         }
     }
 
-    private func warm(postID: String, sourceURL: URL, deepPreroll: Bool) async {
+    private func warm(
+        postID: String,
+        sourceURL: URL,
+        deepPreroll: Bool,
+        allowPlaybackRetry: Bool = true
+    ) async {
         if slots[postID] != nil || inUse.contains(postID) { return }
         guard !warming.contains(postID) else { return }
         warming.insert(postID)
@@ -490,35 +513,34 @@ final class SparkWarmPool {
         // Re-check after waiting in the warm queue — another pass may have filled the slot.
         if slots[postID] != nil || inUse.contains(postID) { return }
 
-        // Warm with the URL we already have — do NOT await GraphQL per neighbor
-        // (that froze feed/Sparks loading and caused ghost audio from stalled players).
-        // Expiry re-resolve only if the presign is actually dead/near-dead.
+        // Always pass postID for R2 — playbackConfiguration still gates live /v1/playback
+        // on blocked/expired URLs only (no GraphQL storm on healthy signed GETs).
         let configuration = await MediaURLResolver.playbackConfiguration(
             for: sourceURL,
-            postID: MediaURLResolver.isPresignExpiredOrNearExpiry(sourceURL) ? postID : nil
+            postID: postID
         )
         let playURL = configuration.url
         if slots[postID] != nil || inUse.contains(postID) { return }
+        // Never warm banned pub-*.r2.dev (CF 1010) — leave slot empty for open-path resolve.
+        if MediaURLResolver.isBlockedR2PublicURL(playURL) { return }
 
         // AVPlayerItem loads playable/duration itself — avoid deprecated loadValuesAsynchronously.
+        // GET-only R2 presigns need the matterya-r2:// proxy (HEAD is 403).
         let item: AVPlayerItem
+        let retainedLoader: R2PresignedResourceLoader?
         if let headers = configuration.headers, !headers.isEmpty,
-           !ArchiveVideoPlayback.isArchiveURL(playURL) {
+           !ArchiveVideoPlayback.isArchiveURL(playURL),
+           !R2PresignedPlayback.needsProxy(playURL) {
             let asset = AVURLAsset(
                 url: playURL,
                 options: ["AVURLAssetHTTPHeaderFieldsKey": headers]
             )
             item = AVPlayerItem(asset: asset)
+            retainedLoader = nil
         } else {
-            let asset = AVURLAsset(
-                url: playURL,
-                options: [
-                    AVURLAssetAllowsCellularAccessKey: true,
-                    AVURLAssetAllowsExpensiveNetworkAccessKey: true,
-                    AVURLAssetAllowsConstrainedNetworkAccessKey: true,
-                ]
-            )
+            let (asset, loader) = R2PresignedPlayback.makeAsset(for: playURL)
             item = AVPlayerItem(asset: asset)
+            retainedLoader = loader
         }
 
         if slots[postID] != nil || inUse.contains(postID) {
@@ -558,23 +580,47 @@ final class SparkWarmPool {
         }
 
         MediaPlaybackCoordinator.shared.register(player)
-        slots[postID] = Slot(postID: postID, player: player, parkedAt: Date())
-        if deepPreroll {
-            Task { await silentBufferFill(postID: postID, player: player) }
-        } else {
-            // Light path: get readyToPlay + park at t=0 without full preroll cost.
-            Task { await lightReady(postID: postID, player: player) }
+        slots[postID] = Slot(
+            postID: postID,
+            player: player,
+            parkedAt: Date(),
+            r2ResourceLoader: retainedLoader
+        )
+        // Fire-and-forget fill so maxConcurrentWarms frees for the next neighbor.
+        // One-shot /v1/playback retry only if the item dies (403 / unavailable).
+        let retry = allowPlaybackRetry
+        let deep = deepPreroll
+        let src = sourceURL
+        Task { @MainActor in
+            let ok: Bool
+            if deep {
+                ok = await self.silentBufferFill(postID: postID, player: player)
+            } else {
+                ok = await self.lightReady(postID: postID, player: player)
+            }
+            guard !ok, retry, MediaURLResolver.looksLikeR2HostedURL(src) else { return }
+            await R2PlaybackResolver.shared.invalidate(postID: postID)
+            guard let live = await R2PlaybackResolver.shared.playURL(postID: postID, fallback: nil),
+                  !MediaURLResolver.isBlockedR2PublicURL(live) else { return }
+            await self.warm(
+                postID: postID,
+                sourceURL: live,
+                deepPreroll: deep,
+                allowPlaybackRetry: false
+            )
         }
     }
 
     /// Outer bulk ring — asset loads + seek 0, no full preroll (saves CPU for deep neighbors).
-    private func lightReady(postID: String, player: AVPlayer) async {
+    /// Returns false when the item died (caller may one-shot /v1/playback retry).
+    @discardableResult
+    private func lightReady(postID: String, player: AVPlayer) async -> Bool {
         for _ in 0..<50 {
-            guard isParked(postID: postID, player: player) else { return }
+            guard isParked(postID: postID, player: player) else { return true }
             if player.currentItem == nil || player.status == .failed
                 || player.currentItem?.status == .failed {
                 evict(postID)
-                return
+                return false
             }
             if player.status == .readyToPlay || player.currentItem?.status == .readyToPlay {
                 player.isMuted = true
@@ -587,25 +633,28 @@ final class SparkWarmPool {
                 )
                 player.pause()
                 player.rate = 0
-                return
+                return true
             }
             try? await Task.sleep(nanoseconds: 40_000_000)
         }
+        return isParked(postID: postID, player: player)
     }
 
     /// Decode first frame + fill forward buffer **without advancing playhead**.
     /// Previous path free-played ~0.7s then seeked back → every swipe showed mid-clip then jumped to 0.
-    private func silentBufferFill(postID: String, player: AVPlayer) async {
+    /// Returns false when the item died (403 / unavailable) so warm can re-resolve once.
+    @discardableResult
+    private func silentBufferFill(postID: String, player: AVPlayer) async -> Bool {
         for _ in 0..<80 {
-            guard isParked(postID: postID, player: player) else { return }
+            guard isParked(postID: postID, player: player) else { return true }
             if player.currentItem == nil {
                 evict(postID)
-                return
+                return false
             }
             if player.status == .failed || player.currentItem?.status == .failed {
                 // Drop dead warm slots so claim never surfaces “Video unavailable”.
                 evict(postID)
-                return
+                return false
             }
             if player.status == .readyToPlay || player.currentItem?.status == .readyToPlay {
                 player.isMuted = true
@@ -617,7 +666,7 @@ final class SparkWarmPool {
                     toleranceBefore: .zero,
                     toleranceAfter: .zero
                 )
-                guard isParked(postID: postID, player: player) else { return }
+                guard isParked(postID: postID, player: player) else { return true }
 
                 // Preroll buffers from t=0 without leaving the start (unlike play()+sleep).
                 await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
@@ -625,10 +674,10 @@ final class SparkWarmPool {
                         cont.resume()
                     }
                 }
-                guard isParked(postID: postID, player: player) else { return }
+                guard isParked(postID: postID, player: player) else { return true }
                 if player.status == .failed || player.currentItem?.status == .failed {
                     evict(postID)
-                    return
+                    return false
                 }
 
                 player.pause()
@@ -643,10 +692,11 @@ final class SparkWarmPool {
                 )
                 player.pause()
                 player.rate = 0
-                return
+                return true
             }
             try? await Task.sleep(nanoseconds: 40_000_000)
         }
+        return isParked(postID: postID, player: player)
     }
 
     /// True when playhead is already at the start (no seek needed on claim).

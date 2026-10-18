@@ -693,14 +693,22 @@ struct YouTubeAppView: View {
                                 YouTubeVideoListRow(post: post, onTap: {
                                     openVideo(post)
                                 }, onAppearRow: {
-                                    // Grow local window near the end; settled scroll warms 5 ahead
-                                    // (same Sparks sliding window — concurrent warm cap avoids storms).
+                                    // Media session 09: Hubs list = posters/Frame0 only.
+                                    // AV warm belongs in Watch/related (prepareHubsWindow), not here.
                                     ensureMoreForYou(around: index)
                                     if !ScrollBudget.isFlinging {
-                                        SparkWarmPool.shared.prepareHubsWindow(
+                                        ImageCache.shared.prefetchHubsWindow(
                                             posts: stableDiscoverVideos,
                                             around: index
                                         )
+                                        let lo = max(0, index - 2)
+                                        let hi = min(stableDiscoverVideos.count, index + 7)
+                                        if lo < hi {
+                                            let ids = Array(stableDiscoverVideos[lo..<hi].map(\.id))
+                                            Task {
+                                                await Frame0PosterResolver.shared.prefetch(postIDs: ids)
+                                            }
+                                        }
                                     }
                                 })
                                 .padding(.bottom, 18)

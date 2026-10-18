@@ -153,6 +153,12 @@ final class ImageCache: @unchecked Sendable {
     }
 
     func image(for url: URL, maxPixelSize: CGFloat) async -> UIImage? {
+        // Never fetch banned pub-*.r2.dev (CF 1010) — callers should fall through to Frame0.
+        if MediaURLResolver.isBlockedR2PublicURL(url) { return nil }
+        if !MediaURLResolver.isUsablePosterURL(url), MediaURLResolver.looksLikeR2HostedURL(url) {
+            return nil
+        }
+
         if let hit = imageIfCached(for: url, maxPixelSize: maxPixelSize) {
             return hit
         }
@@ -453,6 +459,13 @@ struct CachedAsyncImage: View {
         }
         .task(id: taskID) {
             guard let url else {
+                image = nil
+                loadedURL = nil
+                return
+            }
+            // Dead pub-*.r2.dev / expired R2 embeds — skip fetch so Frame0 can win.
+            if MediaURLResolver.isBlockedR2PublicURL(url)
+                || (!MediaURLResolver.isUsablePosterURL(url) && MediaURLResolver.looksLikeR2HostedURL(url)) {
                 image = nil
                 loadedURL = nil
                 return

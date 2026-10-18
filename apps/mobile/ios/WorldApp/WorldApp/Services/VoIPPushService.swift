@@ -195,16 +195,13 @@ final class VoIPPushService: NSObject, PKPushRegistryDelegate {
 
         CallSessionManager.shared.bootstrapForIncomingCall()
 
-        let useCallKit = CallSessionManager.shouldUseCallKitForIncomingRing
-        if useCallKit {
-            CallKitManager.shared.reportIncomingCall(
-                conversationID: callPayload.conversationID,
-                callerName: callPayload.displayName,
-                hasVideo: callPayload.callType == "video"
-            ) { _ in
-                finish()
-            }
-        } else {
+        // PushKit requires reportNewIncomingCall on every VoIP push (iOS 13+),
+        // including foreground — otherwise the system stops delivering / kills the app.
+        CallKitManager.shared.reportIncomingCall(
+            conversationID: callPayload.conversationID,
+            callerName: callPayload.displayName,
+            hasVideo: callPayload.callType == "video"
+        ) { _ in
             finish()
         }
 
@@ -214,7 +211,8 @@ final class VoIPPushService: NSObject, PKPushRegistryDelegate {
             callType: callPayload.callType,
             callID: callPayload.callID,
             roomName: callPayload.roomName,
-            callerName: callPayload.displayName
+            callerName: callPayload.displayName,
+            presentedViaCallKit: true
         )
 
         if staged {
@@ -224,11 +222,9 @@ final class VoIPPushService: NSObject, PKPushRegistryDelegate {
                     from: callPayload.from,
                     reportToCallKit: false
                 )
-                if UIApplication.shared.applicationState == .active {
-                    CallSessionManager.shared.presentInAppIncomingUI()
-                }
+                // CallKit owns the ring; Matterya overlay appears after answer.
             }
-        } else if useCallKit {
+        } else {
             logger.warning("Could not stage incoming call after VoIP push")
             CallKitManager.shared.requestEndCall(for: callPayload.conversationID)
         }

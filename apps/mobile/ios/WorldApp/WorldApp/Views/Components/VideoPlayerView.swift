@@ -177,7 +177,8 @@ struct VideoPlayerView: View {
                                     postID: postID,
                                     videoURL: url,
                                     fillsFrame: fillsFrame,
-                                    allowClientExtract: isActive
+                                    allowClientExtract: false,
+                                    seedPosterURL: Frame0PosterCache.url(for: postID)
                                 )
                                 .allowsHitTesting(false)
                             }

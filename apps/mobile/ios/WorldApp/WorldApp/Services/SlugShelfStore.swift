@@ -196,7 +196,7 @@ final class SlugShelfStore {
         shelves[key] = state
         pruneShelves(keeping: key)
 
-        // Warm full slug page thumbs + Frame 0 (AV stays 5-ahead via prepareHubsWindow).
+        // Warm full slug page thumbs + Frame 0 only (AV warm is Watch/related).
         let warmBand = Array(
             (append ? remote.items : state.posts).prefix(SparkWarmPool.MediaBudget.thumbAhead)
         )

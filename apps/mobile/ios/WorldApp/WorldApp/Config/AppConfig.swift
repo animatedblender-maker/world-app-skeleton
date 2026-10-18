@@ -6,8 +6,9 @@ enum AppConfig {
     static let supabaseAnonKey = "sb_publishable_17VL78hCv9BVez2c4lIqFQ_MUv1iOHb"
     static let graphqlEndpoint = "https://api.matterya.com/graphql"
     static let apiBaseURL = "https://api.matterya.com"
-    /// Public R2 base (HEAD+GET). Signed cloudflarestorage.com GETs 403 on HEAD → AVPlayer
-    /// "You do not have permission to access the requested resource."
+    /// Legacy public R2 base — currently CF 1010/403 for matterya-sparks. Do not hand to
+    /// AVPlayer/ImageCache. Signed cloudflarestorage.com GETs also 403 on HEAD; hubs play
+    /// tolerates that via `R2PresignedPlayback` (matterya-r2:// Range GET proxy).
     static let r2PublicBaseURL = "https://pub-0af7dfb233b3438f90451ac0261b6009.r2.dev"
     static let demoDatasetBaseURL = "https://matterya.com"
     /// PERMANENTLY OFF — never load Reddit JSONL (bundled or remote). Backend GraphQL only.
