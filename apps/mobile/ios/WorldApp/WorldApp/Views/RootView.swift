@@ -60,7 +60,7 @@ struct RootView: View {
 
     /// Brief splash only while a known session finishes marking the shell ready.
     private var sessionRestoringSplash: some View {
-        MatteryaSplashView(showsProgress: true, message: "Loading…")
+        MatteryaSplashView(showsProgress: true)
     }
 
     /// Call stack only exists once signed in — keeps login typing responsive.

@@ -7,6 +7,10 @@ struct WorldAppApp: App {
     @State private var appState = AppState()
     /// Bridges the system launch screen into SwiftUI so cold open never flashes white.
     @State private var showsLaunchSplash = true
+    /// Letter-glow fill finished (Matterya word acts as the loading bar).
+    @State private var splashFillComplete = false
+    /// First SwiftUI frame of the shell is on screen under the splash.
+    @State private var shellFirstFrameReady = false
 
     var body: some Scene {
         WindowGroup {
@@ -14,15 +18,18 @@ struct WorldAppApp: App {
                 RootView()
 
                 if showsLaunchSplash {
-                    MatteryaSplashView(showsProgress: false)
-                        .transition(.opacity)
-                        .zIndex(1_000)
+                    MatteryaSplashView(showsProgress: true) {
+                        splashFillComplete = true
+                        dismissSplashIfReady()
+                    }
+                    .transition(.opacity)
+                    .zIndex(1_000)
                 }
             }
             .environment(appState)
             .preferredColorScheme(.light)
             .tint(Theme.accentBright)
-            .animation(.easeOut(duration: 0.28), value: showsLaunchSplash)
+            .animation(.easeOut(duration: 0.35), value: showsLaunchSplash)
             .onAppear {
                 PerformanceTelemetry.markIfAbsent("process_start")
                 // Install after first frame so AuthView text fields stay responsive.
@@ -33,12 +40,8 @@ struct WorldAppApp: App {
                         "app_start_to_shell",
                         surface: "app"
                     )
-                    // Keep splash up for one runloop so RootView can paint underneath.
-                    DispatchQueue.main.async {
-                        withAnimation(.easeOut(duration: 0.28)) {
-                            showsLaunchSplash = false
-                        }
-                    }
+                    shellFirstFrameReady = true
+                    dismissSplashIfReady()
                 }
             }
             .task {
@@ -75,6 +78,14 @@ struct WorldAppApp: App {
                     await appState.handleBecameActive()
                 }
             }
+        }
+    }
+
+    /// Dismiss only after letters finished glowing AND the shell painted underneath.
+    private func dismissSplashIfReady() {
+        guard showsLaunchSplash, splashFillComplete, shellFirstFrameReady else { return }
+        withAnimation(.easeOut(duration: 0.35)) {
+            showsLaunchSplash = false
         }
     }
 }
