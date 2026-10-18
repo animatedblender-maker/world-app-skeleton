@@ -789,10 +789,19 @@ struct FacebookPostCard: View {
         // Feed: only Archive CDN needs MatteryaHubPlayer. R2 hubs use light AV path —
         // mounting the hub UIKit player on every cell froze scroll.
         let useArchivePath = ArchiveVideoPlayback.isArchiveURL(url)
-        // Same poster resolve as Sparks feed card (self → shared origin → resolver).
-        let poster = MediaURLResolver.posterURL(for: post)
-            ?? post.sharedPost.flatMap { MediaURLResolver.posterURL(for: $0.asCountryPost) }
-            ?? Frame0PosterCache.url(for: post.id)
+        // Prefer usable Frame 0 — feed thumb_url is often an expired signed webp (403).
+        let posterCandidates: [URL?] = [
+            Frame0PosterCache.url(for: post.id),
+            MediaURLResolver.posterURL(for: post),
+            post.sharedPost.flatMap { MediaURLResolver.posterURL(for: $0.asCountryPost) },
+        ]
+        let poster: URL? = {
+            for candidate in posterCandidates {
+                guard let url = candidate, MediaURLResolver.isUsablePosterURL(url) else { continue }
+                return url
+            }
+            return nil
+        }()
         let isHubFilm = PlayPlatformBridge.isHubFeedCardVideo(post)
             || PlayPlatformBridge.isHubCatalogContent(post)
             || isHubOriginShareCard
@@ -809,7 +818,7 @@ struct FacebookPostCard: View {
                 .clipped()
                 .allowsHitTesting(false)
             } else {
-                // No thumb_url yet — pack-path Frame 0 only (no full-video download).
+                // No usable thumb — pack-path Frame 0 only (no full-video download).
                 FrameZeroFallbackPoster(
                     postID: post.id,
                     videoURL: url,

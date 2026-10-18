@@ -445,6 +445,18 @@ enum MediaURLResolver {
 extension CountryPost {
     var playableVideoURL: URL? { MediaURLResolver.videoURL(for: self) }
     var posterImageURL: URL? { MediaURLResolver.posterURL(for: self) }
-    var resolvedImageURL: URL? { MediaURLResolver.imageURL(for: self) }
-    var feedImageURL: URL? { MediaURLResolver.posterURL(for: self) ?? MediaURLResolver.imageURL(for: self) }
+    var resolvedImageURL: URL? {
+        guard let url = MediaURLResolver.imageURL(for: self),
+              MediaURLResolver.isUsablePosterURL(url)
+        else { return nil }
+        return url
+    }
+    /// Never fall through to expired / banned r2.dev thumbs after posterURL rejects them.
+    var feedImageURL: URL? {
+        if let poster = MediaURLResolver.posterURL(for: self) { return poster }
+        guard let img = MediaURLResolver.imageURL(for: self),
+              MediaURLResolver.isUsablePosterURL(img)
+        else { return nil }
+        return img
+    }
 }

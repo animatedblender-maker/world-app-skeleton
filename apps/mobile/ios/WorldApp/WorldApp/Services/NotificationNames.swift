@@ -12,4 +12,7 @@ extension Notification.Name {
     /// Sync export of the live feed player into SparkWarmPool before Sparks/Hubs claim.
     /// userInfo: `postIDs` ([String]). Delivered synchronously on the posting thread.
     static let matteryaExportPlaybackForHandoff = Notification.Name("matterya.exportPlaybackForHandoff")
+    /// Frame0PosterCache gained signed posters — userInfo: `postIDs` ([String]).
+    /// Strip/feed cells observe this because the cache itself is not SwiftUI state.
+    static let frame0PostersDidUpdate = Notification.Name("frame0PostersDidUpdate")
 }

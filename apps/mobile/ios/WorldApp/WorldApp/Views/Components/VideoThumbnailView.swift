@@ -55,6 +55,10 @@ struct VideoThumbnailView: View {
             await ensureFrame0Poster()
             await loadFrameIfNeeded()
         }
+        // Frame0PosterCache is not Observable — batch prefetch must poke visible cells.
+        .onReceive(NotificationCenter.default.publisher(for: .frame0PostersDidUpdate)) { note in
+            applyFrame0CacheIfNeeded(postIDs: note.userInfo?["postIDs"] as? [String])
+        }
     }
 
     /// Prefer usable Frame 0 / IA / thumbs — never dead pub-*.r2.dev or expired presigns.
@@ -82,6 +86,16 @@ struct VideoThumbnailView: View {
     }
 
     @MainActor
+    private func applyFrame0CacheIfNeeded(postIDs: [String]?) {
+        if let liveFrame0URL, MediaURLResolver.isUsablePosterURL(liveFrame0URL) { return }
+        if let postIDs, !postIDs.isEmpty, !postIDs.contains(post.id) { return }
+        if let cached = Frame0PosterCache.url(for: post.id),
+           MediaURLResolver.isUsablePosterURL(cached) {
+            liveFrame0URL = cached
+        }
+    }
+
+    @MainActor
     private func ensureFrame0Poster() async {
         if let cached = liveFrame0URL ?? Frame0PosterCache.url(for: post.id),
            MediaURLResolver.isUsablePosterURL(cached) {
@@ -97,6 +111,12 @@ struct VideoThumbnailView: View {
         if let signed = await Frame0PosterResolver.shared.posterURL(postID: post.id),
            MediaURLResolver.isUsablePosterURL(signed) {
             liveFrame0URL = signed
+            return
+        }
+        // Batch may have landed while the single GET failed/timed out.
+        if let cached = Frame0PosterCache.url(for: post.id),
+           MediaURLResolver.isUsablePosterURL(cached) {
+            liveFrame0URL = cached
         }
     }
 
@@ -151,18 +171,35 @@ struct FrameZeroFallbackPoster: View {
         }
         .onAppear {
             if remotePosterURL == nil,
-               let cached = seedPosterURL ?? Frame0PosterCache.url(for: postID) {
+               let cached = seedPosterURL ?? Frame0PosterCache.url(for: postID),
+               MediaURLResolver.isUsablePosterURL(cached) {
+                remotePosterURL = cached
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .frame0PostersDidUpdate)) { note in
+            if let remotePosterURL, MediaURLResolver.isUsablePosterURL(remotePosterURL) { return }
+            let ids = note.userInfo?["postIDs"] as? [String]
+            if let ids, !ids.isEmpty, !ids.contains(postID) { return }
+            if let cached = Frame0PosterCache.url(for: postID),
+               MediaURLResolver.isUsablePosterURL(cached) {
                 remotePosterURL = cached
             }
         }
         .task(id: "\(postID)|\(videoURL.absoluteString)|\(allowClientExtract)") {
-            if let seed = seedPosterURL ?? Frame0PosterCache.url(for: postID) {
+            if let seed = seedPosterURL ?? Frame0PosterCache.url(for: postID),
+               MediaURLResolver.isUsablePosterURL(seed) {
                 remotePosterURL = seed
                 return
             }
             // Pack-path Frame 0 only (cheap). Do not AV-extract on every cell.
-            if let signed = await Frame0PosterResolver.shared.posterURL(postID: postID) {
+            if let signed = await Frame0PosterResolver.shared.posterURL(postID: postID),
+               MediaURLResolver.isUsablePosterURL(signed) {
                 remotePosterURL = signed
+                return
+            }
+            if let cached = Frame0PosterCache.url(for: postID),
+               MediaURLResolver.isUsablePosterURL(cached) {
+                remotePosterURL = cached
                 return
             }
             guard allowClientExtract else { return }

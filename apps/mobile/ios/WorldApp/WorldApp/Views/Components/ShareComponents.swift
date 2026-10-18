@@ -66,9 +66,21 @@ struct SparkFeedCard: View {
         return nil
     }
 
+    /// Live Frame 0 — feed/sparks thumb_url is often an expired Aug-signed webp (403).
+    @State private var livePosterURL: URL?
+
     private var posterURL: URL? {
-        MediaURLResolver.posterURL(for: post)
-            ?? post.sharedPost.flatMap { MediaURLResolver.posterURL(for: $0.asCountryPost) }
+        let candidates: [URL?] = [
+            livePosterURL,
+            Frame0PosterCache.url(for: post.id),
+            MediaURLResolver.posterURL(for: post),
+            post.sharedPost.flatMap { MediaURLResolver.posterURL(for: $0.asCountryPost) },
+        ]
+        for candidate in candidates {
+            guard let url = candidate, MediaURLResolver.isUsablePosterURL(url) else { continue }
+            return url
+        }
+        return nil
     }
 
     /// width/height once known — drives card height so first frame isn't forced into wrong box.
@@ -145,14 +157,14 @@ struct SparkFeedCard: View {
                                 videoURL: url,
                                 fillsFrame: useFill,
                                 allowClientExtract: false,
-                                seedPosterURL: Frame0PosterCache.url(for: post.id)
+                                seedPosterURL: livePosterURL ?? Frame0PosterCache.url(for: post.id)
                             )
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .allowsHitTesting(false)
                         }
                         InFrameVideoPlayer(
                             url: url,
-                            posterURL: posterURL ?? Frame0PosterCache.url(for: post.id),
+                            posterURL: posterURL,
                             placement: "reel",
                             countryCode: post.countryCode,
                             contentCountryCode: post.countryCode,
@@ -245,7 +257,46 @@ struct SparkFeedCard: View {
             mediaAspect = nil
             useFill = false
             gravityLocked = false
+            livePosterURL = nil
         }
+        .task(id: post.id) {
+            await seedPosterAndAspect()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .frame0PostersDidUpdate)) { note in
+            let ids = note.userInfo?["postIDs"] as? [String]
+            if let ids, !ids.isEmpty, !ids.contains(post.id) { return }
+            guard let cached = Frame0PosterCache.url(for: post.id),
+                  MediaURLResolver.isUsablePosterURL(cached)
+            else { return }
+            livePosterURL = cached
+            Task { await seedAspectFromPoster(cached) }
+        }
+    }
+
+    /// Resolve fresh Frame 0 and lock stage from poster pixels before AV measures.
+    @MainActor
+    private func seedPosterAndAspect() async {
+        if let existing = posterURL {
+            livePosterURL = existing
+            await seedAspectFromPoster(existing)
+            return
+        }
+        if let signed = await Frame0PosterResolver.shared.posterURL(postID: post.id),
+           MediaURLResolver.isUsablePosterURL(signed) {
+            livePosterURL = signed
+            await seedAspectFromPoster(signed)
+        }
+    }
+
+    @MainActor
+    private func seedAspectFromPoster(_ url: URL) async {
+        guard !gravityLocked else { return }
+        guard let image = await ImageCache.shared.image(for: url, maxPixelSize: 720) else { return }
+        let pixel = CGSize(
+            width: image.size.width * image.scale,
+            height: image.size.height * image.scale
+        )
+        applyVideoSize(pixel)
     }
 
     private func openFullPlayer() {
