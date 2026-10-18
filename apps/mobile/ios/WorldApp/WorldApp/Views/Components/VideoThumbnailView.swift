@@ -14,6 +14,8 @@ struct VideoThumbnailView: View {
     var placeholder: AnyView = AnyView(Color.clear)
 
     @State private var frameImage: UIImage?
+    /// Live Frame 0 from /v1/poster — refreshes cells after dead r2.dev thumbs are rejected.
+    @State private var liveFrame0URL: URL?
 
     var body: some View {
         ZStack {
@@ -25,13 +27,13 @@ struct VideoThumbnailView: View {
                     placeholder: placeholder
                 )
             } else if let videoURL = post.playableVideoURL ?? MediaURLResolver.videoURL(for: post) {
-                // R2 Sparks often lack thumb_url until Frame0 is signed — never leave blank tiles.
+                // R2 Sparks/Hubs often lack a usable thumb until Frame0 is signed.
                 FrameZeroFallbackPoster(
                     postID: post.id,
                     videoURL: videoURL,
                     fillsFrame: contentMode == .fill,
                     allowClientExtract: extractFrameIfNeeded,
-                    seedPosterURL: nil
+                    seedPosterURL: liveFrame0URL ?? Frame0PosterCache.url(for: post.id)
                 )
             } else if let frameImage {
                 Image(uiImage: frameImage)
@@ -50,23 +52,52 @@ struct VideoThumbnailView: View {
             }
         }
         .task(id: thumbnailTaskID) {
+            await ensureFrame0Poster()
             await loadFrameIfNeeded()
         }
     }
 
-    /// Prefer IA services/img (fast) then other posters — never the mp4 URL.
+    /// Prefer usable Frame 0 / IA / thumbs — never dead pub-*.r2.dev or expired presigns.
     private var resolvedPosterURL: URL? {
-        MediaURLResolver.hubsListPosterURL(for: post)
-            ?? post.posterImageURL
-            ?? post.feedImageURL
+        let candidates: [URL?] = [
+            liveFrame0URL,
+            Frame0PosterCache.url(for: post.id),
+            MediaURLResolver.hubsListPosterURL(for: post),
+            post.posterImageURL,
+            post.feedImageURL,
+        ]
+        for candidate in candidates {
+            guard let url = candidate, MediaURLResolver.isUsablePosterURL(url) else { continue }
+            return url
+        }
+        return nil
     }
 
     private var thumbnailTaskID: String {
         [
             post.id,
-            resolvedPosterURL?.absoluteString ?? "",
+            liveFrame0URL?.absoluteString ?? "",
             extractFrameIfNeeded ? "1" : "0",
         ].joined(separator: "|")
+    }
+
+    @MainActor
+    private func ensureFrame0Poster() async {
+        if let cached = liveFrame0URL ?? Frame0PosterCache.url(for: post.id),
+           MediaURLResolver.isUsablePosterURL(cached) {
+            liveFrame0URL = cached
+            return
+        }
+        // Skip Frame0 fetch when a non-R2 usable poster already paints (e.g. IA services/img).
+        if let existing = MediaURLResolver.hubsListPosterURL(for: post),
+           MediaURLResolver.isUsablePosterURL(existing),
+           !MediaURLResolver.hasMatteryaR2VideoKey(post) {
+            return
+        }
+        if let signed = await Frame0PosterResolver.shared.posterURL(postID: post.id),
+           MediaURLResolver.isUsablePosterURL(signed) {
+            liveFrame0URL = signed
+        }
     }
 
     private var needsFrameExtraction: Bool {

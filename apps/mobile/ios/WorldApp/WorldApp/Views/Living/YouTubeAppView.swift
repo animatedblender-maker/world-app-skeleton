@@ -1490,9 +1490,15 @@ struct YouTubeAppView: View {
             (hubsForYouPool.isEmpty ? head : hubsForYouPool)
                 .prefix(SparkWarmPool.MediaBudget.thumbAhead)
         )
-        ImageCache.shared.prefetchPostThumbnails(poolBand, maxPixelSize: thumbPx, aggressive: false)
+        // Continue watching + discover head — shelves were painting dead r2.dev thumbs.
+        let continueBand = Array(continueWatching.prefix(8))
+        var warmBand = poolBand
+        for post in continueBand where !warmBand.contains(where: { $0.id == post.id }) {
+            warmBand.append(post)
+        }
+        ImageCache.shared.prefetchPostThumbnails(warmBand, maxPixelSize: thumbPx, aggressive: false)
         Task {
-            await Frame0PosterResolver.shared.prefetch(postIDs: poolBand.map(\.id))
+            await Frame0PosterResolver.shared.prefetch(postIDs: warmBand.map(\.id))
         }
         // Sparks strip thumbs — after For you posters.
         Task(priority: .background) {

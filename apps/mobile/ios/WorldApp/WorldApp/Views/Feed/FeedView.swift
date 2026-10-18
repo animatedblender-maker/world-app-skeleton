@@ -369,6 +369,13 @@ struct FeedView: View {
                 allowSeed: false
             )
         }
+
+        // Frame 0 for Continue watching / New on Hubs — dead r2.dev thumbs must not stick.
+        let hubsStrip = continueWatching + newOnPlay
+        if !hubsStrip.isEmpty {
+            ImageCache.shared.prefetchPostThumbnails(hubsStrip, maxPixelSize: 360, aggressive: false)
+            Task { await Frame0PosterResolver.shared.prefetch(postIDs: hubsStrip.map(\.id)) }
+        }
     }
 
     private func refreshStrips(network: Bool) async {

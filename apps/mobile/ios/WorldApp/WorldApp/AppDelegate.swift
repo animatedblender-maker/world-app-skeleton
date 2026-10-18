@@ -22,12 +22,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 
         // VoIP/CallKit only when already signed in OR cold-start is an incoming call.
         // Doing this on the login screen hung the main thread (can't type email/password).
+        // Incoming-call wake still needs the stack before return; otherwise defer past
+        // first paint so cold launch stays on the Matterya splash instead of white.
         let launchedFromRemote = launchOptions?[.remoteNotification] as? [AnyHashable: Any]
-        let needsCallStackImmediately =
-            AuthService.shared.isAuthenticated
-            || (launchedFromRemote != nil && IncomingCallWake.looksLikeIncomingCall(launchedFromRemote))
+        let isIncomingCallWake =
+            launchedFromRemote != nil && IncomingCallWake.looksLikeIncomingCall(launchedFromRemote)
 
-        if needsCallStackImmediately {
+        if isIncomingCallWake {
             VoIPPushService.shared.bootstrap()
             _ = CallKitManager.shared
             application.registerForRemoteNotifications()
@@ -42,9 +43,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         }
 
         Task { @MainActor in
-            if AuthService.shared.isAuthenticated {
+            // Yield so RootView / splash can paint before CallKit + PushKit work.
+            await Task.yield()
+            if AuthService.shared.isAuthenticated || isIncomingCallWake {
                 VoIPPushService.shared.bootstrap()
+                _ = CallKitManager.shared
                 CallSessionManager.shared.bootstrap()
+                UIApplication.shared.registerForRemoteNotifications()
                 await PushNotificationService.shared.syncWithServer(force: true)
             }
         }

@@ -91,18 +91,22 @@ enum MediaURLResolver {
     static func posterURL(for post: CountryPost) -> URL? {
         // Internet Archive: always prefer services/img — nested `.thumbs/` paths are
         // slower and flakier on mobile (often 1–2s+). services/img is the snappy poster.
-        if let ia = archiveServicesImgURL(for: post) { return ia }
+        if let ia = archiveServicesImgURL(for: post), isUsablePosterURL(ia) { return ia }
         // Server Frame 0 (first displayed video frame) — prefer over any CDN fallback.
         if let frame0 = frame0PosterURL(for: post) { return frame0 }
-        if let thumb = resolve(post.thumbURL), !isVideoURL(thumb) { return thumb }
+        if let thumb = resolve(post.thumbURL), !isVideoURL(thumb), isUsablePosterURL(thumb) {
+            return thumb
+        }
         // Matterya R2 LongForm/Sparks: never use YouTube hqdefault (wrong pixels vs Frame 0).
-        // Nil → client holds black / extracts t=0 until backfill fills thumb_url.
+        // Nil → FrameZeroFallback /v1/poster (dead pub-*.r2.dev must not win the race).
         if hasMatteryaR2VideoKey(post) {
-            return imageURL(for: post)
+            if let img = imageURL(for: post), isUsablePosterURL(img) { return img }
+            return nil
         }
         // Non-R2 legacy only.
         if let yt = r2LongformYouTubePosterURL(for: post) { return yt }
-        return imageURL(for: post)
+        if let img = imageURL(for: post), isUsablePosterURL(img) { return img }
+        return nil
     }
 
     /// True when media lives on Matterya R2 (catalog or share) — Frame 0 owns the poster.

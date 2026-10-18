@@ -347,7 +347,7 @@ for config_id, name, is_target in [
         add("\t\t\t\tINFOPLIST_KEY_LSApplicationCategoryType = \"public.app-category.social-networking\";")
         add("\t\t\t\tINFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;")
         add("\t\t\t\tINFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;")
-        add("\t\t\t\tINFOPLIST_KEY_UILaunchScreen_Generation = YES;")
+        # UILaunchScreen lives in SupplementalInfo.plist (BrandLogo + LaunchBackground).
         # Portrait default; landscape allowed so Hubs fullscreen can follow device orientation.
         add("\t\t\t\tINFOPLIST_KEY_UISupportedInterfaceOrientations = \"UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight\";")
         add("\t\t\t\tINFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = \"UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown\";")
