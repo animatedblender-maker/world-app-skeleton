@@ -7,10 +7,10 @@ struct WorldAppApp: App {
     @State private var appState = AppState()
     /// Bridges the system launch screen into SwiftUI so cold open never flashes white.
     @State private var showsLaunchSplash = true
-    /// Letter-glow fill finished (Matterya word acts as the loading bar).
-    @State private var splashFillComplete = false
     /// First SwiftUI frame of the shell is on screen under the splash.
     @State private var shellFirstFrameReady = false
+    /// Splash appeared — enforce a short minimum so the loop is visible.
+    @State private var splashMinimumElapsed = false
 
     var body: some Scene {
         WindowGroup {
@@ -18,12 +18,9 @@ struct WorldAppApp: App {
                 RootView()
 
                 if showsLaunchSplash {
-                    MatteryaSplashView(showsProgress: true) {
-                        splashFillComplete = true
-                        dismissSplashIfReady()
-                    }
-                    .transition(.opacity)
-                    .zIndex(1_000)
+                    MatteryaSplashView(showsProgress: true)
+                        .transition(.opacity)
+                        .zIndex(1_000)
                 }
             }
             .environment(appState)
@@ -45,6 +42,12 @@ struct WorldAppApp: App {
                 }
             }
             .task {
+                // Keep the glow looping briefly so it never flash-dismisses on a hot path.
+                try? await Task.sleep(nanoseconds: 900_000_000)
+                splashMinimumElapsed = true
+                dismissSplashIfReady()
+            }
+            .task {
                 // Session already hydrated in AppState.init (no login flash).
                 // Bootstrap only warms feed / push / VoIP for returning users.
                 await appState.bootstrap()
@@ -56,6 +59,8 @@ struct WorldAppApp: App {
                         "ready": appState.isSessionReady ? "1" : "0",
                     ]
                 )
+                // Prefer opening once bootstrap has also finished when it beats the minimum.
+                dismissSplashIfReady()
             }
             .onOpenURL { url in
                 appState.handleDeepLink(url)
@@ -81,9 +86,9 @@ struct WorldAppApp: App {
         }
     }
 
-    /// Dismiss only after letters finished glowing AND the shell painted underneath.
+    /// Glow loops until the shell has painted and the minimum splash time has passed.
     private func dismissSplashIfReady() {
-        guard showsLaunchSplash, splashFillComplete, shellFirstFrameReady else { return }
+        guard showsLaunchSplash, shellFirstFrameReady, splashMinimumElapsed else { return }
         withAnimation(.easeOut(duration: 0.35)) {
             showsLaunchSplash = false
         }
