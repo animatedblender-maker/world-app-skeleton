@@ -30,7 +30,7 @@ struct YouTubeAppView: View {
     /// Full ranked For you pool (endless scroll grows the display window from this).
     @State private var hubsForYouPool: [CountryPost] = []
     /// How many ranked rows LazyVStack may show (grows on scroll — never ends).
-    @State private var hubsDisplayLimit: Int = 28
+    @State private var hubsDisplayLimit: Int = 36
     @State private var isLoadingMoreHubs = false
     @State private var hubsLoadMoreQueued = false
     /// Session seed for For you mix (new every open / pull / filter).
@@ -45,8 +45,9 @@ struct YouTubeAppView: View {
     @State private var hubsVisitEpoch: Int = 0
 
     /// First paint window — small LazyVStack; grows on scroll (endless).
-    private static let hubsFirstWindow = 20
-    private static let hubsGrowBy = 18
+    /// First paint window — Instagram-dense; more rows grow via slug pages, not fat catalog.
+    private static let hubsFirstWindow = 36
+    private static let hubsGrowBy = 24
     /// Soft memory ceiling — slug pages only; never keep thousands of posts on MainActor.
     private static let hubsCatalogMemoryCap = 240
     /// How many times we re-cycle the ranked pool after the full catalog is shown (endless scroll).
@@ -179,10 +180,21 @@ struct YouTubeAppView: View {
         }
     }
 
-    /// Endless For you: grow window cheaply; network only after scroll settles.
+    /// Prefetch N more thin slug pages into the pool while user still scrolls the head.
+    private func prefetchNextSlugPages(count: Int) async {
+        let n = max(1, min(count, 3))
+        for _ in 0..<n {
+            guard appState.selectedTab == .hubs else { return }
+            await loadMoreActiveShelf()
+            if hubsForYouPool.count >= Self.hubsCatalogMemoryCap { break }
+        }
+        butterWarmHubCatalog(allVideos)
+    }
+
+    /// Endless For you: grow window cheaply; network early so the list never feels thin.
     private func ensureMoreForYou(around index: Int) {
-        // Near end of visible window only.
-        let threshold = max(0, stableDiscoverVideos.count - 6)
+        // Start paging at ~halfway — Instagram never waits until the last cell.
+        let threshold = max(0, stableDiscoverVideos.count / 2)
         guard index >= threshold else { return }
 
         // 1) Grow local pool only (no network, no image storm).
@@ -485,14 +497,15 @@ struct YouTubeAppView: View {
             if !allVideos.isEmpty, stableDiscoverVideos.isEmpty {
                 rebuildStableHomeLists(shuffle: false, remountList: false)
             }
-            // 2) Fast network only if still thin — keeps open snappy.
+            // 2) Always hit slug thin pages (For you / active chip) — never wait on fat catalog.
             let longForm = allVideos.filter { !$0.isReel }.count
-            if longForm < 8 {
+            if longForm < Self.hubsFirstWindow {
                 await loadVideos(forceRefresh: false, mode: .fast)
                 guard !Task.isCancelled else { return }
                 rebuildStableHomeLists(shuffle: false, remountList: false)
             } else {
                 isLoading = false
+                butterWarmHubCatalog(allVideos)
             }
             PerformanceTelemetry.milestone(
                 "hubs_interactive",
@@ -501,8 +514,11 @@ struct YouTubeAppView: View {
                 meta: ["longForm": "\(allVideos.filter { !$0.isReel }.count)"]
             )
             await consumePendingRoutingIfNeeded()
-            // 3) Light warm only — never full-catalog rank on open.
+            // 3) Prefetch next slug page + neighbor under the fold (Instagram-style).
             scheduleDeferredFullCatalogWarm()
+            Task(priority: .utility) {
+                await prefetchNextSlugPages(count: 2)
+            }
         }
         .onAppear {
             paintInstantHubsIfPossible()
@@ -1289,19 +1305,20 @@ struct YouTubeAppView: View {
         }
     }
 
-    /// Idle top-up — warm **neighbor slug only** (never download full catalog).
+    /// Idle top-up — neighbor slug + extra For you pages (never fat GraphQL catalog).
     private func scheduleDeferredFullCatalogWarm() {
         Task(priority: .utility) {
-            try? await Task.sleep(nanoseconds: 3_500_000_000)
+            try? await Task.sleep(nanoseconds: 900_000_000)
             guard appState.selectedTab == .hubs else { return }
             // Skip heavy warm while a hubs video is open/minimized — keeps morph smooth.
             guard appState.hubPlaybackPost == nil else { return }
             let active = homeFilter.hubSlug
             SlugShelfStore.shared.warmNeighbor(of: active)
-            let longForm = allVideos.filter { PlayPlatformBridge.isHubsForYouLongForm($0) }.count
-            if longForm < 12 {
-                await loadMoreActiveShelf()
+            // Second neighbor for chip switches that feel instant.
+            if let slug = active {
+                SlugShelfStore.shared.warmNeighbor(of: SlugShelfStore.neighbor(of: slug))
             }
+            await prefetchNextSlugPages(count: 2)
         }
     }
 

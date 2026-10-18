@@ -447,7 +447,7 @@ export async function fetchShelfPage(input: {
   cursor?: string | null;
 }): Promise<ShelfPage> {
   const slug = normalizeParentSlug(input.slug);
-  const want = Math.min(Math.max(Number(input.limit) || 20, 1), 40);
+  const want = Math.min(Math.max(Number(input.limit) || 36, 1), 48);
   const hasCol = await hasHubSlugColumn();
 
   const items: ThinShelfCard[] = [];
@@ -532,7 +532,7 @@ export async function fetchForYouPage(input: {
   cursor?: string | null;
   session?: string | null;
 }): Promise<ForYouPage> {
-  const want = Math.min(Math.max(Number(input.limit) || 20, 1), 40);
+  const want = Math.min(Math.max(Number(input.limit) || 36, 1), 48);
   const session =
     String(input.session ?? '').trim().slice(0, 64) ||
     `s${Date.now().toString(36)}`;

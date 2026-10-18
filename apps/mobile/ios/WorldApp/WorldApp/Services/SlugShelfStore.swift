@@ -12,11 +12,11 @@ final class SlugShelfStore {
     static let shared = SlugShelfStore()
 
     /// Max posts retained per slug (or for_you key).
-    static let maxPerShelf = 80
+    static let maxPerShelf = 120
     /// Max distinct shelves kept in RAM.
-    static let maxShelves = 8
-    /// First paint / page size.
-    static let pageSize = 20
+    static let maxShelves = 10
+    /// First paint / page size — denser than before for Instagram-speed fills.
+    static let pageSize = 40
 
     /// Synthetic key for the mixed For you stream.
     static let forYouKey = "for_you"

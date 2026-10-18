@@ -19,6 +19,8 @@ enum PlayPlatformBridge {
         if isArchiveCatalogMedia(post) { return true }
         // R2 LongForm catalog (public or signed) — even if markers were missing from an older pipeline run.
         if isR2LongFormMedia(post) { return true }
+        // Thin /v1/hubs/* cards (SurfacePageClient stamps externalRefType=hub).
+        if post.externalRefType?.lowercased() == "hub", post.hasVideo { return true }
         let id = post.id.lowercased()
         if id.hasPrefix("ia_") || id.hasPrefix("hub_") || id.hasPrefix("hub_spark_") { return true }
         return false
@@ -77,13 +79,20 @@ enum PlayPlatformBridge {
     /// Sharer identity is irrelevant on Hubs/Sparks surfaces.
     static func isFeedOnlyShare(_ post: CountryPost) -> Bool {
         if post.isStory { return false }
+        // Thin /v1/hubs cards + R2 LongForm catalog are Hubs inventory — never feed-only.
+        // (API strips `__hub_channel__` stamps and may set shared_post_id/origin_sid for comments.)
+        if isR2LongFormMedia(post) { return false }
+        if post.externalRefType?.lowercased() == "hub", post.hasVideo, !post.isReel {
+            return false
+        }
         // Explicit share stamps.
         if isHubOriginShare(post) { return true }
         if SparkShareMarker.isMarked(post.body) { return true }
         if post.isSparkFeedShare { return true }
-        // Pointer re-post (not an intentional channel publish).
+        // Pointer re-post (not an intentional channel publish) — skip LongForm catalog rows.
         if let shared = post.sharedPostID, !shared.isEmpty,
-           !HubChannelPostMarker.isMarked(post.body) {
+           !HubChannelPostMarker.isMarked(post.body),
+           !isR2LongFormMedia(post) {
             return true
         }
         // Real person as author + Archive/catalog media = re-share of The Archive.
@@ -94,11 +103,13 @@ enum PlayPlatformBridge {
         }
         // Live user row with video but no channel-publish marker is never a Hubs catalog item
         // (includes old shares that only copied media without stamps).
+        // Exception: R2 LongForm / thin hub shelf cards (handled above).
         if isLikelyLiveUserAuthor(post.authorID),
            post.hasVideo,
            !HubChannelPostMarker.isMarked(post.body),
            !post.isHubSeedVideo,
-           !HubVideoSeedService.isArchiveChannelAuthor(post.authorID) {
+           !HubVideoSeedService.isArchiveChannelAuthor(post.authorID),
+           !isR2LongFormMedia(post) {
             return true
         }
         return false
@@ -155,23 +166,25 @@ enum PlayPlatformBridge {
         // Live rows that only re-host archive.org media stay out while Archive is off.
         if !archiveOn, isArchiveCatalogMedia(post) { return false }
         guard post.hasVideo else { return false }
-        // Hub origin shares open in Hubs but must not invent a personal channel for the sharer.
-        // They still belong in For you / related rails as catalog content.
-        if isHubOriginShare(post) { return true }
-        if isFeedOnlyShare(post) { return false }
-        // R2 longform + sparks stamped as channel publishes (country Hubs channels).
-        if isHubChannelUpload(post) { return true }
-        // Explicit LongForm R2 path even if marker was stripped.
+        // Explicit LongForm / thin hub shelf FIRST — before feed-only share gates.
+        // Otherwise shared_post_id + stripped body markers emptied For you after rebuildChannels.
+        if isR2LongFormMedia(post), !post.isReel { return true }
+        if post.externalRefType?.lowercased() == "hub", !post.isReel { return true }
         if let media = (post.mediaURL ?? post.playableVideoURL?.absoluteString)?.lowercased() {
             if media.contains("longform/") || media.contains("/longform") {
                 return !post.isReel
             }
-            // Other matterya-sparks media: longform videos only (not sparks path).
             if media.contains("matterya-sparks"), !post.isReel,
-               !media.contains("/spark"), !media.contains("/sparks/") {
+               !media.contains("/spark"), !media.contains("/sparks/"),
+               !media.contains("shortform/") {
                 return true
             }
         }
+        // Hub origin shares open in Hubs but must not invent a personal channel for the sharer.
+        if isHubOriginShare(post) { return true }
+        if isFeedOnlyShare(post) { return false }
+        // R2 longform + sparks stamped as channel publishes (country Hubs channels).
+        if isHubChannelUpload(post) { return true }
         return false
     }
 
