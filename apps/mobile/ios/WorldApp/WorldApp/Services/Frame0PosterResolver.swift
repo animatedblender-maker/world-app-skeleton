@@ -1,30 +1,40 @@
 import Foundation
+import os
 
-/// MainActor mirror of Frame0 signed URLs so SwiftUI can paint first frames
-/// immediately after `Frame0PosterResolver.prefetch` (lives in this file so Xcode
-/// target membership matches — do not split into an unlisted .swift file).
-@MainActor
-enum Frame0PosterCache {
-    private static var map: [String: URL] = [:]
+/// Thread-safe mirror of Frame0 signed URLs so SwiftUI / ImageCache / MediaURLResolver
+/// can paint first frames after `Frame0PosterResolver.prefetch` from any isolation.
+/// (Lives in this file so Xcode target membership matches — do not split out.)
+enum Frame0PosterCache: Sendable {
+    private static let state = OSAllocatedUnfairLock(initialState: [String: URL]())
 
-    static func url(for postID: String) -> URL? {
+    nonisolated static func url(for postID: String) -> URL? {
         let key = postID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return nil }
-        return map[key]
+        return state.withLock { $0[key] }
     }
 
-    static func store(_ postID: String, _ url: URL) {
+    nonisolated static func store(_ postID: String, _ url: URL) {
         let key = postID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return }
-        map[key] = url
-        if map.count > 4000, let first = map.keys.first {
-            map.removeValue(forKey: first)
+        state.withLock { map in
+            map[key] = url
+            if map.count > 4000, let first = map.keys.first {
+                map.removeValue(forKey: first)
+            }
         }
     }
 
-    static func storeBatch(_ posters: [String: URL]) {
-        for (id, url) in posters {
-            store(id, url)
+    nonisolated static func storeBatch(_ posters: [String: URL]) {
+        guard !posters.isEmpty else { return }
+        state.withLock { map in
+            for (id, url) in posters {
+                let key = id.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !key.isEmpty else { continue }
+                map[key] = url
+            }
+            while map.count > 4000, let first = map.keys.first {
+                map.removeValue(forKey: first)
+            }
         }
     }
 }
@@ -155,12 +165,10 @@ actor Frame0PosterResolver {
                 }
                 let mirrored = mirroredMutable
                 if !mirrored.isEmpty {
+                    Frame0PosterCache.storeBatch(mirrored)
                     let urls = Array(mirrored.values)
-                    await MainActor.run {
-                        Frame0PosterCache.storeBatch(mirrored)
-                        // Warm CDN bytes so first paint is not an empty black box.
-                        ImageCache.shared.prefetch(urls, maxPixelSize: 420)
-                    }
+                    // Warm CDN bytes so first paint is not an empty black box.
+                    ImageCache.shared.prefetch(urls, maxPixelSize: 420)
                 }
             } catch {
                 consecutiveBatchFailures += 1
@@ -202,7 +210,7 @@ actor Frame0PosterResolver {
             if cache.count > 6000, let first = cache.keys.first {
                 cache.removeValue(forKey: first)
             }
-            await MainActor.run { Frame0PosterCache.store(postID, url) }
+            Frame0PosterCache.store(postID, url)
             return url
         } catch {
             #if DEBUG
