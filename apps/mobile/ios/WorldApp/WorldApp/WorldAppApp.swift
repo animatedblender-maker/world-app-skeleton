@@ -4,16 +4,16 @@ import UIKit
 @main
 struct WorldAppApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    /// Created AFTER the splash paints — `AppState()` hydrate was blocking first frame.
+    /// Created after first splash frame — never block cold open on hydrate.
     @State private var appState: AppState?
     @State private var showsLaunchSplash = true
 
     var body: some Scene {
         WindowGroup {
             ZStack {
-                // Mount the shell only after splash dismisses so Feed/Hubs init
-                // never steals the main thread during the Matterya glow.
-                if !showsLaunchSplash, let appState {
+                // Shell mounts under the splash as soon as AppState exists so bootstrap
+                // and first paint happen while Matterya still glows (no white hang).
+                if let appState {
                     RootView()
                         .environment(appState)
                 }
@@ -26,7 +26,7 @@ struct WorldAppApp: App {
             }
             .preferredColorScheme(.light)
             .tint(Theme.accentBright)
-            .animation(.easeOut(duration: 0.35), value: showsLaunchSplash)
+            .animation(.easeOut(duration: 0.28), value: showsLaunchSplash)
             .task {
                 await runLaunchSequence()
             }
@@ -54,44 +54,50 @@ struct WorldAppApp: App {
         }
     }
 
-    /// Splash first → then hydrate/bootstrap under the looping glow → then open.
+    /// Splash paints first → quick AppState hydrate → shell under glow → dismiss without
+    /// waiting on network bootstrap (that was the long white / awkward hang).
     @MainActor
     private func runLaunchSequence() async {
         PerformanceTelemetry.markIfAbsent("process_start")
 
-        // Let SwiftUI commit the splash frame before any session/disk work.
+        // One frame so Matterya is on screen before any disk work.
         await Task.yield()
-        try? await Task.sleep(nanoseconds: 32_000_000)
+        try? await Task.sleep(nanoseconds: 16_000_000)
 
         PerformanceTelemetry.markIfAbsent("shell_first_frame")
         PerformanceTelemetry.milestoneFromLaunch("app_start_to_shell", surface: "app")
 
         let splashStarted = Date()
 
-        // Heavy work while Matterya letters keep glowing.
+        // Sync hydrate only (Keychain/UserDefaults) — must stay off the network path.
         let state = AppState()
         appState = state
         Keyboard.installDismissOnOutsideTap()
-        await state.bootstrap()
-        PerformanceTelemetry.milestoneFromLaunch(
-            "app_bootstrap_complete",
-            surface: "app",
-            meta: [
-                "authed": state.isAuthenticated ? "1" : "0",
-                "ready": state.isSessionReady ? "1" : "0",
-            ]
-        )
 
-        // At least one full glow pass so the word is never a one-frame flash.
-        let minVisible: TimeInterval = 1.35
+        // Bootstrap in parallel — do NOT block splash dismiss on feed/push/VoIP.
+        let boot = Task { @MainActor in
+            await state.bootstrap()
+            PerformanceTelemetry.milestoneFromLaunch(
+                "app_bootstrap_complete",
+                surface: "app",
+                meta: [
+                    "authed": state.isAuthenticated ? "1" : "0",
+                    "ready": state.isSessionReady ? "1" : "0",
+                ]
+            )
+        }
+
+        // One clean glow pass (~0.95s), then open — never wait on network bootstrap.
+        let minVisible: TimeInterval = 0.95
         let elapsed = Date().timeIntervalSince(splashStarted)
         if elapsed < minVisible {
-            let remaining = minVisible - elapsed
-            try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+            try? await Task.sleep(nanoseconds: UInt64((minVisible - elapsed) * 1_000_000_000))
         }
 
-        withAnimation(.easeOut(duration: 0.35)) {
+        withAnimation(.easeOut(duration: 0.28)) {
             showsLaunchSplash = false
         }
+        // Bootstrap keeps running under the shell.
+        _ = boot
     }
 }

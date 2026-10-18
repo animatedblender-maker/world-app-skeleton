@@ -30,7 +30,7 @@ struct YouTubeAppView: View {
     /// Full ranked For you pool (endless scroll grows the display window from this).
     @State private var hubsForYouPool: [CountryPost] = []
     /// How many ranked rows LazyVStack may show (grows on scroll — never ends).
-    @State private var hubsDisplayLimit: Int = 36
+    @State private var hubsDisplayLimit: Int = 48
     @State private var isLoadingMoreHubs = false
     @State private var hubsLoadMoreQueued = false
     /// Session seed for For you mix (new every open / pull / filter).
@@ -45,9 +45,9 @@ struct YouTubeAppView: View {
     @State private var hubsVisitEpoch: Int = 0
 
     /// First paint window — small LazyVStack; grows on scroll (endless).
-    /// First paint window — Instagram-dense; more rows grow via slug pages, not fat catalog.
-    private static let hubsFirstWindow = 36
-    private static let hubsGrowBy = 24
+    /// First paint window — dense; more rows grow via slug pages, not fat catalog.
+    private static let hubsFirstWindow = 48
+    private static let hubsGrowBy = 32
     /// Soft memory ceiling — slug pages only; never keep thousands of posts on MainActor.
     private static let hubsCatalogMemoryCap = 240
     /// How many times we re-cycle the ranked pool after the full catalog is shown (endless scroll).
@@ -115,8 +115,10 @@ struct YouTubeAppView: View {
                 ^ UInt64(Date().timeIntervalSince1970 * 1_000)
         }
 
-        // Small cap — UI only needs a window; endless scroll pages more later.
-        let rankInput = home.count > 64 ? Array(home.prefix(64)) : home
+        // Keep a large pool — slug pages are already curated; don't truncate to 64.
+        let rankInput = home.count > Self.hubsCatalogMemoryCap
+            ? Array(home.prefix(Self.hubsCatalogMemoryCap))
+            : home
         let following = appState.followingIDs
         let myID = appState.currentProfile?.userID ?? AuthService.shared.currentUser?.id
         let seed = hubsSessionSeed
@@ -124,8 +126,8 @@ struct YouTubeAppView: View {
         let displayLimit = hubsDisplayLimit
         let firstWindow = Self.hubsFirstWindow
 
-        // Fast path for tiny lists (no Task hop).
-        if rankInput.count <= 12 {
+        // Fast path: apply immediately so For you never looks like "only a few".
+        if rankInput.count <= 48 || !shuffle {
             let ranked = catalog.rankForYouBySlugs(
                 rankInput,
                 followingIDs: following,
@@ -139,8 +141,6 @@ struct YouTubeAppView: View {
 
         Task { @MainActor in
             let ranked = await Task.detached(priority: .userInitiated) {
-                // Catalog service is MainActor — call parentHubSlug-free path via pure copy rank.
-                // Use a local pure rank on Sendable posts to avoid MainActor hop inside detach.
                 return YouTubeCatalogService.rankForYouBySlugsPure(
                     rankInput,
                     followingIDs: following,
@@ -517,7 +517,7 @@ struct YouTubeAppView: View {
             // 3) Prefetch next slug page + neighbor under the fold (Instagram-style).
             scheduleDeferredFullCatalogWarm()
             Task(priority: .utility) {
-                await prefetchNextSlugPages(count: 2)
+                await prefetchNextSlugPages(count: 4)
             }
         }
         .onAppear {
@@ -710,21 +710,15 @@ struct YouTubeAppView: View {
                                     openVideo(post)
                                 }, onAppearRow: {
                                     // Media session 09: Hubs list = posters/Frame0 only.
-                                    // AV warm belongs in Watch/related (prepareHubsWindow), not here.
                                     ensureMoreForYou(around: index)
+                                    // Settled scroll only — tiny window (mid-fling prefetch was jank).
                                     if !ScrollBudget.isFlinging {
                                         ImageCache.shared.prefetchHubsWindow(
                                             posts: stableDiscoverVideos,
-                                            around: index
+                                            around: index,
+                                            behind: 1,
+                                            ahead: 4
                                         )
-                                        let lo = max(0, index - 2)
-                                        let hi = min(stableDiscoverVideos.count, index + 7)
-                                        if lo < hi {
-                                            let ids = Array(stableDiscoverVideos[lo..<hi].map(\.id))
-                                            Task {
-                                                await Frame0PosterResolver.shared.prefetch(postIDs: ids)
-                                            }
-                                        }
                                     }
                                 })
                                 .padding(.bottom, 18)
@@ -1201,14 +1195,20 @@ struct YouTubeAppView: View {
         persist: Bool,
         remountList: Bool = true
     ) {
-        allVideos = videos
-        if persist, !videos.isEmpty {
+        // Prefer long-form Hubs inventory; never blank a dense slug page.
+        let longForm = videos.filter { PlayPlatformBridge.isHubsForYouLongForm($0) || ($0.hasVideo && !$0.isReel) }
+        allVideos = longForm.isEmpty ? videos : longForm
+        if persist, !allVideos.isEmpty {
             ContentCache.shared.setPosts(
-                Array(videos.prefix(ContentCache.maxCachedPosts)),
+                Array(allVideos.prefix(ContentCache.maxCachedPosts)),
                 for: .livingVideos
             )
         }
-        rebuildChannels()
+        // Defer channel rebuild — it was filtering the list on the hot path.
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            rebuildChannels()
+        }
         if shuffle {
             refreshHubsVisitShuffle(remountList: remountList)
         } else {
@@ -1548,8 +1548,9 @@ struct YouTubeAppView: View {
         if let me = appState.currentProfile {
             profiles[me.userID] = me
         }
-        // Strip feed-only shares only — NEVER drop ia_* / Archive seed rows.
-        allVideos = allVideos.filter { post in
+        // Build channel rails from catalog rows — do NOT rewrite `allVideos`.
+        // Filtering allVideos here emptied For you (thin slug cards looked like feed shares).
+        let channelSource = allVideos.filter { post in
             let id = post.id.lowercased()
             if post.isHubSeedVideo
                 || HubVideoSeedService.isArchiveChannelAuthor(post.authorID)
@@ -1559,7 +1560,7 @@ struct YouTubeAppView: View {
             }
             return PlayPlatformBridge.belongsInHubsCatalog(post)
         }
-        channels = catalog.buildChannels(from: allVideos, profiles: profiles)
+        channels = catalog.buildChannels(from: channelSource, profiles: profiles)
     }
 
     private func loadChannelProfiles() async {

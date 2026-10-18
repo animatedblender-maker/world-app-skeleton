@@ -1,14 +1,16 @@
 import SwiftUI
 
-/// Branded Matterya splash — the word glows in a continuous loop until the shell opens.
+/// Branded Matterya splash — a single glow peak sweeps left→right, then repeats.
+/// (No circular wrap — that lit the first and last letters at once and felt stuck.)
 struct MatteryaSplashView: View {
-    /// When true, run the looping letter glow. When false, hold a soft mid glow.
     var showsProgress: Bool = true
     var message: String? = nil
 
     private let word = Array("Matterya")
-    /// One full left→right pass duration (then repeats seamlessly).
-    private let loopDuration: TimeInterval = 1.25
+    /// One clean left→right pass (snappy, not sluggish).
+    private let loopDuration: TimeInterval = 0.95
+    /// Quiet beat between passes so ends never glow together.
+    private let gapDuration: TimeInterval = 0.18
 
     var body: some View {
         ZStack {
@@ -20,9 +22,8 @@ struct MatteryaSplashView: View {
 
                 Group {
                     if showsProgress {
-                        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
-                            let phase = loopPhase(at: context.date)
-                            letterRow(wavePhase: phase)
+                        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: false)) { context in
+                            letterRow(wavePhase: loopPhase(at: context.date))
                         }
                     } else {
                         letterRow(wavePhase: 0.5)
@@ -35,7 +36,6 @@ struct MatteryaSplashView: View {
                     Text(message)
                         .font(.subheadline)
                         .foregroundStyle(Theme.inkMuted)
-                        .transition(.opacity)
                 }
 
                 Spacer(minLength: 0)
@@ -59,44 +59,41 @@ struct MatteryaSplashView: View {
         return Text(String(character))
             .font(.system(size: 36, weight: .semibold, design: .serif))
             .tracking(0.6)
-            // Base opacity matches LaunchWordmark so cold open never “pops in” late.
-            .foregroundStyle(Theme.ink.opacity(0.55 + 0.45 * amount))
+            .foregroundStyle(Theme.ink.opacity(0.42 + 0.58 * amount))
             .shadow(
-                color: Theme.accentBright.opacity(0.70 * amount),
-                radius: 3 + 14 * amount,
+                color: Theme.accentBright.opacity(0.75 * amount),
+                radius: 2 + 12 * amount,
                 y: 0
             )
             .shadow(
-                color: Theme.accent.opacity(0.45 * amount),
-                radius: 1.5 + 6 * amount,
+                color: Theme.accent.opacity(0.40 * amount),
+                radius: 1 + 5 * amount,
                 y: 0
             )
-            .scaleEffect(1 + 0.045 * amount)
+            .scaleEffect(1 + 0.04 * amount)
     }
 
-    /// Brightest under the traveling wave peak; soft falloff so the word reads as a looping bar.
+    /// Linear distance only — peak travels 0→1; during the gap phase is nil-ish (all soft).
     private func letterGlow(index: Int, wavePhase: CGFloat) -> CGFloat {
+        // gap: wavePhase < 0 → all letters at base glow
+        guard wavePhase >= 0 else { return 0.15 }
         let count = CGFloat(max(word.count, 1))
         let letterCenter = (CGFloat(index) + 0.5) / count
-        var delta = abs(letterCenter - wavePhase)
-        delta = min(delta, 1 - delta)
-        let band: CGFloat = 0.28
+        let delta = abs(letterCenter - wavePhase)
+        let band: CGFloat = 0.16
         let raw = max(0, 1 - delta / band)
-        // Floor keeps every letter readable from frame 0 (matches static launch wordmark).
-        return 0.35 + 0.65 * (raw * raw * (3 - 2 * raw))
+        return 0.15 + 0.85 * (raw * raw * (3 - 2 * raw))
     }
 
+    /// Returns 0…1 during the sweep, or -1 during the quiet gap (no wrap glow).
     private func loopPhase(at date: Date) -> CGFloat {
-        let t = date.timeIntervalSinceReferenceDate
-        let wrapped = t.truncatingRemainder(dividingBy: loopDuration)
-        return CGFloat(wrapped / loopDuration)
+        let cycle = loopDuration + gapDuration
+        let t = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: cycle)
+        if t >= loopDuration { return -1 }
+        return CGFloat(t / loopDuration)
     }
 }
 
 #Preview("Loop") {
     MatteryaSplashView(showsProgress: true)
-}
-
-#Preview("Hold") {
-    MatteryaSplashView(showsProgress: false)
 }
