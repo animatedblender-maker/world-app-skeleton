@@ -59,18 +59,19 @@ struct MatteryaSplashView: View {
         return Text(String(character))
             .font(.system(size: 36, weight: .semibold, design: .serif))
             .tracking(0.6)
-            .foregroundStyle(Theme.ink.opacity(0.20 + 0.80 * amount))
+            // Base opacity matches LaunchWordmark so cold open never “pops in” late.
+            .foregroundStyle(Theme.ink.opacity(0.55 + 0.45 * amount))
             .shadow(
-                color: Theme.accentBright.opacity(0.65 * amount),
-                radius: 3 + 12 * amount,
+                color: Theme.accentBright.opacity(0.70 * amount),
+                radius: 3 + 14 * amount,
                 y: 0
             )
             .shadow(
-                color: Theme.accent.opacity(0.40 * amount),
-                radius: 1.5 + 5 * amount,
+                color: Theme.accent.opacity(0.45 * amount),
+                radius: 1.5 + 6 * amount,
                 y: 0
             )
-            .scaleEffect(1 + 0.04 * amount)
+            .scaleEffect(1 + 0.045 * amount)
     }
 
     /// Brightest under the traveling wave peak; soft falloff so the word reads as a looping bar.
@@ -79,9 +80,10 @@ struct MatteryaSplashView: View {
         let letterCenter = (CGFloat(index) + 0.5) / count
         var delta = abs(letterCenter - wavePhase)
         delta = min(delta, 1 - delta)
-        let band: CGFloat = 0.22
+        let band: CGFloat = 0.28
         let raw = max(0, 1 - delta / band)
-        return 0.12 + 0.88 * (raw * raw * (3 - 2 * raw))
+        // Floor keeps every letter readable from frame 0 (matches static launch wordmark).
+        return 0.35 + 0.65 * (raw * raw * (3 - 2 * raw))
     }
 
     private func loopPhase(at date: Date) -> CGFloat {
