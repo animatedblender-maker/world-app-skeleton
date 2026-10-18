@@ -319,11 +319,16 @@ final class SlugShelfStore {
             print("[SlugShelf] \(url.path) items=\(posts.count) next=\(next != nil)")
             #endif
             // Media session 09: shelf list = posters only. Continuous player warms on open.
+            // prefetchPostThumbnails also Frame0-fills any expired/missing thumbs.
+            let head = Array(posts.prefix(12))
             ImageCache.shared.prefetchPostThumbnails(
-                Array(posts.prefix(8)),
+                head,
                 maxPixelSize: 360,
                 aggressive: false
             )
+            Task {
+                await Frame0PosterResolver.shared.prefetch(postIDs: head.map(\.id))
+            }
             return Page(items: posts, nextCursor: next, slugsUsed: slugsUsed, session: session)
         } catch {
             #if DEBUG

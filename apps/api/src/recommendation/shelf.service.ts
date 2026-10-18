@@ -225,7 +225,7 @@ function toIso(v: Date | string): string {
   return Number.isFinite(d.getTime()) ? d.toISOString() : String(v);
 }
 
-/** Re-presign media_url + Frame 0 thumb_url so clients never open dead/403 R2 links. */
+/** Re-presign media_url + Frame 0 thumb_url (+ nested posters) so clients never open dead/403 R2 links. */
 async function freshenCardMedia(items: ThinShelfCard[]): Promise<ThinShelfCard[]> {
   if (!items.length) return items;
   const concurrency = 6;
@@ -237,19 +237,55 @@ async function freshenCardMedia(items: ThinShelfCard[]): Promise<ThinShelfCard[]
       const card = items[i];
       let next = card;
       const fresh = await freshenMediaUrlString(card.media_url);
-      if (fresh && fresh !== card.media_url) {
+      if (fresh) {
         next = { ...next, media_url: fresh };
       }
       // Live Frame 0: re-presign thumb, or mint from media_url pack key when missing.
       const liveThumb = await freshenThumbUrlString(next.thumb_url, null, next.media_url);
-      if (liveThumb && liveThumb !== next.thumb_url) {
+      if (liveThumb) {
         next = { ...next, thumb_url: liveThumb };
+      }
+      // Nested media_url.posters ladder often still carries Aug-expired embeds — refresh in place.
+      const withPosters = await freshenEmbeddedPosters(next.media_url);
+      if (withPosters) {
+        next = { ...next, media_url: withPosters };
       }
       out[i] = next;
     }
   }
   await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
   return out;
+}
+
+/** Re-sign media_url JSON `posters.{256|512|1080}` when present (expired embeds → 403 on device). */
+async function freshenEmbeddedPosters(mediaUrl: string | null | undefined): Promise<string | null> {
+  if (!mediaUrl) return null;
+  const raw = String(mediaUrl).trim();
+  if (!raw.startsWith('{')) return null;
+  try {
+    const obj = JSON.parse(raw) as Record<string, unknown>;
+    const posters = obj.posters;
+    if (!posters || typeof posters !== 'object') return null;
+    const nextPosters: Record<string, string> = {
+      ...(posters as Record<string, string>),
+    };
+    let changed = false;
+    for (const key of ['1080', '512', '256'] as const) {
+      const cur = nextPosters[key];
+      if (!cur) continue;
+      const live = await freshenThumbUrlString(cur, null, raw);
+      if (live && live !== cur) {
+        nextPosters[key] = live;
+        changed = true;
+      }
+    }
+    if (!changed) return null;
+    obj.posters = nextPosters;
+    obj.signed_at = new Date().toISOString();
+    return JSON.stringify(obj);
+  } catch {
+    return null;
+  }
 }
 
 function synthesizeThumbFromMedia(mediaUrl: string | null | undefined): string | null {
@@ -615,15 +651,16 @@ export async function fetchHomeFeedPage(input: {
   `;
   const { rows } = await pool.query<RawPostRow>(sql, params);
   const items = rows.map((row) => rowToCard(row, classifyRow(row)));
+  const liveItems = await freshenCardMedia(items);
   const last = rows[rows.length - 1];
   const nextCursor = last
     ? encodeCursor(toIso(last.created_at), last.id)
     : null;
   return {
     surface: 'home_for_you',
-    items,
-    nextCursor: items.length >= want ? nextCursor : null,
-    count: items.length,
+    items: liveItems,
+    nextCursor: liveItems.length >= want ? nextCursor : null,
+    count: liveItems.length,
   };
 }
 
@@ -688,10 +725,11 @@ export async function fetchSparksPage(input: {
     items.push(rowToCard(row, slug));
     if (items.length >= want) break;
   }
+  const liveItems = await freshenCardMedia(items);
   return {
     surface: focus ? `sparks:${focus}` : 'sparks',
-    items,
+    items: liveItems,
     nextCursor: lastCursor,
-    count: items.length,
+    count: liveItems.length,
   };
 }

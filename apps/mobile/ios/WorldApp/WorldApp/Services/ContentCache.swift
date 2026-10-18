@@ -1,9 +1,10 @@
 import Foundation
 
 enum ContentCacheKey: String, CaseIterable {
-    /// Bump suffix whenever feed identity changes (kills stale Reddit disk cache).
-    case homeFeed = "homeFeed.v6_backend_only_no_reddit"
-    case livingVideos
+    /// Bump suffix whenever feed identity changes (kills stale Reddit / expired-thumb disk cache).
+    case homeFeed = "homeFeed.v7_fresh_thumbs"
+    /// Bump when hubs catalog thumbs must re-fetch (expired Aug-signed Frame0 embeds).
+    case livingVideos = "livingVideos.v2_fresh_thumbs"
     case savedPosts
     case profilePosts
     case profileCountryCode

@@ -87,11 +87,22 @@ final class ImageCache: @unchecked Sendable {
     }
 
     func prefetchPostThumbnails(_ posts: [CountryPost], maxPixelSize: CGFloat = 420, aggressive: Bool = false) {
+        var missingFrame0IDs: [String] = []
         let urls = posts.compactMap { post -> URL? in
-            guard let u = MediaURLResolver.hubsListPosterURL(for: post) else { return nil }
-            return MediaURLResolver.isUsablePosterURL(u) ? u : nil
+            if let u = MediaURLResolver.hubsListPosterURL(for: post),
+               MediaURLResolver.isUsablePosterURL(u) {
+                return u
+            }
+            // Expired / missing thumb — must mint Frame 0 or shelves stay black forever.
+            missingFrame0IDs.append(post.id)
+            return nil
         }
         prefetch(urls, maxPixelSize: maxPixelSize, aggressive: aggressive)
+        if !missingFrame0IDs.isEmpty {
+            Task {
+                await Frame0PosterResolver.shared.prefetch(postIDs: missingFrame0IDs)
+            }
+        }
     }
 
     /// Hubs For you: prefetch a sliding window around `index` (behind + ahead).
@@ -138,8 +149,20 @@ final class ImageCache: @unchecked Sendable {
         // Avatars first — every feed card has one; media is secondary for text-heavy demos.
         // Must match AvatarView feed maxPixelSize (size 36 → max(72, 72) = 72) or cache misses.
         let avatarMax: CGFloat = 72
-        let mediaURLs = posts.compactMap {
-            $0.posterImageURL ?? $0.feedImageURL ?? $0.thumbURL.flatMap(URL.init(string:))
+        var missingFrame0IDs: [String] = []
+        let mediaURLs = posts.compactMap { post -> URL? in
+            let candidates = [
+                MediaURLResolver.hubsListPosterURL(for: post),
+                post.posterImageURL,
+                post.feedImageURL,
+                post.thumbURL.flatMap(URL.init(string:)),
+            ]
+            for candidate in candidates {
+                guard let url = candidate, MediaURLResolver.isUsablePosterURL(url) else { continue }
+                return url
+            }
+            missingFrame0IDs.append(post.id)
+            return nil
         }
         let avatarURLs = posts.compactMap { post -> URL? in
             guard let raw = post.author?.avatarURL else { return nil }
@@ -150,6 +173,11 @@ final class ImageCache: @unchecked Sendable {
         }
         prefetch(avatarURLs, maxPixelSize: avatarMax)
         prefetch(mediaURLs, maxPixelSize: maxPixelSize)
+        if !missingFrame0IDs.isEmpty {
+            Task {
+                await Frame0PosterResolver.shared.prefetch(postIDs: missingFrame0IDs)
+            }
+        }
     }
 
     func image(for url: URL, maxPixelSize: CGFloat) async -> UIImage? {
