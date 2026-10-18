@@ -169,6 +169,11 @@ actor Frame0PosterResolver {
                     let urls = Array(mirrored.values)
                     // Warm CDN bytes so first paint is not an empty black box.
                     ImageCache.shared.prefetch(urls, maxPixelSize: 420)
+                    NotificationCenter.default.post(
+                        name: .frame0PostersDidUpdate,
+                        object: nil,
+                        userInfo: ["postIDs": Array(mirrored.keys)]
+                    )
                 }
             } catch {
                 consecutiveBatchFailures += 1
@@ -206,11 +211,18 @@ actor Frame0PosterResolver {
     private func fetchAndCache(postID: String, fallback: URL?) async -> URL? {
         do {
             let url = try await fetchOne(postID: postID)
+            // Same reject as batch — never mirror dead pub-*.r2.dev into UI cache.
+            if MediaURLResolver.isBlockedR2PublicURL(url) { return fallback }
             cache[postID] = CacheEntry(url: url, cachedAt: Date())
             if cache.count > 6000, let first = cache.keys.first {
                 cache.removeValue(forKey: first)
             }
             Frame0PosterCache.store(postID, url)
+            NotificationCenter.default.post(
+                name: .frame0PostersDidUpdate,
+                object: nil,
+                userInfo: ["postIDs": [postID]]
+            )
             return url
         } catch {
             #if DEBUG
