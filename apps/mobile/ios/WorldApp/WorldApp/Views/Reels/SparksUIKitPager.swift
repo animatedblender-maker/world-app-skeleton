@@ -542,10 +542,24 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
 
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
         commitPageFromScroll()
+        // Settled: refill the full ahead window (fling path skipped willDisplay warm).
+        SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
+        if activeIndex >= max(0, posts.count - 24) {
+            coordinator?.nearEnd()
+        }
+        if activeIndex <= 2 {
+            coordinator?.nearStart()
+        }
     }
 
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
-        if !decelerate { commitPageFromScroll() }
+        if !decelerate {
+            commitPageFromScroll()
+            SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
+            if activeIndex >= max(0, posts.count - 24) {
+                coordinator?.nearEnd()
+            }
+        }
     }
 
     func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
@@ -594,11 +608,15 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
                 self?.coordinator?.openComments(post.id)
             }
         )
-        // Prefetch AV bulk as cells approach the viewport (before page commit).
-        // Continuing handoff slots are protected from eviction inside prepare().
-        SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: indexPath.item)
+        // Mid-fling: skip warm — DidEndDecelerating / WillEndDragging refill the window.
+        // Calling prepare on every willDisplay during a fling still ran eviction + MainActor work.
+        if !ScrollBudget.isFlinging {
+            SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
+        }
         // Queue catalog bulk early — endless scroll must never hit a hard wall.
-        if indexPath.item >= max(0, posts.count - 24) {
+        // Skip mid-fling so load-more + array mutation don't hitch the pager.
+        if !ScrollBudget.isFlinging,
+           indexPath.item >= max(0, posts.count - 24) {
             coordinator?.nearEnd()
         }
     }
@@ -634,16 +652,33 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         refreshVisibleCells()
 
         // Keep a deep bulk ahead — fire load-more well before the last page.
-        if clamped >= max(0, posts.count - 24) {
+        // Never during fling: nearEnd → ensureBulk → posts mutation freezes the pager.
+        if !ScrollBudget.isFlinging, clamped >= max(0, posts.count - 24) {
             coordinator?.nearEnd()
         }
-        if clamped <= 2 {
+        if !ScrollBudget.isFlinging, clamped <= 2 {
             coordinator?.nearStart()
         }
 
         if posts.indices.contains(clamped) {
             // Mark all identities (origin + share) so feed never re-serves this clip.
             SparkDiscoveryEngine.markWatched(posts[clamped])
+        }
+    }
+
+    // MARK: Scroll budget — keep warm/prefetch off the main thread during fling
+
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        ScrollBudget.noteScrollActivity(dragging: true)
+    }
+
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        // Continuous drag / deceleration still counts as fling for warm gates.
+        if scrollView.isDragging || scrollView.isDecelerating {
+            ScrollBudget.noteScrollActivity(
+                velocityY: scrollView.panGestureRecognizer.velocity(in: scrollView).y / 1000,
+                dragging: scrollView.isDragging
+            )
         }
     }
 
@@ -654,6 +689,7 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         withVelocity velocity: CGPoint,
         targetContentOffset: UnsafeMutablePointer<CGPoint>
     ) {
+        ScrollBudget.noteScrollActivity(velocityY: velocity.y, dragging: false)
         let h = max(pageSize.height, 1)
         let targetPage = Int(round(targetContentOffset.pointee.y / h))
         // Fast fling: hand off focus before deceleration finishes.
@@ -673,8 +709,10 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
 
 extension SparksPagerViewController: UICollectionViewDataSourcePrefetching {
     func collectionView(_ collectionView: UICollectionView, prefetchItemsAt indexPaths: [IndexPath]) {
-        guard let first = indexPaths.map(\.item).min() else { return }
-        SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: first)
+        // Mid-fling: skip — prepare coalesces and fling gate already covers ±1.
+        guard !ScrollBudget.isFlinging else { return }
+        // Warm from focus, never from the farthest prefetch index (that re-centered the window).
+        SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
     }
 }
 

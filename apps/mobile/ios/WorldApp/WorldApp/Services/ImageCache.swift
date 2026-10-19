@@ -12,8 +12,8 @@ final class ImageCache: @unchecked Sendable {
 
     private let memoryCache = NSCache<NSString, UIImage>()
     private let inflight = InflightTable()
-    /// Cap concurrent image loads — 20 flooded the network and hitching the main runloop.
-    private let downloadGate = DownloadGate(maxConcurrent: 8)
+    /// Cap concurrent image loads — keep low so Feed+Hubs dual-mount never storms the radio.
+    private let downloadGate = DownloadGate(maxConcurrent: 4)
     private let session: URLSession
     private let diskDirectory: URL
     private let ioQueue = DispatchQueue(label: "com.matterya.imagecache.io", qos: .utility)
@@ -21,18 +21,18 @@ final class ImageCache: @unchecked Sendable {
     private static let sizeBuckets: [CGFloat] = [240, 280, 320, 360, 420, 480, 720]
 
     private init() {
-        memoryCache.countLimit = 400
-        memoryCache.totalCostLimit = 96 * 1024 * 1024
+        memoryCache.countLimit = 180
+        memoryCache.totalCostLimit = 48 * 1024 * 1024
 
         let configuration = URLSessionConfiguration.default
         // Short timeouts — fail fast and fall back to services/img rather than hang on .thumbs.
         configuration.timeoutIntervalForRequest = 6
         configuration.timeoutIntervalForResource = 10
-        configuration.httpMaximumConnectionsPerHost = 6
+        configuration.httpMaximumConnectionsPerHost = 4
         configuration.waitsForConnectivity = false
         configuration.urlCache = URLCache(
-            memoryCapacity: 80 * 1024 * 1024,
-            diskCapacity: 500 * 1024 * 1024
+            memoryCapacity: 32 * 1024 * 1024,
+            diskCapacity: 200 * 1024 * 1024
         )
         configuration.requestCachePolicy = .returnCacheDataElseLoad
         session = URLSession(configuration: configuration)
@@ -67,12 +67,12 @@ final class ImageCache: @unchecked Sendable {
     func prefetch(_ urls: [URL], maxPixelSize: CGFloat = 420, aggressive: Bool = false) {
         let fling = ScrollBudget.isFlinging
         // Fast fling: starve the network so decode/download don't hitch the main thread.
-        // Settled: warm a healthy ahead window so cells paint from memory.
+        // Settled: small ahead window — large prefetch was making the whole app feel heavy.
         let cap: Int
         if fling {
-            cap = aggressive ? 4 : 3
+            cap = aggressive ? 2 : 2
         } else {
-            cap = aggressive ? 20 : 12
+            cap = aggressive ? 8 : 6
         }
         let unique = Array(Set(urls.map(\.absoluteString))).prefix(cap).compactMap(URL.init(string:))
         let priority: TaskPriority = fling
@@ -106,18 +106,18 @@ final class ImageCache: @unchecked Sendable {
     }
 
     /// Hubs For you: prefetch a sliding window around `index` (behind + ahead).
-    /// Mid-fling uses a tight window so rapid cell churn doesn't stampede downloads.
+    /// Settled-only callers pass a Feed-sized window; mid-fling stays tiny.
     func prefetchHubsWindow(
         posts: [CountryPost],
         around index: Int,
-        behind: Int = 6,
-        ahead: Int = 24,
+        behind: Int = 1,
+        ahead: Int = 4,
         maxPixelSize: CGFloat = YouTubeMediaLayout.hubsListThumbMaxPixel
     ) {
         guard !posts.isEmpty else { return }
         let fling = ScrollBudget.isFlinging
-        let useBehind = fling ? min(behind, 0) : min(behind, 2)
-        let useAhead = fling ? min(ahead, 2) : min(ahead, 6)
+        let useBehind = fling ? min(behind, 0) : min(behind, 1)
+        let useAhead = fling ? min(ahead, 1) : min(ahead, 4)
         let lo = max(0, index - useBehind)
         let hi = min(posts.count, index + useAhead + 1)
         guard lo < hi else { return }
@@ -125,7 +125,7 @@ final class ImageCache: @unchecked Sendable {
         prefetchPostThumbnails(
             Array(posts[lo..<hi]),
             maxPixelSize: maxPixelSize,
-            aggressive: !fling
+            aggressive: false
         )
     }
 
@@ -133,7 +133,7 @@ final class ImageCache: @unchecked Sendable {
     func prefetchHubSlug(
         _ slug: String,
         from posts: [CountryPost],
-        limit: Int = 48,
+        limit: Int = 16,
         maxPixelSize: CGFloat = YouTubeMediaLayout.hubsListThumbMaxPixel
     ) {
         let needle = slug.lowercased()
@@ -555,6 +555,18 @@ enum ScrollBudget: Sendable {
         // 3+ cells in quick succession ≈ finger fling / deceleration.
         if burst >= 3 {
             flingUntil = now.addingTimeInterval(0.45)
+        }
+    }
+
+    /// Sparks / UIScrollView: mark fling from drag velocity so warm/prefetch stay off the main thread.
+    nonisolated static func noteScrollActivity(velocityY: CGFloat = 0, dragging: Bool = false) {
+        let now = Date()
+        lock.lock()
+        defer { lock.unlock() }
+        if dragging || abs(velocityY) > 0.25 {
+            // Hold fling through deceleration; settle handlers refill the deep ahead window.
+            flingUntil = now.addingTimeInterval(0.65)
+            burst = max(burst, 3)
         }
     }
 

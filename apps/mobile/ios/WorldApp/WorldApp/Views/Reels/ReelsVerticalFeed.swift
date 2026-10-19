@@ -83,9 +83,12 @@ struct ReelsVerticalFeed: View {
         }
         .onChange(of: activeIndex) { _, idx in
             recordView(at: idx)
-            SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: idx)
+            // Mid-fling: settle handlers refill the deep ahead window.
+            if !ScrollBudget.isFlinging {
+                SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: idx)
+            }
             // Request next catalog bulk well before the user reaches the tail.
-            if idx >= posts.count - 16 {
+            if !ScrollBudget.isFlinging, idx >= posts.count - 16 {
                 onNearEnd?()
             }
         }
@@ -1601,16 +1604,17 @@ struct ReelsScrollViewer: View {
         .onChange(of: activeIndex) { _, idx in
             // Idle-warm comments for the focused Spark so Chat is instant.
             guard posts.indices.contains(idx) else { return }
-            CommentsWarmCache.shared.warm(posts[idx].id)
-            // Pager already markWatched — park any watched clips still ahead to the end.
-            parkWatchedAheadToEnd(preservingIndex: idx)
-            // Keep a bulk of unplayed Sparks ahead — but never mid-fling.
-            // loadMore + array mutation on the swipe path froze the pager (audio kept playing).
+            // Never mutate `posts` or hit network mid-fling — that hitch is what made
+            // Sparks feel heavy while audio kept playing. Settle first, then maintain.
             Task { @MainActor in
                 if ScrollBudget.isFlinging {
-                    try? await Task.sleep(nanoseconds: 280_000_000)
+                    try? await Task.sleep(nanoseconds: 420_000_000)
                     guard !ScrollBudget.isFlinging else { return }
                 }
+                guard posts.indices.contains(activeIndex) else { return }
+                CommentsWarmCache.shared.warm(posts[activeIndex].id)
+                // Park watched ahead only after settle — mid-swipe reorder reloads the pager.
+                parkWatchedAheadToEnd(preservingIndex: activeIndex)
                 await ensureBulkQueueAhead()
             }
         }
@@ -1942,15 +1946,18 @@ struct ReelsScrollViewer: View {
             // Do NOT reassign activeIndex — even to the same id's index. Stale preserveIDs
             // from network start were snapping the user back to the entry spark.
         }
-        ImageCache.shared.prefetchPostThumbnails(
-            Array(appended.prefix(SparkWarmPool.MediaBudget.thumbAhead)),
-            maxPixelSize: 360,
-            aggressive: false
-        )
-        Task {
-            await Frame0PosterResolver.shared.prefetch(
-                postIDs: Array(appended.prefix(SparkWarmPool.MediaBudget.thumbAhead).map(\.id))
+        // Skip thumb/Frame0 storms if the user is still flinging — settle warm covers it.
+        if !ScrollBudget.isFlinging {
+            ImageCache.shared.prefetchPostThumbnails(
+                Array(appended.prefix(SparkWarmPool.MediaBudget.thumbAhead)),
+                maxPixelSize: 360,
+                aggressive: false
             )
+            Task {
+                await Frame0PosterResolver.shared.prefetch(
+                    postIDs: Array(appended.prefix(SparkWarmPool.MediaBudget.thumbAhead).map(\.id))
+                )
+            }
         }
     }
 
@@ -1972,12 +1979,12 @@ struct ReelsScrollViewer: View {
         let tail = Array(posts.suffix(8))
         let bulk = SparksQueueBudget.bulkBatchSize
 
-        // Pre-KNN primary path: page /v1/sparks by feed_at (newest R2 first).
-        // Walks the full DB-backed library without loading 306k into RAM.
+        // Newest-first /v1/sparks page — keep pages small on scroll so load-more
+        // never freezes the pager (deep preload still comes from SparkWarmPool).
         let surface = await SurfacePageClient.fetchSparksPages(
-            want: bulk,
+            want: min(bulk, 36),
             startingCursor: feedCursor,
-            maxPages: 6,
+            maxPages: posts.count > 20 ? 2 : 4,
             excluding: existingIDs,
             skipViewed: true
         )

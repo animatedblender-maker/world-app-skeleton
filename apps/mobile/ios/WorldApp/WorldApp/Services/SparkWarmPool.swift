@@ -25,25 +25,27 @@ final class SparkWarmPool {
         static var isConstrained: Bool { physicalGB < 3.6 }
         static var isMid: Bool { physicalGB < 5.6 }
 
-        /// IG-style Sparks window — 5 deep-ready beats 10 half-warm. Do not retune daily.
-        static var playerAhead: Int { 5 }
+        /// Sparks swipe window — load ahead of the finger so the next clip is already decoding.
+        /// Feed/Hubs stay light; only Sparks uses this depth.
+        /// Keep modest: ahead 5 + deep 3 + concurrent 3 was freezing the UI mid-swipe (audio kept playing).
+        static var playerAhead: Int { playerAheadSparks }
         /// Feed list must NOT use AV warm (media session 09) — kept for API compat only.
         static var playerAheadFeed: Int { 0 }
-        static var playerAheadSparks: Int { 5 }
-        static var playerAheadHubs: Int { 5 }
+        static var playerAheadSparks: Int { isConstrained ? 3 : 4 }
+        static var playerAheadHubs: Int { 2 }
         /// Thumbs / Frame 0 ahead of focus (Sparks player + shelves).
-        static var thumbAhead: Int { isConstrained ? 12 : 16 }
-        /// Deep-preroll next 2 (first-frame ready); rest of window light-buffer.
+        static var thumbAhead: Int { isConstrained ? 8 : 10 }
+        /// Deep-preroll next N (first-frame ready); rest of window light-buffer.
         static var deepPrerollFeed: Int { 0 }
         static var deepPrerollSparks: Int { 2 }
-        static var deepPrerollHubs: Int { 2 }
-        /// 5 ahead + 1 behind + spare.
-        static var maxSlots: Int { isConstrained ? 7 : 8 }
+        static var deepPrerollHubs: Int { 1 }
+        /// current + behind + ahead + spare — room for Sparks window without thrash.
+        static var maxSlots: Int { isConstrained ? 6 : 7 }
         static var playerBehind: Int { 1 }
-        /// Cap parallel R2 pipes — never storm on open.
-        static var maxConcurrentWarms: Int { isConstrained ? 2 : 3 }
-        static var forwardBufferDeep: Double { isConstrained ? 5 : 7 }
-        static var forwardBufferLight: Double { isConstrained ? 2 : 3 }
+        /// Parallel R2 warms — capped so swipe never storms MainActor with AVPlayer creates.
+        static var maxConcurrentWarms: Int { 2 }
+        static var forwardBufferDeep: Double { isConstrained ? 4 : 6 }
+        static var forwardBufferLight: Double { isConstrained ? 2 : 2.5 }
     }
 
     /// Default Sparks / hubs player window (adaptive).
@@ -73,17 +75,26 @@ final class SparkWarmPool {
     /// Serialize warm starts so we fill the ahead window without opening N R2 pipes at once.
     private var activeWarms = 0
     private var warmWaiters: [CheckedContinuation<Void, Never>] = []
+    /// Coalesce prepare storms from willDisplay + prefetch + commit during one swipe.
+    private var lastPrepareIndex: Int = .min
+    private var lastPrepareAt: Date = .distantPast
+    private var lastPreparePostCount: Int = 0
 
     private init() {}
 
     /// Convenience for Sparks player — sliding AV window (device-adaptive ahead).
     func preparePlayerWindow(posts: [CountryPost], around index: Int) {
+        let fling = ScrollBudget.isFlinging
+        // Mid-swipe: only keep current ±1 hot. Deep fill resumes when the finger settles.
+        let ahead = fling ? 1 : MediaBudget.playerAheadSparks
+        let deep = fling ? 1 : MediaBudget.deepPrerollSparks
         prepare(
             posts: posts,
             around: index,
-            ahead: MediaBudget.playerAheadSparks,
+            ahead: ahead,
             behind: MediaBudget.playerBehind,
-            deepPrerollLimit: MediaBudget.deepPrerollSparks
+            deepPrerollLimit: deep,
+            skipThumbWarm: fling
         )
     }
 
@@ -113,15 +124,29 @@ final class SparkWarmPool {
         around index: Int,
         ahead: Int = 6,
         behind: Int = 2,
-        deepPrerollLimit: Int? = nil
+        deepPrerollLimit: Int? = nil,
+        skipThumbWarm: Bool = false
     ) {
         guard !posts.isEmpty else { return }
         let deepLimit = deepPrerollLimit ?? MediaBudget.deepPrerollSparks
 
+        // Coalesce willDisplay + prefetch + commit storms for the same focus.
+        let now = Date()
+        if index == lastPrepareIndex,
+           posts.count == lastPreparePostCount,
+           now.timeIntervalSince(lastPrepareAt) < 0.18 {
+            return
+        }
+        lastPrepareIndex = index
+        lastPrepareAt = now
+        lastPreparePostCount = posts.count
+
         // Resolve + thumbs for a *slightly wider* band than full AV buffers (cheap).
+        // Mid-fling: skip entirely — ImageCache/Frame0 on the swipe path froze Sparks UI
+        // while AV audio kept playing on its own thread.
         let resolveLo = max(0, index - behind)
         let resolveHi = min(posts.count, index + max(ahead, deepLimit) + 3)
-        if resolveLo < resolveHi {
+        if resolveLo < resolveHi, !skipThumbWarm {
             if AppConfig.archiveContentEnabled {
                 for post in posts[resolveLo..<resolveHi] {
                     if let url = post.playableVideoURL, ArchiveVideoPlayback.isArchiveURL(url) {
@@ -150,7 +175,9 @@ final class SparkWarmPool {
         guard lo < hi else { return }
         let window = Array(posts[lo..<hi])
         // Never evict the deep-preroll head — only drop far tails.
-        let protectHi = min(posts.count, index + max(ahead, deepLimit) + 1)
+        // Mid-fling: protect a wider keep set than we warm so we don't thrash evict/create.
+        let protectAhead = skipThumbWarm ? MediaBudget.playerAheadSparks : max(ahead, deepLimit)
+        let protectHi = min(posts.count, index + protectAhead + 1)
         let protectLo = max(0, index - behind)
         var keep = Set(window.map(\.id)).union(inUse)
         // Never evict a mid-clip feed→Sparks/Hubs handoff — even if share id ≠ origin id.
@@ -166,14 +193,15 @@ final class SparkWarmPool {
         }
 
         // Warm next first (highest swipe priority), then previous.
-        let ordered = window.sorted { a, b in
-            let ia = posts.firstIndex(where: { $0.id == a.id }) ?? 0
-            let ib = posts.firstIndex(where: { $0.id == b.id }) ?? 0
+        // Use window indices (already sliced) — avoid O(n) firstIndex scans per post mid-swipe.
+        let ordered = window.enumerated().sorted { a, b in
+            let ia = lo + a.offset
+            let ib = lo + b.offset
             let da = abs(ia - index)
             let db = abs(ib - index)
             if da != db { return da < db }
             return ia > ib
-        }
+        }.map(\.element)
         for post in ordered {
             let url = post.playableVideoURL
                 ?? MediaURLResolver.videoURL(for: post)
