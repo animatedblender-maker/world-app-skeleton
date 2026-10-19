@@ -32,6 +32,8 @@ export const typeDefs = `#graphql
     city_name: String
     bio: String
     is_private: Boolean!
+    """everyone | following | requests — who can message you"""
+    message_privacy: String!
     account_status: String
     deactivated_at: String
     deleted_at: String
@@ -235,6 +237,9 @@ export const typeDefs = `#graphql
     created_at: String!
     updated_at: String!
     last_message_at: String
+    """Viewer-side pending message request"""
+    is_request: Boolean
+    request_status: String
     members: [PostAuthor!]!
     last_message: Message
   }
@@ -361,6 +366,8 @@ export const typeDefs = `#graphql
     city_name: String
     bio: String
     is_private: Boolean
+    """everyone | following | requests"""
+    message_privacy: String
   }
 
   # ----------------------------
@@ -599,7 +606,8 @@ export const typeDefs = `#graphql
     isFollowing(user_id: ID!): Boolean!
 
     # Messaging
-    conversations(limit: Int): [Conversation!]!
+    """inbox: primary (default) | requests | all"""
+    conversations(limit: Int, inbox: String): [Conversation!]!
     conversationById(conversation_id: ID!): Conversation
     messagesByConversation(conversation_id: ID!, limit: Int, before: String): [Message!]!
     messagesUnreadCount: Int!
@@ -696,6 +704,8 @@ export const typeDefs = `#graphql
     deleteMessage(message_id: ID!): Boolean!
     archiveConversation(conversation_id: ID!): Boolean!
     deleteConversation(conversation_id: ID!): Boolean!
+    acceptMessageRequest(conversation_id: ID!): Conversation!
+    declineMessageRequest(conversation_id: ID!): Boolean!
 
     # Notifications
     markNotificationRead(id: ID!): Boolean!

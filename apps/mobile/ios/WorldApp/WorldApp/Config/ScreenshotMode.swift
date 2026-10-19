@@ -1,12 +1,22 @@
 import Foundation
 
 /// Demo / App Store screenshot helper.
-/// Keep `isActive == false` for normal app use.
+/// Code default stays inactive. Simulator captures: launch with
+/// `-UIScreenshotMode` and optional `-UIScreenshotTab feed|globe|hubs|messages|profile`.
 enum ScreenshotMode {
-    /// Flip to `true` only when capturing marketing screenshots.
-    static let isActive = false
+    /// Active only when launched with `-UIScreenshotMode` (keeps Release clean).
+    static var isActive: Bool {
+        ProcessInfo.processInfo.arguments.contains("-UIScreenshotMode")
+    }
 
-    static var tab: AppTab? { nil }
+    static var tab: AppTab? {
+        let args = ProcessInfo.processInfo.arguments
+        guard let idx = args.firstIndex(of: "-UIScreenshotTab"),
+              args.indices.contains(idx + 1),
+              let tab = AppTab(rawValue: args[idx + 1]) else { return nil }
+        return tab
+    }
+
     static var route: AppDestination? { nil }
     static var searchQuery: String? { nil }
 
@@ -22,6 +32,7 @@ enum ScreenshotMode {
         bio: "Exploring the world with Matterya.",
         followersCount: 1284,
         followingCount: 312,
+        messagePrivacy: "everyone",
         accountStatus: "active",
         deactivatedAt: nil,
         deletedAt: nil,
@@ -69,6 +80,8 @@ enum ScreenshotMode {
                 createdAt: now,
                 updatedAt: now,
                 lastMessageAt: now,
+                isRequest: false,
+                requestStatus: nil,
                 members: [me, peer],
                 lastMessage: last
             ),

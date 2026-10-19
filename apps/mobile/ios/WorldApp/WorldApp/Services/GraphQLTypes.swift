@@ -249,6 +249,7 @@ struct GraphQLProfile: Decodable {
     let countryCode: String?
     let cityName: String?
     let bio: String?
+    let messagePrivacy: String?
     let accountStatus: String?
     let deactivatedAt: String?
     let deletedAt: String?
@@ -265,6 +266,7 @@ struct GraphQLProfile: Decodable {
         case countryCode = "country_code"
         case cityName = "city_name"
         case bio
+        case messagePrivacy = "message_privacy"
         case accountStatus = "account_status"
         case deactivatedAt = "deactivated_at"
         case deletedAt = "deleted_at"
@@ -277,6 +279,7 @@ struct GraphQLProfile: Decodable {
             userID: userID, email: email, displayName: displayName, username: username,
             avatarURL: avatarURL, countryName: countryName, countryCode: countryCode,
             cityName: cityName, bio: bio, followersCount: nil, followingCount: nil,
+            messagePrivacy: messagePrivacy ?? "everyone",
             accountStatus: accountStatus, deactivatedAt: deactivatedAt, deletedAt: deletedAt,
             createdAt: createdAt ?? "", updatedAt: updatedAt ?? ""
         )

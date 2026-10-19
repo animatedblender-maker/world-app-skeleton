@@ -24,10 +24,17 @@ const svc = () => new MessagesService();
 
 export const messagesResolvers = {
   Query: {
-    conversations: async (_: any, args: { limit?: number }, ctx: Context) => {
+    conversations: async (
+      _: any,
+      args: { limit?: number; inbox?: string | null },
+      ctx: Context
+    ) => {
       const user = requireAuth(ctx);
       const limit = typeof args?.limit === 'number' ? args.limit : 20;
-      return await svc().listConversations(user.id, limit);
+      const inboxRaw = String(args?.inbox ?? 'primary').toLowerCase();
+      const inbox =
+        inboxRaw === 'requests' || inboxRaw === 'all' ? inboxRaw : 'primary';
+      return await svc().listConversations(user.id, limit, inbox);
     },
     conversationById: async (_: any, args: { conversation_id: string }, ctx: Context) => {
       const user = requireAuth(ctx);
@@ -104,6 +111,16 @@ export const messagesResolvers = {
       const user = requireAuth(ctx);
       if (!args?.conversation_id) throw new Error('conversation_id is required.');
       return await svc().deleteConversation(args.conversation_id, user.id);
+    },
+    acceptMessageRequest: async (_: any, args: { conversation_id: string }, ctx: Context) => {
+      const user = requireAuth(ctx);
+      if (!args?.conversation_id) throw new Error('conversation_id is required.');
+      return await svc().acceptMessageRequest(args.conversation_id, user.id);
+    },
+    declineMessageRequest: async (_: any, args: { conversation_id: string }, ctx: Context) => {
+      const user = requireAuth(ctx);
+      if (!args?.conversation_id) throw new Error('conversation_id is required.');
+      return await svc().declineMessageRequest(args.conversation_id, user.id);
     },
   },
 };

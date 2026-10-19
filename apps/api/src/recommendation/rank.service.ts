@@ -4,13 +4,21 @@
  * Planes:
  *  - Events: entity_engagement_events (+ Kafka matterya.engagement)
  *  - Features: entity_personality, recsys_user_creator_affinity, recsys_item_stats
- *  - Rank: multi-source score + diversity re-rank
+ *  - KNN: entity_neighbors (cosine on feature_vector) + interest bubbles
+ *  - Rank: multi-source score + bubble soft-filter + diversity re-rank
  *  - Log: recommendation_decisions (warehouse fact)
  *
  * Not a toy client shuffle — this is the serving contract clients call as we scale.
  */
 import { randomUUID } from 'node:crypto';
 import { pool } from '../db.js';
+import {
+  bubbleMatchScore,
+  loadInterestBubbles,
+  loadNeighborEngagementBoosts,
+  rebuildNeighborsForEntity,
+  upsertPersonalityFeatureVector,
+} from './knn.service.js';
 
 export type RankSurface =
   | 'home_for_you'
@@ -47,7 +55,7 @@ export type RankResponse = {
   };
 };
 
-const POLICY_VERSION = 'server.v2';
+const POLICY_VERSION = 'server.v3-knn-bubbles';
 
 /** Short-lived rank cache — same candidate set within ~20s reuses work (feed soft-rerank). */
 const RANK_CACHE_TTL_MS = 20_000;
@@ -150,13 +158,16 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
   );
   const uuidCandidates = candidateIds.filter(isUuid);
 
-  // Parallel feature reads
-  const [affinityMap, itemStats, postMeta, hidden] = await Promise.all([
-    loadCreatorAffinity(entityId),
-    loadItemStats(uuidCandidates),
-    loadPostMeta(uuidCandidates),
-    loadHiddenContent(entityId),
-  ]);
+  // Parallel feature reads (affinity + KNN bubbles + neighbor collab)
+  const [affinityMap, itemStats, postMeta, hidden, bubbles, neighborBoosts] =
+    await Promise.all([
+      loadCreatorAffinity(entityId),
+      loadItemStats(uuidCandidates),
+      loadPostMeta(uuidCandidates),
+      loadHiddenContent(entityId),
+      loadInterestBubbles(entityId),
+      loadNeighborEngagementBoosts(entityId),
+    ]);
 
   type Scored = {
     id: string;
@@ -166,6 +177,7 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
   };
 
   const scored: Scored[] = [];
+  const coldStart = !bubbles || bubbles.eventsCounted < 25;
   for (const id of candidateIds) {
     if (hidden.has(id)) continue;
 
@@ -187,14 +199,14 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
       sources.push('affinity');
     }
 
-    // Global item quality (cold start / social proof) — stronger weight in v2
+    // Global item quality (cold start / social proof)
     const st = itemStats.get(id);
     if (st) {
       score += Math.max(-1.5, Math.min(3.2, st * 1.15));
       sources.push('item_stats');
     }
 
-    // Freshness from created_at
+    // Freshness from feed_at
     if (meta?.createdAt) {
       const ageH = (Date.now() - meta.createdAt.getTime()) / 3_600_000;
       if (ageH < 24) {
@@ -203,6 +215,34 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
       } else if (ageH < 168) {
         score += 0.3;
       }
+    }
+
+    // Interest bubbles — soft boost in-bubble; soft demote outside (never hard-drop).
+    const bubble = bubbleMatchScore(bubbles, {
+      authorId,
+      countryCode: meta?.countryCode,
+      hubSlug: meta?.hubSlug,
+      mediaType: meta?.mediaType,
+      isSpark: meta?.isSpark,
+    });
+    if (!coldStart) {
+      score += bubble.score * 2.4;
+      if (bubble.inBubble && bubble.reasons[0] !== 'cold_start') {
+        sources.push('bubble');
+      } else if (!bubble.inBubble) {
+        score -= 1.15; // exploration still possible after demote
+        sources.push('outside_bubble');
+      }
+    }
+
+    // KNN collaborative: content / creators neighbors liked
+    const knnContent = neighborBoosts.content.get(id);
+    if (knnContent) {
+      score += Math.min(2.5, knnContent * 0.85);
+      sources.push('knn');
+    } else if (authorId && neighborBoosts.creators.has(authorId)) {
+      score += Math.min(1.8, (neighborBoosts.creators.get(authorId) ?? 0) * 0.55);
+      sources.push('knn_creator');
     }
 
     // Surface policy tweaks
@@ -264,7 +304,7 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
     featureHits: {
       affinityCreators: affinityMap.size,
       itemStats: itemStats.size,
-      personality: affinityMap.size > 0,
+      personality: !!bubbles && bubbles.eventsCounted > 0,
     },
   };
 
@@ -384,11 +424,28 @@ async function loadItemStats(ids: string[]): Promise<Map<string, number>> {
 async function loadPostMeta(
   ids: string[]
 ): Promise<
-  Map<string, { authorId: string | null; createdAt: Date | null; isSpark: boolean }>
+  Map<
+    string,
+    {
+      authorId: string | null;
+      createdAt: Date | null;
+      isSpark: boolean;
+      countryCode: string | null;
+      hubSlug: string | null;
+      mediaType: string | null;
+    }
+  >
 > {
   const map = new Map<
     string,
-    { authorId: string | null; createdAt: Date | null; isSpark: boolean }
+    {
+      authorId: string | null;
+      createdAt: Date | null;
+      isSpark: boolean;
+      countryCode: string | null;
+      hubSlug: string | null;
+      mediaType: string | null;
+    }
   >();
   if (!ids.length) return map;
   try {
@@ -399,9 +456,12 @@ async function loadPostMeta(
       updated_at: Date | null;
       is_reel: boolean | null;
       media_type: string | null;
+      country_code: string | null;
+      hub_slug: string | null;
     }>(
       `
-      select id::text, author_id::text, created_at, updated_at, is_reel, media_type
+      select id::text, author_id::text, created_at, updated_at, is_reel, media_type,
+             country_code, hub_slug
       from public.posts
       where id = any($1::uuid[])
       `,
@@ -417,14 +477,57 @@ async function loadPostMeta(
             ? created
             : updated
           : updated ?? created;
+      const mt = (r.media_type ?? '').toLowerCase();
       map.set(r.id, {
         authorId: r.author_id,
         createdAt: feedAt,
-        isSpark: !!(r.is_reel || r.media_type === 'reel' || r.media_type === 'spark'),
+        isSpark: !!(r.is_reel || mt === 'reel' || mt === 'spark'),
+        countryCode: r.country_code,
+        hubSlug: r.hub_slug,
+        mediaType: r.media_type,
       });
     }
   } catch {
-    /* ignore */
+    // hub_slug may be missing pre-migration — retry without it.
+    try {
+      const { rows } = await pool.query<{
+        id: string;
+        author_id: string | null;
+        created_at: Date;
+        updated_at: Date | null;
+        is_reel: boolean | null;
+        media_type: string | null;
+        country_code: string | null;
+      }>(
+        `
+        select id::text, author_id::text, created_at, updated_at, is_reel, media_type, country_code
+        from public.posts
+        where id = any($1::uuid[])
+        `,
+        [ids]
+      );
+      for (const r of rows) {
+        const created = r.created_at ? new Date(r.created_at) : null;
+        const updated = r.updated_at ? new Date(r.updated_at) : null;
+        const feedAt =
+          created && updated
+            ? created > updated
+              ? created
+              : updated
+            : updated ?? created;
+        const mt = (r.media_type ?? '').toLowerCase();
+        map.set(r.id, {
+          authorId: r.author_id,
+          createdAt: feedAt,
+          isSpark: !!(r.is_reel || mt === 'reel' || mt === 'spark'),
+          countryCode: r.country_code,
+          hubSlug: null,
+          mediaType: r.media_type,
+        });
+      }
+    } catch {
+      /* ignore */
+    }
   }
   return map;
 }
@@ -497,7 +600,9 @@ async function logDecision(args: {
  * Roll engagement facts → online features (affinity + item stats + personality stub).
  * Safe to call often; designed for post-ingest + cron.
  */
-export async function refreshUserFeatures(entityId: string): Promise<{ ok: boolean }> {
+export async function refreshUserFeatures(
+  entityId: string
+): Promise<{ ok: boolean; knnNeighbors?: number }> {
   if (!entityId || !isUuid(entityId)) return { ok: false };
 
   try {
@@ -533,7 +638,7 @@ export async function refreshUserFeatures(entityId: string): Promise<{ ok: boole
   }
 
   try {
-    // Touch personality row so reports / future models have a home
+    // Touch personality row so reports / KNN have a home
     await pool.query(
       `
       insert into public.entity_personality (entity_id, events_counted, window_end, updated_at, model_version)
@@ -558,7 +663,11 @@ export async function refreshUserFeatures(entityId: string): Promise<{ ok: boole
     /* ignore */
   }
 
-  return { ok: true };
+  // Build feature_vector + cosine KNN neighbors (interest-bubble collab).
+  await upsertPersonalityFeatureVector(entityId);
+  const knn = await rebuildNeighborsForEntity(entityId);
+
+  return { ok: true, knnNeighbors: knn.neighbors };
 }
 
 /**

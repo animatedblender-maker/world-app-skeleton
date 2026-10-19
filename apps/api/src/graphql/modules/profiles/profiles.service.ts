@@ -3,6 +3,8 @@ import { deleteAuthUser, supabaseAdminConfigured } from '../../../supabase-admin
 
 export type AccountStatus = 'active' | 'deactivated' | 'deleted';
 
+export type MessagePrivacy = 'everyone' | 'following' | 'requests';
+
 export type ProfileRow = {
   user_id: string;
   email: string | null;
@@ -14,6 +16,7 @@ export type ProfileRow = {
   city_name: string | null;
   bio: string | null;
   is_private: boolean;
+  message_privacy: MessagePrivacy;
   account_status: AccountStatus;
   deactivated_at: string | null;
   deleted_at: string | null;
@@ -37,7 +40,14 @@ type UpdateProfileInput = {
   city_name?: string | null;
   bio?: string | null;
   is_private?: boolean | null;
+  message_privacy?: string | null;
 };
+
+function normalizeMessagePrivacy(raw: unknown): MessagePrivacy {
+  const v = String(raw ?? 'everyone').trim().toLowerCase();
+  if (v === 'following' || v === 'requests') return v;
+  return 'everyone';
+}
 
 export class ProfilesService {
   /** Owner always sees full data; others lose avatar (and bio/city) when private. */
@@ -312,8 +322,13 @@ export class ProfilesService {
       [userId]
     );
 
+    const messagePrivacy =
+      input.message_privacy != null && String(input.message_privacy).trim() !== ''
+        ? normalizeMessagePrivacy(input.message_privacy)
+        : null;
+
     try {
-      // Prefer full update including is_private when the column exists.
+      // Prefer full update including privacy columns when they exist.
       const { rows } = await pool.query(
         `
         update public.profiles
@@ -326,6 +341,7 @@ export class ProfilesService {
           city_name    = coalesce($7, city_name),
           bio          = coalesce($8, bio),
           is_private   = coalesce($9, is_private),
+          message_privacy = coalesce($10, message_privacy),
           updated_at   = now()
         where user_id = $1
         returning *
@@ -340,6 +356,7 @@ export class ProfilesService {
           input.city_name ?? null,
           input.bio ?? null,
           typeof input.is_private === 'boolean' ? input.is_private : null,
+          messagePrivacy,
         ]
       );
 
@@ -349,9 +366,13 @@ export class ProfilesService {
       if (err?.code === '23505' && String(err?.constraint ?? '').includes('profiles_username')) {
         throw new Error('Handle already taken.');
       }
-      // Column missing (migration not applied yet) — update without is_private.
+      // Column missing (migration not applied yet) — update without privacy columns.
       const msg = String(err?.message ?? '');
-      if (err?.code === '42703' || msg.includes('is_private')) {
+      if (
+        err?.code === '42703' ||
+        msg.includes('is_private') ||
+        msg.includes('message_privacy')
+      ) {
         const { rows } = await pool.query(
           `
           update public.profiles
@@ -451,6 +472,7 @@ export class ProfilesService {
     return {
       ...row,
       is_private: !!(row as any).is_private,
+      message_privacy: normalizeMessagePrivacy((row as any).message_privacy),
       account_status,
       deactivated_at: (row as any).deactivated_at ?? null,
       deleted_at: (row as any).deleted_at ?? null,

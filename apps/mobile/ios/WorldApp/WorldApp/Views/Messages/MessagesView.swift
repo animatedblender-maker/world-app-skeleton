@@ -6,12 +6,25 @@ private struct MessagesLoadToken: Equatable {
     let isAuthenticated: Bool
 }
 
+private enum MessagesInboxFolder: String, CaseIterable {
+    case primary
+    case requests
+
+    var title: String {
+        switch self {
+        case .primary: return "Primary"
+        case .requests: return "Requests"
+        }
+    }
+}
+
 struct MessagesView: View {
     @Environment(AppState.self) private var appState
 
     @State private var conversations: [Conversation]
     @State private var isLoading: Bool
     @State private var errorMessage: String?
+    @State private var inboxFolder: MessagesInboxFolder = .primary
 
     init() {
         // Profile-style paint-first: show last inbox instantly, soft-refresh in background.
@@ -25,6 +38,7 @@ struct MessagesView: View {
     var body: some View {
         VStack(spacing: 0) {
             messagesTopBar
+            inboxPicker
 
             Group {
                 if isLoading && conversations.isEmpty {
@@ -34,7 +48,15 @@ struct MessagesView: View {
                 } else if let errorMessage, conversations.isEmpty {
                     ContentUnavailableView("Messages unavailable", systemImage: "bubble.left.and.bubble.right", description: Text(errorMessage))
                 } else if conversations.isEmpty {
-                    ContentUnavailableView("No conversations", systemImage: "bubble.left.and.bubble.right", description: Text("Start chatting from a profile."))
+                    ContentUnavailableView(
+                        inboxFolder == .requests ? "No message requests" : "No conversations",
+                        systemImage: "bubble.left.and.bubble.right",
+                        description: Text(
+                            inboxFolder == .requests
+                                ? "When someone you don’t follow messages you, it shows up here."
+                                : "Start chatting from a profile."
+                        )
+                    )
                 } else {
                     List {
                         ForEach(conversations) { conversation in
@@ -46,18 +68,32 @@ struct MessagesView: View {
                                 }
                                 .listRowBackground(Theme.surface)
                                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                    Button(role: .destructive) {
-                                        Task { await deleteConversation(conversation) }
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
+                                    if inboxFolder == .requests {
+                                        Button(role: .destructive) {
+                                            Task { await declineRequest(conversation) }
+                                        } label: {
+                                            Label("Delete", systemImage: "trash")
+                                        }
+                                        Button {
+                                            Task { await acceptRequest(conversation) }
+                                        } label: {
+                                            Label("Accept", systemImage: "checkmark")
+                                        }
+                                        .tint(Theme.accentBright)
+                                    } else {
+                                        Button(role: .destructive) {
+                                            Task { await deleteConversation(conversation) }
+                                        } label: {
+                                            Label("Delete", systemImage: "trash")
+                                        }
 
-                                    Button {
-                                        Task { await archiveConversation(conversation) }
-                                    } label: {
-                                        Label("Archive", systemImage: "archivebox")
+                                        Button {
+                                            Task { await archiveConversation(conversation) }
+                                        } label: {
+                                            Label("Archive", systemImage: "archivebox")
+                                        }
+                                        .tint(Theme.accentBright)
                                     }
-                                    .tint(Theme.accentBright)
                                 }
                         }
                     }
@@ -95,6 +131,10 @@ struct MessagesView: View {
                 await openPendingConversation(conversationID)
             }
         }
+        .onChange(of: inboxFolder) { _, _ in
+            conversations = []
+            Task { await loadConversations(forceNetwork: true) }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .authTokenDidRefresh)) { _ in
             Task { await loadConversations() }
         }
@@ -103,6 +143,7 @@ struct MessagesView: View {
             Task { await openPendingConversation(conversationID) }
         }
         .onReceive(NotificationCenter.default.publisher(for: .conversationMessagesDidChange)) { _ in
+            guard inboxFolder == .primary else { return }
             // Instant inbox preview from memory — soft network only if cache is stale.
             let cached = MessagesService.shared.cachedConversationsSnapshot()
                 .filter { !ConversationInboxStore.isHidden($0.id) }
@@ -139,6 +180,18 @@ struct MessagesView: View {
         }
         .padding(.horizontal, 8)
         .frame(height: 44)
+        .background(Theme.surface)
+    }
+
+    private var inboxPicker: some View {
+        Picker("Inbox", selection: $inboxFolder) {
+            ForEach(MessagesInboxFolder.allCases, id: \.self) { folder in
+                Text(folder.title).tag(folder)
+            }
+        }
+        .pickerStyle(.segmented)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
         .background(Theme.surface)
     }
 
@@ -197,14 +250,38 @@ struct MessagesView: View {
         }
     }
 
+    private func acceptRequest(_ conversation: Conversation) async {
+        do {
+            _ = try await MessagesService.shared.acceptMessageRequest(conversationID: conversation.id)
+            conversations.removeAll { $0.id == conversation.id }
+            appState.showToast("Request accepted", style: .success)
+            inboxFolder = .primary
+            await loadConversations(forceNetwork: true)
+        } catch {
+            appState.showToast(error.localizedDescription, style: .error)
+        }
+    }
+
+    private func declineRequest(_ conversation: Conversation) async {
+        conversations.removeAll { $0.id == conversation.id }
+        do {
+            _ = try await MessagesService.shared.declineMessageRequest(conversationID: conversation.id)
+            appState.showToast("Request deleted", style: .info)
+        } catch {
+            appState.showToast(error.localizedDescription, style: .error)
+        }
+    }
+
     private func loadConversations(forceNetwork: Bool = false) async {
         // Always re-paint from memory first (instant), then soft network.
-        let cached = MessagesService.shared.cachedConversationsSnapshot()
-            .filter { !ConversationInboxStore.isHidden($0.id) }
-        if !cached.isEmpty {
-            conversations = cached
-            isLoading = false
-            errorMessage = nil
+        if inboxFolder == .primary {
+            let cached = MessagesService.shared.cachedConversationsSnapshot()
+                .filter { !ConversationInboxStore.isHidden($0.id) }
+            if !cached.isEmpty {
+                conversations = cached
+                isLoading = false
+                errorMessage = nil
+            }
         }
 
         let showSpinner = conversations.isEmpty
@@ -217,9 +294,12 @@ struct MessagesView: View {
         }
 
         do {
-            conversations = try await MessagesService.shared.listConversations(forceNetwork: forceNetwork)
-                .filter { !ConversationInboxStore.isHidden($0.id) }
-            if let pendingID = appState.pendingConversationID {
+            conversations = try await MessagesService.shared.listConversations(
+                forceNetwork: forceNetwork,
+                inbox: inboxFolder.rawValue
+            )
+            .filter { !ConversationInboxStore.isHidden($0.id) }
+            if let pendingID = appState.pendingConversationID, inboxFolder == .primary {
                 await openPendingConversation(pendingID)
             }
         } catch {

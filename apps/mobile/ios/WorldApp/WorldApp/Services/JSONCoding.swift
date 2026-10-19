@@ -70,6 +70,7 @@ extension Profile {
             bio: row["bio"] as? String,
             followersCount: row["followers_count"] as? Int,
             followingCount: row["following_count"] as? Int,
+            messagePrivacy: row["message_privacy"] as? String ?? "everyone",
             accountStatus: row["account_status"] as? String,
             deactivatedAt: row["deactivated_at"] as? String,
             deletedAt: row["deleted_at"] as? String,
@@ -122,6 +123,8 @@ extension Conversation {
             createdAt: row["created_at"] as? String ?? "",
             updatedAt: row["updated_at"] as? String ?? "",
             lastMessageAt: row["last_message_at"] as? String,
+            isRequest: row["is_request"] as? Bool ?? false,
+            requestStatus: row["request_status"] as? String,
             members: members,
             lastMessage: lastMessageRow.map { Message.fromGraphQL($0) }
         )

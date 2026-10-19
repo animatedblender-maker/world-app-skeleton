@@ -206,12 +206,17 @@ struct SettingsView: View {
             }
 
             Section("Privacy") {
+                NavigationLink("Message requests") {
+                    MessagePrivacySettingsView()
+                }
                 NavigationLink("Blocked accounts") {
                     BlockedAccountsView()
                 }
                 NavigationLink("Data & privacy") {
                     PrivacyInfoView()
                 }
+            } footer: {
+                Text("Control who can message you. Non-followers can be sent to Message Requests or blocked entirely.")
             }
 
             Section("Support") {
@@ -457,6 +462,81 @@ struct SettingsView: View {
         defer { isSendingTest = false }
         statusMessage = await PushNotificationService.shared.sendTestNotification()
         await refreshPushStatus()
+    }
+}
+
+private struct MessagePrivacySettingsView: View {
+    @Environment(AppState.self) private var appState
+    @State private var selected: MessagePrivacy = .everyone
+    @State private var isSaving = false
+    @State private var statusMessage: String?
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(MessagePrivacy.allCases, id: \.self) { option in
+                    Button {
+                        Task { await save(option) }
+                    } label: {
+                        HStack(alignment: .top, spacing: 12) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(option.title)
+                                    .foregroundStyle(Theme.ink)
+                                Text(option.detail)
+                                    .font(.caption)
+                                    .foregroundStyle(Theme.inkMuted)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer(minLength: 8)
+                            if selected == option {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(Theme.accentBright)
+                            }
+                        }
+                    }
+                    .disabled(isSaving)
+                }
+            } header: {
+                Text("Who can message you")
+            } footer: {
+                Text("People you already follow always reach your primary inbox. Blocked accounts never can.")
+            }
+
+            if let statusMessage {
+                Section {
+                    Text(statusMessage)
+                        .font(.caption)
+                        .foregroundStyle(Theme.inkMuted)
+                }
+            }
+        }
+        .navigationTitle("Message requests")
+        .scrollContentBackground(.hidden)
+        .background(Theme.canvas)
+        .task {
+            selected = appState.currentProfile?.resolvedMessagePrivacy ?? .everyone
+            if let profile = try? await ProfileService.shared.meProfile() {
+                appState.currentProfile = profile
+                selected = profile.resolvedMessagePrivacy
+            }
+        }
+    }
+
+    private func save(_ option: MessagePrivacy) async {
+        guard option != selected else { return }
+        isSaving = true
+        defer { isSaving = false }
+        do {
+            let updated = try await ProfileService.shared.updateProfile(messagePrivacy: option.rawValue)
+            appState.currentProfile = updated
+            ContentCache.shared.setProfile(updated)
+            selected = option
+            statusMessage = "Saved — \(option.title)."
+            appState.showToast("Message privacy updated", style: .success)
+        } catch {
+            statusMessage = error.localizedDescription
+            appState.showToast(error.localizedDescription, style: .error)
+        }
     }
 }
 

@@ -48,6 +48,7 @@ import {
   refreshItemStats,
   refreshUserFeatures,
 } from './recommendation/rank.service.js';
+import { rebuildNeighborsForEntity } from './recommendation/knn.service.js';
 import {
   fetchForYouPage,
   fetchHomeFeedPage,
@@ -1054,6 +1055,19 @@ app.post('/v1/recommendation/refresh-features', async (req: Request, res: Respon
     return res.json({ ok: out.ok !== false, features: out });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message ?? 'refresh_failed' });
+  }
+});
+
+/** Rebuild cosine-KNN neighbors for the caller (ops / after heavy engagement). */
+app.post('/v1/recommendation/rebuild-neighbors', async (req: Request, res: Response) => {
+  const user = await getUserFromRequest(req);
+  if (!user?.id) return res.status(401).json({ error: 'unauthenticated' });
+  try {
+    const k = Number(req.body?.k ?? 40);
+    const out = await rebuildNeighborsForEntity(user.id, k);
+    return res.json({ ok: true, neighbors: out.neighbors });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'knn_failed' });
   }
 });
 

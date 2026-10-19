@@ -1231,6 +1231,34 @@ struct DetectedLocation: Sendable {
     let source: String
 }
 
+/// Who can message you: everyone | following | requests.
+enum MessagePrivacy: String, Codable, Sendable, CaseIterable, Hashable {
+    case everyone
+    case following
+    case requests
+
+    var title: String {
+        switch self {
+        case .everyone: return "Everyone"
+        case .following: return "People you follow"
+        case .requests: return "Message requests"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .everyone: return "Anyone can message you. Chats open in your primary inbox."
+        case .following: return "Only people you follow can message you. Everyone else is blocked."
+        case .requests: return "People you follow go to your inbox. Everyone else lands in Message Requests."
+        }
+    }
+
+    static func parse(_ raw: String?) -> MessagePrivacy {
+        MessagePrivacy(rawValue: (raw ?? "everyone").trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+            ?? .everyone
+    }
+}
+
 struct Profile: Identifiable, Hashable, Sendable, Codable {
     var id: String { userID }
     let userID: String
@@ -1244,12 +1272,18 @@ struct Profile: Identifiable, Hashable, Sendable, Codable {
     let bio: String?
     let followersCount: Int?
     let followingCount: Int?
+    /// everyone | following | requests
+    let messagePrivacy: String?
     /// active | deactivated | deleted
     let accountStatus: String?
     let deactivatedAt: String?
     let deletedAt: String?
     let createdAt: String
     let updatedAt: String
+
+    var resolvedMessagePrivacy: MessagePrivacy {
+        MessagePrivacy.parse(messagePrivacy)
+    }
 
     var isComplete: Bool {
         let name = displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -1914,8 +1948,15 @@ struct Conversation: Identifiable, Hashable, Sendable {
     let createdAt: String
     let updatedAt: String
     let lastMessageAt: String?
+    /// Viewer-side pending message request.
+    let isRequest: Bool
+    let requestStatus: String?
     let members: [PostAuthor]
     let lastMessage: Message?
+
+    var isPendingRequest: Bool {
+        isRequest && (requestStatus ?? "pending").lowercased() == "pending"
+    }
 
     func otherMember(currentUserID: String) -> PostAuthor? {
         members.first { $0.userID != currentUserID }

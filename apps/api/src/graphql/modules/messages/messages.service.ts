@@ -73,6 +73,9 @@ type ConversationRow = {
   created_at: string;
   updated_at: string;
   last_message_at: string | null;
+  /** Viewer-side: pending message request from a non-follower. */
+  is_request?: boolean;
+  request_status?: string | null;
   members: Array<{
     user_id: string;
     display_name: string | null;
@@ -85,16 +88,134 @@ type ConversationRow = {
   last_message: MessageRow | null;
 };
 
+export type MessagePrivacy = 'everyone' | 'following' | 'requests';
+export type ConversationInbox = 'primary' | 'requests' | 'all';
+
+let messagePrivacyColumnReady: boolean | null = null;
+let requestColumnsReady: boolean | null = null;
+
+async function supportsMessagePrivacyColumn(): Promise<boolean> {
+  if (messagePrivacyColumnReady !== null) return messagePrivacyColumnReady;
+  const { rows } = await pool.query<{ ok: boolean }>(
+    `
+    select exists (
+      select 1 from information_schema.columns
+      where table_schema = 'public' and table_name = 'profiles' and column_name = 'message_privacy'
+    ) as ok
+    `
+  );
+  messagePrivacyColumnReady = !!rows[0]?.ok;
+  return messagePrivacyColumnReady;
+}
+
+async function supportsRequestColumns(): Promise<boolean> {
+  if (requestColumnsReady !== null) return requestColumnsReady;
+  const { rows } = await pool.query<{ ok: boolean }>(
+    `
+    select exists (
+      select 1 from information_schema.columns
+      where table_schema = 'public'
+        and table_name = 'conversation_members'
+        and column_name = 'is_request'
+    ) as ok
+    `
+  );
+  requestColumnsReady = !!rows[0]?.ok;
+  return requestColumnsReady;
+}
+
+function normalizeMessagePrivacy(raw: unknown): MessagePrivacy {
+  const v = String(raw ?? 'everyone').trim().toLowerCase();
+  if (v === 'following' || v === 'requests') return v;
+  return 'everyone';
+}
+
 export class MessagesService {
   private notifications = new NotificationsService();
 
-  async listConversations(userId: string, limit: number): Promise<ConversationRow[]> {
+  private async getMessagePrivacy(userId: string): Promise<MessagePrivacy> {
+    if (!(await supportsMessagePrivacyColumn())) return 'everyone';
+    try {
+      const { rows } = await pool.query<{ message_privacy: string | null }>(
+        `select message_privacy from public.profiles where user_id = $1 limit 1`,
+        [userId]
+      );
+      return normalizeMessagePrivacy(rows[0]?.message_privacy);
+    } catch {
+      return 'everyone';
+    }
+  }
+
+  /** True when followerId follows followingId. */
+  private async isFollowing(followerId: string, followingId: string): Promise<boolean> {
+    const { rows } = await pool.query(
+      `select 1 from public.user_follows where follower_id = $1 and following_id = $2 limit 1`,
+      [followerId, followingId]
+    );
+    return !!rows[0];
+  }
+
+  /**
+   * Enforce recipient message_privacy when sender starts or messages a direct chat.
+   * Returns whether the recipient membership should be flagged as a request.
+   */
+  private async resolveInboundPolicy(
+    senderId: string,
+    recipientId: string
+  ): Promise<{ allow: boolean; asRequest: boolean; reason?: string }> {
+    if (senderId === recipientId) return { allow: false, asRequest: false, reason: 'Invalid target.' };
+    const privacy = await this.getMessagePrivacy(recipientId);
+    const recipientFollowsSender = await this.isFollowing(recipientId, senderId);
+    if (recipientFollowsSender) {
+      return { allow: true, asRequest: false };
+    }
+    if (privacy === 'everyone') {
+      return { allow: true, asRequest: false };
+    }
+    if (privacy === 'following') {
+      return {
+        allow: false,
+        asRequest: false,
+        reason: 'This person only accepts messages from people they follow.',
+      };
+    }
+    // requests — non-followers land in Message Requests
+    return { allow: true, asRequest: true };
+  }
+
+  async listConversations(
+    userId: string,
+    limit: number,
+    inbox: ConversationInbox = 'primary'
+  ): Promise<ConversationRow[]> {
     const safeLimit = Math.max(1, Math.min(50, limit || 20));
     const inboxFilter = await inboxVisibilityFilter('cm');
+    const hasRequestCols = await supportsRequestColumns();
+    const folder = String(inbox || 'primary').toLowerCase() as ConversationInbox;
+
+    let requestFilter = '';
+    if (hasRequestCols) {
+      if (folder === 'requests') {
+        requestFilter = `and coalesce(cm.is_request, false) = true and coalesce(cm.request_status, 'pending') = 'pending'`;
+      } else if (folder === 'primary') {
+        requestFilter = `and (
+          coalesce(cm.is_request, false) = false
+          or coalesce(cm.request_status, '') = 'accepted'
+        )`;
+      }
+    } else if (folder === 'requests') {
+      return [];
+    }
+
+    const requestSelect = hasRequestCols
+      ? `, coalesce(cm.is_request, false) as is_request, cm.request_status`
+      : `, false as is_request, null::text as request_status`;
+
     const { rows } = await pool.query(
       `
       select
-        c.*,
+        c.*
+        ${requestSelect},
         coalesce(
           (
             select jsonb_agg(
@@ -150,6 +271,7 @@ export class MessagesService {
       join public.conversation_members cm on cm.conversation_id = c.id
       where cm.user_id = $1
         ${inboxFilter}
+        ${requestFilter}
       order by coalesce(c.last_message_at, c.updated_at, c.created_at) desc
       limit $2
       `,
@@ -230,6 +352,11 @@ export class MessagesService {
       return convo;
     }
 
+    const policy = await this.resolveInboundPolicy(userId, targetId);
+    if (!policy.allow) {
+      throw new Error(policy.reason || 'MESSAGE_PRIVACY_DENIED');
+    }
+
     const client = await pool.connect();
     let convoId: string | null = null;
     try {
@@ -241,13 +368,27 @@ export class MessagesService {
       convoId = inserted.rows[0]?.id ?? null;
       if (!convoId) throw new Error('Failed to create conversation.');
 
-      await client.query(
-        `
-        insert into public.conversation_members (conversation_id, user_id)
-        values ($1, $2), ($1, $3)
-        `,
-        [convoId, userId, targetId]
-      );
+      const hasRequestCols = await supportsRequestColumns();
+      if (hasRequestCols && policy.asRequest) {
+        // Sender: normal membership. Recipient: pending request.
+        await client.query(
+          `
+          insert into public.conversation_members (conversation_id, user_id, is_request, request_status)
+          values
+            ($1, $2, false, null),
+            ($1, $3, true, 'pending')
+          `,
+          [convoId, userId, targetId]
+        );
+      } else {
+        await client.query(
+          `
+          insert into public.conversation_members (conversation_id, user_id)
+          values ($1, $2), ($1, $3)
+          `,
+          [convoId, userId, targetId]
+        );
+      }
 
       await client.query('commit');
     } catch (error) {
@@ -260,6 +401,52 @@ export class MessagesService {
     const convo = await this.conversationById(convoId, userId);
     if (!convo) throw new Error('Conversation not found.');
     return convo;
+  }
+
+  async acceptMessageRequest(conversationId: string, userId: string): Promise<ConversationRow> {
+    if (!(await supportsRequestColumns())) {
+      throw new Error('Message requests are not available yet.');
+    }
+    await this.ensureMember(conversationId, userId);
+    const { rowCount } = await pool.query(
+      `
+      update public.conversation_members
+      set is_request = false, request_status = 'accepted'
+      where conversation_id = $1 and user_id = $2 and is_request = true
+      `,
+      [conversationId, userId]
+    );
+    if (!rowCount) throw new Error('No pending message request.');
+    const convo = await this.conversationById(conversationId, userId);
+    if (!convo) throw new Error('Conversation not found.');
+    return convo;
+  }
+
+  async declineMessageRequest(conversationId: string, userId: string): Promise<boolean> {
+    if (!(await supportsRequestColumns())) {
+      throw new Error('Message requests are not available yet.');
+    }
+    await this.ensureMember(conversationId, userId);
+    await pool.query(
+      `
+      update public.conversation_members
+      set request_status = 'declined', is_request = true
+      where conversation_id = $1 and user_id = $2
+      `,
+      [conversationId, userId]
+    );
+    // Soft-hide from recipient inbox (reuse deleted_at when available).
+    if (await supportsInboxColumns()) {
+      await pool.query(
+        `
+        update public.conversation_members
+        set deleted_at = now()
+        where conversation_id = $1 and user_id = $2
+        `,
+        [conversationId, userId]
+      );
+    }
+    return true;
   }
 
   async sendMessage(
@@ -290,6 +477,60 @@ export class MessagesService {
       );
       if (!member.rows[0]) {
         throw new Error('CONVERSATION_ACCESS_DENIED');
+      }
+
+      // Block sends into declined request threads; re-check following-only for DMs.
+      if (await supportsRequestColumns()) {
+        const declined = await client.query(
+          `
+          select 1
+          from public.conversation_members
+          where conversation_id = $1
+            and user_id <> $2
+            and coalesce(request_status, '') = 'declined'
+          limit 1
+          `,
+          [conversationId, userId]
+        );
+        if (declined.rows[0]) {
+          throw new Error('This person declined the message request.');
+        }
+      }
+      const others = await client.query<{ user_id: string }>(
+        `
+        select user_id
+        from public.conversation_members
+        where conversation_id = $1 and user_id <> $2
+        `,
+        [conversationId, userId]
+      );
+      if (others.rows.length === 1) {
+        const recipientId = others.rows[0].user_id;
+        const prior = await client.query(
+          `
+          select 1 from public.messages
+          where conversation_id = $1 and sender_id = $2
+          limit 1
+          `,
+          [conversationId, userId]
+        );
+        if (!prior.rows[0]) {
+          const policy = await this.resolveInboundPolicy(userId, recipientId);
+          if (!policy.allow) {
+            throw new Error(policy.reason || 'MESSAGE_PRIVACY_DENIED');
+          }
+          if (policy.asRequest && (await supportsRequestColumns())) {
+            await client.query(
+              `
+              update public.conversation_members
+              set is_request = true, request_status = 'pending'
+              where conversation_id = $1 and user_id = $2
+                and coalesce(request_status, '') is distinct from 'accepted'
+              `,
+              [conversationId, recipientId]
+            );
+          }
+        }
       }
 
       const { rows } = await client.query<{ id: string }>(
@@ -580,10 +821,15 @@ export class MessagesService {
   }
 
   private async conversationById(conversationId: string, userId: string): Promise<ConversationRow | null> {
+    const hasRequestCols = await supportsRequestColumns();
+    const requestSelect = hasRequestCols
+      ? `, coalesce(cm.is_request, false) as is_request, cm.request_status`
+      : `, false as is_request, null::text as request_status`;
     const { rows } = await pool.query(
       `
       select
-        c.*,
+        c.*
+        ${requestSelect},
         coalesce(
           (
             select jsonb_agg(

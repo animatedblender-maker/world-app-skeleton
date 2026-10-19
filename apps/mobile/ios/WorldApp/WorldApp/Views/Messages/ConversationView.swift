@@ -20,6 +20,7 @@ struct ConversationView: View {
     @State private var replyingTo: Message?
     /// Peer's `last_read_at` — drives Read receipts on my messages.
     @State private var peerLastReadAt: String?
+    @State private var pendingRequest: Bool
 
     init(conversation: Conversation) {
         self.conversation = conversation
@@ -30,6 +31,7 @@ struct ConversationView: View {
         let peerCached = MessagesService.shared.cachedPeerRead(for: conversation.id)
             ?? conversation.otherMember(currentUserID: AuthService.shared.currentUser?.id ?? "")?.lastReadAt
         _peerLastReadAt = State(initialValue: peerCached)
+        _pendingRequest = State(initialValue: conversation.isPendingRequest)
     }
     /// Fixed chat miniplayer (under composer) — long-form / hub shares only.
     @State private var chatMiniShare: Message.ShareInfo?
@@ -144,6 +146,31 @@ struct ConversationView: View {
                 }
             }
             .frame(maxHeight: .infinity)
+
+            if pendingRequest {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Message request")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.ink)
+                    Text("Accept to move this chat into your primary inbox, or delete the request.")
+                        .font(.caption)
+                        .foregroundStyle(Theme.inkMuted)
+                    HStack(spacing: 12) {
+                        Button("Delete") {
+                            Task { await declinePendingRequest() }
+                        }
+                        .buttonStyle(.bordered)
+                        Button("Accept") {
+                            Task { await acceptPendingRequest() }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Theme.accentBright)
+                    }
+                }
+                .padding(Theme.pagePadding)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Theme.surfaceMuted)
+            }
 
             if let errorMessage {
                 Text(errorMessage)
@@ -492,6 +519,27 @@ struct ConversationView: View {
         .padding(.top, Theme.pagePadding)
         .background(Theme.surface)
         .overlay(Rectangle().frame(height: 0.5).foregroundStyle(Theme.border), alignment: .top)
+    }
+
+    private func acceptPendingRequest() async {
+        do {
+            _ = try await MessagesService.shared.acceptMessageRequest(conversationID: conversation.id)
+            pendingRequest = false
+            appState.showToast("Request accepted", style: .success)
+        } catch {
+            appState.showToast(error.localizedDescription, style: .error)
+        }
+    }
+
+    private func declinePendingRequest() async {
+        do {
+            _ = try await MessagesService.shared.declineMessageRequest(conversationID: conversation.id)
+            pendingRequest = false
+            appState.showToast("Request deleted", style: .info)
+            appState.closeConversation(id: conversation.id)
+        } catch {
+            appState.showToast(error.localizedDescription, style: .error)
+        }
     }
 
     private func loadMessages() async {

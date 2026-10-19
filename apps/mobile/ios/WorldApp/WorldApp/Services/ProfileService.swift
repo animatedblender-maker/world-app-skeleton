@@ -82,6 +82,7 @@ final class ProfileService {
           meProfile {
             user_id email display_name username avatar_url
             country_name country_code city_name bio
+            message_privacy
             account_status deactivated_at deleted_at
             created_at updated_at
           }
@@ -182,7 +183,8 @@ final class ProfileService {
         countryCode: String? = nil,
         cityName: String? = nil,
         bio: String? = nil,
-        avatarURL: String? = nil
+        avatarURL: String? = nil,
+        messagePrivacy: String? = nil
     ) async throws -> Profile {
         struct Response: Decodable {
             let updateProfile: GraphQLProfile
@@ -196,6 +198,7 @@ final class ProfileService {
         if let cityName { input["city_name"] = cityName }
         if let bio { input["bio"] = bio }
         if let avatarURL { input["avatar_url"] = avatarURL }
+        if let messagePrivacy { input["message_privacy"] = messagePrivacy }
 
         // Always send a real input object — empty dict can fail on some GraphQL servers.
         if input.isEmpty {
@@ -207,6 +210,7 @@ final class ProfileService {
           updateProfile(input: $input) {
             user_id email display_name username avatar_url
             country_name country_code city_name bio
+            message_privacy
             account_status
             created_at updated_at
           }

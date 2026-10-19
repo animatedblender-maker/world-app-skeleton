@@ -93,6 +93,8 @@ final class MessagesService {
                 createdAt: prev.createdAt,
                 updatedAt: now,
                 lastMessageAt: now,
+                isRequest: prev.isRequest,
+                requestStatus: prev.requestStatus,
                 members: prev.members,
                 lastMessage: message
             )
@@ -143,6 +145,8 @@ final class MessagesService {
             createdAt: "",
             updatedAt: "",
             lastMessageAt: nil,
+            isRequest: false,
+            requestStatus: nil,
             members: [],
             lastMessage: nil
         )
@@ -180,13 +184,22 @@ final class MessagesService {
         }
     }
 
-    func listConversations(limit: Int = 40, forceNetwork: Bool = false) async throws -> [Conversation] {
+    /// inbox: primary | requests | all
+    func listConversations(
+        limit: Int = 40,
+        forceNetwork: Bool = false,
+        inbox: String = "primary"
+    ) async throws -> [Conversation] {
         if ScreenshotMode.isActive {
             return Array(ScreenshotMode.demoConversations.prefix(limit))
         }
 
+        let folder = inbox.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let usePrimaryCache = folder == "primary" || folder.isEmpty
+
         // Fresh memory cache — return instantly (Messages tab hop must not re-hit GraphQL).
-        if !forceNetwork,
+        if usePrimaryCache,
+           !forceNetwork,
            let userID = AuthService.shared.currentUser?.id,
            cacheUserID == userID,
            !cachedConversations.isEmpty,
@@ -197,17 +210,21 @@ final class MessagesService {
         _ = try await AuthService.shared.ensureValidToken()
 
         do {
-            let conversations = try await fetchConversations(limit: limit, retryingAuth: true)
-            if let userID = AuthService.shared.currentUser?.id {
+            let conversations = try await fetchConversations(
+                limit: limit,
+                inbox: folder.isEmpty ? "primary" : folder,
+                retryingAuth: true
+            )
+            if usePrimaryCache, let userID = AuthService.shared.currentUser?.id {
                 cacheUserID = userID
                 cachedConversations = conversations
+                lastConversationsFetchAt = Date()
+                prefetchRecentThreads(limit: 2)
             }
-            lastConversationsFetchAt = Date()
-            // Warm only 2 top threads — was 4 × full hydrate and lagged the tab.
-            prefetchRecentThreads(limit: 2)
             return conversations
         } catch {
-            if let userID = AuthService.shared.currentUser?.id,
+            if usePrimaryCache,
+               let userID = AuthService.shared.currentUser?.id,
                cacheUserID == userID,
                !cachedConversations.isEmpty {
                 return cachedConversations
@@ -216,15 +233,65 @@ final class MessagesService {
         }
     }
 
-    private func fetchConversations(limit: Int, retryingAuth: Bool) async throws -> [Conversation] {
+    func acceptMessageRequest(conversationID: String) async throws -> Conversation {
+        struct Response: Decodable {
+            let acceptMessageRequest: GraphQLConversation
+        }
+        let mutation = """
+        mutation AcceptMessageRequest($conversationId: ID!) {
+          acceptMessageRequest(conversation_id: $conversationId) {
+            id is_direct created_at updated_at last_message_at
+            is_request request_status
+            members {
+              user_id display_name username avatar_url country_name country_code last_read_at
+            }
+            last_message {
+              id conversation_id sender_id body media_type media_path media_name created_at updated_at
+              sender { user_id display_name username avatar_url country_name country_code }
+            }
+          }
+        }
+        """
+        let result: Response = try await gql.authenticatedRequest(
+            query: mutation,
+            variables: ["conversationId": conversationID]
+        )
+        let conversation = result.acceptMessageRequest.toModel
+        storeConversation(conversation)
+        return conversation
+    }
+
+    func declineMessageRequest(conversationID: String) async throws -> Bool {
+        struct Response: Decodable {
+            let declineMessageRequest: Bool
+        }
+        let mutation = """
+        mutation DeclineMessageRequest($conversationId: ID!) {
+          declineMessageRequest(conversation_id: $conversationId)
+        }
+        """
+        let result: Response = try await gql.authenticatedRequest(
+            query: mutation,
+            variables: ["conversationId": conversationID]
+        )
+        cachedConversations.removeAll { $0.id == conversationID }
+        return result.declineMessageRequest
+    }
+
+    private func fetchConversations(
+        limit: Int,
+        inbox: String,
+        retryingAuth: Bool
+    ) async throws -> [Conversation] {
         struct Response: Decodable {
             let conversations: [GraphQLConversation]
         }
 
         let query = """
-        query Conversations($limit: Int) {
-          conversations(limit: $limit) {
+        query Conversations($limit: Int, $inbox: String) {
+          conversations(limit: $limit, inbox: $inbox) {
             id is_direct created_at updated_at last_message_at
+            is_request request_status
             members {
               user_id display_name username avatar_url country_name country_code last_read_at
             }
@@ -239,7 +306,7 @@ final class MessagesService {
         do {
             let result: Response = try await gql.authenticatedRequest(
                 query: query,
-                variables: ["limit": limit]
+                variables: ["limit": limit, "inbox": inbox]
             )
             return result.conversations.map(\.toModel)
         } catch {
@@ -252,10 +319,39 @@ final class MessagesService {
                 _ = try? await Task { @MainActor in
                     try await AuthService.shared.ensureValidToken()
                 }.value
-                return try await fetchConversations(limit: limit, retryingAuth: false)
+                return try await fetchConversations(limit: limit, inbox: inbox, retryingAuth: false)
+            }
+            // Older API without inbox arg — fall back to primary list.
+            if message.contains("inbox") || message.contains("unknown") {
+                return try await fetchConversationsLegacy(limit: limit)
             }
             throw error
         }
+    }
+
+    private func fetchConversationsLegacy(limit: Int) async throws -> [Conversation] {
+        struct Response: Decodable {
+            let conversations: [GraphQLConversation]
+        }
+        let query = """
+        query Conversations($limit: Int) {
+          conversations(limit: $limit) {
+            id is_direct created_at updated_at last_message_at
+            members {
+              user_id display_name username avatar_url country_name country_code last_read_at
+            }
+            last_message {
+              id conversation_id sender_id body media_type media_path media_name media_mime media_size created_at updated_at
+              sender { user_id display_name username avatar_url country_name country_code }
+            }
+          }
+        }
+        """
+        let result: Response = try await gql.authenticatedRequest(
+            query: query,
+            variables: ["limit": limit]
+        )
+        return result.conversations.map(\.toModel)
     }
 
     func listMessages(conversationID: String, limit: Int = 50) async throws -> [Message] {
@@ -318,6 +414,7 @@ final class MessagesService {
         mutation StartConversation($targetId: ID!) {
           startConversation(target_id: $targetId) {
             id is_direct created_at updated_at last_message_at
+            is_request request_status
             members {
               user_id display_name username avatar_url country_name country_code last_read_at
             }
@@ -347,6 +444,7 @@ final class MessagesService {
         query ConversationById($conversationId: ID!) {
           conversationById(conversation_id: $conversationId) {
             id is_direct created_at updated_at last_message_at
+            is_request request_status
             members {
               user_id display_name username avatar_url country_name country_code last_read_at
             }
@@ -371,6 +469,8 @@ final class MessagesService {
                 createdAt: conversation.createdAt,
                 updatedAt: conversation.updatedAt,
                 lastMessageAt: conversation.lastMessageAt,
+                isRequest: conversation.isRequest,
+                requestStatus: conversation.requestStatus,
                 members: conversation.members,
                 lastMessage: await hydrateMedia(last)
             )
@@ -513,6 +613,8 @@ private struct GraphQLConversation: Decodable {
     let createdAt: String
     let updatedAt: String
     let lastMessageAt: String?
+    let isRequest: Bool?
+    let requestStatus: String?
     let members: [GraphQLAuthor]
     let lastMessage: GraphQLMessage?
 
@@ -522,6 +624,8 @@ private struct GraphQLConversation: Decodable {
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case lastMessageAt = "last_message_at"
+        case isRequest = "is_request"
+        case requestStatus = "request_status"
         case members
         case lastMessage = "last_message"
     }
@@ -533,6 +637,8 @@ private struct GraphQLConversation: Decodable {
             createdAt: createdAt,
             updatedAt: updatedAt,
             lastMessageAt: lastMessageAt,
+            isRequest: isRequest ?? false,
+            requestStatus: requestStatus,
             members: members.compactMap(\.toModelIfValid),
             lastMessage: lastMessage?.toModel
         )
