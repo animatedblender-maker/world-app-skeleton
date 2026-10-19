@@ -564,7 +564,8 @@ struct ReelsPagerCard: View {
                 seekToSeconds = nil
                 isScrubbingTimeline = false
                 if let url = sparkPlayURL, !feedHandoffSticky {
-                    SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
+                    // Deep preroll — active page must be first-frame-ready, not light-buffer.
+                    SparkWarmPool.shared.warmSingle(postID: post.id, url: url, deep: true)
                 }
             }
         }
@@ -575,7 +576,7 @@ struct ReelsPagerCard: View {
                 useFill = prefersFillUntilMeasured
             }
             if let url = sparkPlayURL, !feedHandoffSticky {
-                SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
+                SparkWarmPool.shared.warmSingle(postID: post.id, url: url, deep: isActive)
             }
         }
         .onChange(of: post.id) { _, _ in
@@ -591,7 +592,7 @@ struct ReelsPagerCard: View {
             hidePauseGlyph(animated: false)
             resetGravityForCurrentPost()
             if let url = sparkPlayURL, !feedHandoffSticky {
-                SparkWarmPool.shared.warmSingle(postID: post.id, url: url)
+                SparkWarmPool.shared.warmSingle(postID: post.id, url: url, deep: isActive)
             }
         }
         .onDisappear {

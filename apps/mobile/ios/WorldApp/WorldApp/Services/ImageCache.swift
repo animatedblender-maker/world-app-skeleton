@@ -564,15 +564,27 @@ enum ScrollBudget: Sendable {
         lock.lock()
         defer { lock.unlock() }
         if dragging || abs(velocityY) > 0.25 {
-            // Hold fling through deceleration; settle handlers refill the deep ahead window.
-            flingUntil = now.addingTimeInterval(0.65)
+            // Hold through deceleration only — settle handlers call `noteSettled()` to clear.
+            flingUntil = now.addingTimeInterval(0.55)
             burst = max(burst, 3)
         }
+    }
+
+    /// Call from Sparks DidEndDecelerating / DidEndDragging(no decelerate) before refill warm.
+    /// Without this, `burst >= 3` kept `isFlinging` true forever after the first swipe
+    /// (Sparks never decays burst via noteCellAppear) → every next clip cold-started.
+    nonisolated static func noteSettled() {
+        lock.lock()
+        defer { lock.unlock() }
+        flingUntil = .distantPast
+        burst = 0
     }
 
     nonisolated static var isFlinging: Bool {
         lock.lock()
         defer { lock.unlock() }
-        return Date() < flingUntil || burst >= 3
+        // Time-gated only. Burst alone must not stick after Sparks flings
+        // (feed decays burst via noteCellAppear; Sparks does not).
+        return Date() < flingUntil
     }
 }

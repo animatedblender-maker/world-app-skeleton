@@ -25,27 +25,37 @@ final class SparkWarmPool {
         static var isConstrained: Bool { physicalGB < 3.6 }
         static var isMid: Bool { physicalGB < 5.6 }
 
-        /// Sparks swipe window — load ahead of the finger so the next clip is already decoding.
-        /// Feed/Hubs stay light; only Sparks uses this depth.
-        /// Keep modest: ahead 5 + deep 3 + concurrent 3 was freezing the UI mid-swipe (audio kept playing).
+        /// Sparks swipe window — Max instant: next clips first-frame-ready before the finger lands.
+        /// Mid-fling hitch is avoided by skipping willDisplay/prefetch warms + posts mutations,
+        /// not by starving the settle/landing warm depth.
         static var playerAhead: Int { playerAheadSparks }
         /// Feed list must NOT use AV warm (media session 09) — kept for API compat only.
         static var playerAheadFeed: Int { 0 }
-        static var playerAheadSparks: Int { isConstrained ? 3 : 4 }
+        static var playerAheadSparks: Int { isConstrained ? 4 : 5 }
         static var playerAheadHubs: Int { 2 }
         /// Thumbs / Frame 0 ahead of focus (Sparks player + shelves).
         static var thumbAhead: Int { isConstrained ? 8 : 10 }
         /// Deep-preroll next N (first-frame ready); rest of window light-buffer.
         static var deepPrerollFeed: Int { 0 }
-        static var deepPrerollSparks: Int { 2 }
+        static var deepPrerollSparks: Int { isConstrained ? 3 : 4 }
         static var deepPrerollHubs: Int { 1 }
-        /// current + behind + ahead + spare — room for Sparks window without thrash.
-        static var maxSlots: Int { isConstrained ? 6 : 7 }
+        /// current + behind + ahead + spare — room for Sparks Max window.
+        static var maxSlots: Int { isConstrained ? 7 : 8 }
         static var playerBehind: Int { 1 }
-        /// Parallel R2 warms — capped so swipe never storms MainActor with AVPlayer creates.
-        static var maxConcurrentWarms: Int { 2 }
-        static var forwardBufferDeep: Double { isConstrained ? 4 : 6 }
-        static var forwardBufferLight: Double { isConstrained ? 2 : 2.5 }
+        /// Parallel R2 warms — fill ahead window fast without MainActor storms.
+        static var maxConcurrentWarms: Int { isConstrained ? 2 : 3 }
+        static var forwardBufferDeep: Double { isConstrained ? 5 : 8 }
+        static var forwardBufferLight: Double { isConstrained ? 2 : 3 }
+    }
+
+    /// How aggressively to warm the Sparks sliding window.
+    enum PreparePolicy {
+        /// Full ahead + deep preroll (settle / open).
+        case settled
+        /// Protect keep-set; still warm next 1–2 so landing is instant (mid-drag).
+        case flingProtect
+        /// Force-warm landing ± deep regardless of ScrollBudget fling gate.
+        case landing
     }
 
     /// Default Sparks / hubs player window (adaptive).
@@ -83,21 +93,53 @@ final class SparkWarmPool {
     private init() {}
 
     /// Convenience for Sparks player — sliding AV window (device-adaptive ahead).
-    func preparePlayerWindow(posts: [CountryPost], around index: Int) {
-        let fling = ScrollBudget.isFlinging
-        // Mid-swipe: protect keep-set only — no new AVPlayer create (kills PlayerRemoteXPC thrash).
-        // Deep fill resumes when the finger settles.
-        let ahead = fling ? 0 : MediaBudget.playerAheadSparks
-        let deep = fling ? 0 : MediaBudget.deepPrerollSparks
-        prepare(
-            posts: posts,
-            around: index,
-            ahead: ahead,
-            behind: fling ? 0 : MediaBudget.playerBehind,
-            deepPrerollLimit: deep,
-            skipThumbWarm: fling,
-            allowNewWarms: !fling
-        )
+    /// - Parameter policy: `.landing` / `.settled` ignore a stale fling gate so the next
+    ///   clip is already decoding when the finger lands.
+    func preparePlayerWindow(
+        posts: [CountryPost],
+        around index: Int,
+        policy: PreparePolicy? = nil
+    ) {
+        let resolved: PreparePolicy
+        if let policy {
+            resolved = policy
+        } else {
+            resolved = ScrollBudget.isFlinging ? .flingProtect : .settled
+        }
+        switch resolved {
+        case .settled:
+            prepare(
+                posts: posts,
+                around: index,
+                ahead: MediaBudget.playerAheadSparks,
+                behind: MediaBudget.playerBehind,
+                deepPrerollLimit: MediaBudget.deepPrerollSparks,
+                skipThumbWarm: false,
+                allowNewWarms: true
+            )
+        case .flingProtect:
+            // Keep next 1–2 decoding during drag — no thumbs / far-ahead storm.
+            prepare(
+                posts: posts,
+                around: index,
+                ahead: 2,
+                behind: 0,
+                deepPrerollLimit: 2,
+                skipThumbWarm: true,
+                allowNewWarms: true
+            )
+        case .landing:
+            // Snap / settle: force deep warm of landing + neighbors even if fling flag lags.
+            prepare(
+                posts: posts,
+                around: index,
+                ahead: MediaBudget.playerAheadSparks,
+                behind: MediaBudget.playerBehind,
+                deepPrerollLimit: MediaBudget.deepPrerollSparks,
+                skipThumbWarm: false,
+                allowNewWarms: true
+            )
+        }
     }
 
     /// **Deprecated for Home feed** (media session 09: posters only).

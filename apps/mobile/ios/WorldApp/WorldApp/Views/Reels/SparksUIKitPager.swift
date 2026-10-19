@@ -547,9 +547,15 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
     }
 
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+        // Clear fling gate FIRST — otherwise prepare still thinks we're flinging
+        // and the next clips never deep-warm (every swipe felt cold).
+        ScrollBudget.noteSettled()
         commitPageFromScroll()
-        // Settled: refill the full ahead window (fling path skipped willDisplay warm).
-        SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
+        SparkWarmPool.shared.preparePlayerWindow(
+            posts: posts,
+            around: activeIndex,
+            policy: .settled
+        )
         if activeIndex >= max(0, posts.count - 24) {
             coordinator?.nearEnd()
         }
@@ -560,8 +566,13 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
 
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
         if !decelerate {
+            ScrollBudget.noteSettled()
             commitPageFromScroll()
-            SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
+            SparkWarmPool.shared.preparePlayerWindow(
+                posts: posts,
+                around: activeIndex,
+                policy: .settled
+            )
             if activeIndex >= max(0, posts.count - 24) {
                 coordinator?.nearEnd()
             }
@@ -641,9 +652,13 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
             refreshVisibleCells()
             return
         }
-        // Pre-warm the landing page *before* killing the outgoing solo so claim is hot.
+        // Force-warm landing + deep neighbors BEFORE silence/claim — instant first frame.
         if posts.indices.contains(clamped) {
-            SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: clamped)
+            SparkWarmPool.shared.preparePlayerWindow(
+                posts: posts,
+                around: clamped,
+                policy: .landing
+            )
         }
         PerformanceTelemetry.mark("reel_swipe_start")
         MediaPlaybackCoordinator.shared.silenceForSparkPageChange()
@@ -698,10 +713,14 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         ScrollBudget.noteScrollActivity(velocityY: velocity.y, dragging: false)
         let h = max(pageSize.height, 1)
         let targetPage = Int(round(targetContentOffset.pointee.y / h))
-        // Fast fling: hand off focus before deceleration finishes.
+        // Fast fling: deep-warm landing while decelerating so claim is already ready.
         if abs(velocity.y) > 0.35 || targetPage != activeIndex {
             if posts.indices.contains(targetPage) {
-                SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: targetPage)
+                SparkWarmPool.shared.preparePlayerWindow(
+                    posts: posts,
+                    around: targetPage,
+                    policy: .landing
+                )
             }
             // Only early-commit when the target is clearly a neighbor (avoid double-jump).
             if abs(targetPage - activeIndex) == 1 {
