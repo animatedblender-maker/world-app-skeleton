@@ -691,8 +691,11 @@ export class PostsService {
     const savedByMeShared = await this.savedByMeSharedExpr('$2::uuid');
     const params: Array<string | number | null> = [safeLimit, viewerId];
     // Never pass raw epoch-ms / garbage into ::timestamptz (Render ERR spam + pool stress).
+    // Cursor uses feed_at (= greatest(updated_at, created_at)) so R2 updates page correctly.
     const beforeTs = normalizeTimestamptzCursor(before);
-    const beforeClause = beforeTs ? `and p.created_at < $3::timestamptz` : '';
+    const beforeClause = beforeTs
+      ? `and greatest(p.updated_at, p.created_at) < $3::timestamptz`
+      : '';
     if (beforeTs) params.push(beforeTs);
     const { rows } = await pool.query(
       `
@@ -785,7 +788,7 @@ export class PostsService {
         )
         ${await this.privateAuthorVisibleSql('$2::uuid')}
         ${beforeClause}
-      order by p.created_at desc, p.id desc
+      order by greatest(p.updated_at, p.created_at) desc, p.id desc
       limit $1
       `,
       params

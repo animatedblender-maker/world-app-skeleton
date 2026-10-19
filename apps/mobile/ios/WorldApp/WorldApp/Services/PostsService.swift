@@ -416,11 +416,20 @@ final class PostsService {
             }.value
         }
 
-        // Deep: max channel lists (API cap 500/author) + multi-country + recent pages.
-        // Goal: entire R2 Spark library available in-session (thousands when seeded).
+        // Deep: newest R2 head via /v1/sparks (feed_at) + focus samples.
+        // Full 306k library is walked by Surface cursor on scroll — never load all into RAM.
+        async let surfaceHead = SurfacePageClient.fetchSparksPages(
+            want: 240,
+            startingCursor: nil,
+            maxPages: 6,
+            excluding: [],
+            skipViewed: false
+        )
         async let hubSparks = fetchFocusMarketHubSparks(limitPerAuthor: 500)
         async let countrySparks = fetchFocusMarketSparks(limitPerCountry: 500)
         async let recent = fetchRecentPosts(limit: 120)
+        let surfaceBatch = await surfaceHead
+        await Task.yield()
         let hubBatch = await hubSparks
         await Task.yield()
         let countryBatch = await countrySparks
@@ -430,7 +439,8 @@ final class PostsService {
 
         var merged: [CountryPost] = []
         var seen = Set<String>()
-        for post in hubBatch + countryBatch + recentBatch + sparksSessionCatalog {
+        // Surface newest-first head first so fresh R2 uploads lead the session pool.
+        for post in surfaceBatch.items + hubBatch + countryBatch + recentBatch + sparksSessionCatalog {
             guard seen.insert(post.id).inserted else { continue }
             guard ReelsRankingEngine.isSparkEligible(post) else { continue }
             merged.append(post)
@@ -438,7 +448,7 @@ final class PostsService {
 
         // Page further recent posts for more Sparks (new R2 uploads land here first).
         var before: String? = recentBatch.last?.createdAt
-        for _ in 0..<6 {
+        for _ in 0..<4 {
             let page = await fetchRecentPosts(limit: 100, before: before)
             if page.isEmpty { break }
             var added = 0
@@ -465,10 +475,14 @@ final class PostsService {
         }
 
         // Store unsorted pool; callers that need a fresh order use beginFreshSparksSession / shuffle.
+        // Cap session RAM — endless scroll pages /v1/sparks further via feedCursor.
+        if merged.count > 800 {
+            merged = Array(merged.prefix(800))
+        }
         sparksSessionCatalog = merged
         sparksSessionLoadedAt = Date()
         #if DEBUG
-        print("[Sparks] deep catalog size=\(merged.count)")
+        print("[Sparks] deep catalog size=\(merged.count) surface=\(surfaceBatch.items.count)")
         #endif
         // Return a shuffled view so even cache-less deep loads feel random.
         let seed = UInt64.random(in: 1...UInt64.max) ^ UInt64(merged.count)
@@ -497,6 +511,19 @@ final class PostsService {
         var seen = Set(catalog.map(\.id))
         let watchedExclude = SparkDiscoveryEngine.viewedIDList(limit: 800)
 
+        // Newest R2 head via thin /v1/sparks (feed_at) — uploads stay on top pre-KNN.
+        let surfaceFresh = await SurfacePageClient.fetchSparksPages(
+            want: 120,
+            startingCursor: nil,
+            maxPages: 4,
+            excluding: seen,
+            skipViewed: true
+        )
+        for post in surfaceFresh.items where seen.insert(post.id).inserted {
+            guard ReelsRankingEngine.isSparkEligible(post) else { continue }
+            catalog.insert(post, at: 0)
+        }
+
         // A few random DB windows (not 14 — that stormed the API when DB was slow).
         for _ in 0..<4 {
             var exclude = Array(seen.prefix(300))
@@ -514,7 +541,7 @@ final class PostsService {
         }
 
         var before: String? = nil
-        for _ in 0..<12 {
+        for _ in 0..<8 {
             let page = await fetchRecentPosts(limit: 100, before: before)
             if page.isEmpty { break }
             for post in page where seen.insert(post.id).inserted {
@@ -2903,8 +2930,8 @@ enum SparkDiscoveryEngine {
         ReelsRankingEngine.resetSession()
     }
 
-    /// **Unviewed only** while any remain; otherwise least-recently-viewed recycle.
-    /// Never interleave already-watched clips ahead of fresh ones.
+    /// Unviewed first; watched clips always at the **end** of the queue (LRV).
+    /// Endless surfaces keep the full pool — never drop watched while unviewed remain.
     static func rankForDiscovery(
         _ candidates: [CountryPost],
         excluding: Set<String> = [],
@@ -2955,18 +2982,17 @@ enum SparkDiscoveryEngine {
             return spacedPick(from: r2 + rest, limit: items.count)
         }
 
-        // HARD RULE: if anything unviewed exists, only suggest those.
-        var out: [CountryPost]
-        if !unviewed.isEmpty {
-            out = diversityShuffle(unviewed)
-        } else {
-            // Last resort: oldest view first (longest since last watch).
-            out = viewed.sorted { $0.1 < $1.1 }.map(\.0)
-            out = diversityShuffle(out)
-        }
-        out = spacedPick(from: out, limit: out.count)
+        // HARD RULE: never recommend watched ahead of unviewed.
+        // Watched stay in the queue at the end so Feed / Hubs / Sparks stay endless.
+        let fresh = diversityShuffle(unviewed)
+        let recycled = diversityShuffle(viewed.sorted { $0.1 < $1.1 }.map(\.0))
+        var out = spacedPick(from: fresh + recycled, limit: fresh.count + recycled.count)
 
         if let limit, limit > 0, out.count > limit {
+            // Prefer filling the limit from fresh; only spill into recycled at the tail.
+            if fresh.count >= limit {
+                return Array(fresh.prefix(limit))
+            }
             return Array(out.prefix(limit))
         }
         return out
@@ -3024,8 +3050,14 @@ enum SparkDiscoveryEngine {
             }
         }
 
+        // Recency = max(created, updated) so R2-synced bumps float above stale creates.
+        func feedRecency(_ p: CountryPost) -> Date {
+            let c = p.createdDate ?? .distantPast
+            let u = p.updatedDate ?? .distantPast
+            return c > u ? c : u
+        }
         func newestFirst(_ items: [CountryPost]) -> [CountryPost] {
-            items.sorted { ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast) }
+            items.sorted { feedRecency($0) > feedRecency($1) }
         }
 
         // Following unviewed = priority, but **not a sticky chronological block**.
@@ -3040,21 +3072,22 @@ enum SparkDiscoveryEngine {
             : seededShuffle(otherUnviewed, seed: sessionSeed)
         let discoveryMixed = weaveSparkAndHubFormats(otherFresh, seed: sessionSeed)
 
-        // HARD RULE (product): never re-show viewed while any unviewed remain.
+        // HARD RULE: unviewed first; watched automatically at the end of the queue.
         let fresh = weaveHomeFeed(
             primary: mineFresh + followFresh,
             discovery: discoveryMixed,
             seed: sessionSeed
         )
-        if !fresh.isEmpty { return fresh }
-
-        // Library exhausted — least-recently-viewed, rotate by session so opens differ.
-        let recycled = viewedPool
+        var recycled = viewedPool
             .sorted { $0.1 < $1.1 }
             .map(\.0)
-        guard recycled.count > 1, sessionSeed != 0 else { return recycled }
-        let rot = Int(sessionSeed % UInt64(recycled.count))
-        return Array(recycled[rot...]) + Array(recycled[..<rot])
+        if recycled.count > 1, sessionSeed != 0 {
+            let rot = Int(sessionSeed % UInt64(recycled.count))
+            recycled = Array(recycled[rot...]) + Array(recycled[..<rot])
+        }
+        if fresh.isEmpty { return recycled }
+        // Endless feed: keep watched at the tail so scroll never dies early.
+        return fresh + recycled
     }
 
     /// Interleave Sparks and Hubs-badge cards so Home isn't spark-only.

@@ -396,20 +396,30 @@ async function loadPostMeta(
       id: string;
       author_id: string | null;
       created_at: Date;
+      updated_at: Date | null;
       is_reel: boolean | null;
       media_type: string | null;
     }>(
       `
-      select id::text, author_id::text, created_at, is_reel, media_type
+      select id::text, author_id::text, created_at, updated_at, is_reel, media_type
       from public.posts
       where id = any($1::uuid[])
       `,
       [ids]
     );
     for (const r of rows) {
+      const created = r.created_at ? new Date(r.created_at) : null;
+      const updated = r.updated_at ? new Date(r.updated_at) : null;
+      // Freshness uses feed_at so R2-synced updates score as recent.
+      const feedAt =
+        created && updated
+          ? created > updated
+            ? created
+            : updated
+          : updated ?? created;
       map.set(r.id, {
         authorId: r.author_id,
-        createdAt: r.created_at ? new Date(r.created_at) : null,
+        createdAt: feedAt,
         isSpark: !!(r.is_reel || r.media_type === 'reel' || r.media_type === 'spark'),
       });
     }

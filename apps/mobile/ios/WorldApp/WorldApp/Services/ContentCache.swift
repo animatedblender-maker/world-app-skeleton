@@ -22,7 +22,8 @@ final class ContentCache {
     static let shared = ContentCache()
 
     /// Hard cap for any feed list on disk/memory — keeps encode/decode snappy.
-    static let maxCachedPosts = 48
+    /// Pre-KNN: keep a deeper disk/memory head so relaunch paints more of the R2 library.
+    static let maxCachedPosts = 160
 
     private let freshTTL: TimeInterval = 5 * 60
     private let staleTTL: TimeInterval = 24 * 60 * 60

@@ -469,13 +469,17 @@ final class YouTubeCatalogService {
             buckets[slug, default: []].append(post)
         }
 
-        /// Unviewed only — never append viewed here (that broke “watch once” across slugs).
+        /// Unviewed first; watched of this slug park at the end (endless For you).
         func rankSlugFresh(_ items: [CountryPost], salt: UInt64) -> [CountryPost] {
             var followFresh: [CountryPost] = []
             var mineFresh: [CountryPost] = []
             var otherFresh: [CountryPost] = []
+            var viewed: [CountryPost] = []
             for p in items {
-                if SparkDiscoveryEngine.isViewed(p) { continue }
+                if SparkDiscoveryEngine.isViewed(p) {
+                    viewed.append(p)
+                    continue
+                }
                 if isMine(p) { mineFresh.append(p) }
                 else if isFollow(p) { followFresh.append(p) }
                 else { otherFresh.append(p) }
@@ -484,7 +488,8 @@ final class YouTubeCatalogService {
                 a.sorted { ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast) }
             }
             let others = salt == 0 ? newest(otherFresh) : seededInterleavePure(newest(otherFresh), seed: salt)
-            return newest(mineFresh) + newest(followFresh) + others
+            // Watched last within the slug so For you stays endless after unviewed.
+            return newest(mineFresh) + newest(followFresh) + others + newest(viewed)
         }
 
         let slugOrder: [String]
@@ -522,12 +527,18 @@ final class YouTubeCatalogService {
                 }
             }
         }
-        // HARD: never mix viewed ahead of unviewed. Recycle only when fresh is empty.
-        if !out.isEmpty { return out }
-        let viewed = longForm.filter { SparkDiscoveryEngine.isViewed($0) }
-        return viewed.sorted {
-            ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast)
+        // HARD: never mix viewed ahead of unviewed. Keep watched at the end for endless For you.
+        if out.isEmpty {
+            let viewed = longForm.filter { SparkDiscoveryEngine.isViewed($0) }
+            return viewed.sorted {
+                ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast)
+            }
         }
+        var seenOut = Set(out.map(\.id))
+        let viewedTail = longForm
+            .filter { SparkDiscoveryEngine.isViewed($0) && seenOut.insert($0.id).inserted }
+            .sorted { ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast) }
+        return out + viewedTail
     }
 
     nonisolated private static func seededInterleavePure(_ items: [CountryPost], seed: UInt64) -> [CountryPost] {

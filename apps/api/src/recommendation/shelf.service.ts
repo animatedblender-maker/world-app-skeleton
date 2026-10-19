@@ -70,6 +70,8 @@ export type ThinShelfCard = {
   like_count: number;
   comment_count: number;
   created_at: string;
+  /** Present when API selects it — R2 sync bumps this so feed can float updates. */
+  updated_at?: string;
   country_code: string | null;
   country_name: string | null;
   author_id: string;
@@ -108,6 +110,9 @@ type RawPostRow = {
   like_count: number;
   comment_count: number;
   created_at: Date | string;
+  updated_at?: Date | string | null;
+  /** greatest(updated_at, created_at) when selected for home feed ranking. */
+  feed_at?: Date | string | null;
   country_code: string | null;
   country_name: string | null;
   author_id: string;
@@ -338,6 +343,14 @@ function rowToCard(row: RawPostRow, slug: HubParentSlug): ThinShelfCard {
     synthesizeThumbFromMedia(row.media_url) ||
     null;
 
+  const createdIso = toIso(row.created_at);
+  // Prefer feed_at (= greatest(updated_at, created_at)) so clients rank R2 syncs as newest.
+  const feedIso =
+    row.feed_at != null
+      ? toIso(row.feed_at)
+      : row.updated_at != null
+        ? toIso(row.updated_at)
+        : createdIso;
   return {
     id: row.id,
     slug,
@@ -348,7 +361,8 @@ function rowToCard(row: RawPostRow, slug: HubParentSlug): ThinShelfCard {
     thumb_url: thumb,
     like_count: Number(row.like_count) || 0,
     comment_count: Number(row.comment_count) || 0,
-    created_at: toIso(row.created_at),
+    created_at: createdIso,
+    updated_at: feedIso,
     country_code: row.country_code,
     country_name: row.country_name,
     author_id: row.author_id,
@@ -392,9 +406,10 @@ async function queryVideoPage(opts: {
     )`;
   }
 
+  // Pre-KNN: page newest uploads first (R2 sync bumps updated_at → feed_at).
   if (cur) {
     params.push(cur.createdAt, cur.id);
-    where += ` and (p.created_at, p.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`;
+    where += ` and (greatest(p.updated_at, p.created_at), p.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`;
   }
 
   params.push(limit);
@@ -409,6 +424,8 @@ async function queryVideoPage(opts: {
       p.like_count,
       p.comment_count,
       p.created_at,
+      p.updated_at,
+      greatest(p.updated_at, p.created_at) as feed_at,
       p.country_code,
       p.country_name,
       p.author_id,
@@ -420,7 +437,7 @@ async function queryVideoPage(opts: {
     from public.posts p
     left join public.profiles pr on pr.user_id = p.author_id
     where ${where}
-    order by p.created_at desc, p.id desc
+    order by greatest(p.updated_at, p.created_at) desc, p.id desc
     limit $${params.length}
   `;
 
@@ -482,7 +499,10 @@ export async function fetchShelfPage(input: {
 
     for (const row of rows) {
       const rowSlug = classifyRow(row);
-      cursor = encodeCursor(toIso(row.created_at), row.id);
+      cursor = encodeCursor(
+        toIso(row.feed_at ?? row.updated_at ?? row.created_at),
+        row.id,
+      );
       if (rowSlug !== slug) continue;
       items.push(rowToCard(row, rowSlug));
       if (items.length >= want) break;
@@ -546,9 +566,9 @@ export async function fetchForYouPage(input: {
     order = [...order.slice(rot), ...order.slice(0, rot)];
   }
 
-  // Pull a modest candidate window once, then RR.
+  // Larger candidate window so For you can walk the full long-form library newest-first.
   const batch = await queryVideoPage({
-    limit: Math.min(want * 6, 100),
+    limit: Math.min(want * 8, 160),
     cursor: input.cursor,
   });
 
@@ -556,7 +576,10 @@ export async function fetchForYouPage(input: {
   let lastCursor: string | null = null;
   for (const row of batch) {
     const slug = classifyRow(row);
-    lastCursor = encodeCursor(toIso(row.created_at), row.id);
+    lastCursor = encodeCursor(
+      toIso(row.feed_at ?? row.updated_at ?? row.created_at),
+      row.id,
+    );
     const list = buckets.get(slug) ?? [];
     list.push(rowToCard(row, slug));
     buckets.set(slug, list);
@@ -615,14 +638,16 @@ export type SurfacePage = {
 };
 
 /**
- * Home feed thin page — all public posts (text/image/video), cursor by created_at.
- * Client ranks; server only pages cheap rows.
+ * Home feed thin page — all public posts (text/image/video).
+ * Rank by greatest(updated_at, created_at) so R2-synced / recently updated
+ * media floats to the top (latest R2 updates first). Pre-KNN: client pages
+ * endlessly through the full library; server pages by feed_at.
  */
 export async function fetchHomeFeedPage(input: {
   limit?: number;
   cursor?: string | null;
 }): Promise<SurfacePage> {
-  const want = Math.min(Math.max(Number(input.limit) || 24, 1), 48);
+  const want = Math.min(Math.max(Number(input.limit) || 24, 1), 64);
   const cur = decodeCursor(input.cursor);
   const hasCol = await hasHubSlugColumn();
   const slugSelect = hasCol ? 'p.hub_slug' : 'null::text as hub_slug';
@@ -632,21 +657,24 @@ export async function fetchHomeFeedPage(input: {
     and lower(coalesce(p.media_type, '')) not in ('story', 'moment')
     and lower(coalesce(p.body, '')) not like '%__story__%'
   `;
+  // Cursor on feed_at (= greatest(updated_at, created_at)).
   if (cur) {
     params.push(cur.createdAt, cur.id);
-    where += ` and (p.created_at, p.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`;
+    where += ` and (greatest(p.updated_at, p.created_at), p.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`;
   }
   params.push(want);
   const sql = `
     select
       p.id, p.title, p.body, p.media_type, p.media_url, p.thumb_url,
-      p.like_count, p.comment_count, p.created_at, p.country_code, p.country_name,
+      p.like_count, p.comment_count, p.created_at, p.updated_at,
+      greatest(p.updated_at, p.created_at) as feed_at,
+      p.country_code, p.country_name,
       p.author_id, p.shared_post_id, ${slugSelect},
       pr.display_name as author_name, pr.username as author_username, pr.avatar_url as author_avatar
     from public.posts p
     left join public.profiles pr on pr.user_id = p.author_id
     where ${where}
-    order by p.created_at desc, p.id desc
+    order by greatest(p.updated_at, p.created_at) desc, p.id desc
     limit $${params.length}
   `;
   const { rows } = await pool.query<RawPostRow>(sql, params);
@@ -654,7 +682,7 @@ export async function fetchHomeFeedPage(input: {
   const liveItems = await freshenCardMedia(items);
   const last = rows[rows.length - 1];
   const nextCursor = last
-    ? encodeCursor(toIso(last.created_at), last.id)
+    ? encodeCursor(toIso(last.feed_at ?? last.updated_at ?? last.created_at), last.id)
     : null;
   return {
     surface: 'home_for_you',
@@ -672,7 +700,8 @@ export async function fetchSparksPage(input: {
   cursor?: string | null;
   slug?: string | null;
 }): Promise<SurfacePage> {
-  const want = Math.min(Math.max(Number(input.limit) || 20, 1), 40);
+  // Pre-KNN: larger pages + feed_at so the full R2 spark library is reachable newest-first.
+  const want = Math.min(Math.max(Number(input.limit) || 24, 1), 48);
   const focus = input.slug ? normalizeParentSlug(input.slug) : null;
   const cur = decodeCursor(input.cursor);
   const hasCol = await hasHubSlugColumn();
@@ -687,6 +716,8 @@ export async function fetchSparksPage(input: {
     and (
       lower(coalesce(p.media_type, '')) in ('reel', 'spark')
       or lower(coalesce(p.body, '')) like '%__spark__%'
+      or coalesce(p.media_path, '') like 'r2:%'
+      or coalesce(p.media_path, '') like 'r2-share:%'
     )
   `;
   if (hasCol && focus) {
@@ -698,20 +729,22 @@ export async function fetchSparksPage(input: {
   }
   if (cur) {
     params.push(cur.createdAt, cur.id);
-    where += ` and (p.created_at, p.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`;
+    where += ` and (greatest(p.updated_at, p.created_at), p.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`;
   }
   // Over-fetch when classifying in memory for slug focus.
   params.push(focus && !hasCol ? want * 4 : want);
   const sql = `
     select
       p.id, p.title, p.body, p.media_type, p.media_url, p.thumb_url,
-      p.like_count, p.comment_count, p.created_at, p.country_code, p.country_name,
+      p.like_count, p.comment_count, p.created_at, p.updated_at,
+      greatest(p.updated_at, p.created_at) as feed_at,
+      p.country_code, p.country_name,
       p.author_id, p.shared_post_id, ${slugSelect},
       pr.display_name as author_name, pr.username as author_username, pr.avatar_url as author_avatar
     from public.posts p
     left join public.profiles pr on pr.user_id = p.author_id
     where ${where}
-    order by p.created_at desc, p.id desc
+    order by greatest(p.updated_at, p.created_at) desc, p.id desc
     limit $${params.length}
   `;
   const { rows } = await pool.query<RawPostRow>(sql, params);
@@ -719,9 +752,9 @@ export async function fetchSparksPage(input: {
   let lastCursor: string | null = null;
   for (const row of rows) {
     const slug = classifyRow(row);
-    lastCursor = encodeCursor(toIso(row.created_at), row.id);
+    lastCursor = encodeCursor(toIso(row.feed_at ?? row.updated_at ?? row.created_at), row.id);
     if (focus && slug !== focus) continue;
-    // Prefer short/reel-ish; still accept tagged sparks.
+    // Prefer short/reel-ish; still accept tagged sparks + R2 spark shares.
     items.push(rowToCard(row, slug));
     if (items.length >= want) break;
   }

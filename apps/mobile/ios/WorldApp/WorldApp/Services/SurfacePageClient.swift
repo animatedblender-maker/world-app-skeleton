@@ -15,16 +15,18 @@ enum SurfacePageClient {
         await get(
             path: "/v1/feed",
             query: [
-                "limit": "\(min(max(limit, 1), 48))",
+                // API caps at 64 — walk the full R2-backed library newest-first.
+                "limit": "\(min(max(limit, 1), 64))",
                 "cursor": cursor,
             ].compactMapValues { $0 },
             allowMissingMedia: true
         )
     }
 
-    static func fetchSparks(limit: Int = 20, cursor: String? = nil, slug: String? = nil) async -> Page? {
+    static func fetchSparks(limit: Int = 24, cursor: String? = nil, slug: String? = nil) async -> Page? {
         var q: [String: String?] = [
-            "limit": "\(min(max(limit, 1), 40))",
+            // API caps at 48 — endless Sparks pages by feed_at.
+            "limit": "\(min(max(limit, 1), 48))",
             "cursor": cursor,
         ]
         if let slug, !slug.isEmpty { q["slug"] = slug }
@@ -33,6 +35,39 @@ enum SurfacePageClient {
             query: q.compactMapValues { $0 },
             allowMissingMedia: false
         )
+    }
+
+    /// Walk `/v1/sparks` newest-first until `want` unviewed items or the cursor ends.
+    /// Phone never holds 306k — this is the pre-KNN full-library pager.
+    static func fetchSparksPages(
+        want: Int,
+        startingCursor: String? = nil,
+        maxPages: Int = 8,
+        excluding: Set<String> = [],
+        skipViewed: Bool = true
+    ) async -> (items: [CountryPost], nextCursor: String?) {
+        var out: [CountryPost] = []
+        var seen = excluding
+        var cursor = startingCursor
+        var pages = 0
+        let pageSize = min(max(want, 24), 48)
+        while out.count < want, pages < maxPages {
+            pages += 1
+            guard let page = await fetchSparks(limit: pageSize, cursor: cursor) else { break }
+            if page.items.isEmpty {
+                cursor = page.nextCursor
+                break
+            }
+            for post in page.items {
+                guard seen.insert(post.id).inserted else { continue }
+                if skipViewed, SparkDiscoveryEngine.isViewed(post) { continue }
+                out.append(post)
+                if out.count >= want { break }
+            }
+            cursor = page.nextCursor
+            if page.nextCursor == nil { break }
+        }
+        return (out, cursor)
     }
 
     // MARK: - HTTP
@@ -115,6 +150,11 @@ enum SurfacePageClient {
             lastReadAt: nil
         )
         let created = (row["created_at"] as? String) ?? ISO8601DateFormatter().string(from: Date())
+        // Prefer feed_at (= greatest(updated_at, created_at)) so newest R2 uploads stay on top.
+        let updated = ([row["feed_at"] as? String, row["updated_at"] as? String]
+            .compactMap { $0 }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }) ?? created
         let body = (row["body"] as? String) ?? ""
         let isHubSurface = mediaType == "video" || mediaType == "reel" || mediaType == "spark"
         // Thin feed used to strip stamps — API now sends shared_post_id / origin_sid for comments.
@@ -141,7 +181,7 @@ enum SurfacePageClient {
             likedByMe: false,
             savedByMe: false,
             createdAt: created,
-            updatedAt: created,
+            updatedAt: updated,
             authorID: authorID,
             countryName: row["country_name"] as? String,
             countryCode: row["country_code"] as? String,

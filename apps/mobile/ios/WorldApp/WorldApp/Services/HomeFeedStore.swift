@@ -67,15 +67,15 @@ final class HomeFeedStore {
     /// True once the user has seen/scrolled a row this session — blocks head-replacing network merges.
     private var userEngagedThisSession = false
 
-    /// Network page size — fat pages so the tail never feels "loading more".
-    private let pageSize = 40
-    private let windowPageSize = 18
-    /// First paint window — enough for 2+ screens without load-more spinner.
-    private let firstWindow = 20
+    /// Network page size — keep modest so ranking/merge stays off the scroll path.
+    private let pageSize = 24
+    private let windowPageSize = 12
+    /// First paint window — ~1.5 screens; grow on scroll.
+    private let firstWindow = 12
     /// Prefetch next page early (Facebook-style always-ahead pool).
-    private let prefetchRatio = 0.32
+    private let prefetchRatio = 0.28
     /// Keep at least this many posts buffered in `posts` (beyond the visible window).
-    private let minBufferedPool = 56
+    private let minBufferedPool = 36
 
     private init() {}
 
@@ -282,6 +282,18 @@ final class HomeFeedStore {
         _ = await work.result
     }
 
+    /// App Store / Simulator capture seed — bypasses network wipe.
+    func applyScreenshotSeed(_ seed: [CountryPost]) {
+        guard ScreenshotMode.isActive, !seed.isEmpty else { return }
+        feedSessionId = UUID().uuidString
+        applyPosts(Array(seed.prefix(28)), replace: true, sessionId: feedSessionId, alreadyRanked: true)
+        isBootstrapping = false
+        didPaint = true
+        isRefreshing = false
+        hasMore = false
+        errorMessage = nil
+    }
+
     private func runFreshSession(forceReplace: Bool) async {
         generation += 1
         let gen = generation
@@ -291,6 +303,16 @@ final class HomeFeedStore {
         let paintedBefore = didPaint && !posts.isEmpty
         // Only show refresh chrome when the list was already on screen (pull / reshape).
         isRefreshing = forceReplace && paintedBefore
+
+        // Screenshot Mode: keep seeded posts; never replace with empty /v1/feed.
+        if ScreenshotMode.isActive {
+            if posts.isEmpty, let cached = ContentCache.shared.posts(for: .homeFeed), !cached.isEmpty {
+                applyScreenshotSeed(cached)
+            }
+            isBootstrapping = false
+            isRefreshing = false
+            return
+        }
 
         if forceReplace {
             userEngagedThisSession = false
@@ -436,24 +458,28 @@ final class HomeFeedStore {
         )
         guard !clean.isEmpty else { return }
 
-        // Rank unviewed-first across incoming + pool.
+        // Rank unviewed-first; watched park at the end (endless feed).
         let ranked = await rankForSessionAsync(clean + posts)
-        let hasFresh = ranked.contains { !SparkDiscoveryEngine.isViewed($0) }
 
-        // Only pin what the user is literally on (≤3). Drop the rest of a viewed sticky head.
+        // Only pin what the user is literally on (≤3). Rest of a viewed sticky head moves to tail.
         let pinCount = userEngagedThisSession ? min(3, posts.count) : 0
         let head = Array(posts.prefix(pinCount))
         var seen = Set(head.map(\.id))
         var contentKeys = Set(head.map(\.homeFeedContentKey))
 
-        var tail: [CountryPost] = []
-        tail.reserveCapacity(ranked.count)
+        var freshTail: [CountryPost] = []
+        var viewedTail: [CountryPost] = []
+        freshTail.reserveCapacity(ranked.count)
         for post in ranked {
-            if hasFresh, SparkDiscoveryEngine.isViewed(post) { continue }
             guard seen.insert(post.id).inserted else { continue }
             guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
-            tail.append(post)
+            if SparkDiscoveryEngine.isViewed(post) {
+                viewedTail.append(post)
+            } else {
+                freshTail.append(post)
+            }
         }
+        let tail = freshTail + viewedTail
 
         guard !tail.isEmpty || head.count != posts.count else {
             if !posts.isEmpty {
@@ -469,7 +495,6 @@ final class HomeFeedStore {
         t.disablesAnimations = true
         withTransaction(t) {
             posts = head + tail
-            // Shrink window if we dropped a bloated viewed head.
             if !userEngagedThisSession {
                 windowLimit = min(windowLimit, max(firstWindow, min(posts.count, firstWindow)))
             }
@@ -579,10 +604,7 @@ final class HomeFeedStore {
     private static func liveOnlyPosts(_ posts: [CountryPost]) -> [CountryPost] {
         let base = posts.excludingDeletedPosts().forHomeFeed()
         guard !base.isEmpty else { return [] }
-        let unviewed = base.filter { !SparkDiscoveryEngine.isViewed($0) }
-        if !unviewed.isEmpty {
-            return SparkDiscoveryEngine.rankForDiscovery(unviewed)
-        }
+        // Unviewed first, watched at end — keep full pool so home feed stays endless.
         return SparkDiscoveryEngine.rankForDiscovery(base)
     }
 
@@ -861,16 +883,27 @@ final class HomeFeedStore {
         var seen = existingIDs
         var contentKeys = seenContent
         let pageDeduped = pageItems.dedupeHomeFeedContent()
-        // Infinite scroll rule: skip viewed until this page has zero unviewed left.
-        for post in SparkDiscoveryEngine.rankForDiscovery(pageDeduped) {
-            guard !SparkDiscoveryEngine.isViewed(post) else { continue }
+        // Infinite scroll: take unviewed first from the page; watched only as tail fillers.
+        let rankedPage = SparkDiscoveryEngine.rankForDiscovery(pageDeduped)
+        var pageViewed: [CountryPost] = []
+        for post in rankedPage {
             guard seen.insert(post.id).inserted else { continue }
             guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
+            if SparkDiscoveryEngine.isViewed(post) {
+                pageViewed.append(post)
+                continue
+            }
             appended.append(post)
             if appended.count >= pageSize { break }
         }
+        if appended.count < pageSize {
+            for post in pageViewed {
+                appended.append(post)
+                if appended.count >= pageSize { break }
+            }
+        }
 
-        // Empty / all-viewed page → R2 discovery top-up (still unviewed-first).
+        // Empty page → R2 discovery top-up (unviewed first, watched at end).
         if appended.isEmpty {
             recyclePass += 1
             let forceDeep = recyclePass == 1 || recyclePass % 4 == 0
@@ -992,17 +1025,17 @@ final class HomeFeedStore {
     }
 
     /// Media session 09: feed head = thumbs + Frame0 only. Never prepareFeedWindow here.
-    /// `lite` = open path (smaller band); full = after paint (visible + 8 ahead).
+    /// `lite` = open path (tiny band); full = after paint (visible + a few ahead).
     private func warmHead(lite: Bool = false) async {
-        let thumbN = lite ? 12 : min(max(windowLimit, firstWindow) + 8, 24)
+        let thumbN = lite ? 6 : min(max(windowLimit, firstWindow) + 4, 14)
         let thumbBand = Array(posts.prefix(thumbN))
-        ImageCache.shared.prefetchFeedMedia(thumbBand, maxPixelSize: lite ? 280 : 360)
-        ImageCache.shared.prefetchPostThumbnails(thumbBand, maxPixelSize: 360, aggressive: false)
+        ImageCache.shared.prefetchFeedMedia(thumbBand, maxPixelSize: lite ? 240 : 320)
+        ImageCache.shared.prefetchPostThumbnails(thumbBand, maxPixelSize: 320, aggressive: false)
         Task(priority: .utility) {
-            await Frame0PosterResolver.shared.prefetch(postIDs: thumbBand.map(\.id))
+            await Frame0PosterResolver.shared.prefetch(postIDs: Array(thumbBand.prefix(8).map(\.id)))
         }
-        // Slug neighbor thumbs only (no AV) for first hub card in head.
-        if !lite, let hub = posts.prefix(12).first(where: {
+        // Slug neighbor only after paint — never on the open path.
+        if !lite, let hub = posts.prefix(8).first(where: {
             PlayPlatformBridge.isHubFeedCardVideo($0) || PlayPlatformBridge.isHubOriginShare($0)
         }) {
             let slug = hub.hubSlug ?? YouTubeCatalogService.parentHubSlug(for: hub)
