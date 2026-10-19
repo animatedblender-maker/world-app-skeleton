@@ -222,18 +222,27 @@ final class AppState {
         // Background only — UI already on MainTab for returning users.
         // VoIP/CallKit stay off the first-paint path (AppDelegate already yields; incoming-call wake is immediate).
         Task(priority: .utility) {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
             await AppPermissionsService.shared.requestEssentialPermissionsOnLaunch()
             await Task.yield()
             VoIPPushService.shared.bootstrap()
             CallSessionManager.shared.bootstrap()
             await registerPushInBackgroundAsync()
         }
-        startPolling()
         flushPendingPushRoute()
-        Task { await finishSessionWarmup() }
+        // Defer session warm + polling so first paint isn't fighting background storms.
+        Task(priority: .utility) {
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            await finishSessionWarmup()
+        }
+        Task(priority: .background) {
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            guard !Task.isCancelled, isAuthenticated else { return }
+            startPolling()
+        }
         // Config is non-critical — delay so it never races first feed paint / auth.
         Task(priority: .utility) {
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
             await RemoteConfigClient.refreshIfNeeded()
         }
     }
@@ -271,20 +280,20 @@ final class AppState {
     }
 
     private func finishSessionWarmup() async {
-        // ── Fast path: paint feed from cache/demo in <1s. Never block on hubs/GraphQL. ──
+        // ── Fast path: paint feed from cache/demo. Never block on hubs/GraphQL. ──
         // Disk cache already restored by ContentCache.init.
         // Demo seed fills empty cache (small JSONL; actor work, not main-thread I/O).
         if AppConfig.useDemoDataset, ContentCache.shared.posts(for: .homeFeed) == nil {
-            let sample = await DemoDatasetService.shared.sampleGlobalPosts(limit: 40)
+            let sample = await DemoDatasetService.shared.sampleGlobalPosts(limit: 24)
             if !sample.isEmpty {
                 ContentCache.shared.setPosts(sample, for: .homeFeed)
-                ImageCache.shared.prefetchFeedMedia(Array(sample.prefix(12)), maxPixelSize: 360)
+                ImageCache.shared.prefetchFeedMedia(Array(sample.prefix(6)), maxPixelSize: 280)
             }
             #if DEBUG
             print("[DemoDataset] warmup posts=\(sample.count)")
             #endif
         } else if let cached = ContentCache.shared.posts(for: .homeFeed) {
-            ImageCache.shared.prefetchFeedMedia(Array(cached.prefix(12)), maxPixelSize: 360)
+            ImageCache.shared.prefetchFeedMedia(Array(cached.prefix(6)), maxPixelSize: 280)
         }
 
         // Generation already stamped in hydrate (returning user) or below (late ready).
@@ -293,6 +302,9 @@ final class AppState {
         Task(priority: .utility) {
             await prepareSession()
             await refreshProfile()
+            // Social chrome after first feed paint has settled.
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            guard !Task.isCancelled else { return }
             await refreshAllInBackground()
         }
     }
@@ -317,6 +329,8 @@ final class AppState {
     func noteSelectedTabChanged(from old: AppTab, to new: AppTab) {
         if old == .feed, new != .feed {
             feedLeftAt = Date()
+            // Lock this open's head so the next cold reshape demotes it.
+            HomeFeedStore.shared.noteSessionPaused()
             return
         }
         if new == .feed, old != .feed {
@@ -329,10 +343,8 @@ final class AppState {
             }
             feedLeftAt = nil
         }
-        if new == .hubs, old != .hubs {
-            // Fresh For you shuffle every time user opens Hubs.
-            hubsFreshSessionToken += 1
-        }
+        // Do not reshuffle Hubs on every tab hop — that reloaded catalog + thumbs and felt heavy.
+        // Pull-to-refresh / cold open still bumps hubsFreshSessionToken.
     }
 
     /// Reshuffle feed posts + strips (5+ min off feed). App open uses contentLoadGeneration.
@@ -398,10 +410,9 @@ final class AppState {
             async let stories: Void = { await refreshStories() }()
             _ = await (stats, saved, stories)
         }
-        // Warm a *light* Hubs catalog after open — never pull the full Archive corpus on launch
-        // (that competed with feed first paint and made open feel heavy).
-        Task(priority: .utility) {
-            try? await Task.sleep(nanoseconds: 2_500_000_000)
+        // Warm a *light* Hubs catalog long after open — never compete with feed first paint.
+        Task(priority: .background) {
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
             guard currentProfile != nil else { return }
             if PostsService.shared.hubsSessionIsWarm(minLongForm: 12) { return }
             if ContentCache.shared.isFresh(.livingVideos),
@@ -411,7 +422,7 @@ final class AppState {
                 return
             }
             _ = await PostsService.shared.loadPlayCatalog(
-                globalLimit: 24,
+                globalLimit: 16,
                 forceRefresh: false,
                 viewerCountry: currentProfile?.countryCode,
                 followingIDs: followingIDs,
@@ -1800,17 +1811,23 @@ final class AppState {
                 parked.safePlayImmediately(atRate: 1.0)
             }
         }
-        let seeds = [start]
+        // Seed enough neighbors for the Sparks ahead window so the first swipes are already warm.
+        let seedLimit = max(20, SparkWarmPool.MediaBudget.playerAheadSparks + 12)
+        let seeds = Self.instantSparksSeedQueue(starting: start, limit: seedLimit)
         openReelsViewer(startingPost: start, seedPosts: seeds)
 
-        // Neighbors + catalog strictly after first paint (never block the continuing claim).
-        Task(priority: .utility) { @MainActor in
-            let expanded = Self.instantSparksSeedQueue(starting: start, limit: 16)
-            SparkWarmPool.shared.preparePlayerWindow(posts: expanded, around: 0)
+        // Warm the ahead window immediately after paint — before the user can swipe.
+        Task(priority: .userInitiated) { @MainActor in
+            SparkWarmPool.shared.preparePlayerWindow(posts: seeds, around: 0)
             _ = await PostsService.shared.loadSparksDiscoveryCatalog(
                 forceRefresh: false,
                 deep: false
             )
+            // Catalog may add fresher neighbors — re-warm once so swipe 2–5 stay instant.
+            let expanded = Self.instantSparksSeedQueue(starting: start, limit: seedLimit)
+            if expanded.count > seeds.count {
+                SparkWarmPool.shared.preparePlayerWindow(posts: expanded, around: 0)
+            }
         }
     }
 
@@ -1851,7 +1868,8 @@ final class AppState {
             openPlay()
             return
         }
-        let head = Array(reels.prefix(max(24, SparkWarmPool.playerAhead + 4)))
+        // Warm before present so the first swipes never cold-start.
+        let head = Array(reels.prefix(max(24, SparkWarmPool.MediaBudget.playerAheadSparks + 8)))
         SparkWarmPool.shared.preparePlayerWindow(posts: head, around: 0)
         openReelsViewer(startingPost: first, seedPosts: reels)
     }
@@ -1865,6 +1883,8 @@ final class AppState {
                 openPlay()
                 return
             }
+            let head = Array(reels.prefix(max(20, SparkWarmPool.MediaBudget.playerAheadSparks + 8)))
+            SparkWarmPool.shared.preparePlayerWindow(posts: head, around: 0)
             openReelsViewer(startingPost: first, seedPosts: reels)
         }
     }
@@ -2458,7 +2478,8 @@ final class AppState {
             while !Task.isCancelled {
                 await refreshUnreadCounts()
                 await refreshNotifications()
-                try? await Task.sleep(nanoseconds: 45_000_000_000)
+                // 90s — unread badges don't need 45s churn while browsing media.
+                try? await Task.sleep(nanoseconds: 90_000_000_000)
             }
         }
     }
@@ -2514,13 +2535,16 @@ final class AppState {
         currentProfile = ScreenshotMode.demoProfile
         ContentCache.shared.setProfile(ScreenshotMode.demoProfile)
 
-        let demoPosts = await DemoDatasetService.shared.sampleGlobalPosts(limit: 40)
-        let feedPosts = Array(demoPosts.filter { !$0.isStory }.excludingSparks().prefix(24))
+        let demoPosts = await DemoDatasetService.shared.sampleGlobalPosts(limit: 80)
+        // Screenshot captures need a full-looking feed — do not strip Sparks/Hubs cards.
+        let feedPosts = Array(demoPosts.filter { !$0.isStory }.prefix(28))
         let hubPosts = demoPosts.filter { $0.hasVideo && !$0.isStory }
-        let profilePosts = Array(feedPosts.prefix(6))
+        let profilePosts = Array(feedPosts.prefix(8))
 
         if !feedPosts.isEmpty {
             ContentCache.shared.setPosts(feedPosts, for: .homeFeed)
+            // Pin into the live store so /v1/feed emptiness cannot wipe the capture.
+            HomeFeedStore.shared.applyScreenshotSeed(feedPosts)
         }
         if !hubPosts.isEmpty {
             ContentCache.shared.setPosts(hubPosts, for: .livingVideos)
@@ -2542,6 +2566,12 @@ final class AppState {
             if case .search = route {
                 pendingSearchQuery = ScreenshotMode.searchQuery
             }
+        }
+
+        // App Store Sparks capture: open fullscreen player after demo feed is ready.
+        if ProcessInfo.processInfo.arguments.contains("-UIScreenshotSparks"),
+           let spark = hubPosts.first(where: { $0.isSpark || $0.isReel }) ?? hubPosts.first {
+            presentGlobalSparks(starting: spark, fromFeedPost: nil)
         }
     }
 }

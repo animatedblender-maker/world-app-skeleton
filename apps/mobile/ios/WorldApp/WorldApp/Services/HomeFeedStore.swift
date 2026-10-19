@@ -69,6 +69,8 @@ final class HomeFeedStore {
     /// Most recent on-screen row — soft-merge must pin through here so the watched card never vanishes.
     private var lastVisiblePostID: String?
     private var lastVisibleIndex: Int = 0
+    /// Last open's head IDs — demoted on the next fresh session so Feed isn't identical every launch.
+    private static let lastHeadDefaultsKey = "home.feed.lastHeadIDs.v2"
 
     /// Network page size — keep modest so ranking/merge stays off the scroll path.
     private let pageSize = 24
@@ -277,6 +279,68 @@ final class HomeFeedStore {
         return min(poolCount, max(byWindow, byFocus, firstWindow))
     }
 
+    private func persistedLastHeadIDs() -> [String] {
+        UserDefaults.standard.stringArray(forKey: Self.lastHeadDefaultsKey) ?? []
+    }
+
+    /// Remember what the user just saw at the top so the next cold open can demote it.
+    private func rememberDisplayedHead() {
+        let ids = Array(displayedPosts.prefix(28).map(\.id))
+        guard !ids.isEmpty else { return }
+        var merged = ids
+        for old in persistedLastHeadIDs() where !merged.contains(old) {
+            merged.append(old)
+            if merged.count >= 80 { break }
+        }
+        UserDefaults.standard.set(Array(merged.prefix(80)), forKey: Self.lastHeadDefaultsKey)
+    }
+
+    /// Put last-open head at the tail — API `/v1/feed` is newest-first and otherwise repeats.
+    private func demoteRecentHead(_ posts: [CountryPost]) -> [CountryPost] {
+        let recent = Set(persistedLastHeadIDs())
+        guard !recent.isEmpty else { return posts }
+        var fresh: [CountryPost] = []
+        var stale: [CountryPost] = []
+        fresh.reserveCapacity(posts.count)
+        for post in posts {
+            if recent.contains(post.id) {
+                stale.append(post)
+            } else {
+                fresh.append(post)
+            }
+        }
+        guard !fresh.isEmpty else { return posts }
+        return fresh + stale
+    }
+
+    /// On reshape: if page-1 is mostly last session's head, walk the cursor for new IDs.
+    private func expandFreshHead(
+        initial: [CountryPost],
+        startingCursor: String?
+    ) async -> (items: [CountryPost], cursor: String?) {
+        var pooled = initial
+        var cursor = startingCursor
+        let recent = Set(persistedLastHeadIDs())
+        let freshCount = pooled.filter { !recent.contains($0.id) }.count
+        // Already enough new material — skip extra round-trips.
+        if freshCount >= 14 || cursor == nil { return (pooled, cursor) }
+
+        var seen = Set(pooled.map(\.id))
+        for _ in 0..<3 {
+            guard let cur = cursor, !cur.isEmpty else { break }
+            guard let page = await SurfacePageClient.fetchHomeFeed(limit: 48, cursor: cur) else { break }
+            cursor = page.nextCursor
+            if page.items.isEmpty { break }
+            for post in page.items where seen.insert(post.id).inserted {
+                pooled.append(post)
+            }
+            let fresh = pooled.filter { !recent.contains($0.id) }.count
+            if fresh >= 20 { break }
+            if page.nextCursor == nil { break }
+        }
+        return (pooled, cursor)
+    }
+
     var displayedPosts: [CountryPost] {
         Array(posts.prefix(windowLimit))
     }
@@ -358,8 +422,10 @@ final class HomeFeedStore {
                     BlockService.shared.filterPosts(cached.excludingMoments().forHomeFeed())
                 )
                 if !pool.isEmpty {
+                    // Demote last open's head so cache paint isn't a carbon copy every launch.
+                    let ranked = demoteRecentHead(rankForSessionSync(pool))
                     applyPosts(
-                        Array(rankForSessionSync(pool).prefix(24)),
+                        Array(ranked.prefix(24)),
                         replace: true,
                         sessionId: feedSessionId,
                         alreadyRanked: true
@@ -378,7 +444,9 @@ final class HomeFeedStore {
 
         // 2) Thin feed only on the critical path (following refresh off-path).
         Task(priority: .utility) { await self.refreshFollowingContextOnly() }
-        let thin = await SurfacePageClient.fetchHomeFeed(limit: 24, cursor: nil)
+        // Fresh session: wider first page so demote+shuffle has room to differ.
+        let thinLimit = forceReplace ? 48 : 24
+        let thin = await SurfacePageClient.fetchHomeFeed(limit: thinLimit, cursor: nil)
         guard gen == generation else {
             isRefreshing = false
             return
@@ -386,9 +454,18 @@ final class HomeFeedStore {
 
         if let thin, !thin.items.isEmpty {
             nextCursor = thin.nextCursor
-            let fast = Self.liveOnlyPosts(thin.items)
-            let rankedFast = rankForSessionSync(fast.isEmpty ? thin.items : fast)
-            let head = Array(rankedFast.prefix(24))
+            var livePool = thin.items
+            if forceReplace {
+                let expanded = await expandFreshHead(initial: livePool, startingCursor: thin.nextCursor)
+                livePool = expanded.items
+                if let cur = expanded.cursor { nextCursor = cur }
+            }
+            let fast = Self.liveOnlyPosts(livePool)
+            var rankedFast = rankForSessionSync(fast.isEmpty ? livePool : fast)
+            if forceReplace {
+                rankedFast = demoteRecentHead(rankedFast)
+            }
+            let head = Array(rankedFast.prefix(forceReplace ? 36 : 24))
             if !head.isEmpty {
                 let preserveHead = !forceReplace
                     && (paintedBefore || userEngagedThisSession)
@@ -397,6 +474,7 @@ final class HomeFeedStore {
                 } else {
                     applyPosts(head, replace: true, sessionId: feedSessionId, alreadyRanked: true)
                     ContentCache.shared.setPosts(posts, for: .homeFeed)
+                    rememberDisplayedHead()
                 }
                 isBootstrapping = false
                 didPaint = true
@@ -404,15 +482,16 @@ final class HomeFeedStore {
                 Task { await warmHead(lite: true) }
             }
         } else if posts.isEmpty {
-            let liveRaw = await PostsService.shared.fetchFirstPaintHomePosts(limit: 24)
+            let liveRaw = await PostsService.shared.fetchFirstPaintHomePosts(limit: 48)
             guard gen == generation else {
                 isRefreshing = false
                 return
             }
-            let ranked = rankForSessionSync(Self.liveOnlyPosts(liveRaw))
+            let ranked = demoteRecentHead(rankForSessionSync(Self.liveOnlyPosts(liveRaw)))
             if !ranked.isEmpty {
-                applyPosts(Array(ranked.prefix(24)), replace: true, sessionId: feedSessionId, alreadyRanked: true)
+                applyPosts(Array(ranked.prefix(36)), replace: true, sessionId: feedSessionId, alreadyRanked: true)
                 ContentCache.shared.setPosts(posts, for: .homeFeed)
+                rememberDisplayedHead()
                 didPaint = true
                 Task { await warmHead(lite: true) }
             }
@@ -661,6 +740,11 @@ final class HomeFeedStore {
 
     /// Call from row `onAppear`. Prefetches media and next page at 65%.
     /// Fast fling: grow the local window aggressively, skip heavy network work until scroll settles.
+    /// Call when leaving the Feed tab / backgrounding — locks this open's head for next demote.
+    func noteSessionPaused() {
+        rememberDisplayedHead()
+    }
+
     func onRowAppear(post: CountryPost) {
         ScrollBudget.noteCellAppear()
         // Any row appear counts as engagement — late network must not remount the head.

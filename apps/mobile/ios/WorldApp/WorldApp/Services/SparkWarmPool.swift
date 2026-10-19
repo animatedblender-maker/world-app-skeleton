@@ -85,16 +85,18 @@ final class SparkWarmPool {
     /// Convenience for Sparks player — sliding AV window (device-adaptive ahead).
     func preparePlayerWindow(posts: [CountryPost], around index: Int) {
         let fling = ScrollBudget.isFlinging
-        // Mid-swipe: only keep current ±1 hot. Deep fill resumes when the finger settles.
-        let ahead = fling ? 1 : MediaBudget.playerAheadSparks
-        let deep = fling ? 1 : MediaBudget.deepPrerollSparks
+        // Mid-swipe: protect keep-set only — no new AVPlayer create (kills PlayerRemoteXPC thrash).
+        // Deep fill resumes when the finger settles.
+        let ahead = fling ? 0 : MediaBudget.playerAheadSparks
+        let deep = fling ? 0 : MediaBudget.deepPrerollSparks
         prepare(
             posts: posts,
             around: index,
             ahead: ahead,
-            behind: MediaBudget.playerBehind,
+            behind: fling ? 0 : MediaBudget.playerBehind,
             deepPrerollLimit: deep,
-            skipThumbWarm: fling
+            skipThumbWarm: fling,
+            allowNewWarms: !fling
         )
     }
 
@@ -125,7 +127,8 @@ final class SparkWarmPool {
         ahead: Int = 6,
         behind: Int = 2,
         deepPrerollLimit: Int? = nil,
-        skipThumbWarm: Bool = false
+        skipThumbWarm: Bool = false,
+        allowNewWarms: Bool = true
     ) {
         guard !posts.isEmpty else { return }
         let deepLimit = deepPrerollLimit ?? MediaBudget.deepPrerollSparks
@@ -172,13 +175,21 @@ final class SparkWarmPool {
 
         let lo = max(0, index - behind)
         let hi = min(posts.count, index + ahead + 1)
-        guard lo < hi else { return }
-        let window = Array(posts[lo..<hi])
+        // Mid-fling with ahead=0: still protect current slot; skip create storm below.
+        let window: [CountryPost]
+        if lo < hi {
+            window = Array(posts[lo..<hi])
+        } else if posts.indices.contains(index) {
+            window = [posts[index]]
+        } else {
+            return
+        }
         // Never evict the deep-preroll head — only drop far tails.
         // Mid-fling: protect a wider keep set than we warm so we don't thrash evict/create.
         let protectAhead = skipThumbWarm ? MediaBudget.playerAheadSparks : max(ahead, deepLimit)
+        let protectBehind = skipThumbWarm ? MediaBudget.playerBehind : behind
         let protectHi = min(posts.count, index + protectAhead + 1)
-        let protectLo = max(0, index - behind)
+        let protectLo = max(0, index - protectBehind)
         var keep = Set(window.map(\.id)).union(inUse)
         // Never evict a mid-clip feed→Sparks/Hubs handoff — even if share id ≠ origin id.
         keep.formUnion(continuingIDs)
@@ -191,6 +202,9 @@ final class SparkWarmPool {
         for id in slots.keys where !keep.contains(id) {
             evict(id)
         }
+
+        // Mid-fling: protect/evict only — creating AVPlayers here storms PlayerRemoteXPC.
+        guard allowNewWarms else { return }
 
         // Warm next first (highest swipe priority), then previous.
         // Use window indices (already sliced) — avoid O(n) firstIndex scans per post mid-swipe.

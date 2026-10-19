@@ -80,7 +80,13 @@ struct SparksUIKitPager: UIViewControllerRepresentable {
 
         func setActiveIndex(_ index: Int) {
             guard parent.activeIndex != index else { return }
-            parent.activeIndex = index
+            // Hop off the UIKit scroll callback — assigning @Binding during view update
+            // triggers "Modifying state during view update".
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                guard self.parent.activeIndex != index else { return }
+                self.parent.activeIndex = index
+            }
         }
 
         func nearEnd() { parent.onNearEnd?() }

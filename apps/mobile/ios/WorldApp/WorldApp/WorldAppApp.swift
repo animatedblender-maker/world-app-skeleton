@@ -36,6 +36,8 @@ struct WorldAppApp: App {
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
                 Task { @MainActor in
                     CallSessionManager.shared.handleAppWillResignActive()
+                    // Persist feed head for next-open demote (same posts every launch).
+                    HomeFeedStore.shared.noteSessionPaused()
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
@@ -54,22 +56,23 @@ struct WorldAppApp: App {
         }
     }
 
-    /// Splash paints first → quick AppState hydrate → shell under glow → dismiss without
-    /// waiting on network bootstrap (that was the long white / awkward hang).
+    /// Splash paints first (Core Animation glow) → AppState hydrate off the glow path →
+    /// shell under splash → dismiss on a timer. Glow does not wait on bootstrap.
     @MainActor
     private func runLaunchSequence() async {
         PerformanceTelemetry.markIfAbsent("process_start")
 
-        // One frame so Matterya is on screen before any disk work.
+        // Let the CA glow mount and paint before any sync hydrate.
         await Task.yield()
-        try? await Task.sleep(nanoseconds: 16_000_000)
+        try? await Task.sleep(nanoseconds: 32_000_000)
 
         PerformanceTelemetry.markIfAbsent("shell_first_frame")
         PerformanceTelemetry.milestoneFromLaunch("app_start_to_shell", surface: "app")
 
         let splashStarted = Date()
 
-        // Sync hydrate only (Keychain/UserDefaults) — must stay off the network path.
+        // Sync hydrate after glow is already looping on the render server.
+        // (CA animations continue through short main-thread Keychain/UserDefaults work.)
         let state = AppState()
         appState = state
         Keyboard.installDismissOnOutsideTap()
@@ -87,8 +90,8 @@ struct WorldAppApp: App {
             )
         }
 
-        // One clean glow pass (~0.95s), then open — never wait on network bootstrap.
-        let minVisible: TimeInterval = 0.95
+        // ~1.2s so at least one full glow pass is visible; never wait on network.
+        let minVisible: TimeInterval = 1.15
         let elapsed = Date().timeIntervalSince(splashStarted)
         if elapsed < minVisible {
             try? await Task.sleep(nanoseconds: UInt64((minVisible - elapsed) * 1_000_000_000))
