@@ -66,6 +66,9 @@ final class HomeFeedStore {
     private var sessionMyUserID: String?
     /// True once the user has seen/scrolled a row this session — blocks head-replacing network merges.
     private var userEngagedThisSession = false
+    /// Most recent on-screen row — soft-merge must pin through here so the watched card never vanishes.
+    private var lastVisiblePostID: String?
+    private var lastVisibleIndex: Int = 0
 
     /// Network page size — keep modest so ranking/merge stays off the scroll path.
     private let pageSize = 24
@@ -230,9 +233,19 @@ final class HomeFeedStore {
 
     /// After a network page lands, ask the server ranker to personalize order (scale path).
     /// Never blocks first paint — call from load paths in the background.
+    /// While the user is watching, only reorders **below** the on-screen window.
     func applyServerRankIfPossible() async {
         let snapshot = posts
         guard snapshot.count >= 4 else { return }
+        // Engaged: never reshuffle anything the user can see (or just watched).
+        let pinCount: Int
+        if userEngagedThisSession {
+            pinCount = pinnedPrefixCount(poolCount: snapshot.count)
+            // Nothing useful to re-rank below a deep pin — skip the round-trip.
+            if pinCount >= snapshot.count - 2 { return }
+        } else {
+            pinCount = min(6, snapshot.count)
+        }
         let surface = homeSurface
         let ranked = await RecommendationClient.rankPosts(
             snapshot,
@@ -242,9 +255,7 @@ final class HomeFeedStore {
             limit: min(snapshot.count, 100)
         )
         guard ranked.map(\.id) != snapshot.map(\.id) else { return }
-        // Soft blend only — never wipe the session-shuffled head (that made every open identical).
-        let headCount = min(userEngagedThisSession ? 4 : 6, snapshot.count)
-        let head = Array(snapshot.prefix(headCount))
+        let head = Array(snapshot.prefix(pinCount))
         let headIDs = Set(head.map(\.id))
         let tail = ranked.filter { !headIDs.contains($0.id) }
         // Keep any local-only ids (non-UUID seeds) that server dropped.
@@ -255,6 +266,15 @@ final class HomeFeedStore {
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) { posts = merged }
+    }
+
+    /// How many leading posts must stay frozen in place while the user is mid-watch.
+    private func pinnedPrefixCount(poolCount: Int) -> Int {
+        guard poolCount > 0 else { return 0 }
+        // Freeze the full painted window + a couple ahead of the focused row.
+        let byWindow = windowLimit
+        let byFocus = lastVisibleIndex + 3
+        return min(poolCount, max(byWindow, byFocus, firstWindow))
     }
 
     var displayedPosts: [CountryPost] {
@@ -316,6 +336,8 @@ final class HomeFeedStore {
 
         if forceReplace {
             userEngagedThisSession = false
+            lastVisiblePostID = nil
+            lastVisibleIndex = 0
             feedSessionId = UUID().uuidString
             recyclePass = 0
             windowLimit = firstWindow
@@ -450,20 +472,58 @@ final class HomeFeedStore {
         }
     }
 
-    /// Weave network rows under a **small** live pin — never pin a long viewed head
-    /// (that was the “same feed forever” bug vs unviewed-until-exhausted).
+    /// Weave network rows under the live on-screen window.
+    /// Mid-watch: never reorder or drop pinned posts (marking watched used to send the
+    /// focused card to the viewed tail and replace it with strangers).
     private func softMergePreservingHead(_ incoming: [CountryPost]) async {
         let clean = Self.liveOnlyPosts(
             BlockService.shared.filterPosts(incoming.excludingMoments().forHomeFeed())
         )
         guard !clean.isEmpty else { return }
 
-        // Rank unviewed-first; watched park at the end (endless feed).
-        let ranked = await rankForSessionAsync(clean + posts)
+        // Engaged: freeze the on-screen window in place. Append new rows only below it.
+        // Never re-rank / move a post the user is watching to the viewed tail.
+        if userEngagedThisSession, !posts.isEmpty {
+            let pinCount = pinnedPrefixCount(poolCount: posts.count)
+            let head = Array(posts.prefix(pinCount))
+            let below = Array(posts.dropFirst(pinCount))
+            var seen = Set(head.map(\.id))
+            var contentKeys = Set(head.map(\.homeFeedContentKey))
 
-        // Only pin what the user is literally on (≤3). Rest of a viewed sticky head moves to tail.
-        let pinCount = userEngagedThisSession ? min(3, posts.count) : 0
-        let head = Array(posts.prefix(pinCount))
+            var preservedBelow: [CountryPost] = []
+            for post in below where seen.insert(post.id).inserted {
+                contentKeys.insert(post.homeFeedContentKey)
+                preservedBelow.append(post)
+            }
+
+            var newUnviewed: [CountryPost] = []
+            var newViewed: [CountryPost] = []
+            for post in clean {
+                guard seen.insert(post.id).inserted else { continue }
+                guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
+                if SparkDiscoveryEngine.isViewed(post) {
+                    newViewed.append(post)
+                } else {
+                    newUnviewed.append(post)
+                }
+            }
+
+            let merged = head + preservedBelow + newUnviewed + newViewed
+            guard merged.map(\.id) != posts.map(\.id) else { return }
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { posts = merged }
+            hasMore = true
+            ContentCache.shared.setPosts(
+                Array(posts.prefix(ContentCache.maxCachedPosts)),
+                for: .homeFeed
+            )
+            return
+        }
+
+        // Cold open (not engaged): full rank is fine — nothing on screen yet to protect.
+        let ranked = await rankForSessionAsync(clean + posts)
+        let head: [CountryPost] = []
         var seen = Set(head.map(\.id))
         var contentKeys = Set(head.map(\.homeFeedContentKey))
 
@@ -480,24 +540,13 @@ final class HomeFeedStore {
             }
         }
         let tail = freshTail + viewedTail
-
-        guard !tail.isEmpty || head.count != posts.count else {
-            if !posts.isEmpty {
-                ContentCache.shared.setPosts(
-                    Array(posts.prefix(ContentCache.maxCachedPosts)),
-                    for: .homeFeed
-                )
-            }
-            return
-        }
+        guard !tail.isEmpty else { return }
 
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) {
             posts = head + tail
-            if !userEngagedThisSession {
-                windowLimit = min(windowLimit, max(firstWindow, min(posts.count, firstWindow)))
-            }
+            windowLimit = min(windowLimit, max(firstWindow, min(posts.count, firstWindow)))
         }
         hasMore = true
         ContentCache.shared.setPosts(
@@ -617,6 +666,8 @@ final class HomeFeedStore {
         // Any row appear counts as engagement — late network must not remount the head.
         userEngagedThisSession = true
         guard let index = displayedPosts.firstIndex(where: { $0.id == post.id }) else { return }
+        lastVisiblePostID = post.id
+        lastVisibleIndex = index
 
         // True exposure (viewport) — stronger label than "returned by ranking".
         // Dwell/skip still come from FeedView appear/disappear.
