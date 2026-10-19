@@ -104,26 +104,8 @@ struct ReelsVerticalFeed: View {
         let post = posts[index]
         SparkDiscoveryEngine.markWatched(post)
         Task { await PostsService.shared.recordView(post) }
-        // Watched clips behind the finger stay; anything already ahead that was watched
-        // moves to the end of the queue so it is never re-recommended next.
-        parkWatchedAtEndOfQueue(preservingIndex: index)
-    }
-
-    /// Keep history + current; reorder upcoming as unviewed first, then watched (endless).
-    private func parkWatchedAtEndOfQueue(preservingIndex index: Int) {
-        guard posts.count > index + 1 else { return }
-        let head = Array(posts.prefix(index + 1))
-        let upcoming = Array(posts.suffix(from: index + 1))
-        guard !upcoming.isEmpty else { return }
-        let rankedUpcoming = SparkDiscoveryEngine.rankForDiscovery(upcoming)
-        // No-op if already unviewed-first.
-        if rankedUpcoming.map(\.id) == upcoming.map(\.id) { return }
-        var t = Transaction()
-        t.disablesAnimations = true
-        withTransaction(t) {
-            posts = head + rankedUpcoming
-            activeIndex = index
-        }
+        // Do NOT reorder the live queue here — swipe up then down must keep the same
+        // clips in the same places (TikTok/IG history). New pages append only.
     }
 
     private func toggleLike(_ post: CountryPost) async {
@@ -1614,8 +1596,7 @@ struct ReelsScrollViewer: View {
                 }
                 guard posts.indices.contains(activeIndex) else { return }
                 CommentsWarmCache.shared.warm(posts[activeIndex].id)
-                // Park watched ahead only after settle — mid-swipe reorder reloads the pager.
-                parkWatchedAheadToEnd(preservingIndex: activeIndex)
+                // Never reorder on index change — swipe back must show the same clips.
                 await ensureBulkQueueAhead()
             }
         }
@@ -1733,22 +1714,6 @@ struct ReelsScrollViewer: View {
         Task { await ensureBulkQueueAhead() }
     }
 
-    /// After a watch, any already-watched clips still ahead of the finger move to the end.
-    private func parkWatchedAheadToEnd(preservingIndex index: Int) {
-        guard posts.count > index + 1 else { return }
-        let head = Array(posts.prefix(index + 1))
-        let upcoming = Array(posts.suffix(from: index + 1))
-        guard !upcoming.isEmpty else { return }
-        let rankedUpcoming = SparkDiscoveryEngine.rankForDiscovery(upcoming)
-        if rankedUpcoming.map(\.id) == upcoming.map(\.id) { return }
-        var t = Transaction()
-        t.disablesAnimations = true
-        withTransaction(t) {
-            posts = head + rankedUpcoming
-            activeIndex = index
-        }
-    }
-
     /// Keep at least `target` unplayed Sparks after the focused index.
     private func ensureBulkQueueAhead(target: Int = SparksQueueBudget.minQueueAhead) async {
         var guardPasses = 0
@@ -1851,54 +1816,28 @@ struct ReelsScrollViewer: View {
             : liveID
         let liveIndex = posts.firstIndex(where: { $0.id == keepID }) ?? activeIndex
 
-        // Large instant seed already under the finger — **append only**.
-        // Full replace remounted early pages → open “hallucinations” / flicker.
-        if aheadBefore >= 12, posts.count >= 16 {
-            applyExpandedFeed(fresh, preserveID: keepID)
-            hasMorePages = true
-            SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
-            #if DEBUG
-            print("[Sparks] expand soft-append size=\(posts.count) live=\(keepID.prefix(8))")
-            #endif
-            return
-        }
-
-        // Thin seed: keep history + replace upcoming with discovery queue.
-        let history = Array(posts.prefix(max(0, liveIndex + 1)))
-        var seen = Set(history.map(\.id))
-        var upcoming: [CountryPost] = []
-        for post in fresh {
-            guard seen.insert(post.id).inserted else { continue }
-            guard ReelsRankingEngine.isSparkEligible(post) || post.id == keepID else { continue }
-            let hasPath = MediaURLResolver.videoURL(for: post) != nil
-                || !(post.mediaURL ?? "").isEmpty
-                || post.hasVideo
-            guard hasPath else { continue }
-            upcoming.append(post)
-        }
-
-        if !upcoming.isEmpty || history.count != posts.count {
-            let queue = history + upcoming
-            if queue.count >= 2 {
-                replacePlayerQueue(queue, preserveID: keepID)
-            } else if !upcoming.isEmpty {
-                applyExpandedFeed(upcoming)
-            }
-        } else if posts.count < 4, rankingAnchor.playableVideoURL != nil || rankingAnchor.hasVideo {
+        // Always append-only after open — replacing upcoming mid-session made swipe-back
+        // land on different clips than the ones just above/below the finger.
+        applyExpandedFeed(fresh, preserveID: keepID)
+        if posts.count < 4, rankingAnchor.playableVideoURL != nil || rankingAnchor.hasVideo {
             var tiny = [rankingAnchor]
             for p in fresh where p.id != rankingAnchor.id {
                 tiny.append(p)
                 if tiny.count >= 40 { break }
             }
-            replacePlayerQueue(tiny, preserveID: keepID)
+            if posts.count < 2 {
+                replacePlayerQueue(tiny, preserveID: keepID)
+            } else {
+                applyExpandedFeed(tiny, preserveID: keepID)
+            }
         }
 
-        hasMorePages = posts.count > 12 || !upcoming.isEmpty
+        hasMorePages = posts.count > 12 || !fresh.isEmpty
         SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
         #if DEBUG
         let unviewedAhead = posts.dropFirst(activeIndex + 1)
             .filter { !SparkDiscoveryEngine.isViewed($0) }.count
-        print("[Sparks] player queue size=\(posts.count) live=\(keepID.prefix(8)) unviewedAhead=\(unviewedAhead)")
+        print("[Sparks] expand append-only size=\(posts.count) live=\(keepID.prefix(8)) unviewedAhead=\(unviewedAhead) aheadBefore=\(aheadBefore)")
         #endif
     }
 
@@ -2146,30 +2085,20 @@ struct ReelsScrollViewer: View {
         replacePlayerQueue(history + upcoming, preserveID: liveID)
     }
 
-    /// Always-on endless: move far-behind pages to the tail (TikTok-style loop).
-    /// Tail is always unviewed-first, then watched — never re-recommend watched next.
+    /// Endless recycle only when the ahead pool is exhausted.
+    /// Preserve recent history order so swipe-up / swipe-down stays stable.
     private func rotateQueueForEndless() {
         guard posts.count >= 8 else { return }
         let liveID = posts.indices.contains(activeIndex) ? posts[activeIndex].id : posts[0].id
         let liveIndex = posts.firstIndex(where: { $0.id == liveID }) ?? activeIndex
-        let keepBehind = 3
+        // Long behind window — short keepBehind made swipe-back land on recycled clips.
+        let keepBehind = 32
         let dropCount = max(0, liveIndex - keepBehind)
-        if dropCount >= 4 {
-            let moved = SparkDiscoveryEngine.rankForDiscovery(Array(posts.prefix(dropCount)))
-            let keep = Array(posts.dropFirst(dropCount))
-            replacePlayerQueue(keep + moved, preserveID: liveID)
-            return
-        }
-        // Not enough history — rebuild upcoming: unviewed first, watched at end.
-        let history = Array(posts.prefix(liveIndex + 1))
-        var rest = Array(posts.dropFirst(liveIndex + 1))
-        if rest.count < 6 {
-            rest.append(contentsOf: history.dropLast().prefix(20))
-        }
-        var seen = Set(history.map(\.id))
-        let upcoming = SparkDiscoveryEngine.rankForDiscovery(rest).filter { seen.insert($0.id).inserted }
-        guard !upcoming.isEmpty else { return }
-        replacePlayerQueue(history + upcoming, preserveID: liveID)
+        guard dropCount >= 8 else { return }
+        // Far-behind only → append in original order (no discovery reshuffle of nearby clips).
+        let moved = Array(posts.prefix(dropCount))
+        let keep = Array(posts.dropFirst(dropCount))
+        replacePlayerQueue(keep + moved, preserveID: liveID)
     }
 
     private func loadEarlierReels() async {
