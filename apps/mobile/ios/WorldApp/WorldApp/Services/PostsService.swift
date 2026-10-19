@@ -2546,6 +2546,8 @@ final class PostsService {
         SparkDiscoveryEngine.markWatched(post)
         await MainActor.run {
             EngagementTracker.shared.videoProgress(post: post, progress: 0.05, durationMs: 0, surface: "view")
+            // Strip from upcoming Home rows so the same video cannot scroll in again.
+            HomeFeedStore.shared.noteClipWatched(post)
         }
     }
 
@@ -3004,9 +3006,8 @@ enum SparkDiscoveryEngine {
     }
 
     /// Home feed open / reload / app open order.
-    /// **Hard rule:** if the user already saw a post, it must not appear again until
-    /// every unviewed candidate is exhausted (then least-recently-viewed only).
-    /// Priority while unviewed remain:
+    /// **Hard rule:** watched posts never return on Home (90-day impression suppress).
+    /// Priority:
     /// 1) Your unviewed posts
     /// 2) **Unviewed posts from people you follow** (newest first)
     /// 3) Other unviewed shares / Sparks (session-seeded shuffle → different every open)
@@ -3072,22 +3073,15 @@ enum SparkDiscoveryEngine {
             : seededShuffle(otherUnviewed, seed: sessionSeed)
         let discoveryMixed = weaveSparkAndHubFormats(otherFresh, seed: sessionSeed)
 
-        // HARD RULE: unviewed first; watched automatically at the end of the queue.
+        // HARD RULE (Home): watched never reappear — only unviewed are recommended.
+        // Pull-to-refresh / away reshuffle still use this path; impressions (90d) suppress.
         let fresh = weaveHomeFeed(
             primary: mineFresh + followFresh,
             discovery: discoveryMixed,
             seed: sessionSeed
         )
-        var recycled = viewedPool
-            .sorted { $0.1 < $1.1 }
-            .map(\.0)
-        if recycled.count > 1, sessionSeed != 0 {
-            let rot = Int(sessionSeed % UInt64(recycled.count))
-            recycled = Array(recycled[rot...]) + Array(recycled[..<rot])
-        }
-        if fresh.isEmpty { return recycled }
-        // Endless feed: keep watched at the tail so scroll never dies early.
-        return fresh + recycled
+        _ = viewedPool // retained for diagnostics; intentionally not recycled onto Home
+        return fresh
     }
 
     /// Interleave Sparks and Hubs-badge cards so Home isn't spark-only.

@@ -576,18 +576,17 @@ final class HomeFeedStore {
             }
 
             var newUnviewed: [CountryPost] = []
-            var newViewed: [CountryPost] = []
             for post in clean {
                 guard seen.insert(post.id).inserted else { continue }
                 guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
-                if SparkDiscoveryEngine.isViewed(post) {
-                    newViewed.append(post)
-                } else {
-                    newUnviewed.append(post)
-                }
+                // Never append watched — Home does not recycle viewed clips.
+                if SparkDiscoveryEngine.isViewed(post) { continue }
+                newUnviewed.append(post)
             }
+            // Also strip watched that somehow sat below the pin.
+            let cleanedBelow = preservedBelow.filter { !SparkDiscoveryEngine.isViewed($0) }
 
-            let merged = head + preservedBelow + newUnviewed + newViewed
+            let merged = head + cleanedBelow + newUnviewed
             guard merged.map(\.id) != posts.map(\.id) else { return }
             var t = Transaction()
             t.disablesAnimations = true
@@ -602,29 +601,22 @@ final class HomeFeedStore {
 
         // Cold open (not engaged): full rank is fine — nothing on screen yet to protect.
         let ranked = await rankForSessionAsync(clean + posts)
-        let head: [CountryPost] = []
-        var seen = Set(head.map(\.id))
-        var contentKeys = Set(head.map(\.homeFeedContentKey))
-
+        var seen = Set<String>()
+        var contentKeys = Set<String>()
         var freshTail: [CountryPost] = []
-        var viewedTail: [CountryPost] = []
         freshTail.reserveCapacity(ranked.count)
         for post in ranked {
             guard seen.insert(post.id).inserted else { continue }
             guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
-            if SparkDiscoveryEngine.isViewed(post) {
-                viewedTail.append(post)
-            } else {
-                freshTail.append(post)
-            }
+            if SparkDiscoveryEngine.isViewed(post) { continue }
+            freshTail.append(post)
         }
-        let tail = freshTail + viewedTail
-        guard !tail.isEmpty else { return }
+        guard !freshTail.isEmpty else { return }
 
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) {
-            posts = head + tail
+            posts = freshTail
             windowLimit = min(windowLimit, max(firstWindow, min(posts.count, firstWindow)))
         }
         hasMore = true
@@ -728,12 +720,31 @@ final class HomeFeedStore {
     /// Drop offline Reddit / catalog fakes; keep real UUID-backed posts only
     /// (includes DE Million Post Corpus seeds + their comments).
     /// **Keeps R2 Sparks** — they render as SparkFeedCard on the main feed.
-    /// Unviewed only while any remain in this batch; recycle only when the batch is all-viewed.
+    /// Hard-exclude watched — Home must not recommend the same clip again.
     private static func liveOnlyPosts(_ posts: [CountryPost]) -> [CountryPost] {
         let base = posts.excludingDeletedPosts().forHomeFeed()
         guard !base.isEmpty else { return [] }
-        // Unviewed first, watched at end — keep full pool so home feed stays endless.
-        return SparkDiscoveryEngine.rankForDiscovery(base)
+        return base.filter { !SparkDiscoveryEngine.isViewed($0) }
+    }
+
+    /// After a meaningful watch: drop this clip from upcoming Home rows (keep on-screen pin).
+    func noteClipWatched(_ post: CountryPost) {
+        let keys = Set(SparkDiscoveryEngine.discoveryKeys(for: post))
+        guard !keys.isEmpty, !posts.isEmpty else { return }
+        let pin = pinnedPrefixCount(poolCount: posts.count)
+        let head = Array(posts.prefix(pin))
+        var seen = Set(head.map(\.id))
+        var rest: [CountryPost] = []
+        for p in posts.dropFirst(pin) {
+            guard seen.insert(p.id).inserted else { continue }
+            if keys.contains(p.id) || SparkDiscoveryEngine.isViewed(p) { continue }
+            rest.append(p)
+        }
+        let next = head + rest
+        guard next.map(\.id) != posts.map(\.id) else { return }
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) { posts = next }
     }
 
     // MARK: - Scroll / prefetch
@@ -1018,27 +1029,17 @@ final class HomeFeedStore {
         var seen = existingIDs
         var contentKeys = seenContent
         let pageDeduped = pageItems.dedupeHomeFeedContent()
-        // Infinite scroll: take unviewed first from the page; watched only as tail fillers.
+        // Infinite scroll: unviewed only — never pad the page with watched clips.
         let rankedPage = SparkDiscoveryEngine.rankForDiscovery(pageDeduped)
-        var pageViewed: [CountryPost] = []
         for post in rankedPage {
             guard seen.insert(post.id).inserted else { continue }
             guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
-            if SparkDiscoveryEngine.isViewed(post) {
-                pageViewed.append(post)
-                continue
-            }
+            if SparkDiscoveryEngine.isViewed(post) { continue }
             appended.append(post)
             if appended.count >= pageSize { break }
         }
-        if appended.count < pageSize {
-            for post in pageViewed {
-                appended.append(post)
-                if appended.count >= pageSize { break }
-            }
-        }
 
-        // Empty page → R2 discovery top-up (unviewed first, watched at end).
+        // Empty page → R2 discovery top-up (unviewed only).
         if appended.isEmpty {
             recyclePass += 1
             let forceDeep = recyclePass == 1 || recyclePass % 4 == 0

@@ -47,7 +47,8 @@ enum RecommendationSurface: String, Codable, CaseIterable, Sendable {
                 maxSameCreatorInWindow: 2,
                 creatorWindow: 8,
                 preferUnviewed: true,
-                allowRecycleWhenExhausted: true,
+                // Watched must not reappear on Home — page for more unviewed instead.
+                allowRecycleWhenExhausted: false,
                 latencyBudgetMs: 450
             )
         case .homeFollowing:
