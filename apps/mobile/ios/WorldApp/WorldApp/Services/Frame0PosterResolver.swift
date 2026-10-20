@@ -52,9 +52,9 @@ actor Frame0PosterResolver {
     private var cache: [String: CacheEntry] = [:]
     private var inflight: [String: Task<URL?, Never>] = [:]
     private let cacheTTL: TimeInterval = 6 * 3600
-    /// Cap parallel single-poster GETs — neighbors were opening dozens of connections.
+    /// Cap parallel single-poster GETs — keep low while Feed+Hubs stay dual-mounted.
     private var activeFetches = 0
-    private let maxConcurrentFetches = 4
+    private let maxConcurrentFetches = 2
     private var fetchWaiters: [CheckedContinuation<Void, Never>] = []
     /// Coalesce overlapping prefetch windows (Feed + Hubs + Sparks open-path).
     private var batchInFlight = false
@@ -62,6 +62,9 @@ actor Frame0PosterResolver {
     private var consecutiveBatchFailures = 0
     private var batchCircuitOpenUntil: Date = .distantPast
     private let batchCircuitCooldown: TimeInterval = 20
+    /// Debounce UI notifies — awaiting MainActor per chunk froze scroll (dual-mounted Feed+Hubs).
+    private var pendingNotifyIDs: Set<String> = []
+    private var notifyFlushTask: Task<Void, Never>?
 
     /// Signed Frame 0 URL for a post (derived from media_path / r2_key on the server).
     func posterURL(postID: String, fallback: URL? = nil) async -> URL? {
@@ -167,13 +170,9 @@ actor Frame0PosterResolver {
                 if !mirrored.isEmpty {
                     Frame0PosterCache.storeBatch(mirrored)
                     let urls = Array(mirrored.values)
-                    // Warm CDN bytes so first paint is not an empty black box.
-                    ImageCache.shared.prefetch(urls, maxPixelSize: 420)
-                    NotificationCenter.default.post(
-                        name: .frame0PostersDidUpdate,
-                        object: nil,
-                        userInfo: ["postIDs": Array(mirrored.keys)]
-                    )
+                    // Light CDN warm — never await main; dual-mounted lists already fight for radio.
+                    ImageCache.shared.prefetch(urls, maxPixelSize: 320)
+                    scheduleUINotify(ids: Array(mirrored.keys))
                 }
             } catch {
                 consecutiveBatchFailures += 1
@@ -218,17 +217,40 @@ actor Frame0PosterResolver {
                 cache.removeValue(forKey: first)
             }
             Frame0PosterCache.store(postID, url)
-            NotificationCenter.default.post(
-                name: .frame0PostersDidUpdate,
-                object: nil,
-                userInfo: ["postIDs": [postID]]
-            )
+            scheduleUINotify(ids: [postID])
             return url
         } catch {
             #if DEBUG
             print("[Frame0Poster] \(postID.prefix(8)): \(error.localizedDescription)")
             #endif
             return fallback
+        }
+    }
+
+    /// Fire-and-forget main post, coalesced — never `await MainActor.run` (that stalled the actor behind SwiftUI).
+    private func scheduleUINotify(ids: [String]) {
+        guard !ids.isEmpty else { return }
+        pendingNotifyIDs.formUnion(ids)
+        guard notifyFlushTask == nil else { return }
+        notifyFlushTask = Task {
+            // Short coalesce — do not wait forever on fling (Hubs cards stayed black).
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            var waits = 0
+            while ScrollBudget.isFlinging, waits < 4 {
+                try? await Task.sleep(nanoseconds: 80_000_000)
+                waits += 1
+            }
+            let flushIDs = Array(pendingNotifyIDs)
+            pendingNotifyIDs.removeAll()
+            notifyFlushTask = nil
+            guard !flushIDs.isEmpty else { return }
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .frame0PostersDidUpdate,
+                    object: nil,
+                    userInfo: ["postIDs": flushIDs]
+                )
+            }
         }
     }
 

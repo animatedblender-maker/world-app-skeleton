@@ -105,6 +105,43 @@ final class ImageCache: @unchecked Sendable {
         }
     }
 
+    /// Hubs For you / shelves — every visible card needs a poster. Balanced-light Feed caps
+    /// (prefetch 4) left most hub rows black; this path warms a denser settled band + Frame0.
+    func prefetchHubsListThumbnails(
+        _ posts: [CountryPost],
+        maxPixelSize: CGFloat = YouTubeMediaLayout.hubsListThumbMaxPixel
+    ) {
+        guard !posts.isEmpty else { return }
+        var missingFrame0IDs: [String] = []
+        let urls = posts.compactMap { post -> URL? in
+            if let u = MediaURLResolver.hubsListPosterURL(for: post),
+               MediaURLResolver.isUsablePosterURL(u) {
+                return u
+            }
+            missingFrame0IDs.append(post.id)
+            return nil
+        }
+        let fling = ScrollBudget.isFlinging
+        let cap = fling ? 2 : min(16, max(urls.count, 0))
+        let unique = Array(Set(urls.map(\.absoluteString))).prefix(cap).compactMap(URL.init(string:))
+        let priority: TaskPriority = fling ? .background : .utility
+        for url in unique {
+            if imageIfCached(for: url, maxPixelSize: maxPixelSize) != nil { continue }
+            Task.detached(priority: priority) {
+                _ = await ImageCache.shared.image(for: url, maxPixelSize: maxPixelSize)
+            }
+        }
+        // Frame0 for every missing/expired thumb — not capped by ImageCache prefetch.
+        let frame0IDs = missingFrame0IDs.isEmpty
+            ? posts.prefix(cap).map(\.id)
+            : missingFrame0IDs
+        if !frame0IDs.isEmpty {
+            Task {
+                await Frame0PosterResolver.shared.prefetch(postIDs: Array(frame0IDs))
+            }
+        }
+    }
+
     /// Hubs For you: prefetch a sliding window around `index` (behind + ahead).
     /// Settled-only callers pass a Feed-sized window; mid-fling stays tiny.
     func prefetchHubsWindow(
@@ -121,11 +158,10 @@ final class ImageCache: @unchecked Sendable {
         let lo = max(0, index - useBehind)
         let hi = min(posts.count, index + useAhead + 1)
         guard lo < hi else { return }
-        // Never aggressive mid-fling — that was the For you hitch.
-        prefetchPostThumbnails(
+        // Dense hubs thumb path — Feed prefetchPostThumbnails caps left most cards black.
+        prefetchHubsListThumbnails(
             Array(posts[lo..<hi]),
-            maxPixelSize: maxPixelSize,
-            aggressive: false
+            maxPixelSize: maxPixelSize
         )
     }
 

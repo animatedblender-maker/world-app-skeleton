@@ -383,22 +383,22 @@ async function queryVideoPage(opts: {
   /** When hub_slug column exists, push filter into SQL. */
   sqlSlug?: string | null;
 }): Promise<RawPostRow[]> {
-  const limit = Math.min(Math.max(opts.limit || 40, 1), 120);
+  // Cap high enough for For-you over-fetch (want*10) while classify fills sparse chips.
+  const limit = Math.min(Math.max(opts.limit || 40, 1), 200);
   const cur = decodeCursor(opts.cursor);
   const hasCol = await hasHubSlugColumn();
 
   const slugSelect = hasCol ? 'p.hub_slug' : 'null::text as hub_slug';
   const params: unknown[] = [];
-  // Hubs shelves = long-form first. Keep reel/spark out of thin Hubs pages
-  // (Sparks have their own surface). Still allow video rows that are long-form.
+  // Hubs shelves = long-form video. Keep reel/spark out (Sparks have their own surface).
+  // Index-friendly created_at walk — same fix as home feed (greatest() scanned multi-seconds).
   let where = `
     p.visibility = 'public'
-    and lower(coalesce(p.media_type, '')) = 'video'
+    and p.media_type = 'video'
     and p.media_url is not null
     and length(trim(p.media_url)) > 8
-    and lower(coalesce(p.body, '')) not like '%__story__%'
-    and lower(coalesce(p.body, '')) not like '%__spark__%'
-    and lower(coalesce(p.media_type, '')) not in ('story', 'moment', 'reel', 'spark')
+    and coalesce(p.body, '') not ilike '%__story__%'
+    and coalesce(p.body, '') not ilike '%__spark__%'
   `;
 
   if (hasCol && opts.sqlSlug) {
@@ -409,10 +409,9 @@ async function queryVideoPage(opts: {
     )`;
   }
 
-  // Pre-KNN: page newest uploads first (R2 sync bumps updated_at → feed_at).
   if (cur) {
     params.push(cur.createdAt, cur.id);
-    where += ` and (greatest(p.updated_at, p.created_at), p.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`;
+    where += ` and (p.created_at, p.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`;
   }
 
   params.push(limit);
@@ -428,7 +427,7 @@ async function queryVideoPage(opts: {
       p.comment_count,
       p.created_at,
       p.updated_at,
-      greatest(p.updated_at, p.created_at) as feed_at,
+      p.created_at as feed_at,
       p.country_code,
       p.country_name,
       p.author_id,
@@ -440,12 +439,24 @@ async function queryVideoPage(opts: {
     from public.posts p
     left join public.profiles pr on pr.user_id = p.author_id
     where ${where}
-    order by greatest(p.updated_at, p.created_at) desc, p.id desc
+    order by p.created_at desc, p.id desc
     limit $${params.length}
   `;
 
-  const { rows } = await pool.query<RawPostRow>(sql, params);
-  return rows;
+  try {
+    const timed = await Promise.race([
+      pool.query<RawPostRow>(sql, params),
+      new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 7000)),
+    ]);
+    if (timed === 'timeout') {
+      console.error('[hubs] queryVideoPage timed out after 7s');
+      return [];
+    }
+    return timed.rows;
+  } catch (err: any) {
+    console.error('[hubs] queryVideoPage failed', err?.message ?? err);
+    return [];
+  }
 }
 
 function classifyRow(row: RawPostRow): HubParentSlug {
@@ -471,6 +482,7 @@ export async function fetchShelfPage(input: {
   const hasCol = await hasHubSlugColumn();
 
   const items: ThinShelfCard[] = [];
+  const seen = new Set<string>();
   let cursor = input.cursor ?? null;
   let guard = 0;
   // SQL filter only helps when hub_slug is filled. If column exists but is empty,
@@ -478,18 +490,18 @@ export async function fetchShelfPage(input: {
   let useSqlSlug = hasCol;
   let didClassifyFallback = false;
 
-  while (items.length < want && guard < 8) {
+  while (items.length < want && guard < 16) {
     guard += 1;
-    // Over-fetch so classification still fills the page when SQL can't filter.
-    const batchSize = useSqlSlug ? want * 2 : Math.max(want * 4, 48);
+    // Over-fetch so classification still fills chips when hub_slug is sparse/unfilled.
+    const batchSize = useSqlSlug ? Math.max(want * 4, 64) : Math.max(want * 8, 120);
     const rows = await queryVideoPage({
       limit: batchSize,
       cursor,
       sqlSlug: useSqlSlug ? slug : null,
     });
     if (rows.length === 0) {
-      if (useSqlSlug && !didClassifyFallback && items.length === 0 && !input.cursor) {
-        // Column present but unfilled / wrong density — classify path.
+      if (useSqlSlug && !didClassifyFallback && items.length < want && !input.cursor) {
+        // Column present but thin/unfilled for this chip — classify path over the library.
         useSqlSlug = false;
         didClassifyFallback = true;
         cursor = null;
@@ -502,22 +514,21 @@ export async function fetchShelfPage(input: {
 
     for (const row of rows) {
       const rowSlug = classifyRow(row);
-      cursor = encodeCursor(
-        toIso(row.feed_at ?? row.updated_at ?? row.created_at),
-        row.id,
-      );
+      cursor = encodeCursor(toIso(row.created_at), row.id);
       if (rowSlug !== slug) continue;
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
       items.push(rowToCard(row, rowSlug));
       if (items.length >= want) break;
     }
 
-    // SQL path returned rows but none matched parent after classify → also fall back once.
+    // SQL hub_slug filter returned a thin chip → classify-scan the broader library once.
     if (
       useSqlSlug &&
       !didClassifyFallback &&
-      items.length === 0 &&
+      items.length < want &&
       !input.cursor &&
-      guard >= 2
+      guard >= 1
     ) {
       useSqlSlug = false;
       didClassifyFallback = true;
@@ -569,9 +580,9 @@ export async function fetchForYouPage(input: {
     order = [...order.slice(rot), ...order.slice(0, rot)];
   }
 
-  // Larger candidate window so For you can walk the full long-form library newest-first.
+  // Large candidate window so round-robin can fill dense pages from the R2 long-form library.
   const batch = await queryVideoPage({
-    limit: Math.min(want * 8, 160),
+    limit: Math.min(want * 10, 200),
     cursor: input.cursor,
   });
 
@@ -579,10 +590,7 @@ export async function fetchForYouPage(input: {
   let lastCursor: string | null = null;
   for (const row of batch) {
     const slug = classifyRow(row);
-    lastCursor = encodeCursor(
-      toIso(row.feed_at ?? row.updated_at ?? row.created_at),
-      row.id,
-    );
+    lastCursor = encodeCursor(toIso(row.created_at), row.id);
     const list = buckets.get(slug) ?? [];
     list.push(rowToCard(row, slug));
     buckets.set(slug, list);

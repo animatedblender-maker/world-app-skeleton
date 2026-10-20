@@ -179,7 +179,10 @@ struct FeedView: View {
                                 appState.openPost(post)
                             },
                             onOpenReel: {
-                                appState.openGlobalSparksViewer(startingPost: post)
+                                appState.openGlobalSparksViewer(
+                                    startingPost: post,
+                                    seedPosts: feedReels
+                                )
                             },
                             onPostDeleted: { id in store.removePost(id: id) },
                             onPostUpdated: { updated in store.applyLocalUpdate(updated) },

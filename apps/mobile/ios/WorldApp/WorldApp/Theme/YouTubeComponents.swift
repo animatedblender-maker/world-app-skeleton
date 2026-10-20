@@ -434,8 +434,19 @@ struct SparksHorizontalStrip: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
-                    ForEach(posts) { post in
+                    ForEach(Array(posts.enumerated()), id: \.element.id) { index, post in
                         SparksStripTile(post: post) {
+                            // Deep-warm tapped + next 1–2 before open so Sparks mounts onto live buffers.
+                            let start = ReelsRankingEngine.resolvePlayerStart(post)
+                            if let url = start.playableVideoURL {
+                                SparkWarmPool.shared.warmSingle(postID: start.id, url: url, deep: true)
+                            }
+                            for neighbor in posts.dropFirst(index + 1).prefix(2) {
+                                let n = ReelsRankingEngine.resolvePlayerStart(neighbor)
+                                if let url = n.playableVideoURL {
+                                    SparkWarmPool.shared.warmSingle(postID: n.id, url: url, deep: true)
+                                }
+                            }
                             onOpen(post)
                         }
                     }

@@ -30,7 +30,7 @@ struct YouTubeAppView: View {
     /// Full ranked For you pool (endless scroll grows the display window from this).
     @State private var hubsForYouPool: [CountryPost] = []
     /// How many ranked rows LazyVStack may show (grows on scroll — never ends).
-    @State private var hubsDisplayLimit: Int = 24
+    @State private var hubsDisplayLimit: Int = 36
     @State private var isLoadingMoreHubs = false
     @State private var hubsLoadMoreQueued = false
     /// Coalesce mid-fling settle top-ups / thumb warms (onAppear storms).
@@ -47,10 +47,9 @@ struct YouTubeAppView: View {
     /// Bumps whenever we intentionally re-roll Hubs surfaces (tab enter / home return).
     @State private var hubsVisitEpoch: Int = 0
 
-    /// First paint window — small LazyVStack; grows on scroll (endless).
-    /// Keep first paint light; slug pages fill density without mounting 48 rows at once.
-    private static let hubsFirstWindow = 24
-    private static let hubsGrowBy = 16
+    /// First paint window — denser so For you doesn't look empty vs R2 long-form library.
+    private static let hubsFirstWindow = 36
+    private static let hubsGrowBy = 24
     /// Soft memory ceiling — slug pages only; never keep thousands of posts on MainActor.
     /// Pre-KNN session pool — large enough to page deep into the R2 long-form library
     /// without holding all ~300k objects in RAM. Endless scroll keeps fetching past this.
@@ -252,13 +251,12 @@ struct YouTubeAppView: View {
             stableDiscoverVideos = window
         }
         if warmThumbs {
-            // Warm only the newly revealed slice — full-window prefetch was capped/starved.
+            // Warm newly revealed slice with hubs denser thumb path (Feed Balanced light caps starve Hubs).
             let fresh = Array(window.dropFirst(previous).prefix(Self.hubsGrowBy + 4))
             let band = fresh.isEmpty ? Array(window.suffix(8)) : fresh
-            ImageCache.shared.prefetchPostThumbnails(
+            ImageCache.shared.prefetchHubsListThumbnails(
                 band,
-                maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel,
-                aggressive: false
+                maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel
             )
             Task {
                 await Frame0PosterResolver.shared.prefetch(postIDs: band.map(\.id))
@@ -567,16 +565,14 @@ struct YouTubeAppView: View {
             if !allVideos.isEmpty, stableDiscoverVideos.isEmpty {
                 rebuildStableHomeLists(shuffle: false, remountList: false)
             }
-            // 2) Always hit slug thin pages (For you / active chip) — never wait on fat catalog.
-            let longForm = allVideos.filter { !$0.isReel }.count
-            if longForm < Self.hubsFirstWindow {
-                await loadVideos(forceRefresh: false, mode: .fast)
-                guard !Task.isCancelled else { return }
+            // 2) Always hit slug thin pages (For you / active chip) — never park on a thin
+            // disk paint. Soft-merge densifies even when session already has ≥24 rows.
+            await loadVideos(forceRefresh: false, mode: .fast)
+            guard !Task.isCancelled else { return }
+            if hubsForYouPool.count < Self.hubsFirstWindow || stableDiscoverVideos.isEmpty {
                 rebuildStableHomeLists(shuffle: false, remountList: false)
-            } else {
-                isLoading = false
-                butterWarmHubCatalog(allVideos)
             }
+            butterWarmHubCatalog(allVideos)
             PerformanceTelemetry.milestone(
                 "hubs_interactive",
                 surface: "hubs",
@@ -639,7 +635,31 @@ struct YouTubeAppView: View {
                     page = await SlugShelfStore.shared.loadForYou(force: false)
                 }
                 if !page.items.isEmpty {
-                    let filtered = BlockService.shared.filterPosts(page.items)
+                    var filtered = BlockService.shared.filterPosts(page.items)
+                        .filter {
+                            PlayPlatformBridge.isHubsForYouLongForm($0)
+                                || PlayPlatformBridge.belongsInHubsCatalog($0)
+                                || ($0.hasVideo && !$0.isReel)
+                        }
+                    // Sparse chip (unfilled hub_slug) — top up with more thin pages.
+                    if let slug = filter.hubSlug, filtered.count < Self.hubsFirstWindow {
+                        for _ in 0..<3 {
+                            guard SlugShelfStore.shared.hasMore(for: slug) else { break }
+                            let more = await SlugShelfStore.shared.loadMoreShelf(slug)
+                            guard !more.items.isEmpty else { break }
+                            let extra = BlockService.shared.filterPosts(more.items)
+                                .filter {
+                                    PlayPlatformBridge.isHubsForYouLongForm($0)
+                                        || PlayPlatformBridge.belongsInHubsCatalog($0)
+                                        || ($0.hasVideo && !$0.isReel)
+                                }
+                            var seen = Set(filtered.map(\.id))
+                            for p in extra where seen.insert(p.id).inserted {
+                                filtered.append(p)
+                            }
+                            if filtered.count >= Self.hubsFirstWindow { break }
+                        }
+                    }
                     applyHubCatalog(
                         filtered,
                         shuffle: true,
@@ -778,6 +798,12 @@ struct YouTubeAppView: View {
                                 }, onAppearRow: {
                                     // Media session 09: Hubs list = posters/Frame0 only.
                                     ensureMoreForYou(around: index)
+                                    // Always queue Frame0 for the visible row so cards never stay black.
+                                    Task(priority: .utility) {
+                                        await Frame0PosterResolver.shared.prefetch(
+                                            postIDs: [post.id]
+                                        )
+                                    }
                                     // Settled scroll only — Feed-sized window (mid-fling prefetch was jank).
                                     if ScrollBudget.isFlinging {
                                         scheduleSettledThumbWarm(around: index)
@@ -787,8 +813,17 @@ struct YouTubeAppView: View {
                                         posts: stableDiscoverVideos,
                                         around: index,
                                         behind: 1,
-                                        ahead: 4
+                                        ahead: 3
                                     )
+                                    let lo = max(0, index - 1)
+                                    let hi = min(stableDiscoverVideos.count, index + 4)
+                                    if lo < hi {
+                                        Task(priority: .utility) {
+                                            await Frame0PosterResolver.shared.prefetch(
+                                                postIDs: Array(stableDiscoverVideos[lo..<hi].map(\.id))
+                                            )
+                                        }
+                                    }
                                 })
                                 .padding(.bottom, 18)
                             }
@@ -1297,7 +1332,11 @@ struct YouTubeAppView: View {
             byID[post.id] = post
         }
         let all = Array(byID.values)
-        var longForm = all.filter { PlayPlatformBridge.isHubsForYouLongForm($0) }
+        var longForm = all.filter {
+            PlayPlatformBridge.isHubsForYouLongForm($0)
+                || PlayPlatformBridge.belongsInHubsCatalog($0)
+                || ($0.externalRefType?.lowercased() == "hub" && $0.hasVideo && !$0.isReel)
+        }
         // Prefer newer first if we ever hit the extreme memory ceiling.
         if longForm.count > Self.hubsCatalogMemoryCap {
             longForm.sort { ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast) }
@@ -1408,18 +1447,10 @@ struct YouTubeAppView: View {
         if allVideos.isEmpty { isLoading = true }
         errorMessage = nil
 
-        let longFormNow = allVideos.filter { !$0.isReel }.count
         let hadPaint = !allVideos.isEmpty
 
-        // Warm UI: slug page already painted — skip network.
-        if !forceRefresh, mode == .fast, longFormNow >= 8 {
-            isLoading = false
-            butterWarmHubCatalog(allVideos)
-            #if DEBUG
-            print("[Hubs] skip FAST — \(longFormNow) longform (slug cache)")
-            #endif
-            return
-        }
+        // Never skip the thin /v1/hubs page — disk/session paint alone looked "very few".
+        // Soft-merge below densifies without remounting when already painted.
 
         if forceRefresh {
             SlugShelfStore.shared.newSession()
@@ -1436,9 +1467,13 @@ struct YouTubeAppView: View {
 
         if !page.items.isEmpty {
             let filtered = BlockService.shared.filterPosts(page.items)
-                .filter { PlayPlatformBridge.isHubsForYouLongForm($0) || $0.hasVideo }
+                .filter {
+                    PlayPlatformBridge.isHubsForYouLongForm($0)
+                        || PlayPlatformBridge.belongsInHubsCatalog($0)
+                        || ($0.hasVideo && !$0.isReel)
+                }
             if !filtered.isEmpty {
-                if hadPaint, !forceRefresh, mode == .full {
+                if hadPaint, !forceRefresh {
                     softMergeHubCatalog(filtered)
                 } else {
                     applyHubCatalog(
@@ -1452,6 +1487,28 @@ struct YouTubeAppView: View {
                         Array((filtered + allVideos).prefix(SlugShelfStore.maxPerShelf * 2))
                     )
                 }
+                // Sparse chip shelf (hub_slug unfilled) — pull more pages until denser.
+                if let slug = homeFilter.hubSlug,
+                   filtered.count < Self.hubsFirstWindow,
+                   SlugShelfStore.shared.hasMore(for: slug) {
+                    for _ in 0..<3 {
+                        let more = await SlugShelfStore.shared.loadMoreShelf(slug)
+                        guard !more.items.isEmpty else { break }
+                        let extra = BlockService.shared.filterPosts(more.items)
+                            .filter {
+                                PlayPlatformBridge.isHubsForYouLongForm($0)
+                                    || PlayPlatformBridge.belongsInHubsCatalog($0)
+                                    || ($0.hasVideo && !$0.isReel)
+                            }
+                        softMergeHubCatalog(extra)
+                        if hubsForYouPool.count >= Self.hubsFirstWindow
+                            || allVideos.filter({ PlayPlatformBridge.isHubsForYouLongForm($0) }).count
+                                >= Self.hubsFirstWindow {
+                            break
+                        }
+                    }
+                    rebuildStableHomeLists(shuffle: false, remountList: false)
+                }
                 isLoading = false
                 butterWarmHubCatalog(allVideos)
                 if let slug = homeFilter.hubSlug {
@@ -1460,7 +1517,7 @@ struct YouTubeAppView: View {
                     SlugShelfStore.shared.warmNeighbor(of: first)
                 }
                 #if DEBUG
-                print("[Hubs] slug path key=\(key) items=\(filtered.count) force=\(forceRefresh)")
+                print("[Hubs] slug path key=\(key) items=\(filtered.count) force=\(forceRefresh) pool=\(hubsForYouPool.count)")
                 #endif
                 if forceRefresh {
                     Task(priority: .utility) {
@@ -1604,7 +1661,10 @@ struct YouTubeAppView: View {
         }
         ImageCache.shared.prefetchPostThumbnails(warmBand, maxPixelSize: thumbPx, aggressive: false)
         Task(priority: .utility) {
-            await Frame0PosterResolver.shared.prefetch(postIDs: Array(warmBand.prefix(10).map(\.id)))
+            // Every first-paint card needs a Frame0 — expired thumb_url otherwise leaves black cells.
+            await Frame0PosterResolver.shared.prefetch(
+                postIDs: Array(warmBand.prefix(24).map(\.id))
+            )
         }
         // Sparks strip thumbs — much later, only if still on Hubs with no player.
         Task(priority: .background) {

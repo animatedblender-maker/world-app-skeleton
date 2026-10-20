@@ -91,10 +91,9 @@ final class SlugShelfStore {
         Task(priority: .utility) {
             let page = await loadShelf(neighbor, force: false)
             let band = Array(page.items.prefix(SparkWarmPool.MediaBudget.thumbAhead))
-            ImageCache.shared.prefetchPostThumbnails(
+            ImageCache.shared.prefetchHubsListThumbnails(
                 band,
-                maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel,
-                aggressive: false
+                maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel
             )
             await Frame0PosterResolver.shared.prefetch(postIDs: band.map(\.id))
         }
@@ -199,12 +198,11 @@ final class SlugShelfStore {
 
         // Warm full slug page thumbs + Frame 0 only (AV warm is Watch/related).
         let warmBand = Array(
-            (append ? remote.items : state.posts).prefix(SparkWarmPool.MediaBudget.thumbAhead)
+            (append ? remote.items : state.posts).prefix(24)
         )
-        ImageCache.shared.prefetchPostThumbnails(
+        ImageCache.shared.prefetchHubsListThumbnails(
             warmBand,
-            maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel,
-            aggressive: false
+            maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel
         )
         Task {
             await Frame0PosterResolver.shared.prefetch(postIDs: warmBand.map(\.id))
@@ -320,12 +318,11 @@ final class SlugShelfStore {
             print("[SlugShelf] \(url.path) items=\(posts.count) next=\(next != nil)")
             #endif
             // Media session 09: shelf list = posters only. Continuous player warms on open.
-            // prefetchPostThumbnails also Frame0-fills any expired/missing thumbs.
-            let head = Array(posts.prefix(12))
-            ImageCache.shared.prefetchPostThumbnails(
+            // Warm the full first window so For you / chips are not a strip of black cards.
+            let head = Array(posts.prefix(24))
+            ImageCache.shared.prefetchHubsListThumbnails(
                 head,
-                maxPixelSize: 360,
-                aggressive: false
+                maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel
             )
             Task {
                 await Frame0PosterResolver.shared.prefetch(postIDs: head.map(\.id))
