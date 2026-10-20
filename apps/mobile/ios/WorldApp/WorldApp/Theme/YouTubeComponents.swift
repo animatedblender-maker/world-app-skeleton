@@ -620,9 +620,10 @@ struct YouTubeMiniPlayerChrome: View {
                     } label: {
                         Image(systemName: isPlaying ? "pause.fill" : "play.fill")
                             .font(.system(size: btn * 0.38, weight: .bold))
-                            .foregroundStyle(Theme.paper)
+                            // Matte glyph on dark disc — accentBright is matte now (was invisible white-on-white).
+                            .foregroundStyle(Theme.matte)
                             .frame(width: btn, height: btn)
-                            .background(Theme.accentBright, in: Circle())
+                            .background(Theme.ink.opacity(0.72), in: Circle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(isPlaying ? "Pause" : "Play")
@@ -632,8 +633,9 @@ struct YouTubeMiniPlayerChrome: View {
                     } label: {
                         Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                             .font(.system(size: btn * 0.36, weight: .semibold))
-                            .foregroundStyle(Theme.paper)
+                            .foregroundStyle(Theme.matte)
                             .frame(width: btn, height: btn)
+                            .background(Theme.ink.opacity(0.55), in: Circle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(isMuted ? "Unmute" : "Mute")
@@ -641,18 +643,19 @@ struct YouTubeMiniPlayerChrome: View {
                     Button(action: onClose) {
                         Image(systemName: "xmark")
                             .font(.system(size: btn * 0.34, weight: .bold))
-                            .foregroundStyle(Theme.paper)
+                            .foregroundStyle(Theme.matte)
                             .frame(width: btn, height: btn)
+                            .background(Theme.ink.opacity(0.55), in: Circle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Close mini player")
                 }
                 .padding(.horizontal, 6)
                 .padding(.vertical, 4)
-                .background(.ultraThinMaterial, in: Capsule())
+                .background(Theme.ink.opacity(0.28), in: Capsule(style: .continuous))
                 .overlay(
-                    Capsule()
-                        .stroke(Color.white.opacity(0.22), lineWidth: 0.5)
+                    Capsule(style: .continuous)
+                        .stroke(Theme.matte.opacity(0.22), lineWidth: 0.5)
                 )
             }
             .padding(.trailing, 12)
