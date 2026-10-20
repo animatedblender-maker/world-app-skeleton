@@ -753,31 +753,36 @@ async function fetchHomeWrittenRows(opts: {
 }
 
 /**
- * Home feed thin page — video + written/image mix.
- * Rank by greatest(updated_at, created_at) so R2-synced / recently updated
- * media floats to the top. Written posts get a reserved quota each page so
- * R2 video storms cannot bury text forever. Dual cursor pages both lanes.
+ * Home feed thin page — Sparks/Hubs video first.
+ * Written/text is extremely rare (~1 per 50 media) so the feed stays smooth.
+ * Media query excludes text/image rows; a tiny written lane fills the rare slot.
  */
 export async function fetchHomeFeedPage(input: {
   limit?: number;
   cursor?: string | null;
 }): Promise<SurfacePage> {
   const want = Math.min(Math.max(Number(input.limit) || 24, 1), 64);
-  // ~1 written card per ~10–12 Sparks/Hubs (still in the mix, much lighter).
-  const mediaBetweenWritten = 11;
-  const textQuota = Math.min(
-    Math.max(1, Math.ceil(want / (mediaBetweenWritten + 1))),
-    Math.max(1, want - 4),
-  );
-  const mediaWant = Math.max(want, want - textQuota + mediaBetweenWritten);
+  // ~1 written card per ~50 Sparks/Hubs — video feed stays dominant.
+  const mediaBetweenWritten = 50;
+  // At most one text card per thin page; often none when the media lane is full.
+  const textQuota = want >= 40 ? 1 : 0;
+  const mediaWant = want;
   const homeCur = decodeHomeFeedCursor(input.cursor);
   const hasCol = await hasHubSlugColumn();
   const slugSelect = hasCol ? 'p.hub_slug' : 'null::text as hub_slug';
   const params: unknown[] = [];
+  // Video-only media lane — text/image posts must not consume video slots.
   let where = `
     p.visibility = 'public'
-    and lower(coalesce(p.media_type, '')) not in ('story', 'moment')
+    and lower(coalesce(p.media_type, '')) not in ('story', 'moment', 'none', 'text', 'image', 'photo')
     and lower(coalesce(p.body, '')) not like '%__story__%'
+    and (
+      lower(coalesce(p.media_type, '')) in ('video', 'reel', 'spark')
+      or (
+        p.media_url is not null
+        and length(trim(coalesce(p.media_url, ''))) > 4
+      )
+    )
   `;
   if (homeCur.media) {
     params.push(homeCur.media.createdAt, homeCur.media.id);
@@ -798,28 +803,21 @@ export async function fetchHomeFeedPage(input: {
     order by greatest(p.updated_at, p.created_at) desc, p.id desc
     limit $${params.length}
   `;
-  const [{ rows: mediaRows }, writtenRows] = await Promise.all([
-    pool.query<RawPostRow>(sql, params),
-    fetchHomeWrittenRows({
-      limit: textQuota + 2,
-      cursor: homeCur.text,
-      slugSelect,
-    }),
-  ]);
+  const mediaQuery = pool.query<RawPostRow>(sql, params);
+  const writtenQuery =
+    textQuota > 0
+      ? fetchHomeWrittenRows({
+          limit: 1,
+          cursor: homeCur.text,
+          slugSelect,
+        })
+      : Promise.resolve([] as RawPostRow[]);
+  const [{ rows: mediaRows }, writtenRows] = await Promise.all([mediaQuery, writtenQuery]);
 
-  // Prefer dedicated written lane; also keep any text that slipped into media page.
-  const writtenFromMedia = mediaRows.filter(isWrittenFeedRow);
   const mediaOnly = mediaRows.filter((r) => !isWrittenFeedRow(r));
-  const writtenSeen = new Set<string>();
-  const writtenMerged: RawPostRow[] = [];
-  for (const row of [...writtenRows, ...writtenFromMedia]) {
-    if (!writtenSeen.has(row.id)) {
-      writtenSeen.add(row.id);
-      writtenMerged.push(row);
-    }
-  }
+  const writtenMerged = writtenRows.filter(isWrittenFeedRow).slice(0, 1);
 
-  // Weave: ~1 written per 10–12 media (media-first head).
+  // Weave: media-first; insert at most one written after ~50 media when present.
   const woven: RawPostRow[] = [];
   let mi = 0;
   let ti = 0;
@@ -862,8 +860,8 @@ export async function fetchHomeFeedPage(input: {
     : homeCur.text;
   const hasMore =
     mediaOnly.length >= mediaWant ||
-    writtenRows.length >= textQuota ||
-    liveItems.length >= want;
+    liveItems.length >= want ||
+    (textQuota > 0 && writtenRows.length >= textQuota);
   const nextCursor = hasMore
     ? encodeHomeFeedCursor({ media: nextMedia, text: nextText })
     : null;

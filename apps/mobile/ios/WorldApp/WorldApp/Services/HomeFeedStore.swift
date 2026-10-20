@@ -524,13 +524,8 @@ final class HomeFeedStore {
                 limit: 6,
                 forceRefresh: false
             )
-            async let textTop = PostsService.shared.homeFeedTextTopUp(
-                excluding: exclude,
-                limit: 2,
-                forceRefresh: false
-            )
-            // Soft-merge weaves written into the tail — never dump a text block on top.
-            let extra = (await sparkTop) + (await hubTop) + (await textTop)
+            // No text top-up on the hot path — Home stays Sparks/Hubs-smooth; rare text comes from thin feed.
+            let extra = (await sparkTop) + (await hubTop)
             guard gen == self.generation else { return }
             if !extra.isEmpty {
                 await self.softMergePreservingHead(extra)
@@ -637,8 +632,8 @@ final class HomeFeedStore {
         )
     }
 
-    /// Media cards between written inserts (~1 text per 10–12 Sparks/Hubs).
-    private static let homeWrittenMediaGap = 11
+    /// Media cards between written inserts (~1 text per ~50 Sparks/Hubs).
+    private static let homeWrittenMediaGap = 50
 
     /// Keep written cards in the mix — never a written block at the head.
     private static func weaveWrittenAmongMedia(_ posts: [CountryPost]) -> [CountryPost] {
@@ -652,23 +647,27 @@ final class HomeFeedStore {
                 media.append(p)
             }
         }
-        guard !written.isEmpty, !media.isEmpty else { return posts }
+        guard !media.isEmpty else { return media.isEmpty ? posts : media }
+        // Cap density — at most ~1 text per 50 media (drop the rest from this pass).
+        let maxWritten = max(0, media.count / Self.homeWrittenMediaGap)
+        let writtenCap = Array(written.prefix(maxWritten))
+        guard !writtenCap.isEmpty else { return media }
         var out: [CountryPost] = []
-        out.reserveCapacity(posts.count)
+        out.reserveCapacity(media.count + writtenCap.count)
         var mi = 0
         var wi = 0
         var sinceWritten = 0
-        while mi < media.count || wi < written.count {
-            let wantWritten = wi < written.count
+        while mi < media.count || wi < writtenCap.count {
+            let wantWritten = wi < writtenCap.count
                 && (mi >= media.count || (sinceWritten >= Self.homeWrittenMediaGap && out.count >= 2))
             if wantWritten {
-                out.append(written[wi]); wi += 1
+                out.append(writtenCap[wi]); wi += 1
                 sinceWritten = 0
             } else if mi < media.count {
                 out.append(media[mi]); mi += 1
                 sinceWritten += 1
-            } else if wi < written.count {
-                out.append(written[wi]); wi += 1
+            } else if wi < writtenCap.count {
+                out.append(writtenCap[wi]); wi += 1
                 sinceWritten = 0
             } else {
                 break
@@ -1030,10 +1029,7 @@ final class HomeFeedStore {
             async let hubTop = PostsService.shared.homeFeedHubTopUp(
                 excluding: exclude, limit: 10, forceRefresh: false
             )
-            async let textTop = PostsService.shared.homeFeedTextTopUp(
-                excluding: exclude, limit: 3, forceRefresh: false
-            )
-            let extra = (await sparkTop) + (await hubTop) + (await textTop)
+            let extra = (await sparkTop) + (await hubTop)
             guard gen == self.generation, !extra.isEmpty else {
                 await self.ensureBufferedPool()
                 return
@@ -1107,13 +1103,12 @@ final class HomeFeedStore {
             if appended.count >= pageSize { break }
         }
 
-        // Empty thin page → light R2 top-up (unviewed). Keep this path fast.
+        // Empty thin page → Sparks + Hubs top-up only (video-smooth). Rare text stays on thin feed.
         if appended.isEmpty {
             recyclePass += 1
             let exclude = seen
-            let textLimit = max(1, pageSize / (Self.homeWrittenMediaGap + 1))
             let hubLimit = max(2, pageSize / 3)
-            let sparkLimit = max(1, pageSize - hubLimit - textLimit)
+            let sparkLimit = max(1, pageSize - hubLimit)
             // Never forceRefresh mid-scroll — that reset the Sparks cursor and stalled the tail.
             async let sparkTop = PostsService.shared.homeFeedSparkTopUp(
                 excluding: exclude,
@@ -1125,36 +1120,18 @@ final class HomeFeedStore {
                 limit: hubLimit,
                 forceRefresh: false
             )
-            async let textTop = PostsService.shared.homeFeedTextTopUp(
-                excluding: exclude,
-                limit: textLimit,
-                forceRefresh: false
-            )
             let sparks = await sparkTop
             let hubs = await hubTop
-            let texts = await textTop
             var mixed: [CountryPost] = []
             var si = 0
             var hi = 0
-            var ti = 0
-            var sinceWritten = 0
-            while mixed.count < pageSize, si < sparks.count || hi < hubs.count || ti < texts.count {
-                if ti < texts.count,
-                   (si >= sparks.count && hi >= hubs.count) || sinceWritten >= Self.homeWrittenMediaGap {
-                    mixed.append(texts[ti]); ti += 1
-                    sinceWritten = 0
-                } else if hi < hubs.count, mixed.count % 3 == 2 || si >= sparks.count {
+            while mixed.count < pageSize, si < sparks.count || hi < hubs.count {
+                if hi < hubs.count, mixed.count % 3 == 2 || si >= sparks.count {
                     mixed.append(hubs[hi]); hi += 1
-                    sinceWritten += 1
                 } else if si < sparks.count {
                     mixed.append(sparks[si]); si += 1
-                    sinceWritten += 1
                 } else if hi < hubs.count {
                     mixed.append(hubs[hi]); hi += 1
-                    sinceWritten += 1
-                } else if ti < texts.count {
-                    mixed.append(texts[ti]); ti += 1
-                    sinceWritten = 0
                 } else {
                     break
                 }

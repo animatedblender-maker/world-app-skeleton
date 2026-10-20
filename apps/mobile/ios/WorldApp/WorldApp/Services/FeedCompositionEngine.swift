@@ -298,9 +298,9 @@ enum FeedCompositionEngine {
             if isHub, sparkStreak >= 3 { s += 2.8 }
             if isSpark, hubStreak >= 2 { s += 1.2 }
             if isSpark, sparkStreak >= 3 { s -= 1.4 }
-            // Gentle pull after a long media streak (~10–12) — never a written pile at the head.
-            if isWritten, mediaStreak >= 11, writtenStreak == 0 { s += 1.4 }
-            if isWritten, writtenStreak >= 1 { s -= 2.2 }
+            // Rare pull after a long media streak (~50) — never a written pile at the head.
+            if isWritten, mediaStreak >= 50, writtenStreak == 0 { s += 1.0 }
+            if isWritten, writtenStreak >= 1 { s -= 3.0 }
         }
 
         return s

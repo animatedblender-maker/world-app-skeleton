@@ -3149,10 +3149,10 @@ enum SparkDiscoveryEngine {
         return weaveWrittenThroughFeed(fresh)
     }
 
-    /// Media cards between written inserts (~1 text per 10–12 Sparks/Hubs).
-    private static let homeWrittenMediaGap = 11
+    /// Media cards between written inserts (~1 text per ~50 Sparks/Hubs).
+    private static let homeWrittenMediaGap = 50
 
-    /// ~1 written card per 10–12 media; media owns the first slots.
+    /// ~1 written card per ~50 media; media owns the first slots.
     private static func weaveWrittenThroughFeed(_ posts: [CountryPost]) -> [CountryPost] {
         guard posts.count > 1 else { return posts }
         var media: [CountryPost] = []
@@ -3164,23 +3164,26 @@ enum SparkDiscoveryEngine {
                 media.append(p)
             }
         }
-        guard !written.isEmpty, !media.isEmpty else { return posts }
+        guard !media.isEmpty else { return media.isEmpty ? posts : media }
+        let maxWritten = max(0, media.count / homeWrittenMediaGap)
+        let writtenCap = Array(written.prefix(maxWritten))
+        guard !writtenCap.isEmpty else { return media }
         var out: [CountryPost] = []
-        out.reserveCapacity(posts.count)
+        out.reserveCapacity(media.count + writtenCap.count)
         var mi = 0
         var wi = 0
         var sinceWritten = 0
-        while mi < media.count || wi < written.count {
-            let wantWritten = wi < written.count
+        while mi < media.count || wi < writtenCap.count {
+            let wantWritten = wi < writtenCap.count
                 && (mi >= media.count || (sinceWritten >= homeWrittenMediaGap && out.count >= 2))
             if wantWritten {
-                out.append(written[wi]); wi += 1
+                out.append(writtenCap[wi]); wi += 1
                 sinceWritten = 0
             } else if mi < media.count {
                 out.append(media[mi]); mi += 1
                 sinceWritten += 1
-            } else if wi < written.count {
-                out.append(written[wi]); wi += 1
+            } else if wi < writtenCap.count {
+                out.append(writtenCap[wi]); wi += 1
                 sinceWritten = 0
             } else {
                 break
@@ -3217,7 +3220,7 @@ enum SparkDiscoveryEngine {
         var h = hubs
         var w = written
         var rng = FeedSeededRNG(seed: seed == 0 ? 0xBEEF : seed ^ 0xA0B511)
-        // Roughly 1 Hubs per ~3 Sparks; insert a written card about every 10–12 media cards.
+        // Roughly 1 Hubs per ~3 Sparks; insert a written card about every ~50 media cards.
         var sinceHub = 0
         var sinceWritten = 0
         while !s.isEmpty || !h.isEmpty || !w.isEmpty {
