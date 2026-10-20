@@ -530,7 +530,6 @@ struct SharePostSheet: View {
     /// Stay in Sparks after in-app share actions (no chat navigation / no Sparks dismiss).
     var keepsSparksPlaying: Bool = false
 
-    @State private var showSystemShare = false
     @State private var showMessagePicker = false
     @State private var showRepeatShareConfirm = false
     @State private var busy = false
@@ -557,9 +556,30 @@ struct SharePostSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
-            List {
-                Section {
+        VStack(spacing: 0) {
+            // Matterya header — not Apple toolbar Cancel.
+            HStack {
+                Text("Share")
+                    .font(.system(.title3, design: .serif).weight(.semibold))
+                    .foregroundStyle(Theme.ink)
+                Spacer()
+                Button(action: closeShareUI) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(Theme.ink)
+                        .frame(width: 32, height: 32)
+                        .background(Theme.matte, in: Circle())
+                        .overlay(Circle().stroke(Theme.border, lineWidth: 0.5))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close")
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 18)
+            .padding(.bottom, 12)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
                     VStack(alignment: .leading, spacing: 6) {
                         if let headline = post.displayHeadline {
                             Text(headline)
@@ -571,26 +591,37 @@ struct SharePostSheet: View {
                                 .foregroundStyle(Theme.inkMuted)
                         }
                     }
-                    .padding(.vertical, 4)
-                }
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Theme.matte)
+                    )
 
-                Section("Outside Matterya") {
-                    shareRow("Share anywhere", subtitle: "Messages, Mail, social apps", icon: "square.and.arrow.up", tint: Theme.accentBright) {
-                        showSystemShare = true
-                    }
-                    shareRow("Copy link", subtitle: "Share the public post link", icon: "link", tint: Theme.accent) {
-                        ShareService.shared.copyLink(for: .post(post))
-                        appState.showToast("Link copied")
-                        closeShareUI()
-                    }
-                }
+                    Text("On Matterya")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.inkMuted)
+                        .textCase(.uppercase)
+                        .padding(.horizontal, 4)
 
-                Section("Inside Matterya") {
-                    shareRow(
-                        MatteryaCopy.shareToYourFeed,
-                        subtitle: shareToFeedSubtitle,
-                        icon: "rectangle.stack.fill",
-                        tint: Theme.accent
+                    matteryaShareRow(
+                        title: isSparkShare ? "Send \(MatteryaCopy.spark) in chat" : "Send in Messages",
+                        subtitle: isSparkShare
+                            ? "Friend opens full-screen \(MatteryaCopy.sparks)"
+                            : "Private chat with a friend",
+                        icon: isSparkShare ? "sparkles" : "paperplane.fill"
+                    ) {
+                        showMessagePicker = true
+                    }
+
+                    matteryaShareRow(
+                        title: isSparkShare
+                            ? "Share as \(MatteryaCopy.spark)"
+                            : MatteryaCopy.shareToYourFeed,
+                        subtitle: isSparkShare
+                            ? "Adds this clip to your feed & \(MatteryaCopy.sparks)"
+                            : shareToFeedSubtitle,
+                        icon: isSparkShare ? "bolt.fill" : "rectangle.stack.fill"
                     ) {
                         if appState.needsRepeatShareWarning(for: post) {
                             showRepeatShareConfirm = true
@@ -598,72 +629,106 @@ struct SharePostSheet: View {
                             Task { await shareToCountryFeed() }
                         }
                     }
-                    shareRow(
-                        isSparkShare ? "Send \(MatteryaCopy.spark) in chat" : "Send in message",
-                        subtitle: isSparkShare
-                            ? "Friend opens full-screen \(MatteryaCopy.sparks)"
-                            : "Private chat with a friend",
-                        icon: isSparkShare ? "sparkles" : "paperplane",
-                        tint: isSparkShare ? Theme.reelsAccent : Theme.facebookBlue
-                    ) {
-                        showMessagePicker = true
-                    }
+
                     if !keepsSparksPlaying {
-                        shareRow("Repost with quote", subtitle: "Write your take on your home feed", icon: "quote.bubble", tint: Theme.ink) {
+                        matteryaShareRow(
+                            title: "Repost with quote",
+                            subtitle: "Write your take on your home feed",
+                            icon: "quote.bubble"
+                        ) {
                             Task { await repostWithQuote() }
                         }
                     }
-                }
 
-                if let feedback {
-                    Section {
+                    matteryaShareRow(
+                        title: "Copy link",
+                        subtitle: "Paste anywhere — still opens in Matterya",
+                        icon: "link"
+                    ) {
+                        ShareService.shared.copyLink(for: .post(post))
+                        appState.showToast("Link copied")
+                        closeShareUI()
+                    }
+
+                    if let feedback {
                         Text(feedback)
                             .font(.caption)
                             .foregroundStyle(Theme.inkMuted)
+                            .padding(.horizontal, 4)
                     }
                 }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 28)
             }
-            .navigationTitle("Share")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { closeShareUI() }
-                }
+        }
+        .background(Theme.canvas)
+        .confirmationDialog(
+            "Share again?",
+            isPresented: $showRepeatShareConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Share Again") {
+                Task { await shareToCountryFeed() }
             }
-            .sheet(isPresented: $showSystemShare) {
-                ShareSheet(items: ShareService.shared.activityItems(for: .post(post))) {
-                    // System share finished — stay in Sparks when overlay mode.
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(repeatShareWarningMessage)
+        }
+        .sheet(isPresented: $showMessagePicker) {
+            ShareMessagePickerSheet(post: post) { conversationID in
+                if keepsSparksPlaying {
+                    appState.showToast("Sent in message")
                     closeShareUI()
-                }
-            }
-            .confirmationDialog(
-                "Share again?",
-                isPresented: $showRepeatShareConfirm,
-                titleVisibility: .visible
-            ) {
-                Button("Share Again") {
-                    Task { await shareToCountryFeed() }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text(repeatShareWarningMessage)
-            }
-            .sheet(isPresented: $showMessagePicker) {
-                ShareMessagePickerSheet(post: post) { conversationID in
-                    if keepsSparksPlaying {
-                        // Silent send — toast only, keep watching.
-                        appState.showToast("Sent in message")
-                        closeShareUI()
-                    } else {
-                        appState.openConversation(id: conversationID)
-                        appState.showToast("Sent in message")
-                        closeShareUI()
-                    }
+                } else {
+                    appState.openConversation(id: conversationID)
+                    appState.showToast("Sent in message")
+                    closeShareUI()
                 }
             }
         }
         // Sheet-only chrome (feed share). Sparks uses an overlay host — no presentation detents.
         .modifier(ShareSheetPresentationModifier(enabled: !keepsSparksPlaying))
+    }
+
+    private func matteryaShareRow(
+        title: String,
+        subtitle: String,
+        icon: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                Image(systemName: icon)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Theme.matte)
+                    .frame(width: 40, height: 40)
+                    .background(Theme.ink, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(Theme.ink)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(Theme.inkMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.inkMuted)
+            }
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Theme.surface)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Theme.border.opacity(0.85), lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(busy)
     }
 
     private var shareToFeedSubtitle: String {
@@ -680,32 +745,6 @@ struct SharePostSheet: View {
             return "This post is already on your feed. Share it again anyway?"
         }
         return "You've shared this post before. Do you still want to add it to your feed again?"
-    }
-
-    private func shareRow(
-        _ title: String,
-        subtitle: String,
-        icon: String,
-        tint: Color,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 14) {
-                Image(systemName: icon)
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(tint)
-                    .frame(width: 28)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .foregroundStyle(Theme.ink)
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(Theme.inkMuted)
-                }
-                Spacer()
-            }
-        }
-        .disabled(busy)
     }
 
     private func shareToCountryFeed() async {

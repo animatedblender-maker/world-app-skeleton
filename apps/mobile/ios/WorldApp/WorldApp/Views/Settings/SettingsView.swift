@@ -36,15 +36,17 @@ struct SettingsView: View {
                         appState.navigate(to: .editProfile)
                     } label: {
                         settingsActionLabel("Edit profile", systemImage: "person.crop.circle")
+                            .matteryaSettingsCard()
                     }
-                    .buttonStyle(MatteryaSettingsRowButtonStyle())
+                    .buttonStyle(.plain)
 
                     Button {
                         appState.logout()
                     } label: {
                         settingsActionLabel("Log out", systemImage: "rectangle.portrait.and.arrow.right")
+                            .matteryaSettingsCard(destructive: true)
                     }
-                    .buttonStyle(MatteryaSettingsRowButtonStyle(destructive: true))
+                    .buttonStyle(.plain)
                 }
 
                 settingsSection(
@@ -59,8 +61,9 @@ struct SettingsView: View {
                             title: "Deactivate account",
                             subtitle: "Hide your profile and pause activity. You can sign in again anytime to reactivate."
                         )
+                        .matteryaSettingsCard()
                     }
-                    .buttonStyle(MatteryaSettingsRowButtonStyle())
+                    .buttonStyle(.plain)
                     .disabled(accountActionBusy)
 
                     Button {
@@ -73,8 +76,9 @@ struct SettingsView: View {
                             subtitle: "Permanently delete your account, profile, and posts. This cannot be undone.",
                             destructive: true
                         )
+                        .matteryaSettingsCard(destructive: true)
                     }
-                    .buttonStyle(MatteryaSettingsRowButtonStyle(destructive: true))
+                    .buttonStyle(.plain)
                     .disabled(accountActionBusy)
 
                     if let accountActionError {
@@ -123,8 +127,9 @@ struct SettingsView: View {
                         }
                     } label: {
                         settingsActionLabel("Open iOS Settings", systemImage: "gearshape")
+                            .matteryaSettingsCard()
                     }
-                    .buttonStyle(MatteryaSettingsRowButtonStyle())
+                    .buttonStyle(.plain)
                 }
 
                 settingsSection(
@@ -135,22 +140,28 @@ struct SettingsView: View {
                         MessagePrivacySettingsView()
                     } label: {
                         settingsActionLabel("Message requests", systemImage: "envelope.badge", showsChevron: true)
+                            .matteryaSettingsCard()
                     }
-                    .buttonStyle(MatteryaSettingsRowButtonStyle())
+                    .buttonStyle(.plain)
+                    .tint(Theme.ink)
 
                     NavigationLink {
                         BlockedAccountsView()
                     } label: {
                         settingsActionLabel("Blocked accounts", systemImage: "hand.raised", showsChevron: true)
+                            .matteryaSettingsCard()
                     }
-                    .buttonStyle(MatteryaSettingsRowButtonStyle())
+                    .buttonStyle(.plain)
+                    .tint(Theme.ink)
 
                     NavigationLink {
                         PrivacyInfoView()
                     } label: {
                         settingsActionLabel("Data & privacy", systemImage: "lock.shield", showsChevron: true)
+                            .matteryaSettingsCard()
                     }
-                    .buttonStyle(MatteryaSettingsRowButtonStyle())
+                    .buttonStyle(.plain)
+                    .tint(Theme.ink)
                 }
 
                 settingsSection(title: "Support") {
@@ -158,14 +169,19 @@ struct SettingsView: View {
                     settingsInfoRow("Version", appVersion)
                     Link(destination: URL(string: "https://matterya.com")!) {
                         settingsActionLabel("Help center", systemImage: "questionmark.circle", showsChevron: true)
+                            .matteryaSettingsCard()
                     }
-                    .buttonStyle(MatteryaSettingsRowButtonStyle())
+                    .buttonStyle(.plain)
+                    .tint(Theme.ink)
                 }
             }
             .padding(.horizontal, Theme.pagePadding)
             .padding(.vertical, 18)
         }
         .navigationTitle("Settings")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(Theme.canvas, for: .navigationBar)
+        .tint(Theme.ink)
         .background(Theme.canvas)
         .task {
             pushEnabled = await PushNotificationService.shared.notificationsAuthorized()
@@ -472,8 +488,9 @@ private struct MessagePrivacySettingsView: View {
                                     .foregroundStyle(Theme.ink)
                             }
                         }
+                        .matteryaSettingsCard()
                     }
-                    .buttonStyle(MatteryaSettingsRowButtonStyle())
+                    .buttonStyle(.plain)
                     .disabled(isSaving)
                 }
 

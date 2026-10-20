@@ -40,11 +40,10 @@ struct EditProfileView: View {
                                         ProgressView().tint(Theme.ink)
                                     }
                                     Text(uploadingAvatar ? "Uploading…" : "Change avatar")
-                                        .font(.subheadline.weight(.semibold))
                                 }
-                                .frame(maxWidth: .infinity)
+                                .matteryaSecondaryFill()
                             }
-                            .buttonStyle(MatteryaSecondaryButtonStyle())
+                            .buttonStyle(.plain)
                             .disabled(busy || uploadingAvatar)
                             .onChange(of: selectedPhoto) { _, item in
                                 guard let item else { return }
@@ -101,9 +100,9 @@ struct EditProfileView: View {
                         Task { await detectLocation() }
                     } label: {
                         Text(detectingLocation ? "Detecting…" : "Detect location again")
-                            .frame(maxWidth: .infinity)
+                            .matteryaSecondaryFill()
                     }
-                    .buttonStyle(MatteryaSecondaryButtonStyle())
+                    .buttonStyle(.plain)
                     .disabled(detectingLocation || busy || uploadingAvatar)
                 }
 
@@ -144,11 +143,11 @@ struct EditProfileView: View {
                         Spacer()
                         if busy { ProgressView().tint(Theme.paper) }
                         Text(busy ? "Saving…" : "Save profile")
-                            .fontWeight(.semibold)
                         Spacer()
                     }
+                    .matteryaPrimaryFill()
                 }
-                .buttonStyle(PrimaryButtonStyle())
+                .buttonStyle(.plain)
                 .disabled(busy || uploadingAvatar || displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .opacity(
                     busy || uploadingAvatar || displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -159,9 +158,9 @@ struct EditProfileView: View {
                     dismiss()
                 } label: {
                     Text("Cancel")
-                        .frame(maxWidth: .infinity)
+                        .matteryaSecondaryFill()
                 }
-                .buttonStyle(MatteryaSecondaryButtonStyle())
+                .buttonStyle(.plain)
                 .disabled(busy || uploadingAvatar)
             }
             .padding(.horizontal, Theme.pagePadding)

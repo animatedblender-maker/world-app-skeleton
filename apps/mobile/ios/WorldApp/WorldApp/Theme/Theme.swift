@@ -258,12 +258,7 @@ extension View {
 struct PrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(Theme.paper)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 12)
-            .background(Theme.ink, in: RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous))
-            .opacity(configuration.isPressed ? 0.82 : 1)
+            .matteryaPrimaryFill(pressed: configuration.isPressed)
     }
 }
 
@@ -273,18 +268,57 @@ struct MatteryaSettingsRowButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.body.weight(.medium))
+            .matteryaSettingsCard(
+                destructive: destructive,
+                pressed: configuration.isPressed
+            )
+    }
+}
+
+extension View {
+    /// Bake Matterya paper chrome into the label itself — survives NavigationLink / PhotosPicker
+    /// (those ignore ButtonStyle and fall back to Apple blue/bordered).
+    func matteryaSettingsCard(destructive: Bool = false, pressed: Bool = false) -> some View {
+        font(.body.weight(.medium))
             .foregroundStyle(destructive ? Theme.danger : Theme.ink)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(configuration.isPressed ? Theme.matteDeep : Theme.surface)
+                    .fill(pressed ? Theme.matteDeep : Theme.surface)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .stroke(Theme.border.opacity(0.85), lineWidth: 0.5)
+            )
+    }
+
+    /// Solid Matterya control fill (ink pill) — primary actions.
+    func matteryaPrimaryFill(pressed: Bool = false) -> some View {
+        font(.subheadline.weight(.semibold))
+            .foregroundStyle(Theme.paper)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
+                    .fill(Theme.ink.opacity(pressed ? 0.82 : 1))
+            )
+    }
+
+    /// Matte outlined Matterya control — secondary actions.
+    func matteryaSecondaryFill(pressed: Bool = false) -> some View {
+        font(.subheadline.weight(.semibold))
+            .foregroundStyle(Theme.ink)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
+                    .fill(pressed ? Theme.matteDeep : Theme.matte)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
+                    .stroke(Theme.border, lineWidth: 0.5)
             )
     }
 }
@@ -301,19 +335,7 @@ struct SecondaryButtonStyle: ButtonStyle {
 struct MatteryaSecondaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(Theme.ink)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 11)
-            .background(
-                RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
-                    .fill(configuration.isPressed ? Theme.matteDeep : Theme.matte)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
-                    .stroke(Theme.border, lineWidth: 0.5)
-            )
-            .opacity(configuration.isPressed ? 0.9 : 1)
+            .matteryaSecondaryFill(pressed: configuration.isPressed)
     }
 }
 
