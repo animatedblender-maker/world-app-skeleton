@@ -1928,8 +1928,8 @@ private struct MatteryaScrubber: View {
 
 /// Plays video when it wins feed focus (highest on-screen ratio). Only one plays at a time.
 ///
-/// **Media session (butter-smooth 09):** non-winners are **poster only** — no AVPlayer,
-/// no MatteryaHubPlayer, no warm pool. Mount the heavy player stack only while `playGate`.
+/// Mounts a **silent preload** as the card approaches (~10% visible), then flips to
+/// active play on FeedVideoFocus win — claims SparkWarmPool buffer for instant start.
 /// In-feed chrome: scrub, pause, mute — does not navigate away.
 struct InFrameVideoPlayer: View {
     @Environment(AppState.self) private var appState
@@ -1968,6 +1968,8 @@ struct InFrameVideoPlayer: View {
     @State private var isFocusWinner = false
     /// Debounced play gate — brief focus blips must not hard-pause mid-clip.
     @State private var playGate = false
+    /// Silent AV mount while approaching — so focus win claims a ready buffer.
+    @State private var preloadGate = false
     /// Instagram/YT: keep poster until AV is producing frames (never flash black).
     @State private var framesReady = false
     @State private var deactivateTask: Task<Void, Never>?
@@ -2044,6 +2046,11 @@ struct InFrameVideoPlayer: View {
         showsControls && !muteOnlyControls && playGate
     }
 
+    /// Mount AV for silent preload or active play.
+    private var shouldMountPlayer: Bool {
+        playGate || preloadGate
+    }
+
     /// Poster floor — prefer existing `posterURL`; otherwise pack-path Frame 0 (no video download).
     @ViewBuilder
     private var posterFloor: some View {
@@ -2085,17 +2092,17 @@ struct InFrameVideoPlayer: View {
 
     var body: some View {
         ZStack {
-            // Always poster base (neighbors never mount AV — media session 09).
+            // Always poster base under the player / preload.
             posterFloor
 
-            // ONE winner mounts a player. Leaving focus unmounts → frees AVPlayer.
-            if playGate {
+            // Approach → silent preload; focus win → active play (claims warm pool).
+            if shouldMountPlayer {
                 Group {
                     if usesArchivePath {
                         MatteryaHubPlayerView(
                             url: url,
                             posterURL: posterURL,
-                            isActive: true,
+                            isActive: playGate,
                             // Continue mid-clip when feed→hubs/sparks handoff parked this buffer.
                             startTime: continueStartTime,
                             postID: postID,
@@ -2118,13 +2125,12 @@ struct InFrameVideoPlayer: View {
                             onReady: {
                                 onViewed?()
                                 // Handoff / claim already painting — lift outer poster immediately.
-                                framesReady = true
+                                if playGate { framesReady = true }
                             },
                             onPlayingChange: { playing in
-                                // Kick ≠ painted frames — never lift cover here (blink source).
-                                if playing {
+                                if playGate, playing {
                                     framesReady = true
-                                } else {
+                                } else if !playGate {
                                     framesReady = false
                                 }
                             },
@@ -2142,7 +2148,7 @@ struct InFrameVideoPlayer: View {
                             contentCountryCode: contentCountryCode,
                             postID: postID,
                             adsEnabled: false,
-                            isActive: true,
+                            isActive: playGate,
                             loops: loops,
                             muted: isMuted,
                             showsControls: transportChrome,
@@ -2152,12 +2158,11 @@ struct InFrameVideoPlayer: View {
                             fillsFrame: fillsFrame,
                             topChromeReserve: topChromeReserve,
                             bottomChromeReserve: bottomChromeReserve,
-                            // Claim warm buffer when approaching — butter-smooth start.
-                            preloadsWhenInactive: false,
+                            // Silent buffer while approaching; claim warm on activate.
+                            preloadsWhenInactive: true,
                             onViewed: onViewed,
-                            // Do NOT lift on time>=0.12 alone — that flashed black before paint.
                             onFramesReady: {
-                                // Player already settled its own cover — lift outer after a beat.
+                                guard playGate else { return }
                                 markInFrameFramesReady()
                             },
                             onVideoSize: onVideoSize
@@ -2166,9 +2171,10 @@ struct InFrameVideoPlayer: View {
                 }
                 // Keep cover mounted; fade with opacity (remounting CachedAsyncImage stutters).
                 posterFloor
-                    .opacity(framesReady ? 0 : 1)
+                    .opacity(playGate && framesReady ? 0 : 1)
                     .allowsHitTesting(false)
                     .animation(nil, value: framesReady)
+                    .animation(nil, value: playGate)
             } else {
                 posterFloor
             }
@@ -2214,7 +2220,13 @@ struct InFrameVideoPlayer: View {
             } else {
                 isMuted = muted
             }
-            // Poster only on appear — no Archive warm, no SparkWarmPool (freezes feed scroll).
+            // Kick deep-warm immediately so first visible frame can claim a ready buffer.
+            if let postID {
+                SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: true)
+            }
+            if usesArchivePath {
+                ArchiveVideoPlayback.warmResolve(url)
+            }
             refreshFocusWinner()
             syncPlayGate(immediate: true)
             if playGate, !isMuted {
@@ -2239,6 +2251,7 @@ struct InFrameVideoPlayer: View {
             FeedVideoFocus.shared.clear(id: focusID)
             isFocusWinner = false
             playGate = false
+            preloadGate = false
             framesReady = false
         }
         .onChange(of: url) { _, _ in
@@ -2309,14 +2322,10 @@ struct InFrameVideoPlayer: View {
         syncPlayGate(immediate: win)
     }
 
-    /// Lift outer poster as soon as AV reports painted frames (minimal settle).
+    /// Lift outer poster as soon as AV reports painted frames.
     private func markInFrameFramesReady() {
-        guard !framesReady else { return }
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 16_000_000)
-            guard playGate, shouldPlay else { return }
-            framesReady = true
-        }
+        guard playGate, !framesReady else { return }
+        framesReady = true
     }
 
     /// Instant on for play; delayed off so GeometryReader glitches don't pause full-screen cards.
@@ -2347,21 +2356,20 @@ struct InFrameVideoPlayer: View {
             deactivateTask?.cancel()
             deactivateTask = nil
             playGate = false
+            preloadGate = false
+            framesReady = false
             return
         }
-        // Focus lost (scrolled away / another winner) — hold briefly, then pause.
-        // Never hard-cut on `immediate` alone; that was pausing 100%-visible videos on layout ticks.
+        // Focus lost — short hold, then pause (keep preloadGate if still approaching).
         guard playGate else { return }
-        if immediate {
-            // Still debounce — "immediate" only means we schedule sooner, not kill this frame.
-        }
         deactivateTask?.cancel()
         deactivateTask = Task {
-            try? await Task.sleep(nanoseconds: 280_000_000)
+            try? await Task.sleep(nanoseconds: 140_000_000)
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 if !shouldPlay {
                     playGate = false
+                    framesReady = false
                 }
             }
         }
@@ -2403,23 +2411,25 @@ struct InFrameVideoPlayer: View {
         }
 
         let ratio = FeedVideoFocus.visibleRatio(for: frame)
-        // Warm slightly before the quarter-play threshold so AV is ready at 25%.
-        if ratio >= 0.15, let postID {
-            if !SparkWarmPool.shared.hasWarmOrInflight(postID: postID) {
+        // Early deep-warm + silent preload so focus win is already buffered.
+        if ratio >= 0.05 {
+            if let postID, !SparkWarmPool.shared.hasWarmOrInflight(postID: postID) {
                 SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: true)
             }
             if usesArchivePath {
                 ArchiveVideoPlayback.warmResolve(url)
             }
-            // Do NOT call /v1/playback/batch from scroll visibility.
-            // That created a timeout storm (one request per cell approach) that
-            // starved GraphQL + poster/batch. Hubs/Sparks warm via AppState window.
+            if ratio >= 0.08, !preloadGate {
+                preloadGate = true
+            }
+        } else if ratio < 0.03, preloadGate, !playGate {
+            preloadGate = false
         }
-        // Always report when crossing the quarter threshold; skip only tiny noise otherwise.
-        let crossedQuarter =
-            (lastReportedRatio < 0.25 && ratio >= 0.25)
-            || (lastReportedRatio >= 0.25 && ratio < 0.22)
-        if !crossedQuarter, abs(ratio - lastReportedRatio) < 0.03, lastReportedRatio >= 0 {
+        // Always report when crossing the play threshold; skip only tiny noise otherwise.
+        let crossedPlay =
+            (lastReportedRatio < 0.20 && ratio >= 0.20)
+            || (lastReportedRatio >= 0.20 && ratio < 0.16)
+        if !crossedPlay, abs(ratio - lastReportedRatio) < 0.025, lastReportedRatio >= 0 {
             refreshFocusWinner()
             return
         }

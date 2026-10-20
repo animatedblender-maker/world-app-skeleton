@@ -848,7 +848,7 @@ final class HomeFeedStore {
             hasMore = true
         }
 
-        // Thumbs + Frame0 only — no AV warm on the feed list (media-session contract).
+        // Thumbs + Frame0; AV warm on video queue so autoplay is instant.
         let thumbAhead = fling ? 2 : 5
         let end = min(displayedPosts.count, index + thumbAhead)
         if index < end {
@@ -861,6 +861,17 @@ final class HomeFeedStore {
                     )
                 }
             }
+        }
+
+        // Warm focused video + ahead (video queue only). Runs mid-fling too (pool flingProtect).
+        let videos = Self.feedWarmVideoQueue(from: displayedPosts)
+        if let warmIdx = Self.feedWarmIndex(
+            for: post,
+            in: videos,
+            feedIndex: index,
+            feed: displayedPosts
+        ) {
+            SparkWarmPool.shared.prepareFeedWindow(posts: videos, around: warmIdx)
         }
 
         // Don't kick network load-more mid-fling (causes hitch + image storms).
@@ -1239,7 +1250,7 @@ final class HomeFeedStore {
         hasMore = true
     }
 
-    /// Open / after-paint: thumbs + Frame0 only (no AV pool, no slug neighbor storm).
+    /// Open / after-paint: thumbs + Frame0 + first feed videos deep-warm for instant autoplay.
     private func warmHead(lite: Bool = false) async {
         let thumbN = lite ? 4 : min(max(windowLimit, firstWindow), 8)
         let thumbBand = Array(posts.prefix(thumbN))
@@ -1247,6 +1258,12 @@ final class HomeFeedStore {
         ImageCache.shared.prefetchPostThumbnails(thumbBand, maxPixelSize: 320, aggressive: false)
         Task(priority: .utility) {
             await Frame0PosterResolver.shared.prefetch(postIDs: Array(thumbBand.prefix(4).map(\.id)))
+        }
+        let videos = Self.feedWarmVideoQueue(
+            from: Array(displayedPosts.prefix(max(windowLimit, firstWindow)))
+        )
+        if !videos.isEmpty {
+            SparkWarmPool.shared.prepareFeedWindow(posts: videos, around: 0)
         }
     }
 

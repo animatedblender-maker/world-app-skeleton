@@ -26,23 +26,22 @@ final class SparkWarmPool {
         static var isMid: Bool { physicalGB < 5.6 }
 
         /// Sparks swipe — Balanced light (whole-app weight). Ahead 3 / deep 2.
-        /// If swipe feels cold, bump ahead/deep by +1 only — do not restore Max-instant 5/4.
         static var playerAhead: Int { playerAheadSparks }
-        /// Home feed list must not warm AV (posters only). Kept for API compatibility = 0.
-        static var playerAheadFeed: Int { 0 }
+        /// Home feed: focus + ahead deep-warm so autoplay claims a ready buffer (instant play).
+        static var playerAheadFeed: Int { isConstrained ? 1 : 2 }
         static var playerAheadSparks: Int { isConstrained ? 2 : 3 }
         static var playerAheadHubs: Int { 2 }
         /// Thumbs / Frame 0 ahead of focus (Sparks player + shelves).
         static var thumbAhead: Int { isConstrained ? 5 : 6 }
         /// Deep-preroll next N (first-frame ready); rest of window light-buffer.
-        static var deepPrerollFeed: Int { 0 }
+        static var deepPrerollFeed: Int { isConstrained ? 1 : 2 }
         static var deepPrerollSparks: Int { 2 }
         static var deepPrerollHubs: Int { 1 }
-        /// current + behind + ahead + spare.
-        static var maxSlots: Int { isConstrained ? 5 : 6 }
+        /// current + behind + ahead + spare — room for feed + sparks dual use.
+        static var maxSlots: Int { isConstrained ? 6 : 7 }
         static var playerBehind: Int { 1 }
-        /// Parallel R2 warms — keep at 2 so Feed+Hubs dual-mount stays light.
-        static var maxConcurrentWarms: Int { 2 }
+        /// Parallel R2 warms — fill feed ahead window quickly.
+        static var maxConcurrentWarms: Int { isConstrained ? 2 : 3 }
         static var forwardBufferDeep: Double { isConstrained ? 4 : 6 }
         static var forwardBufferLight: Double { isConstrained ? 2 : 3 }
     }
@@ -141,11 +140,31 @@ final class SparkWarmPool {
         }
     }
 
-    /// Home feed list — posters only (media-session contract). No AV warm on scroll.
+    /// Home feed: warm focus + 1–2 ahead on the video queue so autoplay claims a ready buffer.
     func prepareFeedWindow(posts: [CountryPost], around index: Int) {
-        _ = posts
-        _ = index
-        // No-op: Feed list must not create SparkWarmPool slots.
+        guard !posts.isEmpty else { return }
+        // Mid-fling: still deep-warm the next clip so landing is instant.
+        if ScrollBudget.isFlinging {
+            prepare(
+                posts: posts,
+                around: index,
+                ahead: 1,
+                behind: 0,
+                deepPrerollLimit: 1,
+                skipThumbWarm: true,
+                allowNewWarms: true
+            )
+            return
+        }
+        prepare(
+            posts: posts,
+            around: index,
+            ahead: MediaBudget.playerAheadFeed,
+            behind: 0,
+            deepPrerollLimit: MediaBudget.deepPrerollFeed,
+            skipThumbWarm: true,
+            allowNewWarms: true
+        )
     }
 
     /// Hubs For you shelf + related / up-next while watching.

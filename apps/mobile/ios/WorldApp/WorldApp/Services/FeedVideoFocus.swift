@@ -56,13 +56,12 @@ final class FeedVideoFocus {
     /// Debounced silence when no winner — layout flaps used to kill in-frame hubs audio.
     private var silenceWhenEmptyTask: Task<Void, Never>?
 
-    /// Must be at least this visible to *start* (or take over) autoplay — a quarter of the card.
-    private let minVisibleToPlay: CGFloat = 0.25
-    /// Keep current winner until it drops below this (slightly under a quarter).
-    private let minVisibleToKeep: CGFloat = 0.22
+    /// Start autoplay once ~20% is on-screen (warm already running from ~5–10%).
+    private let minVisibleToPlay: CGFloat = 0.20
+    /// Keep current winner until it drops below this.
+    private let minVisibleToKeep: CGFloat = 0.16
     /// Challenger must beat the current winner by this much to steal focus.
-    /// Tiny so the next card starts as soon as it crosses a quarter.
-    private let stealEpsilon: CGFloat = 0.02
+    private let stealEpsilon: CGFloat = 0.015
     /// Ignore this many consecutive near-zero layout reports before clearing a candidate.
     private let zeroGlitchTolerance = 6
 
@@ -95,8 +94,8 @@ final class FeedVideoFocus {
 
         zeroStreak[id] = 0
         let prev = ratios[id]
-        // Always recompute when crossing the quarter-play threshold — small deltas
-        // used to skip election and delay start until the card was mostly on-screen.
+        // Always recompute when crossing the play threshold — small deltas used to
+        // skip election and delay start until the card was mostly on-screen.
         let crossedPlay =
             (prev == nil || prev! < minVisibleToPlay) && clamped >= minVisibleToPlay
             || (prev != nil && prev! >= minVisibleToPlay && clamped < minVisibleToKeep)
