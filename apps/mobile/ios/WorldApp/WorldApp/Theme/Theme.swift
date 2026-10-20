@@ -297,6 +297,55 @@ struct SecondaryButtonStyle: ButtonStyle {
     }
 }
 
+/// Outlined / secondary Matterya control — matte paper, ink label (not Apple bordered).
+struct MatteryaSecondaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(Theme.ink)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
+                    .fill(configuration.isPressed ? Theme.matteDeep : Theme.matte)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
+                    .stroke(Theme.border, lineWidth: 0.5)
+            )
+            .opacity(configuration.isPressed ? 0.9 : 1)
+    }
+}
+
+/// Flat Matterya switch — replaces system Toggle chrome in Settings.
+struct MatteryaSwitch: View {
+    @Binding var isOn: Bool
+
+    var body: some View {
+        Button {
+            withAnimation(MatteryaMotion.micro) { isOn.toggle() }
+        } label: {
+            ZStack(alignment: isOn ? .trailing : .leading) {
+                Capsule(style: .continuous)
+                    .fill(isOn ? Theme.ink : Theme.matteDeep)
+                    .frame(width: 48, height: 28)
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(Theme.border.opacity(isOn ? 0 : 0.9), lineWidth: 0.5)
+                    )
+                Circle()
+                    .fill(Theme.paper)
+                    .frame(width: 22, height: 22)
+                    .padding(3)
+                    .shadow(color: Theme.ink.opacity(0.12), radius: 1, y: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityValue(isOn ? "On" : "Off")
+    }
+}
+
 struct PremiumTextField: View {
     let title: String
     @Binding var text: String

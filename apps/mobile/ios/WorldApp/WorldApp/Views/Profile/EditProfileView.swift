@@ -24,123 +24,225 @@ struct EditProfileView: View {
     @State private var avatarUploadTask: Task<Void, Never>?
 
     var body: some View {
-        Form {
-            Section("Avatar") {
-                HStack(spacing: 16) {
-                    AvatarView(
-                        url: avatarURL ?? appState.currentProfile?.avatarURL,
-                        seed: appState.currentProfile?.userID ?? "me",
-                        size: 64
-                    )
-                    VStack(alignment: .leading, spacing: 8) {
-                        PhotosPicker(selection: $selectedPhoto, matching: .images, photoLibrary: .shared()) {
-                            HStack {
-                                if uploadingAvatar {
-                                    ProgressView()
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                editSection(title: "Avatar") {
+                    HStack(spacing: 16) {
+                        AvatarView(
+                            url: avatarURL ?? appState.currentProfile?.avatarURL,
+                            seed: appState.currentProfile?.userID ?? "me",
+                            size: 72
+                        )
+                        VStack(alignment: .leading, spacing: 10) {
+                            PhotosPicker(selection: $selectedPhoto, matching: .images, photoLibrary: .shared()) {
+                                HStack(spacing: 8) {
+                                    if uploadingAvatar {
+                                        ProgressView().tint(Theme.ink)
+                                    }
+                                    Text(uploadingAvatar ? "Uploading…" : "Change avatar")
+                                        .font(.subheadline.weight(.semibold))
                                 }
-                                Text(uploadingAvatar ? "Uploading…" : "Change avatar")
-                                    .fontWeight(.semibold)
+                                .frame(maxWidth: .infinity)
                             }
+                            .buttonStyle(MatteryaSecondaryButtonStyle())
+                            .disabled(busy || uploadingAvatar)
+                            .onChange(of: selectedPhoto) { _, item in
+                                guard let item else { return }
+                                startAvatarUpload(item)
+                            }
+
+                            Text(uploadingAvatar
+                                 ? "Please wait — photo is uploading…"
+                                 : "Pick a photo from your library.")
+                                .font(.caption)
+                                .foregroundStyle(Theme.inkMuted)
                         }
-                        .buttonStyle(.bordered)
-                        .disabled(busy || uploadingAvatar)
-                        .onChange(of: selectedPhoto) { _, item in
-                            guard let item else { return }
-                            startAvatarUpload(item)
+                    }
+                }
+
+                editSection(title: "Identity") {
+                    matteryaField(title: "Display name", text: $displayName, autocap: .words)
+                    matteryaField(
+                        title: "Username",
+                        text: $username,
+                        autocap: .never,
+                        disableAutocorrect: true
+                    )
+                }
+
+                editSection(title: "Location") {
+                    if detectingLocation {
+                        HStack(spacing: 10) {
+                            ProgressView().tint(Theme.ink)
+                            Text("Detecting your location…")
+                                .font(.subheadline)
+                                .foregroundStyle(Theme.inkMuted)
                         }
-                        Text(uploadingAvatar
-                             ? "Please wait — photo is uploading…"
-                             : "Pick a photo from your library.")
+                        .padding(.vertical, 4)
+                    } else if hasDetectedLocation {
+                        settingsInfoLine("Country", countryName)
+                        if !cityName.isEmpty {
+                            settingsInfoLine("City", cityName)
+                        }
+                        Text("Location is detected automatically and can’t be edited.")
                             .font(.caption)
                             .foregroundStyle(Theme.inkMuted)
-                    }
-                }
-            }
-
-            Section("Identity") {
-                TextField("Display name", text: $displayName)
-                TextField("Username", text: $username)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-            }
-
-            Section("Location") {
-                if detectingLocation {
-                    HStack(spacing: 10) {
-                        ProgressView()
-                        Text("Detecting your location…")
-                            .font(.subheadline)
-                            .foregroundStyle(Theme.inkMuted)
-                    }
-                } else if hasDetectedLocation {
-                    LabeledContent("Country", value: countryName)
-                    if !cityName.isEmpty {
-                        LabeledContent("City", value: cityName)
-                    }
-                    Text("Location is detected automatically and can’t be edited.")
-                        .font(.caption)
+                    } else {
+                        Text(
+                            locationStatus.isEmpty
+                                ? "Tap below to detect your location from this device."
+                                : locationStatus
+                        )
+                        .font(.footnote)
                         .foregroundStyle(Theme.inkMuted)
-                } else {
-                    Text(
-                        locationStatus.isEmpty
-                            ? "Tap below to detect your location from this device."
-                            : locationStatus
-                    )
-                    .font(.footnote)
-                    .foregroundStyle(Theme.inkMuted)
+                    }
+
+                    Button {
+                        Task { await detectLocation() }
+                    } label: {
+                        Text(detectingLocation ? "Detecting…" : "Detect location again")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(MatteryaSecondaryButtonStyle())
+                    .disabled(detectingLocation || busy || uploadingAvatar)
                 }
 
-                Button(detectingLocation ? "Detecting…" : "Detect location again") {
-                    Task { await detectLocation() }
+                editSection(title: "Bio") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Bio")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Theme.inkMuted)
+                        TextField("Bio", text: $bio, axis: .vertical)
+                            .lineLimit(3...6)
+                            .padding(12)
+                            .background(
+                                Theme.matteDeep,
+                                in: RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
+                                    .stroke(Theme.border, lineWidth: 0.5)
+                            )
+                    }
                 }
-                .disabled(detectingLocation || busy || uploadingAvatar)
-            }
 
-            Section("Bio") {
-                TextField("Bio", text: $bio, axis: .vertical)
-                    .lineLimit(3...6)
-            }
-
-            if let errorMessage {
-                Section {
+                if let errorMessage {
                     Text(errorMessage)
                         .foregroundStyle(Theme.danger)
                         .font(.footnote)
                 }
-            }
-            if let successMessage {
-                Section {
+                if let successMessage {
                     Text(successMessage)
                         .foregroundStyle(Theme.success)
                         .font(.footnote)
                 }
-            }
 
-            Section {
                 Button {
                     Task { await save() }
                 } label: {
                     HStack {
                         Spacer()
-                        if busy { ProgressView() }
-                        Text(busy ? "Saving…" : "Save Profile")
+                        if busy { ProgressView().tint(Theme.paper) }
+                        Text(busy ? "Saving…" : "Save profile")
                             .fontWeight(.semibold)
                         Spacer()
                     }
                 }
+                .buttonStyle(PrimaryButtonStyle())
                 .disabled(busy || uploadingAvatar || displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .opacity(
+                    busy || uploadingAvatar || displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? 0.55 : 1
+                )
+
+                Button {
+                    dismiss()
+                } label: {
+                    Text("Cancel")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(MatteryaSecondaryButtonStyle())
+                .disabled(busy || uploadingAvatar)
             }
+            .padding(.horizontal, Theme.pagePadding)
+            .padding(.vertical, 18)
         }
         .navigationTitle("Edit Profile")
-        .scrollContentBackground(.hidden)
-        .screenBackground()
+        .navigationBarTitleDisplayMode(.inline)
+        .background(Theme.canvas)
         .toolbarBackground(Theme.canvas, for: .navigationBar)
-        .tint(Theme.accentBright)
+        .tint(Theme.ink)
         .task {
             await loadProfile()
         }
         .onDisappear {
             avatarUploadTask?.cancel()
+        }
+    }
+
+    // MARK: - Matterya chrome
+
+    @ViewBuilder
+    private func editSection<Content: View>(
+        title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Theme.inkMuted)
+                .textCase(.uppercase)
+            VStack(alignment: .leading, spacing: 12) {
+                content()
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Theme.surface)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Theme.border.opacity(0.85), lineWidth: 0.5)
+            )
+        }
+    }
+
+    private func matteryaField(
+        title: String,
+        text: Binding<String>,
+        autocap: TextInputAutocapitalization = .sentences,
+        disableAutocorrect: Bool = false
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Theme.inkMuted)
+            TextField(title, text: text)
+                .textInputAutocapitalization(autocap)
+                .autocorrectionDisabled(disableAutocorrect)
+                .padding(12)
+                .background(
+                    Theme.matteDeep,
+                    in: RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
+                        .stroke(Theme.border, lineWidth: 0.5)
+                )
+        }
+    }
+
+    private func settingsInfoLine(_ title: String, _ value: String) -> some View {
+        HStack {
+            Text(title)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(Theme.ink)
+            Spacer()
+            Text(value)
+                .font(.subheadline)
+                .foregroundStyle(Theme.inkMuted)
+                .multilineTextAlignment(.trailing)
         }
     }
 
@@ -206,7 +308,6 @@ struct EditProfileView: View {
                 }
             }
             do {
-                // Yield so SwiftUI can render “Uploading…” before heavy work.
                 await Task.yield()
                 try Task.checkCancellation()
 

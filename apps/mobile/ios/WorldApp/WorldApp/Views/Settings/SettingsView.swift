@@ -90,18 +90,19 @@ struct SettingsView: View {
                     footer: "Used for messages, calls, and activity. Turn delivery off in iOS Settings if you change your mind."
                 ) {
                     settingsCard {
-                        Toggle(isOn: $pushEnabled) {
+                        HStack {
                             Text("Notifications")
                                 .font(.body.weight(.medium))
                                 .foregroundStyle(Theme.ink)
-                        }
-                        .tint(Theme.ink)
-                        .onChange(of: pushEnabled) { _, enabled in
-                            if enabled {
-                                Task { await enablePush() }
-                            } else if let url = URL(string: UIApplication.openSettingsURLString) {
-                                UIApplication.shared.open(url)
-                            }
+                            Spacer()
+                            MatteryaSwitch(isOn: $pushEnabled)
+                                .onChange(of: pushEnabled) { _, enabled in
+                                    if enabled {
+                                        Task { await enablePush() }
+                                    } else if let url = URL(string: UIApplication.openSettingsURLString) {
+                                        UIApplication.shared.open(url)
+                                    }
+                                }
                         }
 
                         if isRequestingPush {
@@ -181,10 +182,19 @@ struct SettingsView: View {
                 }
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") {
+                        Button {
                             accountSheet = nil
                             accountActionError = nil
+                        } label: {
+                            Text("Cancel")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Theme.ink)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(Theme.matte, in: Capsule(style: .continuous))
+                                .overlay(Capsule(style: .continuous).stroke(Theme.border, lineWidth: 0.5))
                         }
+                        .buttonStyle(.plain)
                         .disabled(accountActionBusy)
                     }
                 }
