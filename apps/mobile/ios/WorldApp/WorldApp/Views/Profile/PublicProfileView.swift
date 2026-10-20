@@ -132,9 +132,9 @@ struct PublicProfileView: View {
             }
 
             if let country = profile.countryName, country != "Unknown" {
-                Label(country, systemImage: "mappin.and.ellipse")
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.accent)
+                Text(country)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(Theme.inkSecondary)
             }
 
             // Only for real Hubs channel owners — never for people who only re-shared a Hubs video.
@@ -145,11 +145,9 @@ struct PublicProfileView: View {
                         username: profile.username
                     )
                 } label: {
-                    Label(MatteryaCopy.watchOnHubs, systemImage: "play.rectangle.fill")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
+                    Text(MatteryaCopy.watchOnHubs)
                 }
-                .buttonStyle(SecondaryButtonStyle())
+                .buttonStyle(MatteryaTextPillButtonStyle(emphasized: true))
             }
 
             if isOwner {
@@ -157,20 +155,16 @@ struct PublicProfileView: View {
                     Button {
                         appState.navigate(to: .editProfile)
                     } label: {
-                        Label("Edit profile", systemImage: "square.and.pencil")
-                            .font(.subheadline.weight(.semibold))
-                            .frame(maxWidth: .infinity)
+                        Text("Edit profile")
                     }
-                    .buttonStyle(SecondaryButtonStyle())
+                    .buttonStyle(MatteryaTextPillButtonStyle())
 
                     Button {
                         appState.navigate(to: .settings)
                     } label: {
-                        Label("Settings", systemImage: "gearshape")
-                            .font(.subheadline.weight(.semibold))
-                            .frame(maxWidth: .infinity)
+                        Text("Settings")
                     }
-                    .buttonStyle(SecondaryButtonStyle())
+                    .buttonStyle(MatteryaTextPillButtonStyle())
                 }
             } else {
                 profileActions(profile)
@@ -185,11 +179,9 @@ struct PublicProfileView: View {
             Button {
                 Task { await appState.openDirectMessage(with: profile.userID) }
             } label: {
-                Label("Message", systemImage: "bubble.left.and.bubble.right")
-                    .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity)
+                Text("Message")
             }
-            .buttonStyle(PrimaryButtonStyle())
+            .buttonStyle(MatteryaTextPillButtonStyle(emphasized: true))
 
             Menu {
                 Button {

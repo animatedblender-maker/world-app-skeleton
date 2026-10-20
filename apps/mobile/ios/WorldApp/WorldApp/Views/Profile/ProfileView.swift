@@ -143,20 +143,16 @@ struct ProfileView: View {
                 Button {
                     appState.navigate(to: .editProfile)
                 } label: {
-                    Label("Edit profile", systemImage: "square.and.pencil")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
+                    Text("Edit profile")
                 }
-                .buttonStyle(SecondaryButtonStyle())
+                .buttonStyle(MatteryaTextPillButtonStyle())
 
                 Button {
                     appState.navigate(to: .settings)
                 } label: {
-                    Label("Settings", systemImage: "gearshape")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
+                    Text("Settings")
                 }
-                .buttonStyle(SecondaryButtonStyle())
+                .buttonStyle(MatteryaTextPillButtonStyle())
             }
 
             VStack(alignment: .leading, spacing: 8) {
@@ -168,9 +164,9 @@ struct ProfileView: View {
                         .lineSpacing(3)
                 }
                 if let country = profile?.countryName, country != "Unknown" {
-                    Label(country, systemImage: "mappin.and.ellipse")
-                        .font(.subheadline)
-                        .foregroundStyle(Theme.accent)
+                    Text(country)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(Theme.inkSecondary)
                 }
             }
 
@@ -179,11 +175,9 @@ struct ProfileView: View {
                 Button {
                     appState.openPlayChannel(authorID: userID, username: profile?.username)
                 } label: {
-                    Label(MatteryaCopy.yourChannelOnHubs, systemImage: "play.rectangle.fill")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
+                    Text(MatteryaCopy.yourChannelOnHubs)
                 }
-                .buttonStyle(SecondaryButtonStyle())
+                .buttonStyle(MatteryaTextPillButtonStyle(emphasized: true))
             }
         }
         .padding(.horizontal, Theme.pagePadding)

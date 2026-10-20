@@ -35,7 +35,7 @@ struct SettingsView: View {
                     Button {
                         appState.navigate(to: .editProfile)
                     } label: {
-                        settingsActionLabel("Edit profile", systemImage: "person.crop.circle")
+                        settingsActionLabel("Edit profile")
                             .matteryaSettingsCard()
                     }
                     .buttonStyle(.plain)
@@ -43,7 +43,7 @@ struct SettingsView: View {
                     Button {
                         appState.logout()
                     } label: {
-                        settingsActionLabel("Log out", systemImage: "rectangle.portrait.and.arrow.right")
+                        settingsActionLabel("Log out", destructive: true)
                             .matteryaSettingsCard(destructive: true)
                     }
                     .buttonStyle(.plain)
@@ -126,7 +126,7 @@ struct SettingsView: View {
                             UIApplication.shared.open(url)
                         }
                     } label: {
-                        settingsActionLabel("Open iOS Settings", systemImage: "gearshape")
+                        settingsActionLabel("Open iOS Settings")
                             .matteryaSettingsCard()
                     }
                     .buttonStyle(.plain)
@@ -139,7 +139,7 @@ struct SettingsView: View {
                     NavigationLink {
                         MessagePrivacySettingsView()
                     } label: {
-                        settingsActionLabel("Message requests", systemImage: "envelope.badge", showsChevron: true)
+                        settingsActionLabel("Message requests", showsChevron: true)
                             .matteryaSettingsCard()
                     }
                     .buttonStyle(.plain)
@@ -148,7 +148,7 @@ struct SettingsView: View {
                     NavigationLink {
                         BlockedAccountsView()
                     } label: {
-                        settingsActionLabel("Blocked accounts", systemImage: "hand.raised", showsChevron: true)
+                        settingsActionLabel("Blocked accounts", showsChevron: true)
                             .matteryaSettingsCard()
                     }
                     .buttonStyle(.plain)
@@ -157,7 +157,7 @@ struct SettingsView: View {
                     NavigationLink {
                         PrivacyInfoView()
                     } label: {
-                        settingsActionLabel("Data & privacy", systemImage: "lock.shield", showsChevron: true)
+                        settingsActionLabel("Data & privacy", showsChevron: true)
                             .matteryaSettingsCard()
                     }
                     .buttonStyle(.plain)
@@ -168,7 +168,7 @@ struct SettingsView: View {
                     settingsInfoRow("App", "Matterya")
                     settingsInfoRow("Version", appVersion)
                     Link(destination: URL(string: "https://matterya.com")!) {
-                        settingsActionLabel("Help center", systemImage: "questionmark.circle", showsChevron: true)
+                        settingsActionLabel("Help center", showsChevron: true)
                             .matteryaSettingsCard()
                     }
                     .buttonStyle(.plain)
@@ -288,15 +288,12 @@ struct SettingsView: View {
 
     private func settingsActionLabel(
         _ title: String,
-        systemImage: String,
-        showsChevron: Bool = false
+        showsChevron: Bool = false,
+        destructive: Bool = false
     ) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: systemImage)
-                .font(.body.weight(.semibold))
-                .foregroundStyle(Theme.ink)
-                .frame(width: 22)
             Text(title)
+                .foregroundStyle(destructive ? Theme.danger : Theme.ink)
             Spacer()
             if showsChevron {
                 Image(systemName: "chevron.right")

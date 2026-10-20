@@ -338,6 +338,40 @@ extension View {
                     .stroke(Theme.border, lineWidth: 0.5)
             )
     }
+
+    /// Profile / settings text pill — no SF Symbols, flat paper.
+    func matteryaTextPill(pressed: Bool = false, emphasized: Bool = false) -> some View {
+        font(.subheadline.weight(.semibold))
+            .foregroundStyle(emphasized ? Theme.paper : Theme.ink)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
+                    .fill(
+                        emphasized
+                            ? Theme.ink.opacity(pressed ? 0.82 : 1)
+                            : (pressed ? Theme.matteDeep : Theme.matte)
+                    )
+            )
+            .overlay {
+                if !emphasized {
+                    RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
+                        .stroke(Theme.border, lineWidth: 0.5)
+                }
+            }
+    }
+}
+
+/// Text-first Matterya pill — profile Edit / Settings / Hubs channel.
+struct MatteryaTextPillButtonStyle: ButtonStyle {
+    var emphasized: Bool = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .matteryaTextPill(pressed: configuration.isPressed, emphasized: emphasized)
+    }
 }
 
 struct SecondaryButtonStyle: ButtonStyle {
