@@ -1135,25 +1135,29 @@ final class HomeFeedStore {
                 )
             }
             let exclude = seen
+            // Snapshot for async let — autoclosure is nonisolated and cannot touch MainActor state.
+            let pass = recyclePass
             // Mix Sparks + Hubs + written (~1 written / 10–12 media) so Home isn't video-only.
             let textLimit = max(1, pageSize / (Self.homeWrittenMediaGap + 1))
             let hubLimit = max(2, pageSize / 3)
             // Prefer Sparks fill — /v1/sparks cursor walks the full R2 set.
             let sparkLimit = max(pageSize, pageSize - hubLimit - textLimit)
+            let sparkForce = pass > 4 && pass % 5 == 0
+            let hubTextForce = pass > 2
             async let sparkTop = PostsService.shared.homeFeedSparkTopUp(
                 excluding: exclude,
                 limit: sparkLimit,
-                forceRefresh: recyclePass > 4 && recyclePass % 5 == 0
+                forceRefresh: sparkForce
             )
             async let hubTop = PostsService.shared.homeFeedHubTopUp(
                 excluding: exclude,
                 limit: hubLimit,
-                forceRefresh: recyclePass > 2
+                forceRefresh: hubTextForce
             )
             async let textTop = PostsService.shared.homeFeedTextTopUp(
                 excluding: exclude,
                 limit: textLimit,
-                forceRefresh: recyclePass > 2
+                forceRefresh: hubTextForce
             )
             let sparks = await sparkTop
             let hubs = await hubTop
