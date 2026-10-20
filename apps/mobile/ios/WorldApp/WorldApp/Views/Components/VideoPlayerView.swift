@@ -2051,28 +2051,37 @@ struct InFrameVideoPlayer: View {
         playGate || preloadGate
     }
 
-    /// Poster floor — prefer existing `posterURL`; otherwise pack-path Frame 0 (no video download).
+    /// Poster floor — never bare black while waiting for AV (missing/expired thumbs used to flash black).
     @ViewBuilder
     private var posterFloor: some View {
+        let cachedFrame0 = postID.flatMap { Frame0PosterCache.url(for: $0) }
+        let usablePoster: URL? = {
+            if let posterURL, MediaURLResolver.isUsablePosterURL(posterURL) { return posterURL }
+            if let cachedFrame0, MediaURLResolver.isUsablePosterURL(cachedFrame0) { return cachedFrame0 }
+            return nil
+        }()
         ZStack {
-            Color.black
-            if let posterURL {
+            // Matte floor — not AV black — so cold/missing thumbs never look like a black flash.
+            Theme.matteDeep
+            if let usablePoster {
                 CachedAsyncImage(
-                    url: posterURL,
+                    url: usablePoster,
                     maxPixelSize: 720,
                     contentMode: fillsFrame ? .fill : .fit,
-                    placeholder: AnyView(Color.clear)
+                    placeholder: AnyView(Theme.matteDeep)
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
                 .allowsHitTesting(false)
-            } else if let postID {
+            }
+            // Always try Frame0 when API thumb missing/unusable — fills matte until signed.
+            if let postID, usablePoster == nil || posterURL.map({ !MediaURLResolver.isUsablePosterURL($0) }) == true {
                 FrameZeroFallbackPoster(
                     postID: postID,
                     videoURL: url,
                     fillsFrame: fillsFrame,
                     allowClientExtract: false,
-                    seedPosterURL: Frame0PosterCache.url(for: postID)
+                    seedPosterURL: cachedFrame0
                 )
                 .allowsHitTesting(false)
             }
@@ -2124,18 +2133,20 @@ struct InFrameVideoPlayer: View {
                             allowsFullscreen: false,
                             onReady: {
                                 onViewed?()
-                                // Handoff / claim already painting — lift outer poster immediately.
-                                if playGate { framesReady = true }
+                                // readyToPlay ≠ painted frames — keep outer poster (black AV blink).
                             },
                             onPlayingChange: { playing in
                                 if playGate, playing {
-                                    framesReady = true
-                                } else if !playGate {
+                                    markInFrameFramesReady()
+                                } else if !playing {
                                     framesReady = false
                                 }
                             },
-                            onProgress: { _, _ in
-                                // Cover lifts only via paint-ready paths (not wall-clock).
+                            onProgress: { current, _ in
+                                // Extra paint proof for hubs path (time advanced + playing).
+                                if playGate, current >= 0.08 {
+                                    markInFrameFramesReady()
+                                }
                             },
                             onVideoSize: onVideoSize
                         )
@@ -2169,7 +2180,7 @@ struct InFrameVideoPlayer: View {
                         )
                     }
                 }
-                // Keep cover mounted; fade with opacity (remounting CachedAsyncImage stutters).
+                // Keep cover mounted until paint proof — never bare black AV layer.
                 posterFloor
                     .opacity(playGate && framesReady ? 0 : 1)
                     .allowsHitTesting(false)
@@ -2220,13 +2231,20 @@ struct InFrameVideoPlayer: View {
             } else {
                 isMuted = muted
             }
-            // Kick deep-warm immediately so first visible frame can claim a ready buffer.
+            // Kick deep-warm + Frame0 so first paint never sits on bare black.
             if let postID {
                 SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: true)
+                let needsPoster = posterURL.map { !MediaURLResolver.isUsablePosterURL($0) } ?? true
+                if needsPoster {
+                    Task {
+                        await Frame0PosterResolver.shared.prefetch(postIDs: [postID])
+                    }
+                }
             }
             if usesArchivePath {
                 ArchiveVideoPlayback.warmResolve(url)
             }
+            framesReady = false
             refreshFocusWinner()
             syncPlayGate(immediate: true)
             if playGate, !isMuted {
@@ -2322,10 +2340,14 @@ struct InFrameVideoPlayer: View {
         syncPlayGate(immediate: win)
     }
 
-    /// Lift outer poster as soon as AV reports painted frames.
+    /// Lift outer poster only after paint proof + a short settle (decoder still blacks 1–2 frames).
     private func markInFrameFramesReady() {
         guard playGate, !framesReady else { return }
-        framesReady = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 64_000_000)
+            guard playGate, !framesReady else { return }
+            framesReady = true
+        }
     }
 
     /// Instant on for play; delayed off so GeometryReader glitches don't pause full-screen cards.
