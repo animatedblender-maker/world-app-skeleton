@@ -667,7 +667,7 @@ final class HomeFeedStore {
         var sinceWritten = 0
         while mi < media.count || wi < written.count {
             let wantWritten = wi < written.count
-                && (mi >= media.count || (sinceWritten >= homeWrittenMediaGap && out.count >= 2))
+                && (mi >= media.count || (sinceWritten >= Self.homeWrittenMediaGap && out.count >= 2))
             if wantWritten {
                 out.append(written[wi]); wi += 1
                 sinceWritten = 0
@@ -1136,7 +1136,7 @@ final class HomeFeedStore {
             }
             let exclude = seen
             // Mix Sparks + Hubs + written (~1 written / 10–12 media) so Home isn't video-only.
-            let textLimit = max(1, pageSize / (homeWrittenMediaGap + 1))
+            let textLimit = max(1, pageSize / (Self.homeWrittenMediaGap + 1))
             let hubLimit = max(2, pageSize / 3)
             // Prefer Sparks fill — /v1/sparks cursor walks the full R2 set.
             let sparkLimit = max(pageSize, pageSize - hubLimit - textLimit)
@@ -1165,7 +1165,7 @@ final class HomeFeedStore {
             var sinceWritten = 0
             while mixed.count < pageSize, si < sparks.count || hi < hubs.count || ti < texts.count {
                 if ti < texts.count,
-                   (si >= sparks.count && hi >= hubs.count) || sinceWritten >= homeWrittenMediaGap {
+                   (si >= sparks.count && hi >= hubs.count) || sinceWritten >= Self.homeWrittenMediaGap {
                     mixed.append(texts[ti]); ti += 1
                     sinceWritten = 0
                 } else if hi < hubs.count, mixed.count % 3 == 2 || si >= sparks.count {
