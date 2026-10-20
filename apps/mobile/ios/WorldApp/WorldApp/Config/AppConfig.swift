@@ -19,6 +19,10 @@ enum AppConfig {
     /// OFF for now — it slows Hubs/Sparks (CDN resolve + huge offline library).
     /// Code stays in `HubVideoSeedService` / `ArchiveVideoPlayback`; flip to `true` to restore.
     static let archiveContentEnabled = false
+    /// Apple Translate / TranslationSession on captions & posts.
+    /// OFF for now — removes Translate buttons + on-device translation work from Feed/Sparks/comments.
+    /// `TranslatableCaption` stays as plain text; restore hooks from git when re-enabling.
+    static let enableTranslate = false
     static let pexelsAPIKey = "gN9dMuDmlYiMu1AjIEHZcpoemMfHhfWhAmi71jrRssq5I5AIVIl6D3Ll"
     static let appName = "Matterya"
 }

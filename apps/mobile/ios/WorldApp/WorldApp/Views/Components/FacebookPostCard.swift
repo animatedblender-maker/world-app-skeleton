@@ -43,10 +43,6 @@ struct FacebookPostCard: View {
     @State private var showReportConfirm = false
     @State private var actionBusy = false
     @State private var actionMessage: String?
-    /// One Translate for the whole post (title + body together).
-    @State private var translatedTitle: String?
-    @State private var translatedBody: String?
-    @State private var showingPostTranslated = false
 
     private var isOwnPost: Bool {
         guard let userID = appState.currentProfile?.userID else { return false }
@@ -568,17 +564,11 @@ struct FacebookPostCard: View {
 
             // Only an explicit post title here — never a body prefix (that duplicated captions).
             if let title = post.displayTitle, !title.isEmpty {
-                Text(displayPostTitle(title))
+                Text(title)
                     .postHeadlineStyle(lineLimit: 4)
                     .padding(.horizontal, horizontalGutter)
                     .contentShape(Rectangle())
                     .onTapGesture { openPrimaryDestination() }
-                // Title-only posts (no separate body) still get one Translate control.
-                if !hasPostTranslateBody {
-                    postSharedTranslateBar
-                        .padding(.horizontal, horizontalGutter)
-                        .padding(.top, 4)
-                }
             }
 
             // Hubs channel attribution under the title (share / channel long-form).
@@ -595,75 +585,17 @@ struct FacebookPostCard: View {
         .padding(.bottom, post.displayTitle != nil || showsPlayLinkInFeed || isImageOnlyPost ? 12 : 10)
     }
 
-    private func displayPostTitle(_ original: String) -> String {
-        if showingPostTranslated, let translatedTitle, !translatedTitle.isEmpty {
-            return translatedTitle
-        }
-        return original
-    }
-
-    private func displayPostBody(_ original: String) -> String {
-        if showingPostTranslated, let translatedBody, !translatedBody.isEmpty {
-            return translatedBody
-        }
-        return original
-    }
-
-    /// Visible body/caption for this card layout (mirrors captionBlock inputs).
-    private var postTranslateBodySource: String {
-        if isImageOnlyPost, !post.displayBody.isEmpty {
-            return post.displayBody
-        }
-        if showsPlayLinkInFeed || opensAsSpark {
-            return post.displayExcerpt
-        }
-        if !post.displayExcerpt.isEmpty { return post.displayExcerpt }
-        if PlayPlatformBridge.isWrittenHomePost(post), !post.displayBody.isEmpty {
-            if let title = post.displayTitle, title == post.displayBody { return "" }
-            return post.displayBody
-        }
-        return ""
-    }
-
-    private var postTranslateTitleSource: String {
-        post.displayTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    }
-
-    @ViewBuilder
-    private var postSharedTranslateBar: some View {
-        let title = postTranslateTitleSource
-        let body = postTranslateBodySource.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !title.isEmpty || !body.isEmpty {
-            PostSharedTranslateBar(
-                title: title,
-                bodyText: body,
-                buttonTint: Theme.accentBright,
-                translatedTitle: $translatedTitle,
-                translatedBody: $translatedBody,
-                showingTranslated: $showingPostTranslated
-            )
-        }
-    }
-
-    private var hasPostTranslateBody: Bool {
-        !postTranslateBodySource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
     private func captionBlock(text: String, topPadding: CGFloat, bottomPadding: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ExpandableBodyText(
-                text: displayPostBody(text),
-                collapsedLineLimit: 4,
-                font: .body,
-                color: Theme.inkSecondary,
-                lineSpacing: 4,
-                moreTitle: "See more",
-                lessTitle: "See less",
-                uiTextStyle: .body
-            )
-            // One Translate for the whole post (title + body).
-            postSharedTranslateBar
-        }
+        ExpandableBodyText(
+            text: text,
+            collapsedLineLimit: 4,
+            font: .body,
+            color: Theme.inkSecondary,
+            lineSpacing: 4,
+            moreTitle: "See more",
+            lessTitle: "See less",
+            uiTextStyle: .body
+        )
         // Small side margin so multi-line text stays readable on full-width cards.
         .padding(.horizontal, textGutter)
         .padding(.top, topPadding)
@@ -671,11 +603,6 @@ struct FacebookPostCard: View {
         .id("post-body-\(post.id)")
         .contentShape(Rectangle())
         .onTapGesture { openPrimaryDestination() }
-        .onChange(of: post.id) { _, _ in
-            translatedTitle = nil
-            translatedBody = nil
-            showingPostTranslated = false
-        }
     }
 
     /// Extra channel line under journal titles only when the name row does **not** already
@@ -1028,12 +955,8 @@ struct FacebookPostCard: View {
             }
 
             if showsAuthorHeader, let title = post.displayTitle, !title.isEmpty {
-                Text(displayPostTitle(title))
+                Text(title)
                     .postHeadlineStyle(lineLimit: 3)
-                if !hasPostTranslateBody {
-                    postSharedTranslateBar
-                        .padding(.top, 4)
-                }
             }
 
 
