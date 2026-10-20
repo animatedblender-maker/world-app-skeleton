@@ -49,8 +49,6 @@ final class HomeFeedStore {
     private(set) var feedSessionId = UUID().uuidString
     /// True once we painted anything (cache/demo/network).
     private(set) var didPaint = false
-    /// Bumps the Feed end-sentinel identity so `onAppear` re-fires after empty/failed top-ups.
-    private(set) var loadMoreEpoch = 0
     /// Uploading / sharing video shadows at the top of the feed.
     private(set) var pendingUploads: [FeedUploadPlaceholder] = []
     /// Single home surface — Phase-0 recsys (following priority + discovery in one stream).
@@ -62,8 +60,6 @@ final class HomeFeedStore {
     private var pendingLoadMoreTask: Task<Void, Never>?
     /// Soft recycle pass when unique network + catalog slices run dry — feed never ends.
     private var recyclePass = 0
-    /// Consecutive empty load-more attempts — triggers deferred auto-retry.
-    private var emptyLoadMoreStreak = 0
     /// New every app open / pull-to-refresh → different share mix.
     private var sessionRankSeed: UInt64 = UInt64.random(in: 1...UInt64.max)
     private var sessionFollowingIDs: Set<String> = []
@@ -82,9 +78,9 @@ final class HomeFeedStore {
     /// First paint window — ~1.5 screens; grow on scroll.
     private let firstWindow = 12
     /// Prefetch next page early (Facebook-style always-ahead pool).
-    private let prefetchRatio = 0.22
-    /// Keep a deep ahead pool so scroll never waits on network (R2 library is huge).
-    private let minBufferedPool = 64
+    private let prefetchRatio = 0.28
+    /// Keep at least this many posts buffered in `posts` (beyond the visible window).
+    private let minBufferedPool = 36
 
     private init() {}
 
@@ -408,8 +404,6 @@ final class HomeFeedStore {
             lastVisibleIndex = 0
             feedSessionId = UUID().uuidString
             recyclePass = 0
-            emptyLoadMoreStreak = 0
-            loadMoreEpoch &+= 1
             windowLimit = firstWindow
             PostsService.shared.resetHomeFeedSparkPager()
             // Keep disk cache for instant paint — overwrite after thin succeeds.
@@ -553,7 +547,7 @@ final class HomeFeedStore {
         var guardPasses = 0
         var stagnant = 0
         var lastCount = posts.count
-        while posts.count < minBufferedPool, hasMore, guardPasses < 28 {
+        while posts.count < minBufferedPool, hasMore, guardPasses < 12 {
             guardPasses += 1
             let gen = generation
             // Force network — don't only expand the local window.
@@ -561,8 +555,7 @@ final class HomeFeedStore {
             guard gen == generation else { return }
             if posts.count <= lastCount {
                 stagnant += 1
-                // Keep walking the Sparks surface — a viewed streak must not freeze the pool.
-                if stagnant >= 8 { break }
+                if stagnant >= 3 { break }
             } else {
                 stagnant = 0
                 lastCount = posts.count
@@ -877,9 +870,7 @@ final class HomeFeedStore {
 
         // Top up pool early — never wait until the last few cells.
         let threshold = max(0, Int(Double(max(posts.count, 1)) * prefetchRatio) - 1)
-        let nearPoolTail = index >= max(0, displayedPosts.count - 10)
-        let bufferThin = posts.count - windowLimit < 24 || posts.count < minBufferedPool
-        if index >= threshold || nearPoolTail || bufferThin {
+        if index >= threshold || posts.count < minBufferedPool {
             requestLoadMore()
         }
     }
@@ -900,10 +891,7 @@ final class HomeFeedStore {
                 return
             }
         }
-        guard !isLoadingMore, !isBootstrapping else {
-            // Still bump sentinel so a stuck empty load can re-trigger after the in-flight finishes.
-            return
-        }
+        guard !isLoadingMore, !isBootstrapping else { return }
         hasMore = true
         let gen = generation
         pendingLoadMoreTask?.cancel()
@@ -1009,8 +997,6 @@ final class HomeFeedStore {
         nextCursor = nil
         hasMore = true
         recyclePass = 0
-        emptyLoadMoreStreak = 0
-        loadMoreEpoch &+= 1
         PostsService.shared.resetHomeFeedSparkPager()
         await refreshSessionRankingContext()
 
@@ -1073,9 +1059,8 @@ final class HomeFeedStore {
             return
         }
 
-        // Never show a long end-of-feed spinner — top-ups run silently in the background.
-        // Cold empty feed still gets a brief indicator.
-        let showSpinner = displayedPosts.isEmpty
+        // Background buffer top-ups stay silent when the list already has rows.
+        let showSpinner = displayedPosts.count < 8
         if showSpinner { isLoadingMore = true }
         defer { if showSpinner { isLoadingMore = false } }
 
@@ -1083,26 +1068,27 @@ final class HomeFeedStore {
         let existingIDs = Set(posts.map(\.id))
         let seenContent = Set(posts.map(\.homeFeedContentKey))
 
-        // Prefer thin /v1/feed while its cursor lives; once nil, skip straight to R2 Sparks.
+        // Prefer thin /v1/feed page (light); GraphQL only if thin fails.
         let pageItems: [CountryPost]
         let pageNextCursor: String?
-        if cursor != nil || posts.count < pageSize,
-           let thin = await SurfacePageClient.fetchHomeFeed(limit: pageSize, cursor: cursor),
+        if let thin = await SurfacePageClient.fetchHomeFeed(limit: pageSize, cursor: cursor),
            !thin.items.isEmpty {
             pageNextCursor = thin.nextCursor
             nextCursor = thin.nextCursor
             hasMore = true
             pageItems = thin.items
-        } else if cursor != nil {
-            // Thin returned empty but cursor was set — clear and fall through to Sparks.
-            nextCursor = nil
-            pageNextCursor = nil
-            pageItems = []
-            hasMore = true
         } else {
-            pageNextCursor = nil
-            pageItems = []
+            let page = await PostsService.shared.loadHomeFeedPage(
+                after: cursor,
+                limit: pageSize,
+                feedSessionId: feedSessionId,
+                preferCache: false,
+                excludingIDs: existingIDs
+            )
+            pageNextCursor = page.nextCursor
+            nextCursor = page.nextCursor
             hasMore = true
+            pageItems = page.items
         }
         guard gen == generation, !Task.isCancelled else { return }
 
@@ -1121,14 +1107,14 @@ final class HomeFeedStore {
             if appended.count >= pageSize { break }
         }
 
-        // Always top up from R2 Sparks so the pool stays ahead of the finger.
-        // Never forceRefresh here — that reset the Sparks cursor and caused dead ends.
-        if appended.count < pageSize {
+        // Empty thin page → light R2 top-up (unviewed). Keep this path fast.
+        if appended.isEmpty {
             recyclePass += 1
             let exclude = seen
             let textLimit = max(1, pageSize / (Self.homeWrittenMediaGap + 1))
-            let hubLimit = max(2, pageSize / 4)
-            let sparkLimit = max(pageSize - appended.count, pageSize - hubLimit - textLimit)
+            let hubLimit = max(2, pageSize / 3)
+            let sparkLimit = max(1, pageSize - hubLimit - textLimit)
+            // Never forceRefresh mid-scroll — that reset the Sparks cursor and stalled the tail.
             async let sparkTop = PostsService.shared.homeFeedSparkTopUp(
                 excluding: exclude,
                 limit: sparkLimit,
@@ -1152,8 +1138,7 @@ final class HomeFeedStore {
             var hi = 0
             var ti = 0
             var sinceWritten = 0
-            let fillWant = pageSize
-            while mixed.count < fillWant, si < sparks.count || hi < hubs.count || ti < texts.count {
+            while mixed.count < pageSize, si < sparks.count || hi < hubs.count || ti < texts.count {
                 if ti < texts.count,
                    (si >= sparks.count && hi >= hubs.count) || sinceWritten >= Self.homeWrittenMediaGap {
                     mixed.append(texts[ti]); ti += 1
@@ -1182,32 +1167,15 @@ final class HomeFeedStore {
         }
 
         if appended.isEmpty {
+            // Keep trying on next scroll — never set hasMore false permanently.
             hasMore = true
-            emptyLoadMoreStreak += 1
-            loadMoreEpoch &+= 1
             if let next = pageNextCursor, next != cursor {
                 nextCursor = next
-            }
-            // Quick silent retry — no multi-second spinner waits at the tail.
-            let streak = emptyLoadMoreStreak
-            let gen = generation
-            if streak <= 6 {
-                Task(priority: .utility) { [weak self] in
-                    try? await Task.sleep(nanoseconds: streak <= 2 ? 200_000_000 : 600_000_000)
-                    guard let self, gen == self.generation else { return }
-                    self.requestLoadMore()
-                }
             }
             return
         }
 
-        emptyLoadMoreStreak = 0
-
-        // Rank new batch when possible. If ranking drops a recycle fill (all viewed),
-        // keep the raw append so the tail never dead-ends.
-        let rankedAppend = await rankForSessionAsync(appended)
-        let orderedAppend = rankedAppend.isEmpty ? appended : rankedAppend
-        // Never allow duplicate ids (uniqueKeysWithValues fatal + ForEach identity bugs).
+        let orderedAppend = await rankForSessionAsync(appended)
         var poolIDs = Set(posts.map(\.id))
         let dedupedAppend = orderedAppend.filter { poolIDs.insert($0.id).inserted }
         posts.append(contentsOf: dedupedAppend)
