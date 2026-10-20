@@ -698,12 +698,15 @@ final class PostsService {
     private var homeFeedSparkOrder: [CountryPost] = []
     /// Thin `/v1/sparks` cursor — walks the R2 library newest-first across Home load-mores.
     private var homeSparksSurfaceCursor: String?
+    /// True after one full newest→oldest unviewed walk finished; discover/recycle fills until refresh.
+    private var homeSparksSurfaceExhausted = false
 
     /// Reset Home Sparks paging (fresh session / pull-to-refresh).
     func resetHomeFeedSparkPager() {
         homeFeedSparkOffset = 0
         homeFeedSparkOrder = []
         homeSparksSurfaceCursor = nil
+        homeSparksSurfaceExhausted = false
     }
 
     /// Draw Hubs-badge long-form / `__hub_origin__|` shares for Home (not Sparks).
@@ -746,53 +749,58 @@ final class PostsService {
     }
 
     /// Draw the next slice of R2 Sparks for the main feed (SparkFeedCard).
-    /// Prefers thin `/v1/sparks` cursor walk (full library); GraphQL discover is a supplement.
+    /// Prefers thin `/v1/sparks` cursor walk (full library); never resets mid-scroll.
     func homeFeedSparkTopUp(excluding: Set<String>, limit: Int, forceRefresh: Bool = false) async -> [CountryPost] {
         guard limit > 0 else { return [] }
+        // Only fresh sessions may reset the pager — mid-scroll reset caused dead ends.
         if forceRefresh {
             resetHomeFeedSparkPager()
         }
 
         var out: [CountryPost] = []
-        var seen = excluding.union(Set(SparkDiscoveryEngine.viewedIDList(limit: 800)))
+        // Exclude only what's already in the Home pool — do not union the full watched list
+        // into every surface walk (that made each top-up crawl slowly then stall).
+        var seen = excluding
 
-        // Primary: page the R2-backed Sparks surface until we fill `limit`.
-        // 300k+ objects — never stop after one GraphQL sample.
-        var surfacePasses = 0
-        while out.count < limit, surfacePasses < 6 {
-            surfacePasses += 1
-            let need = limit - out.count
-            let page = await SurfacePageClient.fetchSparksPages(
-                want: max(need, 24),
-                startingCursor: homeSparksSurfaceCursor,
-                maxPages: 4,
-                excluding: seen,
-                skipViewed: true
-            )
-            homeSparksSurfaceCursor = page.nextCursor
-            var added = 0
-            for post in page.items {
-                guard seen.insert(post.id).inserted else { continue }
-                guard !SparkDiscoveryEngine.isViewed(post) else { continue }
-                guard post.playableVideoURL != nil || post.hasVideo || !(post.mediaURL ?? "").isEmpty else { continue }
-                out.append(post)
-                added += 1
-                if out.count >= limit { return out }
-            }
-            if page.nextCursor == nil {
-                // Restart from the newest head so Home stays endless across the library.
-                homeSparksSurfaceCursor = nil
-                if added == 0 { break }
-            } else if added == 0 {
-                // Cursor advanced past a viewed/dup streak — keep walking.
-                continue
+        // Primary: keep walking `/v1/sparks` from the saved cursor.
+        if !homeSparksSurfaceExhausted {
+            var surfacePasses = 0
+            while out.count < limit, surfacePasses < 8 {
+                surfacePasses += 1
+                let need = limit - out.count
+                let page = await SurfacePageClient.fetchSparksPages(
+                    want: max(need, 32),
+                    startingCursor: homeSparksSurfaceCursor,
+                    maxPages: 5,
+                    excluding: seen,
+                    skipViewed: true
+                )
+                if let next = page.nextCursor {
+                    homeSparksSurfaceCursor = next
+                } else {
+                    homeSparksSurfaceCursor = nil
+                    homeSparksSurfaceExhausted = true
+                }
+                var added = 0
+                for post in page.items {
+                    guard seen.insert(post.id).inserted else { continue }
+                    guard !SparkDiscoveryEngine.isViewed(post) else { continue }
+                    guard post.playableVideoURL != nil || post.hasVideo || !(post.mediaURL ?? "").isEmpty else {
+                        continue
+                    }
+                    out.append(post)
+                    added += 1
+                    if out.count >= limit { return out }
+                }
+                if homeSparksSurfaceExhausted { break }
+                if added == 0, page.nextCursor == nil { break }
             }
         }
         if out.count >= limit { return out }
 
-        // Supplement: random GraphQL discover windows.
+        // Supplement: random GraphQL discover windows (still unviewed-first).
         let remote = await fetchDiscoverSparks(
-            limit: max(limit * 2, 40),
+            limit: max(limit * 2, 48),
             excluding: Array(seen.prefix(800))
         )
         for post in SparkDiscoveryEngine.rankForDiscovery(remote, excluding: seen) {
@@ -803,62 +811,23 @@ final class PostsService {
             if out.count >= limit { return out }
         }
 
-        if homeFeedSparkOrder.isEmpty || homeFeedSparkOffset >= homeFeedSparkOrder.count {
-            let rankedRemote = SparkDiscoveryEngine.rankForDiscovery(remote, excluding: seen)
-                .filter { !SparkDiscoveryEngine.isViewed($0) }
-            if !rankedRemote.isEmpty {
-                homeFeedSparkOrder = rankedRemote
-                homeFeedSparkOffset = 0
-            } else if !sparksSessionCatalog.isEmpty {
-                homeFeedSparkOrder = SparkDiscoveryEngine.rankForDiscovery(sparksSessionCatalog)
-                    .filter { !SparkDiscoveryEngine.isViewed($0) }
-                homeFeedSparkOffset = 0
-            }
-        }
-        if homeFeedSparkOrder.isEmpty {
-            let hub = await fetchFocusMarketHubSparks(limitPerAuthor: 200)
-            homeFeedSparkOrder = SparkDiscoveryEngine.rankForDiscovery(hub)
-                .filter { !SparkDiscoveryEngine.isViewed($0) }
-            homeFeedSparkOffset = 0
-        }
-
-        var attempts = 0
-        let maxAttempts = max(homeFeedSparkOrder.count * 2, limit * 4)
-        while out.count < limit, attempts < maxAttempts, !homeFeedSparkOrder.isEmpty {
-            attempts += 1
-            if homeFeedSparkOffset >= homeFeedSparkOrder.count {
-                let more = await fetchDiscoverSparks(limit: 60, excluding: Array(seen.prefix(800)))
-                if !more.isEmpty {
-                    homeFeedSparkOrder = SparkDiscoveryEngine.rankForDiscovery(more, excluding: seen)
-                        .filter { !SparkDiscoveryEngine.isViewed($0) }
-                    homeFeedSparkOffset = 0
-                    if homeFeedSparkOrder.isEmpty { break }
-                } else {
-                    // Walk /v1/sparks again from the current surface cursor.
-                    let again = await SurfacePageClient.fetchSparksPages(
-                        want: max(limit, 24),
-                        startingCursor: homeSparksSurfaceCursor,
-                        maxPages: 3,
-                        excluding: seen,
-                        skipViewed: true
-                    )
-                    homeSparksSurfaceCursor = again.nextCursor ?? homeSparksSurfaceCursor
-                    if again.items.isEmpty { break }
-                    homeFeedSparkOrder = again.items
-                    homeFeedSparkOffset = 0
+        // Last resort so Home never dead-ends: allow already-watched clips not in this pool.
+        if out.count < limit {
+            let recycle = await SurfacePageClient.fetchSparksPages(
+                want: max(limit - out.count, 24),
+                startingCursor: nil,
+                maxPages: 3,
+                excluding: seen,
+                skipViewed: false
+            )
+            for post in recycle.items {
+                guard seen.insert(post.id).inserted else { continue }
+                guard post.playableVideoURL != nil || post.hasVideo || !(post.mediaURL ?? "").isEmpty else {
+                    continue
                 }
+                out.append(post)
+                if out.count >= limit { break }
             }
-            guard homeFeedSparkOrder.indices.contains(homeFeedSparkOffset) else { break }
-            let post = homeFeedSparkOrder[homeFeedSparkOffset]
-            homeFeedSparkOffset += 1
-            if seen.contains(post.id) { continue }
-            if SparkDiscoveryEngine.isViewed(post) {
-                seen.insert(post.id)
-                continue
-            }
-            seen.insert(post.id)
-            guard post.playableVideoURL != nil || post.hasVideo || !(post.mediaURL ?? "").isEmpty else { continue }
-            out.append(post)
         }
         return out
     }

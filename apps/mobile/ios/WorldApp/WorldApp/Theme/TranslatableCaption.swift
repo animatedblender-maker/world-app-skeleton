@@ -11,6 +11,7 @@ import Translation
 /// - iOS 17.4–17.x: system translation sheet; Replace swaps text inline.
 /// - Earlier OS: text only (no button).
 /// - Already-English text: no Translate control (Show original still appears after a swap).
+/// - Set `showsTranslateControl` false when a parent owns one shared post-level button.
 struct TranslatableCaption: View {
     let text: String
     var collapsedLineLimit: Int = 4
@@ -25,6 +26,8 @@ struct TranslatableCaption: View {
     var buttonTint: Color = Theme.accentBright
     /// Skip expand/collapse chrome (always plain Text + Translate).
     var expandable: Bool = true
+    /// When false, only renders text (parent supplies a shared Translate control).
+    var showsTranslateControl: Bool = true
 
     @State private var translated: String?
     @State private var showingTranslated = false
@@ -49,10 +52,8 @@ struct TranslatableCaption: View {
         return false
     }
 
-    /// Show Translate only when OS supports it and the source is not already English.
-    /// Always show the control while a translation is on screen (Show original).
-    private var showsTranslateControl: Bool {
-        guard translationAvailable else { return false }
+    private var showsControl: Bool {
+        guard showsTranslateControl, translationAvailable else { return false }
         if showingTranslated || isTranslating { return true }
         return !CaptionLanguage.isLikelyEnglish(trimmed)
     }
@@ -65,7 +66,7 @@ struct TranslatableCaption: View {
                 VStack(alignment: .leading, spacing: 6) {
                     captionContent
 
-                    if showsTranslateControl {
+                    if showsControl {
                         translateControl
                     }
                 }
@@ -122,26 +123,13 @@ struct TranslatableCaption: View {
     }
 
     private var translateControl: some View {
-        Button {
+        TranslateControlButton(
+            showingTranslated: showingTranslated,
+            isTranslating: isTranslating,
+            buttonTint: buttonTint
+        ) {
             handleTranslateTap()
-        } label: {
-            HStack(spacing: 4) {
-                if isTranslating {
-                    ProgressView()
-                        .controlSize(.mini)
-                        .tint(buttonTint)
-                } else {
-                    Image(systemName: "translate")
-                        .font(.caption2.weight(.semibold))
-                }
-                Text(showingTranslated ? "Show original" : "Translate")
-                    .font(.caption.weight(.semibold))
-            }
-            .foregroundStyle(buttonTint)
         }
-        .buttonStyle(.plain)
-        .disabled(isTranslating)
-        .accessibilityLabel(showingTranslated ? "Show original text" : "Translate to English")
     }
 
     private func handleTranslateTap() {
@@ -174,9 +162,145 @@ struct TranslatableCaption: View {
     }
 }
 
+// MARK: - Shared post-level Translate (one button for title + body)
+
+/// One Translate control for an entire post’s visible title + body.
+struct PostSharedTranslateBar: View {
+    let title: String
+    let bodyText: String
+    var buttonTint: Color = Theme.accentBright
+
+    @Binding var translatedTitle: String?
+    @Binding var translatedBody: String?
+    @Binding var showingTranslated: Bool
+
+    @State private var isTranslating = false
+    @State private var showSystemSheet = false
+    @State private var englishSessionTrigger = 0
+
+    private var trimmedTitle: String {
+        title.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var trimmedBody: String {
+        bodyText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var combinedForSheet: String {
+        [trimmedTitle, trimmedBody].filter { !$0.isEmpty }.joined(separator: "\n\n")
+    }
+
+    private var translationAvailable: Bool {
+        if #available(iOS 17.4, *) { return true }
+        return false
+    }
+
+    private var needsTranslate: Bool {
+        let parts = [trimmedTitle, trimmedBody].filter { !$0.isEmpty }
+        guard !parts.isEmpty else { return false }
+        // Hide when every visible part is already English.
+        return parts.contains { !CaptionLanguage.isLikelyEnglish($0) }
+    }
+
+    private var showsControl: Bool {
+        guard translationAvailable else { return false }
+        if showingTranslated || isTranslating { return true }
+        return needsTranslate
+    }
+
+    var body: some View {
+        Group {
+            if showsControl {
+                TranslateControlButton(
+                    showingTranslated: showingTranslated,
+                    isTranslating: isTranslating,
+                    buttonTint: buttonTint
+                ) {
+                    handleTap()
+                }
+                .modifier(MultiTranslationHooks(
+                    title: trimmedTitle,
+                    bodyText: trimmedBody,
+                    combinedForSheet: combinedForSheet,
+                    showSystemSheet: $showSystemSheet,
+                    englishSessionTrigger: englishSessionTrigger,
+                    onTranslated: { titleOut, bodyOut in
+                        translatedTitle = titleOut
+                        translatedBody = bodyOut
+                        showingTranslated = true
+                        isTranslating = false
+                    },
+                    onFailed: {
+                        isTranslating = false
+                    }
+                ))
+            }
+        }
+        .onChange(of: title) { _, _ in resetIfSourcesChanged() }
+        .onChange(of: bodyText) { _, _ in resetIfSourcesChanged() }
+    }
+
+    private func handleTap() {
+        if showingTranslated {
+            showingTranslated = false
+            return
+        }
+        if translatedTitle != nil || translatedBody != nil {
+            showingTranslated = true
+            return
+        }
+        if #available(iOS 18.0, *) {
+            isTranslating = true
+            englishSessionTrigger &+= 1
+            return
+        }
+        if #available(iOS 17.4, *) {
+            showSystemSheet = true
+            return
+        }
+    }
+
+    private func resetIfSourcesChanged() {
+        translatedTitle = nil
+        translatedBody = nil
+        showingTranslated = false
+        isTranslating = false
+        showSystemSheet = false
+        englishSessionTrigger = 0
+    }
+}
+
+struct TranslateControlButton: View {
+    let showingTranslated: Bool
+    let isTranslating: Bool
+    var buttonTint: Color = Theme.accentBright
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                if isTranslating {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .tint(buttonTint)
+                } else {
+                    Image(systemName: "translate")
+                        .font(.caption2.weight(.semibold))
+                }
+                Text(showingTranslated ? "Show original" : "Translate")
+                    .font(.caption.weight(.semibold))
+            }
+            .foregroundStyle(buttonTint)
+        }
+        .buttonStyle(.plain)
+        .disabled(isTranslating)
+        .accessibilityLabel(showingTranslated ? "Show original text" : "Translate to English")
+    }
+}
+
 // MARK: - Language gate
 
-private enum CaptionLanguage {
+enum CaptionLanguage {
     /// True when NaturalLanguage is confident the text is English.
     /// Short / ambiguous strings stay eligible for Translate (false).
     static func isLikelyEnglish(_ text: String) -> Bool {
@@ -187,7 +311,6 @@ private enum CaptionLanguage {
         recognizer.processString(trimmed)
 
         guard recognizer.dominantLanguage == .english else { return false }
-        // Require a solid English score so mixed / weak guesses still offer Translate.
         let englishScore = recognizer.languageHypotheses(withMaximum: 3)[.english] ?? 0
         return englishScore >= 0.72
     }
@@ -195,8 +318,6 @@ private enum CaptionLanguage {
 
 // MARK: - Availability bridges (keep iOS 18 types off the iOS 17-deployed struct)
 
-/// Routes to the right Translation API without putting `TranslationSession` on
-/// types that compile against the iOS 17 deployment target.
 private struct TranslationAvailabilityHooks: ViewModifier {
     let sourceText: String
     @Binding var showSystemSheet: Bool
@@ -234,6 +355,75 @@ private struct TranslationAvailabilityHooks: ViewModifier {
                 )
         } else {
             content
+        }
+    }
+}
+
+private struct MultiTranslationHooks: ViewModifier {
+    let title: String
+    let bodyText: String
+    let combinedForSheet: String
+    @Binding var showSystemSheet: Bool
+    let englishSessionTrigger: Int
+    let onTranslated: (_ title: String?, _ body: String?) -> Void
+    let onFailed: () -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content
+                .modifier(
+                    InlineEnglishMultiTranslation(
+                        title: title,
+                        bodyText: bodyText,
+                        trigger: englishSessionTrigger,
+                        onTranslated: onTranslated,
+                        onFailed: onFailed
+                    )
+                )
+                .modifier(
+                    SystemTranslationSheet(
+                        sourceText: combinedForSheet,
+                        showSystemSheet: $showSystemSheet,
+                        onTranslated: { replaced in
+                            applyCombinedReplace(replaced)
+                        }
+                    )
+                )
+        } else if #available(iOS 17.4, *) {
+            content
+                .modifier(
+                    SystemTranslationSheet(
+                        sourceText: combinedForSheet,
+                        showSystemSheet: $showSystemSheet,
+                        onTranslated: { replaced in
+                            applyCombinedReplace(replaced)
+                        }
+                    )
+                )
+        } else {
+            content
+        }
+    }
+
+    private func applyCombinedReplace(_ replaced: String) {
+        let out = replaced.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !out.isEmpty else {
+            onFailed()
+            return
+        }
+        let hasTitle = !title.isEmpty
+        let hasBody = !bodyText.isEmpty
+        if hasTitle, hasBody, let range = out.range(of: "\n\n") {
+            let t = String(out[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let b = String(out[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            onTranslated(t.isEmpty ? nil : t, b.isEmpty ? nil : b)
+        } else if hasTitle, !hasBody {
+            onTranslated(out, nil)
+        } else if hasBody, !hasTitle {
+            onTranslated(nil, out)
+        } else {
+            onTranslated(hasTitle ? out : nil, hasBody ? out : nil)
         }
     }
 }
@@ -279,6 +469,57 @@ private struct InlineEnglishTranslation: ViewModifier {
     }
 }
 
+@available(iOS 18.0, *)
+private struct InlineEnglishMultiTranslation: ViewModifier {
+    let title: String
+    let bodyText: String
+    let trigger: Int
+    let onTranslated: (_ title: String?, _ body: String?) -> Void
+    let onFailed: () -> Void
+
+    @State private var configuration: TranslationSession.Configuration?
+
+    func body(content: Content) -> some View {
+        content
+            .translationTask(configuration) { @MainActor session in
+                do {
+                    var titleOut: String?
+                    var bodyOut: String?
+                    if !title.isEmpty {
+                        let response = try await session.translate(title)
+                        let out = response.targetText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        titleOut = out.isEmpty ? nil : out
+                    }
+                    if !bodyText.isEmpty {
+                        let response = try await session.translate(bodyText)
+                        let out = response.targetText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        bodyOut = out.isEmpty ? nil : out
+                    }
+                    if titleOut == nil, bodyOut == nil {
+                        onFailed()
+                    } else {
+                        onTranslated(titleOut, bodyOut)
+                    }
+                } catch {
+                    onFailed()
+                }
+            }
+            .onChange(of: trigger) { _, newValue in
+                guard newValue > 0 else { return }
+                let next = TranslationSession.Configuration(
+                    source: nil,
+                    target: Locale.Language(identifier: "en")
+                )
+                if configuration == nil {
+                    configuration = next
+                } else {
+                    configuration?.invalidate()
+                    configuration = next
+                }
+            }
+    }
+}
+
 @available(iOS 17.4, *)
 private struct SystemTranslationSheet: ViewModifier {
     let sourceText: String
@@ -302,7 +543,16 @@ private struct InlineEnglishTranslation: ViewModifier {
     let trigger: Int
     let onTranslated: (String) -> Void
     let onFailed: () -> Void
+    func body(content: Content) -> some View { content }
+}
 
+@available(iOS 18.0, *)
+private struct InlineEnglishMultiTranslation: ViewModifier {
+    let title: String
+    let bodyText: String
+    let trigger: Int
+    let onTranslated: (_ title: String?, _ body: String?) -> Void
+    let onFailed: () -> Void
     func body(content: Content) -> some View { content }
 }
 
@@ -311,7 +561,6 @@ private struct SystemTranslationSheet: ViewModifier {
     let sourceText: String
     @Binding var showSystemSheet: Bool
     let onTranslated: (String) -> Void
-
     func body(content: Content) -> some View { content }
 }
 #endif

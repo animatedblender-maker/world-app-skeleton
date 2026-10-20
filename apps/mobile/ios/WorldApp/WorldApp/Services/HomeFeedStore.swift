@@ -1073,9 +1073,9 @@ final class HomeFeedStore {
             return
         }
 
-        // Never permanently stop — R2 Sparks keep the tail alive.
-        // Background buffer top-ups stay silent (no spinner) when the list already has rows.
-        let showSpinner = displayedPosts.count < 8
+        // Never show a long end-of-feed spinner — top-ups run silently in the background.
+        // Cold empty feed still gets a brief indicator.
+        let showSpinner = displayedPosts.isEmpty
         if showSpinner { isLoadingMore = true }
         defer { if showSpinner { isLoadingMore = false } }
 
@@ -1083,28 +1083,26 @@ final class HomeFeedStore {
         let existingIDs = Set(posts.map(\.id))
         let seenContent = Set(posts.map(\.homeFeedContentKey))
 
-        // Prefer thin /v1/feed page (light); GraphQL only if thin fails.
+        // Prefer thin /v1/feed while its cursor lives; once nil, skip straight to R2 Sparks.
         let pageItems: [CountryPost]
         let pageNextCursor: String?
-        if let thin = await SurfacePageClient.fetchHomeFeed(limit: pageSize, cursor: cursor),
+        if cursor != nil || posts.count < pageSize,
+           let thin = await SurfacePageClient.fetchHomeFeed(limit: pageSize, cursor: cursor),
            !thin.items.isEmpty {
             pageNextCursor = thin.nextCursor
             nextCursor = thin.nextCursor
-            // Endless feed: thin cursor may end, but R2/Spark top-up must keep going.
             hasMore = true
             pageItems = thin.items
-        } else {
-            let page = await PostsService.shared.loadHomeFeedPage(
-                after: cursor,
-                limit: pageSize,
-                feedSessionId: feedSessionId,
-                preferCache: false,
-                excludingIDs: existingIDs
-            )
-            pageNextCursor = page.nextCursor
-            nextCursor = page.nextCursor
+        } else if cursor != nil {
+            // Thin returned empty but cursor was set — clear and fall through to Sparks.
+            nextCursor = nil
+            pageNextCursor = nil
+            pageItems = []
             hasMore = true
-            pageItems = page.items
+        } else {
+            pageNextCursor = nil
+            pageItems = []
+            hasMore = true
         }
         guard gen == generation, !Task.isCancelled else { return }
 
@@ -1112,7 +1110,6 @@ final class HomeFeedStore {
         var seen = existingIDs
         var contentKeys = seenContent
         let pageDeduped = pageItems.dedupeHomeFeedContent()
-        // Infinite scroll: unviewed only — never pad the page with watched clips.
         let rankedPage = SparkDiscoveryEngine.rankForDiscovery(pageDeduped)
         for post in rankedPage {
             guard seen.insert(post.id).inserted else { continue }
@@ -1124,40 +1121,28 @@ final class HomeFeedStore {
             if appended.count >= pageSize { break }
         }
 
-        // Thin page empty/all-viewed → walk R2 Sparks (+ hubs/text). Library is huge; keep going.
-        if appended.isEmpty || appended.count < pageSize / 2 {
+        // Always top up from R2 Sparks so the pool stays ahead of the finger.
+        // Never forceRefresh here — that reset the Sparks cursor and caused dead ends.
+        if appended.count < pageSize {
             recyclePass += 1
-            let forceDeep = recyclePass == 1 || recyclePass % 3 == 0
-            if forceDeep {
-                _ = await PostsService.shared.loadSparksDiscoveryCatalog(
-                    forceRefresh: recyclePass == 1,
-                    deep: recyclePass >= 1
-                )
-            }
             let exclude = seen
-            // Snapshot for async let — autoclosure is nonisolated and cannot touch MainActor state.
-            let pass = recyclePass
-            // Mix Sparks + Hubs + written (~1 written / 10–12 media) so Home isn't video-only.
             let textLimit = max(1, pageSize / (Self.homeWrittenMediaGap + 1))
-            let hubLimit = max(2, pageSize / 3)
-            // Prefer Sparks fill — /v1/sparks cursor walks the full R2 set.
-            let sparkLimit = max(pageSize, pageSize - hubLimit - textLimit)
-            let sparkForce = pass > 4 && pass % 5 == 0
-            let hubTextForce = pass > 2
+            let hubLimit = max(2, pageSize / 4)
+            let sparkLimit = max(pageSize - appended.count, pageSize - hubLimit - textLimit)
             async let sparkTop = PostsService.shared.homeFeedSparkTopUp(
                 excluding: exclude,
                 limit: sparkLimit,
-                forceRefresh: sparkForce
+                forceRefresh: false
             )
             async let hubTop = PostsService.shared.homeFeedHubTopUp(
                 excluding: exclude,
                 limit: hubLimit,
-                forceRefresh: hubTextForce
+                forceRefresh: false
             )
             async let textTop = PostsService.shared.homeFeedTextTopUp(
                 excluding: exclude,
                 limit: textLimit,
-                forceRefresh: hubTextForce
+                forceRefresh: false
             )
             let sparks = await sparkTop
             let hubs = await hubTop
@@ -1167,7 +1152,8 @@ final class HomeFeedStore {
             var hi = 0
             var ti = 0
             var sinceWritten = 0
-            while mixed.count < pageSize, si < sparks.count || hi < hubs.count || ti < texts.count {
+            let fillWant = pageSize
+            while mixed.count < fillWant, si < sparks.count || hi < hubs.count || ti < texts.count {
                 if ti < texts.count,
                    (si >= sparks.count && hi >= hubs.count) || sinceWritten >= Self.homeWrittenMediaGap {
                     mixed.append(texts[ti]); ti += 1
@@ -1191,29 +1177,26 @@ final class HomeFeedStore {
             for post in mixed {
                 guard seen.insert(post.id).inserted else { continue }
                 guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
-                if SparkDiscoveryEngine.isViewed(post), !PlayPlatformBridge.isWrittenHomePost(post) {
-                    continue
-                }
                 appended.append(post)
             }
         }
 
         if appended.isEmpty {
-            // Keep trying — never set hasMore false. Re-fire the end sentinel + auto-retry.
             hasMore = true
             emptyLoadMoreStreak += 1
             loadMoreEpoch &+= 1
             if let next = pageNextCursor, next != cursor {
                 nextCursor = next
             }
+            // Quick silent retry — no multi-second spinner waits at the tail.
             let streak = emptyLoadMoreStreak
             let gen = generation
-            Task(priority: .utility) { [weak self] in
-                // Brief backoff so we don't spin the API; sentinel also re-appears via epoch.
-                let delayNs: UInt64 = streak <= 2 ? 350_000_000 : min(2_500_000_000, UInt64(streak) * 400_000_000)
-                try? await Task.sleep(nanoseconds: delayNs)
-                guard let self, gen == self.generation else { return }
-                self.requestLoadMore()
+            if streak <= 6 {
+                Task(priority: .utility) { [weak self] in
+                    try? await Task.sleep(nanoseconds: streak <= 2 ? 200_000_000 : 600_000_000)
+                    guard let self, gen == self.generation else { return }
+                    self.requestLoadMore()
+                }
             }
             return
         }

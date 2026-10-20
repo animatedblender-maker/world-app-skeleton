@@ -211,17 +211,13 @@ struct FeedView: View {
                     }
 
                     // Endless sentinel — identity bumps after empty top-ups so onAppear re-fires.
+                    // No end spinner: top-ups stay silent so the tail never feels stuck loading.
                     Color.clear
                         .frame(height: 1)
                         .id("feed-end-\(store.loadMoreEpoch)-\(store.posts.count)")
                         .onAppear {
                             store.requestLoadMore()
                         }
-                    if store.isLoadingMore, store.displayedPosts.count < 8 {
-                        ProgressView()
-                            .padding(.vertical, 16)
-                            .frame(maxWidth: .infinity)
-                    }
                 }
                 .padding(.top, 8)
                 .padding(.bottom, 16)
