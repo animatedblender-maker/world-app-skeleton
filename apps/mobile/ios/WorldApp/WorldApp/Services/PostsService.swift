@@ -3164,7 +3164,7 @@ enum SparkDiscoveryEngine {
                 media.append(p)
             }
         }
-        guard !media.isEmpty else { return media.isEmpty ? posts : media }
+        guard !media.isEmpty else { return posts }
         let maxWritten = max(0, media.count / homeWrittenMediaGap)
         let writtenCap = Array(written.prefix(maxWritten))
         guard !writtenCap.isEmpty else { return media }

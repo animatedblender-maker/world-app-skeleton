@@ -647,7 +647,7 @@ final class HomeFeedStore {
                 media.append(p)
             }
         }
-        guard !media.isEmpty else { return media.isEmpty ? posts : media }
+        guard !media.isEmpty else { return posts }
         // Cap density — at most ~1 text per 50 media (drop the rest from this pass).
         let maxWritten = max(0, media.count / Self.homeWrittenMediaGap)
         let writtenCap = Array(written.prefix(maxWritten))
