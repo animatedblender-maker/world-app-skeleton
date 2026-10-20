@@ -135,9 +135,10 @@ struct FollowButton: View {
 
     private var backgroundFill: Color {
         if onDark {
-            return isFollowing ? Color.white.opacity(0.14) : Theme.accentBright
+            return isFollowing ? Color.white.opacity(0.14) : Theme.matte
         }
-        return isFollowing ? Theme.surfaceMuted : Theme.accentBright
+        // Primary Follow = flat ink (Matterya), never gold/bronze fill.
+        return isFollowing ? Theme.surfaceMuted : Theme.ink
     }
 
     private var borderColor: Color {
@@ -149,8 +150,8 @@ struct FollowButton: View {
 
     private var labelColor: Color {
         if onDark {
-            return .white
+            return isFollowing ? .white : Theme.ink
         }
-        return isFollowing ? Theme.inkSecondary : .white
+        return isFollowing ? Theme.inkSecondary : Theme.paper
     }
 }

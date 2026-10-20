@@ -145,12 +145,12 @@ struct YouTubeSubscribeButton: View {
                 Text(isFollowing ? MatteryaCopy.following : MatteryaCopy.follow)
                     .font(compact ? .caption.weight(.bold) : .subheadline.weight(.semibold))
             }
-            .foregroundStyle(isFollowing ? Theme.ink : Theme.surface)
+            .foregroundStyle(isFollowing ? Theme.ink : Theme.paper)
             .padding(.horizontal, compact ? 12 : 16)
             .padding(.vertical, compact ? 8 : 10)
             .background(
                 Capsule()
-                    .fill(isFollowing ? Theme.canvasMuted : Theme.accentBright)
+                    .fill(isFollowing ? Theme.canvasMuted : Theme.ink)
             )
             .overlay {
                 if isFollowing {

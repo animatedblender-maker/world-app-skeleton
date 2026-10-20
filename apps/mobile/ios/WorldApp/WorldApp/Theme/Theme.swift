@@ -12,31 +12,38 @@ enum Theme {
     static let ink = Color(red: 0.173, green: 0.157, blue: 0.145)
     static let inkSecondary = Color(red: 0.420, green: 0.392, blue: 0.365)
     static let inkMuted = Color(red: 0.580, green: 0.545, blue: 0.510)
-    static let accent = Color(red: 0.420, green: 0.345, blue: 0.255)
-    static let accentBright = Color(red: 0.482, green: 0.388, blue: 0.278)
+    /// Off-white matte highlight — never metallic gold or shiny bronze.
+    static let matte = Color(red: 0.965, green: 0.953, blue: 0.937)
+    /// Soft matte fill for chips / selected controls (flat paper, no sheen).
+    static let matteDeep = Color(red: 0.941, green: 0.929, blue: 0.910)
+    /// Warm ink accent for text/icons on paper (flat — not gold).
+    static let accent = ink
+    /// Former gold/bronze bright → matte off-white (fills, tints, checkmarks).
+    static let accentBright = matte
     static let border = Color(red: 0.867, green: 0.847, blue: 0.820)
     static let divider = Color(red: 0.886, green: 0.871, blue: 0.847)
     static let landFill = Color(red: 0.910, green: 0.894, blue: 0.863)
     static let landSelected = Color(red: 0.878, green: 0.839, blue: 0.776)
     static let oceanWash = Color(red: 0.820, green: 0.878, blue: 0.922)
-    /// Full-screen Sparks accents on dark video — same warm ink as the rest of Matterya.
-    static let reelsAccent = accentBright
+    /// Full-screen Sparks accents on dark video — matte off-white, never gold.
+    static let reelsAccent = matte
     static let danger = Color(red: 0.918, green: 0.000, blue: 0.043)
     static let like = Color(red: 0.918, green: 0.000, blue: 0.043)
     static let commentBubble = Color(red: 0.941, green: 0.949, blue: 0.961)
     static let facebookBlue = Color(red: 0.094, green: 0.467, blue: 0.949)
-    /// Filled/active icon tint — warm off-white, never blue.
-    static let iconFill = Color(red: 0.965, green: 0.953, blue: 0.937)
+    /// Filled/active icon tint — same matte off-white family.
+    static let iconFill = matte
     static let success = Color(red: 0.000, green: 0.690, blue: 0.314)
-    static let buttonMuted = Color(red: 0.941, green: 0.941, blue: 0.941)
+    static let buttonMuted = matteDeep
     static let globeGlass = Color.white.opacity(0.94)
     static let globeScrimTop = Color.white.opacity(0.82)
     static let globeScrimBottom = Color.white.opacity(0.55)
+    /// Story ring — flat paper tones (no gold / IG rainbow).
     static let storyRing = LinearGradient(
         colors: [
-            Color(red: 0.985, green: 0.753, blue: 0.176),
-            Color(red: 0.918, green: 0.235, blue: 0.412),
-            Color(red: 0.525, green: 0.224, blue: 0.796),
+            matte,
+            matteDeep,
+            Color(red: 0.910, green: 0.894, blue: 0.863),
         ],
         startPoint: .topLeading,
         endPoint: .bottomTrailing
@@ -252,11 +259,33 @@ struct PrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.subheadline.weight(.semibold))
-            .foregroundStyle(.white)
+            .foregroundStyle(Theme.paper)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-            .background(Theme.accent, in: RoundedRectangle(cornerRadius: Theme.controlRadius))
-            .opacity(configuration.isPressed ? 0.85 : 1)
+            .padding(.vertical, 12)
+            .background(Theme.ink, in: RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous))
+            .opacity(configuration.isPressed ? 0.82 : 1)
+    }
+}
+
+/// Matterya settings / menu row — paper card, not UIKit grouped List chrome.
+struct MatteryaSettingsRowButtonStyle: ButtonStyle {
+    var destructive: Bool = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.body.weight(.medium))
+            .foregroundStyle(destructive ? Theme.danger : Theme.ink)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(configuration.isPressed ? Theme.matteDeep : Theme.surface)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Theme.border.opacity(0.85), lineWidth: 0.5)
+            )
     }
 }
 

@@ -151,7 +151,7 @@ struct PostDetailView: View {
             appState.openPost(post)
         } label: {
             HStack(spacing: 10) {
-                HubsOriginBadge()
+                MatteryaHubsLogoView(size: 18)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(MatteryaCopy.watchOnHubs)
                         .font(.subheadline.weight(.semibold))

@@ -50,7 +50,7 @@ struct ExpandableBodyText: View {
                             }
                         }
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(Theme.accentBright)
+                        .foregroundStyle(Theme.ink)
                         .buttonStyle(.plain)
                         .accessibilityHint(
                             expanded

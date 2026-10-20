@@ -729,13 +729,10 @@ struct ReelsPagerCard: View {
             }
             .allowsHitTesting(false)
 
-            // Soft off-white gold — pause icon when pausing, play icon when resuming.
-            // Fades in, holds briefly, fades out (same color as before).
+            // Flat off-white matte — pause icon when pausing, play icon when resuming.
             Image(systemName: isPaused ? "pause.fill" : "play.fill")
                 .font(.system(size: 64, weight: .semibold))
-                .foregroundStyle(
-                    Color(red: 0.96, green: 0.93, blue: 0.86).opacity(0.72)
-                )
+                .foregroundStyle(Theme.matte.opacity(0.78))
                 .offset(x: isPaused ? 0 : 3) // optical center for play triangle only
                 .opacity(showPauseGlyph ? 1 : 0)
                 .scaleEffect(showPauseGlyph ? 1 : 0.92)

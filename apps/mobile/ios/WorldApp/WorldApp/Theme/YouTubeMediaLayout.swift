@@ -188,12 +188,8 @@ struct YouTubeVideoThumbnail: View {
     var embedsFrame: Bool = true
     /// Feed must never extract video frames on scroll (main-thread hang).
     var extractFrameIfNeeded: Bool = false
-    /// Hubs badge: only feed share cards (`PlayFeedLinkCard`) — never hubs shelves / search.
+    /// Kept for call-site compatibility — badges on film are off.
     var showsHubBadge: Bool = false
-
-    private var shouldShowHubBadge: Bool {
-        showsHubBadge && PlayPlatformBridge.isHubCatalogContent(post)
-    }
 
     var body: some View {
         Group {
@@ -203,13 +199,6 @@ struct YouTubeVideoThumbnail: View {
                 }
             } else {
                 thumbnailContent
-            }
-        }
-        .overlay(alignment: .bottomLeading) {
-            if shouldShowHubBadge {
-                HubsOriginBadge(compact: true)
-                    .padding(8)
-                    .allowsHitTesting(false)
             }
         }
     }
@@ -398,21 +387,13 @@ struct PlayFeedLinkCard: View {
     /// Opens full Matterya Hubs watch (more related videos, shelves, etc.).
     var onOpen: () -> Void
     var edgeToEdge: Bool = true
-    /// Feed shares always show the Hubs logo even when stamp markers were lost.
+    /// Kept for call-site compatibility — Hubs badges on film are off.
     var forceHubsBadge: Bool = false
     /// Home feed vs profile — same ≥25% (quarter) autoplay rules on both.
     var autoplaySurface: FeedAutoplaySurface = .home
 
     private var horizontalPadding: CGFloat {
         edgeToEdge ? Theme.feedGutter : Theme.pagePadding
-    }
-
-    /// Hub catalog clips + forced share path show the Hubs origin chip.
-    private var showsHubsOriginBadge: Bool {
-        forceHubsBadge
-            || PlayPlatformBridge.isHubFeedCardVideo(post)
-            || PlayPlatformBridge.isHubOriginShare(post)
-            || PlayPlatformBridge.isHubCatalogContent(post)
     }
 
     var body: some View {
@@ -431,20 +412,6 @@ struct PlayFeedLinkCard: View {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .stroke(Theme.border, lineWidth: 0.5)
                 }
-            }
-        }
-        .overlay(alignment: .topLeading) {
-            if showsHubsOriginBadge {
-                Button(action: onOpen) {
-                    HubsOriginBadge()
-                }
-                .buttonStyle(.plain)
-                .padding(.leading, 10)
-                // Sit in the top chrome strip (fully visible, never cropped with the film).
-                .padding(.top, 10)
-                .zIndex(40)
-                .accessibilityLabel(MatteryaCopy.watchOnHubs)
-                .accessibilityHint("Opens this video in Matterya Hubs")
             }
         }
         .padding(.horizontal, edgeToEdge ? 0 : horizontalPadding)
@@ -537,32 +504,10 @@ struct PlayFeedLinkCard: View {
     }
 }
 
-/// Compact mark that a clip lives on Matterya Hubs (not used for plain feed videos).
+/// Former Hubs origin chip on video — removed (product: no Hubs/Sparks badges on film).
 struct HubsOriginBadge: View {
     var compact: Bool = false
-
-    var body: some View {
-        HStack(spacing: compact ? 4 : 6) {
-            MatteryaHubsLogoView(size: compact ? 12 : 16)
-            Text("Hubs")
-                .font(compact ? .caption2.weight(.bold) : .caption.weight(.bold))
-                .tracking(0.35)
-                .foregroundStyle(Color.white)
-        }
-        .padding(.horizontal, compact ? 8 : 10)
-        .padding(.vertical, compact ? 4 : 6)
-        .background(
-            Capsule(style: .continuous)
-                .fill(Theme.accentBright.opacity(0.92))
-        )
-        .overlay(
-            Capsule(style: .continuous)
-                .stroke(Color.white.opacity(0.28), lineWidth: 0.5)
-        )
-        .shadow(color: .black.opacity(0.35), radius: 5, y: 2)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(MatteryaCopy.matteryaHubs)
-    }
+    var body: some View { EmptyView() }
 }
 
 struct YouTubeFeedVideoCard: View {

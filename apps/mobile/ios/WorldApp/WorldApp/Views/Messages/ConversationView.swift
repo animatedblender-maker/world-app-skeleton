@@ -505,9 +505,9 @@ struct ConversationView: View {
                     Task { await sendMessage() }
                 } label: {
                     Image(systemName: isSending ? "hourglass" : "paperplane.fill")
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Theme.paper)
                         .padding(12)
-                        .background(canSend && !isSending ? Theme.accentBright : Theme.inkMuted, in: Circle())
+                        .background(canSend && !isSending ? Theme.ink : Theme.inkMuted, in: Circle())
                 }
                 .buttonStyle(.plain)
                 .contentShape(Circle())

@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 import UIKit
 
@@ -233,16 +234,11 @@ struct SparkFeedCard: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
-        // Badge + mute AFTER clipShape — never cropped by film/corner clip (was missing on many cards).
-        .overlay(alignment: .top) {
-            HStack(alignment: .top, spacing: 8) {
-                SparksOriginBadge(compact: true)
-                    .allowsHitTesting(false)
-                Spacer(minLength: 0)
-                SparkFeedMuteButton()
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 10)
+        // Mute only — no Sparks/Hubs origin badges on film.
+        .overlay(alignment: .topTrailing) {
+            SparkFeedMuteButton()
+                .padding(.horizontal, 12)
+                .padding(.top, 10)
         }
         .contentShape(Rectangle())
         .overlay {
@@ -262,7 +258,11 @@ struct SparkFeedCard: View {
         .task(id: post.id) {
             await seedPosterAndAspect()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .frame0PostersDidUpdate)) { note in
+        .onReceive(
+            NotificationCenter.default.publisher(for: .frame0PostersDidUpdate)
+                .receive(on: DispatchQueue.main)
+        ) { note in
+            guard !ScrollBudget.isFlinging else { return }
             let ids = note.userInfo?["postIDs"] as? [String]
             if let ids, !ids.isEmpty, !ids.contains(post.id) { return }
             guard let cached = Frame0PosterCache.url(for: post.id),
@@ -316,34 +316,10 @@ struct SparkFeedCard: View {
     }
 }
 
-/// Compact Sparks brand chip — feed cards + full-screen player.
+/// Former Sparks origin chip on video — removed (product: no Hubs/Sparks badges on film).
 struct SparksOriginBadge: View {
     var compact: Bool = false
-
-    var body: some View {
-        HStack(spacing: compact ? 4 : 6) {
-            Image(systemName: "sparkles")
-                .font(.system(size: compact ? 9 : 11, weight: .bold))
-            Text(MatteryaCopy.sparks)
-                .font(.system(size: compact ? 10 : 12, weight: .bold))
-                .tracking(0.3)
-        }
-        .foregroundStyle(.white)
-        .padding(.horizontal, compact ? 8 : 10)
-        .padding(.vertical, compact ? 4 : 6)
-        .background(
-            Capsule()
-                .fill(
-                    LinearGradient(
-                        colors: [Theme.reelsAccent, Theme.accentBright.opacity(0.92)],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-        )
-        .shadow(color: .black.opacity(0.28), radius: 6, y: 2)
-        .accessibilityLabel(MatteryaCopy.sparks)
-    }
+    var body: some View { EmptyView() }
 }
 
 /// Feed Sparks mute chip — card overlay (always visible above film).
@@ -486,12 +462,6 @@ struct SharedPostEmbedView: View {
                         ))
                         .clipped()
 
-                        // Hubs chip for spark / non-long-form hub shares in the standard embed path.
-                        if isHub, isVideo {
-                            HubsOriginBadge(compact: true)
-                                .padding(10)
-                                .allowsHitTesting(false)
-                        }
                     }
                 }
 

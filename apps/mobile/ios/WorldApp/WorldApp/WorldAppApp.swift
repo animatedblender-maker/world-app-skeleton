@@ -25,7 +25,7 @@ struct WorldAppApp: App {
                 }
             }
             .preferredColorScheme(.light)
-            .tint(Theme.accentBright)
+            .tint(Theme.ink)
             .animation(.easeOut(duration: 0.28), value: showsLaunchSplash)
             .task {
                 await runLaunchSequence()

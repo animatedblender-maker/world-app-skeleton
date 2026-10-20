@@ -95,8 +95,8 @@ struct ChannelSetupView: View {
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
-                        .foregroundStyle(.white)
-                        .background(canSave ? Theme.accentBright : Theme.inkMuted, in: Capsule())
+                        .foregroundStyle(Theme.paper)
+                        .background(canSave ? Theme.ink : Theme.inkMuted, in: Capsule())
                     }
                     .buttonStyle(.plain)
                     .disabled(!canSave)
