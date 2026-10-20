@@ -233,7 +233,8 @@ function toIso(v: Date | string): string {
 /** Re-presign media_url + Frame 0 thumb_url (+ nested posters) so clients never open dead/403 R2 links. */
 async function freshenCardMedia(items: ThinShelfCard[]): Promise<ThinShelfCard[]> {
   if (!items.length) return items;
-  const concurrency = 6;
+  // Higher concurrency — feed pages were spending multi-seconds on serial-ish R2 re-sign.
+  const concurrency = 12;
   const out: ThinShelfCard[] = new Array(items.length);
   let idx = 0;
   async function worker() {
@@ -755,7 +756,8 @@ async function fetchHomeWrittenRows(opts: {
 /**
  * Home feed thin page — Sparks/Hubs video first.
  * Written/text is extremely rare (~1 per 50 media) so the feed stays smooth.
- * Media query excludes text/image rows; a tiny written lane fills the rare slot.
+ * Media lane uses created_at (index-friendly) — greatest(updated_at, created_at)
+ * was causing multi-second scans / intermittent 500s under cursor walk.
  */
 export async function fetchHomeFeedPage(input: {
   limit?: number;
@@ -771,48 +773,71 @@ export async function fetchHomeFeedPage(input: {
   const hasCol = await hasHubSlugColumn();
   const slugSelect = hasCol ? 'p.hub_slug' : 'null::text as hub_slug';
   const params: unknown[] = [];
-  // Video-only media lane — text/image posts must not consume video slots.
+  // Tight video-only predicate — avoid OR media_url / lower(coalesce) that defeat indexes.
   let where = `
     p.visibility = 'public'
-    and lower(coalesce(p.media_type, '')) not in ('story', 'moment', 'none', 'text', 'image', 'photo')
-    and lower(coalesce(p.body, '')) not like '%__story__%'
-    and (
-      lower(coalesce(p.media_type, '')) in ('video', 'reel', 'spark')
-      or (
-        p.media_url is not null
-        and length(trim(coalesce(p.media_url, ''))) > 4
-      )
-    )
+    and p.media_type in ('video', 'reel', 'spark')
+    and p.media_url is not null
+    and length(trim(p.media_url)) > 8
+    and coalesce(p.body, '') not ilike '%__story__%'
   `;
   if (homeCur.media) {
     params.push(homeCur.media.createdAt, homeCur.media.id);
-    where += ` and (greatest(p.updated_at, p.created_at), p.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`;
+    where += ` and (p.created_at, p.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`;
   }
   params.push(mediaWant);
   const sql = `
     select
       p.id, p.title, p.body, p.media_type, p.media_url, p.thumb_url,
       p.like_count, p.comment_count, p.created_at, p.updated_at,
-      greatest(p.updated_at, p.created_at) as feed_at,
+      p.created_at as feed_at,
       p.country_code, p.country_name,
       p.author_id, p.shared_post_id, ${slugSelect},
       pr.display_name as author_name, pr.username as author_username, pr.avatar_url as author_avatar
     from public.posts p
     left join public.profiles pr on pr.user_id = p.author_id
     where ${where}
-    order by greatest(p.updated_at, p.created_at) desc, p.id desc
+    order by p.created_at desc, p.id desc
     limit $${params.length}
   `;
-  const mediaQuery = pool.query<RawPostRow>(sql, params);
-  const writtenQuery =
-    textQuota > 0
-      ? fetchHomeWrittenRows({
-          limit: 1,
-          cursor: homeCur.text,
-          slugSelect,
-        })
-      : Promise.resolve([] as RawPostRow[]);
-  const [{ rows: mediaRows }, writtenRows] = await Promise.all([mediaQuery, writtenQuery]);
+
+  let mediaRows: RawPostRow[] = [];
+  let writtenRows: RawPostRow[] = [];
+  try {
+    const mediaQuery = pool.query<RawPostRow>(sql, params);
+    const writtenQuery =
+      textQuota > 0
+        ? fetchHomeWrittenRows({
+            limit: 1,
+            cursor: homeCur.text,
+            slugSelect,
+          })
+        : Promise.resolve([] as RawPostRow[]);
+    // Bound the DB wait — prefer empty page over 12s+ hangs that storm iOS -1001.
+    const timed = await Promise.race([
+      Promise.all([mediaQuery, writtenQuery]),
+      new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 7000)),
+    ]);
+    if (timed === 'timeout') {
+      console.error('[feed] media query timed out after 7s');
+      return {
+        surface: 'home_for_you',
+        items: [],
+        nextCursor: null,
+        count: 0,
+      };
+    }
+    mediaRows = timed[0].rows;
+    writtenRows = timed[1];
+  } catch (err: any) {
+    console.error('[feed] media query failed', err?.message ?? err);
+    return {
+      surface: 'home_for_you',
+      items: [],
+      nextCursor: null,
+      count: 0,
+    };
+  }
 
   const mediaOnly = mediaRows.filter((r) => !isWrittenFeedRow(r));
   const writtenMerged = writtenRows.filter(isWrittenFeedRow).slice(0, 1);
@@ -841,14 +866,20 @@ export async function fetchHomeFeedPage(input: {
   }
 
   const items = woven.map((row) => rowToCard(row, classifyRow(row)));
-  const liveItems = await freshenCardMedia(items);
+  let liveItems: ThinShelfCard[];
+  try {
+    liveItems = await freshenCardMedia(items);
+  } catch (err: any) {
+    console.error('[feed] freshenCardMedia failed', err?.message ?? err);
+    liveItems = items;
+  }
 
   const lastMedia = mediaOnly[Math.min(mi, mediaOnly.length) - 1] ?? mediaOnly[mediaOnly.length - 1];
   const lastText =
     writtenMerged[Math.min(ti, writtenMerged.length) - 1] ?? writtenMerged[writtenMerged.length - 1];
   const nextMedia = lastMedia
     ? {
-        createdAt: toIso(lastMedia.feed_at ?? lastMedia.updated_at ?? lastMedia.created_at),
+        createdAt: toIso(lastMedia.created_at),
         id: lastMedia.id,
       }
     : homeCur.media;

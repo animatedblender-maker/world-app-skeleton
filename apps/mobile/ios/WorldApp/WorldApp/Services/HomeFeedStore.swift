@@ -58,6 +58,12 @@ final class HomeFeedStore {
     /// Bumps cancel obsolete network merges / load-more.
     private var generation = 0
     private var pendingLoadMoreTask: Task<Void, Never>?
+    /// True for the whole loadMore body — spinner `isLoadingMore` alone allowed parallel storms.
+    private var loadMoreInFlight = false
+    /// Consecutive `/v1/feed` timeouts/500s on the same thin cursor.
+    private var thinFeedFailStreak = 0
+    /// After repeated thin failures, skip `/v1/feed` briefly and top up from Sparks/Hubs.
+    private var thinFeedCoolUntil: Date?
     /// Soft recycle pass when unique network + catalog slices run dry — feed never ends.
     private var recyclePass = 0
     /// New every app open / pull-to-refresh → different share mix.
@@ -383,6 +389,8 @@ final class HomeFeedStore {
         let gen = generation
         errorMessage = nil
         nextCursor = nil
+        thinFeedFailStreak = 0
+        thinFeedCoolUntil = nil
         hasMore = true
         let paintedBefore = didPaint && !posts.isEmpty
         // Only show refresh chrome when the list was already on screen (pull / reshape).
@@ -890,7 +898,9 @@ final class HomeFeedStore {
                 return
             }
         }
-        guard !isLoadingMore, !isBootstrapping else { return }
+        // Single-flight: UncancellableHTTP ignores Task.cancel, so parallel loadMores
+        // storm the same /v1/feed cursor until -1001.
+        guard !loadMoreInFlight, !isLoadingMore, !isBootstrapping else { return }
         hasMore = true
         let gen = generation
         pendingLoadMoreTask?.cancel()
@@ -994,6 +1004,8 @@ final class HomeFeedStore {
     private func hardRefresh(generation gen: Int) async {
         feedSessionId = UUID().uuidString
         nextCursor = nil
+        thinFeedFailStreak = 0
+        thinFeedCoolUntil = nil
         hasMore = true
         recyclePass = 0
         PostsService.shared.resetHomeFeedSparkPager()
@@ -1055,6 +1067,10 @@ final class HomeFeedStore {
             return
         }
 
+        guard !loadMoreInFlight else { return }
+        loadMoreInFlight = true
+        defer { loadMoreInFlight = false }
+
         // Background buffer top-ups stay silent when the list already has rows.
         let showSpinner = displayedPosts.count < 8
         if showSpinner { isLoadingMore = true }
@@ -1063,47 +1079,63 @@ final class HomeFeedStore {
         let cursor = nextCursor
         let existingIDs = Set(posts.map(\.id))
         let seenContent = Set(posts.map(\.homeFeedContentKey))
+        let thinCooling = thinFeedCoolUntil.map { Date() < $0 } ?? false
 
-        // Prefer thin /v1/feed page (light); GraphQL only if thin fails.
-        let pageItems: [CountryPost]
-        let pageNextCursor: String?
-        if let thin = await SurfacePageClient.fetchHomeFeed(limit: pageSize, cursor: cursor),
-           !thin.items.isEmpty {
-            pageNextCursor = thin.nextCursor
-            nextCursor = thin.nextCursor
-            hasMore = true
-            pageItems = thin.items
-        } else {
-            let page = await PostsService.shared.loadHomeFeedPage(
-                after: cursor,
-                limit: pageSize,
-                feedSessionId: feedSessionId,
-                preferCache: false,
-                excludingIDs: existingIDs
-            )
-            pageNextCursor = page.nextCursor
-            nextCursor = page.nextCursor
-            hasMore = true
-            pageItems = page.items
+        // Prefer thin /v1/feed. On timeout/500: do NOT GraphQL with a v2 cursor (that
+        // storms /graphql too) — clear stuck cursor and fall through to Sparks/Hubs.
+        var pageItems: [CountryPost] = []
+        var pageNextCursor: String? = cursor
+        if !thinCooling {
+            if let thin = await SurfacePageClient.fetchHomeFeed(limit: pageSize, cursor: cursor) {
+                thinFeedFailStreak = 0
+                thinFeedCoolUntil = nil
+                if !thin.items.isEmpty {
+                    pageItems = thin.items
+                    pageNextCursor = thin.nextCursor
+                    nextCursor = thin.nextCursor
+                    hasMore = true
+                } else if let next = thin.nextCursor, next != cursor {
+                    pageNextCursor = next
+                    nextCursor = next
+                } else {
+                    // Thin exhausted — Sparks/Hubs keep the feed endless.
+                    pageNextCursor = nil
+                    nextCursor = nil
+                }
+            } else {
+                thinFeedFailStreak += 1
+                #if DEBUG
+                print("[HomeFeed] thin /v1/feed fail streak=\(thinFeedFailStreak) cursor=\(cursor?.prefix(24) ?? "nil")")
+                #endif
+                if thinFeedFailStreak >= 2 {
+                    // Drop the stuck cursor so the next thin attempt starts fresh.
+                    nextCursor = nil
+                    pageNextCursor = nil
+                    thinFeedCoolUntil = Date().addingTimeInterval(45)
+                    thinFeedFailStreak = 0
+                }
+            }
         }
-        guard gen == generation, !Task.isCancelled else { return }
+        guard gen == generation else { return }
 
         var appended: [CountryPost] = []
         var seen = existingIDs
         var contentKeys = seenContent
-        let pageDeduped = pageItems.dedupeHomeFeedContent()
-        let rankedPage = SparkDiscoveryEngine.rankForDiscovery(pageDeduped)
-        for post in rankedPage {
-            guard seen.insert(post.id).inserted else { continue }
-            guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
-            if SparkDiscoveryEngine.isViewed(post), !PlayPlatformBridge.isWrittenHomePost(post) {
-                continue
+        if !pageItems.isEmpty {
+            let pageDeduped = pageItems.dedupeHomeFeedContent()
+            let rankedPage = SparkDiscoveryEngine.rankForDiscovery(pageDeduped)
+            for post in rankedPage {
+                guard seen.insert(post.id).inserted else { continue }
+                guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
+                if SparkDiscoveryEngine.isViewed(post), !PlayPlatformBridge.isWrittenHomePost(post) {
+                    continue
+                }
+                appended.append(post)
+                if appended.count >= pageSize { break }
             }
-            appended.append(post)
-            if appended.count >= pageSize { break }
         }
 
-        // Empty thin page → Sparks + Hubs top-up only (video-smooth). Rare text stays on thin feed.
+        // Empty / failed thin → Sparks + Hubs top-up only (video-smooth). Rare text stays on thin feed.
         if appended.isEmpty {
             recyclePass += 1
             let exclude = seen
@@ -1162,8 +1194,8 @@ final class HomeFeedStore {
         withTransaction(t) {
             windowLimit = min(posts.count, max(windowLimit + appended.count, windowLimit + windowPageSize))
         }
-        // Prefer network cursor only — never invent ISO from last post (re-walks thin page 1).
-        if let pageNextCursor {
+        // Prefer thin network cursor only when we actually used thin items.
+        if !pageItems.isEmpty, let pageNextCursor {
             nextCursor = pageNextCursor
         }
         hasMore = true
