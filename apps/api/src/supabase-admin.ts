@@ -100,6 +100,7 @@ export async function createAuthUser(opts: {
   email: string;
   password: string;
   emailConfirm?: boolean;
+  userMetadata?: Record<string, unknown>;
 }): Promise<AdminAuthUser> {
   const res = await adminFetch('admin/users', {
     method: 'POST',
@@ -107,6 +108,7 @@ export async function createAuthUser(opts: {
       email: opts.email,
       password: opts.password,
       email_confirm: opts.emailConfirm === true,
+      ...(opts.userMetadata ? { user_metadata: opts.userMetadata } : {}),
     }),
   });
   const text = await res.text().catch(() => '');

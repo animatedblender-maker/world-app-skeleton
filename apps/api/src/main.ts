@@ -503,9 +503,11 @@ app.post('/auth/signup', async (req: Request, res: Response) => {
     // Pass raw body values so empty/null password is rejected with EMPTY_PASSWORD (not coerced to "").
     const email = req.body?.email;
     const password = req.body?.password;
+    const birthdate = req.body?.birthdate;
     const result = await signupWithMatteryaEmail(
       email === undefined || email === null ? '' : String(email),
-      password
+      password,
+      birthdate
     );
     return res.status(201).json(result);
   } catch (err: any) {

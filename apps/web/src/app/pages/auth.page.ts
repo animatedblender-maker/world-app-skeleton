@@ -44,6 +44,18 @@ import {
           />
         </label>
 
+        <label class="field" *ngIf="tab === 'register'">
+          <span>Date of birth</span>
+          <input
+            type="date"
+            [(ngModel)]="birthdate"
+            name="birthdate"
+            [attr.max]="todayISO"
+            required
+          />
+          <span class="field-hint">Required. Under-18 experience comes later — you can still join for now.</span>
+        </label>
+
         <div class="error" *ngIf="errorMsg">{{ errorMsg }}</div>
 
         <div class="hint" *ngIf="accountExists">
@@ -139,6 +151,14 @@ import {
       border-color: var(--m-accent, #6b5841);
       box-shadow: 0 0 0 3px rgba(107, 88, 65, 0.12);
     }
+    .field-hint{
+      font-size: 11px;
+      font-weight: 500;
+      text-transform: none;
+      letter-spacing: 0;
+      color: var(--m-ink-muted, #948b82);
+      line-height: 1.35;
+    }
     .cta{
       border:0;
       border-radius: 10px;
@@ -215,6 +235,9 @@ export class AuthPageComponent {
   tab: 'login' | 'register' = 'login';
   email = '';
   password = '';
+  /** Default ~18 years ago so the picker starts near adult age; user must confirm. */
+  birthdate = AuthPageComponent.defaultBirthdateISO();
+  readonly todayISO = new Date().toISOString().slice(0, 10);
 
   busy = false;
   errorMsg = '';
@@ -361,6 +384,17 @@ export class AuthPageComponent {
         this.forceUi();
         return;
       }
+      const birth = (this.birthdate || '').trim();
+      if (!birth) {
+        this.errorMsg = 'Birthdate is required. Enter your date of birth.';
+        this.forceUi();
+        return;
+      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(birth)) {
+        this.errorMsg = 'Enter a valid date of birth.';
+        this.forceUi();
+        return;
+      }
     }
 
     this.busy = true;
@@ -374,7 +408,7 @@ export class AuthPageComponent {
         return;
       }
 
-      const r = await this.auth.register(email, pass);
+      const r = await this.auth.register(email, pass, (this.birthdate || '').trim());
 
       if (r.isExistingEmail) {
         this.accountExists = true;
@@ -429,6 +463,12 @@ export class AuthPageComponent {
 
   private isValidEmail(value: string): boolean {
     return /^[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}$/i.test(value);
+  }
+
+  private static defaultBirthdateISO(): string {
+    const d = new Date();
+    d.setUTCFullYear(d.getUTCFullYear() - 18);
+    return d.toISOString().slice(0, 10);
   }
 
   async resendConfirm(): Promise<void> {

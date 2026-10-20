@@ -7,6 +7,7 @@ import { AuthService } from '../core/services/auth.service';
 import { GraphqlService } from '../core/services/graphql.service';
 import { MediaService } from '../core/services/media.service';
 import { LocationService } from '../core/services/location.service';
+import { ProfileService } from '../core/services/profile.service';
 
 @Component({
   selector: 'app-profile-setup-page',
@@ -18,52 +19,106 @@ import { LocationService } from '../core/services/location.service';
       <div class="topbar">
         <button class="back" type="button" (click)="goBack()">Back</button>
       </div>
-      <div class="title">Create your profile</div>
-      <div class="sub">Your country is detected automatically. Just add who you are.</div>
 
-      <div class="field">
-        <label>Screen name</label>
-        <input [(ngModel)]="displayName" placeholder="e.g. Amr" autocomplete="nickname" />
-      </div>
+      <ng-container *ngIf="birthdateOnly; else fullSetup">
+        <div class="title">Date of birth</div>
+        <div class="sub">Your profile stays as it is — we only need your birthday.</div>
 
-      <div class="field">
-        <label>Avatar (optional)</label>
-        <div class="row">
-          <label class="btn2" style="cursor:pointer;">
-            Choose image
-            <input type="file" accept="image/*" (change)="onAvatar($event)" style="display:none;" />
-          </label>
-          <div class="avatar-preview" *ngIf="avatarPreviewUrl || avatarUrl">
-            <img [src]="avatarPreviewUrl || avatarUrl" alt="" />
+        <div class="existing" *ngIf="displayName || avatarPreviewUrl || avatarUrl || bio">
+          <div class="existing-row">
+            <div class="avatar-preview" *ngIf="avatarPreviewUrl || avatarUrl">
+              <img [src]="avatarPreviewUrl || avatarUrl" alt="" />
+            </div>
+            <div class="existing-meta">
+              <div class="existing-name">{{ displayName || 'Your profile' }}</div>
+              <div class="existing-bio" *ngIf="bio">{{ bio }}</div>
+              <div class="existing-bio" *ngIf="!bio && countryName">
+                {{ cityName ? (cityName + ', ') : '' }}{{ countryName }}
+              </div>
+            </div>
           </div>
-          <small class="muted" *ngIf="avatarUrl && !avatarPreviewUrl">Selected ✅</small>
         </div>
-      </div>
 
-      <div class="field">
-        <label>Bio (optional)</label>
-        <textarea
-          [(ngModel)]="bio"
-          rows="3"
-          placeholder="Tell the world a little about you…"
-          maxlength="280"
-        ></textarea>
-      </div>
+        <div class="field">
+          <label>Date of birth</label>
+          <input
+            type="date"
+            [(ngModel)]="birthdate"
+            name="birthdate"
+            [attr.max]="todayISO"
+            required
+          />
+          <small class="muted">Required. Private — only you can see this. Under-18 experience comes later.</small>
+        </div>
 
-      <div class="loc-status" *ngIf="detecting || countryName">
-        <span class="dot" [class.ok]="!!countryCode && !detecting" [class.busy]="detecting"></span>
-        <span *ngIf="detecting">Detecting your location…</span>
-        <span *ngIf="!detecting && countryName">
-          Home country: <b>{{ countryName }}</b><span *ngIf="cityName"> · {{ cityName }}</span>
-        </span>
-      </div>
+        <div class="row" style="margin-top:16px;">
+          <button class="btn" (click)="save()" [disabled]="busy || !canSave">
+            {{ busy ? 'Saving…' : 'Save birthday' }}
+          </button>
+          <div class="msg" *ngIf="msg">{{ msg }}</div>
+        </div>
+      </ng-container>
 
-      <div class="row" style="margin-top:16px;">
-        <button class="btn" (click)="save()" [disabled]="busy || detecting || !canSave">
-          {{ busy ? 'Saving…' : detecting ? 'Detecting location…' : 'Save & Continue' }}
-        </button>
-        <div class="msg" *ngIf="msg">{{ msg }}</div>
-      </div>
+      <ng-template #fullSetup>
+        <div class="title">Create your profile</div>
+        <div class="sub">Your country is detected automatically. Add who you are — including your birthday.</div>
+
+        <div class="field">
+          <label>Screen name</label>
+          <input [(ngModel)]="displayName" placeholder="e.g. Amr" autocomplete="nickname" />
+        </div>
+
+        <div class="field">
+          <label>Date of birth</label>
+          <input
+            type="date"
+            [(ngModel)]="birthdate"
+            name="birthdate"
+            [attr.max]="todayISO"
+            required
+          />
+          <small class="muted">Required. Private — only you can see this. Under-18 experience comes later.</small>
+        </div>
+
+        <div class="field">
+          <label>Avatar (optional)</label>
+          <div class="row">
+            <label class="btn2" style="cursor:pointer;">
+              Choose image
+              <input type="file" accept="image/*" (change)="onAvatar($event)" style="display:none;" />
+            </label>
+            <div class="avatar-preview" *ngIf="avatarPreviewUrl || avatarUrl">
+              <img [src]="avatarPreviewUrl || avatarUrl" alt="" />
+            </div>
+            <small class="muted" *ngIf="avatarUrl && !avatarPreviewUrl">Selected ✅</small>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Bio (optional)</label>
+          <textarea
+            [(ngModel)]="bio"
+            rows="3"
+            placeholder="Tell the world a little about you…"
+            maxlength="280"
+          ></textarea>
+        </div>
+
+        <div class="loc-status" *ngIf="detecting || countryName">
+          <span class="dot" [class.ok]="!!countryCode && !detecting" [class.busy]="detecting"></span>
+          <span *ngIf="detecting">Detecting your location…</span>
+          <span *ngIf="!detecting && countryName">
+            Home country: <b>{{ countryName }}</b><span *ngIf="cityName"> · {{ cityName }}</span>
+          </span>
+        </div>
+
+        <div class="row" style="margin-top:16px;">
+          <button class="btn" (click)="save()" [disabled]="busy || detecting || !canSave">
+            {{ busy ? 'Saving…' : detecting ? 'Detecting location…' : 'Save & Continue' }}
+          </button>
+          <div class="msg" *ngIf="msg">{{ msg }}</div>
+        </div>
+      </ng-template>
     </div>
   </div>
   `,
@@ -113,39 +168,40 @@ import { LocationService } from '../core/services/location.service';
       font: inherit;
       resize: vertical;
     }
+    .muted{ font-size:11px; opacity:.65; line-height:1.35; }
     .loc-status{
       margin-top:14px;
       display:flex;
       align-items:center;
       gap:8px;
       font-size:13px;
-      opacity:.85;
+      opacity:.9;
     }
-    .loc-status .dot{
-      width:8px; height:8px; border-radius:999px;
-      background: rgba(255,255,255,0.35);
-      flex-shrink:0;
+    .dot{
+      width:8px; height:8px; border-radius:50%;
+      background: rgba(255,255,255,0.25);
     }
-    .loc-status .dot.ok{ background: #22c55e; box-shadow: 0 0 0 3px rgba(34,197,94,0.2); }
-    .loc-status .dot.busy{
-      background: #00ffd1;
-      animation: pulse 1s ease infinite;
-    }
-    @keyframes pulse {
-      0%,100% { opacity: 1; }
-      50% { opacity: 0.35; }
-    }
-    .row{ display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+    .dot.ok{ background:#34d399; box-shadow:0 0 10px rgba(52,211,153,0.55); }
+    .dot.busy{ background:#67e8f9; animation: pulse 1s infinite; }
+    @keyframes pulse { 50% { opacity:.4; } }
+    .row{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
     .avatar-preview{
-      width:44px; height:44px; border-radius:999px; overflow:hidden;
-      border:1px solid rgba(255,255,255,0.15);
+      width:56px; height:56px; border-radius:16px; overflow:hidden;
+      border:1px solid rgba(255,255,255,0.14);
+      flex:0 0 auto;
     }
     .avatar-preview img{ width:100%; height:100%; object-fit:cover; display:block; }
-    .muted{ opacity:.65; font-weight:600; font-size:12px; }
+    .existing{
+      margin-top:14px; padding:12px; border-radius:16px;
+      border:1px solid rgba(255,255,255,0.10);
+      background: rgba(0,0,0,0.22);
+    }
+    .existing-row{ display:flex; gap:12px; align-items:center; }
+    .existing-name{ font-weight:800; letter-spacing:0.04em; }
+    .existing-bio{ margin-top:4px; font-size:12px; opacity:.7; line-height:1.35; }
     .btn{
-      border:0; border-radius:16px; padding:12px 14px; cursor:pointer;
-      background: linear-gradient(90deg, rgba(0,255,209,0.85), rgba(140,0,255,0.75));
-      color: rgba(6,8,14,0.96); font-weight:900; letter-spacing:0.12em;
+      border:0; border-radius:14px; padding:12px 16px; cursor:pointer;
+      background: #00ffd1; color: rgba(6,8,14,0.96); font-weight:900; letter-spacing:0.12em;
     }
     .btn:disabled{ opacity:.6; cursor:not-allowed; }
     .btn2{
@@ -165,6 +221,8 @@ import { LocationService } from '../core/services/location.service';
 export class ProfileSetupPageComponent implements OnInit {
   displayName = '';
   bio = '';
+  birthdate = ProfileSetupPageComponent.defaultBirthdateISO();
+  readonly todayISO = new Date().toISOString().slice(0, 10);
   avatarUrl: string | null = null;
   avatarPreviewUrl: string | null = null;
 
@@ -173,11 +231,13 @@ export class ProfileSetupPageComponent implements OnInit {
   countryCode = '';
   cityName = '';
 
+  birthdateOnly = false;
   busy = false;
   msg = '';
 
   constructor(
     private auth: AuthService,
+    private profiles: ProfileService,
     private gql: GraphqlService,
     private media: MediaService,
     private location: LocationService,
@@ -186,7 +246,16 @@ export class ProfileSetupPageComponent implements OnInit {
   ) {}
 
   get canSave(): boolean {
+    const birth = (this.birthdate || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(birth)) return false;
+    if (this.birthdateOnly) return true;
     return !!this.displayName.trim() && !!this.countryCode && !!this.countryName;
+  }
+
+  private static defaultBirthdateISO(): string {
+    const d = new Date();
+    d.setUTCFullYear(d.getUTCFullYear() - 18);
+    return d.toISOString().slice(0, 10);
   }
 
   async ngOnInit(): Promise<void> {
@@ -197,10 +266,34 @@ export class ProfileSetupPageComponent implements OnInit {
     }
 
     this.displayName = user.email?.split('@')[0] ?? 'User';
+
+    try {
+      const { meProfile } = await this.profiles.meProfile();
+      if (meProfile) {
+        this.displayName = meProfile.display_name?.trim() || this.displayName;
+        this.bio = (meProfile.bio || '').trim();
+        this.countryName = meProfile.country_name || '';
+        this.countryCode = meProfile.country_code || '';
+        this.cityName = meProfile.city_name || '';
+        this.avatarUrl = meProfile.avatar_url || null;
+        if (meProfile.birthdate && String(meProfile.birthdate).trim().length >= 10) {
+          this.birthdate = String(meProfile.birthdate).trim().slice(0, 10);
+        }
+        this.birthdateOnly = this.profiles.needsBirthdateOnly(meProfile);
+        if (this.profiles.isComplete(meProfile)) {
+          await this.router.navigateByUrl('/');
+          return;
+        }
+      }
+    } catch {
+      // Fall through to full setup.
+    }
+
     this.cdr.detectChanges();
 
-    // Location is automatic — no manual country picker on this screen.
-    queueMicrotask(() => void this.detectLocation());
+    if (!this.birthdateOnly) {
+      queueMicrotask(() => void this.detectLocation());
+    }
   }
 
   async onAvatar(e: Event): Promise<void> {
@@ -256,10 +349,27 @@ export class ProfileSetupPageComponent implements OnInit {
     this.busy = true;
 
     try {
+      const birth = (this.birthdate || '').trim();
+      if (!birth || !/^\d{4}-\d{2}-\d{2}$/.test(birth)) {
+        throw new Error('Birthdate is required. Enter your date of birth.');
+      }
+
+      if (this.birthdateOnly) {
+        await this.gql.query(
+          `
+          mutation Update($input: UpdateProfileInput!) {
+            updateProfile(input: $input) { user_id birthdate display_name country_name }
+          }
+          `,
+          { input: { birthdate: birth } }
+        );
+        await this.router.navigateByUrl('/');
+        return;
+      }
+
       const dn = this.displayName.trim();
       if (!dn) throw new Error('Screen name is required.');
 
-      // One more detect attempt if still missing (e.g. slow network).
       if (!this.countryCode || !this.countryName) {
         const loc = await this.location.detectViaGpsThenServer(9000);
         if (loc?.countryCode && loc.countryName) {
@@ -276,7 +386,7 @@ export class ProfileSetupPageComponent implements OnInit {
       await this.gql.query(
         `
         mutation Update($input: UpdateProfileInput!) {
-          updateProfile(input: $input) { user_id }
+          updateProfile(input: $input) { user_id birthdate }
         }
         `,
         {
@@ -284,6 +394,7 @@ export class ProfileSetupPageComponent implements OnInit {
             display_name: dn,
             avatar_url: this.avatarUrl,
             bio: this.bio.trim() || null,
+            birthdate: birth,
             country_name: this.countryName,
             country_code: this.countryCode,
             city_name: this.cityName || null,

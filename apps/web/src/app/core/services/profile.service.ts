@@ -22,6 +22,8 @@ export type Profile = {
   country_code?: string | null;
   city_name?: string | null;
   bio?: string | null;
+  /** YYYY-MM-DD — owner-only; under-18 policy TBD. */
+  birthdate?: string | null;
   followers_count?: number | null;
   following_count?: number | null;
   account_status?: string | null;
@@ -53,6 +55,29 @@ query Countries {
 `;
 
 const ME_PROFILE = `
+query MeProfile {
+  meProfile {
+    user_id
+    email
+    display_name
+    username
+    avatar_url
+    country_name
+    country_code
+    city_name
+    bio
+    birthdate
+    account_status
+    deactivated_at
+    deleted_at
+    created_at
+    updated_at
+  }
+}
+`;
+
+/** Fallback while older API revisions lack Profile.birthdate. */
+const ME_PROFILE_NO_BIRTHDATE = `
 query MeProfile {
   meProfile {
     user_id
@@ -103,11 +128,40 @@ mutation UpdateProfile($input: UpdateProfileInput!) {
     country_code
     city_name
     bio
+    birthdate
     created_at
     updated_at
   }
 }
 `;
+
+const UPDATE_PROFILE_NO_BIRTHDATE = `
+mutation UpdateProfile($input: UpdateProfileInput!) {
+  updateProfile(input: $input) {
+    user_id
+    email
+    display_name
+    username
+    avatar_url
+    country_name
+    country_code
+    city_name
+    bio
+    created_at
+    updated_at
+  }
+}
+`;
+
+function isUnknownBirthdateFieldError(err: unknown): boolean {
+  const msg = String((err as any)?.message ?? err ?? '').toLowerCase();
+  return (
+    msg.includes('birthdate') ||
+    msg.includes('cannot query field') ||
+    msg.includes('unknown field') ||
+    msg.includes('is not defined by type')
+  );
+}
 
 const PROFILE_BY_USERNAME = `
 query ProfileByUsername($username: String!) {
@@ -193,7 +247,12 @@ export class ProfileService {
   }
 
   async meProfile() {
-    return this.gql.request<{ meProfile: Profile | null }>(ME_PROFILE);
+    try {
+      return await this.gql.request<{ meProfile: Profile | null }>(ME_PROFILE);
+    } catch (err) {
+      if (!isUnknownBirthdateFieldError(err)) throw err;
+      return this.gql.request<{ meProfile: Profile | null }>(ME_PROFILE_NO_BIRTHDATE);
+    }
   }
 
   async deactivateAccount() {
@@ -218,8 +277,20 @@ export class ProfileService {
     country_code?: string | null;
     city_name?: string | null;
     bio?: string | null;
+    birthdate?: string | null;
   }) {
-    return this.gql.request<{ updateProfile: Profile }>(UPDATE_PROFILE, { input });
+    try {
+      return await this.gql.request<{ updateProfile: Profile }>(UPDATE_PROFILE, { input });
+    } catch (err) {
+      if (!isUnknownBirthdateFieldError(err)) throw err;
+      if (input.birthdate != null && Object.keys(input).length === 1) {
+        throw new Error('Birthdate isn’t on the live API yet. Deploy the API, then try again.');
+      }
+      const { birthdate: _ignored, ...rest } = input;
+      return this.gql.request<{ updateProfile: Profile }>(UPDATE_PROFILE_NO_BIRTHDATE, {
+        input: rest,
+      });
+    }
   }
 
   async profileByUsername(username: string) {
@@ -255,9 +326,25 @@ export class ProfileService {
     return { profileById: null };
   }
 
-  isComplete(p: Profile | null) {
+  hasCoreIdentity(p: Profile | null): boolean {
     if (!p) return false;
-    return !!p.display_name && !!p.country_name && p.country_name !== 'Unknown';
+    const name = String(p.display_name || '').trim();
+    const country = String(p.country_name || '').trim();
+    return !!name && !!country && country !== 'Unknown';
+  }
+
+  hasBirthdate(p: Profile | null): boolean {
+    if (!p) return false;
+    return String(p.birthdate || '').trim().length >= 10;
+  }
+
+  /** Existing user with name/location — only birthdate still needed. */
+  needsBirthdateOnly(p: Profile | null): boolean {
+    return this.hasCoreIdentity(p) && !this.hasBirthdate(p);
+  }
+
+  isComplete(p: Profile | null) {
+    return this.hasCoreIdentity(p) && this.hasBirthdate(p);
   }
 
   async searchProfiles(query: string, limit = 6) {

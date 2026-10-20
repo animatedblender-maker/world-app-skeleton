@@ -30,17 +30,23 @@ export class AuthService {
    */
   async register(
     email: string,
-    password: string
+    password: string,
+    birthdate: string
   ): Promise<{ isExistingEmail: boolean; needsEmailConfirm: boolean; message?: string }> {
     const emailTrim = (email ?? '').trim();
     if (!emailTrim) throw new Error('Email is required. Enter your email address.');
     const strength = validateStrongPassword(password);
     if (!strength.ok) throw new Error(strength.message);
+    const birthTrim = (birthdate ?? '').trim();
+    if (!birthTrim) throw new Error('Birthdate is required. Enter your date of birth.');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(birthTrim)) {
+      throw new Error('Birthdate must be YYYY-MM-DD.');
+    }
 
     const res = await fetch(`${this.apiBase}/auth/signup`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'application/json' },
-      body: JSON.stringify({ email: emailTrim, password }),
+      body: JSON.stringify({ email: emailTrim, password, birthdate: birthTrim }),
     });
     const json = await res.json().catch(() => ({}));
 

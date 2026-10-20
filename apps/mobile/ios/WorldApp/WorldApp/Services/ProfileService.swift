@@ -73,15 +73,29 @@ final class ProfileService {
     }
 
     func meProfile() async throws -> Profile? {
+        // Prefer birthdate when the live schema has it; fall back so profile
+        // setup still loads avatar/name/bio on older API revisions.
+        do {
+            return try await fetchMeProfile(includeBirthdate: true)
+        } catch {
+            if Self.isUnknownGraphQLFieldError(error) {
+                return try await fetchMeProfile(includeBirthdate: false)
+            }
+            throw error
+        }
+    }
+
+    private func fetchMeProfile(includeBirthdate: Bool) async throws -> Profile? {
         struct Response: Decodable {
             let meProfile: GraphQLProfile?
         }
 
+        let birthField = includeBirthdate ? " birthdate" : ""
         let query = """
         query MeProfile {
           meProfile {
             user_id email display_name username avatar_url
-            country_name country_code city_name bio
+            country_name country_code city_name bio\(birthField)
             message_privacy
             account_status deactivated_at deleted_at
             created_at updated_at
@@ -91,6 +105,13 @@ final class ProfileService {
 
         let result: Response = try await gql.authenticatedRequest(query: query)
         return result.meProfile?.toModel
+    }
+
+    private static func isUnknownGraphQLFieldError(_ error: Error) -> Bool {
+        let message = error.localizedDescription.lowercased()
+        return message.contains("cannot query field")
+            || message.contains("unknown field")
+            || message.contains("birthdate")
     }
 
     struct AccountActionResult: Sendable {
@@ -183,13 +204,10 @@ final class ProfileService {
         countryCode: String? = nil,
         cityName: String? = nil,
         bio: String? = nil,
+        birthdate: String? = nil,
         avatarURL: String? = nil,
         messagePrivacy: String? = nil
     ) async throws -> Profile {
-        struct Response: Decodable {
-            let updateProfile: GraphQLProfile
-        }
-
         var input: [String: Any] = [:]
         if let displayName { input["display_name"] = displayName }
         if let username { input["username"] = username }
@@ -197,6 +215,7 @@ final class ProfileService {
         if let countryCode { input["country_code"] = countryCode }
         if let cityName { input["city_name"] = cityName }
         if let bio { input["bio"] = bio }
+        if let birthdate { input["birthdate"] = birthdate }
         if let avatarURL { input["avatar_url"] = avatarURL }
         if let messagePrivacy { input["message_privacy"] = messagePrivacy }
 
@@ -205,11 +224,46 @@ final class ProfileService {
             throw GraphQLError.gql("Nothing to update.")
         }
 
+        let wantsBirthdate = input["birthdate"] != nil
+        do {
+            return try await performUpdateProfile(input: input, includeBirthdate: true)
+        } catch {
+            // Live schema may not expose birthdate yet — retry without it so
+            // other profile fields still save; surface a clear error when the
+            // only change was birthdate.
+            if Self.isUnknownGraphQLFieldError(error) {
+                if wantsBirthdate, input.keys.count == 1 {
+                    throw GraphQLError.gql(
+                        "Birthdate isn’t on the live API yet. Deploy the API, then try again."
+                    )
+                }
+                var stripped = input
+                stripped.removeValue(forKey: "birthdate")
+                guard !stripped.isEmpty else {
+                    throw GraphQLError.gql(
+                        "Birthdate isn’t on the live API yet. Deploy the API, then try again."
+                    )
+                }
+                return try await performUpdateProfile(input: stripped, includeBirthdate: false)
+            }
+            throw error
+        }
+    }
+
+    private func performUpdateProfile(
+        input: [String: Any],
+        includeBirthdate: Bool
+    ) async throws -> Profile {
+        struct Response: Decodable {
+            let updateProfile: GraphQLProfile
+        }
+
+        let birthField = includeBirthdate ? " birthdate" : ""
         let mutation = """
         mutation UpdateProfile($input: UpdateProfileInput!) {
           updateProfile(input: $input) {
             user_id email display_name username avatar_url
-            country_name country_code city_name bio
+            country_name country_code city_name bio\(birthField)
             message_privacy
             account_status
             created_at updated_at

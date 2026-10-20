@@ -31,6 +31,8 @@ export const typeDefs = `#graphql
     country_code: String
     city_name: String
     bio: String
+    """YYYY-MM-DD — owner-only; under-18 policy TBD"""
+    birthdate: String
     is_private: Boolean!
     """everyone | following | requests — who can message you"""
     message_privacy: String!
@@ -365,6 +367,8 @@ export const typeDefs = `#graphql
     country_code: String
     city_name: String
     bio: String
+    """YYYY-MM-DD"""
+    birthdate: String
     is_private: Boolean
     """everyone | following | requests"""
     message_privacy: String

@@ -6,6 +6,8 @@ struct AuthView: View {
     @State private var activeTab: AuthTab = .login
     @State private var email = ""
     @State private var password = ""
+    /// Default ~18 years ago so the picker starts near adult age; user must confirm.
+    @State private var birthdate = Calendar.current.date(byAdding: .year, value: -18, to: Date()) ?? Date()
     @State private var busy = false
     @State private var errorMessage: String?
     @State private var infoMessage: String?
@@ -30,6 +32,27 @@ struct AuthView: View {
                     VStack(spacing: 14) {
                         PremiumTextField(title: "Email", text: $email, keyboard: .emailAddress)
                         PremiumTextField(title: "Password", text: $password, isSecure: true)
+
+                        if activeTab == .register {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Date of birth")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(Theme.inkMuted)
+                                DatePicker(
+                                    "",
+                                    selection: $birthdate,
+                                    in: ...Date(),
+                                    displayedComponents: .date
+                                )
+                                .labelsHidden()
+                                .datePickerStyle(.compact)
+                                .tint(Theme.ink)
+                                Text("Required. Under-18 experience comes later — you can still join for now.")
+                                    .font(.caption2)
+                                    .foregroundStyle(Theme.inkMuted)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
 
                         if let errorMessage {
                             Text(errorMessage)
@@ -149,7 +172,8 @@ struct AuthView: View {
                 } else {
                     let result = try await AuthService.shared.register(
                         email: trimmedEmail,
-                        password: password
+                        password: password,
+                        birthdate: Self.birthdateAPIString(from: birthdate)
                     )
                     if result.isExistingEmail {
                         errorMessage = "This email is already registered. Log in or reset your password."
@@ -206,6 +230,15 @@ struct AuthView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    private static func birthdateAPIString(from date: Date) -> String {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(secondsFromGMT: 0)
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: date)
     }
 
     private func isValidEmail(_ value: String) -> Bool {

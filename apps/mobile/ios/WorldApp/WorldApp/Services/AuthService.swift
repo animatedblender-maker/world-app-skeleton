@@ -142,13 +142,21 @@ final class AuthService {
 
     /// Matterya-owned signup: API creates an unconfirmed user and emails a branded
     /// confirmation link to `https://matterya.com/confirm-email?token=…`.
-    func register(email: String, password: String) async throws -> (needsEmailConfirm: Bool, isExistingEmail: Bool) {
+    func register(
+        email: String,
+        password: String,
+        birthdate: String
+    ) async throws -> (needsEmailConfirm: Bool, isExistingEmail: Bool) {
         if case .failure(let failure) = PasswordPolicy.validateStrong(password) {
             throw AuthError.server(failure.errorDescription ?? PasswordPolicy.requirementsHint)
         }
         let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedEmail.isEmpty else {
             throw AuthError.server("Email is required. Enter your email address.")
+        }
+        let trimmedBirth = birthdate.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedBirth.isEmpty else {
+            throw AuthError.server("Birthdate is required. Enter your date of birth.")
         }
         guard let url = URL(string: "\(AppConfig.apiBaseURL)/auth/signup") else {
             throw AuthError.network("Invalid signup URL.")
@@ -161,6 +169,7 @@ final class AuthService {
         request.httpBody = try JSONSerialization.data(withJSONObject: [
             "email": trimmedEmail,
             "password": password,
+            "birthdate": trimmedBirth,
         ])
 
         let (data, response) = try await URLSession.shared.data(for: request)

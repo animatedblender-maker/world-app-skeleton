@@ -15,6 +15,8 @@ export type ProfileRow = {
   country_code: string | null;
   city_name: string | null;
   bio: string | null;
+  /** YYYY-MM-DD — owner-only via redactForViewer */
+  birthdate: string | null;
   is_private: boolean;
   message_privacy: MessagePrivacy;
   account_status: AccountStatus;
@@ -39,9 +41,43 @@ type UpdateProfileInput = {
   country_code?: string | null;
   city_name?: string | null;
   bio?: string | null;
+  birthdate?: string | null;
   is_private?: boolean | null;
   message_privacy?: string | null;
 };
+
+/** Parse YYYY-MM-DD; reject invalid / future / pre-1900 dates. */
+export function normalizeBirthdate(raw: unknown): string | null {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    throw Object.assign(new Error('Birthdate must be YYYY-MM-DD.'), {
+      code: 'INVALID_BIRTHDATE',
+      status: 400,
+    });
+  }
+  const d = new Date(`${s}T00:00:00.000Z`);
+  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== s) {
+    throw Object.assign(new Error('Enter a valid birthdate.'), {
+      code: 'INVALID_BIRTHDATE',
+      status: 400,
+    });
+  }
+  const min = new Date('1900-01-01T00:00:00.000Z');
+  const today = new Date();
+  const todayUtc = new Date(
+    Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())
+  );
+  if (d < min || d > todayUtc) {
+    throw Object.assign(new Error('Enter a valid birthdate.'), {
+      code: 'INVALID_BIRTHDATE',
+      status: 400,
+    });
+  }
+  // Under-18 policy TBD — store for now; do not reject.
+  return s;
+}
 
 function normalizeMessagePrivacy(raw: unknown): MessagePrivacy {
   const v = String(raw ?? 'everyone').trim().toLowerCase();
@@ -50,16 +86,21 @@ function normalizeMessagePrivacy(raw: unknown): MessagePrivacy {
 }
 
 export class ProfilesService {
-  /** Owner always sees full data; others lose avatar (and bio/city) when private. */
+  /** Owner always sees full data; birthdate is always owner-only. */
   redactForViewer(profile: ProfileRow | null, viewerId: string | null): ProfileRow | null {
     if (!profile) return null;
     const isPrivate = !!profile.is_private;
     const isOwner = !!viewerId && viewerId === profile.user_id;
-    if (!isPrivate || isOwner) {
+    if (isOwner) {
       return {
         ...profile,
         is_private: isPrivate,
       };
+    }
+    // Birthdate is never public (age-gate later).
+    const withoutBirth: ProfileRow = { ...profile, birthdate: null, is_private: isPrivate };
+    if (!isPrivate) {
+      return withoutBirth;
     }
     return {
       ...profile,
@@ -68,6 +109,7 @@ export class ProfilesService {
       bio: null,
       city_name: null,
       email: null,
+      birthdate: null,
     };
   }
 
@@ -327,8 +369,22 @@ export class ProfilesService {
         ? normalizeMessagePrivacy(input.message_privacy)
         : null;
 
+    // When birthdate is present in the input, require a valid YYYY-MM-DD (do not clear).
+    let birthdate: string | null = null;
+    let setBirthdate = false;
+    if (input.birthdate !== undefined) {
+      birthdate = normalizeBirthdate(input.birthdate);
+      if (!birthdate) {
+        throw Object.assign(new Error('Birthdate is required. Enter your date of birth.'), {
+          code: 'BIRTHDATE_REQUIRED',
+          status: 400,
+        });
+      }
+      setBirthdate = true;
+    }
+
     try {
-      // Prefer full update including privacy columns when they exist.
+      // Prefer full update including privacy + birthdate columns when they exist.
       const { rows } = await pool.query(
         `
         update public.profiles
@@ -342,6 +398,7 @@ export class ProfilesService {
           bio          = coalesce($8, bio),
           is_private   = coalesce($9, is_private),
           message_privacy = coalesce($10, message_privacy),
+          birthdate    = case when $12::boolean then $11::date else birthdate end,
           updated_at   = now()
         where user_id = $1
         returning *
@@ -357,6 +414,8 @@ export class ProfilesService {
           input.bio ?? null,
           typeof input.is_private === 'boolean' ? input.is_private : null,
           messagePrivacy,
+          birthdate,
+          setBirthdate,
         ]
       );
 
@@ -469,8 +528,16 @@ export class ProfilesService {
     const statusRaw = String((row as any).account_status ?? 'active').toLowerCase();
     const account_status: AccountStatus =
       statusRaw === 'deactivated' || statusRaw === 'deleted' ? statusRaw : 'active';
+    const rawBirth = (row as any).birthdate;
+    let birthdate: string | null = null;
+    if (rawBirth instanceof Date && !Number.isNaN(rawBirth.getTime())) {
+      birthdate = rawBirth.toISOString().slice(0, 10);
+    } else if (typeof rawBirth === 'string' && rawBirth.trim()) {
+      birthdate = rawBirth.trim().slice(0, 10);
+    }
     return {
       ...row,
+      birthdate,
       is_private: !!(row as any).is_private,
       message_privacy: normalizeMessagePrivacy((row as any).message_privacy),
       account_status,

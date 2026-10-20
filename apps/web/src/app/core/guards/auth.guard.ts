@@ -21,22 +21,26 @@ export const authGuard: CanActivateFn = async (_route, state) => {
 
   try {
     const { meProfile } = await profiles.meProfile();
-    if (meProfile) return true;
-
-    if (!meProfile) {
-      const byId = await profiles.profileById(user.id);
-      if (byId.profileById) return true;
+    if (meProfile) {
+      // Existing users missing birthdate (or core identity) must finish setup.
+      if (!profiles.isComplete(meProfile)) {
+        return router.parseUrl('/profile-setup');
+      }
+      return true;
     }
 
-    console.warn('[authGuard] profile lookup returned null for authenticated user, allowing navigation', {
-      userId: user.id,
-      url,
-    });
-    return true;
+    const byId = await profiles.profileById(user.id);
+    if (byId.profileById) {
+      if (!profiles.isComplete(byId.profileById)) {
+        return router.parseUrl('/profile-setup');
+      }
+      return true;
+    }
+
+    // No profile row yet — send to setup (full form for new users).
+    return router.parseUrl('/profile-setup');
   } catch (e) {
     console.warn('[authGuard] meProfile failed, allowing navigation:', e);
     return true;
   }
-
-  return true;
 };

@@ -263,8 +263,8 @@ enum SparkShareMarker {
         return body.contains(token)
     }
 
-    /// Stamp original Spark id + **channel** so feed cards can show
-    /// “you shared · from Channel” without pretending the channel posted.
+    /// Stamp original Spark id + **channel** so feed cards can show the
+    /// clickable channel/creator name without pretending the channel posted.
     static func markBody(caption: String, origin: CountryPost) -> String {
         let sid = (origin.sharedPostID ?? origin.id)
             .replacingOccurrences(of: "|", with: "")
@@ -272,9 +272,12 @@ enum SparkShareMarker {
         let an = (origin.author?.displayName ?? origin.authorDisplayName)
             .replacingOccurrences(of: "|", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        let au = (origin.author?.username ?? "")
+            .replacingOccurrences(of: "|", with: "")
         var header = "\(token)sid=\(sid)"
         if !aid.isEmpty { header += "|aid=\(aid)" }
         if !an.isEmpty { header += "|an=\(an)" }
+        if !au.isEmpty { header += "|au=\(au)" }
         let cap = caption.trimmingCharacters(in: .whitespacesAndNewlines)
         if cap.isEmpty { return header }
         return "\(header)\n\(cap)"
@@ -294,6 +297,20 @@ enum SparkShareMarker {
         guard let an = parseFields(from: body)?["an"]?.trimmingCharacters(in: .whitespacesAndNewlines),
               !an.isEmpty else { return nil }
         return an
+    }
+
+    /// Original Spark author id when stamped (`aid=`).
+    static func originAuthorID(from body: String?) -> String? {
+        guard let aid = parseFields(from: body)?["aid"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !aid.isEmpty else { return nil }
+        return aid
+    }
+
+    /// Original Spark author username when stamped (`au=`).
+    static func originUsername(from body: String?) -> String? {
+        guard let au = parseFields(from: body)?["au"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !au.isEmpty else { return nil }
+        return au
     }
 
     private static func parseFields(from body: String?) -> [String: String]? {
@@ -1275,6 +1292,8 @@ struct Profile: Identifiable, Hashable, Sendable, Codable {
     let countryCode: String?
     let cityName: String?
     let bio: String?
+    /// YYYY-MM-DD — owner-only; under-18 policy TBD.
+    let birthdate: String?
     let followersCount: Int?
     let followingCount: Int?
     /// everyone | following | requests
@@ -1286,15 +1305,92 @@ struct Profile: Identifiable, Hashable, Sendable, Codable {
     let createdAt: String
     let updatedAt: String
 
+    enum CodingKeys: String, CodingKey {
+        case userID = "user_id"
+        case email
+        case displayName = "display_name"
+        case username
+        case avatarURL = "avatar_url"
+        case countryName = "country_name"
+        case countryCode = "country_code"
+        case cityName = "city_name"
+        case bio
+        case birthdate
+        case followersCount = "followers_count"
+        case followingCount = "following_count"
+        case messagePrivacy = "message_privacy"
+        case accountStatus = "account_status"
+        case deactivatedAt = "deactivated_at"
+        case deletedAt = "deleted_at"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+
     var resolvedMessagePrivacy: MessagePrivacy {
         MessagePrivacy.parse(messagePrivacy)
     }
 
-    var isComplete: Bool {
+    /// Age in whole years from birthdate (UTC calendar), if known.
+    var ageYears: Int? {
+        guard let birthdate,
+              let date = Profile.birthdateFormatter.date(from: String(birthdate.prefix(10)))
+        else { return nil }
+        let comps = Calendar(identifier: .gregorian)
+            .dateComponents([.year], from: date, to: Date())
+        return comps.year
+    }
+
+    /// Under-18 policy TBD — helper for future gating.
+    var isUnder18: Bool {
+        guard let age = ageYears else { return false }
+        return age < 18
+    }
+
+    /// Display name + home country present (legacy users may still lack birthdate).
+    var hasCoreIdentity: Bool {
         let name = displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let country = countryName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return !name.isEmpty && !country.isEmpty && country != "Unknown"
     }
+
+    /// Any signal that this is an established account (not a blank new signup).
+    var hasEstablishedProfileContent: Bool {
+        if hasCoreIdentity { return true }
+        let name = displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let country = countryName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let handle = username?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let about = LivingChannelMarker.displayBio(from: bio)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasAvatar = !(avatarURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
+        return hasAvatar
+            || !about.isEmpty
+            || !handle.isEmpty
+            || (!name.isEmpty && !country.isEmpty)
+    }
+
+    var hasBirthdate: Bool {
+        guard let birthdate else { return false }
+        let trimmed = birthdate.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.count >= 10
+    }
+
+    /// Existing user — only need to collect birthdate; keep avatar/bio/identity as-is.
+    var needsBirthdateOnly: Bool {
+        hasEstablishedProfileContent && !hasBirthdate
+    }
+
+    var isComplete: Bool {
+        hasCoreIdentity && hasBirthdate
+    }
+
+    private static let birthdateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(secondsFromGMT: 0)
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
 
     var isDemoUser: Bool { userID.hasPrefix("user_") }
 

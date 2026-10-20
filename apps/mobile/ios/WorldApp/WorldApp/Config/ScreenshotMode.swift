@@ -30,6 +30,7 @@ enum ScreenshotMode {
         countryCode: "ES",
         cityName: "Barcelona",
         bio: "Exploring the world with Matterya.",
+        birthdate: "1996-04-12",
         followersCount: 1284,
         followingCount: 312,
         messagePrivacy: "everyone",

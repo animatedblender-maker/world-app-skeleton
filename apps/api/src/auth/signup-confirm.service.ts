@@ -14,6 +14,7 @@ import {
   sendMail,
 } from '../mail/mail.service.js';
 import { assertStrongPassword, PASSWORD_REQUIREMENTS_HINT } from './password-policy.js';
+import { normalizeBirthdate } from '../graphql/modules/profiles/profiles.service.js';
 
 const TOKEN_BYTES = 32;
 const EXPIRES_HOURS = Number(process.env.EMAIL_CONFIRM_EXPIRES_HOURS ?? 48);
@@ -148,7 +149,8 @@ async function issueConfirmation(userId: string, email: string): Promise<{
 
 export async function signupWithMatteryaEmail(
   rawEmail: string,
-  password: unknown
+  password: unknown,
+  rawBirthdate?: unknown
 ): Promise<SignupResult> {
   if (!supabaseAdminConfigured()) {
     throw Object.assign(new Error('Signup is temporarily unavailable (admin not configured).'), {
@@ -161,6 +163,13 @@ export async function signupWithMatteryaEmail(
   validateEmail(email);
   assertStrongPassword(password);
   const strongPassword = String(password);
+  const birthdate = normalizeBirthdate(rawBirthdate);
+  if (!birthdate) {
+    throw Object.assign(new Error('Birthdate is required. Enter your date of birth.'), {
+      code: 'BIRTHDATE_REQUIRED',
+      status: 400,
+    });
+  }
 
   // Matterya branded mail from noreply@matterya.com requires RESEND_API_KEY
   // (+ domain verified on Resend). Without it we fail clearly — Supabase’s
@@ -183,6 +192,20 @@ export async function signupWithMatteryaEmail(
         isExistingEmail: true,
       });
     }
+    // Keep birthdate current if they retry signup before confirming.
+    try {
+      await pool.query(
+        `
+        update public.profiles
+           set birthdate = $2::date,
+               updated_at = now()
+         where user_id = $1::uuid
+        `,
+        [existing.id, birthdate]
+      );
+    } catch (err: any) {
+      console.warn('[auth] profiles birthdate refresh failed:', String(err?.message ?? err));
+    }
     const reissued = await issueConfirmation(existing.id, email);
     return {
       ok: true,
@@ -199,7 +222,12 @@ export async function signupWithMatteryaEmail(
 
   let created;
   try {
-    created = await createAuthUser({ email, password: strongPassword, emailConfirm: false });
+    created = await createAuthUser({
+      email,
+      password: strongPassword,
+      emailConfirm: false,
+      userMetadata: { birthdate },
+    });
   } catch (err: any) {
     const msg = String(err?.message ?? err);
     if (/already|exists|registered|duplicate/i.test(msg)) {
@@ -210,6 +238,28 @@ export async function signupWithMatteryaEmail(
       });
     }
     throw err;
+  }
+
+  // Ensure profiles.birthdate even if the Auth trigger ran before migration.
+  try {
+    await pool.query(
+      `
+      insert into public.profiles (user_id, email, country_name, birthdate)
+      values ($1::uuid, $2, 'Unknown', $3::date)
+      on conflict (user_id) do update
+        set birthdate = coalesce(excluded.birthdate, public.profiles.birthdate),
+            email = coalesce(excluded.email, public.profiles.email),
+            updated_at = now()
+      `,
+      [created.id, email, birthdate]
+    );
+  } catch (err: any) {
+    const msg = String(err?.message ?? err);
+    if (err?.code === '42703' || msg.includes('birthdate')) {
+      console.warn('[auth] profiles.birthdate column missing — apply migration 20261021120000');
+    } else {
+      console.warn('[auth] profiles birthdate upsert failed:', msg);
+    }
   }
 
   const issued = await issueConfirmation(created.id, email);

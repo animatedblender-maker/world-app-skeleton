@@ -68,6 +68,7 @@ extension Profile {
             countryCode: row["country_code"] as? String,
             cityName: row["city_name"] as? String,
             bio: row["bio"] as? String,
+            birthdate: row["birthdate"] as? String,
             followersCount: row["followers_count"] as? Int,
             followingCount: row["following_count"] as? Int,
             messagePrivacy: row["message_privacy"] as? String ?? "everyone",

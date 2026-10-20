@@ -7,7 +7,9 @@ struct RootView: View {
         Group {
             // Order matters: never show Auth when a persisted session exists.
             // Returning users hydrate isAuthenticated + isSessionReady in AppState.init.
-            if appState.isAuthenticated, appState.needsProfileSetup {
+            // Profile setup loads its own meProfile (shows avatar/bio); avoid flashing
+            // an empty form before session restore finishes.
+            if appState.isAuthenticated, appState.needsProfileSetup, appState.isSessionReady {
                 ProfileSetupView()
             } else if appState.isAuthenticated, appState.isSessionReady {
                 authenticatedShell

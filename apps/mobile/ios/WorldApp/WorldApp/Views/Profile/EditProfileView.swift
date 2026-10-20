@@ -12,6 +12,7 @@ struct EditProfileView: View {
     @State private var countryCode = ""
     @State private var cityName = ""
     @State private var bio = ""
+    @State private var birthdate = Calendar.current.date(byAdding: .year, value: -18, to: Date()) ?? Date()
     @State private var avatarURL: String?
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var busy = false
@@ -67,6 +68,23 @@ struct EditProfileView: View {
                         autocap: .never,
                         disableAutocorrect: true
                     )
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Date of birth")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Theme.inkMuted)
+                        DatePicker(
+                            "",
+                            selection: $birthdate,
+                            in: ...Date(),
+                            displayedComponents: .date
+                        )
+                        .labelsHidden()
+                        .datePickerStyle(.compact)
+                        .tint(Theme.ink)
+                        Text("Private — only you can see this. Under-18 experience comes later.")
+                            .font(.caption2)
+                            .foregroundStyle(Theme.inkMuted)
+                    }
                 }
 
                 editSection(title: "Location") {
@@ -259,8 +277,30 @@ struct EditProfileView: View {
             cityName = profile.cityName ?? ""
             bio = LivingChannelMarker.displayBio(from: profile.bio)
             avatarURL = profile.avatarURL
+            if let parsed = Self.parseBirthdate(profile.birthdate) {
+                birthdate = parsed
+            }
         }
         await detectLocation()
+    }
+
+    private static func parseBirthdate(_ raw: String?) -> Date? {
+        guard let raw, !raw.isEmpty else { return nil }
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(secondsFromGMT: 0)
+        f.dateFormat = "yyyy-MM-dd"
+        return f.date(from: String(raw.prefix(10)))
+    }
+
+    private static func birthdateAPIString(from date: Date) -> String {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(secondsFromGMT: 0)
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: date)
     }
 
     private func detectLocation() async {
@@ -374,6 +414,7 @@ struct EditProfileView: View {
                 countryCode: countryCode.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
                 cityName: cityName.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
                 bio: composedBio,
+                birthdate: Self.birthdateAPIString(from: birthdate),
                 avatarURL: avatarURL
             )
             appState.currentProfile = profile
