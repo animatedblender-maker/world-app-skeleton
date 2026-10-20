@@ -344,13 +344,14 @@ function rowToCard(row: RawPostRow, slug: HubParentSlug): ThinShelfCard {
     null;
 
   const createdIso = toIso(row.created_at);
+  // Real updated_at only — never map feed_at here (that made every bumped post show "Edited").
+  const updatedIso =
+    row.updated_at != null ? toIso(row.updated_at) : createdIso;
   // Prefer feed_at (= greatest(updated_at, created_at)) so clients rank R2 syncs as newest.
   const feedIso =
     row.feed_at != null
       ? toIso(row.feed_at)
-      : row.updated_at != null
-        ? toIso(row.updated_at)
-        : createdIso;
+      : updatedIso;
   return {
     id: row.id,
     slug,
@@ -363,7 +364,7 @@ function rowToCard(row: RawPostRow, slug: HubParentSlug): ThinShelfCard {
     like_count: Number(row.like_count) || 0,
     comment_count: Number(row.comment_count) || 0,
     created_at: createdIso,
-    updated_at: feedIso,
+    updated_at: updatedIso,
     country_code: row.country_code,
     country_name: row.country_name,
     author_id: row.author_id,

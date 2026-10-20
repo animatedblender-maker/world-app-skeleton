@@ -131,8 +131,8 @@ enum FeedCompositionEngine {
             }
             if PlayPlatformBridge.isWrittenHomePost(post) {
                 sources.append(.written)
-                // Soft boost so R2 video density cannot zero out text cards.
-                score += 1.05
+                // No score boost — boosting stacked every text card at the feed head.
+                // Placement is handled by weave (~1 written / 3–4 media).
             }
             if sources.isEmpty {
                 sources.append(.explore)
@@ -298,8 +298,9 @@ enum FeedCompositionEngine {
             if isHub, sparkStreak >= 3 { s += 2.8 }
             if isSpark, hubStreak >= 2 { s += 1.2 }
             if isSpark, sparkStreak >= 3 { s -= 1.4 }
-            if isWritten, mediaStreak >= 3 { s += 3.0 }
-            if isWritten, writtenStreak >= 2 { s -= 1.6 }
+            // Gentle pull into the mix after a media streak — never a written pile at the head.
+            if isWritten, mediaStreak >= 3, writtenStreak == 0 { s += 1.4 }
+            if isWritten, writtenStreak >= 1 { s -= 2.2 }
         }
 
         return s

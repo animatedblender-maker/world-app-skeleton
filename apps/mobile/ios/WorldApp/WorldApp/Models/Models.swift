@@ -642,9 +642,11 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
     var createdDate: Date? { RelativeTime.parseDate(createdAt) }
     var updatedDate: Date? { RelativeTime.parseDate(updatedAt) }
 
+    /// True only for a real edit — seed/import often sets updated_at ≠ created_at by minutes/days.
     var isEdited: Bool {
         guard let created = createdDate, let updated = updatedDate else { return false }
-        return updated.timeIntervalSince(created) > 1
+        // Require a clear human edit gap (not R2 sync / seed stamp noise).
+        return updated.timeIntervalSince(created) > 120
     }
 
     var privacyLabel: String {
@@ -1407,7 +1409,7 @@ struct Message: Identifiable, Hashable, Sendable {
         guard let created = RelativeTime.parseDate(createdAt),
               let updated = RelativeTime.parseDate(updatedAt)
         else { return false }
-        return updated.timeIntervalSince(created) > 1
+        return updated.timeIntervalSince(created) > 120
     }
 
     static func callLogBody(status: String, kind: String, durationSeconds: Int) -> String {

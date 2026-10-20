@@ -3120,7 +3120,45 @@ enum SparkDiscoveryEngine {
             seed: sessionSeed
         )
         _ = viewedPool // retained for diagnostics; intentionally not recycled onto Home
-        return fresh
+        // Final pass: written cards spaced through media (never a text block at the top).
+        return weaveWrittenThroughFeed(fresh)
+    }
+
+    /// ~1 written card per 3–4 media; media owns the first two slots.
+    private static func weaveWrittenThroughFeed(_ posts: [CountryPost]) -> [CountryPost] {
+        guard posts.count > 1 else { return posts }
+        var media: [CountryPost] = []
+        var written: [CountryPost] = []
+        for p in posts {
+            if PlayPlatformBridge.isWrittenHomePost(p) {
+                written.append(p)
+            } else {
+                media.append(p)
+            }
+        }
+        guard !written.isEmpty, !media.isEmpty else { return posts }
+        var out: [CountryPost] = []
+        out.reserveCapacity(posts.count)
+        var mi = 0
+        var wi = 0
+        var sinceWritten = 0
+        while mi < media.count || wi < written.count {
+            let wantWritten = wi < written.count
+                && (mi >= media.count || (sinceWritten >= 3 && out.count >= 2))
+            if wantWritten {
+                out.append(written[wi]); wi += 1
+                sinceWritten = 0
+            } else if mi < media.count {
+                out.append(media[mi]); mi += 1
+                sinceWritten += 1
+            } else if wi < written.count {
+                out.append(written[wi]); wi += 1
+                sinceWritten = 0
+            } else {
+                break
+            }
+        }
+        return out
     }
 
     /// Interleave Sparks, Hubs, and written/text cards so Home isn't video-only.

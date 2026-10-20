@@ -520,9 +520,10 @@ final class HomeFeedStore {
             )
             async let textTop = PostsService.shared.homeFeedTextTopUp(
                 excluding: exclude,
-                limit: 8,
+                limit: 4,
                 forceRefresh: false
             )
+            // Soft-merge weaves written into the tail — never dump a text block on top.
             let extra = (await sparkTop) + (await hubTop) + (await textTop)
             guard gen == self.generation else { return }
             if !extra.isEmpty {
@@ -565,10 +566,12 @@ final class HomeFeedStore {
         )
         guard !clean.isEmpty else { return }
 
-        // Engaged: freeze the on-screen window in place. Append new rows only below it.
-        // Never re-rank / move a post the user is watching to the viewed tail.
-        if userEngagedThisSession, !posts.isEmpty {
-            let pinCount = pinnedPrefixCount(poolCount: posts.count)
+        // Already painted: never full-replace (re-rank stacked every written card on top).
+        // Pin the live list; weave newcomers into the tail (~1 written / 3–4 media).
+        if !posts.isEmpty {
+            let pinCount = userEngagedThisSession
+                ? pinnedPrefixCount(poolCount: posts.count)
+                : posts.count
             let head = Array(posts.prefix(pinCount))
             let below = Array(posts.dropFirst(pinCount))
             var seen = Set(head.map(\.id))
@@ -580,7 +583,7 @@ final class HomeFeedStore {
                 preservedBelow.append(post)
             }
 
-            var newUnviewed: [CountryPost] = []
+            var newcomers: [CountryPost] = []
             for post in clean {
                 guard seen.insert(post.id).inserted else { continue }
                 guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
@@ -588,14 +591,14 @@ final class HomeFeedStore {
                 if SparkDiscoveryEngine.isViewed(post), !PlayPlatformBridge.isWrittenHomePost(post) {
                     continue
                 }
-                newUnviewed.append(post)
+                newcomers.append(post)
             }
-            // Strip watched videos below the pin; keep written cards.
             let cleanedBelow = preservedBelow.filter {
                 PlayPlatformBridge.isWrittenHomePost($0) || !SparkDiscoveryEngine.isViewed($0)
             }
+            let wovenNew = Self.weaveWrittenAmongMedia(newcomers)
 
-            let merged = head + cleanedBelow + newUnviewed
+            let merged = head + cleanedBelow + wovenNew
             guard merged.map(\.id) != posts.map(\.id) else { return }
             var t = Transaction()
             t.disablesAnimations = true
@@ -608,26 +611,17 @@ final class HomeFeedStore {
             return
         }
 
-        // Cold open (not engaged): full rank is fine — nothing on screen yet to protect.
-        let ranked = await rankForSessionAsync(clean + posts)
-        var seen = Set<String>()
-        var contentKeys = Set<String>()
-        var freshTail: [CountryPost] = []
-        freshTail.reserveCapacity(ranked.count)
-        for post in ranked {
-            guard seen.insert(post.id).inserted else { continue }
-            guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
-            if SparkDiscoveryEngine.isViewed(post), !PlayPlatformBridge.isWrittenHomePost(post) {
-                continue
-            }
-            freshTail.append(post)
-        }
-        guard !freshTail.isEmpty else { return }
+        // Truly empty: first paint from this merge — weave, don't score-stack written.
+        let ranked = await rankForSessionAsync(clean)
+        let woven = Self.weaveWrittenAmongMedia(ranked.filter {
+            PlayPlatformBridge.isWrittenHomePost($0) || !SparkDiscoveryEngine.isViewed($0)
+        })
+        guard !woven.isEmpty else { return }
 
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) {
-            posts = freshTail
+            posts = woven
             windowLimit = min(windowLimit, max(firstWindow, min(posts.count, firstWindow)))
         }
         hasMore = true
@@ -635,6 +629,43 @@ final class HomeFeedStore {
             Array(posts.prefix(ContentCache.maxCachedPosts)),
             for: .homeFeed
         )
+    }
+
+    /// Keep written cards in the mix (~1 / 3–4 media) — never a written block at the head.
+    private static func weaveWrittenAmongMedia(_ posts: [CountryPost]) -> [CountryPost] {
+        guard posts.count > 1 else { return posts }
+        var media: [CountryPost] = []
+        var written: [CountryPost] = []
+        for p in posts {
+            if PlayPlatformBridge.isWrittenHomePost(p) {
+                written.append(p)
+            } else {
+                media.append(p)
+            }
+        }
+        guard !written.isEmpty, !media.isEmpty else { return posts }
+        var out: [CountryPost] = []
+        out.reserveCapacity(posts.count)
+        var mi = 0
+        var wi = 0
+        var sinceWritten = 0
+        while mi < media.count || wi < written.count {
+            let wantWritten = wi < written.count
+                && (mi >= media.count || (sinceWritten >= 3 && out.count >= 2))
+            if wantWritten {
+                out.append(written[wi]); wi += 1
+                sinceWritten = 0
+            } else if mi < media.count {
+                out.append(media[mi]); mi += 1
+                sinceWritten += 1
+            } else if wi < written.count {
+                out.append(written[wi]); wi += 1
+                sinceWritten = 0
+            } else {
+                break
+            }
+        }
+        return out
     }
 
     /// Smooth open: cache → tiny first-paint network → done.
