@@ -79,14 +79,14 @@ final class HomeFeedStore {
     private static let lastHeadDefaultsKey = "home.feed.lastHeadIDs.v2"
 
     /// Network page size — keep modest so ranking/merge stays off the scroll path.
-    private let pageSize = 24
-    private let windowPageSize = 12
+    private let pageSize = 16
+    private let windowPageSize = 10
     /// First paint window — ~1.5 screens; grow on scroll.
-    private let firstWindow = 12
-    /// Prefetch next page early (Facebook-style always-ahead pool).
-    private let prefetchRatio = 0.28
+    private let firstWindow = 10
+    /// Prefetch next page later — early ratio stacked /v1/feed + Sparks while scrolling.
+    private let prefetchRatio = 0.55
     /// Keep at least this many posts buffered in `posts` (beyond the visible window).
-    private let minBufferedPool = 36
+    private let minBufferedPool = 24
 
     private init() {}
 
@@ -550,7 +550,7 @@ final class HomeFeedStore {
         var guardPasses = 0
         var stagnant = 0
         var lastCount = posts.count
-        while posts.count < minBufferedPool, hasMore, guardPasses < 12 {
+        while posts.count < minBufferedPool, hasMore, guardPasses < 6 {
             guardPasses += 1
             let gen = generation
             // Force network — don't only expand the local window.
@@ -835,8 +835,8 @@ final class HomeFeedStore {
 
         let fling = ScrollBudget.isFlinging
         // During a fling, jump the window ahead so LazyVStack always has cells ready.
-        let growBy = fling ? windowPageSize * 3 : windowPageSize
-        let growWhenWithin = fling ? 8 : 3
+        let growBy = fling ? windowPageSize * 2 : windowPageSize
+        let growWhenWithin = fling ? 6 : 3
 
         if index >= displayedPosts.count - growWhenWithin, windowLimit < posts.count {
             var t = Transaction()
@@ -848,15 +848,17 @@ final class HomeFeedStore {
             hasMore = true
         }
 
-        // Thumbs + Frame0 always; AV warm only on settle for focus ± small ahead.
-        let thumbAhead = fling ? 4 : 8
+        // Thumbs + Frame0 only — no AV warm on the feed list (media-session contract).
+        let thumbAhead = fling ? 2 : 5
         let end = min(displayedPosts.count, index + thumbAhead)
         if index < end {
             let window = Array(displayedPosts[index..<end])
-            ImageCache.shared.prefetchFeedMedia(window, maxPixelSize: fling ? 280 : 360)
+            ImageCache.shared.prefetchFeedMedia(window, maxPixelSize: fling ? 240 : 320)
             if !fling {
                 Task(priority: .utility) {
-                    await Frame0PosterResolver.shared.prefetch(postIDs: window.map(\.id))
+                    await Frame0PosterResolver.shared.prefetch(
+                        postIDs: Array(window.prefix(4).map(\.id))
+                    )
                 }
             }
         }
@@ -864,18 +866,7 @@ final class HomeFeedStore {
         // Don't kick network load-more mid-fling (causes hitch + image storms).
         guard !fling else { return }
 
-        // Settle: warm focused video + 1–2 ahead (video queue only — not every cell).
-        let videos = Self.feedWarmVideoQueue(from: displayedPosts)
-        if let warmIdx = Self.feedWarmIndex(
-            for: post,
-            in: videos,
-            feedIndex: index,
-            feed: displayedPosts
-        ) {
-            SparkWarmPool.shared.prepareFeedWindow(posts: videos, around: warmIdx)
-        }
-
-        // Top up pool early — never wait until the last few cells.
+        // Top up pool later — never wait until the last few cells.
         let threshold = max(0, Int(Double(max(posts.count, 1)) * prefetchRatio) - 1)
         if index >= threshold || posts.count < minBufferedPool {
             requestLoadMore()
@@ -1248,28 +1239,14 @@ final class HomeFeedStore {
         hasMore = true
     }
 
-    /// `lite` = open path (thumbs only); full = after paint (thumbs + focus±ahead AV).
+    /// Open / after-paint: thumbs + Frame0 only (no AV pool, no slug neighbor storm).
     private func warmHead(lite: Bool = false) async {
-        let thumbN = lite ? 6 : min(max(windowLimit, firstWindow) + 4, 14)
+        let thumbN = lite ? 4 : min(max(windowLimit, firstWindow), 8)
         let thumbBand = Array(posts.prefix(thumbN))
         ImageCache.shared.prefetchFeedMedia(thumbBand, maxPixelSize: lite ? 240 : 320)
         ImageCache.shared.prefetchPostThumbnails(thumbBand, maxPixelSize: 320, aggressive: false)
         Task(priority: .utility) {
-            await Frame0PosterResolver.shared.prefetch(postIDs: Array(thumbBand.prefix(8).map(\.id)))
-        }
-        // Slug neighbor only after paint — never on the open path.
-        if !lite, let hub = posts.prefix(8).first(where: {
-            PlayPlatformBridge.isHubFeedCardVideo($0) || PlayPlatformBridge.isHubOriginShare($0)
-        }) {
-            let slug = hub.hubSlug ?? YouTubeCatalogService.parentHubSlug(for: hub)
-            SlugShelfStore.shared.warmNeighbor(of: slug)
-        }
-        // After paint: light AV warm for first video card + 1–2 ahead (Sparks-like instant).
-        if !lite {
-            let videos = Self.feedWarmVideoQueue(from: Array(displayedPosts.prefix(max(windowLimit, firstWindow))))
-            if !videos.isEmpty {
-                SparkWarmPool.shared.prepareFeedWindow(posts: videos, around: 0)
-            }
+            await Frame0PosterResolver.shared.prefetch(postIDs: Array(thumbBand.prefix(4).map(\.id)))
         }
     }
 

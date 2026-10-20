@@ -13,7 +13,7 @@ final class ImageCache: @unchecked Sendable {
     private let memoryCache = NSCache<NSString, UIImage>()
     private let inflight = InflightTable()
     /// Cap concurrent image loads — keep low so Feed+Hubs dual-mount never storms the radio.
-    private let downloadGate = DownloadGate(maxConcurrent: 4)
+    private let downloadGate = DownloadGate(maxConcurrent: 3)
     private let session: URLSession
     private let diskDirectory: URL
     private let ioQueue = DispatchQueue(label: "com.matterya.imagecache.io", qos: .utility)
@@ -21,18 +21,18 @@ final class ImageCache: @unchecked Sendable {
     private static let sizeBuckets: [CGFloat] = [240, 280, 320, 360, 420, 480, 720]
 
     private init() {
-        memoryCache.countLimit = 180
-        memoryCache.totalCostLimit = 48 * 1024 * 1024
+        memoryCache.countLimit = 120
+        memoryCache.totalCostLimit = 32 * 1024 * 1024
 
         let configuration = URLSessionConfiguration.default
         // Short timeouts — fail fast and fall back to services/img rather than hang on .thumbs.
         configuration.timeoutIntervalForRequest = 6
         configuration.timeoutIntervalForResource = 10
-        configuration.httpMaximumConnectionsPerHost = 4
+        configuration.httpMaximumConnectionsPerHost = 3
         configuration.waitsForConnectivity = false
         configuration.urlCache = URLCache(
-            memoryCapacity: 32 * 1024 * 1024,
-            diskCapacity: 200 * 1024 * 1024
+            memoryCapacity: 24 * 1024 * 1024,
+            diskCapacity: 160 * 1024 * 1024
         )
         configuration.requestCachePolicy = .returnCacheDataElseLoad
         session = URLSession(configuration: configuration)
@@ -44,8 +44,8 @@ final class ImageCache: @unchecked Sendable {
 
     static func configureSharedCache() {
         URLCache.shared = URLCache(
-            memoryCapacity: 40 * 1024 * 1024,
-            diskCapacity: 200 * 1024 * 1024
+            memoryCapacity: 24 * 1024 * 1024,
+            diskCapacity: 160 * 1024 * 1024
         )
     }
 
@@ -67,12 +67,12 @@ final class ImageCache: @unchecked Sendable {
     func prefetch(_ urls: [URL], maxPixelSize: CGFloat = 420, aggressive: Bool = false) {
         let fling = ScrollBudget.isFlinging
         // Fast fling: starve the network so decode/download don't hitch the main thread.
-        // Settled: small ahead window — large prefetch was making the whole app feel heavy.
+        // Settled: tiny ahead window — Balanced light whole-app weight.
         let cap: Int
         if fling {
-            cap = aggressive ? 2 : 2
+            cap = 2
         } else {
-            cap = aggressive ? 8 : 6
+            cap = aggressive ? 5 : 4
         }
         let unique = Array(Set(urls.map(\.absoluteString))).prefix(cap).compactMap(URL.init(string:))
         let priority: TaskPriority = fling
@@ -111,13 +111,13 @@ final class ImageCache: @unchecked Sendable {
         posts: [CountryPost],
         around index: Int,
         behind: Int = 1,
-        ahead: Int = 4,
+        ahead: Int = 3,
         maxPixelSize: CGFloat = YouTubeMediaLayout.hubsListThumbMaxPixel
     ) {
         guard !posts.isEmpty else { return }
         let fling = ScrollBudget.isFlinging
         let useBehind = fling ? min(behind, 0) : min(behind, 1)
-        let useAhead = fling ? min(ahead, 1) : min(ahead, 4)
+        let useAhead = fling ? min(ahead, 1) : min(ahead, 3)
         let lo = max(0, index - useBehind)
         let hi = min(posts.count, index + useAhead + 1)
         guard lo < hi else { return }

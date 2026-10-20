@@ -25,26 +25,25 @@ final class SparkWarmPool {
         static var isConstrained: Bool { physicalGB < 3.6 }
         static var isMid: Bool { physicalGB < 5.6 }
 
-        /// Sparks swipe window — Max instant: next clips first-frame-ready before the finger lands.
-        /// Mid-fling hitch is avoided by skipping willDisplay/prefetch warms + posts mutations,
-        /// not by starving the settle/landing warm depth.
+        /// Sparks swipe — Balanced light (whole-app weight). Ahead 3 / deep 2.
+        /// If swipe feels cold, bump ahead/deep by +1 only — do not restore Max-instant 5/4.
         static var playerAhead: Int { playerAheadSparks }
-        /// Home feed: focus + 1–2 ahead only (not every cell). Claim on focus like Sparks.
-        static var playerAheadFeed: Int { isConstrained ? 1 : 2 }
-        static var playerAheadSparks: Int { isConstrained ? 4 : 5 }
+        /// Home feed list must not warm AV (posters only). Kept for API compatibility = 0.
+        static var playerAheadFeed: Int { 0 }
+        static var playerAheadSparks: Int { isConstrained ? 2 : 3 }
         static var playerAheadHubs: Int { 2 }
         /// Thumbs / Frame 0 ahead of focus (Sparks player + shelves).
-        static var thumbAhead: Int { isConstrained ? 8 : 10 }
+        static var thumbAhead: Int { isConstrained ? 5 : 6 }
         /// Deep-preroll next N (first-frame ready); rest of window light-buffer.
-        static var deepPrerollFeed: Int { 1 }
-        static var deepPrerollSparks: Int { isConstrained ? 3 : 4 }
+        static var deepPrerollFeed: Int { 0 }
+        static var deepPrerollSparks: Int { 2 }
         static var deepPrerollHubs: Int { 1 }
-        /// current + behind + ahead + spare — room for Sparks Max window.
-        static var maxSlots: Int { isConstrained ? 7 : 8 }
+        /// current + behind + ahead + spare.
+        static var maxSlots: Int { isConstrained ? 5 : 6 }
         static var playerBehind: Int { 1 }
-        /// Parallel R2 warms — fill ahead window fast without MainActor storms.
-        static var maxConcurrentWarms: Int { isConstrained ? 2 : 3 }
-        static var forwardBufferDeep: Double { isConstrained ? 5 : 8 }
+        /// Parallel R2 warms — keep at 2 so Feed+Hubs dual-mount stays light.
+        static var maxConcurrentWarms: Int { 2 }
+        static var forwardBufferDeep: Double { isConstrained ? 4 : 6 }
         static var forwardBufferLight: Double { isConstrained ? 2 : 3 }
     }
 
@@ -118,13 +117,13 @@ final class SparkWarmPool {
                 allowNewWarms: true
             )
         case .flingProtect:
-            // Keep next 1–2 decoding during drag — no thumbs / far-ahead storm.
+            // Keep next 1 decoding during drag — no thumbs / far-ahead storm.
             prepare(
                 posts: posts,
                 around: index,
-                ahead: 2,
+                ahead: 1,
                 behind: 0,
-                deepPrerollLimit: 2,
+                deepPrerollLimit: 1,
                 skipThumbWarm: true,
                 allowNewWarms: true
             )
@@ -142,21 +141,11 @@ final class SparkWarmPool {
         }
     }
 
-    /// Home feed settle: warm **focus + 1–2 ahead** (video queue only).
-    /// Not every list cell — keeps media-session single-player rule; claim still happens on focus.
+    /// Home feed list — posters only (media-session contract). No AV warm on scroll.
     func prepareFeedWindow(posts: [CountryPost], around index: Int) {
-        guard !posts.isEmpty else { return }
-        // Mid-fling: skip — settle/landing refills. Avoids feed scroll AV storms.
-        if ScrollBudget.isFlinging { return }
-        prepare(
-            posts: posts,
-            around: index,
-            ahead: MediaBudget.playerAheadFeed,
-            behind: 0,
-            deepPrerollLimit: MediaBudget.deepPrerollFeed,
-            skipThumbWarm: true,
-            allowNewWarms: true
-        )
+        _ = posts
+        _ = index
+        // No-op: Feed list must not create SparkWarmPool slots.
     }
 
     /// Hubs For you shelf + related / up-next while watching.
