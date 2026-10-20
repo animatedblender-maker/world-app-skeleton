@@ -423,7 +423,9 @@ final class HomeFeedStore {
                 )
                 if !pool.isEmpty {
                     // Demote last open's head so cache paint isn't a carbon copy every launch.
-                    let ranked = demoteRecentHead(rankForSessionSync(pool))
+                    let ranked = Self.weaveWrittenAmongMedia(
+                        demoteRecentHead(rankForSessionSync(pool))
+                    )
                     applyPosts(
                         Array(ranked.prefix(24)),
                         replace: true,
@@ -465,6 +467,7 @@ final class HomeFeedStore {
             if forceReplace {
                 rankedFast = demoteRecentHead(rankedFast)
             }
+            rankedFast = Self.weaveWrittenAmongMedia(rankedFast)
             let head = Array(rankedFast.prefix(forceReplace ? 36 : 24))
             if !head.isEmpty {
                 let preserveHead = !forceReplace
@@ -487,7 +490,9 @@ final class HomeFeedStore {
                 isRefreshing = false
                 return
             }
-            let ranked = demoteRecentHead(rankForSessionSync(Self.liveOnlyPosts(liveRaw)))
+            let ranked = Self.weaveWrittenAmongMedia(
+                demoteRecentHead(rankForSessionSync(Self.liveOnlyPosts(liveRaw)))
+            )
             if !ranked.isEmpty {
                 applyPosts(Array(ranked.prefix(36)), replace: true, sessionId: feedSessionId, alreadyRanked: true)
                 ContentCache.shared.setPosts(posts, for: .homeFeed)
