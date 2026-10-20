@@ -117,6 +117,7 @@ struct MainTabView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .ignoresSafeArea(.all)
                     .statusBarHidden(false)
+                    // Dark scheme → light/off-white notch clock + battery on black film.
                     .preferredColorScheme(.dark)
                     .persistentSystemOverlays(.hidden)
                     .background(Color.black.ignoresSafeArea(.all))
@@ -125,12 +126,16 @@ struct MainTabView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onChange(of: appState.reelsViewerContext?.id) { _, newID in
+            MatteryaStatusBar.setSparksLightContent(newID != nil)
+        }
         .onPreferenceChange(HubContinuousVideoSlotKey.self) { frame in
             hubContinuousDockSlotGlobal = frame
         }
         // Keyboard dismiss is window-level (cancelsTouchesInView = false).
         // Root dismissKeyboardOnTap() blocked Settings List taps.
         .onAppear {
+            MatteryaStatusBar.setSparksLightContent(appState.reelsViewerContext != nil)
             Keyboard.installDismissOnOutsideTap()
             appState.ensureHubPlaybackMinimizedIfNeeded()
             EngagementTracker.shared.screenOpened(appState.selectedTab.rawValue)
@@ -327,6 +332,11 @@ struct MainTabView: View {
             .allowsHitTesting(selected)
             .accessibilityHidden(!selected)
             .zIndex(selected ? 1 : 0)
+            // Frozen off-tab trees skip layout/animation work while Feed+Hubs stay mounted
+            // for continuous mini playback.
+            .transaction { txn in
+                if !selected { txn.disablesAnimations = true }
+            }
     }
 }
 

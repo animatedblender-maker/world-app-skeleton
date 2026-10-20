@@ -1241,17 +1241,18 @@ private struct SparksCommentsOverlay: View {
                         // No Close/Done toolbar — dimmer + grabber only (Instagram-style).
                         PostCommentsPageView(postID: postID, dismissesOnProfileOpen: false)
                             .toolbar(.hidden, for: .navigationBar)
-                            // Sheet is paper — keep ink text (parent Sparks uses .dark).
-                            .preferredColorScheme(.light)
+                            // Paper sheet chrome only — do NOT use preferredColorScheme(.light)
+                            // (that flips the notch clock dark over Sparks film).
+                            .environment(\.colorScheme, .light)
                     }
                     .withAppState(appState)
-                    .preferredColorScheme(.light)
+                    .environment(\.colorScheme, .light)
                 }
                 .frame(maxWidth: .infinity)
                 .frame(height: maxSheetH, alignment: .top)
                 .background(Theme.surface)
                 .clipShape(sheetShape)
-                .preferredColorScheme(.light)
+                .environment(\.colorScheme, .light)
                 // Clip shadow to the sheet bounds so it can't paint over the video after dismiss.
                 .compositingGroup()
                 .shadow(color: .black.opacity(shadowOpacity), radius: 12, y: -2)
