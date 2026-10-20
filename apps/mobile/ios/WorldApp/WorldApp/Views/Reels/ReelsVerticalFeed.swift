@@ -780,13 +780,16 @@ struct ReelsPagerCard: View {
             authorRow
 
             if let text = post.sparkDisplayCaption, !text.isEmpty {
-                Text(text)
-                    .font(.system(.subheadline, design: .serif))
-                    .foregroundStyle(Theme.paper.opacity(0.94))
-                    .shadow(color: Theme.ink.opacity(0.45), radius: 6, y: 1)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                TranslatableCaption(
+                    text: text,
+                    font: .system(.subheadline, design: .serif),
+                    color: Theme.paper.opacity(0.94),
+                    lineSpacing: 2,
+                    plainLineLimit: 2,
+                    buttonTint: Theme.paper.opacity(0.88),
+                    expandable: false
+                )
+                .shadow(color: Theme.ink.opacity(0.45), radius: 6, y: 1)
             }
 
             // Timeline above Like / Chat / Keep / Send (all inside the same box).

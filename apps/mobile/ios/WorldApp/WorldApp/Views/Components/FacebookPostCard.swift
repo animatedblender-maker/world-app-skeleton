@@ -564,11 +564,18 @@ struct FacebookPostCard: View {
 
             // Only an explicit post title here — never a body prefix (that duplicated captions).
             if let title = post.displayTitle, !title.isEmpty {
-                Text(title)
-                    .postHeadlineStyle(lineLimit: 4)
-                    .padding(.horizontal, horizontalGutter)
-                    .contentShape(Rectangle())
-                    .onTapGesture { openPrimaryDestination() }
+                TranslatableCaption(
+                    text: title,
+                    font: .system(.title3, design: .serif),
+                    color: Theme.ink,
+                    lineSpacing: 2,
+                    plainLineLimit: 4,
+                    buttonTint: Theme.accentBright,
+                    expandable: false
+                )
+                .padding(.horizontal, horizontalGutter)
+                .contentShape(Rectangle())
+                .onTapGesture { openPrimaryDestination() }
             }
 
             // Hubs channel attribution under the title (share / channel long-form).
@@ -586,7 +593,7 @@ struct FacebookPostCard: View {
     }
 
     private func captionBlock(text: String, topPadding: CGFloat, bottomPadding: CGFloat) -> some View {
-        ExpandableBodyText(
+        TranslatableCaption(
             text: text,
             collapsedLineLimit: 4,
             font: .body,
@@ -594,7 +601,9 @@ struct FacebookPostCard: View {
             lineSpacing: 4,
             moreTitle: "See more",
             lessTitle: "See less",
-            uiTextStyle: .body
+            uiTextStyle: .body,
+            buttonTint: Theme.accentBright,
+            expandable: true
         )
         // Small side margin so multi-line text stays readable on full-width cards.
         .padding(.horizontal, textGutter)
@@ -954,9 +963,16 @@ struct FacebookPostCard: View {
                 .buttonStyle(.plain)
             }
 
-            if showsAuthorHeader, let title = post.displayTitle {
-                Text(title)
-                    .postHeadlineStyle(lineLimit: 3)
+            if showsAuthorHeader, let title = post.displayTitle, !title.isEmpty {
+                TranslatableCaption(
+                    text: title,
+                    font: .system(.title3, design: .serif),
+                    color: Theme.ink,
+                    lineSpacing: 2,
+                    plainLineLimit: 3,
+                    buttonTint: Theme.accentBright,
+                    expandable: false
+                )
             }
 
 

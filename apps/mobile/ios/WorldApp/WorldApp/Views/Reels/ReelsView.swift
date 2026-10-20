@@ -188,10 +188,15 @@ private struct ReelCard: View {
                 }
 
                 if let text = post.displayCaption ?? post.displayHeadline {
-                    Text(text)
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.9))
-                        .lineLimit(4)
+                    TranslatableCaption(
+                        text: text,
+                        font: .subheadline,
+                        color: .white.opacity(0.9),
+                        lineSpacing: 2,
+                        plainLineLimit: 4,
+                        buttonTint: .white.opacity(0.85),
+                        expandable: false
+                    )
                 }
 
                 HStack {
