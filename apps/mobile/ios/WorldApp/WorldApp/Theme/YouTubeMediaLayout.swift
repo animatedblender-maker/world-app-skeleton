@@ -390,7 +390,7 @@ struct YouTubeVideoMetadataRow: View {
 }
 
 /// Hub video in Feed / shares: same player as Hubs watch + small Hubs badge (hub content only).
-/// Participates in `FeedVideoFocus` — only one feed video plays; needs ≥50% on-screen.
+/// Participates in `FeedVideoFocus` — only one feed video plays; starts at ≥25% on-screen.
 struct PlayFeedLinkCard: View {
     @Environment(AppState.self) private var appState
 
@@ -400,7 +400,7 @@ struct PlayFeedLinkCard: View {
     var edgeToEdge: Bool = true
     /// Feed shares always show the Hubs logo even when stamp markers were lost.
     var forceHubsBadge: Bool = false
-    /// Home feed vs profile — same ≥50% autoplay rules on both.
+    /// Home feed vs profile — same ≥25% (quarter) autoplay rules on both.
     var autoplaySurface: FeedAutoplaySurface = .home
 
     private var horizontalPadding: CGFloat {

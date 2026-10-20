@@ -38,9 +38,8 @@ enum FeedAutoplaySurface: String, Equatable, Sendable {
 
 /// Exactly **one** feed video plays at a time — the most visible eligible card.
 ///
-/// Pause rule (product): only stop when **more than 70% is off-screen**
-/// (visible ratio &lt; 0.30). Fully on-screen video must never pause due to
-/// layout noise, mini-player presence, or tiny ratio flaps.
+/// Start rule (product): play once **≥25%** of the player is on-screen (a quarter).
+/// Keep until it drops under that band so the next card can take over as it enters.
 @MainActor
 final class FeedVideoFocus {
     static let shared = FeedVideoFocus()
@@ -57,14 +56,13 @@ final class FeedVideoFocus {
     /// Debounced silence when no winner — layout flaps used to kill in-frame hubs audio.
     private var silenceWhenEmptyTask: Task<Void, Never>?
 
-    /// Must be at least this visible to *start* (or take over) autoplay.
-    /// Low on purpose: product wants play the moment the card enters the frame.
-    private let minVisibleToPlay: CGFloat = 0.10
-    /// Keep current winner until it drops below this (~85% off-screen).
-    private let minVisibleToKeep: CGFloat = 0.12
+    /// Must be at least this visible to *start* (or take over) autoplay — a quarter of the card.
+    private let minVisibleToPlay: CGFloat = 0.25
+    /// Keep current winner until it drops below this (slightly under a quarter).
+    private let minVisibleToKeep: CGFloat = 0.22
     /// Challenger must beat the current winner by this much to steal focus.
-    /// Small so the next card takes over quickly while scrolling.
-    private let stealEpsilon: CGFloat = 0.04
+    /// Tiny so the next card starts as soon as it crosses a quarter.
+    private let stealEpsilon: CGFloat = 0.02
     /// Ignore this many consecutive near-zero layout reports before clearing a candidate.
     private let zeroGlitchTolerance = 6
 
@@ -96,8 +94,13 @@ final class FeedVideoFocus {
         }
 
         zeroStreak[id] = 0
-        // Skip no-op ratio noise (was recomputing every GeometryReader tick).
-        if let prev = ratios[id], abs(prev - clamped) < 0.04 {
+        let prev = ratios[id]
+        // Always recompute when crossing the quarter-play threshold — small deltas
+        // used to skip election and delay start until the card was mostly on-screen.
+        let crossedPlay =
+            (prev == nil || prev! < minVisibleToPlay) && clamped >= minVisibleToPlay
+            || (prev != nil && prev! >= minVisibleToPlay && clamped < minVisibleToKeep)
+        if let prev, !crossedPlay, abs(prev - clamped) < 0.03 {
             stickyRatios[id] = clamped
             return
         }
@@ -141,17 +144,16 @@ final class FeedVideoFocus {
     private func recompute() {
         let previous = activeID
 
-        // Current winner holds until < 30% visible (more than 70% off-screen).
+        // Current winner holds while still ≥ keep band; yield when a challenger
+        // has a quarter+ on screen and is clearly more visible.
         if let current = activeID,
            let currentRatio = ratios[current],
            currentRatio >= minVisibleToKeep {
-            // Only yield if a challenger is clearly more visible.
             if let best = bestCandidate(minRatio: minVisibleToPlay),
                best.key != current,
                best.value >= currentRatio + stealEpsilon {
                 publish(winner: best.key, previous: previous)
             }
-            // else keep current — even if another card is slightly higher.
             return
         }
 

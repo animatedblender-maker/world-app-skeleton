@@ -9,7 +9,7 @@ struct FacebookPostCard: View {
     var showsAuthorHeader: Bool = true
     var showsAuthorInJournal: Bool = false
     var mediaContext: MediaContext = .feed
-    /// Home feed vs profile — same autoplay (≥50% visible, one winner).
+    /// Home feed vs profile — same autoplay (≥25% / quarter visible, one winner).
     var autoplaySurface: FeedAutoplaySurface = .home
     var commentsInitiallyExpanded: Bool = false
     var onLikeToggle: (() -> Void)?

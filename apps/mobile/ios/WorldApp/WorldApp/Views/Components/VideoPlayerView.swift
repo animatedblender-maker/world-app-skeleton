@@ -1419,7 +1419,8 @@ private struct MatteryaFullscreenPlayer: View {
 
             Group {
                 if let player {
-                    MatteryaVideoSurface(player: player)
+                    // Fullscreen = aspect-fit (never crop); letterbox/pillarbox OK.
+                    MatteryaVideoSurface(player: player, fillsFrame: false)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .ignoresSafeArea()
                         .contentShape(Rectangle())
@@ -1475,11 +1476,13 @@ private struct MatteryaFullscreenPlayer: View {
         .persistentSystemOverlays(.hidden)
         .onAppear {
             isMuted = initialMuted
+            AppOrientation.lock(.landscape, prefer: .landscapeRight)
             Task { await setupPlayer() }
             scheduleChromeHide()
         }
         .onDisappear {
             teardown()
+            AppOrientation.lock(.portrait, prefer: .portrait)
         }
     }
 
@@ -2371,8 +2374,11 @@ struct InFrameVideoPlayer: View {
             let frame = proxy.frame(in: .global)
             Color.clear
                 .onAppear { reportVisibility(proxy.frame(in: .global)) }
-                // One axis only — minY+midY+height was 3× FeedVideoFocus elections per layout.
+                // midY + minY: entering from the bottom edge updates before midY alone would.
                 .onChange(of: frame.midY) { _, _ in
+                    reportVisibility(proxy.frame(in: .global))
+                }
+                .onChange(of: frame.minY) { _, _ in
                     reportVisibility(proxy.frame(in: .global))
                 }
                 .onChange(of: appState.selectedTab) { _, _ in
@@ -2397,8 +2403,8 @@ struct InFrameVideoPlayer: View {
         }
 
         let ratio = FeedVideoFocus.visibleRatio(for: frame)
-        // Entering frame → warm immediately so play can start on the next focus tick.
-        if ratio >= 0.08, let postID {
+        // Warm slightly before the quarter-play threshold so AV is ready at 25%.
+        if ratio >= 0.15, let postID {
             if !SparkWarmPool.shared.hasWarmOrInflight(postID: postID) {
                 SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: true)
             }
@@ -2409,8 +2415,11 @@ struct InFrameVideoPlayer: View {
             // That created a timeout storm (one request per cell approach) that
             // starved GraphQL + poster/batch. Hubs/Sparks warm via AppState window.
         }
-        // Skip tiny noise; still re-check winner (pause only when >70% off-screen).
-        if abs(ratio - lastReportedRatio) < 0.03, lastReportedRatio >= 0 {
+        // Always report when crossing the quarter threshold; skip only tiny noise otherwise.
+        let crossedQuarter =
+            (lastReportedRatio < 0.25 && ratio >= 0.25)
+            || (lastReportedRatio >= 0.25 && ratio < 0.22)
+        if !crossedQuarter, abs(ratio - lastReportedRatio) < 0.03, lastReportedRatio >= 0 {
             refreshFocusWinner()
             return
         }
