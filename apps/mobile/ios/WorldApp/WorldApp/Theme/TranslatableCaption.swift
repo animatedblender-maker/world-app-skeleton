@@ -1,3 +1,4 @@
+import NaturalLanguage
 import SwiftUI
 import UIKit
 #if canImport(Translation)
@@ -9,6 +10,7 @@ import Translation
 /// - iOS 18+: on-device `TranslationSession` into English, swaps text inline.
 /// - iOS 17.4–17.x: system translation sheet; Replace swaps text inline.
 /// - Earlier OS: text only (no button).
+/// - Already-English text: no Translate control (Show original still appears after a swap).
 struct TranslatableCaption: View {
     let text: String
     var collapsedLineLimit: Int = 4
@@ -47,6 +49,14 @@ struct TranslatableCaption: View {
         return false
     }
 
+    /// Show Translate only when OS supports it and the source is not already English.
+    /// Always show the control while a translation is on screen (Show original).
+    private var showsTranslateControl: Bool {
+        guard translationAvailable else { return false }
+        if showingTranslated || isTranslating { return true }
+        return !CaptionLanguage.isLikelyEnglish(trimmed)
+    }
+
     var body: some View {
         Group {
             if trimmed.isEmpty {
@@ -55,7 +65,7 @@ struct TranslatableCaption: View {
                 VStack(alignment: .leading, spacing: 6) {
                     captionContent
 
-                    if translationAvailable {
+                    if showsTranslateControl {
                         translateControl
                     }
                 }
@@ -161,6 +171,25 @@ struct TranslatableCaption: View {
         isTranslating = false
         showSystemSheet = false
         englishSessionTrigger = 0
+    }
+}
+
+// MARK: - Language gate
+
+private enum CaptionLanguage {
+    /// True when NaturalLanguage is confident the text is English.
+    /// Short / ambiguous strings stay eligible for Translate (false).
+    static func isLikelyEnglish(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 12 else { return false }
+
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(trimmed)
+
+        guard recognizer.dominantLanguage == .english else { return false }
+        // Require a solid English score so mixed / weak guesses still offer Translate.
+        let englishScore = recognizer.languageHypotheses(withMaximum: 3)[.english] ?? 0
+        return englishScore >= 0.72
     }
 }
 
