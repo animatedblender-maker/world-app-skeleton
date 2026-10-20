@@ -6,22 +6,7 @@ struct SettingsView: View {
 
     @State private var pushEnabled = false
     @State private var isRequestingPush = false
-    @State private var isSendingTest = false
-    @State private var isRefreshingPush = false
-    @State private var statusMessage: String?
-    @State private var registrationSummary = ""
-    @State private var alertTokenStatus = "Checking…"
-    @State private var alertServerStatus = "Checking…"
-    @State private var serverApnsStatus = "Checking…"
-    @State private var serverPushRoutesStatus = "Checking…"
-    @State private var serverTokenSummary = ""
-    @State private var callingSummary = ""
-    @State private var voipTokenStatus = "Checking…"
-    @State private var voipServerStatus = "Checking…"
-    @State private var signalingStatus = "Checking…"
-    @State private var incomingCallsReady = false
-    @State private var pushEnvironmentLabel = ""
-    @State private var isRefreshingCalling = false
+    @State private var notificationsHint: String?
 
     /// Sheet-based account actions (confirmationDialog inside List often fails to present).
     @State private var accountSheet: AccountSheet?
@@ -49,6 +34,9 @@ struct SettingsView: View {
                 }
                 Button("Edit profile") {
                     appState.navigate(to: .editProfile)
+                }
+                Button("Log out", role: .destructive) {
+                    appState.logout()
                 }
             }
 
@@ -107,7 +95,7 @@ struct SettingsView: View {
             }
 
             Section {
-                Toggle("Incoming calls & alerts", isOn: $pushEnabled)
+                Toggle("Notifications", isOn: $pushEnabled)
                     .onChange(of: pushEnabled) { _, enabled in
                         if enabled {
                             Task { await enablePush() }
@@ -120,92 +108,24 @@ struct SettingsView: View {
                     ProgressView("Requesting permission…")
                 }
 
-                LabeledContent("Alert token") {
-                    statusLabel(alertTokenStatus, positive: alertTokenStatus == "Received")
+                if let notificationsHint {
+                    Text(notificationsHint)
+                        .font(.caption)
+                        .foregroundStyle(Theme.inkMuted)
                 }
-                LabeledContent("Server registration") {
-                    statusLabel(alertServerStatus, positive: alertServerStatus == "Registered")
-                }
-                LabeledContent("Push API routes") {
-                    statusLabel(serverPushRoutesStatus, positive: serverPushRoutesStatus == "Deployed")
-                }
-                LabeledContent("Server APNs") {
-                    statusLabel(serverApnsStatus, positive: serverApnsStatus == "Configured")
-                }
-                if !serverTokenSummary.isEmpty {
-                    LabeledContent("Devices on server") {
-                        Text(serverTokenSummary)
-                            .font(.subheadline)
-                            .foregroundStyle(Theme.inkMuted)
+
+                Button("Open iOS Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
                     }
-                }
-
-                if !registrationSummary.isEmpty {
-                    Text(registrationSummary)
-                        .font(.caption)
-                        .foregroundStyle(Theme.inkMuted)
-                }
-
-                Button(isSendingTest ? "Sending test…" : "Send test notification") {
-                    Task { await sendTestPush() }
-                }
-                .disabled(isSendingTest || !pushEnabled)
-
-                Button(isRefreshingPush ? "Refreshing…" : "Refresh push status") {
-                    Task { await refreshPushStatus() }
-                }
-                .disabled(isRefreshingPush)
-
-                if let statusMessage {
-                    Text(statusMessage)
-                        .font(.caption)
-                        .foregroundStyle(Theme.inkMuted)
                 }
             } header: {
                 Text("Notifications")
             } footer: {
-                Text("Browser notifications use Web Push (VAPID). iOS uses Apple Push (APNS) — a separate Render env setup. You need APNS_TEAM_ID, APNS_KEY_ID, and APNS_PRIVATE_KEY on Render, plus a registered device token here.")
+                Text("Used for messages, calls, and activity. Turn delivery off in iOS Settings if you change your mind.")
             }
 
             Section {
-                LabeledContent("VoIP token") {
-                    statusLabel(voipTokenStatus, positive: voipTokenStatus == "Received")
-                }
-                LabeledContent("Server registration") {
-                    statusLabel(voipServerStatus, positive: voipServerStatus == "Registered")
-                }
-                LabeledContent("Call signaling") {
-                    statusLabel(signalingStatus, positive: signalingStatus == "Connected")
-                }
-                LabeledContent("Incoming calls") {
-                    statusLabel(
-                        incomingCallsReady ? "Ready" : "Not ready",
-                        positive: incomingCallsReady
-                    )
-                }
-                LabeledContent("Push environment") {
-                    Text(pushEnvironmentLabel)
-                        .font(.subheadline)
-                        .foregroundStyle(Theme.inkMuted)
-                }
-
-                if !callingSummary.isEmpty {
-                    Text(callingSummary)
-                        .font(.caption)
-                        .foregroundStyle(Theme.inkMuted)
-                }
-
-                Button(isRefreshingCalling ? "Refreshing…" : "Refresh calling status") {
-                    Task { await refreshCallingStatus() }
-                }
-                .disabled(isRefreshingCalling)
-            } header: {
-                Text("Calling")
-            } footer: {
-                Text("Incoming calls when Matterya is closed require VoIP registration, a real iPhone (not Simulator), and APNs credentials on the Matterya API server. If Server registration stays red, calls cannot ring off-app.")
-            }
-
-            Section("Privacy") {
                 NavigationLink("Message requests") {
                     MessagePrivacySettingsView()
                 }
@@ -215,6 +135,8 @@ struct SettingsView: View {
                 NavigationLink("Data & privacy") {
                     PrivacyInfoView()
                 }
+            } header: {
+                Text("Privacy")
             } footer: {
                 Text("Control who can message you. Non-followers can be sent to Message Requests or blocked entirely.")
             }
@@ -229,8 +151,7 @@ struct SettingsView: View {
         .scrollContentBackground(.hidden)
         .background(Theme.canvas)
         .task {
-            await refreshPushStatus()
-            await refreshCallingStatus()
+            pushEnabled = await PushNotificationService.shared.notificationsAuthorized()
         }
         .sheet(item: $accountSheet) { sheet in
             NavigationStack {
@@ -360,108 +281,24 @@ struct SettingsView: View {
         }
     }
 
-    @ViewBuilder
-    private func statusLabel(_ text: String, positive: Bool) -> some View {
-        Text(text)
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(positive ? Theme.success : Theme.inkMuted)
-    }
-
     private var appVersion: String {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
         return "\(version) (\(build))"
     }
 
-    private func refreshPushStatus() async {
-        isRefreshingPush = true
-        defer { isRefreshingPush = false }
-
-        pushEnabled = await PushNotificationService.shared.notificationsAuthorized()
-        VoIPPushService.shared.bootstrap()
-        await PushNotificationService.shared.syncWithServer(force: true)
-
-        let push = PushNotificationService.shared
-        registrationSummary = push.registrationSummary
-        alertTokenStatus = push.hasAlertToken ? "Received" : "Waiting"
-        alertServerStatus = push.serverRegistrationSucceeded ? "Registered" : "Not registered"
-
-        if let serverStatus = await push.fetchServerPushStatus() {
-            serverPushRoutesStatus = serverStatus.endpointsAvailable ? "Deployed" : "Missing"
-            serverApnsStatus = serverStatus.apnsConfigured ? "Configured" : "Not configured"
-            if let statusMessage = serverStatus.statusMessage {
-                serverTokenSummary = statusMessage
-            } else {
-                var parts = ["\(serverStatus.alertTokenCount) alert"]
-                if serverStatus.voipTokenCount > 0 {
-                    parts.append("\(serverStatus.voipTokenCount) VoIP")
-                }
-                if !serverStatus.environments.isEmpty {
-                    parts.append(serverStatus.environments.joined(separator: ", "))
-                }
-                serverTokenSummary = parts.joined(separator: " · ")
-            }
-        } else {
-            let capabilities = await push.fetchServerCapabilities()
-            serverPushRoutesStatus = capabilities.iosPushRoutes ? "Deployed" : "Missing"
-            serverApnsStatus = capabilities.apnsConfigured ? "Configured" : "Unknown"
-            serverTokenSummary = capabilities.iosPushRoutes
-                ? "Could not load per-account push status. Sign in and refresh again."
-                : "api.matterya.com is running an old API build without /push/ios routes."
-        }
-    }
-
-    private func refreshCallingStatus() async {
-        isRefreshingCalling = true
-        defer { isRefreshingCalling = false }
-
-        VoIPPushService.shared.bootstrap()
-        CallSessionManager.shared.bootstrap()
-        _ = await CallSignalingService.shared.ensureConnected()
-        await VoIPPushService.shared.ensureToken()
-        await PushNotificationService.shared.syncWithServer(force: true)
-
-        let push = PushNotificationService.shared
-        if !VoIPPushService.shared.isSupportedOnThisDevice {
-            voipTokenStatus = "Unavailable"
-        } else if push.hasVoIPToken {
-            voipTokenStatus = "Received"
-        } else if VoIPPushService.shared.isRegistryActive {
-            voipTokenStatus = "Waiting"
-        } else {
-            voipTokenStatus = "Registry off"
-        }
-        voipServerStatus = push.voipServerRegistrationSucceeded ? "Registered" : "Not registered"
-        signalingStatus = CallSignalingService.shared.isConnected ? "Connected" : "Offline"
-        incomingCallsReady = push.isReadyForIncomingCalls
-        pushEnvironmentLabel = push.pushEnvironmentLabel
-        #if targetEnvironment(simulator)
-        callingSummary = "Simulator cannot receive VoIP calls. Install on a real iPhone to test ringing when Matterya is closed."
-        #else
-        callingSummary = push.callingRegistrationSummary
-        #endif
-    }
-
     private func enablePush() async {
         isRequestingPush = true
-        statusMessage = nil
+        notificationsHint = nil
         defer { isRequestingPush = false }
         await PushNotificationService.shared.requestAuthorizationAndRegister()
         await PushNotificationService.shared.syncWithServer(force: true)
-        await refreshPushStatus()
+        pushEnabled = await PushNotificationService.shared.notificationsAuthorized()
         if pushEnabled {
-            statusMessage = "Notifications enabled for calls and messages."
+            notificationsHint = "Notifications are on for messages, calls, and activity."
         } else {
-            statusMessage = "Enable notifications in iOS Settings to receive calls while away."
+            notificationsHint = "Permission was not granted. You can enable it in iOS Settings."
         }
-        await refreshCallingStatus()
-    }
-
-    private func sendTestPush() async {
-        isSendingTest = true
-        defer { isSendingTest = false }
-        statusMessage = await PushNotificationService.shared.sendTestNotification()
-        await refreshPushStatus()
     }
 }
 
