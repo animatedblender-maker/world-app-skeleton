@@ -652,6 +652,7 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
             refreshVisibleCells()
             return
         }
+        let previousIndex = activeIndex
         // Force-warm landing + deep neighbors BEFORE silence/claim — instant first frame.
         if posts.indices.contains(clamped) {
             SparkWarmPool.shared.preparePlayerWindow(
@@ -661,6 +662,14 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
             )
         }
         PerformanceTelemetry.mark("reel_swipe_start")
+        // Deactivate outgoing cell immediately — do not wait for didEndDisplaying
+        // (adjacent pages stay visible mid-swipe and can keep ghost audio).
+        if previousIndex != clamped,
+           let prev = collectionView.cellForItem(
+               at: IndexPath(item: previousIndex, section: 0)
+           ) as? SparksPageCell {
+            prev.deactivateAudio()
+        }
         MediaPlaybackCoordinator.shared.silenceForSparkPageChange()
         focusGeneration &+= 1
         // Leaving the feed-handoff page — later reconfigure must restart at t=0.

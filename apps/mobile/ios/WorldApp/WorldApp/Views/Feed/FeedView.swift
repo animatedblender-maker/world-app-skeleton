@@ -249,7 +249,8 @@ struct FeedView: View {
         SparksHorizontalStrip(
             posts: feedReels,
             onOpen: { post in
-                appState.openGlobalSparksViewer(startingPost: post)
+                // Pass strip rail as seeds so open skips cold catalog / GraphQL.
+                appState.openGlobalSparksViewer(startingPost: post, seedPosts: feedReels)
             },
             onBrandTap: { appState.openPlay() }
         )

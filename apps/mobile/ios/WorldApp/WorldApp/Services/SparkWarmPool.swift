@@ -512,6 +512,24 @@ final class SparkWarmPool {
             slot.player.pause()
             slot.player.isMuted = true
             slot.player.volume = 0
+            slot.player.rate = 0
+        }
+    }
+
+    /// Pause only warm slots that are still producing rate (page-change ghost audio).
+    /// Leaves silent t≈0 buffers untouched so claim keeps the first frame.
+    func silencePlayingBuffered() {
+        for slot in slots.values {
+            let p = slot.player
+            if p.rate > 0.01
+                || p.timeControlStatus == .playing
+                || p.timeControlStatus == .waitingToPlayAtSpecifiedRate
+                || (!p.isMuted && p.volume > 0.01) {
+                p.pause()
+                p.isMuted = true
+                p.volume = 0
+                p.rate = 0
+            }
         }
     }
 

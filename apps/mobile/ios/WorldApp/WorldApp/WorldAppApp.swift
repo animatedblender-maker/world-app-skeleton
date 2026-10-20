@@ -38,6 +38,8 @@ struct WorldAppApp: App {
                     CallSessionManager.shared.handleAppWillResignActive()
                     // Persist feed head for next-open demote (same posts every launch).
                     HomeFeedStore.shared.noteSessionPaused()
+                    // Sparks/warm-pool audio pause is owned by MediaPlaybackCoordinator
+                    // (willResignActive / didEnterBackground observers).
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
