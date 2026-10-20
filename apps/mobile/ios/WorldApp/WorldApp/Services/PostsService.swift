@@ -696,6 +696,15 @@ final class PostsService {
     /// Cursor into the in-memory Sparks pool for endless home-feed top-ups.
     private var homeFeedSparkOffset: Int = 0
     private var homeFeedSparkOrder: [CountryPost] = []
+    /// Thin `/v1/sparks` cursor — walks the R2 library newest-first across Home load-mores.
+    private var homeSparksSurfaceCursor: String?
+
+    /// Reset Home Sparks paging (fresh session / pull-to-refresh).
+    func resetHomeFeedSparkPager() {
+        homeFeedSparkOffset = 0
+        homeFeedSparkOrder = []
+        homeSparksSurfaceCursor = nil
+    }
 
     /// Draw Hubs-badge long-form / `__hub_origin__|` shares for Home (not Sparks).
     /// Suggests **unviewed** first (same discovery rule as Sparks); LRV fill only if starved.
@@ -737,12 +746,51 @@ final class PostsService {
     }
 
     /// Draw the next slice of R2 Sparks for the main feed (SparkFeedCard).
-    /// Hard prefer unviewed (server exclude + local skip); recycle only when unviewed dry.
+    /// Prefers thin `/v1/sparks` cursor walk (full library); GraphQL discover is a supplement.
     func homeFeedSparkTopUp(excluding: Set<String>, limit: Int, forceRefresh: Bool = false) async -> [CountryPost] {
         guard limit > 0 else { return [] }
+        if forceRefresh {
+            resetHomeFeedSparkPager()
+        }
 
         var out: [CountryPost] = []
         var seen = excluding.union(Set(SparkDiscoveryEngine.viewedIDList(limit: 800)))
+
+        // Primary: page the R2-backed Sparks surface until we fill `limit`.
+        // 300k+ objects — never stop after one GraphQL sample.
+        var surfacePasses = 0
+        while out.count < limit, surfacePasses < 6 {
+            surfacePasses += 1
+            let need = limit - out.count
+            let page = await SurfacePageClient.fetchSparksPages(
+                want: max(need, 24),
+                startingCursor: homeSparksSurfaceCursor,
+                maxPages: 4,
+                excluding: seen,
+                skipViewed: true
+            )
+            homeSparksSurfaceCursor = page.nextCursor
+            var added = 0
+            for post in page.items {
+                guard seen.insert(post.id).inserted else { continue }
+                guard !SparkDiscoveryEngine.isViewed(post) else { continue }
+                guard post.playableVideoURL != nil || post.hasVideo || !(post.mediaURL ?? "").isEmpty else { continue }
+                out.append(post)
+                added += 1
+                if out.count >= limit { return out }
+            }
+            if page.nextCursor == nil {
+                // Restart from the newest head so Home stays endless across the library.
+                homeSparksSurfaceCursor = nil
+                if added == 0 { break }
+            } else if added == 0 {
+                // Cursor advanced past a viewed/dup streak — keep walking.
+                continue
+            }
+        }
+        if out.count >= limit { return out }
+
+        // Supplement: random GraphQL discover windows.
         let remote = await fetchDiscoverSparks(
             limit: max(limit * 2, 40),
             excluding: Array(seen.prefix(800))
@@ -755,7 +803,6 @@ final class PostsService {
             if out.count >= limit { return out }
         }
 
-        // Never deep-load catalog on the feed open path — discoverSparks above is enough.
         if homeFeedSparkOrder.isEmpty || homeFeedSparkOffset >= homeFeedSparkOrder.count {
             let rankedRemote = SparkDiscoveryEngine.rankForDiscovery(remote, excluding: seen)
                 .filter { !SparkDiscoveryEngine.isViewed($0) }
@@ -771,6 +818,7 @@ final class PostsService {
         if homeFeedSparkOrder.isEmpty {
             let hub = await fetchFocusMarketHubSparks(limitPerAuthor: 200)
             homeFeedSparkOrder = SparkDiscoveryEngine.rankForDiscovery(hub)
+                .filter { !SparkDiscoveryEngine.isViewed($0) }
             homeFeedSparkOffset = 0
         }
 
@@ -786,8 +834,18 @@ final class PostsService {
                     homeFeedSparkOffset = 0
                     if homeFeedSparkOrder.isEmpty { break }
                 } else {
-                    // Unviewed library dry for this top-up — stop (don't recycle mid-feed).
-                    break
+                    // Walk /v1/sparks again from the current surface cursor.
+                    let again = await SurfacePageClient.fetchSparksPages(
+                        want: max(limit, 24),
+                        startingCursor: homeSparksSurfaceCursor,
+                        maxPages: 3,
+                        excluding: seen,
+                        skipViewed: true
+                    )
+                    homeSparksSurfaceCursor = again.nextCursor ?? homeSparksSurfaceCursor
+                    if again.items.isEmpty { break }
+                    homeFeedSparkOrder = again.items
+                    homeFeedSparkOffset = 0
                 }
             }
             guard homeFeedSparkOrder.indices.contains(homeFeedSparkOffset) else { break }
