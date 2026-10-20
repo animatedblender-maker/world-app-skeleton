@@ -525,7 +525,7 @@ final class HomeFeedStore {
             )
             async let textTop = PostsService.shared.homeFeedTextTopUp(
                 excluding: exclude,
-                limit: 4,
+                limit: 2,
                 forceRefresh: false
             )
             // Soft-merge weaves written into the tail — never dump a text block on top.
@@ -636,7 +636,10 @@ final class HomeFeedStore {
         )
     }
 
-    /// Keep written cards in the mix (~1 / 3–4 media) — never a written block at the head.
+    /// Media cards between written inserts (~1 text per 10–12 Sparks/Hubs).
+    private static let homeWrittenMediaGap = 11
+
+    /// Keep written cards in the mix — never a written block at the head.
     private static func weaveWrittenAmongMedia(_ posts: [CountryPost]) -> [CountryPost] {
         guard posts.count > 1 else { return posts }
         var media: [CountryPost] = []
@@ -656,7 +659,7 @@ final class HomeFeedStore {
         var sinceWritten = 0
         while mi < media.count || wi < written.count {
             let wantWritten = wi < written.count
-                && (mi >= media.count || (sinceWritten >= 3 && out.count >= 2))
+                && (mi >= media.count || (sinceWritten >= homeWrittenMediaGap && out.count >= 2))
             if wantWritten {
                 out.append(written[wi]); wi += 1
                 sinceWritten = 0
@@ -1026,7 +1029,7 @@ final class HomeFeedStore {
                 excluding: exclude, limit: 10, forceRefresh: false
             )
             async let textTop = PostsService.shared.homeFeedTextTopUp(
-                excluding: exclude, limit: 12, forceRefresh: false
+                excluding: exclude, limit: 3, forceRefresh: false
             )
             let extra = (await sparkTop) + (await hubTop) + (await textTop)
             guard gen == self.generation, !extra.isEmpty else {
@@ -1116,8 +1119,8 @@ final class HomeFeedStore {
                 )
             }
             let exclude = seen
-            // Mix Sparks + Hubs + written (~2:1 media, ~1 written / 4) so Home isn't video-only.
-            let textLimit = max(2, pageSize / 4)
+            // Mix Sparks + Hubs + written (~1 written / 10–12 media) so Home isn't video-only.
+            let textLimit = max(1, pageSize / (homeWrittenMediaGap + 1))
             let hubLimit = max(2, pageSize / 3)
             let sparkLimit = max(1, pageSize - hubLimit - textLimit)
             async let sparkTop = PostsService.shared.homeFeedSparkTopUp(
@@ -1142,17 +1145,24 @@ final class HomeFeedStore {
             var si = 0
             var hi = 0
             var ti = 0
+            var sinceWritten = 0
             while mixed.count < pageSize, si < sparks.count || hi < hubs.count || ti < texts.count {
-                if ti < texts.count, mixed.count % 4 == 3 || (si >= sparks.count && hi >= hubs.count) {
+                if ti < texts.count,
+                   (si >= sparks.count && hi >= hubs.count) || sinceWritten >= homeWrittenMediaGap {
                     mixed.append(texts[ti]); ti += 1
+                    sinceWritten = 0
                 } else if hi < hubs.count, mixed.count % 3 == 2 || si >= sparks.count {
                     mixed.append(hubs[hi]); hi += 1
+                    sinceWritten += 1
                 } else if si < sparks.count {
                     mixed.append(sparks[si]); si += 1
+                    sinceWritten += 1
                 } else if hi < hubs.count {
                     mixed.append(hubs[hi]); hi += 1
+                    sinceWritten += 1
                 } else if ti < texts.count {
                     mixed.append(texts[ti]); ti += 1
+                    sinceWritten = 0
                 } else {
                     break
                 }

@@ -763,9 +763,13 @@ export async function fetchHomeFeedPage(input: {
   cursor?: string | null;
 }): Promise<SurfacePage> {
   const want = Math.min(Math.max(Number(input.limit) || 24, 1), 64);
-  // ~1 written card per ~3–4 media cards (min 3 on a normal page).
-  const textQuota = Math.min(Math.max(3, Math.ceil(want * 0.28)), Math.max(3, want - 4));
-  const mediaWant = Math.max(want, want - textQuota + 4);
+  // ~1 written card per ~10–12 Sparks/Hubs (still in the mix, much lighter).
+  const mediaBetweenWritten = 11;
+  const textQuota = Math.min(
+    Math.max(1, Math.ceil(want / (mediaBetweenWritten + 1))),
+    Math.max(1, want - 4),
+  );
+  const mediaWant = Math.max(want, want - textQuota + mediaBetweenWritten);
   const homeCur = decodeHomeFeedCursor(input.cursor);
   const hasCol = await hasHubSlugColumn();
   const slugSelect = hasCol ? 'p.hub_slug' : 'null::text as hub_slug';
@@ -815,7 +819,7 @@ export async function fetchHomeFeedPage(input: {
     }
   }
 
-  // Weave: ~1 written per 3 media (media-first head, then alternate).
+  // Weave: ~1 written per 10–12 media (media-first head).
   const woven: RawPostRow[] = [];
   let mi = 0;
   let ti = 0;
@@ -823,7 +827,7 @@ export async function fetchHomeFeedPage(input: {
   while (woven.length < want && (mi < mediaOnly.length || ti < writtenMerged.length)) {
     const wantText =
       ti < writtenMerged.length &&
-      (mi >= mediaOnly.length || sinceText >= 3 || (woven.length > 0 && woven.length % 4 === 3));
+      (mi >= mediaOnly.length || sinceText >= mediaBetweenWritten);
     if (wantText) {
       woven.push(writtenMerged[ti++]);
       sinceText = 0;
