@@ -478,10 +478,15 @@ struct ConversationView: View {
 
             HStack(spacing: 10) {
                 PhotosPicker(selection: $selectedPhoto, matching: .images) {
-                    Image(systemName: "photo")
-                        .foregroundStyle(Theme.accentBright)
-                        .frame(width: 36, height: 36)
+                    Image(systemName: "photo.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Theme.ink)
+                        .frame(width: 40, height: 40)
+                        .background(Theme.matteDeep, in: Circle())
+                        .overlay(Circle().stroke(Theme.border, lineWidth: 0.5))
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Add photo")
                 .onChange(of: selectedPhoto) { _, item in
                     Task { await loadPendingMedia(item) }
                 }

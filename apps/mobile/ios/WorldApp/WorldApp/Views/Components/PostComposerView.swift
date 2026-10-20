@@ -238,9 +238,13 @@ struct PostComposerView: View {
                     HStack(spacing: 14) {
                         Image(systemName: "photo.on.rectangle.angled")
                             .font(.title2)
-                            .foregroundStyle(Theme.accentBright)
+                            .foregroundStyle(Theme.ink)
                             .frame(width: 48, height: 48)
-                            .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .background(Theme.matteDeep, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(Theme.border, lineWidth: 0.5)
+                            )
                         VStack(alignment: .leading, spacing: 3) {
                             Text("Add a photo")
                                 .font(.subheadline.weight(.semibold))
