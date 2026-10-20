@@ -29,14 +29,14 @@ final class SparkWarmPool {
         /// Mid-fling hitch is avoided by skipping willDisplay/prefetch warms + posts mutations,
         /// not by starving the settle/landing warm depth.
         static var playerAhead: Int { playerAheadSparks }
-        /// Feed list must NOT use AV warm (media session 09) — kept for API compat only.
-        static var playerAheadFeed: Int { 0 }
+        /// Home feed: focus + 1–2 ahead only (not every cell). Claim on focus like Sparks.
+        static var playerAheadFeed: Int { isConstrained ? 1 : 2 }
         static var playerAheadSparks: Int { isConstrained ? 4 : 5 }
         static var playerAheadHubs: Int { 2 }
         /// Thumbs / Frame 0 ahead of focus (Sparks player + shelves).
         static var thumbAhead: Int { isConstrained ? 8 : 10 }
         /// Deep-preroll next N (first-frame ready); rest of window light-buffer.
-        static var deepPrerollFeed: Int { 0 }
+        static var deepPrerollFeed: Int { 1 }
         static var deepPrerollSparks: Int { isConstrained ? 3 : 4 }
         static var deepPrerollHubs: Int { 1 }
         /// current + behind + ahead + spare — room for Sparks Max window.
@@ -142,12 +142,21 @@ final class SparkWarmPool {
         }
     }
 
-    /// **Deprecated for Home feed** (media session 09: posters only).
-    /// No-op so stray call sites cannot reintroduce feed AV storms.
+    /// Home feed settle: warm **focus + 1–2 ahead** (video queue only).
+    /// Not every list cell — keeps media-session single-player rule; claim still happens on focus.
     func prepareFeedWindow(posts: [CountryPost], around index: Int) {
-        _ = posts
-        _ = index
-        // Intentionally empty — feed list must not warm AVPlayers.
+        guard !posts.isEmpty else { return }
+        // Mid-fling: skip — settle/landing refills. Avoids feed scroll AV storms.
+        if ScrollBudget.isFlinging { return }
+        prepare(
+            posts: posts,
+            around: index,
+            ahead: MediaBudget.playerAheadFeed,
+            behind: 0,
+            deepPrerollLimit: MediaBudget.deepPrerollFeed,
+            skipThumbWarm: true,
+            allowNewWarms: true
+        )
     }
 
     /// Hubs For you shelf + related / up-next while watching.

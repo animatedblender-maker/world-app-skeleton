@@ -33,6 +33,9 @@ struct YouTubeAppView: View {
     @State private var hubsDisplayLimit: Int = 24
     @State private var isLoadingMoreHubs = false
     @State private var hubsLoadMoreQueued = false
+    /// Coalesce mid-fling settle top-ups / thumb warms (onAppear storms).
+    @State private var hubsSettledTopUpQueued = false
+    @State private var hubsSettledThumbWarmIndex: Int? = nil
     /// Session seed for For you mix (new every open / pull / filter).
     @State private var hubsSessionSeed: UInt64 = UInt64.random(in: 1...UInt64.max)
     /// Continue-watching strip order (shuffled subset of history).
@@ -199,22 +202,33 @@ struct YouTubeAppView: View {
         let threshold = max(0, stableDiscoverVideos.count - max(4, Self.hubsGrowBy / 2))
         guard index >= threshold else { return }
 
-        // 1) Grow local pool only (no network, no image storm).
+        // 1) Grow local pool only — warm the newly revealed thumbs so cells aren't blank.
         if hubsDisplayLimit < hubsForYouPool.count {
-            growForYouDisplay(by: Self.hubsGrowBy, warmThumbs: false)
+            growForYouDisplay(by: Self.hubsGrowBy, warmThumbs: true)
             return
         }
 
         // 2) Network only when not flinging and not already loading.
         guard !ScrollBudget.isFlinging, !isLoadingMoreHubs else {
-            if ScrollBudget.isFlinging { scheduleSettledHubsTopUp() }
+            if ScrollBudget.isFlinging {
+                scheduleSettledHubsTopUp()
+            } else {
+                hubsLoadMoreQueued = true
+            }
             return
         }
         Task { @MainActor in
             // Settle gate — avoid load during rubber-band / momentum.
             try? await Task.sleep(nanoseconds: 400_000_000)
-            guard appState.selectedTab == .hubs, !ScrollBudget.isFlinging else { return }
-            guard hubsDisplayLimit >= hubsForYouPool.count else { return }
+            guard appState.selectedTab == .hubs else { return }
+            if ScrollBudget.isFlinging {
+                scheduleSettledHubsTopUp()
+                return
+            }
+            if hubsDisplayLimit < hubsForYouPool.count {
+                growForYouDisplay(by: Self.hubsGrowBy, warmThumbs: true)
+                return
+            }
             await loadMoreActiveShelf()
             if hubsDisplayLimit >= hubsForYouPool.count {
                 requestMoreHubsLongForm()
@@ -223,6 +237,7 @@ struct YouTubeAppView: View {
     }
 
     private func growForYouDisplay(by growBy: Int, warmThumbs: Bool) {
+        let previous = hubsDisplayLimit
         let next = min(
             hubsForYouPool.count,
             hubsDisplayLimit + max(growBy, Self.hubsGrowBy)
@@ -237,23 +252,68 @@ struct YouTubeAppView: View {
             stableDiscoverVideos = window
         }
         if warmThumbs {
+            // Warm only the newly revealed slice — full-window prefetch was capped/starved.
+            let fresh = Array(window.dropFirst(previous).prefix(Self.hubsGrowBy + 4))
+            let band = fresh.isEmpty ? Array(window.suffix(8)) : fresh
             ImageCache.shared.prefetchPostThumbnails(
-                window,
+                band,
                 maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel,
                 aggressive: false
             )
             Task {
-                await Frame0PosterResolver.shared.prefetch(postIDs: window.map(\.id))
+                await Frame0PosterResolver.shared.prefetch(postIDs: band.map(\.id))
             }
         }
     }
 
-    private func scheduleSettledHubsTopUp() {
+    /// Mid-fling onAppear skips prefetch — re-warm once settled so thumbs don't stay blank.
+    private func scheduleSettledThumbWarm(around index: Int) {
+        let shouldStart = hubsSettledThumbWarmIndex == nil
+        hubsSettledThumbWarmIndex = index
+        guard shouldStart else { return }
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            guard !ScrollBudget.isFlinging, !isLoadingMoreHubs else { return }
-            guard hubsDisplayLimit >= hubsForYouPool.count else { return }
+            defer { hubsSettledThumbWarmIndex = nil }
+            for _ in 0..<5 {
+                try? await Task.sleep(nanoseconds: 220_000_000)
+                if !ScrollBudget.isFlinging { break }
+            }
+            guard appState.selectedTab == .hubs, !ScrollBudget.isFlinging else { return }
+            guard !stableDiscoverVideos.isEmpty else { return }
+            let target = hubsSettledThumbWarmIndex ?? index
+            let clamped = min(max(0, target), stableDiscoverVideos.count - 1)
+            ImageCache.shared.prefetchHubsWindow(
+                posts: stableDiscoverVideos,
+                around: clamped,
+                behind: 1,
+                ahead: 4
+            )
+        }
+    }
+
+    private func scheduleSettledHubsTopUp() {
+        guard !hubsSettledTopUpQueued else { return }
+        hubsSettledTopUpQueued = true
+        Task { @MainActor in
+            defer { hubsSettledTopUpQueued = false }
+            // Wait out fling; retry a few times so endless never dies mid-momentum.
+            for _ in 0..<6 {
+                try? await Task.sleep(nanoseconds: 280_000_000)
+                if !ScrollBudget.isFlinging { break }
+            }
+            guard appState.selectedTab == .hubs, !ScrollBudget.isFlinging else { return }
+            if hubsDisplayLimit < hubsForYouPool.count {
+                growForYouDisplay(by: Self.hubsGrowBy, warmThumbs: true)
+                return
+            }
+            guard !isLoadingMoreHubs else {
+                hubsLoadMoreQueued = true
+                return
+            }
             await loadMoreActiveShelf()
+            // Shelf may be exhausted — recycle / legacy must still run.
+            if hubsDisplayLimit >= hubsForYouPool.count {
+                requestMoreHubsLongForm()
+            }
         }
     }
 
@@ -323,11 +383,19 @@ struct YouTubeAppView: View {
             }
         }
 
-        // C) Still nothing new → recycle ranked pool so scroll is endless.
-        if added == 0, hubsDisplayLimit >= hubsForYouPool.count {
-            appendEndlessRecyclePage()
+        // C) Ensure display can keep scrolling.
+        // softMerge may still be waiting out a fling before rebuilding the pool —
+        // force a growth/rebuild here so we never stall at the tail.
+        if added > 0 {
+            applySoftMergeDisplayGrowth(added: added)
+            if hubsDisplayLimit < hubsForYouPool.count {
+                growForYouDisplay(by: Self.hubsGrowBy, warmThumbs: true)
+            }
         } else if hubsDisplayLimit < hubsForYouPool.count {
             growForYouDisplay(by: Self.hubsGrowBy, warmThumbs: true)
+        } else {
+            // Network dry → recycle ranked pool so scroll is endless.
+            appendEndlessRecyclePage()
         }
 
         #if DEBUG
@@ -702,14 +770,19 @@ struct YouTubeAppView: View {
                                         .id(PlayScrollAnchor.subscriptions)
                                 }
                             }
-                            ForEach(Array(stableDiscoverVideos.enumerated()), id: \.element.id) { index, post in
+                            // Offset identity — endless recycle re-queues the same post IDs;
+                            // element.id collisions broke LazyVStack (scroll died + blank cells).
+                            ForEach(Array(stableDiscoverVideos.enumerated()), id: \.offset) { index, post in
                                 YouTubeVideoListRow(post: post, onTap: {
                                     openVideo(post)
                                 }, onAppearRow: {
                                     // Media session 09: Hubs list = posters/Frame0 only.
                                     ensureMoreForYou(around: index)
                                     // Settled scroll only — Feed-sized window (mid-fling prefetch was jank).
-                                    guard !ScrollBudget.isFlinging else { return }
+                                    if ScrollBudget.isFlinging {
+                                        scheduleSettledThumbWarm(around: index)
+                                        return
+                                    }
                                     ImageCache.shared.prefetchHubsWindow(
                                         posts: stableDiscoverVideos,
                                         around: index,
@@ -1259,8 +1332,11 @@ struct YouTubeAppView: View {
         if added > 0 {
             if ScrollBudget.isFlinging {
                 Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 320_000_000)
-                    guard !ScrollBudget.isFlinging else { return }
+                    // Retry until settled — dropping the merge left displayLimit stuck at pool end.
+                    for _ in 0..<8 {
+                        try? await Task.sleep(nanoseconds: 280_000_000)
+                        if !ScrollBudget.isFlinging { break }
+                    }
                     applySoftMergeDisplayGrowth(added: added)
                 }
             } else {
@@ -1492,24 +1568,35 @@ struct YouTubeAppView: View {
         let filtered = BlockService.shared.filterPosts(page.items)
             .filter { PlayPlatformBridge.isHubsForYouLongForm($0) || $0.hasVideo }
         softMergeHubCatalog(filtered)
-        // Grow display only — settled onAppearRow warms thumbs (avoid Frame0 storm mid-scroll).
+        // Grow display + warm new thumbs (onAppear alone skipped mid-fling → blank cells).
         if hubsDisplayLimit < hubsForYouPool.count {
-            growForYouDisplay(by: Self.hubsGrowBy, warmThumbs: false)
+            growForYouDisplay(by: Self.hubsGrowBy, warmThumbs: true)
         } else {
             rebuildStableHomeLists(shuffle: false, remountList: false)
-            growForYouDisplay(by: Self.hubsGrowBy, warmThumbs: false)
+            growForYouDisplay(by: Self.hubsGrowBy, warmThumbs: true)
         }
     }
 
     /// Media session 09: Hubs list = posters/Frame0 only. AV warm only in Watch/related.
     private func butterWarmHubCatalog(_ videos: [CountryPost]) {
-        guard !ScrollBudget.isFlinging else { return }
+        if ScrollBudget.isFlinging {
+            // Open/paint during fling used to skip forever — warm once settled.
+            Task { @MainActor in
+                for _ in 0..<5 {
+                    try? await Task.sleep(nanoseconds: 220_000_000)
+                    if !ScrollBudget.isFlinging { break }
+                }
+                guard !ScrollBudget.isFlinging else { return }
+                butterWarmHubCatalog(videos)
+            }
+            return
+        }
         let thumbPx = YouTubeMediaLayout.hubsListThumbMaxPixel
-        // Visible head only — slug thin pages fill density; don't warm the whole pool.
+        // Visible head — keep a bit denser so first paint isn't a strip of black cards.
         let head = stableDiscoverVideos.isEmpty
             ? videos.filter { !$0.isReel && $0.playableVideoURL != nil }
             : stableDiscoverVideos
-        let poolBand = Array(head.prefix(min(SparkWarmPool.MediaBudget.thumbAhead, 6)))
+        let poolBand = Array(head.prefix(min(max(SparkWarmPool.MediaBudget.thumbAhead, 8), 12)))
         let continueBand = Array(continueWatching.prefix(3))
         var warmBand = poolBand
         for post in continueBand where !warmBand.contains(where: { $0.id == post.id }) {
@@ -1517,7 +1604,7 @@ struct YouTubeAppView: View {
         }
         ImageCache.shared.prefetchPostThumbnails(warmBand, maxPixelSize: thumbPx, aggressive: false)
         Task(priority: .utility) {
-            await Frame0PosterResolver.shared.prefetch(postIDs: Array(warmBand.prefix(6).map(\.id)))
+            await Frame0PosterResolver.shared.prefetch(postIDs: Array(warmBand.prefix(10).map(\.id)))
         }
         // Sparks strip thumbs — much later, only if still on Hubs with no player.
         Task(priority: .background) {

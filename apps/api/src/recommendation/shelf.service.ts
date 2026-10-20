@@ -356,7 +356,8 @@ function rowToCard(row: RawPostRow, slug: HubParentSlug): ThinShelfCard {
     slug,
     title: row.title,
     body: body || null,
-    media_type: row.media_type || 'video',
+    // Preserve none/text/image — defaulting to 'video' hid written posts on thin cards.
+    media_type: row.media_type || 'none',
     media_url: row.media_url,
     thumb_url: thumb,
     like_count: Number(row.like_count) || 0,
@@ -637,18 +638,134 @@ export type SurfacePage = {
   count: number;
 };
 
+/** Dual cursor so media + written lanes page independently on Home. */
+type HomeFeedCursor = {
+  media: { createdAt: string; id: string } | null;
+  text: { createdAt: string; id: string } | null;
+};
+
+function encodeHomeFeedCursor(cur: HomeFeedCursor): string | null {
+  const m = cur.media;
+  const t = cur.text;
+  if (!m && !t) return null;
+  // v2|mediaAt|mediaId|textAt|textId — empty text lane uses "-" placeholders.
+  const raw = [
+    'v2',
+    m?.createdAt ?? '-',
+    m?.id ?? '-',
+    t?.createdAt ?? '-',
+    t?.id ?? '-',
+  ].join('|');
+  return Buffer.from(raw, 'utf8').toString('base64url');
+}
+
+function decodeHomeFeedCursor(cursor: string | null | undefined): HomeFeedCursor {
+  if (!cursor) return { media: null, text: null };
+  try {
+    const raw = Buffer.from(String(cursor), 'base64url').toString('utf8');
+    if (raw.startsWith('v2|')) {
+      const parts = raw.split('|');
+      // v2 | mediaAt | mediaId | textAt | textId
+      if (parts.length >= 5) {
+        const media =
+          parts[1] !== '-' && parts[2] !== '-'
+            ? { createdAt: parts[1], id: parts[2] }
+            : null;
+        const text =
+          parts[3] !== '-' && parts[4] !== '-'
+            ? { createdAt: parts[3], id: parts[4] }
+            : null;
+        return { media, text };
+      }
+    }
+  } catch {
+    /* fall through to legacy */
+  }
+  // Legacy single cursor = media lane only.
+  const legacy = decodeCursor(cursor);
+  return { media: legacy, text: null };
+}
+
+/** Written / image posts (no video) — R2 video sync otherwise buries these forever. */
+function isWrittenFeedRow(row: RawPostRow): boolean {
+  const mt = String(row.media_type ?? '')
+    .trim()
+    .toLowerCase();
+  if (mt === 'none' || mt === 'text' || mt === 'image' || mt === 'photo') return true;
+  if (mt === 'video' || mt === 'reel' || mt === 'spark' || mt === 'story' || mt === 'moment') {
+    return false;
+  }
+  const media = row.media_url;
+  if (media == null || String(media).trim() === '') {
+    const body = String(row.body ?? '').trim();
+    const title = String(row.title ?? '').trim();
+    return body.length > 0 || title.length > 0;
+  }
+  return false;
+}
+
+async function fetchHomeWrittenRows(opts: {
+  limit: number;
+  cursor: { createdAt: string; id: string } | null;
+  slugSelect: string;
+}): Promise<RawPostRow[]> {
+  const want = Math.min(Math.max(opts.limit, 1), 32);
+  const params: unknown[] = [];
+  let where = `
+    p.visibility = 'public'
+    and lower(coalesce(p.media_type, '')) not in ('story', 'moment', 'video', 'reel', 'spark')
+    and lower(coalesce(p.body, '')) not like '%__story__%'
+    and lower(coalesce(p.body, '')) not like '%__spark__%'
+    and lower(coalesce(p.body, '')) not like '%__hub_origin__%'
+    and (
+      lower(coalesce(p.media_type, '')) in ('none', 'text', 'image', 'photo')
+      or (
+        (p.media_url is null or length(trim(coalesce(p.media_url, ''))) < 4)
+        and (
+          length(trim(coalesce(p.body, ''))) > 0
+          or length(trim(coalesce(p.title, ''))) > 0
+        )
+      )
+    )
+  `;
+  if (opts.cursor) {
+    params.push(opts.cursor.createdAt, opts.cursor.id);
+    where += ` and (greatest(p.updated_at, p.created_at), p.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`;
+  }
+  params.push(want);
+  const sql = `
+    select
+      p.id, p.title, p.body, p.media_type, p.media_url, p.thumb_url,
+      p.like_count, p.comment_count, p.created_at, p.updated_at,
+      greatest(p.updated_at, p.created_at) as feed_at,
+      p.country_code, p.country_name,
+      p.author_id, p.shared_post_id, ${opts.slugSelect},
+      pr.display_name as author_name, pr.username as author_username, pr.avatar_url as author_avatar
+    from public.posts p
+    left join public.profiles pr on pr.user_id = p.author_id
+    where ${where}
+    order by greatest(p.updated_at, p.created_at) desc, p.id desc
+    limit $${params.length}
+  `;
+  const { rows } = await pool.query<RawPostRow>(sql, params);
+  return rows;
+}
+
 /**
- * Home feed thin page — all public posts (text/image/video).
+ * Home feed thin page — video + written/image mix.
  * Rank by greatest(updated_at, created_at) so R2-synced / recently updated
- * media floats to the top (latest R2 updates first). Pre-KNN: client pages
- * endlessly through the full library; server pages by feed_at.
+ * media floats to the top. Written posts get a reserved quota each page so
+ * R2 video storms cannot bury text forever. Dual cursor pages both lanes.
  */
 export async function fetchHomeFeedPage(input: {
   limit?: number;
   cursor?: string | null;
 }): Promise<SurfacePage> {
   const want = Math.min(Math.max(Number(input.limit) || 24, 1), 64);
-  const cur = decodeCursor(input.cursor);
+  // ~1 written card per ~3–4 media cards (min 3 on a normal page).
+  const textQuota = Math.min(Math.max(3, Math.ceil(want * 0.28)), Math.max(3, want - 4));
+  const mediaWant = Math.max(want, want - textQuota + 4);
+  const homeCur = decodeHomeFeedCursor(input.cursor);
   const hasCol = await hasHubSlugColumn();
   const slugSelect = hasCol ? 'p.hub_slug' : 'null::text as hub_slug';
   const params: unknown[] = [];
@@ -657,12 +774,11 @@ export async function fetchHomeFeedPage(input: {
     and lower(coalesce(p.media_type, '')) not in ('story', 'moment')
     and lower(coalesce(p.body, '')) not like '%__story__%'
   `;
-  // Cursor on feed_at (= greatest(updated_at, created_at)).
-  if (cur) {
-    params.push(cur.createdAt, cur.id);
+  if (homeCur.media) {
+    params.push(homeCur.media.createdAt, homeCur.media.id);
     where += ` and (greatest(p.updated_at, p.created_at), p.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`;
   }
-  params.push(want);
+  params.push(mediaWant);
   const sql = `
     select
       p.id, p.title, p.body, p.media_type, p.media_url, p.thumb_url,
@@ -677,17 +793,80 @@ export async function fetchHomeFeedPage(input: {
     order by greatest(p.updated_at, p.created_at) desc, p.id desc
     limit $${params.length}
   `;
-  const { rows } = await pool.query<RawPostRow>(sql, params);
-  const items = rows.map((row) => rowToCard(row, classifyRow(row)));
+  const [{ rows: mediaRows }, writtenRows] = await Promise.all([
+    pool.query<RawPostRow>(sql, params),
+    fetchHomeWrittenRows({
+      limit: textQuota + 2,
+      cursor: homeCur.text,
+      slugSelect,
+    }),
+  ]);
+
+  // Prefer dedicated written lane; also keep any text that slipped into media page.
+  const writtenFromMedia = mediaRows.filter(isWrittenFeedRow);
+  const mediaOnly = mediaRows.filter((r) => !isWrittenFeedRow(r));
+  const writtenSeen = new Set<string>();
+  const writtenMerged: RawPostRow[] = [];
+  for (const row of [...writtenRows, ...writtenFromMedia]) {
+    if (!writtenSeen.has(row.id)) {
+      writtenSeen.add(row.id);
+      writtenMerged.push(row);
+    }
+  }
+
+  // Weave: ~1 written per 3 media (media-first head, then alternate).
+  const woven: RawPostRow[] = [];
+  let mi = 0;
+  let ti = 0;
+  let sinceText = 0;
+  while (woven.length < want && (mi < mediaOnly.length || ti < writtenMerged.length)) {
+    const wantText =
+      ti < writtenMerged.length &&
+      (mi >= mediaOnly.length || sinceText >= 3 || (woven.length > 0 && woven.length % 4 === 3));
+    if (wantText) {
+      woven.push(writtenMerged[ti++]);
+      sinceText = 0;
+    } else if (mi < mediaOnly.length) {
+      woven.push(mediaOnly[mi++]);
+      sinceText += 1;
+    } else if (ti < writtenMerged.length) {
+      woven.push(writtenMerged[ti++]);
+      sinceText = 0;
+    } else {
+      break;
+    }
+  }
+
+  const items = woven.map((row) => rowToCard(row, classifyRow(row)));
   const liveItems = await freshenCardMedia(items);
-  const last = rows[rows.length - 1];
-  const nextCursor = last
-    ? encodeCursor(toIso(last.feed_at ?? last.updated_at ?? last.created_at), last.id)
+
+  const lastMedia = mediaOnly[Math.min(mi, mediaOnly.length) - 1] ?? mediaOnly[mediaOnly.length - 1];
+  const lastText =
+    writtenMerged[Math.min(ti, writtenMerged.length) - 1] ?? writtenMerged[writtenMerged.length - 1];
+  const nextMedia = lastMedia
+    ? {
+        createdAt: toIso(lastMedia.feed_at ?? lastMedia.updated_at ?? lastMedia.created_at),
+        id: lastMedia.id,
+      }
+    : homeCur.media;
+  const nextText = lastText
+    ? {
+        createdAt: toIso(lastText.feed_at ?? lastText.updated_at ?? lastText.created_at),
+        id: lastText.id,
+      }
+    : homeCur.text;
+  const hasMore =
+    mediaOnly.length >= mediaWant ||
+    writtenRows.length >= textQuota ||
+    liveItems.length >= want;
+  const nextCursor = hasMore
+    ? encodeHomeFeedCursor({ media: nextMedia, text: nextText })
     : null;
+
   return {
     surface: 'home_for_you',
     items: liveItems,
-    nextCursor: liveItems.length >= want ? nextCursor : null,
+    nextCursor,
     count: liveItems.length,
   };
 }

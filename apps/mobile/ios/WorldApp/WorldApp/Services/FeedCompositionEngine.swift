@@ -95,6 +95,7 @@ enum FeedCompositionEngine {
             }
 
             let viewed = SparkDiscoveryEngine.isViewed(post)
+                && !PlayPlatformBridge.isWrittenHomePost(post)
             if policy.preferUnviewed, viewed, !policy.allowRecycleWhenExhausted {
                 continue
             }
@@ -128,6 +129,11 @@ enum FeedCompositionEngine {
                 sources.append(.hubsShare)
                 score += 0.95
             }
+            if PlayPlatformBridge.isWrittenHomePost(post) {
+                sources.append(.written)
+                // Soft boost so R2 video density cannot zero out text cards.
+                score += 1.05
+            }
             if sources.isEmpty {
                 sources.append(.explore)
             }
@@ -155,15 +161,19 @@ enum FeedCompositionEngine {
                 )
             )
         }
-        // Prefer unviewed. Home (`allowRecycleWhenExhausted: false`) never pads with watched.
+        // Prefer unviewed videos. Written/text stay in the fresh pool.
         if policy.preferUnviewed {
-            let fresh = out.filter { !SparkDiscoveryEngine.isViewed($0.post) }
+            func isFreshVideo(_ c: RecommendationCandidate) -> Bool {
+                PlayPlatformBridge.isWrittenHomePost(c.post)
+                    || !SparkDiscoveryEngine.isViewed(c.post)
+            }
+            let fresh = out.filter(isFreshVideo)
             let minHead = max(8, policy.pageSize / 3)
             if fresh.count >= minHead {
                 out = fresh
             } else if !fresh.isEmpty {
                 if policy.allowRecycleWhenExhausted {
-                    let viewed = out.filter { SparkDiscoveryEngine.isViewed($0.post) }
+                    let viewed = out.filter { !isFreshVideo($0) }
                     out = fresh + viewed
                 } else {
                     out = fresh
@@ -267,7 +277,7 @@ enum FeedCompositionEngine {
             s -= 2.5
         }
 
-        // Format diversity: after a Spark streak, prefer a Hubs-badge card (and vice versa).
+        // Format diversity: after a Spark streak, prefer Hubs or written (and vice versa).
         if policy.surface == .homeForYou {
             let recent = selected.suffix(4)
             let sparkStreak = recent.filter {
@@ -277,12 +287,19 @@ enum FeedCompositionEngine {
                 PlayPlatformBridge.isHubFeedCardVideo($0.post)
                     || PlayPlatformBridge.isHubOriginShare($0.post)
             }.count
+            let writtenStreak = recent.filter {
+                PlayPlatformBridge.isWrittenHomePost($0.post)
+            }.count
+            let mediaStreak = sparkStreak + hubStreak
             let isHub = PlayPlatformBridge.isHubFeedCardVideo(c.post)
                 || PlayPlatformBridge.isHubOriginShare(c.post)
             let isSpark = PlayPlatformBridge.isSparkFeedCard(c.post) || c.post.isReel
+            let isWritten = PlayPlatformBridge.isWrittenHomePost(c.post)
             if isHub, sparkStreak >= 3 { s += 2.8 }
             if isSpark, hubStreak >= 2 { s += 1.2 }
             if isSpark, sparkStreak >= 3 { s -= 1.4 }
+            if isWritten, mediaStreak >= 3 { s += 3.0 }
+            if isWritten, writtenStreak >= 2 { s -= 1.6 }
         }
 
         return s

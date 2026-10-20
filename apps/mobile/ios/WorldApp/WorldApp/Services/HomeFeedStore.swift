@@ -510,15 +510,20 @@ final class HomeFeedStore {
             let exclude = Set(self.posts.map(\.id))
             async let sparkTop = PostsService.shared.homeFeedSparkTopUp(
                 excluding: exclude,
-                limit: 20,
+                limit: 16,
                 forceRefresh: false
             )
             async let hubTop = PostsService.shared.homeFeedHubTopUp(
                 excluding: exclude,
+                limit: 6,
+                forceRefresh: false
+            )
+            async let textTop = PostsService.shared.homeFeedTextTopUp(
+                excluding: exclude,
                 limit: 8,
                 forceRefresh: false
             )
-            let extra = (await sparkTop) + (await hubTop)
+            let extra = (await sparkTop) + (await hubTop) + (await textTop)
             guard gen == self.generation else { return }
             if !extra.isEmpty {
                 await self.softMergePreservingHead(extra)
@@ -579,12 +584,16 @@ final class HomeFeedStore {
             for post in clean {
                 guard seen.insert(post.id).inserted else { continue }
                 guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
-                // Never append watched — Home does not recycle viewed clips.
-                if SparkDiscoveryEngine.isViewed(post) { continue }
+                // Never append watched videos — written/text stay eligible.
+                if SparkDiscoveryEngine.isViewed(post), !PlayPlatformBridge.isWrittenHomePost(post) {
+                    continue
+                }
                 newUnviewed.append(post)
             }
-            // Also strip watched that somehow sat below the pin.
-            let cleanedBelow = preservedBelow.filter { !SparkDiscoveryEngine.isViewed($0) }
+            // Strip watched videos below the pin; keep written cards.
+            let cleanedBelow = preservedBelow.filter {
+                PlayPlatformBridge.isWrittenHomePost($0) || !SparkDiscoveryEngine.isViewed($0)
+            }
 
             let merged = head + cleanedBelow + newUnviewed
             guard merged.map(\.id) != posts.map(\.id) else { return }
@@ -608,7 +617,9 @@ final class HomeFeedStore {
         for post in ranked {
             guard seen.insert(post.id).inserted else { continue }
             guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
-            if SparkDiscoveryEngine.isViewed(post) { continue }
+            if SparkDiscoveryEngine.isViewed(post), !PlayPlatformBridge.isWrittenHomePost(post) {
+                continue
+            }
             freshTail.append(post)
         }
         guard !freshTail.isEmpty else { return }
@@ -720,11 +731,14 @@ final class HomeFeedStore {
     /// Drop offline Reddit / catalog fakes; keep real UUID-backed posts only
     /// (includes DE Million Post Corpus seeds + their comments).
     /// **Keeps R2 Sparks** — they render as SparkFeedCard on the main feed.
-    /// Hard-exclude watched — Home must not recommend the same clip again.
+    /// Hard-exclude watched **videos** — written/text posts are not “watched clips”.
     private static func liveOnlyPosts(_ posts: [CountryPost]) -> [CountryPost] {
         let base = posts.excludingDeletedPosts().forHomeFeed()
         guard !base.isEmpty else { return [] }
-        return base.filter { !SparkDiscoveryEngine.isViewed($0) }
+        return base.filter { post in
+            if PlayPlatformBridge.isWrittenHomePost(post) { return true }
+            return !SparkDiscoveryEngine.isViewed(post)
+        }
     }
 
     /// After a meaningful watch: drop this clip from upcoming Home rows (keep on-screen pin).
@@ -787,7 +801,7 @@ final class HomeFeedStore {
             hasMore = true
         }
 
-        // Media session 09: feed list = posters only. NO SparkWarmPool / AV on scroll.
+        // Thumbs + Frame0 always; AV warm only on settle for focus ± small ahead.
         let thumbAhead = fling ? 4 : 8
         let end = min(displayedPosts.count, index + thumbAhead)
         if index < end {
@@ -802,6 +816,17 @@ final class HomeFeedStore {
 
         // Don't kick network load-more mid-fling (causes hitch + image storms).
         guard !fling else { return }
+
+        // Settle: warm focused video + 1–2 ahead (video queue only — not every cell).
+        let videos = Self.feedWarmVideoQueue(from: displayedPosts)
+        if let warmIdx = Self.feedWarmIndex(
+            for: post,
+            in: videos,
+            feedIndex: index,
+            feed: displayedPosts
+        ) {
+            SparkWarmPool.shared.prepareFeedWindow(posts: videos, around: warmIdx)
+        }
 
         // Top up pool early — never wait until the last few cells.
         let threshold = max(0, Int(Double(max(posts.count, 1)) * prefetchRatio) - 1)
@@ -959,12 +984,15 @@ final class HomeFeedStore {
             guard let self else { return }
             let exclude = Set(self.posts.map(\.id))
             async let sparkTop = PostsService.shared.homeFeedSparkTopUp(
-                excluding: exclude, limit: 36, forceRefresh: false
+                excluding: exclude, limit: 28, forceRefresh: false
             )
             async let hubTop = PostsService.shared.homeFeedHubTopUp(
-                excluding: exclude, limit: 14, forceRefresh: false
+                excluding: exclude, limit: 10, forceRefresh: false
             )
-            let extra = (await sparkTop) + (await hubTop)
+            async let textTop = PostsService.shared.homeFeedTextTopUp(
+                excluding: exclude, limit: 12, forceRefresh: false
+            )
+            let extra = (await sparkTop) + (await hubTop) + (await textTop)
             guard gen == self.generation, !extra.isEmpty else {
                 await self.ensureBufferedPool()
                 return
@@ -1034,7 +1062,9 @@ final class HomeFeedStore {
         for post in rankedPage {
             guard seen.insert(post.id).inserted else { continue }
             guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
-            if SparkDiscoveryEngine.isViewed(post) { continue }
+            if SparkDiscoveryEngine.isViewed(post), !PlayPlatformBridge.isWrittenHomePost(post) {
+                continue
+            }
             appended.append(post)
             if appended.count >= pageSize { break }
         }
@@ -1050,9 +1080,10 @@ final class HomeFeedStore {
                 )
             }
             let exclude = seen
-            // Mix Sparks + Hubs-badge cards (~2:1) so Home isn't spark-only.
+            // Mix Sparks + Hubs + written (~2:1 media, ~1 written / 4) so Home isn't video-only.
+            let textLimit = max(2, pageSize / 4)
             let hubLimit = max(2, pageSize / 3)
-            let sparkLimit = max(1, pageSize - hubLimit)
+            let sparkLimit = max(1, pageSize - hubLimit - textLimit)
             async let sparkTop = PostsService.shared.homeFeedSparkTopUp(
                 excluding: exclude,
                 limit: sparkLimit,
@@ -1063,18 +1094,31 @@ final class HomeFeedStore {
                 limit: hubLimit,
                 forceRefresh: recyclePass > 2
             )
+            async let textTop = PostsService.shared.homeFeedTextTopUp(
+                excluding: exclude,
+                limit: textLimit,
+                forceRefresh: recyclePass > 2
+            )
             let sparks = await sparkTop
             let hubs = await hubTop
+            let texts = await textTop
             var mixed: [CountryPost] = []
             var si = 0
             var hi = 0
-            while mixed.count < pageSize, si < sparks.count || hi < hubs.count {
-                if hi < hubs.count, mixed.count % 3 == 2 || si >= sparks.count {
+            var ti = 0
+            while mixed.count < pageSize, si < sparks.count || hi < hubs.count || ti < texts.count {
+                if ti < texts.count, mixed.count % 4 == 3 || (si >= sparks.count && hi >= hubs.count) {
+                    mixed.append(texts[ti]); ti += 1
+                } else if hi < hubs.count, mixed.count % 3 == 2 || si >= sparks.count {
                     mixed.append(hubs[hi]); hi += 1
                 } else if si < sparks.count {
                     mixed.append(sparks[si]); si += 1
                 } else if hi < hubs.count {
                     mixed.append(hubs[hi]); hi += 1
+                } else if ti < texts.count {
+                    mixed.append(texts[ti]); ti += 1
+                } else {
+                    break
                 }
             }
             for post in mixed {
@@ -1160,8 +1204,7 @@ final class HomeFeedStore {
         hasMore = true
     }
 
-    /// Media session 09: feed head = thumbs + Frame0 only. Never prepareFeedWindow here.
-    /// `lite` = open path (tiny band); full = after paint (visible + a few ahead).
+    /// `lite` = open path (thumbs only); full = after paint (thumbs + focus±ahead AV).
     private func warmHead(lite: Bool = false) async {
         let thumbN = lite ? 6 : min(max(windowLimit, firstWindow) + 4, 14)
         let thumbBand = Array(posts.prefix(thumbN))
@@ -1176,6 +1219,13 @@ final class HomeFeedStore {
         }) {
             let slug = hub.hubSlug ?? YouTubeCatalogService.parentHubSlug(for: hub)
             SlugShelfStore.shared.warmNeighbor(of: slug)
+        }
+        // After paint: light AV warm for first video card + 1–2 ahead (Sparks-like instant).
+        if !lite {
+            let videos = Self.feedWarmVideoQueue(from: Array(displayedPosts.prefix(max(windowLimit, firstWindow))))
+            if !videos.isEmpty {
+                SparkWarmPool.shared.prepareFeedWindow(posts: videos, around: 0)
+            }
         }
     }
 

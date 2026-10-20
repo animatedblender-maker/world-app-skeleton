@@ -296,9 +296,19 @@ struct FacebookPostCard: View {
                 }
                 meta
             } else {
-                if !isImageOnlyPost, !post.displayExcerpt.isEmpty {
+                // Written/text: prefer excerpt; fall back to body when title==body cleared excerpt.
+                let writtenCaption: String = {
+                    if !post.displayExcerpt.isEmpty { return post.displayExcerpt }
+                    if PlayPlatformBridge.isWrittenHomePost(post), !post.displayBody.isEmpty {
+                        // Title already in journalHeader — only repeat body when it differs.
+                        if let title = post.displayTitle, title == post.displayBody { return "" }
+                        return post.displayBody
+                    }
+                    return ""
+                }()
+                if !isImageOnlyPost, !writtenCaption.isEmpty {
                     captionBlock(
-                        text: post.displayExcerpt,
+                        text: writtenCaption,
                         topPadding: post.hasMedia || post.sharedPost != nil ? 12 : 10,
                         bottomPadding: 4
                     )

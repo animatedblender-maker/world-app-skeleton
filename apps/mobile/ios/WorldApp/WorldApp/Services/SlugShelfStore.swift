@@ -123,13 +123,14 @@ final class SlugShelfStore {
         if !force, !append, !state.posts.isEmpty, let at = state.lastFetchAt, Date().timeIntervalSince(at) < 45 {
             return Page(items: state.posts, nextCursor: state.nextCursor, slugsUsed: [], session: sessionToken)
         }
+        // Exhausted → empty page (not the cached head). Callers recycle / grow locally.
         if append, state.exhausted {
-            return Page(items: state.posts, nextCursor: nil, slugsUsed: [], session: sessionToken)
+            return Page(items: [], nextCursor: nil, slugsUsed: [], session: sessionToken)
         }
         if append, state.nextCursor == nil, !state.posts.isEmpty {
             state.exhausted = true
             shelves[key] = state
-            return Page(items: state.posts, nextCursor: nil, slugsUsed: [], session: sessionToken)
+            return Page(items: [], nextCursor: nil, slugsUsed: [], session: sessionToken)
         }
 
         let flightKey = append ? "\(key)#more" : key

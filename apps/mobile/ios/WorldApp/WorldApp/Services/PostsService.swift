@@ -650,9 +650,47 @@ final class PostsService {
         return merged
     }
 
-    /// Walk `recentPosts` pages until we have enough non-spark text/feed items.
+    /// Walk `recentPosts` pages until we have enough written/image Home cards.
+    /// R2 video floods newest-first; keep paging until the written quota fills.
     private func fetchRecentTextPosts(limit: Int) async -> [CountryPost] {
-        await fetchRecentFeedPosts(limit: limit, preferSparkShares: false)
+        var collected: [CountryPost] = []
+        var seen = Set<String>()
+        var before: String? = nil
+        let maxPages = 12
+        let stopAt = max(limit, 24)
+        for _ in 0..<maxPages {
+            let batch = await fetchRecentPosts(limit: 80, before: before)
+            if batch.isEmpty { break }
+            for post in batch.forHomeFeed() {
+                guard PlayPlatformBridge.isWrittenHomePost(post) else { continue }
+                guard seen.insert(post.id).inserted else { continue }
+                if SparkDiscoveryEngine.isViewed(post) { continue }
+                collected.append(post)
+                if collected.count >= stopAt { break }
+            }
+            before = batch.last?.createdAt
+            if batch.count < 20 { break }
+            if collected.count >= stopAt { break }
+        }
+        if collected.count > limit { return Array(collected.prefix(limit)) }
+        return collected
+    }
+
+    /// Draw written/text (+ photo) posts for Home so R2 video storms cannot empty the mix.
+    func homeFeedTextTopUp(excluding: Set<String>, limit: Int, forceRefresh: Bool = false) async -> [CountryPost] {
+        guard limit > 0 else { return [] }
+        _ = forceRefresh
+        var seen = excluding
+        var out: [CountryPost] = []
+        let ranked = await fetchRecentTextPosts(limit: max(limit * 2, 24))
+        for post in SparkDiscoveryEngine.rankForDiscovery(ranked, excluding: seen) {
+            guard PlayPlatformBridge.isWrittenHomePost(post) else { continue }
+            guard !SparkDiscoveryEngine.isViewed(post) else { continue }
+            guard seen.insert(post.id).inserted else { continue }
+            out.append(post)
+            if out.count >= limit { break }
+        }
+        return out
     }
 
     /// Cursor into the in-memory Sparks pool for endless home-feed top-ups.
@@ -3036,7 +3074,8 @@ enum SparkDiscoveryEngine {
         lock.unlock()
 
         for p in unique {
-            if isViewed(p) {
+            // Written/text cards are not video “watches” — keep them eligible on Home.
+            if isViewed(p), !PlayPlatformBridge.isWrittenHomePost(p) {
                 let keys = discoveryKeys(for: p)
                 let t = keys.compactMap { impSnap[$0] }.min() ?? now
                 viewedPool.append((p, t))
@@ -3084,40 +3123,62 @@ enum SparkDiscoveryEngine {
         return fresh
     }
 
-    /// Interleave Sparks and Hubs-badge cards so Home isn't spark-only.
+    /// Interleave Sparks, Hubs, and written/text cards so Home isn't video-only.
     private static func weaveSparkAndHubFormats(_ posts: [CountryPost], seed: UInt64) -> [CountryPost] {
         guard posts.count > 1 else { return posts }
         var sparks: [CountryPost] = []
         var hubs: [CountryPost] = []
+        var written: [CountryPost] = []
         var other: [CountryPost] = []
         for p in posts {
             if PlayPlatformBridge.isHubFeedCardVideo(p) || PlayPlatformBridge.isHubOriginShare(p) {
                 hubs.append(p)
             } else if PlayPlatformBridge.isSparkFeedCard(p) || p.isReel || p.isSpark {
                 sparks.append(p)
+            } else if PlayPlatformBridge.isWrittenHomePost(p) {
+                written.append(p)
             } else {
                 other.append(p)
             }
         }
-        guard !hubs.isEmpty, !sparks.isEmpty else { return posts }
+        // No media lanes to weave — keep input order (likely written-heavy).
+        if hubs.isEmpty, sparks.isEmpty {
+            return posts
+        }
         var out: [CountryPost] = []
         out.reserveCapacity(posts.count)
         var s = sparks
         var h = hubs
+        var w = written
         var rng = FeedSeededRNG(seed: seed == 0 ? 0xBEEF : seed ^ 0xA0B511)
-        // Roughly 1 Hubs card per ~3 Sparks when both pools have fuel.
+        // Roughly 1 Hubs per ~3 Sparks; insert a written card about every 4 media cards.
         var sinceHub = 0
-        while !s.isEmpty || !h.isEmpty {
+        var sinceWritten = 0
+        while !s.isEmpty || !h.isEmpty || !w.isEmpty {
+            let wantWritten = !w.isEmpty && (s.isEmpty && h.isEmpty || sinceWritten >= 4)
+            if wantWritten {
+                out.append(w.removeFirst())
+                sinceWritten = 0
+                continue
+            }
             let wantHub = !h.isEmpty && (s.isEmpty || sinceHub >= 3 || (rng.next() % 4) == 0)
             if wantHub, !h.isEmpty {
                 out.append(h.removeFirst())
                 sinceHub = 0
+                sinceWritten += 1
             } else if !s.isEmpty {
                 out.append(s.removeFirst())
                 sinceHub += 1
+                sinceWritten += 1
             } else if !h.isEmpty {
                 out.append(h.removeFirst())
                 sinceHub = 0
+                sinceWritten += 1
+            } else if !w.isEmpty {
+                out.append(w.removeFirst())
+                sinceWritten = 0
+            } else {
+                break
             }
         }
         out.append(contentsOf: other)

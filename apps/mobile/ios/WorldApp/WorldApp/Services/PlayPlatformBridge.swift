@@ -433,6 +433,20 @@ enum PlayPlatformBridge {
         isPlayEligible(post) && post.isReel
     }
 
+    /// Written / image Home card (no playable video) — text posts + photo posts.
+    static func isWrittenHomePost(_ post: CountryPost) -> Bool {
+        if post.isStory { return false }
+        if post.hasVideo || post.playableVideoURL != nil { return false }
+        if isSparkFeedCard(post) || isHubFeedCardVideo(post) || isHubOriginShare(post) {
+            return false
+        }
+        let mt = (post.mediaType ?? "").lowercased()
+        if mt == "none" || mt == "text" || mt == "image" || mt == "photo" || mt.isEmpty {
+            return post.hasFeedVisibleContent
+        }
+        return post.hasImage || (!post.displayBody.isEmpty || (post.displayTitle?.isEmpty == false))
+    }
+
     /// True when the feed should show a Spark card (original or re-share).
     static func isSparkFeedCard(_ post: CountryPost) -> Bool {
         if post.isStory { return false }

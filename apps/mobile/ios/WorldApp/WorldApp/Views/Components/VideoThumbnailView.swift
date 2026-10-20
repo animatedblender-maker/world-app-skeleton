@@ -1,4 +1,5 @@
 import AVFoundation
+import Combine
 import CryptoKit
 import SwiftUI
 import UIKit
@@ -56,8 +57,25 @@ struct VideoThumbnailView: View {
             await loadFrameIfNeeded()
         }
         // Frame0PosterCache is not Observable — batch prefetch must poke visible cells.
-        .onReceive(NotificationCenter.default.publisher(for: .frame0PostersDidUpdate)) { note in
-            applyFrame0CacheIfNeeded(postIDs: note.userInfo?["postIDs"] as? [String])
+        .onReceive(
+            NotificationCenter.default.publisher(for: .frame0PostersDidUpdate)
+                .receive(on: DispatchQueue.main)
+        ) { note in
+            let ids = note.userInfo?["postIDs"] as? [String]
+            if ScrollBudget.isFlinging {
+                // Don't drop forever — Hubs list never AV-extracts, so a missed
+                // Frame0 notify left cards blank until another batch.
+                Task { @MainActor in
+                    for _ in 0..<5 {
+                        try? await Task.sleep(nanoseconds: 200_000_000)
+                        if !ScrollBudget.isFlinging { break }
+                    }
+                    guard !ScrollBudget.isFlinging else { return }
+                    applyFrame0CacheIfNeeded(postIDs: ids)
+                }
+                return
+            }
+            applyFrame0CacheIfNeeded(postIDs: ids)
         }
     }
 
@@ -176,14 +194,23 @@ struct FrameZeroFallbackPoster: View {
                 remotePosterURL = cached
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .frame0PostersDidUpdate)) { note in
-            if let remotePosterURL, MediaURLResolver.isUsablePosterURL(remotePosterURL) { return }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .frame0PostersDidUpdate)
+                .receive(on: DispatchQueue.main)
+        ) { note in
             let ids = note.userInfo?["postIDs"] as? [String]
-            if let ids, !ids.isEmpty, !ids.contains(postID) { return }
-            if let cached = Frame0PosterCache.url(for: postID),
-               MediaURLResolver.isUsablePosterURL(cached) {
-                remotePosterURL = cached
+            if ScrollBudget.isFlinging {
+                Task { @MainActor in
+                    for _ in 0..<5 {
+                        try? await Task.sleep(nanoseconds: 200_000_000)
+                        if !ScrollBudget.isFlinging { break }
+                    }
+                    guard !ScrollBudget.isFlinging else { return }
+                    applyFrame0Notify(postIDs: ids)
+                }
+                return
             }
+            applyFrame0Notify(postIDs: ids)
         }
         .task(id: "\(postID)|\(videoURL.absoluteString)|\(allowClientExtract)") {
             if let seed = seedPosterURL ?? Frame0PosterCache.url(for: postID),
@@ -204,6 +231,16 @@ struct FrameZeroFallbackPoster: View {
             }
             guard allowClientExtract else { return }
             frameImage = await VideoFrameCache.shared.image(for: postID, videoURL: videoURL)
+        }
+    }
+
+    @MainActor
+    private func applyFrame0Notify(postIDs: [String]?) {
+        if let remotePosterURL, MediaURLResolver.isUsablePosterURL(remotePosterURL) { return }
+        if let postIDs, !postIDs.isEmpty, !postIDs.contains(postID) { return }
+        if let cached = Frame0PosterCache.url(for: postID),
+           MediaURLResolver.isUsablePosterURL(cached) {
+            remotePosterURL = cached
         }
     }
 }

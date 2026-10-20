@@ -354,8 +354,14 @@ struct FeedView: View {
             }
             if !reels.isEmpty {
                 feedReels = reels
-                ImageCache.shared.prefetchPostThumbnails(reels, maxPixelSize: 420, aggressive: true)
-                Task { await Frame0PosterResolver.shared.prefetch(postIDs: reels.map(\.id)) }
+                ImageCache.shared.prefetchPostThumbnails(
+                    Array(reels.prefix(8)),
+                    maxPixelSize: 360,
+                    aggressive: false
+                )
+                Task(priority: .utility) {
+                    await Frame0PosterResolver.shared.prefetch(postIDs: Array(reels.prefix(8).map(\.id)))
+                }
             }
         }
 
@@ -371,9 +377,9 @@ struct FeedView: View {
         }
 
         // Frame 0 for Continue watching / New on Hubs — dead r2.dev / expired thumbs must not stick.
-        let hubsStrip = continueWatching + newOnPlay
+        let hubsStrip = Array((continueWatching + newOnPlay).prefix(8))
         if !hubsStrip.isEmpty {
-            ImageCache.shared.prefetchPostThumbnails(hubsStrip, maxPixelSize: 360, aggressive: false)
+            ImageCache.shared.prefetchPostThumbnails(hubsStrip, maxPixelSize: 320, aggressive: false)
             Task(priority: .utility) {
                 await Frame0PosterResolver.shared.prefetch(postIDs: hubsStrip.map(\.id))
             }
@@ -434,17 +440,21 @@ struct FeedView: View {
         }
     }
 
-    /// Warm all visible top-rail posters so tiles never sit empty.
+    /// Warm visible top-rail posters — small bands only (dual-mounted Feed+Hubs).
     private func prefetchStripThumbnails() {
-        let sparks = feedReels
-        let hubs = newOnPlay + continueWatching
+        let sparks = Array(feedReels.prefix(8))
+        let hubs = Array((newOnPlay + continueWatching).prefix(6))
         if !sparks.isEmpty {
-            ImageCache.shared.prefetchPostThumbnails(sparks, maxPixelSize: 420, aggressive: true)
-            Task { await Frame0PosterResolver.shared.prefetch(postIDs: sparks.map(\.id)) }
+            ImageCache.shared.prefetchPostThumbnails(sparks, maxPixelSize: 360, aggressive: false)
+            Task(priority: .utility) {
+                await Frame0PosterResolver.shared.prefetch(postIDs: sparks.map(\.id))
+            }
         }
         if !hubs.isEmpty {
-            ImageCache.shared.prefetchPostThumbnails(hubs, maxPixelSize: 360, aggressive: true)
-            Task { await Frame0PosterResolver.shared.prefetch(postIDs: hubs.map(\.id)) }
+            ImageCache.shared.prefetchPostThumbnails(hubs, maxPixelSize: 320, aggressive: false)
+            Task(priority: .utility) {
+                await Frame0PosterResolver.shared.prefetch(postIDs: hubs.map(\.id))
+            }
         }
     }
 
