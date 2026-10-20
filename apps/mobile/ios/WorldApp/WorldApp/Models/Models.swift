@@ -642,11 +642,14 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
     var createdDate: Date? { RelativeTime.parseDate(createdAt) }
     var updatedDate: Date? { RelativeTime.parseDate(updatedAt) }
 
-    /// True only for a real edit — seed/import often sets updated_at ≠ created_at by minutes/days.
+    /// True only for a plausible in-app edit.
+    /// Seed/import rows often set `updated_at` hours/days after `created_at` — that is not an edit.
     var isEdited: Bool {
         guard let created = createdDate, let updated = updatedDate else { return false }
-        // Require a clear human edit gap (not R2 sync / seed stamp noise).
-        return updated.timeIntervalSince(created) > 120
+        let gap = updated.timeIntervalSince(created)
+        // Ignore clock skew; ignore corpus/import bumps (often multi-hour+).
+        guard gap > 120, gap < 6 * 3600 else { return false }
+        return true
     }
 
     var privacyLabel: String {
