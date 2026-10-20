@@ -1203,8 +1203,10 @@ final class HomeFeedStore {
 
         emptyLoadMoreStreak = 0
 
-        // Rank new batch (unviewed only; follows first), then append without reordering the live head.
-        let orderedAppend = await rankForSessionAsync(appended)
+        // Rank new batch when possible. If ranking drops a recycle fill (all viewed),
+        // keep the raw append so the tail never dead-ends.
+        let rankedAppend = await rankForSessionAsync(appended)
+        let orderedAppend = rankedAppend.isEmpty ? appended : rankedAppend
         // Never allow duplicate ids (uniqueKeysWithValues fatal + ForEach identity bugs).
         var poolIDs = Set(posts.map(\.id))
         let dedupedAppend = orderedAppend.filter { poolIDs.insert($0.id).inserted }
