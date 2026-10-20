@@ -228,6 +228,19 @@ enum MatteryaCopy {
     static let searchHubsHint = "Find videos and creators on \(hubsBrand)"
     static let moreOnHubs = "More on \(hubsBrand)"
     static let yourChannelOnHubs = "Your channel on \(hubsBrand)"
+
+    /// Other people's profile hub CTA — "John's hub" from first name (channel owners only).
+    static func personsHubTitle(displayName: String?, username: String?) -> String {
+        let raw = (displayName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let firstFromName = raw.split(whereSeparator: { $0.isWhitespace }).first.map(String.init)
+        let handle = (username ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = firstFromName ?? (handle.isEmpty ? nil : handle)
+        guard let name, !name.isEmpty else { return "Their hub" }
+        if name.lowercased().hasSuffix("s") {
+            return "\(name)' hub"
+        }
+        return "\(name)'s hub"
+    }
     static let verifiedHubsChannel = "Verified \(hubsBrand) channel"
     static let longFormOnHubs = "Long-form on \(hubsBrand)"
     static let sparksOnHubs = "Short vertical video on \(hubsBrand)"
@@ -340,13 +353,17 @@ extension View {
     }
 
     /// Profile / settings text pill — no SF Symbols, flat paper.
-    func matteryaTextPill(pressed: Bool = false, emphasized: Bool = false) -> some View {
-        font(.subheadline.weight(.semibold))
+    func matteryaTextPill(
+        pressed: Bool = false,
+        emphasized: Bool = false,
+        compact: Bool = false
+    ) -> some View {
+        font(compact ? .caption.weight(.semibold) : .subheadline.weight(.semibold))
             .foregroundStyle(emphasized ? Theme.paper : Theme.ink)
             .multilineTextAlignment(.center)
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
+            .frame(maxWidth: compact ? nil : .infinity)
+            .padding(.horizontal, compact ? 14 : 14)
+            .padding(.vertical, compact ? 8 : 12)
             .background(
                 RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
                     .fill(
@@ -367,10 +384,15 @@ extension View {
 /// Text-first Matterya pill — profile Edit / Settings / Hubs channel.
 struct MatteryaTextPillButtonStyle: ButtonStyle {
     var emphasized: Bool = false
+    var compact: Bool = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .matteryaTextPill(pressed: configuration.isPressed, emphasized: emphasized)
+            .matteryaTextPill(
+                pressed: configuration.isPressed,
+                emphasized: emphasized,
+                compact: compact
+            )
     }
 }
 

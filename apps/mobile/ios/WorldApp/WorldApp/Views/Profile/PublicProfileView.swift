@@ -145,7 +145,14 @@ struct PublicProfileView: View {
                         username: profile.username
                     )
                 } label: {
-                    Text(MatteryaCopy.watchOnHubs)
+                    Text(
+                        isOwner
+                            ? MatteryaCopy.yourChannelOnHubs
+                            : MatteryaCopy.personsHubTitle(
+                                displayName: profile.displayName,
+                                username: profile.username
+                            )
+                    )
                 }
                 .buttonStyle(MatteryaTextPillButtonStyle(emphasized: true))
             }
@@ -175,19 +182,19 @@ struct PublicProfileView: View {
 
     @ViewBuilder
     private func profileActions(_ profile: Profile) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Button {
                 Task { await appState.openDirectMessage(with: profile.userID) }
             } label: {
                 Text("Message")
             }
-            .buttonStyle(MatteryaTextPillButtonStyle(emphasized: true))
+            .buttonStyle(MatteryaTextPillButtonStyle(emphasized: true, compact: true))
 
             Menu {
                 Button {
                     shareProfile(profile)
                 } label: {
-                    Label("Share profile", systemImage: "square.and.arrow.up")
+                    Text("Share profile")
                 }
 
                 if BlockService.shared.isBlocked(profile.userID) {
@@ -204,14 +211,12 @@ struct PublicProfileView: View {
                     }
                 }
             } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(Theme.ink)
-                    .frame(width: 44, height: 44)
-                    .background(Theme.surface, in: Circle())
-                    .overlay(Circle().stroke(Theme.border, lineWidth: 0.5))
+                Text("More")
+                    .matteryaTextPill(compact: true)
             }
             .buttonStyle(.plain)
+
+            Spacer(minLength: 0)
         }
     }
 
