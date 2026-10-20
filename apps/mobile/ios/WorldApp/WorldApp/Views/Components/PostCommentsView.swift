@@ -486,10 +486,14 @@ struct FacebookCommentRow: View {
                     .accessibilityLabel("Open \(authorName)'s profile")
 
                     if let body = cleanedBody {
-                        Text(body)
-                            .font(.subheadline)
-                            .foregroundStyle(Theme.ink)
-                            .fixedSize(horizontal: false, vertical: true)
+                        TranslatableCaption(
+                            text: body,
+                            font: .subheadline,
+                            color: Theme.ink,
+                            lineSpacing: 2,
+                            buttonTint: Theme.accentBright,
+                            expandable: false
+                        )
                     }
 
                     HStack(spacing: 12) {
@@ -696,10 +700,14 @@ private struct NewsCommentRow: View {
                 Text(comment.author?.displayName ?? comment.author?.username ?? "Member")
                     .font(isReply ? .caption.weight(.semibold) : .subheadline.weight(.semibold))
                     .foregroundStyle(Theme.ink)
-                Text(comment.body)
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.inkSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                TranslatableCaption(
+                    text: comment.body,
+                    font: .subheadline,
+                    color: Theme.inkSecondary,
+                    lineSpacing: 2,
+                    buttonTint: Theme.accentBright,
+                    expandable: false
+                )
 
                 Button("Reply", action: onReply)
                     .font(.caption.weight(.semibold))
