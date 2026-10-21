@@ -127,7 +127,8 @@ final class ImageCache: @unchecked Sendable {
         let fling = ScrollBudget.isFlinging
         // Cap is independent of how many poster URLs already resolve — when every
         // row needs Frame0, urls.count==0 used to zero the cap and leave black tiles.
-        let cap = fling ? 2 : 16
+        // Settled Hubs open/rails need a denser band so R2 long-form never stays black.
+        let cap = fling ? 2 : 28
         let unique = Array(Set(urls.map(\.absoluteString))).prefix(min(cap, max(urls.count, 0)))
             .compactMap(URL.init(string:))
         let priority: TaskPriority = fling ? .background : .utility

@@ -279,6 +279,14 @@ struct YouTubeVideoListRow: View {
             ScrollBudget.noteCellAppear()
             onAppearRow?()
         }
+        .task(id: post.id) {
+            // Every Browse-all / list row must mint a poster — never stay black.
+            let usable = MediaURLResolver.hubsListPosterURL(for: post)
+                .map { MediaURLResolver.isUsablePosterURL($0) } ?? false
+            if !usable {
+                _ = await Frame0PosterResolver.shared.posterURL(postID: post.id)
+            }
+        }
     }
 }
 

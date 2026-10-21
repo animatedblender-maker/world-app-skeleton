@@ -50,11 +50,11 @@ struct YouTubeAppView: View {
     /// Bumps whenever we intentionally re-roll Hubs surfaces (tab enter / home return).
     @State private var hubsVisitEpoch: Int = 0
 
-    /// Dense For you (~R2 inventory) without the old 64/40 + 4-page storm.
-    private static let hubsFirstWindow = 48
-    private static let hubsGrowBy = 28
+    /// Dense For you — pull enough R2 long-form that Hubs never looks sparse vs Watch More.
+    private static let hubsFirstWindow = 64
+    private static let hubsGrowBy = 36
     /// Soft memory ceiling — slug pages only; never keep thousands of posts on MainActor.
-    private static let hubsCatalogMemoryCap = 1_500
+    private static let hubsCatalogMemoryCap = 2_000
     /// How many times we re-cycle the ranked pool after the full catalog is shown (endless scroll).
     @State private var hubsEndlessCycle: Int = 0
 
@@ -647,10 +647,11 @@ struct YouTubeAppView: View {
                 meta: ["longForm": "\(allVideos.filter { !$0.isReel }.count)"]
             )
             await consumePendingRoutingIfNeeded()
-            // 3) Two silent pages so For you matches R2 depth (Watch related is endless).
+            // 3) Silent pages + vibe shelves so every R2 long-form can land with thumbs.
             scheduleDeferredFullCatalogWarm()
             Task(priority: .utility) {
-                await prefetchNextSlugPages(count: 2)
+                await prefetchNextSlugPages(count: 4)
+                await densifyVibeShelvesFromNetwork()
             }
         }
         .onAppear {
@@ -689,7 +690,8 @@ struct YouTubeAppView: View {
                 await loadVideos(forceRefresh: true, mode: .fast)
                 refreshHubsVisitShuffle(remountList: true)
                 warmContinueWatchingThumbnails()
-                await prefetchNextSlugPages(count: 2)
+                await prefetchNextSlugPages(count: 4)
+                await densifyVibeShelvesFromNetwork()
             }
         }
         .onChange(of: homeFilter) { _, filter in
@@ -913,6 +915,54 @@ struct YouTubeAppView: View {
                                 )
                             }
 
+                            // Endless vertical browse — every R2 long-form eventually appears here
+                            // with a poster (rails alone cannot surface the full inventory).
+                            if !stableDiscoverVideos.isEmpty {
+                                Text("Browse all")
+                                    .font(.title3.weight(.bold))
+                                    .foregroundStyle(Theme.ink)
+                                    .padding(.horizontal, Theme.pagePadding)
+                                    .padding(.top, 8)
+
+                                ForEach(
+                                    Array(stableDiscoverVideos.enumerated()),
+                                    id: \.offset
+                                ) { index, post in
+                                    YouTubeVideoListRow(post: post, onTap: {
+                                        openVideo(post)
+                                    }, onAppearRow: {
+                                        ensureMoreForYou(around: index)
+                                        Task(priority: .utility) {
+                                            await Frame0PosterResolver.shared.prefetch(
+                                                postIDs: [post.id]
+                                            )
+                                        }
+                                        if ScrollBudget.isFlinging {
+                                            scheduleSettledThumbWarm(around: index)
+                                            return
+                                        }
+                                        ImageCache.shared.prefetchHubsWindow(
+                                            posts: stableDiscoverVideos,
+                                            around: index,
+                                            behind: 1,
+                                            ahead: 4
+                                        )
+                                        let lo = max(0, index - 1)
+                                        let hi = min(stableDiscoverVideos.count, index + 5)
+                                        if lo < hi {
+                                            Task(priority: .utility) {
+                                                await Frame0PosterResolver.shared.prefetch(
+                                                    postIDs: Array(
+                                                        stableDiscoverVideos[lo..<hi].map(\.id)
+                                                    )
+                                                )
+                                            }
+                                        }
+                                    })
+                                    .padding(.bottom, 18)
+                                }
+                            }
+
                             Color.clear
                                 .frame(height: 1)
                                 .onAppear {
@@ -977,11 +1027,47 @@ struct YouTubeAppView: View {
                 return YouTubeCatalogService.parentHubSlug(for: $0) == slug
                     && PlayPlatformBridge.isHubsForYouLongForm($0)
             }
-            let capped = Array(posts.prefix(24))
-            guard capped.count >= 3 else { continue }
+            let capped = Array(posts.prefix(36))
+            guard capped.count >= 2 else { continue }
             rails.append(HubsVibeRail(slug: slug, title: title, posts: capped))
         }
         return rails
+    }
+
+    /// Pull thin pages for each vibe slug so R2 long-form fills Netflix shelves + Browse all.
+    private func densifyVibeShelvesFromNetwork() async {
+        guard appState.selectedTab == .hubs, appState.hubPlaybackPost == nil else { return }
+        for slug in HubVideoSeedService.hubOrder {
+            guard appState.selectedTab == .hubs else { return }
+            let page = await SlugShelfStore.shared.loadShelf(slug, force: false)
+            let filtered = BlockService.shared.filterPosts(page.items)
+                .filter {
+                    PlayPlatformBridge.isHubsForYouLongForm($0)
+                        || PlayPlatformBridge.belongsInHubsCatalog($0)
+                        || ($0.hasVideo && !$0.isReel)
+                }
+            if !filtered.isEmpty {
+                softMergeHubCatalog(filtered)
+                ImageCache.shared.prefetchHubsListThumbnails(
+                    Array(filtered.prefix(16)),
+                    maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel
+                )
+                Task {
+                    await Frame0PosterResolver.shared.prefetch(
+                        postIDs: Array(filtered.prefix(16).map(\.id))
+                    )
+                }
+            }
+            // Sparse slug — one more page before moving on.
+            if filtered.count < 12, SlugShelfStore.shared.hasMore(for: slug) {
+                let more = await SlugShelfStore.shared.loadMoreShelf(slug)
+                let extra = BlockService.shared.filterPosts(more.items)
+                    .filter { PlayPlatformBridge.isHubsForYouLongForm($0) || ($0.hasVideo && !$0.isReel) }
+                if !extra.isEmpty { softMergeHubCatalog(extra) }
+            }
+            try? await Task.sleep(nanoseconds: 120_000_000)
+        }
+        rebuildStableHomeLists(shuffle: false, remountList: false)
     }
 
     private var hubsNetflixTopBar: some View {
@@ -1767,7 +1853,8 @@ struct YouTubeAppView: View {
             // Skip heavy warm while a hubs video is open/minimized — keeps morph smooth.
             guard appState.hubPlaybackPost == nil else { return }
             SlugShelfStore.shared.warmNeighbor(of: homeFilter.hubSlug)
-            await prefetchNextSlugPages(count: 2)
+            await prefetchNextSlugPages(count: 4)
+            await densifyVibeShelvesFromNetwork()
         }
     }
 
@@ -2025,20 +2112,27 @@ struct YouTubeAppView: View {
             return
         }
         let thumbPx = YouTubeMediaLayout.hubsListThumbMaxPixel
-        // First ~screen of posters — enough to avoid black tiles without Frame0×24 storms.
+        // Dense first paint: Browse all head + hero/continue + first vibe shelves.
         let head = stableDiscoverVideos.isEmpty
             ? videos.filter { !$0.isReel && $0.playableVideoURL != nil }
             : stableDiscoverVideos
-        let poolBand = Array(head.prefix(14))
-        let continueBand = Array(continueWatching.prefix(4))
+        let poolBand = Array(head.prefix(28))
+        let continueBand = Array(continueWatching.prefix(8))
         var warmBand = poolBand
         for post in continueBand where !warmBand.contains(where: { $0.id == post.id }) {
             warmBand.append(post)
         }
+        for rail in hubsVibeRails.prefix(4) {
+            for post in rail.posts.prefix(8) where !warmBand.contains(where: { $0.id == post.id }) {
+                warmBand.append(post)
+                if warmBand.count >= 48 { break }
+            }
+            if warmBand.count >= 48 { break }
+        }
         ImageCache.shared.prefetchHubsListThumbnails(warmBand, maxPixelSize: thumbPx)
         Task(priority: .utility) {
             await Frame0PosterResolver.shared.prefetch(
-                postIDs: Array(warmBand.prefix(16).map(\.id))
+                postIDs: Array(warmBand.prefix(32).map(\.id))
             )
         }
         // Sparks strip thumbs — much later, only if still on Hubs with no player.

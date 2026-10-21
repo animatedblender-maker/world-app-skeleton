@@ -11,12 +11,12 @@ import Foundation
 final class SlugShelfStore {
     static let shared = SlugShelfStore()
 
-    /// Max posts retained per slug (or for_you key).
-    static let maxPerShelf = 120
-    /// Max distinct shelves kept in RAM.
-    static let maxShelves = 8
-    /// Dense enough for For you ≈ Watch related depth without 48-row storms.
-    static let pageSize = 36
+    /// Max posts retained per slug (or for_you key) — hold a deep R2 long-form window.
+    static let maxPerShelf = 280
+    /// Max distinct shelves kept in RAM (for_you + vibe slugs).
+    static let maxShelves = 12
+    /// Dense pages so Hubs Browse all fills from R2 without sparse walls.
+    static let pageSize = 40
 
     /// Synthetic key for the mixed For you stream.
     static let forYouKey = "for_you"
