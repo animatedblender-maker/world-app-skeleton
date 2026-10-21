@@ -1,19 +1,41 @@
 import SwiftUI
 import UIKit
 
-/// Status bar (notch clock / battery / Wi‑Fi) for dark video surfaces.
+/// Status bar (notch clock / battery / Wi‑Fi) for dark surfaces.
 enum MatteryaStatusBar {
-    /// Force light (off-white) status-bar glyphs while Sparks is open.
-    /// App root prefers `.light`, which otherwise paints a dark clock on black film.
+    /// Force light (off-white) status-bar glyphs on dark overlays (Sparks, side menu).
+    /// Pair with root `preferredColorScheme(.dark)` — window override alone can lose to a
+    /// hard-coded app-root `.light` preference.
     @MainActor
-    static func setSparksLightContent(_ enabled: Bool) {
+    static func setLightContent(_ enabled: Bool) {
         guard let scene = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
             .first(where: { $0.activationState == .foregroundActive })
             ?? UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first
         else { return }
+        let style: UIUserInterfaceStyle = enabled ? .dark : .unspecified
         for window in scene.windows {
-            window.overrideUserInterfaceStyle = enabled ? .dark : .unspecified
+            window.overrideUserInterfaceStyle = style
+            window.rootViewController?.setNeedsStatusBarAppearanceUpdate()
+            propagateStatusBarUpdate(from: window.rootViewController)
+        }
+    }
+
+    /// Sparks full-screen alias — same light glyphs as `setLightContent`.
+    @MainActor
+    static func setSparksLightContent(_ enabled: Bool) {
+        setLightContent(enabled)
+    }
+
+    @MainActor
+    private static func propagateStatusBarUpdate(from root: UIViewController?) {
+        guard let root else { return }
+        root.setNeedsStatusBarAppearanceUpdate()
+        for child in root.children {
+            propagateStatusBarUpdate(from: child)
+        }
+        if let presented = root.presentedViewController {
+            propagateStatusBarUpdate(from: presented)
         }
     }
 }
@@ -244,7 +266,7 @@ enum MatteryaCopy {
     static let verifiedHubsChannel = "Verified \(hubsBrand) channel"
     static let longFormOnHubs = "Long-form on \(hubsBrand)"
     static let sparksOnHubs = "Short vertical video on \(hubsBrand)"
-    static let hubsPublishHint = "Try another category, follow creators, or publish on \(hubsBrand)."
+    static let hubsPublishHint = "Follow creators or publish on \(hubsBrand)."
     static let hubsLoadError = "Couldn't load \(hubsBrand) right now. Pull to refresh or check your connection."
     static let hubsNoChannelVideos = "This creator hub has no videos on \(hubsBrand) yet."
     static let hubsVideoUnavailable = "This video isn't available on \(hubsBrand)."

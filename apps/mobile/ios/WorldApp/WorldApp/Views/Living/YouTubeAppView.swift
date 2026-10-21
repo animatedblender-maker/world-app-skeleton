@@ -850,75 +850,69 @@ struct YouTubeAppView: View {
 
     private var homeScreen: some View {
         VStack(spacing: 0) {
-            YouTubeFilterChips(selected: $homeFilter, onLibrary: { openLibrary() })
+            hubsNetflixTopBar
             if homeScreenIsEmpty {
                 ContentUnavailableView(
-                    homeFilter == .all ? "No videos here yet" : "No videos in this category",
+                    "No videos here yet",
                     systemImage: "globe.americas",
-                    description: Text(
-                        homeFilter == .all
-                            ? MatteryaCopy.hubsPublishHint
-                            : "Try another category or check back later."
-                    )
+                    description: Text(MatteryaCopy.hubsPublishHint)
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(spacing: 0) {
-                            if homeFilter == .all {
-                                if !playReels.isEmpty {
-                                    homeReelsStrip
-                                        .padding(.bottom, 20)
-                                }
-                                if !continueWatching.isEmpty {
-                                    continueWatchingStrip
-                                        .padding(.bottom, 20)
-                                }
-                                if !subscriptionChannels.isEmpty || !subscriptionVideos.isEmpty {
-                                    followingSection
-                                        .padding(.bottom, 8)
-                                        .id(PlayScrollAnchor.subscriptions)
-                                }
+                        LazyVStack(alignment: .leading, spacing: 22) {
+                            // Netflix-style: hero + horizontal rails. Categories are rows, not chips.
+                            if let hero = hubsHeroPost {
+                                hubsHeroBillboard(hero)
+                                    .padding(.bottom, 4)
                             }
-                            // Offset identity — endless recycle re-queues the same post IDs;
-                            // element.id collisions broke LazyVStack (scroll died + blank cells).
-                            ForEach(Array(stableDiscoverVideos.enumerated()), id: \.offset) { index, post in
-                                YouTubeVideoListRow(post: post, onTap: {
-                                    openVideo(post)
-                                }, onAppearRow: {
-                                    // Media session 09: Hubs list = posters/Frame0 only.
-                                    ensureMoreForYou(around: index)
-                                    // Always queue Frame0 for the visible row so cards never stay black.
-                                    Task(priority: .utility) {
-                                        await Frame0PosterResolver.shared.prefetch(
-                                            postIDs: [post.id]
-                                        )
-                                    }
-                                    // Settled scroll only — Feed-sized window (mid-fling prefetch was jank).
-                                    if ScrollBudget.isFlinging {
-                                        scheduleSettledThumbWarm(around: index)
-                                        return
-                                    }
-                                    ImageCache.shared.prefetchHubsWindow(
-                                        posts: stableDiscoverVideos,
-                                        around: index,
-                                        behind: 1,
-                                        ahead: 3
-                                    )
-                                    let lo = max(0, index - 1)
-                                    let hi = min(stableDiscoverVideos.count, index + 4)
-                                    if lo < hi {
-                                        Task(priority: .utility) {
-                                            await Frame0PosterResolver.shared.prefetch(
-                                                postIDs: Array(stableDiscoverVideos[lo..<hi].map(\.id))
-                                            )
+
+                            if !continueWatching.isEmpty {
+                                hubsNetflixRail(
+                                    title: "Continue watching",
+                                    posts: Array(continueWatching.prefix(24)),
+                                    cardWidth: 168
+                                )
+                            }
+
+                            if !stableDiscoverVideos.isEmpty {
+                                let heroID = hubsHeroPost?.id
+                                let peopleRail = Array(
+                                    stableDiscoverVideos
+                                        .filter { $0.id != heroID }
+                                        .prefix(max(48, hubsDisplayLimit))
+                                )
+                                if !peopleRail.isEmpty {
+                                    hubsNetflixRail(
+                                        title: "From people like you",
+                                        posts: peopleRail,
+                                        cardWidth: 196,
+                                        onNearEnd: {
+                                            ensureMoreForYou(around: max(0, stableDiscoverVideos.count - 1))
                                         }
-                                    }
-                                })
-                                .padding(.bottom, 18)
+                                    )
+                                }
                             }
-                            // Tail sentinel — prefetch before the wall; end card only when caught up.
+
+                            if !subscriptionChannels.isEmpty || !subscriptionVideos.isEmpty {
+                                followingNetflixSection
+                                    .id(PlayScrollAnchor.subscriptions)
+                            }
+
+                            if !playReels.isEmpty {
+                                homeReelsStrip
+                            }
+
+                            // Vibe rows (former chips) — people-uploaded shelves as Netflix rails.
+                            ForEach(hubsVibeRails, id: \.slug) { rail in
+                                hubsNetflixRail(
+                                    title: rail.title,
+                                    posts: rail.posts,
+                                    cardWidth: 168
+                                )
+                            }
+
                             Color.clear
                                 .frame(height: 1)
                                 .onAppear {
@@ -931,12 +925,11 @@ struct YouTubeAppView: View {
                             if hubsCaughtUp {
                                 hubsCaughtUpCard
                                     .padding(.horizontal, Theme.pagePadding)
-                                    .padding(.vertical, 28)
+                                    .padding(.vertical, 12)
                             }
                         }
-                        // Avoid remounting entire list via .id — that freezes mid-scroll.
-                        .padding(.top, 8)
-                        .padding(.bottom, isMiniPlayback ? YouTubeMiniPlayerBar.contentBottomInset : 12)
+                        .padding(.top, 4)
+                        .padding(.bottom, isMiniPlayback ? YouTubeMiniPlayerBar.contentBottomInset : 20)
                     }
                     .scrollDismissesKeyboard(.immediately)
                     .onChange(of: scrollToSubscriptions) { _, shouldScroll in
@@ -947,6 +940,220 @@ struct YouTubeAppView: View {
                         scrollToSubscriptions = false
                     }
                 }
+            }
+        }
+        .onAppear {
+            // Netflix home always browses the mixed For you stream (no category chips).
+            if homeFilter != .all {
+                homeFilter = .all
+            }
+        }
+    }
+
+    // MARK: - Netflix-style Hubs home (UGC)
+
+    private var hubsHeroPost: CountryPost? {
+        continueWatching.first
+            ?? stableDiscoverVideos.first
+            ?? hubsForYouPool.first
+            ?? allVideos.first { PlayPlatformBridge.isHubsForYouLongForm($0) }
+    }
+
+    private struct HubsVibeRail: Sendable {
+        let slug: String
+        let title: String
+        let posts: [CountryPost]
+    }
+
+    /// Former top chips → horizontal vibe rails (people-uploaded shelves).
+    private var hubsVibeRails: [HubsVibeRail] {
+        let heroID = hubsHeroPost?.id
+        let pool = hubsForYouPool.isEmpty ? allVideos : hubsForYouPool
+        var rails: [HubsVibeRail] = []
+        for slug in HubVideoSeedService.hubOrder {
+            let title = YouTubeHomeFilter(rawValue: slug)?.title ?? slug.capitalized
+            let posts = pool.filter {
+                guard $0.id != heroID else { return false }
+                return YouTubeCatalogService.parentHubSlug(for: $0) == slug
+                    && PlayPlatformBridge.isHubsForYouLongForm($0)
+            }
+            let capped = Array(posts.prefix(24))
+            guard capped.count >= 3 else { continue }
+            rails.append(HubsVibeRail(slug: slug, title: title, posts: capped))
+        }
+        return rails
+    }
+
+    private var hubsNetflixTopBar: some View {
+        HStack(spacing: 12) {
+            Text(MatteryaCopy.matteryaHubs)
+                .font(.title2.weight(.bold))
+                .foregroundStyle(Theme.ink)
+            Spacer(minLength: 0)
+            Button {
+                openLibrary()
+            } label: {
+                Image(systemName: "rectangle.stack.fill")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(Theme.ink)
+                    .frame(width: 36, height: 36)
+                    .background(Theme.surface.opacity(0.94), in: Circle())
+                    .overlay(Circle().stroke(Theme.border, lineWidth: 0.5))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Library")
+        }
+        .padding(.horizontal, Theme.pagePadding)
+        .padding(.vertical, 10)
+        .overlay(alignment: .bottom) {
+            Theme.divider.frame(height: 0.5)
+        }
+    }
+
+    private func hubsHeroBillboard(_ post: CountryPost) -> some View {
+        Button {
+            openVideo(post)
+        } label: {
+            ZStack(alignment: .bottomLeading) {
+                YouTubeVideoThumbnail(
+                    post: post,
+                    maxPixelSize: 900,
+                    showsPlayIcon: false,
+                    frameStyle: .card,
+                    embedsFrame: false,
+                    extractFrameIfNeeded: true,
+                    showsHubBadge: false
+                )
+                .frame(maxWidth: .infinity)
+                .frame(height: 220)
+                .clipped()
+                .task(id: post.id) {
+                    let usable = MediaURLResolver.hubsListPosterURL(for: post)
+                        .map { MediaURLResolver.isUsablePosterURL($0) } ?? false
+                    if !usable {
+                        _ = await Frame0PosterResolver.shared.posterURL(postID: post.id)
+                    }
+                }
+
+                LinearGradient(
+                    colors: [.clear, Theme.ink.opacity(0.15), Theme.ink.opacity(0.88)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("People's cinema")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.paper.opacity(0.8))
+                        .textCase(.uppercase)
+                    Text(post.displayHeadline ?? post.displayTitle ?? "Watch now")
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(Theme.paper)
+                        .lineLimit(2)
+                    HStack(spacing: 10) {
+                        Label("Play", systemImage: "play.fill")
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(Theme.ink)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .background(Theme.paper, in: Capsule())
+                        if let name = ContentSanitizer.clean(post.author?.displayName)
+                            ?? ContentSanitizer.clean(post.author?.username) {
+                            Text(name)
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(Theme.paper.opacity(0.85))
+                                .lineLimit(1)
+                        }
+                    }
+                }
+                .padding(18)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .padding(.horizontal, Theme.pagePadding)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Play featured video")
+    }
+
+    private func hubsNetflixRail(
+        title: String,
+        posts: [CountryPost],
+        cardWidth: CGFloat,
+        onNearEnd: (() -> Void)? = nil
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if !title.isEmpty {
+                Text(title)
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(Theme.ink)
+                    .padding(.horizontal, Theme.pagePadding)
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(alignment: .top, spacing: 12) {
+                    // Offset identity — same post can appear across rails; element.id alone
+                    // collides inside a single LazyHStack when the pool has duplicates.
+                    ForEach(Array(posts.enumerated()), id: \.offset) { index, post in
+                        HubsShelfThumbCard(
+                            post: post,
+                            width: cardWidth,
+                            showsMetadata: true,
+                            titleFont: .caption.weight(.semibold),
+                            extractFrameIfNeeded: true,
+                            onTap: { openVideo(post) }
+                        )
+                        .onAppear {
+                            if index >= posts.count - 3 {
+                                onNearEnd?()
+                                ensureMoreForYou(around: min(index, max(0, stableDiscoverVideos.count - 1)))
+                            }
+                            Task(priority: .utility) {
+                                await Frame0PosterResolver.shared.prefetch(postIDs: [post.id])
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, Theme.pagePadding)
+            }
+        }
+    }
+
+    private var followingNetflixSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Following")
+                .font(.title3.weight(.bold))
+                .foregroundStyle(Theme.ink)
+                .padding(.horizontal, Theme.pagePadding)
+
+            if !subscriptionChannels.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 16) {
+                        ForEach(subscriptionChannels) { channel in
+                            Button {
+                                openChannel(channel)
+                            } label: {
+                                VStack(spacing: 6) {
+                                    AvatarView(url: channel.author?.avatarURL, seed: channel.authorID, size: 56)
+                                    Text(channel.title)
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(Theme.ink)
+                                        .lineLimit(1)
+                                        .frame(width: 72)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, Theme.pagePadding)
+                }
+            }
+
+            if !subscriptionVideos.isEmpty {
+                hubsNetflixRail(
+                    title: "",
+                    posts: Array(subscriptionVideos.prefix(18)),
+                    cardWidth: 168
+                )
             }
         }
     }
