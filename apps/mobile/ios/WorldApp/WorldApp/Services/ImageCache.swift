@@ -184,13 +184,14 @@ final class ImageCache: @unchecked Sendable {
     }
 
     /// Feed cold-start warm: avatars + media so first scroll hits memory.
-    /// Full-width photos prefetch at 1080 so CachedAsyncImage(.fit, 1080) never paints a soft 360/420.
+    /// Photos warm at ≥720 (matches FeedPinchZoomPhoto) so tall Reddit memes never decode at 1080 mid-scroll.
     /// Video posters stay at `maxPixelSize` (Frame0 / thumbs).
     func prefetchFeedMedia(_ posts: [CountryPost], maxPixelSize: CGFloat = 420) {
         // Avatars first — every feed card has one; media is secondary for text-heavy demos.
         // Must match AvatarView feed maxPixelSize (size 36 → max(72, 72) = 72) or cache misses.
         let avatarMax: CGFloat = 72
-        let photoMax: CGFloat = 1080
+        // Fling callers pass 320 for posters; photos still need 720 so display hits memory.
+        let photoMax: CGFloat = max(720, maxPixelSize)
         var missingFrame0IDs: [String] = []
         var photoURLs: [URL] = []
         var posterURLs: [URL] = []
@@ -614,7 +615,8 @@ final class FeedPhotoZoomGate {
 /// Zooms under the fingers; release springs back to 1×.
 struct FeedPinchZoomPhoto: View {
     let url: URL
-    var maxPixelSize: CGFloat = 1080
+    /// Feed-width memes: 720 keeps pinch sharp without freezing scroll on tall Reddit cards.
+    var maxPixelSize: CGFloat = 720
     var contentMode: ContentMode = .fit
     var placeholder: AnyView = AnyView(Theme.canvasMuted)
     var onZoomingChanged: ((Bool) -> Void)? = nil
@@ -825,22 +827,18 @@ private final class FeedPhotoPinchView: UIView, UIGestureRecognizerDelegate {
         if gestureRecognizer === pinch && other === pan { return true }
         if gestureRecognizer === pan && other === pinch { return true }
         if other === pinch || other === pan { return false }
-        if gestureRecognizer === pinch { return true }
         return false
     }
 
-    func gestureRecognizer(
-        _ gestureRecognizer: UIGestureRecognizer,
-        shouldBeRequiredToFailBy other: UIGestureRecognizer
-    ) -> Bool {
-        // ScrollView pan waits for our pinch to fail → 2-finger pinch wins the race.
-        if gestureRecognizer === pinch, other is UIPanGestureRecognizer, other !== pan {
-            return true
-        }
-        return false
-    }
+    // Do NOT make ScrollView pan wait for pinch to fail. Large Reddit/meme cards fill
+    // most of the viewport; requiring failure froze one-finger scroll whenever a photo
+    // was on screen. Pinch still wins once two fingers are down (see shouldBegin).
 
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if gestureRecognizer === pinch {
+            // Only claim the gesture when two fingers are already down — never stall 1-finger scroll.
+            return gestureRecognizer.numberOfTouches >= 2
+        }
         if gestureRecognizer === pan {
             return pinchActive || liveScale > 1.05
         }

@@ -55,20 +55,52 @@ enum ContentSanitizer {
         return trimmed
     }
 
-    /// User-facing copy never says "TikTok" — hashtags, captions, comments, bios, etc.
-    /// `#tiktok` / `TikTok` / `TIKTOK` → `matterya` / `#matterya`.
-    static func rebrandCompetitorNames(_ value: String) -> String {
-        guard value.range(of: "tiktok", options: .caseInsensitive) != nil else { return value }
-        guard let regex = try? NSRegularExpression(pattern: "tiktok", options: .caseInsensitive) else {
-            return value
+    /// User-facing copy never says competitor brand names — hashtags, captions, comments, bios.
+    /// Longer tokens first so `subreddit` → `matterya` (not `submatterya`).
+    /// `#tiktok` / `tik tok` / Arabic `تيك توك` / `تيكتوك` → `matterya`.
+    /// Compiled once — Reddit image cards hit `clean` many times per SwiftUI body pass.
+    private static let rebrandRegexes: [NSRegularExpression] = {
+        let tokens = [
+            "تيك توك",
+            "تيك\u{200C}توك",
+            "تيك-توك",
+            "تيكتوك",
+            "tik tok",
+            "subreddit",
+            "reddit",
+            "tiktok",
+        ]
+        return tokens.compactMap { token in
+            let pattern = NSRegularExpression.escapedPattern(for: token)
+            return try? NSRegularExpression(pattern: pattern, options: .caseInsensitive)
         }
-        let range = NSRange(value.startIndex..<value.endIndex, in: value)
-        return regex.stringByReplacingMatches(
-            in: value,
-            options: [],
-            range: range,
-            withTemplate: "matterya"
-        )
+    }()
+
+    static func rebrandCompetitorNames(_ value: String) -> String {
+        var out = value
+        for regex in rebrandRegexes {
+            // Cheap pre-check: skip compile-path work when the needle is absent.
+            // NSRegularExpression has no cheap contains; firstMatch is fine for short captions.
+            let full = NSRange(out.startIndex..<out.endIndex, in: out)
+            guard regex.firstMatch(in: out, options: [], range: full) != nil else { continue }
+            out = regex.stringByReplacingMatches(
+                in: out,
+                options: [],
+                range: full,
+                withTemplate: "matterya"
+            )
+        }
+        return out
+    }
+
+    /// True when caption/title/body hits the simple 18+ keyword gate (whole words).
+    /// Same list as API `ADULT_KEYWORDS` until a real moderation stack ships.
+    static func looksNsfw(_ value: String?) -> Bool {
+        guard let value, !value.isEmpty else { return false }
+        return value.range(
+            of: #"\b(?:nsfw|sex|sexy|sexual|porn|porno|pornography|xxx|onlyfans|hentai|erotic|nude|nudes|naked|blowjob|handjob|cumshot|orgasm|masturbate|masturbation|masturbating|gooning|milf|incest)\b"#,
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil
     }
 
     /// Removes client-only body markers (story / hub channel / spark) so cards never show raw tokens.
@@ -191,10 +223,14 @@ enum ContentSanitizer {
         authorID: String,
         fallback: String = "Member"
     ) -> String {
-        if let name = clean(author?.displayName), !DemoPersonNames.isPlaceholderDisplayName(name) {
+        if let name = clean(author?.displayName),
+           !DemoPersonNames.isPlaceholderDisplayName(name),
+           !isCountryLabel(name, countryName: author?.countryName, countryCode: author?.countryCode) {
             return name
         }
-        if let handle = clean(author?.username), !DemoPersonNames.isPlaceholderDisplayName(handle) {
+        if let handle = clean(author?.username),
+           !DemoPersonNames.isPlaceholderDisplayName(handle),
+           !isCountryLabel(handle, countryName: author?.countryName, countryCode: author?.countryCode) {
             return handle
         }
         if authorID.hasPrefix("user_") {
@@ -204,5 +240,19 @@ enum ContentSanitizer {
             )
         }
         return fallback
+    }
+
+    /// True when display text is just the profile's country (legacy seed bug).
+    private static func isCountryLabel(_ value: String, countryName: String?, countryCode: String?) -> Bool {
+        let low = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let cn = countryName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+           !cn.isEmpty, low == cn {
+            return true
+        }
+        if let cc = countryCode?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+           !cc.isEmpty, low == cc {
+            return true
+        }
+        return false
     }
 }

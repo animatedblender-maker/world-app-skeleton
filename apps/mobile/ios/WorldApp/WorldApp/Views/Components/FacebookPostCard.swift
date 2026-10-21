@@ -834,9 +834,10 @@ struct FacebookPostCard: View {
                     }
                 } else if let url = post.feedImageURL {
                     // UIKit pinch (ScrollView-safe); release springs back.
+                    // 720 (not 1080): tall Reddit memes at 1080 froze Home scroll on appear.
                     FeedPinchZoomPhoto(
                         url: url,
-                        maxPixelSize: 1080,
+                        maxPixelSize: 720,
                         contentMode: .fit,
                         placeholder: AnyView(mediaPlaceholder),
                         onZoomingChanged: { zooming in

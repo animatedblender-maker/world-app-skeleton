@@ -920,7 +920,7 @@ final class HomeFeedStore {
         let end = min(displayedPosts.count, index + thumbAhead)
         if index < end {
             let window = Array(displayedPosts[index..<end])
-            // Photos inside prefetchFeedMedia always warm at 1080; this size is video posters only.
+            // Photos warm at ≥720 inside prefetchFeedMedia; this size is video posters only.
             ImageCache.shared.prefetchFeedMedia(window, maxPixelSize: fling ? 320 : 720)
             if !fling {
                 Task(priority: .utility) {
