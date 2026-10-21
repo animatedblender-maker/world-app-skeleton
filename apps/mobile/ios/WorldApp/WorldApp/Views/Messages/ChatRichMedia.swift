@@ -70,15 +70,20 @@ struct ChatShareCard: View {
     // MARK: Note (optional text above the card)
 
     private var noteBubble: some View {
+        // Ink on paper for both sides — matte fills are near-white; paper/white text vanished.
         Text(effective.note)
             .font(.subheadline)
-            .foregroundStyle(isMine ? Theme.paper : Theme.ink)
+            .foregroundStyle(Theme.ink)
             .multilineTextAlignment(isMine ? .trailing : .leading)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(isMine ? Theme.accentBright : Theme.surface)
+                    .fill(isMine ? Theme.matteDeep : Theme.surface)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Theme.border.opacity(isMine ? 0.55 : 0.85), lineWidth: 0.5)
             )
             .frame(maxWidth: cardWidth + 12, alignment: isMine ? .trailing : .leading)
     }
@@ -682,9 +687,8 @@ struct ChatFixedMiniPlayer: View {
             appState.hubPlaybackPlaying = false
         }
         MediaPlaybackCoordinator.shared.pauseAll()
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .moviePlayback, options: [])
-        try? session.setActive(true, options: [])
+        // Off main — setActive on main freezes the chat composer / keyboard.
+        MediaPlaybackCoordinator.shared.ensurePlaybackAudioSession()
         if let url = playURL, ArchiveVideoPlayback.isArchiveURL(url) {
             ArchiveVideoPlayback.warmResolve(url)
         }

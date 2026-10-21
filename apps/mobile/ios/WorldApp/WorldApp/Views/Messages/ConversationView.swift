@@ -1175,18 +1175,19 @@ private struct MessageBubble: View {
             }
 
             if let text = message.displayText {
+                // Always ink on paper — accentBright is matte/off-white, so white text was invisible.
                 Text(text)
                     .font(.subheadline)
-                    .foregroundStyle(isMine ? .white : Theme.ink)
+                    .foregroundStyle(Theme.ink)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .background(
                         RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .fill(isMine ? Theme.accentBright : Theme.surface)
+                            .fill(isMine ? Theme.matteDeep : Theme.surface)
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(isMine ? Color.clear : Theme.border, lineWidth: 0.5)
+                            .stroke(Theme.border.opacity(isMine ? 0.55 : 0.85), lineWidth: 0.5)
                     )
             }
         }
@@ -1195,7 +1196,7 @@ private struct MessageBubble: View {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(
                     message.hasImage && message.shareInfo == nil && !message.hasVideoMedia
-                        ? (isMine ? Theme.accentBright.opacity(0.15) : Theme.surface)
+                        ? (isMine ? Theme.matteDeep.opacity(0.55) : Theme.surface)
                         : Color.clear
                 )
         )
