@@ -820,12 +820,12 @@ struct YouTubeAppView: View {
             ProgressView(MatteryaCopy.loadingHubs)
                 .tint(Theme.accentBright)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if let errorMessage, allVideos.isEmpty {
+        } else if let loadError = errorMessage, allVideos.isEmpty {
             // Retry affordance — first-open races used to strand users on unavailable.
             ContentUnavailableView(
                 MatteryaCopy.hubsUnavailable,
                 systemImage: "globe.americas",
-                description: Text(errorMessage)
+                description: Text(loadError)
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay(alignment: .bottom) {
