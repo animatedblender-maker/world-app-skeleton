@@ -37,6 +37,10 @@ struct YouTubeWatchView: View {
     @State private var fullscreenPullProgress: CGFloat = 0
     /// FS pull only if the drag *began* at scroll top (YouTube: mid-thread scroll stays scroll).
     @State private var metaFSPullArmed = false
+    @State private var showReportConfirm = false
+    @State private var watchActionToast: String?
+
+    private let reportReasons = ["Spam", "Harassment", "Misinformation", "Other"]
 
     init(
         post: CountryPost,
@@ -608,43 +612,138 @@ struct YouTubeWatchView: View {
     @ViewBuilder
     private var titleAndActionsChrome: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let headline = currentPost.displayHeadline {
-                Text(headline)
-                    .font(.system(size: 16, weight: .semibold, design: .default))
-                    .foregroundStyle(isMinimizingGrab ? Theme.paper : Theme.ink)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, Theme.pagePadding)
-                    .padding(.top, 8)
-            }
-            // Meta — 2pt under title.
-            if currentPost.viewCount > 0 || !currentPost.createdAt.isEmpty {
-                HStack(spacing: 6) {
-                    if currentPost.viewCount > 0 {
-                        Text("\(currentPost.viewCount.formatted()) views")
-                            .font(.caption2)
-                            .foregroundStyle(isMinimizingGrab ? Theme.paper.opacity(0.7) : Theme.inkMuted)
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 0) {
+                    if let headline = currentPost.displayHeadline {
+                        Text(headline)
+                            .font(.system(size: 16, weight: .semibold, design: .default))
+                            .foregroundStyle(isMinimizingGrab ? Theme.paper : Theme.ink)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Text(" ")
+                            .font(.system(size: 16, weight: .semibold, design: .default))
+                            .hidden()
+                            .accessibilityHidden(true)
                     }
-                    if currentPost.viewCount > 0, !currentPost.createdAt.isEmpty {
-                        Text("·")
-                            .font(.caption2)
-                            .foregroundStyle(isMinimizingGrab ? Theme.paper.opacity(0.5) : Theme.inkMuted)
-                    }
-                    if !currentPost.createdAt.isEmpty {
-                        Text(RelativeTime.format(currentPost.createdAt))
-                            .font(.caption2)
-                            .foregroundStyle(isMinimizingGrab ? Theme.paper.opacity(0.7) : Theme.inkMuted)
+                    // Meta — 2pt under title.
+                    if currentPost.viewCount > 0 || !currentPost.createdAt.isEmpty {
+                        HStack(spacing: 6) {
+                            if currentPost.viewCount > 0 {
+                                Text("\(currentPost.viewCount.formatted()) views")
+                                    .font(.caption2)
+                                    .foregroundStyle(isMinimizingGrab ? Theme.paper.opacity(0.7) : Theme.inkMuted)
+                            }
+                            if currentPost.viewCount > 0, !currentPost.createdAt.isEmpty {
+                                Text("·")
+                                    .font(.caption2)
+                                    .foregroundStyle(isMinimizingGrab ? Theme.paper.opacity(0.5) : Theme.inkMuted)
+                            }
+                            if !currentPost.createdAt.isEmpty {
+                                Text(RelativeTime.format(currentPost.createdAt))
+                                    .font(.caption2)
+                                    .foregroundStyle(isMinimizingGrab ? Theme.paper.opacity(0.7) : Theme.inkMuted)
+                            }
+                        }
+                        .padding(.top, 2)
                     }
                 }
-                .padding(.horizontal, Theme.pagePadding)
-                .padding(.top, 2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                // Three horizontal dots — options (Report video, …) on the right under the film.
+                hubsWatchOverflowMenu
             }
+            .padding(.horizontal, Theme.pagePadding)
+            .padding(.top, 8)
 
             // Like · Send · Keep — immediately under meta (3pt only).
             actionSection
                 .padding(.top, 3)
                 .padding(.bottom, 6)
+        }
+        .confirmationDialog(
+            "Report this video",
+            isPresented: $showReportConfirm,
+            titleVisibility: .visible
+        ) {
+            ForEach(reportReasons, id: \.self) { reason in
+                Button(reason, role: .destructive) {
+                    Task { await reportCurrentVideo(reason: reason) }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .overlay(alignment: .bottom) {
+            if let watchActionToast {
+                Text(watchActionToast)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.paper)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Theme.ink.opacity(0.92), in: Capsule())
+                    .padding(.bottom, 4)
+                    .transition(.opacity)
+            }
+        }
+    }
+
+    private var hubsWatchOverflowMenu: some View {
+        Menu {
+            Button {
+                showReportConfirm = true
+            } label: {
+                Label("Report video", systemImage: "flag")
+            }
+            Button {
+                appState.presentShareSheet(for: currentPost)
+            } label: {
+                Label("Share", systemImage: "arrowshape.turn.up.right")
+            }
+            Button {
+                Task { _ = await appState.toggleSavePost(currentPost) }
+            } label: {
+                Label(
+                    appState.isPostSaved(currentPost.id) ? "Remove from saved" : "Save video",
+                    systemImage: appState.isPostSaved(currentPost.id) ? "bookmark.fill" : "bookmark"
+                )
+            }
+            if !currentPost.authorID.isEmpty {
+                Button(role: .destructive) {
+                    appState.blockUser(
+                        currentPost.authorID,
+                        username: currentPost.author?.username,
+                        displayName: currentPost.author?.displayName
+                    )
+                } label: {
+                    Label("Block creator", systemImage: "hand.raised")
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(isMinimizingGrab ? Theme.paper.opacity(0.85) : Theme.ink)
+                .frame(width: 36, height: 36)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Video options")
+    }
+
+    private func reportCurrentVideo(reason: String) async {
+        do {
+            let reported = try await PostsService.shared.reportPost(currentPost.id, reason: reason)
+            await MainActor.run {
+                watchActionToast = reported ? "Video reported. Thank you." : "Could not report video."
+            }
+        } catch {
+            await MainActor.run {
+                watchActionToast = error.localizedDescription
+            }
+        }
+        try? await Task.sleep(nanoseconds: 2_200_000_000)
+        await MainActor.run {
+            if watchActionToast != nil { watchActionToast = nil }
         }
     }
 

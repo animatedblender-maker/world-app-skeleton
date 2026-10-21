@@ -295,6 +295,9 @@ struct YouTubeVideoMetadataRow: View {
 
     let post: CountryPost
     var showsMenu = false
+    @State private var showReportConfirm = false
+
+    private let reportReasons = ["Spam", "Harassment", "Misinformation", "Other"]
 
     /// Channel for Hubs / re-shares — never the person who saved or shared the clip.
     private var creator: (name: String, avatarURL: String?, seed: String, authorID: String, username: String?) {
@@ -332,10 +335,27 @@ struct YouTubeVideoMetadataRow: View {
                 hubsMenu
             }
         }
+        .confirmationDialog(
+            "Report this video",
+            isPresented: $showReportConfirm,
+            titleVisibility: .visible
+        ) {
+            ForEach(reportReasons, id: \.self) { reason in
+                Button(reason, role: .destructive) {
+                    Task { await reportVideo(reason: reason) }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
     }
 
     private var hubsMenu: some View {
         Menu {
+            Button {
+                showReportConfirm = true
+            } label: {
+                Label("Report video", systemImage: "flag")
+            }
             Button {
                 appState.presentShareSheet(for: post)
             } label: {
@@ -359,12 +379,30 @@ struct YouTubeVideoMetadataRow: View {
             } label: {
                 Label(MatteryaCopy.viewCreatorHub, systemImage: "globe.americas")
             }
+            if !post.authorID.isEmpty {
+                Button(role: .destructive) {
+                    appState.blockUser(
+                        post.authorID,
+                        username: post.author?.username,
+                        displayName: post.author?.displayName
+                    )
+                } label: {
+                    Label("Block creator", systemImage: "hand.raised")
+                }
+            }
         } label: {
             Image(systemName: "ellipsis")
                 .font(.body.weight(.semibold))
                 .foregroundStyle(Theme.inkMuted)
-                .frame(width: 28, height: 28)
+                .frame(width: 36, height: 36)
+                .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Video options")
+    }
+
+    private func reportVideo(reason: String) async {
+        _ = try? await PostsService.shared.reportPost(post.id, reason: reason)
     }
 
     private var metadataLine: String {
