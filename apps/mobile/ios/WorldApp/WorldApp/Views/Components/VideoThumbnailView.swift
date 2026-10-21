@@ -30,7 +30,7 @@ struct VideoThumbnailView: View {
                     url: posterURL,
                     maxPixelSize: maxPixelSize,
                     contentMode: contentMode,
-                    placeholder: AnyView(post.hasVideo ? Color.black : placeholder)
+                    placeholder: post.hasVideo ? AnyView(Color.black) : placeholder
                 )
             } else if let videoURL = post.playableVideoURL ?? MediaURLResolver.videoURL(for: post) {
                 // R2 Sparks/Hubs often lack a usable thumb until Frame0 is signed.
@@ -94,6 +94,8 @@ struct VideoThumbnailView: View {
             MediaURLResolver.hubsListPosterURL(for: post),
             post.posterImageURL,
             post.feedImageURL,
+            // LongForm packs often encode a YouTube id — instant poster while Frame0 catches up.
+            MediaURLResolver.r2LongformYouTubePosterURL(for: post),
         ]
         for candidate in candidates {
             guard let url = candidate, MediaURLResolver.isUsablePosterURL(url) else { continue }
@@ -237,6 +239,12 @@ struct FrameZeroFallbackPoster: View {
                 return
             }
             guard allowClientExtract else { return }
+            // Wait out fling so Hubs scroll never fights AV decode.
+            for _ in 0..<8 {
+                if !ScrollBudget.isFlinging { break }
+                try? await Task.sleep(nanoseconds: 120_000_000)
+            }
+            guard !ScrollBudget.isFlinging else { return }
             frameImage = await VideoFrameCache.shared.image(for: postID, videoURL: videoURL)
         }
     }
@@ -301,6 +309,8 @@ final class VideoFrameCache {
             let playback = await MediaURLResolver.playbackConfiguration(for: videoURL)
             let playURL = playback.url
             let headers = playback.headers
+            // Stable "random" mid-clip time per post — avoids black first frames / title cards.
+            let sampleSeed = postID.utf8.reduce(0) { ($0 &* 31 &+ Int($1)) & 0x7fffffff }
 
             // Never block MainActor with AVAssetImageGenerator (Hubs freeze root cause).
             let image: UIImage? = await Task.detached(priority: .utility) {
@@ -313,15 +323,32 @@ final class VideoFrameCache {
                 } else {
                     asset = AVURLAsset(url: playURL)
                 }
+                let duration = (try? await asset.load(.duration)) ?? .zero
+                let seconds = CMTimeGetSeconds(duration)
+                let targetSeconds: Double
+                if seconds.isFinite, seconds > 2 {
+                    // Pick ~15–55% into the clip (deterministic per post id).
+                    let frac = 0.15 + (Double(sampleSeed % 400) / 1000.0)
+                    targetSeconds = min(max(seconds * frac, 0.5), max(seconds - 0.25, 0.5))
+                } else if seconds.isFinite, seconds > 0.4 {
+                    targetSeconds = min(seconds * 0.35, seconds - 0.05)
+                } else {
+                    targetSeconds = 1.0
+                }
+                let time = CMTime(seconds: targetSeconds, preferredTimescale: 600)
                 let generator = AVAssetImageGenerator(asset: asset)
                 generator.appliesPreferredTrackTransform = true
                 generator.maximumSize = CGSize(width: 720, height: 720)
-                generator.requestedTimeToleranceBefore = .zero
-                generator.requestedTimeToleranceAfter = CMTime(seconds: 0.35, preferredTimescale: 600)
-                guard let cgImage = try? generator.copyCGImage(at: .zero, actualTime: nil) else {
-                    return nil
+                generator.requestedTimeToleranceBefore = CMTime(seconds: 0.5, preferredTimescale: 600)
+                generator.requestedTimeToleranceAfter = CMTime(seconds: 1.0, preferredTimescale: 600)
+                if let cgImage = try? generator.copyCGImage(at: time, actualTime: nil) {
+                    return UIImage(cgImage: cgImage)
                 }
-                return UIImage(cgImage: cgImage)
+                // Fall back to t≈0 when mid-clip extract fails (short/corrupt packs).
+                if let cgImage = try? generator.copyCGImage(at: .zero, actualTime: nil) {
+                    return UIImage(cgImage: cgImage)
+                }
+                return nil
             }.value
 
             guard let image else { return nil }

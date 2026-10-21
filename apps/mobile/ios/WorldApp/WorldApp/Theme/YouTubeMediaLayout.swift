@@ -260,8 +260,8 @@ struct YouTubeVideoListRow: View {
                     maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel,
                     showsPlayIcon: false,
                     frameStyle: .card,
-                    // NEVER extract frames while scrolling For you — freezes Hubs hard.
-                    extractFrameIfNeeded: false,
+                    // Mid-clip AV extract only after Frame0/thumb miss (gated, 1 at a time).
+                    extractFrameIfNeeded: true,
                     showsHubBadge: false
                 )
                 YouTubeVideoMetadataRow(post: post)
@@ -618,8 +618,8 @@ struct HubsShelfThumbCard: View {
     /// When true, show a one-line meta row under the title (channel · views).
     var showsMetadata: Bool = false
     var titleFont: Font = .caption.weight(.semibold)
-    /// Frame extract is expensive — default off so Hubs shelves never freeze scroll.
-    var extractFrameIfNeeded: Bool = false
+    /// Last-resort mid-clip frame when Frame0/thumb missing — VideoFrameCache caps concurrency.
+    var extractFrameIfNeeded: Bool = true
     var onTap: () -> Void
 
     private var thumbHeight: CGFloat { (width / YouTubeMediaLayout.aspect).rounded() }
@@ -633,7 +633,7 @@ struct HubsShelfThumbCard: View {
                 // `embedsFrame: false` — outer frame owns size; avoid card aspect fighting fixed height.
                 YouTubeVideoThumbnail(
                     post: post,
-                    maxPixelSize: min(YouTubeMediaLayout.hubsListThumbMaxPixel, 360),
+                    maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel,
                     showsPlayIcon: false,
                     frameStyle: .card,
                     embedsFrame: false,
@@ -648,6 +648,14 @@ struct HubsShelfThumbCard: View {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .stroke(Theme.border.opacity(0.6), lineWidth: 0.5)
                 )
+                .task(id: post.id) {
+                    // Strip tiles must never stay black — mint Frame 0 if thumb is missing/expired.
+                    let usable = MediaURLResolver.hubsListPosterURL(for: post)
+                        .map { MediaURLResolver.isUsablePosterURL($0) } ?? false
+                    if !usable {
+                        _ = await Frame0PosterResolver.shared.posterURL(postID: post.id)
+                    }
+                }
 
                 Text(post.displayHeadline ?? " ")
                     .font(titleFont)
