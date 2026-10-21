@@ -640,8 +640,8 @@ final class HomeFeedStore {
         )
     }
 
-    /// Media cards between written inserts (~1 text per ~50 Sparks/Hubs).
-    private static let homeWrittenMediaGap = 50
+    /// Media cards between written inserts — Home mix ~2 videos : 1 normal (image/text).
+    private static let homeWrittenMediaGap = 2
 
     /// Keep written cards in the mix — never a written block at the head.
     private static func weaveWrittenAmongMedia(_ posts: [CountryPost]) -> [CountryPost] {
@@ -656,8 +656,8 @@ final class HomeFeedStore {
             }
         }
         guard !media.isEmpty else { return posts }
-        // Cap density — at most ~1 text per 50 media (drop the rest from this pass).
-        let maxWritten = max(0, media.count / Self.homeWrittenMediaGap)
+        // Cap density to ~1 normal per 2 media (2:1 video:normal).
+        let maxWritten = max(1, media.count / Self.homeWrittenMediaGap)
         let writtenCap = Array(written.prefix(maxWritten))
         guard !writtenCap.isEmpty else { return media }
         var out: [CountryPost] = []
@@ -780,7 +780,11 @@ final class HomeFeedStore {
     /// **Keeps R2 Sparks** — they render as SparkFeedCard on the main feed.
     /// Hard-exclude watched **videos** — written/text posts are not “watched clips”.
     private static func liveOnlyPosts(_ posts: [CountryPost]) -> [CountryPost] {
-        let base = posts.excludingDeletedPosts().forHomeFeed()
+        let under18 = ContentCache.shared.cachedProfile()?.isUnder18 == true
+        let base = posts
+            .excludingDeletedPosts()
+            .forHomeFeed()
+            .filter { under18 ? !$0.isAdultContent : true }
         guard !base.isEmpty else { return [] }
         return base.filter { post in
             if PlayPlatformBridge.isWrittenHomePost(post) { return true }

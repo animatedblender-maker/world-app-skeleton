@@ -285,6 +285,8 @@ private struct SparksTileChrome: View {
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
+            // Black until Frame 0 first-frame webp lands — cream placeholder read as white tiles.
+            Color.black
             VideoThumbnailView(
                 post: post,
                 maxPixelSize: maxPixelSize,
@@ -293,13 +295,7 @@ private struct SparksTileChrome: View {
                 playIconSize: playIconSize,
                 // Frame0 API only — never AV-extract 12 strip tiles (R2 storm / blank forever).
                 extractFrameIfNeeded: false,
-                placeholder: AnyView(
-                    LinearGradient(
-                        colors: [Theme.canvasMuted, Theme.canvasDeep],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
+                placeholder: AnyView(Color.black)
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()

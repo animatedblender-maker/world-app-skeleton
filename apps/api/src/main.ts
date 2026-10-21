@@ -989,10 +989,14 @@ app.get('/v1/config', async (req: Request, res: Response) => {
 
 app.get('/v1/feed', async (req: Request, res: Response) => {
   try {
-    await getUserFromRequest(req).catch(() => null);
+    const user = await getUserFromRequest(req).catch(() => null);
     const limit = Math.min(Math.max(Number(req.query.limit) || 24, 1), 48);
     const cursor = req.query.cursor ? String(req.query.cursor) : null;
-    const page = await fetchHomeFeedPage({ limit, cursor });
+    const page = await fetchHomeFeedPage({
+      limit,
+      cursor,
+      viewerUserId: user?.id ?? null,
+    });
     return res.json({ ok: true, ...page });
   } catch (err: any) {
     console.error('[feed]', err?.message ?? err);
@@ -1005,11 +1009,24 @@ app.get('/v1/feed', async (req: Request, res: Response) => {
 
 app.get('/v1/sparks', async (req: Request, res: Response) => {
   try {
-    await getUserFromRequest(req).catch(() => null);
+    const user = await getUserFromRequest(req).catch(() => null);
     const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 40);
     const cursor = req.query.cursor ? String(req.query.cursor) : null;
     const slug = req.query.slug ? String(req.query.slug) : null;
-    const page = await fetchSparksPage({ limit, cursor, slug });
+    // Client can pass exclude=id,id,… (watched / already in pager) for endless unwatched.
+    const excludeRaw = req.query.exclude != null ? String(req.query.exclude) : '';
+    const excludeIds = excludeRaw
+      .split(/[, ]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 800);
+    const page = await fetchSparksPage({
+      limit,
+      cursor,
+      slug,
+      viewerUserId: user?.id ?? null,
+      excludeIds,
+    });
     return res.json({ ok: true, ...page });
   } catch (err: any) {
     console.error('[sparks]', err?.message ?? err);

@@ -20,12 +20,17 @@ struct VideoThumbnailView: View {
 
     var body: some View {
         ZStack {
+            // Video thumbs stay black until Frame 0 paints (never paper/cream flash).
+            if post.hasVideo {
+                Color.black
+            }
+
             if let posterURL = resolvedPosterURL {
                 CachedAsyncImage(
                     url: posterURL,
                     maxPixelSize: maxPixelSize,
                     contentMode: contentMode,
-                    placeholder: placeholder
+                    placeholder: AnyView(post.hasVideo ? Color.black : placeholder)
                 )
             } else if let videoURL = post.playableVideoURL ?? MediaURLResolver.videoURL(for: post) {
                 // R2 Sparks/Hubs often lack a usable thumb until Frame0 is signed.
@@ -40,6 +45,8 @@ struct VideoThumbnailView: View {
                 Image(uiImage: frameImage)
                     .resizable()
                     .aspectRatio(contentMode: contentMode)
+            } else if post.hasVideo {
+                Color.black
             } else {
                 placeholder
             }

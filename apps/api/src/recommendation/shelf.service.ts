@@ -10,6 +10,12 @@
  */
 import { pool } from '../db.js';
 import { freshenMediaUrlString, freshenThumbUrlString } from '../media/r2-playback.js';
+import {
+  adultContentSqlFilter,
+  rebrandCompetitorNames,
+  textLooksNsfw,
+  viewerIsUnder18,
+} from '../moderation/nsfw.js';
 
 export const HUB_PARENT_SLUGS = [
   'comedy',
@@ -82,6 +88,9 @@ export type ThinShelfCard = {
   shared_post_id: string | null;
   /** Alias of shared_post_id for clients that read origin_sid. */
   origin_sid: string | null;
+  /** 18+ / NSFW — hidden from under-18 accounts. */
+  is_adult?: boolean;
+  moderation_status?: string | null;
 };
 
 export type ShelfPage = {
@@ -121,6 +130,7 @@ type RawPostRow = {
   author_name: string | null;
   author_username: string | null;
   author_avatar: string | null;
+  moderation_status?: string | null;
 };
 
 /** Extract origin post id from hub/spark share stamps before body scrub. */
@@ -348,16 +358,14 @@ function rowToCard(row: RawPostRow, slug: HubParentSlug): ThinShelfCard {
   // Real updated_at only — never map feed_at here (that made every bumped post show "Edited").
   const updatedIso =
     row.updated_at != null ? toIso(row.updated_at) : createdIso;
-  // Prefer feed_at (= greatest(updated_at, created_at)) so clients rank R2 syncs as newest.
-  const feedIso =
-    row.feed_at != null
-      ? toIso(row.feed_at)
-      : updatedIso;
+  const status = String(row.moderation_status ?? 'active').toLowerCase();
+  const isAdult =
+    status === 'sensitive' || textLooksNsfw(row.title, row.body, body);
   return {
     id: row.id,
     slug,
-    title: row.title,
-    body: body || null,
+    title: rebrandCompetitorNames(row.title),
+    body: rebrandCompetitorNames(body || null),
     // Preserve none/text/image — defaulting to 'video' hid written posts on thin cards.
     media_type: row.media_type || 'none',
     media_url: row.media_url,
@@ -374,6 +382,8 @@ function rowToCard(row: RawPostRow, slug: HubParentSlug): ThinShelfCard {
     author_avatar: row.author_avatar,
     shared_post_id: originSid,
     origin_sid: originSid,
+    is_adult: isAdult,
+    moderation_status: status,
   };
 }
 
@@ -718,6 +728,7 @@ async function fetchHomeWrittenRows(opts: {
   limit: number;
   cursor: { createdAt: string; id: string } | null;
   slugSelect: string;
+  under18?: boolean;
 }): Promise<RawPostRow[]> {
   const want = Math.min(Math.max(opts.limit, 1), 32);
   const params: unknown[] = [];
@@ -727,6 +738,8 @@ async function fetchHomeWrittenRows(opts: {
     and lower(coalesce(p.body, '')) not like '%__story__%'
     and lower(coalesce(p.body, '')) not like '%__spark__%'
     and lower(coalesce(p.body, '')) not like '%__hub_origin__%'
+    and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
+    ${adultContentSqlFilter(!!opts.under18, 'p')}
     and (
       lower(coalesce(p.media_type, '')) in ('none', 'text', 'image', 'photo')
       or (
@@ -750,6 +763,7 @@ async function fetchHomeWrittenRows(opts: {
       greatest(p.updated_at, p.created_at) as feed_at,
       p.country_code, p.country_name,
       p.author_id, p.shared_post_id, ${opts.slugSelect},
+      coalesce(p.moderation_status, 'active') as moderation_status,
       pr.display_name as author_name, pr.username as author_username, pr.avatar_url as author_avatar
     from public.posts p
     left join public.profiles pr on pr.user_id = p.author_id
@@ -762,24 +776,25 @@ async function fetchHomeWrittenRows(opts: {
 }
 
 /**
- * Home feed thin page — Sparks/Hubs video first.
- * Written/text is extremely rare (~1 per 50 media) so the feed stays smooth.
+ * Home feed thin page — weave ~2 videos : 1 normal post (image/text).
  * Media lane uses created_at (index-friendly) — greatest(updated_at, created_at)
  * was causing multi-second scans / intermittent 500s under cursor walk.
  */
 export async function fetchHomeFeedPage(input: {
   limit?: number;
   cursor?: string | null;
+  viewerUserId?: string | null;
 }): Promise<SurfacePage> {
   const want = Math.min(Math.max(Number(input.limit) || 24, 1), 64);
-  // ~1 written card per ~50 Sparks/Hubs — video feed stays dominant.
-  const mediaBetweenWritten = 50;
-  // At most one text card per thin page; often none when the media lane is full.
-  const textQuota = want >= 40 ? 1 : 0;
-  const mediaWant = want;
+  // Home mix: 2 videos → 1 normal post (image/text).
+  const mediaBetweenWritten = 2;
+  // Enough normal cards for ~1/3 of the page (2:1 video:normal).
+  const textQuota = Math.max(1, Math.floor(want / 3));
+  const mediaWant = Math.max(1, want - textQuota);
   const homeCur = decodeHomeFeedCursor(input.cursor);
   const hasCol = await hasHubSlugColumn();
   const slugSelect = hasCol ? 'p.hub_slug' : 'null::text as hub_slug';
+  const under18 = await viewerIsUnder18(input.viewerUserId);
   const params: unknown[] = [];
   // Tight video-only predicate — avoid OR media_url / lower(coalesce) that defeat indexes.
   let where = `
@@ -788,6 +803,8 @@ export async function fetchHomeFeedPage(input: {
     and p.media_url is not null
     and length(trim(p.media_url)) > 8
     and coalesce(p.body, '') not ilike '%__story__%'
+    and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
+    ${adultContentSqlFilter(under18, 'p')}
   `;
   if (homeCur.media) {
     params.push(homeCur.media.createdAt, homeCur.media.id);
@@ -801,6 +818,7 @@ export async function fetchHomeFeedPage(input: {
       p.created_at as feed_at,
       p.country_code, p.country_name,
       p.author_id, p.shared_post_id, ${slugSelect},
+      coalesce(p.moderation_status, 'active') as moderation_status,
       pr.display_name as author_name, pr.username as author_username, pr.avatar_url as author_avatar
     from public.posts p
     left join public.profiles pr on pr.user_id = p.author_id
@@ -816,9 +834,10 @@ export async function fetchHomeFeedPage(input: {
     const writtenQuery =
       textQuota > 0
         ? fetchHomeWrittenRows({
-            limit: 1,
+            limit: textQuota,
             cursor: homeCur.text,
             slugSelect,
+            under18,
           })
         : Promise.resolve([] as RawPostRow[]);
     // Bound the DB wait — prefer empty page over 12s+ hangs that storm iOS -1001.
@@ -848,9 +867,9 @@ export async function fetchHomeFeedPage(input: {
   }
 
   const mediaOnly = mediaRows.filter((r) => !isWrittenFeedRow(r));
-  const writtenMerged = writtenRows.filter(isWrittenFeedRow).slice(0, 1);
+  const writtenMerged = writtenRows.filter(isWrittenFeedRow).slice(0, textQuota);
 
-  // Weave: media-first; insert at most one written after ~50 media when present.
+  // Weave 2 videos : 1 normal post (image/text).
   const woven: RawPostRow[] = [];
   let mi = 0;
   let ti = 0;
@@ -920,6 +939,9 @@ export async function fetchSparksPage(input: {
   limit?: number;
   cursor?: string | null;
   slug?: string | null;
+  viewerUserId?: string | null;
+  /** Already-watched / already-in-pager IDs — keep Sparks endless with fresh clips. */
+  excludeIds?: string[] | null;
 }): Promise<SurfacePage> {
   // Pre-KNN: larger pages + feed_at so the full R2 spark library is reachable newest-first.
   const want = Math.min(Math.max(Number(input.limit) || 24, 1), 48);
@@ -927,20 +949,34 @@ export async function fetchSparksPage(input: {
   const cur = decodeCursor(input.cursor);
   const hasCol = await hasHubSlugColumn();
   const slugSelect = hasCol ? 'p.hub_slug' : 'null::text as hub_slug';
+  const under18 = await viewerIsUnder18(input.viewerUserId);
+  const exclude = (input.excludeIds || [])
+    .map((id) => String(id || '').trim())
+    .filter((id) => /^[0-9a-f-]{36}$/i.test(id))
+    .slice(0, 800);
   const params: unknown[] = [];
+  // Sparks = real short video only (spark stamps). Never Hubs LongForm or image memes.
   let where = `
     p.visibility = 'public'
     and lower(coalesce(p.media_type, '')) in ('reel', 'spark', 'video')
     and p.media_url is not null
     and length(trim(p.media_url)) > 8
     and lower(coalesce(p.body, '')) not like '%__story__%'
+    and lower(coalesce(p.body, '')) not like '%__hub_channel__%'
+    and lower(coalesce(p.body, '')) not like '%__hub_origin__%'
+    and coalesce(p.media_path, '') not like '%/LongForm/%'
+    and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
+    ${adultContentSqlFilter(under18, 'p')}
     and (
       lower(coalesce(p.media_type, '')) in ('reel', 'spark')
-      or lower(coalesce(p.body, '')) like '%__spark__%'
-      or coalesce(p.media_path, '') like 'r2:%'
-      or coalesce(p.media_path, '') like 'r2-share:%'
+      or lower(coalesce(p.body, '')) like '%__spark__|%'
+      or lower(coalesce(p.body, '')) like '%__spark_share__|%'
     )
   `;
+  if (exclude.length) {
+    params.push(exclude);
+    where += ` and p.id <> all($${params.length}::uuid[])`;
+  }
   if (hasCol && focus) {
     params.push(focus);
     where += ` and (
@@ -961,6 +997,7 @@ export async function fetchSparksPage(input: {
       greatest(p.updated_at, p.created_at) as feed_at,
       p.country_code, p.country_name,
       p.author_id, p.shared_post_id, ${slugSelect},
+      coalesce(p.moderation_status, 'active') as moderation_status,
       pr.display_name as author_name, pr.username as author_username, pr.avatar_url as author_avatar
     from public.posts p
     left join public.profiles pr on pr.user_id = p.author_id

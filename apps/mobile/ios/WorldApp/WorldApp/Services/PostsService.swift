@@ -3149,10 +3149,10 @@ enum SparkDiscoveryEngine {
         return weaveWrittenThroughFeed(fresh)
     }
 
-    /// Media cards between written inserts (~1 text per ~50 Sparks/Hubs).
-    private static let homeWrittenMediaGap = 50
+    /// Media cards between written inserts — Home mix ~2 videos : 1 normal (image/text).
+    private static let homeWrittenMediaGap = 2
 
-    /// ~1 written card per ~50 media; media owns the first slots.
+    /// ~1 normal card per 2 media; media owns the first slots.
     private static func weaveWrittenThroughFeed(_ posts: [CountryPost]) -> [CountryPost] {
         guard posts.count > 1 else { return posts }
         var media: [CountryPost] = []
@@ -3165,7 +3165,7 @@ enum SparkDiscoveryEngine {
             }
         }
         guard !media.isEmpty else { return posts }
-        let maxWritten = max(0, media.count / homeWrittenMediaGap)
+        let maxWritten = max(1, media.count / homeWrittenMediaGap)
         let writtenCap = Array(written.prefix(maxWritten))
         guard !writtenCap.isEmpty else { return media }
         var out: [CountryPost] = []

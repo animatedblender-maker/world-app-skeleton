@@ -88,10 +88,13 @@ struct PostMediaPayload: Sendable {
 
             let kind = (object["kind"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             // Pipeline writes kind=spark; older rows may omit reel:true — treat both as Sparks.
-            let reel = boolValue(object["reel"])
+            // kind=image (demoted memes) is never a Spark even if reel:true lingered.
+            let reel = kind != "image"
+                && kind != "photo"
+                && (boolValue(object["reel"])
                 || kind == "spark"
                 || kind == "reel"
-                || types.contains(where: { $0.lowercased() == "reel" || $0.lowercased() == "spark" })
+                || types.contains(where: { $0.lowercased() == "reel" || $0.lowercased() == "spark" }))
             let story = boolValue(object["story"])
             let expiresAt = parseDate(object["expires_at"] as? String)
                 ?? parseDate(object["signed_at"] as? String)
@@ -562,6 +565,8 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
     let linkTitle: String?
     let externalRefType: String?
     let externalRefID: String?
+    /// Server / thin-card flag for NSFW (18+). Optional so older disk cache still decodes.
+    let isAdult: Bool?
 
     init(
         id: String,
@@ -589,7 +594,8 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
         linkURL: String? = nil,
         linkTitle: String? = nil,
         externalRefType: String? = nil,
-        externalRefID: String? = nil
+        externalRefID: String? = nil,
+        isAdult: Bool? = nil
     ) {
         self.id = id
         self.title = title
@@ -624,6 +630,15 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
         self.linkTitle = linkTitle
         self.externalRefType = externalRefType
         self.externalRefID = externalRefID
+        self.isAdult = isAdult
+    }
+
+    /// 18+ content — hidden from under-18 accounts.
+    var isAdultContent: Bool {
+        if isAdult == true { return true }
+        return ContentSanitizer.looksNsfw(title)
+            || ContentSanitizer.looksNsfw(body)
+            || ContentSanitizer.looksNsfw(mediaCaption)
     }
 
     /// UI likes — never show the artificial seed floor of exactly 5000 on R2/catalog Sparks.
@@ -753,9 +768,15 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
 
     var hasVideo: Bool {
         let type = (mediaType ?? "").lowercased()
-        if type == "video" || type == "reel" { return true }
+        // Demoted meme packs keep a .mp4 key but are normal image posts — never video/Sparks.
+        if type == "image" || type == "photo" || type == "gif" || type == "none" || type == "text" {
+            return false
+        }
+        if type == "video" || type == "reel" || type == "spark" { return true }
         if let payload = mediaPayload {
-            return payload.types.contains { $0.lowercased() == "video" }
+            let types = payload.types.map { $0.lowercased() }
+            if types.contains("image") && !types.contains("video") { return false }
+            return types.contains("video")
         }
         guard let url = primaryMediaURL?.lowercased() else { return false }
         return url.range(
@@ -765,9 +786,11 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
     }
 
     var hasImage: Bool {
-        if hasVideo || isStory || isReel { return false }
         let type = (mediaType ?? "").lowercased()
-        if type == "image" { return primaryMediaURL != nil }
+        if type == "image" || type == "photo" || type == "gif" {
+            return primaryMediaURL != nil || mediaPayload != nil
+        }
+        if hasVideo || isStory || isReel { return false }
         if let payload = mediaPayload {
             return payload.types.contains { $0.lowercased() == "image" }
         }
@@ -816,6 +839,10 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
         // Feed re-shares of Sparks are feed cards only — never first-class Sparks.
         if SparkShareMarker.isMarked(body) { return false }
         let type = (mediaType ?? "").lowercased()
+        // Demoted image memes must never count as Sparks.
+        if type == "image" || type == "photo" || type == "gif" || type == "none" || type == "text" {
+            return false
+        }
         if type == "reel" || type == "spark" { return true }
         if mediaPayload?.isReel == true { return true }
         if let mediaURL {

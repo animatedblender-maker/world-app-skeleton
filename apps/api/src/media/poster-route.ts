@@ -7,11 +7,30 @@
  * Derives `{pack}/frame0_512.webp` from posts.media_path / media_url.r2_key.
  */
 import type { Request, Response } from 'express';
+import { HeadObjectCommand } from '@aws-sdk/client-s3';
 import { pool } from '../db.js';
-import { extractR2KeyFromMediaPath, extractR2KeyFromMediaUrl } from '../content-pipeline/r2.js';
+import {
+  createR2Client,
+  extractR2KeyFromMediaPath,
+  extractR2KeyFromMediaUrl,
+  getBucket,
+  r2Configured,
+} from '../content-pipeline/r2.js';
 import { resolvePlayUrlForKey } from './r2-playback.js';
 
 export const FRAME0_DEFAULT_POSTER_SIZE = 512;
+
+/** True only when frame0_*.webp is already in R2 — never return ghost signed URLs. */
+async function frame0ObjectExists(key: string): Promise<boolean> {
+  if (!r2Configured()) return false;
+  try {
+    const client = createR2Client();
+    await client.send(new HeadObjectCommand({ Bucket: getBucket(), Key: key.replace(/^\/+/, '') }));
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export function frame0KeyFromVideoKey(videoKey: string, size = FRAME0_DEFAULT_POSTER_SIZE): string {
   const clean = videoKey.replace(/^\/+/, '');
@@ -99,6 +118,10 @@ export async function handlePosterGet(req: Request, res: Response): Promise<void
       return;
     }
     const key = frame0KeyFromVideoKey(hit.videoKey, size);
+    if (!(await frame0ObjectExists(key))) {
+      res.status(404).json({ error: 'poster_unavailable', key });
+      return;
+    }
     const url = await resolvePlayUrlForKey(key);
     if (!url) {
       res.status(404).json({ error: 'poster_unavailable', key });
@@ -133,6 +156,7 @@ export async function handlePosterBatch(req: Request, res: Response): Promise<vo
         const hit = map.get(id);
         if (!hit) return;
         const key = frame0KeyFromVideoKey(hit.videoKey, size);
+        if (!(await frame0ObjectExists(key))) return;
         const url = await resolvePlayUrlForKey(key);
         if (url) {
           posters[id] = url;

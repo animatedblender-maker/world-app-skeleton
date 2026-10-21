@@ -16,6 +16,11 @@ enum ReelsRankingEngine {
     static func isSparkEligible(_ post: CountryPost) -> Bool {
         guard !post.isStory else { return false }
         guard post.playableVideoURL != nil else { return false }
+        // Still images / memes are normal feed posts — never Sparks player.
+        let mt = (post.mediaType ?? "").lowercased()
+        if mt == "image" || mt == "photo" || mt == "gif" || mt == "none" || mt == "text" {
+            return false
+        }
 
         // Explicit feed re-shares — never swipe-pool “new” Sparks.
         if SparkShareMarker.isMarked(post.body) { return false }

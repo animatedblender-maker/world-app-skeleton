@@ -2051,7 +2051,7 @@ struct InFrameVideoPlayer: View {
         playGate || preloadGate
     }
 
-    /// Poster floor — never bare black while waiting for AV (missing/expired thumbs used to flash black).
+    /// Poster floor under AV — black until Frame 0 / first painted frames (cream matte read as a white flash).
     @ViewBuilder
     private var posterFloor: some View {
         let cachedFrame0 = postID.flatMap { Frame0PosterCache.url(for: $0) }
@@ -2061,20 +2061,19 @@ struct InFrameVideoPlayer: View {
             return nil
         }()
         ZStack {
-            // Matte floor — not AV black — so cold/missing thumbs never look like a black flash.
-            Theme.matteDeep
+            Color.black
             if let usablePoster {
                 CachedAsyncImage(
                     url: usablePoster,
                     maxPixelSize: 720,
                     contentMode: fillsFrame ? .fill : .fit,
-                    placeholder: AnyView(Theme.matteDeep)
+                    placeholder: AnyView(Color.black)
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
                 .allowsHitTesting(false)
             }
-            // Always try Frame0 when API thumb missing/unusable — fills matte until signed.
+            // Pack-path Frame 0 when API thumb missing/unusable — stays black until signed webp loads.
             if let postID, usablePoster == nil || posterURL.map({ !MediaURLResolver.isUsablePosterURL($0) }) == true {
                 FrameZeroFallbackPoster(
                     postID: postID,

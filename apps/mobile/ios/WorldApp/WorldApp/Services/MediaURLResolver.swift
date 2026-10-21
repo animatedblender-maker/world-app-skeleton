@@ -43,7 +43,16 @@ enum SupabaseStorageAccess {
 
 enum MediaURLResolver {
     static func videoURL(for post: CountryPost) -> URL? {
+        let mt = (post.mediaType ?? "").lowercased()
+        // Explicit image/text posts are never Sparks/AV — even when the R2 key ends in video.mp4.
+        if mt == "image" || mt == "photo" || mt == "gif" || mt == "none" || mt == "text" {
+            return nil
+        }
         if let payload = post.mediaPayload {
+            let types = payload.types.map { $0.lowercased() }
+            if types.contains("image") && !types.contains("video") {
+                return nil
+            }
             let pairs = zip(payload.urls, payload.types)
             for (url, type) in pairs where type.lowercased() == "video" {
                 // Prefer typed video rows — don't over-filter with isVideoURL (signed R2 paths vary).
@@ -68,6 +77,7 @@ enum MediaURLResolver {
         }
 
         // Last resort: any mediaURL that looks like video even if media_type was wrong.
+        // Skip when payload already declared image-only.
         if let media = resolve(post.mediaURL), isVideoURL(media) { return media }
         return nil
     }

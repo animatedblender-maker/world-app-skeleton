@@ -395,17 +395,29 @@ enum PlayPlatformBridge {
     /// Prevents a long-form-looking row that opens the Sparks player.
     static func isHubsForYouLongForm(_ post: CountryPost) -> Bool {
         guard isPlayEligible(post), !post.isStory else { return false }
-        // Any Spark identity → out of For you.
-        if post.isReel || post.isSpark || isSparkFeedCard(post) { return false }
-        if ReelsRankingEngine.isSparkEligible(post) { return false }
         let type = (post.mediaType ?? "").lowercased()
         if type == "reel" || type == "spark" { return false }
-        // Must be hub / channel long-form (not a random feed clip).
+        if post.isReel || post.isSpark { return false }
+
+        // Thin /v1/hubs cards + R2 LongForm FIRST — before spark heuristics.
+        // `matterya-sparks` bucket + `r2_focus_seed` false-positived as Sparks and emptied For you.
+        if isR2LongFormMedia(post) { return true }
+        if post.externalRefType?.lowercased() == "hub" { return true }
+        if let media = (post.mediaURL ?? post.playableVideoURL?.absoluteString)?.lowercased() {
+            if media.contains("longform/") || media.contains("/longform")
+                || media.contains("\"kind\":\"longform\"") || media.contains("\"kind\": \"longform\"") {
+                return true
+            }
+        }
         if post.isHubSeedVideo
             || HubVideoSeedService.isArchiveChannelAuthor(post.authorID)
             || post.id.lowercased().hasPrefix("ia_") {
             return true
         }
+
+        // Spark identity only after hub inventory is ruled out.
+        if isSparkFeedCard(post) { return false }
+        if ReelsRankingEngine.isSparkEligible(post) { return false }
         return isHubCatalogContent(post)
             || isHubChannelUpload(post)
             || isHubOriginShare(post)
@@ -436,12 +448,16 @@ enum PlayPlatformBridge {
     /// Written / image Home card (no playable video) — text posts + photo posts.
     static func isWrittenHomePost(_ post: CountryPost) -> Bool {
         if post.isStory { return false }
+        let mt = (post.mediaType ?? "").lowercased()
+        // Explicit image/text wins — demoted meme packs may still have a .mp4 key.
+        if mt == "image" || mt == "photo" || mt == "gif" || mt == "none" || mt == "text" {
+            return post.hasFeedVisibleContent || post.hasImage || post.primaryMediaURL != nil
+        }
         if post.hasVideo || post.playableVideoURL != nil { return false }
         if isSparkFeedCard(post) || isHubFeedCardVideo(post) || isHubOriginShare(post) {
             return false
         }
-        let mt = (post.mediaType ?? "").lowercased()
-        if mt == "none" || mt == "text" || mt == "image" || mt == "photo" || mt.isEmpty {
+        if mt.isEmpty {
             return post.hasFeedVisibleContent
         }
         return post.hasImage || (!post.displayBody.isEmpty || (post.displayTitle?.isEmpty == false))
@@ -477,14 +493,17 @@ enum PlayPlatformBridge {
         ]
         .compactMap { $0?.lowercased() }
         .joined(separator: " ")
-        if blobs.contains("longform/") { return false }
+        if blobs.contains("longform/") || blobs.contains("\"kind\":\"longform\"")
+            || blobs.contains("\"kind\": \"longform\"") {
+            return false
+        }
         if blobs.contains("shortform/") { return true }
         if blobs.contains("\"kind\":\"spark\"") || blobs.contains("\"kind\": \"spark\"") {
             return true
         }
-        if blobs.contains("r2_spark") || blobs.contains("r2_focus_seed") {
-            return true
-        }
+        // r2_focus_seed is shared by LongForm + Sparks packs — only Sparks without longform.
+        if blobs.contains("r2_spark") { return true }
+        if blobs.contains("r2_focus_seed"), !blobs.contains("longform") { return true }
         return false
     }
 
