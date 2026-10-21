@@ -30,7 +30,7 @@ struct YouTubeAppView: View {
     /// Full ranked For you pool (endless scroll grows the display window from this).
     @State private var hubsForYouPool: [CountryPost] = []
     /// How many ranked rows LazyVStack may show (grows on scroll — never ends).
-    @State private var hubsDisplayLimit: Int = 36
+    @State private var hubsDisplayLimit: Int = 64
     @State private var isLoadingMoreHubs = false
     @State private var hubsLoadMoreQueued = false
     /// Coalesce mid-fling settle top-ups / thumb warms (onAppear storms).
@@ -48,8 +48,9 @@ struct YouTubeAppView: View {
     @State private var hubsVisitEpoch: Int = 0
 
     /// First paint window — denser so For you doesn't look empty vs R2 long-form library.
-    private static let hubsFirstWindow = 36
-    private static let hubsGrowBy = 24
+    /// Denser For you first paint — server has hundreds of LongForm; 36 felt "limited".
+    private static let hubsFirstWindow = 64
+    private static let hubsGrowBy = 40
     /// Soft memory ceiling — slug pages only; never keep thousands of posts on MainActor.
     /// Pre-KNN session pool — large enough to page deep into the R2 long-form library
     /// without holding all ~300k objects in RAM. Endless scroll keeps fetching past this.
@@ -197,8 +198,8 @@ struct YouTubeAppView: View {
 
     /// Endless For you: grow window cheaply; network early so the list never feels thin.
     private func ensureMoreForYou(around index: Int) {
-        // Match Feed: grow near the tail, not halfway (halfway remounted too often mid-scroll).
-        let threshold = max(0, stableDiscoverVideos.count - max(4, Self.hubsGrowBy / 2))
+        // Grow earlier than before so network/recycle starts before the user hits a wall.
+        let threshold = max(0, stableDiscoverVideos.count - max(8, Self.hubsGrowBy))
         guard index >= threshold else { return }
 
         // 1) Grow local pool only — warm the newly revealed thumbs so cells aren't blank.
@@ -392,8 +393,8 @@ struct YouTubeAppView: View {
         } else if hubsDisplayLimit < hubsForYouPool.count {
             growForYouDisplay(by: Self.hubsGrowBy, warmThumbs: true)
         } else {
-            // Network dry → recycle ranked pool so scroll is endless.
-            appendEndlessRecyclePage()
+            // Network dry → fresh server mix / local re-rank so scroll never ends.
+            await appendEndlessRecyclePage()
         }
 
         #if DEBUG
@@ -402,9 +403,43 @@ struct YouTubeAppView: View {
         #endif
     }
 
-    /// Re-queue the full ranked catalog under a new seed so For you never ends.
-    private func appendEndlessRecyclePage() {
+    /// Keep For you endless: prefer a fresh server page; fall back to local re-rank.
+    private func appendEndlessRecyclePage() async {
         hubsEndlessCycle += 1
+        let shown = Set(hubsForYouPool.prefix(hubsDisplayLimit).map(\.id))
+
+        // A) New server session → different mix (slug rotation), skip already-shown head.
+        SlugShelfStore.shared.newSession()
+        let page: SlugShelfStore.Page
+        if let slug = homeFilter.hubSlug {
+            page = await SlugShelfStore.shared.loadShelf(slug, force: true)
+        } else {
+            page = await SlugShelfStore.shared.loadForYou(force: true)
+        }
+        let fresh = page.items.filter {
+            !shown.contains($0.id)
+                && (PlayPlatformBridge.isHubsForYouLongForm($0)
+                    || PlayPlatformBridge.belongsInHubsCatalog($0)
+                    || ($0.hasVideo && !$0.isReel))
+        }
+        if !fresh.isEmpty {
+            softMergeHubCatalog(fresh)
+            let existingPool = Set(hubsForYouPool.map(\.id))
+            let newcomers = fresh.filter { existingPool.contains($0.id) == false }
+            if !newcomers.isEmpty {
+                hubsForYouPool.append(contentsOf: newcomers)
+            } else {
+                // Soft-merge already had them — still append a reshuffled tail so display grows.
+                hubsForYouPool.append(contentsOf: Self.pureShuffle(fresh))
+            }
+            growForYouDisplay(by: Self.hubsGrowBy * 2, warmThumbs: true)
+            #if DEBUG
+            print("[Hubs] endless server refresh cycle=\(hubsEndlessCycle) +\(fresh.count) pool=\(hubsForYouPool.count)")
+            #endif
+            return
+        }
+
+        // B) Local re-rank under a new seed (same inventory, new order).
         let home = allVideos.filter { PlayPlatformBridge.isHubsForYouLongForm($0) }
         guard !home.isEmpty else { return }
         let recycled = catalog.rankForYouBySlugs(
@@ -418,13 +453,14 @@ struct YouTubeAppView: View {
         hubsForYouPool.append(contentsOf: recycled)
         growForYouDisplay(by: Self.hubsGrowBy * 2, warmThumbs: true)
         #if DEBUG
-        print("[Hubs] endless recycle cycle=\(hubsEndlessCycle) pool=\(hubsForYouPool.count)")
+        print("[Hubs] endless local recycle cycle=\(hubsEndlessCycle) pool=\(hubsForYouPool.count)")
         #endif
     }
 
     private func rebuildContinueAndFollowingShuffled() {
         let history = catalog.historyVideos(from: allVideos).filter { !$0.isReel }
         stableContinueWatching = Array(Self.pureShuffle(history).prefix(8))
+        warmContinueWatchingThumbnails()
 
         let following = catalog.subscriptionFeed(
             videos: allVideos,
@@ -435,6 +471,19 @@ struct YouTubeAppView: View {
 
         let ch = catalog.subscriptionChannels(channels, followingIDs: appState.followingIDs)
         stableFollowingChannels = Self.pureShuffle(ch)
+    }
+
+    /// Every Continue watching card must paint a real poster — never stay black.
+    private func warmContinueWatchingThumbnails() {
+        let strip = continueWatching
+        guard !strip.isEmpty else { return }
+        ImageCache.shared.prefetchHubsListThumbnails(
+            strip,
+            maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel
+        )
+        Task(priority: .utility) {
+            await Frame0PosterResolver.shared.prefetch(postIDs: strip.map(\.id))
+        }
     }
 
     private var subscriptionVideos: [CountryPost] {
@@ -606,21 +655,19 @@ struct YouTubeAppView: View {
                 syncRouteFromHubSession()
                 return
             }
-            // Do NOT remount / butterWarm For you on every tab visit — only soft-fill if thin.
-            // Intentional reshuffles: pull-to-refresh + hubsFreshSessionToken + content gen.
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 120_000_000)
-                guard appState.selectedTab == .hubs, appState.hubPlaybackPost == nil else { return }
-                if allVideos.filter({ !$0.isReel }).count < 8 {
-                    await loadVideos(forceRefresh: false, mode: .fast)
-                    refreshHubsVisitShuffle(remountList: false)
-                }
-            }
+            // Fresh mix is owned by hubsFreshSessionToken (bumped on every Hubs tab enter).
         }
         .onChange(of: appState.hubsFreshSessionToken) { _, token in
             guard token > 0 else { return }
-            if !allVideos.isEmpty {
+            guard appState.hubPlaybackPost == nil else { return }
+            Task { @MainActor in
+                // New server session → rotated slug order on /v1/hubs/for-you.
+                SlugShelfStore.shared.newSession()
+                hubsEndlessCycle = 0
+                await loadVideos(forceRefresh: true, mode: .fast)
                 refreshHubsVisitShuffle(remountList: true)
+                warmContinueWatchingThumbnails()
+                await prefetchNextSlugPages(count: 2)
             }
         }
         .onChange(of: homeFilter) { _, filter in
@@ -827,6 +874,16 @@ struct YouTubeAppView: View {
                                 })
                                 .padding(.bottom, 18)
                             }
+                            // Tail sentinel — never let For you look finished.
+                            Color.clear
+                                .frame(height: 1)
+                                .onAppear {
+                                    let tail = max(0, stableDiscoverVideos.count - 1)
+                                    ensureMoreForYou(around: tail)
+                                    if hubsDisplayLimit >= hubsForYouPool.count {
+                                        requestMoreHubsLongForm()
+                                    }
+                                }
                         }
                         // Avoid remounting entire list via .id — that freezes mid-scroll.
                         .padding(.top, 8)
