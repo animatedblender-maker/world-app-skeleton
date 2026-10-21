@@ -30,7 +30,8 @@ struct YouTubeAppView: View {
     /// Full ranked For you pool (endless scroll grows the display window from this).
     @State private var hubsForYouPool: [CountryPost] = []
     /// How many ranked rows LazyVStack may show (grows on scroll — never ends).
-    @State private var hubsDisplayLimit: Int = 32
+    /// Match related-shelf richness: For you must not look sparse while Watch “More” is endless.
+    @State private var hubsDisplayLimit: Int = 48
     @State private var isLoadingMoreHubs = false
     @State private var hubsLoadMoreQueued = false
     /// True only after server inventory is exhausted — never silent reshuffle (architecture).
@@ -49,11 +50,11 @@ struct YouTubeAppView: View {
     /// Bumps whenever we intentionally re-roll Hubs surfaces (tab enter / home return).
     @State private var hubsVisitEpoch: Int = 0
 
-    /// Feed-smooth first paint (~1.5 screens). 64/40 made Hubs feel heavy vs Home.
-    private static let hubsFirstWindow = 32
-    private static let hubsGrowBy = 20
+    /// Dense For you (~R2 inventory) without the old 64/40 + 4-page storm.
+    private static let hubsFirstWindow = 48
+    private static let hubsGrowBy = 28
     /// Soft memory ceiling — slug pages only; never keep thousands of posts on MainActor.
-    private static let hubsCatalogMemoryCap = 800
+    private static let hubsCatalogMemoryCap = 1_500
     /// How many times we re-cycle the ranked pool after the full catalog is shown (endless scroll).
     @State private var hubsEndlessCycle: Int = 0
 
@@ -120,8 +121,8 @@ struct YouTubeAppView: View {
                 ^ UInt64(Date().timeIntervalSince1970 * 1_000)
         }
 
-        // Soft-rank cap on tab reshuffle — ranking 800–2500 on MainActor felt heavy.
-        let rankCap = shuffle ? min(400, Self.hubsCatalogMemoryCap) : Self.hubsCatalogMemoryCap
+        // Soft-rank cap on tab reshuffle — keep pool rich enough for For you ≈ related depth.
+        let rankCap = shuffle ? min(800, Self.hubsCatalogMemoryCap) : Self.hubsCatalogMemoryCap
         let rankInput = home.count > rankCap
             ? Array(home.prefix(rankCap))
             : home
@@ -199,9 +200,9 @@ struct YouTubeAppView: View {
         // Thumbs come from settled onAppearRow / grow — no fat butterWarm after every page.
     }
 
-    /// Prefetch earlier than the last row, without Feed-storm headroom.
-    private static let hubsPrefetchRemaining = 12
-    private static let hubsMinPoolHeadroom = 40
+    /// Prefetch earlier than the last row — keep For you dense like Watch related.
+    private static let hubsPrefetchRemaining = 16
+    private static let hubsMinPoolHeadroom = 56
 
     /// Endless For you: grow locally first; prefetch network long before the tail.
     private func ensureMoreForYou(around index: Int) {
@@ -236,8 +237,11 @@ struct YouTubeAppView: View {
             if hubsDisplayLimit < hubsForYouPool.count {
                 growForYouDisplay(by: Self.hubsGrowBy, warmThumbs: true)
             }
-            // One silent page — two back-to-back pages made Hubs feel heavy.
+            // Two silent pages so For you stays as rich as Watch “More”.
             await loadMoreActiveShelf()
+            if hubsForYouPool.count - hubsDisplayLimit < Self.hubsMinPoolHeadroom {
+                await loadMoreActiveShelf()
+            }
             if hubsDisplayLimit >= hubsForYouPool.count {
                 requestMoreHubsLongForm()
             }
@@ -260,16 +264,15 @@ struct YouTubeAppView: View {
             stableDiscoverVideos = window
         }
         if warmThumbs {
-            // Cap thumb/Frame0 band — growBy+4 uncapped stormed Frame0 (concurrency 2).
-            let fresh = Array(window.dropFirst(previous).prefix(min(16, Self.hubsGrowBy + 4)))
-            let band = fresh.isEmpty ? Array(window.suffix(6)) : fresh
+            let fresh = Array(window.dropFirst(previous).prefix(min(20, Self.hubsGrowBy + 4)))
+            let band = fresh.isEmpty ? Array(window.suffix(10)) : fresh
             ImageCache.shared.prefetchHubsListThumbnails(
                 band,
                 maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel
             )
             Task {
                 await Frame0PosterResolver.shared.prefetch(
-                    postIDs: Array(band.prefix(12).map(\.id))
+                    postIDs: Array(band.prefix(16).map(\.id))
                 )
             }
         }
@@ -644,10 +647,10 @@ struct YouTubeAppView: View {
                 meta: ["longForm": "\(allVideos.filter { !$0.isReel }.count)"]
             )
             await consumePendingRoutingIfNeeded()
-            // 3) One silent page + one neighbor — not 4+4 page storms.
+            // 3) Two silent pages so For you matches R2 depth (Watch related is endless).
             scheduleDeferredFullCatalogWarm()
             Task(priority: .utility) {
-                await prefetchNextSlugPages(count: 1)
+                await prefetchNextSlugPages(count: 2)
             }
         }
         .onAppear {
@@ -676,23 +679,17 @@ struct YouTubeAppView: View {
             guard token > 0 else { return }
             guard appState.hubPlaybackPost == nil else { return }
             Task { @MainActor in
+                // Always thin-reload on tab enter — soft “warmEnough” skip left first open
+                // on ContentUnavailable until the second navigate.
                 hubsEndlessCycle = 0
                 hubsCaughtUp = false
-                let warmEnough = hubsForYouPool.count >= Self.hubsFirstWindow
-                    && !stableDiscoverVideos.isEmpty
-                if warmEnough {
-                    // Light tab hop: reshuffle painted pool — skip force network + 4-page storm.
-                    refreshHubsVisitShuffle(remountList: true)
-                    warmContinueWatchingThumbnails()
-                    await prefetchNextSlugPages(count: 1)
-                } else {
-                    // Cold / empty: new server session + thin reload.
-                    SlugShelfStore.shared.newSession()
-                    await loadVideos(forceRefresh: true, mode: .fast)
-                    refreshHubsVisitShuffle(remountList: true)
-                    warmContinueWatchingThumbnails()
-                    await prefetchNextSlugPages(count: 1)
-                }
+                errorMessage = nil
+                if allVideos.isEmpty { isLoading = true }
+                SlugShelfStore.shared.newSession()
+                await loadVideos(forceRefresh: true, mode: .fast)
+                refreshHubsVisitShuffle(remountList: true)
+                warmContinueWatchingThumbnails()
+                await prefetchNextSlugPages(count: 2)
             }
         }
         .onChange(of: homeFilter) { _, filter in
@@ -824,7 +821,28 @@ struct YouTubeAppView: View {
                 .tint(Theme.accentBright)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let errorMessage, allVideos.isEmpty {
-            ContentUnavailableView(MatteryaCopy.hubsUnavailable, systemImage: "globe.americas", description: Text(errorMessage))
+            // Retry affordance — first-open races used to strand users on unavailable.
+            ContentUnavailableView(
+                MatteryaCopy.hubsUnavailable,
+                systemImage: "globe.americas",
+                description: Text(errorMessage)
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(alignment: .bottom) {
+                Button("Try again") {
+                    errorMessage = nil
+                    isLoading = true
+                    Task {
+                        SlugShelfStore.shared.newSession()
+                        await loadVideos(forceRefresh: true, mode: .fast)
+                        refreshHubsVisitShuffle(remountList: true)
+                        await prefetchNextSlugPages(count: 2)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.accentBright)
+                .padding(.bottom, 40)
+            }
         } else {
             homeScreen
         }
@@ -1534,7 +1552,7 @@ struct YouTubeAppView: View {
         }
     }
 
-    /// Idle top-up — one neighbor + one For you page (never fat GraphQL / multi-page storm).
+    /// Idle top-up — neighbor + two For you pages (Watch related is endless; list must densify).
     private func scheduleDeferredFullCatalogWarm() {
         Task(priority: .utility) {
             try? await Task.sleep(nanoseconds: 900_000_000)
@@ -1542,7 +1560,7 @@ struct YouTubeAppView: View {
             // Skip heavy warm while a hubs video is open/minimized — keeps morph smooth.
             guard appState.hubPlaybackPost == nil else { return }
             SlugShelfStore.shared.warmNeighbor(of: homeFilter.hubSlug)
-            await prefetchNextSlugPages(count: 1)
+            await prefetchNextSlugPages(count: 2)
         }
     }
 
@@ -1623,11 +1641,21 @@ struct YouTubeAppView: View {
                     rebuildStableHomeLists(shuffle: false, remountList: false)
                 }
                 isLoading = false
+                errorMessage = nil
                 butterWarmHubCatalog(allVideos)
                 if let slug = homeFilter.hubSlug {
                     SlugShelfStore.shared.warmNeighbor(of: slug)
                 } else if let first = page.slugsUsed.first {
                     SlugShelfStore.shared.warmNeighbor(of: first)
+                }
+                // First paint still thin vs R2 — pull one more page into the pool immediately.
+                if hubsForYouPool.count < Self.hubsFirstWindow || hubsDisplayLimit < Self.hubsFirstWindow {
+                    Task(priority: .utility) {
+                        await loadMoreActiveShelf()
+                        if hubsDisplayLimit < hubsForYouPool.count {
+                            growForYouDisplay(by: Self.hubsGrowBy, warmThumbs: true)
+                        }
+                    }
                 }
                 #if DEBUG
                 print("[Hubs] slug path key=\(key) items=\(filtered.count) force=\(forceRefresh) pool=\(hubsForYouPool.count)")
@@ -1691,11 +1719,39 @@ struct YouTubeAppView: View {
         isLoading = false
 
         if videos.isEmpty, allVideos.isEmpty {
+            // One forced slug retry before “unavailable” — cold first open often races DNS/API.
+            let retry = await SlugShelfStore.shared.loadForYou(force: true)
+            let retryFiltered = BlockService.shared.filterPosts(retry.items)
+                .filter {
+                    PlayPlatformBridge.isHubsForYouLongForm($0)
+                        || PlayPlatformBridge.belongsInHubsCatalog($0)
+                        || ($0.hasVideo && !$0.isReel)
+                }
+            if !retryFiltered.isEmpty {
+                applyHubCatalog(
+                    retryFiltered,
+                    shuffle: true,
+                    persist: true,
+                    remountList: true
+                )
+                PostsService.shared.rememberHubsSessionCatalog(
+                    Array(retryFiltered.prefix(SlugShelfStore.maxPerShelf * 2))
+                )
+                errorMessage = nil
+                butterWarmHubCatalog(allVideos)
+                return
+            }
+            paintInstantHubsIfPossible()
+            if !allVideos.isEmpty {
+                errorMessage = nil
+                return
+            }
             errorMessage = MatteryaCopy.hubsLoadError
             return
         }
 
         if !videos.isEmpty {
+            errorMessage = nil
             if hadPaint, mode == .full, !forceRefresh {
                 softMergeHubCatalog(videos)
             } else {
@@ -1762,12 +1818,12 @@ struct YouTubeAppView: View {
             return
         }
         let thumbPx = YouTubeMediaLayout.hubsListThumbMaxPixel
-        // Visible head only (≤6) — Frame0×24 on open made Hubs feel heavier than Feed.
+        // First ~screen of posters — enough to avoid black tiles without Frame0×24 storms.
         let head = stableDiscoverVideos.isEmpty
             ? videos.filter { !$0.isReel && $0.playableVideoURL != nil }
             : stableDiscoverVideos
-        let poolBand = Array(head.prefix(6))
-        let continueBand = Array(continueWatching.prefix(2))
+        let poolBand = Array(head.prefix(14))
+        let continueBand = Array(continueWatching.prefix(4))
         var warmBand = poolBand
         for post in continueBand where !warmBand.contains(where: { $0.id == post.id }) {
             warmBand.append(post)
@@ -1775,7 +1831,7 @@ struct YouTubeAppView: View {
         ImageCache.shared.prefetchHubsListThumbnails(warmBand, maxPixelSize: thumbPx)
         Task(priority: .utility) {
             await Frame0PosterResolver.shared.prefetch(
-                postIDs: Array(warmBand.prefix(6).map(\.id))
+                postIDs: Array(warmBand.prefix(16).map(\.id))
             )
         }
         // Sparks strip thumbs — much later, only if still on Hubs with no player.

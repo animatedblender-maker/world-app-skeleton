@@ -435,8 +435,10 @@ struct MatteryaHubPlayerView: View {
                                     }
                                 }
                             }
-                            .padding(.horizontal, 12)
-                            .padding(.top, 12)
+                            .padding(.horizontal, isLandscapeFullscreen ? 28 : 14)
+                            .padding(.top, isLandscapeFullscreen ? 10 : 12)
+                            .safeAreaPadding(.top, isLandscapeFullscreen ? 14 : 0)
+                            .safeAreaPadding(.trailing, isLandscapeFullscreen ? 10 : 0)
                             Spacer(minLength: 0)
                         }
                         .padding(.top, topChromeReserve)
@@ -614,7 +616,9 @@ struct MatteryaHubPlayerView: View {
                     Text(formatTime(bridge.currentSeconds))
                         .font(.caption.monospacedDigit().weight(.medium))
                         .foregroundStyle(Theme.paper.opacity(0.92))
-                        .frame(width: 42, alignment: .leading)
+                        .frame(width: hubTimeLabelWidth, alignment: .leading)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
 
                     HubTimelineScrubber(
                         value: scrubberValue,
@@ -639,12 +643,17 @@ struct MatteryaHubPlayerView: View {
                     Text(formatTime(bridge.durationSeconds))
                         .font(.caption.monospacedDigit().weight(.medium))
                         .foregroundStyle(Theme.paper.opacity(0.75))
-                        .frame(width: 42, alignment: .trailing)
+                        .frame(width: hubTimeLabelWidth, alignment: .trailing)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, isLandscapeFullscreen ? 28 : 16)
                 // On-film timeline (no black margin strip under the picture).
-                .padding(.bottom, 10)
+                .padding(.bottom, isLandscapeFullscreen ? 14 : 10)
                 .padding(.top, 12)
+                .safeAreaPadding(.bottom, isLandscapeFullscreen ? 10 : 0)
+                .safeAreaPadding(.leading, isLandscapeFullscreen ? 10 : 0)
+                .safeAreaPadding(.trailing, isLandscapeFullscreen ? 10 : 0)
                 .background(
                     LinearGradient(
                         colors: [.clear, Theme.ink.opacity(0.55), Theme.ink.opacity(0.82)],
@@ -657,6 +666,13 @@ struct MatteryaHubPlayerView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .allowsHitTesting(true)
+    }
+
+    /// Long Hubs clips use h:mm:ss — 42pt cropped both ends in landscape.
+    private var hubTimeLabelWidth: CGFloat {
+        let sample = max(bridge.currentSeconds, bridge.durationSeconds)
+        if sample >= 3600 { return isLandscapeFullscreen ? 68 : 62 }
+        return isLandscapeFullscreen ? 52 : 48
     }
 
     private var scrubberValue: Double {
@@ -799,6 +815,11 @@ struct MatteryaLandscapeFullscreenPlayer: View {
         }
     }
 
+    private var fullscreenTimeLabelWidth: CGFloat {
+        let sample = max(bridge.currentSeconds, bridge.durationSeconds)
+        return sample >= 3600 ? 68 : 52
+    }
+
     private var fullscreenChrome: some View {
         ZStack {
             VStack(spacing: 0) {
@@ -828,8 +849,10 @@ struct MatteryaLandscapeFullscreenPlayer: View {
                     }
                     .buttonStyle(.plain)
                 }
-                .padding(.horizontal, 16)
-                .safeAreaPadding(.top, 8)
+                .padding(.horizontal, 28)
+                .safeAreaPadding(.top, 16)
+                .safeAreaPadding(.leading, 12)
+                .safeAreaPadding(.trailing, 12)
 
                 Spacer(minLength: 0)
 
@@ -837,7 +860,9 @@ struct MatteryaLandscapeFullscreenPlayer: View {
                     Text(formatTime(bridge.currentSeconds))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.white.opacity(0.9))
-                        .frame(width: 42, alignment: .leading)
+                        .frame(width: fullscreenTimeLabelWidth, alignment: .leading)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
 
                     HubTimelineScrubber(
                         value: scrubberValue,
@@ -859,12 +884,16 @@ struct MatteryaLandscapeFullscreenPlayer: View {
                     Text(formatTime(bridge.durationSeconds))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.white.opacity(0.75))
-                        .frame(width: 42, alignment: .trailing)
+                        .frame(width: fullscreenTimeLabelWidth, alignment: .trailing)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                 }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 10)
+                .padding(.horizontal, 28)
+                .padding(.bottom, 14)
                 .padding(.top, 12)
-                .safeAreaPadding(.bottom, 8)
+                .safeAreaPadding(.bottom, 12)
+                .safeAreaPadding(.leading, 12)
+                .safeAreaPadding(.trailing, 12)
                 .background(
                     LinearGradient(
                         colors: [.clear, Theme.ink.opacity(0.75)],

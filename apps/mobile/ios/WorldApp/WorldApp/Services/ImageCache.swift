@@ -125,8 +125,11 @@ final class ImageCache: @unchecked Sendable {
             return nil
         }
         let fling = ScrollBudget.isFlinging
-        let cap = fling ? 2 : min(16, max(urls.count, 0))
-        let unique = Array(Set(urls.map(\.absoluteString))).prefix(cap).compactMap(URL.init(string:))
+        // Cap is independent of how many poster URLs already resolve — when every
+        // row needs Frame0, urls.count==0 used to zero the cap and leave black tiles.
+        let cap = fling ? 2 : 16
+        let unique = Array(Set(urls.map(\.absoluteString))).prefix(min(cap, max(urls.count, 0)))
+            .compactMap(URL.init(string:))
         let priority: TaskPriority = fling ? .background : .utility
         for url in unique {
             if imageIfCached(for: url, maxPixelSize: maxPixelSize) != nil { continue }
@@ -134,9 +137,8 @@ final class ImageCache: @unchecked Sendable {
                 _ = await ImageCache.shared.image(for: url, maxPixelSize: maxPixelSize)
             }
         }
-        // Cap Frame0 to the same thumb cap — uncapped missing IDs stormed concurrency-2.
         let frame0Source = missingFrame0IDs.isEmpty
-            ? posts.prefix(cap).map(\.id)
+            ? posts.map(\.id)
             : missingFrame0IDs
         let frame0IDs = Array(frame0Source.prefix(cap))
         if !frame0IDs.isEmpty {

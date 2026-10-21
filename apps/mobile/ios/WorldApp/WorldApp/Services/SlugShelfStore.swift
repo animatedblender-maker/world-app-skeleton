@@ -12,11 +12,11 @@ final class SlugShelfStore {
     static let shared = SlugShelfStore()
 
     /// Max posts retained per slug (or for_you key).
-    static let maxPerShelf = 80
+    static let maxPerShelf = 120
     /// Max distinct shelves kept in RAM.
     static let maxShelves = 8
-    /// Feed-smooth page size — 48 made every Hubs fetch feel heavy.
-    static let pageSize = 28
+    /// Dense enough for For you ≈ Watch related depth without 48-row storms.
+    static let pageSize = 36
 
     /// Synthetic key for the mixed For you stream.
     static let forYouKey = "for_you"
@@ -200,7 +200,7 @@ final class SlugShelfStore {
 
         // Warm first-screen thumbs + Frame 0 only (AV warm is Watch/related).
         let warmBand = Array(
-            (append ? remote.items : state.posts).prefix(12)
+            (append ? remote.items : state.posts).prefix(16)
         )
         ImageCache.shared.prefetchHubsListThumbnails(
             warmBand,
@@ -208,7 +208,7 @@ final class SlugShelfStore {
         )
         Task {
             await Frame0PosterResolver.shared.prefetch(
-                postIDs: Array(warmBand.prefix(12).map(\.id))
+                postIDs: Array(warmBand.prefix(16).map(\.id))
             )
         }
 
@@ -335,14 +335,14 @@ final class SlugShelfStore {
             print("[SlugShelf] \(url.path) items=\(posts.count) next=\(next != nil)")
             #endif
             // Media session 09: shelf list = posters only. Continuous player warms on open.
-            let head = Array(posts.prefix(12))
+            let head = Array(posts.prefix(16))
             ImageCache.shared.prefetchHubsListThumbnails(
                 head,
                 maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel
             )
             Task {
                 await Frame0PosterResolver.shared.prefetch(
-                    postIDs: Array(head.prefix(12).map(\.id))
+                    postIDs: Array(head.prefix(16).map(\.id))
                 )
             }
             return Page(items: posts, nextCursor: next, slugsUsed: slugsUsed, session: session)
