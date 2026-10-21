@@ -19,6 +19,8 @@ struct VideoPlayerView: View {
     /// Feed hubs: chrome hidden until tap; auto-hides after 3s; tap again dismisses early.
     var tapToRevealControls: Bool = false
     var allowsFullscreen: Bool = false
+    /// When set (Hubs feed), FS hands off to continuous player instead of remounting a cover.
+    var onFullscreenRequest: (() -> Void)? = nil
     var startTime: Double? = nil
     /// When false, teardown won't write a lower position over an existing resume point (mini player).
     var persistsPositionOnTeardown: Bool = true
@@ -216,7 +218,13 @@ struct VideoPlayerView: View {
                         onPlayPause: { togglePlayback() },
                         onMuteToggle: { toggleMute() },
                         onSeek: { seek(to: $0) },
-                        onFullscreen: allowsFullscreen ? { openFullscreen() } : nil,
+                        onFullscreen: allowsFullscreen ? {
+                            if let onFullscreenRequest {
+                                onFullscreenRequest()
+                            } else {
+                                openFullscreen()
+                            }
+                        } : nil,
                         onExitFullscreen: nil
                     )
                 }
@@ -1960,6 +1968,9 @@ struct InFrameVideoPlayer: View {
     var sharesFeedMute: Bool = true
     /// Home feed vs profile — prevents opacity-0 feed cards from stealing profile autoplay.
     var autoplaySurface: FeedAutoplaySurface = .home
+    /// Hubs feed: show FS control and hand off to continuous landscape player.
+    var allowsFullscreen: Bool = false
+    var onFullscreenRequest: (() -> Void)? = nil
     var onViewed: (() -> Void)? = nil
     /// Natural video size — Spark feed cards use this for SparksStageLayout fill vs fit.
     var onVideoSize: ((CGSize) -> Void)? = nil
@@ -1994,6 +2005,8 @@ struct InFrameVideoPlayer: View {
         sharesFeedMute: Bool = true,
         autoplaySurface: FeedAutoplaySurface = .home,
         tapToRevealControls: Bool = false,
+        allowsFullscreen: Bool = false,
+        onFullscreenRequest: (() -> Void)? = nil,
         onViewed: (() -> Void)? = nil,
         onVideoSize: ((CGSize) -> Void)? = nil
     ) {
@@ -2014,6 +2027,8 @@ struct InFrameVideoPlayer: View {
         self.sharesFeedMute = sharesFeedMute
         self.autoplaySurface = autoplaySurface
         self.tapToRevealControls = tapToRevealControls
+        self.allowsFullscreen = allowsFullscreen
+        self.onFullscreenRequest = onFullscreenRequest
         self.onViewed = onViewed
         self.onVideoSize = onVideoSize
         // Initial mute: prefer global feed mute when sharing; else constructor flag.
@@ -2129,7 +2144,8 @@ struct InFrameVideoPlayer: View {
                                     }
                                 }
                             ),
-                            allowsFullscreen: false,
+                            allowsFullscreen: allowsFullscreen,
+                            onFullscreenToggle: allowsFullscreen ? onFullscreenRequest : nil,
                             onReady: {
                                 onViewed?()
                                 // readyToPlay ≠ painted frames — keep outer poster (black AV blink).
@@ -2163,7 +2179,8 @@ struct InFrameVideoPlayer: View {
                             muted: isMuted,
                             showsControls: transportChrome,
                             tapToRevealControls: tapToRevealControls,
-                            allowsFullscreen: false,
+                            allowsFullscreen: allowsFullscreen,
+                            onFullscreenRequest: onFullscreenRequest,
                             sharesFeedMute: sharesFeedMute,
                             fillsFrame: fillsFrame,
                             topChromeReserve: topChromeReserve,

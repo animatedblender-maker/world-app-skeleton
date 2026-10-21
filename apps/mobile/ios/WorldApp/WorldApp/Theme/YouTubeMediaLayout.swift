@@ -483,6 +483,11 @@ struct PlayFeedLinkCard: View {
                     sharesFeedMute: true,
                     autoplaySurface: autoplaySurface,
                     tapToRevealControls: true,
+                    allowsFullscreen: true,
+                    onFullscreenRequest: {
+                        appState.startHubPlayback(post, expanded: true)
+                        appState.requestHubFullscreen()
+                    },
                     onViewed: { Task { await PostsService.shared.recordView(post) } }
                 )
             }
@@ -546,6 +551,11 @@ struct YouTubeFeedVideoCard: View {
                             muted: true,
                             fillsFrame: false,
                             bottomChromeReserve: 0,
+                            allowsFullscreen: true,
+                            onFullscreenRequest: {
+                                appState.startHubPlayback(post, expanded: true)
+                                appState.requestHubFullscreen()
+                            },
                             onViewed: { Task { await PostsService.shared.recordView(post) } }
                         )
                     }

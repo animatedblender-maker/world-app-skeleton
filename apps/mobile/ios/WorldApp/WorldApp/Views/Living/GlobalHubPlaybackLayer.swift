@@ -38,6 +38,7 @@ struct GlobalHubPlaybackLayer: View {
     @State private var isPullingMinimize = false
 
     private var expanded: Bool { appState.hubPlaybackExpanded }
+    private var landscapeFullscreen: Bool { appState.hubPlaybackLandscapeFullscreen }
     private var docked: Bool { appState.hubPlaybackDockInChat }
 
     private var hasDockSlot: Bool {
@@ -79,11 +80,15 @@ struct GlobalHubPlaybackLayer: View {
                     continuousStage(post: post, geo: geo)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                .ignoresSafeArea(edges: .top)
+                // Landscape FS: own the whole window (YouTube). Else clear the notch only.
+                .ignoresSafeArea(edges: landscapeFullscreen ? .all : .top)
+                .statusBarHidden(landscapeFullscreen)
+                .persistentSystemOverlays(landscapeFullscreen ? .hidden : .automatic)
             }
         }
         // Smooth morph expand ↔ mini (interactive spring matches pull-down release).
         .animation(.interactiveSpring(response: 0.42, dampingFraction: 0.86), value: expanded)
+        .animation(.interactiveSpring(response: 0.32, dampingFraction: 0.9), value: landscapeFullscreen)
         .animation(.interactiveSpring(response: 0.38, dampingFraction: 0.88), value: hasDockSlot)
         .animation(.easeOut(duration: 0.2), value: appState.hubPlaybackPost?.id)
         .animation(.easeOut(duration: 0.2), value: appState.navigationPath.isEmpty)
@@ -125,12 +130,15 @@ struct GlobalHubPlaybackLayer: View {
             // Film + mini chrome in ONE box, then offset together.
             // Chrome must not be `.overlay` after `.offset` — that left chips at y≈0 (top of screen).
             ZStack {
-                playerSurface(for: post, showControls: expanded && !isPullingMinimize)
+                playerSurface(
+                    for: post,
+                    showControls: (expanded || landscapeFullscreen) && !isPullingMinimize
+                )
                     .frame(width: layout.width, height: layout.height)
-                    // Ink only under expanded stage (16:9 letterbox); mini hole stays transparent.
-                    .background(expanded ? Theme.ink : Color.clear)
+                    // Ink under expanded / landscape letterbox; mini hole stays transparent.
+                    .background((expanded || landscapeFullscreen) ? Theme.ink : Color.clear)
 
-                if !expanded {
+                if !expanded, !landscapeFullscreen {
                     YouTubeMiniPlayerChrome(
                         isPlaying: playingBinding,
                         isMuted: mutedBinding,
@@ -139,7 +147,7 @@ struct GlobalHubPlaybackLayer: View {
                     .frame(width: layout.width, height: layout.height)
                 }
 
-                if expanded, isPullingMinimize, dragOffset > 28 {
+                if expanded, !landscapeFullscreen, isPullingMinimize, dragOffset > 28 {
                     VStack {
                         Spacer()
                         Label(
@@ -161,27 +169,34 @@ struct GlobalHubPlaybackLayer: View {
             .frame(width: layout.width, height: layout.height)
             .clipShape(
                 RoundedRectangle(
-                    cornerRadius: expanded ? (isPullingMinimize ? 12 : 0) : 0,
+                    cornerRadius: (expanded && !landscapeFullscreen && isPullingMinimize) ? 12 : 0,
                     style: .continuous
                 )
             )
             .shadow(
-                color: expanded
+                color: (expanded && !landscapeFullscreen)
                     ? Theme.ink.opacity(isPullingMinimize ? 0.22 : 0)
                     : .clear,
-                radius: expanded ? (isPullingMinimize ? 16 : 0) : 0,
-                y: expanded ? (isPullingMinimize ? 8 : 0) : 0
+                radius: (expanded && !landscapeFullscreen && isPullingMinimize) ? 16 : 0,
+                y: (expanded && !landscapeFullscreen && isPullingMinimize) ? 8 : 0
             )
             .scaleEffect(
-                expanded ? pullScale : 1,
+                (expanded && !landscapeFullscreen) ? pullScale : 1,
                 anchor: .top
             )
-            .offset(x: layout.x, y: layout.y + (expanded ? dragOffset * 0.92 : 0))
-            .opacity(expanded && isPullingMinimize ? Double(1 - min(dragProgress * 0.12, 0.12)) : 1)
+            .offset(
+                x: layout.x,
+                y: layout.y + ((expanded && !landscapeFullscreen) ? dragOffset * 0.92 : 0)
+            )
+            .opacity(
+                expanded && !landscapeFullscreen && isPullingMinimize
+                    ? Double(1 - min(dragProgress * 0.12, 0.12))
+                    : 1
+            )
             .simultaneousGesture(minimizeGesture)
             .onTapGesture {
-                // Mini / dock: tap video → maximize. Expanded: transport owns taps.
-                guard !expanded else { return }
+                // Mini / dock: tap video → maximize. Expanded / FS: transport owns taps.
+                guard !expanded, !landscapeFullscreen else { return }
                 expand()
             }
             .id("global-hub-continuous-\(post.id)")
@@ -215,12 +230,19 @@ struct GlobalHubPlaybackLayer: View {
     }
 
     private func playerLayout(in geo: GeometryProxy) -> PlayerLayout {
+        // YouTube landscape FS: same AVPlayer, full window, aspect-fit (letterbox OK).
+        if landscapeFullscreen {
+            return PlayerLayout(x: 0, y: 0, width: geo.size.width, height: geo.size.height)
+        }
         if expanded {
             // Start directly under the notch (status bar), not overlapping it.
             let safeTop = geo.safeAreaInsets.top > 1
                 ? geo.safeAreaInsets.top
                 : YouTubeMediaLayout.keyWindowSafeTop
-            let stageHeight = YouTubeMediaLayout.hubsContinuousStageHeight(containerWidth: geo.size.width)
+            let stageHeight = YouTubeMediaLayout.hubsContinuousStageHeight(
+                containerWidth: geo.size.width,
+                videoAspect: appState.hubPlaybackVideoAspect
+            )
             return PlayerLayout(x: 0, y: safeTop, width: geo.size.width, height: stageHeight)
         }
 
@@ -295,11 +317,12 @@ struct GlobalHubPlaybackLayer: View {
             // Sparks pattern: Frame 0 poster under film until AV paints.
             ZStack {
                 Color.black
+                let fitFilm = expanded || landscapeFullscreen
                 if let poster {
                     CachedAsyncImage(
                         url: poster,
                         maxPixelSize: showControls ? 900 : 480,
-                        contentMode: expanded ? .fit : .fill,
+                        contentMode: fitFilm ? .fit : .fill,
                         placeholder: AnyView(Color.black)
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -309,7 +332,7 @@ struct GlobalHubPlaybackLayer: View {
                     FrameZeroFallbackPoster(
                         postID: post.id,
                         videoURL: url,
-                        fillsFrame: !expanded
+                        fillsFrame: !fitFilm
                     )
                     .allowsHitTesting(false)
                 }
@@ -321,12 +344,22 @@ struct GlobalHubPlaybackLayer: View {
                     postID: post.id,
                     showsControls: showControls,
                     loops: false,
-                    // Expanded: aspect-fit 16:9 (no crop). Mini: fill the full-bleed strip.
-                    fillsFrame: !expanded,
+                    // Expanded + landscape FS: aspect-fit (never crop). Mini: fill the strip.
+                    fillsFrame: !(expanded || landscapeFullscreen),
                     isMuted: mutedBinding,
                     allowsFullscreen: showControls,
+                    isLandscapeFullscreen: landscapeFullscreen,
                     // Survive Sparks open/close — resume mini mid-clip without black remount.
                     protectAsContinuousHubs: true,
+                    // Meta-pull / FS button → same-player landscape (no remount cover).
+                    externalFullscreenToken: appState.hubPlaybackFullscreenToken,
+                    onFullscreenToggle: {
+                        if appState.hubPlaybackLandscapeFullscreen {
+                            appState.exitHubLandscapeFullscreen()
+                        } else {
+                            appState.requestHubFullscreen()
+                        }
+                    },
                     onReady: {
                         Task { await PostsService.shared.recordView(post) }
                         if appState.shouldContinuePlayback(for: post.id)
@@ -353,6 +386,9 @@ struct GlobalHubPlaybackLayer: View {
                         // Don't clear playing while Sparks is open (we paused intentionally).
                         if appState.reelsViewerContext != nil, !playing { return }
                         appState.hubPlaybackPlaying = playing
+                    },
+                    onVideoSize: { size in
+                        appState.noteHubPlaybackVideoSize(size)
                     }
                 )
             }
@@ -394,7 +430,7 @@ struct GlobalHubPlaybackLayer: View {
     private var minimizeGesture: some Gesture {
         DragGesture(minimumDistance: 10, coordinateSpace: .local)
             .onChanged { value in
-                guard expanded else { return }
+                guard expanded, !landscapeFullscreen else { return }
                 var offset = dragOffset
                 var dragging = isPullingMinimize
                 MatteryaPullDownDismiss.applyChanged(value, offset: &offset, isDragging: &dragging)
@@ -403,7 +439,7 @@ struct GlobalHubPlaybackLayer: View {
                 isPullingMinimize = dragging
             }
             .onEnded { value in
-                guard expanded else {
+                guard expanded, !landscapeFullscreen else {
                     dragOffset = 0
                     isPullingMinimize = false
                     return

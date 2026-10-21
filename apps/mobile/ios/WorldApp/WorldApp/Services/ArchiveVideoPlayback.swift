@@ -131,39 +131,92 @@ final class ArchivePlayerBridge: ObservableObject {
     @Published var durationSeconds: Double = 0
     @Published var isReady = false
 
-    /// Always hop to the next main-runloop turn so we never publish during a SwiftUI update pass.
-    /// `Task { @MainActor }` is NOT enough — it can run inline when already on the main actor.
+    /// Apply progress on the main actor — skip no-op publishes (0.25s ticks were rebuilding chrome).
+    func applyProgress(current: Double, duration: Double, playing: Bool?) {
+        if abs(currentSeconds - current) >= 0.2 {
+            currentSeconds = current
+        }
+        if duration > 0, abs(durationSeconds - duration) >= 0.05 {
+            durationSeconds = duration
+        }
+        if let playing, playing != isPlaying {
+            isPlaying = playing
+        }
+    }
+
+    /// Scrub thumb — sync write, already on main from the gesture.
+    func applyScrubFraction(_ fraction: Double) {
+        guard durationSeconds > 0 else { return }
+        currentSeconds = fraction * durationSeconds
+    }
+
+    /// Hop to main only when the caller may be off-main (AV callbacks).
     nonisolated func publishPlaying(_ playing: Bool) {
+        if Thread.isMainThread {
+            MainActor.assumeIsolated {
+                if self.isPlaying != playing { self.isPlaying = playing }
+            }
+            return
+        }
         DispatchQueue.main.async { [weak self] in
-            self?.isPlaying = playing
+            guard let self else { return }
+            MainActor.assumeIsolated {
+                if self.isPlaying != playing { self.isPlaying = playing }
+            }
         }
     }
 
     nonisolated func publishProgress(current: Double, duration: Double, playing: Bool?) {
+        if Thread.isMainThread {
+            MainActor.assumeIsolated {
+                self.applyProgress(current: current, duration: duration, playing: playing)
+            }
+            return
+        }
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            self.currentSeconds = current
-            if duration > 0 { self.durationSeconds = duration }
-            if let playing { self.isPlaying = playing }
+            MainActor.assumeIsolated {
+                self.applyProgress(current: current, duration: duration, playing: playing)
+            }
         }
     }
 
     nonisolated func publishReady(playing: Bool = true) {
+        if Thread.isMainThread {
+            MainActor.assumeIsolated {
+                if !self.isReady { self.isReady = true }
+                if self.isPlaying != playing { self.isPlaying = playing }
+            }
+            return
+        }
         DispatchQueue.main.async { [weak self] in
-            self?.isReady = true
-            self?.isPlaying = playing
+            guard let self else { return }
+            MainActor.assumeIsolated {
+                if !self.isReady { self.isReady = true }
+                if self.isPlaying != playing { self.isPlaying = playing }
+            }
         }
     }
 
     nonisolated func publishMuted(_ muted: Bool) {
+        if Thread.isMainThread {
+            MainActor.assumeIsolated {
+                if self.isMuted != muted { self.isMuted = muted }
+            }
+            return
+        }
         DispatchQueue.main.async { [weak self] in
-            self?.isMuted = muted
+            guard let self else { return }
+            MainActor.assumeIsolated {
+                if self.isMuted != muted { self.isMuted = muted }
+            }
         }
     }
 
     func togglePlayPause() {
         controller?.togglePlayPause()
-        isPlaying = controller?.isPlaying ?? false
+        let next = controller?.isPlaying ?? false
+        if isPlaying != next { isPlaying = next }
     }
 
     func seek(to seconds: Double, resumeIfWanted: Bool = false) {
@@ -174,14 +227,14 @@ final class ArchivePlayerBridge: ObservableObject {
     func toggleMute() {
         let next = !(controller?.isMuted ?? isMuted)
         controller?.setMuted(next)
-        isMuted = next
+        if isMuted != next { isMuted = next }
     }
 
     func skip(by delta: Double) {
         let target = max(0, min(durationSeconds, currentSeconds + delta))
         // ±10s must keep playing from the new time (never land paused).
         seek(to: target, resumeIfWanted: true)
-        isPlaying = true
+        if !isPlaying { isPlaying = true }
     }
 
     func beginScrub() {
@@ -195,7 +248,7 @@ final class ArchivePlayerBridge: ObservableObject {
         }
         controller?.endScrub(at: seconds ?? currentSeconds)
         // Scrub pause must never stick — UI + AppState stay "playing".
-        isPlaying = true
+        if !isPlaying { isPlaying = true }
     }
 }
 
@@ -230,8 +283,15 @@ struct MatteryaHubPlayerView: View {
     var onVideoSize: ((CGSize) -> Void)? = nil
 
     var allowsFullscreen: Bool = true
+    /// When true, FS chrome shows the exit icon (continuous landscape mode).
+    var isLandscapeFullscreen: Bool = false
     /// Keep the same AVPlayer when Sparks opens over hubs mini (resume mid-clip, no black).
     var protectAsContinuousHubs: Bool = false
+    /// Bumped by AppState.requestHubFullscreen (meta pull) to open landscape FS.
+    var externalFullscreenToken: Int = 0
+    /// Prefer this over remounting `MatteryaLandscapeFullscreenPlayer` (YouTube-smooth).
+    /// Continuous hubs + feed handoff set this to toggle AppState landscape FS.
+    var onFullscreenToggle: (() -> Void)? = nil
 
     @StateObject private var bridge = ArchivePlayerBridge()
     @State private var showChrome = false
@@ -253,7 +313,10 @@ struct MatteryaHubPlayerView: View {
         tapToRevealControls: Bool = false,
         isMuted: Binding<Bool> = .constant(false),
         allowsFullscreen: Bool = true,
+        isLandscapeFullscreen: Bool = false,
         protectAsContinuousHubs: Bool = false,
+        externalFullscreenToken: Int = 0,
+        onFullscreenToggle: (() -> Void)? = nil,
         onReady: (() -> Void)? = nil,
         onPlayingChange: ((Bool) -> Void)? = nil,
         onProgress: ((Double, Double) -> Void)? = nil,
@@ -272,7 +335,10 @@ struct MatteryaHubPlayerView: View {
         self.tapToRevealControls = tapToRevealControls
         self._isMuted = isMuted
         self.allowsFullscreen = allowsFullscreen
+        self.isLandscapeFullscreen = isLandscapeFullscreen
         self.protectAsContinuousHubs = protectAsContinuousHubs
+        self.externalFullscreenToken = externalFullscreenToken
+        self.onFullscreenToggle = onFullscreenToggle
         self.onReady = onReady
         self.onPlayingChange = onPlayingChange
         self.onProgress = onProgress
@@ -292,8 +358,8 @@ struct MatteryaHubPlayerView: View {
                 ArchiveVideoPlayerView(
                     url: url,
                     posterURL: posterURL,
-                    // Stay active under fullscreen cover so resume is reliable after dismiss.
-                    isActive: isActive && !showFullscreen,
+                    // Continuous / toggle FS keeps the same player active. Legacy cover remount pauses.
+                    isActive: isActive && (onFullscreenToggle != nil || !showFullscreen),
                     muted: isMuted,
                     startTime: startTime,
                     loops: loops,
@@ -313,8 +379,8 @@ struct MatteryaHubPlayerView: View {
                     },
                     onProgress: { current, duration in
                         guard !isScrubbing else { return }
-                        let playing = bridge.controller?.isPlaying
-                        bridge.publishProgress(current: current, duration: duration, playing: playing)
+                        // Play/pause edges arrive via onPlayingChanged — don't republish playing here.
+                        bridge.applyProgress(current: current, duration: duration, playing: nil)
                         onProgress?(current, duration)
                         if let postID, current >= 0.5 {
                             YouTubeCatalogService.shared.notePlaybackPosition(
@@ -360,9 +426,12 @@ struct MatteryaHubPlayerView: View {
                                     scheduleChromeHide()
                                 }
                                 if allowsFullscreen {
-                                    chromeIconButton(systemName: "arrow.up.left.and.arrow.down.right") {
-                                        showFullscreen = true
-                                        chromeHideTask?.cancel()
+                                    chromeIconButton(
+                                        systemName: isLandscapeFullscreen
+                                            ? "arrow.down.right.and.arrow.up.left"
+                                            : "arrow.up.left.and.arrow.down.right"
+                                    ) {
+                                        enterOrToggleFullscreen()
                                     }
                                 }
                             }
@@ -385,6 +454,7 @@ struct MatteryaHubPlayerView: View {
                 }
             }
         }
+        // Legacy remount cover only when no continuous toggle is wired (avoid double-player lag).
         .fullScreenCover(isPresented: $showFullscreen) {
             MatteryaLandscapeFullscreenPlayer(
                 url: url,
@@ -414,16 +484,27 @@ struct MatteryaHubPlayerView: View {
                 }
             )
         }
+        .onChange(of: externalFullscreenToken) { oldToken, newToken in
+            guard allowsFullscreen, newToken > 0, newToken != oldToken else { return }
+            // Token already flipped AppState landscape flag — keep chrome visible briefly.
+            chromeHideTask?.cancel()
+            if onFullscreenToggle == nil, !protectAsContinuousHubs {
+                showFullscreen = true
+            } else if showChrome == false {
+                showChrome = true
+                scheduleChromeHide()
+            }
+        }
         .onChange(of: isActive) { _, active in
             // Always setActive so userWantsPlayback + audio output are restored after pause.
             bridge.controller?.setActive(active)
             if !active {
-                bridge.isPlaying = false
+                bridge.publishPlaying(false)
             } else {
                 // Expand/mini / mini play button: re-assert mute from chrome, then resume.
                 bridge.controller?.setMuted(isMuted)
                 bridge.controller?.ensureContinuingPlayback()
-                bridge.isPlaying = true
+                bridge.publishPlaying(true)
             }
         }
         .onChange(of: showsControls) { _, visible in
@@ -469,6 +550,22 @@ struct MatteryaHubPlayerView: View {
             }
             // Do NOT teardown — keeps continuous full ↔ mini seamless.
         }
+    }
+
+    /// YouTube-smooth: prefer continuous same-player toggle; remount cover only as fallback.
+    private func enterOrToggleFullscreen() {
+        chromeHideTask?.cancel()
+        if let onFullscreenToggle {
+            onFullscreenToggle()
+            return
+        }
+        if protectAsContinuousHubs {
+            // Continuous hubs without a toggle wired — still avoid remount; no-op chrome.
+            showChrome = true
+            scheduleChromeHide()
+            return
+        }
+        showFullscreen = true
     }
 
     /// Center transport (like the provided Hubs chrome): −10s · play/pause · +10s, scrubber bottom.
@@ -535,8 +632,7 @@ struct MatteryaHubPlayerView: View {
                             }
                         },
                         onValueChanged: { fraction in
-                            guard bridge.durationSeconds > 0 else { return }
-                            bridge.currentSeconds = fraction * bridge.durationSeconds
+                            bridge.applyScrubFraction(fraction)
                         }
                     )
 
@@ -631,7 +727,7 @@ struct MatteryaHubPlayerView: View {
 
 // MARK: - Landscape fullscreen (hub / archive)
 
-/// Full-screen hub player. Unlocks landscape so tilting the device rotates playback.
+/// Full-screen hub player. Forces landscape on enter; aspect-fit so film never crops.
 struct MatteryaLandscapeFullscreenPlayer: View {
     let url: URL
     var posterURL: URL? = nil
@@ -659,6 +755,8 @@ struct MatteryaLandscapeFullscreenPlayer: View {
                 muted: isMuted,
                 startTime: startTime,
                 loops: false,
+                // Fullscreen = aspect-fit (letterbox/pillarbox OK). Never crop.
+                fillsFrame: false,
                 bridge: bridge,
                 onReady: {
                     bridge.publishReady(playing: true)
@@ -666,8 +764,7 @@ struct MatteryaLandscapeFullscreenPlayer: View {
                 },
                 onProgress: { current, duration in
                     guard !isScrubbing else { return }
-                    let playing = bridge.controller?.isPlaying
-                    bridge.publishProgress(current: current, duration: duration, playing: playing)
+                    bridge.applyProgress(current: current, duration: duration, playing: nil)
                 }
             )
             .ignoresSafeArea()
@@ -689,14 +786,12 @@ struct MatteryaLandscapeFullscreenPlayer: View {
         .persistentSystemOverlays(.hidden)
         .onAppear {
             isMuted = initialMuted
-            AppDelegate.orientationLock = .allButUpsideDown
-            Self.refreshSupportedOrientations()
+            AppOrientation.lock(.landscape, prefer: .landscapeRight)
             scheduleChromeHide()
         }
         .onDisappear {
             chromeHideTask?.cancel()
-            AppDelegate.orientationLock = .portrait
-            Self.refreshSupportedOrientations()
+            AppOrientation.lock(.portrait, prefer: .portrait)
         }
         .onChange(of: isMuted) { _, muted in
             bridge.controller?.setMuted(muted)
@@ -757,8 +852,7 @@ struct MatteryaLandscapeFullscreenPlayer: View {
                             }
                         },
                         onValueChanged: { fraction in
-                            guard bridge.durationSeconds > 0 else { return }
-                            bridge.currentSeconds = fraction * bridge.durationSeconds
+                            bridge.applyScrubFraction(fraction)
                         }
                     )
 
@@ -828,8 +922,7 @@ struct MatteryaLandscapeFullscreenPlayer: View {
 
     private func close() {
         chromeHideTask?.cancel()
-        AppDelegate.orientationLock = .portrait
-        Self.refreshSupportedOrientations()
+        AppOrientation.lock(.portrait, prefer: .portrait)
         onDismiss(isMuted, bridge.currentSeconds)
         dismiss()
     }
@@ -859,11 +952,38 @@ struct MatteryaLandscapeFullscreenPlayer: View {
         }
         return String(format: "%d:%02d", m, s)
     }
+}
 
-    private static func refreshSupportedOrientations() {
+/// Portrait-locked app; temporarily force landscape for hub fullscreen, then restore.
+enum AppOrientation {
+    static func lock(_ mask: UIInterfaceOrientationMask, prefer: UIInterfaceOrientation) {
+        AppDelegate.orientationLock = mask
         guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
         for window in scene.windows {
             window.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+        }
+        // Prefer the side the device is already tilted toward when entering landscape.
+        let resolvedPrefer: UIInterfaceOrientation = {
+            if mask.contains(.landscapeLeft) || mask.contains(.landscapeRight) {
+                switch scene.effectiveGeometry.interfaceOrientation {
+                case .landscapeLeft: return .landscapeLeft
+                case .landscapeRight: return .landscapeRight
+                default: return prefer
+                }
+            }
+            return prefer
+        }()
+        let geometryMask: UIInterfaceOrientationMask
+        switch resolvedPrefer {
+        case .landscapeLeft: geometryMask = .landscapeLeft
+        case .landscapeRight: geometryMask = .landscapeRight
+        case .portraitUpsideDown: geometryMask = .portraitUpsideDown
+        default: geometryMask = .portrait
+        }
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: geometryMask)) { _ in }
+        // Cover present can race the first geometry update — nudge once more next tick.
+        DispatchQueue.main.async {
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: geometryMask)) { _ in }
         }
     }
 }
@@ -934,7 +1054,7 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
     var startTime: Double = 0
     /// When true, loops the clip at end (Sparks). Avoids a dead pause after first playthrough.
     var loops: Bool = true
-    /// When true, fill the stage (no black bars). Hubs always fills.
+    /// When true, fill the stage (crop). Fullscreen + expanded hubs watch use false (fit).
     var fillsFrame: Bool = true
     /// Optional content id for continuity / engagement (not required for playback).
     var postID: String? = nil
@@ -1148,6 +1268,8 @@ final class ArchiveVideoPlayerController: UIViewController {
     private var resumeAfterScrub = true
     /// Last known playhead — used when remounting so mini↔full never restarts at 0.
     private var lastKnownSeconds: Double = 0
+    /// Last play/pause edge sent to SwiftUI — avoid republishing every time tick.
+    private var lastPublishedPlaying: Bool?
     /// Chrome / user mute — separate from forced silence when the Spark page is inactive.
     private var mutedFlag = false
     /// Epoch captured when this surface last became active (invalidated on page change).
@@ -1941,24 +2063,21 @@ final class ArchiveVideoPlayerController: UIViewController {
             observed.removeTimeObserver(timeObserver)
             self.timeObserver = nil
         }
-        let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
+        // ~2 Hz — enough for the timeline, light enough not to rebuild SwiftUI chrome every tick.
+        let interval = CMTime(seconds: 0.5, preferredTimescale: 600)
         timeObserver = observed.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
-            guard let self else { return }
+            guard let self, !self.isScrubbing else { return }
+            // Already on main (queue: .main) — do not nested-async (that lagged hubs chrome).
             let raw = time.seconds
             let current = raw.isFinite ? max(0, raw) : 0
             let duration = item.duration.seconds
             let dur = duration.isFinite && duration > 0 ? duration : 0
             let playing = observed.rate > 0.01
-            let scrubbing = self.isScrubbing
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                // While scrubbing, UI owns the playhead — don't fight the thumb or publish pause.
-                if !scrubbing {
-                    self.lastKnownSeconds = current
-                    // Always publish — parent must not rely on stale isActive captures.
-                    self.onProgress?(current, dur)
-                    self.onPlayingChanged?(playing)
-                }
+            self.lastKnownSeconds = current
+            self.onProgress?(current, dur)
+            if self.lastPublishedPlaying != playing {
+                self.lastPublishedPlaying = playing
+                self.onPlayingChanged?(playing)
             }
         }
     }
@@ -2245,21 +2364,18 @@ final class ArchiveVideoPlayerController: UIViewController {
             }
         }
 
-        let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
+        let interval = CMTime(seconds: 0.5, preferredTimescale: 600)
         timeObserver = newPlayer.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
-            guard let self else { return }
+            guard let self, !self.isScrubbing else { return }
             let current = max(0, time.seconds)
             let duration = item.duration.seconds
             let dur = duration.isFinite && duration > 0 ? duration : 0
             let playing = newPlayer.rate > 0.01
-            let scrubbing = self.isScrubbing
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                if !scrubbing {
-                    self.lastKnownSeconds = current
-                    self.onProgress?(current, dur)
-                    self.onPlayingChanged?(playing)
-                }
+            self.lastKnownSeconds = current
+            self.onProgress?(current, dur)
+            if self.lastPublishedPlaying != playing {
+                self.lastPublishedPlaying = playing
+                self.onPlayingChanged?(playing)
             }
         }
 
@@ -2335,9 +2451,8 @@ final class ArchiveVideoPlayerController: UIViewController {
     }
 
     private func configureAudioSession() {
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .moviePlayback, options: [])
-        try? session.setActive(true, options: [])
+        // Never setActive on main — SessionCore warns and freezes UI (chat composer during hubs).
+        MediaPlaybackCoordinator.shared.ensurePlaybackAudioSession()
     }
 
     private func loadPoster(_ url: URL?) {

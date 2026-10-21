@@ -933,6 +933,12 @@ struct FacebookPostCard: View {
                 fillsFrame: !isHubFilm,
                 bottomChromeReserve: 0,
                 autoplaySurface: autoplaySurface,
+                // Hubs on feed: FS → continuous landscape player (same buffer, no remount lag).
+                allowsFullscreen: isHubFilm,
+                onFullscreenRequest: isHubFilm ? {
+                    appState.startHubPlayback(post, expanded: true)
+                    appState.requestHubFullscreen()
+                } : nil,
                 onViewed: { Task { await PostsService.shared.recordView(post) } }
             )
         }

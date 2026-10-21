@@ -100,11 +100,12 @@ struct MainTabView: View {
             }
 
             // Continuous AVPlayer + mini chrome overlay (chips live on the film layer).
+            // Landscape FS: above tab bar so film owns the whole window (YouTube).
             GlobalHubPlaybackLayer(dockSlotGlobal: hubContinuousDockSlotGlobal)
-                .zIndex(55)
+                .zIndex(appState.hubPlaybackLandscapeFullscreen ? 280 : 55)
 
             // Tab bar pinned to the physical bottom of the ZStack.
-            if appState.navigationPath.isEmpty {
+            if appState.navigationPath.isEmpty, !appState.hubPlaybackLandscapeFullscreen {
                 BottomTabBar()
                     .frame(maxWidth: .infinity)
                     .zIndex(70)
@@ -126,8 +127,14 @@ struct MainTabView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onChange(of: appState.reelsViewerContext?.id) { _, newID in
-            MatteryaStatusBar.setSparksLightContent(newID != nil)
+        .onChange(of: appState.reelsViewerContext?.id) { _, _ in
+            syncStatusBarLightContent()
+        }
+        .onChange(of: appState.showAppMenu) { _, _ in
+            syncStatusBarLightContent()
+        }
+        .onChange(of: appState.hubPlaybackLandscapeFullscreen) { _, _ in
+            syncStatusBarLightContent()
         }
         .onPreferenceChange(HubContinuousVideoSlotKey.self) { frame in
             hubContinuousDockSlotGlobal = frame
@@ -135,7 +142,7 @@ struct MainTabView: View {
         // Keyboard dismiss is window-level (cancelsTouchesInView = false).
         // Root dismissKeyboardOnTap() blocked Settings List taps.
         .onAppear {
-            MatteryaStatusBar.setSparksLightContent(appState.reelsViewerContext != nil)
+            syncStatusBarLightContent()
             Keyboard.installDismissOnOutsideTap()
             appState.ensureHubPlaybackMinimizedIfNeeded()
             EngagementTracker.shared.screenOpened(appState.selectedTab.rawValue)
@@ -267,6 +274,15 @@ struct MainTabView: View {
         guard showsFloatingMiniBar else { return 0 }
         // No tab bar on pushed routes — mini sits at the bottom of the stack.
         return YouTubeMiniPlayerBar.barHeight
+    }
+
+    /// White notch clock / battery over dark overlays (side menu scrim, Sparks film).
+    private func syncStatusBarLightContent() {
+        MatteryaStatusBar.setLightContent(
+            appState.showAppMenu
+                || appState.reelsViewerContext != nil
+                || appState.hubPlaybackLandscapeFullscreen
+        )
     }
 
     @ViewBuilder

@@ -111,6 +111,9 @@ final class AppState {
     /// Bumped to request landscape fullscreen on the continuous Hubs player
     /// (meta drag-below-video, external chrome). GlobalHubPlaybackLayer observes.
     var hubPlaybackFullscreenToken: Int = 0
+    /// YouTube-style landscape fullscreen on the **same** continuous AVPlayer (no remount).
+    /// When true, GlobalHubPlaybackLayer fills the window + locks landscape + aspect-fit.
+    var hubPlaybackLandscapeFullscreen = false
     /// 0…1 live pull-to-fullscreen morph (meta grab). Layer expands stage toward full screen.
     var hubFullscreenPullProgress: CGFloat = 0
     /// Bumped when mini → expand should re-run even if already expanded.
@@ -343,8 +346,11 @@ final class AppState {
             }
             feedLeftAt = nil
         }
-        // Do not reshuffle Hubs on every tab hop — that reloaded catalog + thumbs and felt heavy.
-        // Pull-to-refresh / cold open still bumps hubsFreshSessionToken.
+        // Every Hubs tab open → new For you mix (server session + client rank).
+        // Skip while a hubs video is open/minimized so expand/morph stays smooth.
+        if new == .hubs, old != .hubs, hubPlaybackPost == nil {
+            hubsFreshSessionToken += 1
+        }
     }
 
     /// Reshuffle feed posts + strips (5+ min off feed). App open uses contentLoadGeneration.
@@ -1329,6 +1335,7 @@ final class AppState {
         if switchingVideo {
             // Soft page silence only — never pauseAll/silenceAllBuffered (wipes feed handoff).
             MediaPlaybackCoordinator.shared.silenceForSparkPageChange()
+            hubPlaybackVideoAspect = 16.0 / 9.0
             hubPlaybackPost = watchPost
         } else if hubPlaybackPost?.playableVideoURL == nil, watchPost.playableVideoURL != nil {
             hubPlaybackPost = watchPost
@@ -1392,6 +1399,10 @@ final class AppState {
     /// Chat messages stay warm in `MessagesService` cache so re-open is instant.
     func minimizeHubPlayback(returnToChat: Bool = true) {
         guard hubPlaybackPost != nil else { return }
+        // Landscape FS → portrait before shrinking to mini.
+        if hubPlaybackLandscapeFullscreen {
+            exitHubLandscapeFullscreen()
+        }
         // Never stop/pause mini — GlobalHubPlaybackLayer only resizes the stage.
         // Feed/profile autoplay must yield while mini is on.
         hubPlaybackPlaying = true
@@ -1472,11 +1483,30 @@ final class AppState {
         }
     }
 
-    /// YouTube: drag down on the meta strip under the video → landscape fullscreen.
+    /// YouTube: drag down on the meta strip / FS button → landscape fullscreen on the
+    /// **same** continuous player (no second AVPlayer / fullScreenCover remount).
     func requestHubFullscreen() {
-        guard hubPlaybackPost != nil, hubPlaybackExpanded else { return }
+        guard hubPlaybackPost != nil else { return }
+        // Ensure expanded watch first (feed handoff may call FS before expand settles).
+        if !hubPlaybackExpanded {
+            expandHubPlayback()
+        }
         hubFullscreenPullProgress = 0
+        guard !hubPlaybackLandscapeFullscreen else {
+            hubPlaybackFullscreenToken &+= 1
+            return
+        }
+        hubPlaybackLandscapeFullscreen = true
         hubPlaybackFullscreenToken &+= 1
+        AppOrientation.lock(.landscape, prefer: .landscapeRight)
+    }
+
+    /// Exit landscape FS → portrait expanded watch. Same AVPlayer keeps playing.
+    func exitHubLandscapeFullscreen() {
+        guard hubPlaybackLandscapeFullscreen else { return }
+        hubPlaybackLandscapeFullscreen = false
+        hubFullscreenPullProgress = 0
+        AppOrientation.lock(.portrait, prefer: .portrait)
     }
 
     /// Live grab progress while pulling meta toward fullscreen (0…1).
@@ -1488,6 +1518,10 @@ final class AppState {
     }
 
     func stopHubPlayback() {
+        if hubPlaybackLandscapeFullscreen {
+            hubPlaybackLandscapeFullscreen = false
+            AppOrientation.lock(.portrait, prefer: .portrait)
+        }
         hubPlaybackPost = nil
         hubPlaybackExpanded = false
         hubPlaybackPlaying = false
