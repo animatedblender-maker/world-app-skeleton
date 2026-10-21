@@ -184,14 +184,14 @@ final class ImageCache: @unchecked Sendable {
     }
 
     /// Feed cold-start warm: avatars + media so first scroll hits memory.
-    /// Photos warm at ≥720 (matches FeedPinchZoomPhoto) so tall Reddit memes never decode at 1080 mid-scroll.
+    /// Photos warm at ≥540 (matches FeedPinchZoomPhoto) so image cards stay scroll-light.
     /// Video posters stay at `maxPixelSize` (Frame0 / thumbs).
     func prefetchFeedMedia(_ posts: [CountryPost], maxPixelSize: CGFloat = 420) {
         // Avatars first — every feed card has one; media is secondary for text-heavy demos.
         // Must match AvatarView feed maxPixelSize (size 36 → max(72, 72) = 72) or cache misses.
         let avatarMax: CGFloat = 72
-        // Fling callers pass 320 for posters; photos still need 720 so display hits memory.
-        let photoMax: CGFloat = max(720, maxPixelSize)
+        // Fling callers pass 320 for posters; photos still need 540 so display hits memory.
+        let photoMax: CGFloat = max(540, maxPixelSize)
         var missingFrame0IDs: [String] = []
         var photoURLs: [URL] = []
         var posterURLs: [URL] = []
@@ -566,19 +566,31 @@ struct CachedAsyncImage: View {
             } else if image != nil {
                 return
             }
-            // Fast fling: wait — if the cell is recycled, .task cancels and we never download.
-            // Settled: short wait so first paint stays snappy without stampeding mid-scroll.
-            let delayNs: UInt64 = ScrollBudget.isFlinging ? 110_000_000 : 24_000_000
+            // Fast fling: wait longer — if the cell is recycled, .task cancels and we never download.
+            // Feed photos (≥480) wait out the fling so decoding does not hitch scroll
+            // (Sparks/Hubs cards skip this path and stay butter-smooth).
+            let photoHeavy = maxPixelSize >= 480
+            let delayNs: UInt64 = ScrollBudget.isFlinging
+                ? (photoHeavy ? 180_000_000 : 110_000_000)
+                : 24_000_000
             try? await Task.sleep(nanoseconds: delayNs)
             guard !Task.isCancelled else { return }
+            if photoHeavy {
+                // Still flinging after wait — skip apply; next settle .task will paint.
+                while ScrollBudget.isFlinging {
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                    guard !Task.isCancelled else { return }
+                }
+            }
             if let cached = ImageCache.shared.imageIfCached(for: url, maxPixelSize: maxPixelSize) {
                 image = cached
                 loadedURL = url.absoluteString
                 return
             }
             let loaded = await ImageCache.shared.image(for: url, maxPixelSize: maxPixelSize)
-            // Apply even if the task was cancelled after the download finished —
-            // SwiftUI cancels .task on fling; dropping the result left blank cells.
+            guard !Task.isCancelled else { return }
+            // Avoid assigning a large bitmap mid-fling (main-thread hitch on meme cards).
+            if photoHeavy, ScrollBudget.isFlinging { return }
             if let loaded {
                 image = loaded
                 loadedURL = url.absoluteString
@@ -615,8 +627,8 @@ final class FeedPhotoZoomGate {
 /// Zooms under the fingers; release springs back to 1×.
 struct FeedPinchZoomPhoto: View {
     let url: URL
-    /// Feed-width memes: 720 keeps pinch sharp without freezing scroll on tall Reddit cards.
-    var maxPixelSize: CGFloat = 720
+    /// Feed-width memes: 540 keeps scroll light; pinch still looks sharp on phone widths.
+    var maxPixelSize: CGFloat = 540
     var contentMode: ContentMode = .fit
     var placeholder: AnyView = AnyView(Theme.canvasMuted)
     var onZoomingChanged: ((Bool) -> Void)? = nil
@@ -644,7 +656,8 @@ struct FeedPinchZoomPhoto: View {
             .scaleEffect(scale)
             .offset(offset)
             .allowsHitTesting(false)
-            // Must fill the photo box — zero-size UIViewRepresentable never gets pinches.
+            // Pinch overlay must NOT steal 1-finger scroll (Sparks/Hubs stay smooth
+            // because they have no UIKit hit layer). Overlay only claims 2-finger / zoom.
             FeedPhotoPinchOverlay(
                 onBegan: {
                     setZooming(true)
@@ -662,16 +675,17 @@ struct FeedPinchZoomPhoto: View {
                     } completion: {
                         setZooming(false)
                     }
-                },
-                onTap: {
-                    guard !announcedZooming else { return }
-                    onTap?()
                 }
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .contentShape(Rectangle())
+            .allowsHitTesting(true)
         }
         .contentShape(Rectangle())
+        // Tap lives in SwiftUI so 1-finger scroll is never owned by the UIKit overlay.
+        .onTapGesture {
+            guard !isZooming else { return }
+            onTap?()
+        }
         .onDisappear {
             if announcedZooming {
                 announcedZooming = false
@@ -695,12 +709,11 @@ struct FeedPinchZoomPhoto: View {
     }
 }
 
-/// UIPinchGestureRecognizer host — two-finger pinch works inside ScrollView.
+/// UIPinchGestureRecognizer host — two-finger pinch only; 1-finger scroll passes through.
 private struct FeedPhotoPinchOverlay: UIViewRepresentable {
     var onBegan: () -> Void
     var onChanged: (_ scale: CGFloat, _ pan: CGSize) -> Void
     var onEnded: () -> Void
-    var onTap: () -> Void
 
     func makeUIView(context: Context) -> FeedPhotoPinchView {
         let view = FeedPhotoPinchView()
@@ -711,7 +724,6 @@ private struct FeedPhotoPinchOverlay: UIViewRepresentable {
         view.onBegan = onBegan
         view.onChanged = onChanged
         view.onEnded = onEnded
-        view.onTap = onTap
         return view
     }
 
@@ -719,7 +731,6 @@ private struct FeedPhotoPinchOverlay: UIViewRepresentable {
         uiView.onBegan = onBegan
         uiView.onChanged = onChanged
         uiView.onEnded = onEnded
-        uiView.onTap = onTap
     }
 }
 
@@ -727,11 +738,9 @@ private final class FeedPhotoPinchView: UIView, UIGestureRecognizerDelegate {
     var onBegan: (() -> Void)?
     var onChanged: ((CGFloat, CGSize) -> Void)?
     var onEnded: (() -> Void)?
-    var onTap: (() -> Void)?
 
     private var pinch: UIPinchGestureRecognizer!
     private var pan: UIPanGestureRecognizer!
-    private var tap: UITapGestureRecognizer!
     private var baseScale: CGFloat = 1
     private var liveScale: CGFloat = 1
     private var panTranslation: CGSize = .zero
@@ -739,10 +748,11 @@ private final class FeedPhotoPinchView: UIView, UIGestureRecognizerDelegate {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        // Transparent but hit-testable fill (clear UIColor alone can skip hits).
-        backgroundColor = UIColor.black.withAlphaComponent(0.001)
+        // Clear — hitTest decides when we own touches (2-finger / zoom only).
+        backgroundColor = .clear
         isMultipleTouchEnabled = true
         isUserInteractionEnabled = true
+        isOpaque = false
 
         pinch = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
         pinch.delegate = self
@@ -758,24 +768,11 @@ private final class FeedPhotoPinchView: UIView, UIGestureRecognizerDelegate {
         pan.cancelsTouchesInView = true
         pan.delaysTouchesBegan = false
         addGestureRecognizer(pan)
-
-        tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
-        tap.delegate = self
-        tap.cancelsTouchesInView = false
-        tap.require(toFail: pinch)
-        addGestureRecognizer(tap)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
 
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        // Keep gesture view covering the full photo bounds SwiftUI proposes.
-        if bounds.width < 1 || bounds.height < 1 { return }
-    }
-
-    /// Accept hits across the full bounds even when subviews are empty.
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         bounds.contains(point)
     }
@@ -814,36 +811,34 @@ private final class FeedPhotoPinchView: UIView, UIGestureRecognizerDelegate {
         }
     }
 
-    @objc private func handleTap(_ gr: UITapGestureRecognizer) {
-        guard !pinchActive, liveScale <= 1.02 else { return }
-        onTap?()
-    }
-
     func gestureRecognizer(
         _ gestureRecognizer: UIGestureRecognizer,
         shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
     ) -> Bool {
-        // Our pinch + 2-finger pan only. Never share with the ScrollView's 1-finger pan.
         if gestureRecognizer === pinch && other === pan { return true }
         if gestureRecognizer === pan && other === pinch { return true }
-        if other === pinch || other === pan { return false }
+        // Until a real pinch starts, let the feed UIScrollView pan run freely.
+        // Blocking it made image cards feel frozen while Sparks/Hubs stayed smooth.
+        if !pinchActive, other is UIPanGestureRecognizer, other !== pan {
+            return true
+        }
         return false
     }
 
-    // Do NOT make ScrollView pan wait for pinch to fail. Large Reddit/meme cards fill
-    // most of the viewport; requiring failure froze one-finger scroll whenever a photo
-    // was on screen. Pinch still wins once two fingers are down (see shouldBegin).
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldBeRequiredToFailBy other: UIGestureRecognizer
+    ) -> Bool {
+        // Never make the feed scroll wait on our pinch/pan.
+        false
+    }
 
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         if gestureRecognizer === pinch {
-            // Only claim the gesture when two fingers are already down — never stall 1-finger scroll.
             return gestureRecognizer.numberOfTouches >= 2
         }
         if gestureRecognizer === pan {
             return pinchActive || liveScale > 1.05
-        }
-        if gestureRecognizer === tap {
-            return !pinchActive && liveScale <= 1.02
         }
         return true
     }

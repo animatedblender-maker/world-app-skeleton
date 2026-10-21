@@ -663,16 +663,30 @@ struct FacebookPostCard: View {
     }
 
     private func captionBlock(text: String, topPadding: CGFloat, bottomPadding: CGFloat) -> some View {
-        ExpandableBodyText(
-            text: text,
-            collapsedLineLimit: 4,
-            font: .body,
-            color: Theme.inkSecondary,
-            lineSpacing: 4,
-            moreTitle: "See more",
-            lessTitle: "See less",
-            uiTextStyle: .body
-        )
+        // Image cards: plain line-limited Text — ExpandableBodyText's GeometryReader +
+        // UIKit truncation measure hitch Home scroll (Sparks/Hubs captions are short/absent).
+        Group {
+            if isImageOnlyPost {
+                Text(text)
+                    .font(.body)
+                    .foregroundStyle(Theme.inkSecondary)
+                    .lineSpacing(4)
+                    .lineLimit(4)
+                    .multilineTextAlignment(.leading)
+                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+            } else {
+                ExpandableBodyText(
+                    text: text,
+                    collapsedLineLimit: 4,
+                    font: .body,
+                    color: Theme.inkSecondary,
+                    lineSpacing: 4,
+                    moreTitle: "See more",
+                    lessTitle: "See less",
+                    uiTextStyle: .body
+                )
+            }
+        }
         // Small side margin so multi-line text stays readable on full-width cards.
         .padding(.horizontal, textGutter)
         .padding(.top, topPadding)
@@ -834,10 +848,11 @@ struct FacebookPostCard: View {
                     }
                 } else if let url = post.feedImageURL {
                     // UIKit pinch (ScrollView-safe); release springs back.
-                    // 720 (not 1080): tall Reddit memes at 1080 froze Home scroll on appear.
+                    // 540 decode + scroll-simultaneous pinch — image cards were freezing
+                    // Home while Sparks/Hubs (no pinch overlay) stayed smooth.
                     FeedPinchZoomPhoto(
                         url: url,
-                        maxPixelSize: 720,
+                        maxPixelSize: 540,
                         contentMode: .fit,
                         placeholder: AnyView(mediaPlaceholder),
                         onZoomingChanged: { zooming in
