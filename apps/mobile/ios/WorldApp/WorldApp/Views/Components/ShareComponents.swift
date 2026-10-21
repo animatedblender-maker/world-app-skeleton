@@ -234,6 +234,19 @@ struct SparkFeedCard: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+        .overlay(alignment: .topLeading) {
+            if post.isAdultContent {
+                Text("18+")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Color.black.opacity(0.72), in: Capsule())
+                    .padding(.horizontal, 12)
+                    .padding(.top, 10)
+                    .accessibilityLabel("18 plus content")
+            }
+        }
         // Mute only — no Sparks/Hubs origin badges on film.
         .overlay(alignment: .topTrailing) {
             SparkFeedMuteButton()
@@ -581,9 +594,12 @@ struct SharePostSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     VStack(alignment: .leading, spacing: 6) {
-                        if let headline = post.displayHeadline {
-                            Text(headline)
-                                .postHeadlineStyle(lineLimit: 2)
+                        // No headlines — show caption/body when present.
+                        if let caption = post.displayCaption ?? (post.displayBody.isEmpty ? nil : post.displayBody) {
+                            Text(caption)
+                                .font(.body)
+                                .foregroundStyle(Theme.ink)
+                                .lineLimit(3)
                         }
                         if let sourceCountryName {
                             Text("From \(sourceCountryName)")
@@ -685,6 +701,9 @@ struct SharePostSheet: View {
                     closeShareUI()
                 }
             }
+            // Nested sheet under Sparks dark chrome — lock paper so contact names show.
+            .preferredColorScheme(.light)
+            .environment(\.colorScheme, .light)
         }
         // Sheet-only chrome (feed share). Sparks uses an overlay host — no presentation detents.
         .modifier(ShareSheetPresentationModifier(enabled: !keepsSparksPlaying))
@@ -788,10 +807,23 @@ struct ShareMessagePickerSheet: View {
             Group {
                 if isLoading {
                     ProgressView("Loading conversations…")
+                        .tint(Theme.ink)
+                        .foregroundStyle(Theme.ink)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let errorMessage {
-                    ContentUnavailableView("Couldn't load messages", systemImage: "exclamationmark.bubble", description: Text(errorMessage))
+                    ContentUnavailableView(
+                        "Couldn't load messages",
+                        systemImage: "exclamationmark.bubble",
+                        description: Text(errorMessage)
+                    )
+                    .foregroundStyle(Theme.ink)
                 } else if conversations.isEmpty {
-                    ContentUnavailableView("No conversations yet", systemImage: "bubble.left.and.bubble.right", description: Text("Start a chat from someone's profile, then share here."))
+                    ContentUnavailableView(
+                        "No conversations yet",
+                        systemImage: "bubble.left.and.bubble.right",
+                        description: Text("Start a chat from someone's profile, then share here.")
+                    )
+                    .foregroundStyle(Theme.ink)
                 } else {
                     List(conversations) { conversation in
                         Button {
@@ -814,20 +846,38 @@ struct ShareMessagePickerSheet: View {
                                             .lineLimit(1)
                                     }
                                 }
+                                Spacer(minLength: 0)
                             }
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
+                        .listRowBackground(Theme.canvas)
+                        .listRowSeparatorTint(Theme.border.opacity(0.7))
                     }
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Theme.canvas.ignoresSafeArea())
             .navigationTitle(isSparkShare ? "Send \(MatteryaCopy.spark) to…" : "Send to…")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(Theme.canvas, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarColorScheme(.light, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .foregroundStyle(Theme.ink)
                 }
             }
             .task { await load() }
         }
+        // Sparks forces dark scheme for the film; this picker must stay paper/white
+        // so Theme.ink names remain readable (dark List + ink = invisible).
+        .preferredColorScheme(.light)
+        .environment(\.colorScheme, .light)
+        .presentationBackground(Theme.canvas)
     }
 
     private var isSparkShare: Bool {
