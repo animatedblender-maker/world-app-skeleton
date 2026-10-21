@@ -56,15 +56,10 @@ struct PostCardView: View {
                     .foregroundStyle(Theme.ink)
                     .lineLimit(1)
                 if let location = post.authorLocationLabel {
-                    HStack(spacing: 4) {
-                        if let flag = post.authorLocationFlag {
-                            Text(flag).font(.caption2)
-                        }
-                        Text(location)
-                            .font(.caption)
-                            .foregroundStyle(Theme.inkMuted)
-                            .lineLimit(1)
-                    }
+                    Text(location)
+                        .font(.caption)
+                        .foregroundStyle(Theme.inkMuted)
+                        .lineLimit(1)
                 }
             }
             Spacer()
@@ -185,14 +180,14 @@ struct PostCardView: View {
                 .buttonStyle(.plain)
             }
 
-            if let title = post.displayTitle, !title.isEmpty {
-                Text(title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Theme.ink)
-            }
-
+            // No headlines — caption/body only.
             if !post.displayExcerpt.isEmpty, post.mediaURL != nil || post.thumbURL != nil {
                 Text(post.displayExcerpt)
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.ink)
+                    .lineLimit(3)
+            } else if !post.displayBody.isEmpty {
+                Text(post.displayBody)
                     .font(.subheadline)
                     .foregroundStyle(Theme.ink)
                     .lineLimit(3)

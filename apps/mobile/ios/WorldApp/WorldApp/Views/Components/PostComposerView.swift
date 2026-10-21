@@ -49,7 +49,7 @@ struct PostComposerView: View {
                         if let quotedEmbed {
                             SharedPostEmbedView(embed: quotedEmbed)
                         }
-                        titleField
+                        // No headlines on posts — caption/body only.
                         bodyField
                         PostVisibilityControl(visibility: $visibility)
                         mediaSection
@@ -113,17 +113,14 @@ struct PostComposerView: View {
                     .font(.headline.weight(.semibold))
                     .foregroundStyle(Theme.ink)
 
-                HStack(spacing: 6) {
-                    Text(countryFlag(country.iso))
-                    Text(MatteryaCopy.postToYourFeed)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Theme.accent)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(Theme.accentSoft, in: Capsule())
+                Text(MatteryaCopy.postToYourFeed)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.accent)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Theme.accentSoft, in: Capsule())
             }
 
             Spacer(minLength: 0)
@@ -361,14 +358,6 @@ struct PostComposerView: View {
             authorID: post.authorID,
             author: post.author
         )
-    }
-
-    private func countryFlag(_ iso: String) -> String {
-        let code = iso.uppercased()
-        guard code.count == 2 else { return "🌍" }
-        let base: UInt32 = 127397
-        let scalars = code.unicodeScalars.compactMap { UnicodeScalar(base + $0.value) }
-        return String(String.UnicodeScalarView(scalars))
     }
 
     private func submit() async {
