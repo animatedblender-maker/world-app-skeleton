@@ -17,12 +17,14 @@ struct VideoThumbnailView: View {
     @State private var frameImage: UIImage?
     /// Live Frame 0 from /v1/poster — refreshes cells after dead r2.dev thumbs are rejected.
     @State private var liveFrame0URL: URL?
+    /// URLs that 403/failed decode — skip so LongForm YouTube / Frame0 can win.
+    @State private var failedPosterKeys: Set<String> = []
 
     var body: some View {
         ZStack {
-            // Video thumbs stay black until Frame 0 paints (never paper/cream flash).
+            // Soft canvas until a real poster paints (black forever looked “broken”).
             if post.hasVideo {
-                Color.black
+                Theme.canvasDeep
             }
 
             if let posterURL = resolvedPosterURL {
@@ -30,7 +32,10 @@ struct VideoThumbnailView: View {
                     url: posterURL,
                     maxPixelSize: maxPixelSize,
                     contentMode: contentMode,
-                    placeholder: post.hasVideo ? AnyView(Color.black) : placeholder
+                    placeholder: post.hasVideo ? AnyView(Theme.canvasDeep) : placeholder,
+                    onLoadFailed: { failed in
+                        failedPosterKeys.insert(failed.absoluteString)
+                    }
                 )
             } else if let videoURL = post.playableVideoURL ?? MediaURLResolver.videoURL(for: post) {
                 // R2 Sparks/Hubs often lack a usable thumb until Frame0 is signed.
@@ -46,7 +51,12 @@ struct VideoThumbnailView: View {
                     .resizable()
                     .aspectRatio(contentMode: contentMode)
             } else if post.hasVideo {
-                Color.black
+                Theme.canvasDeep
+                    .overlay {
+                        Image(systemName: "film")
+                            .font(.title3)
+                            .foregroundStyle(Theme.inkMuted.opacity(0.55))
+                    }
             } else {
                 placeholder
             }
@@ -86,19 +96,22 @@ struct VideoThumbnailView: View {
         }
     }
 
-    /// Prefer usable Frame 0 / IA / thumbs — never dead pub-*.r2.dev or expired presigns.
+    /// Prefer usable Frame 0, then **instant LongForm YouTube**, then other posters.
+    /// Dead/expired R2 must not block YouTube hqdefault or every Hubs tile stays black.
     private var resolvedPosterURL: URL? {
+        let yt = MediaURLResolver.r2LongformYouTubePosterURL(for: post)
         let candidates: [URL?] = [
             liveFrame0URL,
             Frame0PosterCache.url(for: post.id),
+            // Paint LongForm immediately — Frame0 can upgrade when the batch lands.
+            yt,
             MediaURLResolver.hubsListPosterURL(for: post),
             post.posterImageURL,
             post.feedImageURL,
-            // LongForm packs often encode a YouTube id — instant poster while Frame0 catches up.
-            MediaURLResolver.r2LongformYouTubePosterURL(for: post),
         ]
         for candidate in candidates {
             guard let url = candidate, MediaURLResolver.isUsablePosterURL(url) else { continue }
+            if failedPosterKeys.contains(url.absoluteString) { continue }
             return url
         }
         return nil
@@ -178,13 +191,13 @@ struct FrameZeroFallbackPoster: View {
 
     var body: some View {
         ZStack {
-            Color.black
+            Theme.canvasDeep
             if let url = remotePosterURL ?? seedPosterURL ?? Frame0PosterCache.url(for: postID) {
                 CachedAsyncImage(
                     url: url,
                     maxPixelSize: 720,
                     contentMode: fillsFrame ? .fill : .fit,
-                    placeholder: AnyView(Color.clear)
+                    placeholder: AnyView(Theme.canvasDeep)
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()

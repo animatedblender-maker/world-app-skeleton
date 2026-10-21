@@ -52,9 +52,9 @@ actor Frame0PosterResolver {
     private var cache: [String: CacheEntry] = [:]
     private var inflight: [String: Task<URL?, Never>] = [:]
     private let cacheTTL: TimeInterval = 6 * 3600
-    /// Cap parallel single-poster GETs — keep low while Feed+Hubs stay dual-mounted.
+    /// Cap parallel single-poster GETs — enough for Netflix rails without starving thumbs.
     private var activeFetches = 0
-    private let maxConcurrentFetches = 2
+    private let maxConcurrentFetches = 4
     private var fetchWaiters: [CheckedContinuation<Void, Never>] = []
     /// Coalesce overlapping prefetch windows (Feed + Hubs + Sparks open-path).
     private var batchInFlight = false

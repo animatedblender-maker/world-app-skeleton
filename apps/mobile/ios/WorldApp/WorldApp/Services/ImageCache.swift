@@ -522,6 +522,8 @@ struct CachedAsyncImage: View {
     var maxPixelSize: CGFloat = 720
     var contentMode: ContentMode = .fill
     var placeholder: AnyView?
+    /// Called when the URL is blocked or the download/decode returns nil — parents can try the next poster.
+    var onLoadFailed: ((URL) -> Void)? = nil
     @State private var image: UIImage?
     @State private var loadedURL: String?
 
@@ -553,11 +555,12 @@ struct CachedAsyncImage: View {
                 loadedURL = nil
                 return
             }
-            // Dead pub-*.r2.dev / expired R2 embeds — skip fetch so Frame0 can win.
+            // Dead pub-*.r2.dev / expired R2 embeds — skip fetch so Frame0 / YouTube can win.
             if MediaURLResolver.isBlockedR2PublicURL(url)
                 || (!MediaURLResolver.isUsablePosterURL(url) && MediaURLResolver.looksLikeR2HostedURL(url)) {
                 image = nil
                 loadedURL = nil
+                onLoadFailed?(url)
                 return
             }
             // Keep prior frame while a new URL loads (reduces flash on recycle).
@@ -598,6 +601,8 @@ struct CachedAsyncImage: View {
             if let loaded {
                 image = loaded
                 loadedURL = url.absoluteString
+            } else {
+                onLoadFailed?(url)
             }
         }
     }

@@ -217,14 +217,14 @@ struct YouTubeVideoThumbnail: View {
     }
 
     private var matteryaPlaceholder: some View {
-        // Video thumbs: Sparks black floor (no cream flash). Photos keep soft canvas.
+        // Soft canvas while posters load — pure black looked like a broken thumb.
         Group {
             if post.hasVideo {
-                Color.black
+                Theme.canvasDeep
                     .overlay {
                         Image(systemName: "film")
                             .font(.title3)
-                            .foregroundStyle(Color.white.opacity(0.35))
+                            .foregroundStyle(Theme.inkMuted.opacity(0.45))
                     }
             } else {
                 Rectangle()

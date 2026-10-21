@@ -915,51 +915,19 @@ struct YouTubeAppView: View {
                                 )
                             }
 
-                            // Endless vertical browse — every R2 long-form eventually appears here
-                            // with a poster (rails alone cannot surface the full inventory).
-                            if !stableDiscoverVideos.isEmpty {
-                                Text("Browse all")
-                                    .font(.title3.weight(.bold))
-                                    .foregroundStyle(Theme.ink)
-                                    .padding(.horizontal, Theme.pagePadding)
-                                    .padding(.top, 8)
-
-                                ForEach(
-                                    Array(stableDiscoverVideos.enumerated()),
-                                    id: \.offset
-                                ) { index, post in
-                                    YouTubeVideoListRow(post: post, onTap: {
-                                        openVideo(post)
-                                    }, onAppearRow: {
-                                        ensureMoreForYou(around: index)
-                                        Task(priority: .utility) {
-                                            await Frame0PosterResolver.shared.prefetch(
-                                                postIDs: [post.id]
-                                            )
-                                        }
-                                        if ScrollBudget.isFlinging {
-                                            scheduleSettledThumbWarm(around: index)
-                                            return
-                                        }
-                                        ImageCache.shared.prefetchHubsWindow(
-                                            posts: stableDiscoverVideos,
-                                            around: index,
-                                            behind: 1,
-                                            ahead: 4
-                                        )
-                                        let lo = max(0, index - 1)
-                                        let hi = min(stableDiscoverVideos.count, index + 5)
-                                        if lo < hi {
-                                            Task(priority: .utility) {
-                                                await Frame0PosterResolver.shared.prefetch(
-                                                    postIDs: Array(
-                                                        stableDiscoverVideos[lo..<hi].map(\.id)
-                                                    )
-                                                )
-                                            }
-                                        }
-                                    })
-                                    .padding(.bottom, 18)
+                            // Endless Netflix rows — chunk the For-you pool into more shelves
+                            // as you scroll (pure horizontal cinema, no vertical list).
+                            ForEach(hubsMoreWatchRails, id: \.id) { rail in
+                                hubsNetflixRail(
+                                    title: rail.title,
+                                    posts: rail.posts,
+                                    cardWidth: 168,
+                                    onNearEnd: {
+                                        ensureMoreForYou(around: max(0, stableDiscoverVideos.count - 1))
+                                    }
+                                )
+                                .onAppear {
+                                    ensureMoreForYou(around: max(0, stableDiscoverVideos.count - 1))
                                 }
                             }
 
@@ -1015,6 +983,12 @@ struct YouTubeAppView: View {
         let posts: [CountryPost]
     }
 
+    private struct HubsMoreRail: Identifiable, Sendable {
+        let id: String
+        let title: String
+        let posts: [CountryPost]
+    }
+
     /// Former top chips → horizontal vibe rails (people-uploaded shelves).
     private var hubsVibeRails: [HubsVibeRail] {
         let heroID = hubsHeroPost?.id
@@ -1034,7 +1008,38 @@ struct YouTubeAppView: View {
         return rails
     }
 
-    /// Pull thin pages for each vibe slug so R2 long-form fills Netflix shelves + Browse all.
+    /// Extra Netflix rows carved from the growing For-you pool (skip what upper rails already show).
+    private var hubsMoreWatchRails: [HubsMoreRail] {
+        let heroID = hubsHeroPost?.id
+        let vibeIDs = Set(hubsVibeRails.flatMap(\.posts.map(\.id)))
+        let peopleCap = max(48, hubsDisplayLimit)
+        let peopleIDs = Set(
+            stableDiscoverVideos
+                .filter { $0.id != heroID }
+                .prefix(peopleCap)
+                .map(\.id)
+        )
+        let continueIDs = Set(continueWatching.prefix(24).map(\.id))
+        let skip = vibeIDs.union(peopleIDs).union(continueIDs).union(Set([heroID].compactMap { $0 }))
+        let rest = stableDiscoverVideos.filter { !skip.contains($0.id) }
+        let chunk = 18
+        var rails: [HubsMoreRail] = []
+        var offset = 0
+        var row = 0
+        let titles = ["Because you watched", "Fresh uploads", "Keep browsing", "More from people", "Still more"]
+        while offset < rest.count {
+            let slice = Array(rest[offset..<min(offset + chunk, rest.count)])
+            guard slice.count >= 4 else { break }
+            let title = titles[min(row, titles.count - 1)]
+            rails.append(HubsMoreRail(id: "more-\(row)", title: title, posts: slice))
+            offset += chunk
+            row += 1
+            if row >= 12 { break }
+        }
+        return rails
+    }
+
+    /// Pull thin pages for each vibe slug so R2 long-form fills Netflix shelves.
     private func densifyVibeShelvesFromNetwork() async {
         guard appState.selectedTab == .hubs, appState.hubPlaybackPost == nil else { return }
         for slug in HubVideoSeedService.hubOrder {
@@ -2112,7 +2117,7 @@ struct YouTubeAppView: View {
             return
         }
         let thumbPx = YouTubeMediaLayout.hubsListThumbMaxPixel
-        // Dense first paint: Browse all head + hero/continue + first vibe shelves.
+        // Dense first paint: For-you head + hero/continue + first vibe shelves.
         let head = stableDiscoverVideos.isEmpty
             ? videos.filter { !$0.isReel && $0.playableVideoURL != nil }
             : stableDiscoverVideos

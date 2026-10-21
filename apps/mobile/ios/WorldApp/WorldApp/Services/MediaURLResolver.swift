@@ -83,17 +83,30 @@ enum MediaURLResolver {
     }
 
     static func imageURL(for post: CountryPost) -> URL? {
+        let mt = (post.mediaType ?? "").lowercased()
+        // Demoted meme packs keep a `.mp4` key with JPEG bytes + types:["image"].
+        let declaredImage = mt == "image" || mt == "photo" || mt == "gif"
         if let payload = post.mediaPayload {
             let pairs = zip(payload.urls, payload.types)
             for (url, type) in pairs where type.lowercased() == "image" {
-                if let resolved = resolve(url), !isVideoURL(resolved) { return resolved }
+                if let resolved = resolve(url) {
+                    if declaredImage || !isVideoURL(resolved) { return resolved }
+                }
             }
-            for url in payload.urls {
-                if let resolved = resolve(url), !isVideoURL(resolved) { return resolved }
+            if declaredImage {
+                for url in payload.urls {
+                    if let resolved = resolve(url) { return resolved }
+                }
+            } else {
+                for url in payload.urls {
+                    if let resolved = resolve(url), !isVideoURL(resolved) { return resolved }
+                }
             }
         }
 
-        if let media = resolve(post.mediaURL), !isVideoURL(media) { return media }
+        if let media = resolve(post.mediaURL) {
+            if declaredImage || !isVideoURL(media) { return media }
+        }
         if let thumb = resolve(post.thumbURL), !isVideoURL(thumb) { return thumb }
         return nil
     }
@@ -107,13 +120,14 @@ enum MediaURLResolver {
         if let thumb = resolve(post.thumbURL), !isVideoURL(thumb), isUsablePosterURL(thumb) {
             return thumb
         }
-        // Matterya R2 LongForm/Sparks: never use YouTube hqdefault (wrong pixels vs Frame 0).
-        // Nil → FrameZeroFallback /v1/poster (dead pub-*.r2.dev must not win the race).
+        // Matterya R2: Frame 0 first, then any usable image, then LongForm YouTube
+        // hqdefault — never return nil for LongForm or Hubs tiles stay black forever.
         if hasMatteryaR2VideoKey(post) {
             if let img = imageURL(for: post), isUsablePosterURL(img) { return img }
+            if let yt = r2LongformYouTubePosterURL(for: post) { return yt }
             return nil
         }
-        // Non-R2 legacy only.
+        // Non-R2 legacy.
         if let yt = r2LongformYouTubePosterURL(for: post) { return yt }
         if let img = imageURL(for: post), isUsablePosterURL(img) { return img }
         return nil
@@ -463,6 +477,14 @@ extension CountryPost {
     }
     /// Never fall through to expired / banned r2.dev thumbs after posterURL rejects them.
     var feedImageURL: URL? {
+        let mt = (mediaType ?? "").lowercased()
+        // Image posts: prefer the photo URL (even demoted `.mp4` JPEG keys) over Frame0 video posters.
+        if mt == "image" || mt == "photo" || mt == "gif" {
+            if let img = MediaURLResolver.imageURL(for: self),
+               MediaURLResolver.isUsablePosterURL(img) {
+                return img
+            }
+        }
         if let poster = MediaURLResolver.posterURL(for: self) { return poster }
         guard let img = MediaURLResolver.imageURL(for: self),
               MediaURLResolver.isUsablePosterURL(img)
