@@ -43,6 +43,8 @@ struct FacebookPostCard: View {
     @State private var showReportConfirm = false
     @State private var actionBusy = false
     @State private var actionMessage: String?
+    /// Instagram-style pinch on the photo — lifts above clip until release.
+    @State private var isPhotoPinching = false
 
     private var isOwnPost: Bool {
         guard let userID = appState.currentProfile?.userID else { return false }
@@ -135,27 +137,50 @@ struct FacebookPostCard: View {
         return true
     }
 
-    /// Source channel under the sharer's name: “Shared from The Archive”.
-    private var sharedByLine: String? {
-        guard isFeedReshareCard, let channel = originChannelDisplayName else { return nil }
-        return "Shared from \(channel)"
+    /// Source channel / creator for feed re-shares — never brand labels like “Sparks” / “Matterya Hubs”.
+    private struct OriginSource: Equatable {
+        let name: String
+        let authorID: String
+        let username: String?
     }
 
-    /// Channel / creator the Hubs video or Spark originally came from.
-    private var originChannelDisplayName: String? {
+    /// Clickable channel name under the sharer (opens that channel or profile).
+    private var originSource: OriginSource? {
+        guard isFeedReshareCard else { return nil }
+
         if let origin = HubOriginShareMarker.originPresentation(from: post) {
             let n = origin.authorDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !n.isEmpty { return n }
-        }
-        if let an = SparkShareMarker.originChannelName(from: post.body) {
-            return an
-        }
-        if let embed = post.sharedPost?.asCountryPost {
-            let n = embed.authorDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !n.isEmpty, embed.authorID != post.authorID {
-                return n
+            if isUsableOriginName(n) {
+                return OriginSource(
+                    name: n,
+                    authorID: origin.authorID,
+                    username: origin.author?.username
+                )
             }
         }
+
+        if let an = SparkShareMarker.originChannelName(from: post.body), isUsableOriginName(an) {
+            let stampedID = SparkShareMarker.originAuthorID(from: post.body) ?? ""
+            let embed = post.sharedPost?.asCountryPost
+            let authorID = !stampedID.isEmpty
+                ? stampedID
+                : (embed?.authorID ?? "")
+            let username = SparkShareMarker.originUsername(from: post.body)
+                ?? (embed?.authorID == authorID ? embed?.author?.username : nil)
+            return OriginSource(name: an, authorID: authorID, username: username)
+        }
+
+        if let embed = post.sharedPost?.asCountryPost {
+            let n = embed.authorDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if isUsableOriginName(n), embed.authorID != post.authorID {
+                return OriginSource(
+                    name: n,
+                    authorID: embed.authorID,
+                    username: embed.author?.username
+                )
+            }
+        }
+
         // Archive / seed media without stamp fields.
         if PlayPlatformBridge.isArchiveCatalogMedia(post)
             || post.isHubSeedVideo
@@ -164,21 +189,72 @@ struct FacebookPostCard: View {
                     ?? post.sharedPost?.asCountryPost.authorID
                     ?? ""
             ) {
-            return HubVideoSeedService.archiveChannelDisplayName
+            return OriginSource(
+                name: HubVideoSeedService.archiveChannelDisplayName,
+                authorID: HubVideoSeedService.archiveChannelAuthorID,
+                username: HubVideoSeedService.archiveChannelUsername
+            )
         }
-        // Hubs long-form feed share — prefer channel identity over generic brand.
+
+        // Hubs long-form feed share — channel identity only (never brand fallback).
         if isHubOriginShareCard {
-            let creator = PlayPlatformBridge.displayCreator(for: post).name
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if !creator.isEmpty, creator != post.authorDisplayName {
-                return creator
+            let creator = PlayPlatformBridge.displayCreator(for: post)
+            let n = creator.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            if isUsableOriginName(n),
+               n != post.authorDisplayName,
+               creator.authorID != post.authorID {
+                return OriginSource(
+                    name: n,
+                    authorID: creator.authorID,
+                    username: creator.username
+                )
             }
-            return MatteryaCopy.matteryaHubs
         }
-        if opensAsSpark {
-            return MatteryaCopy.sparks
-        }
+
         return nil
+    }
+
+    private func isUsableOriginName(_ name: String) -> Bool {
+        let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !n.isEmpty else { return false }
+        let normalized = n.replacingOccurrences(of: "\u{00A0}", with: " ")
+        if normalized.caseInsensitiveCompare(MatteryaCopy.sparks) == .orderedSame { return false }
+        if normalized.caseInsensitiveCompare(MatteryaCopy.spark) == .orderedSame { return false }
+        let hubs = MatteryaCopy.matteryaHubs.replacingOccurrences(of: "\u{00A0}", with: " ")
+        if normalized.caseInsensitiveCompare(hubs) == .orderedSame { return false }
+        if normalized.caseInsensitiveCompare("Matterya Hubs") == .orderedSame { return false }
+        return true
+    }
+
+    @ViewBuilder
+    private var originSourceLink: some View {
+        if let origin = originSource {
+            sharedFromOriginLink(origin)
+        }
+    }
+
+    /// “Shared from {Name}” — prefix plain, name underlined + tappable (feed + journal).
+    @ViewBuilder
+    private func sharedFromOriginLink(_ origin: OriginSource) -> some View {
+        HStack(spacing: 4) {
+            Text("Shared from")
+                .font(.caption)
+                .foregroundStyle(Theme.inkMuted)
+            Button {
+                openOriginSource(origin)
+            } label: {
+                Text(origin.name)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.ink)
+                    .underline(true, color: Theme.ink.opacity(0.45))
+                    .lineLimit(1)
+            }
+            .buttonStyle(.plain)
+        }
+        .lineLimit(1)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Shared from \(origin.name)")
+        .accessibilityHint("Opens channel or profile")
     }
 
     /// Subtle location under the author name (country name only — no flag).
@@ -241,9 +317,14 @@ struct FacebookPostCard: View {
                 journalHeader
             }
 
-            // Image posts: body/caption sits above the photo only.
-            if isImageOnlyPost, !post.displayBody.isEmpty {
-                captionBlock(text: post.displayBody, topPadding: 4, bottomPadding: 10)
+            // Image posts: caption above the photo (body, or title text when body empty — never as a headline).
+            if isImageOnlyPost {
+                let caption = !post.displayBody.isEmpty
+                    ? post.displayBody
+                    : (post.displayTitle ?? "")
+                if !caption.isEmpty {
+                    captionBlock(text: caption, topPadding: 4, bottomPadding: 10)
+                }
             }
 
             // Sparks first — shared Sparks must be Spark cards (never Hubs long-form chrome).
@@ -373,10 +454,13 @@ struct FacebookPostCard: View {
         .background(edgeToEdge ? Theme.canvas : Theme.surface)
         // Sparks / Hubs shares: do NOT clip actions into the media rounded card —
         // film clips itself; like/share/save/comments sit under on the canvas.
+        // Photo pinch also skips clip so the image can grow under the fingers.
         .modifier(FeedCardClipModifier(
             shape: cardShape,
-            clipWholeCard: !(edgeToEdge && (opensAsSpark || showsPlayLinkInFeed))
+            clipWholeCard: !isPhotoPinching
+                && !(edgeToEdge && (opensAsSpark || showsPlayLinkInFeed))
         ))
+        .zIndex(isPhotoPinching ? 200 : 0)
         .overlay {
             if !edgeToEdge {
                 cardShape
@@ -468,11 +552,8 @@ struct FacebookPostCard: View {
                     }
                 }
 
-                if let sharedByLine {
-                    Text(sharedByLine)
-                        .font(.caption)
-                        .foregroundStyle(Theme.inkMuted)
-                        .lineLimit(1)
+                if originSource != nil {
+                    originSourceLink
                 } else {
                     authorLocationLine
                 }
@@ -532,11 +613,8 @@ struct FacebookPostCard: View {
                             }
                         }
 
-                        if let sharedByLine {
-                            Text(sharedByLine)
-                                .font(.caption)
-                                .foregroundStyle(Theme.inkMuted)
-                                .lineLimit(1)
+                        if originSource != nil {
+                            originSourceLink
                         } else {
                             authorLocationLine
                         }
@@ -562,27 +640,26 @@ struct FacebookPostCard: View {
             }
             .padding(.horizontal, horizontalGutter)
 
-            // Only an explicit post title here — never a body prefix (that duplicated captions).
-            if let title = post.displayTitle, !title.isEmpty {
-                Text(title)
-                    .postHeadlineStyle(lineLimit: 4)
+            // No headlines on posts — body/caption only. Keep 18+ mark when needed.
+            if post.isAdultContent {
+                Text("18+")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(Theme.surface)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Theme.ink.opacity(0.85), in: Capsule())
                     .padding(.horizontal, horizontalGutter)
-                    .contentShape(Rectangle())
-                    .onTapGesture { openPrimaryDestination() }
+                    .accessibilityLabel("18 plus content")
             }
 
-            // Hubs channel attribution under the title (share / channel long-form).
-            if showsPlayLinkInFeed, let channelLine = hubChannelAttributionLine {
-                Text(channelLine)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Theme.inkMuted)
-                    .lineLimit(1)
+            // Hubs channel attribution — “Shared from {underlined name}”.
+            if showsPlayLinkInFeed, let channel = hubChannelAttributionSource {
+                sharedFromOriginLink(channel)
                     .padding(.horizontal, horizontalGutter)
-                    .padding(.top, post.displayTitle != nil ? 2 : 0)
             }
         }
         .padding(.top, 16)
-        .padding(.bottom, post.displayTitle != nil || showsPlayLinkInFeed || isImageOnlyPost ? 12 : 10)
+        .padding(.bottom, showsPlayLinkInFeed || isImageOnlyPost ? 12 : 10)
     }
 
     private func captionBlock(text: String, topPadding: CGFloat, bottomPadding: CGFloat) -> some View {
@@ -605,30 +682,33 @@ struct FacebookPostCard: View {
         .onTapGesture { openPrimaryDestination() }
     }
 
-    /// Extra channel line under journal titles only when the name row does **not** already
-    /// show `sharedByLine` (avoids “Shared from …” twice on feed + profile share cards).
+    /// Extra channel link under journal titles only when the name row does **not** already
+    /// show the origin source (avoids duplicating the channel name on feed + profile cards).
     /// Native hub_* posts already show the channel as the author — no extra line.
-    private var hubChannelAttributionLine: String? {
+    private var hubChannelAttributionSource: OriginSource? {
         // Re-shares: only under the name once — never again under the title.
         if isFeedReshareCard { return nil }
-        // Name row already has sharedByLine when present.
-        if sharedByLine != nil { return nil }
+        if originSource != nil { return nil }
         guard showsPlayLinkInFeed else { return nil }
         // Channel is already the name card for The Archive / hub seed posts.
         if HubVideoSeedService.isArchiveChannelAuthor(post.authorID) {
             return nil
         }
-        if let caption = post.displayCaption, !caption.isEmpty {
-            if caption.localizedCaseInsensitiveContains("from ") {
-                return caption
-            }
-            return "From \(caption) · \(MatteryaCopy.matteryaHubs)"
-        }
         if post.hubSlug != nil || post.isHubSeedVideo {
-            return "From \(HubVideoSeedService.archiveChannelDisplayName) · \(MatteryaCopy.matteryaHubs)"
+            return OriginSource(
+                name: HubVideoSeedService.archiveChannelDisplayName,
+                authorID: HubVideoSeedService.archiveChannelAuthorID,
+                username: HubVideoSeedService.archiveChannelUsername
+            )
         }
-        if HubChannelPostMarker.isMarked(post.body) {
-            return "Shared from \(MatteryaCopy.matteryaHubs)"
+        let creator = PlayPlatformBridge.displayCreator(for: post)
+        let n = creator.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if isUsableOriginName(n), creator.authorID != post.authorID {
+            return OriginSource(
+                name: n,
+                authorID: creator.authorID,
+                username: creator.username
+            )
         }
         return nil
     }
@@ -753,11 +833,16 @@ struct FacebookPostCard: View {
                         feedVideoPoster
                     }
                 } else if let url = post.feedImageURL {
-                    CachedAsyncImage(
+                    // UIKit pinch (ScrollView-safe); release springs back.
+                    FeedPinchZoomPhoto(
                         url: url,
-                        maxPixelSize: 420,
-                        contentMode: .fill,
-                        placeholder: AnyView(mediaPlaceholder)
+                        maxPixelSize: 1080,
+                        contentMode: .fit,
+                        placeholder: AnyView(mediaPlaceholder),
+                        onZoomingChanged: { zooming in
+                            isPhotoPinching = zooming
+                        },
+                        onTap: { openMedia() }
                     )
                 } else {
                     mediaPlaceholder
@@ -771,23 +856,16 @@ struct FacebookPostCard: View {
                 // Hubs only: compact 16:9 (no black gaps). Sparks/photos keep tall/aspect sizing.
                 isHubCompact: PlayPlatformBridge.isHubFeedCardVideo(post)
                     || PlayPlatformBridge.isHubCatalogContent(post)
-                    || isHubOriginShareCard
+                    || isHubOriginShareCard,
+                // Pinch zoom must escape the media box.
+                clipsContent: !isPhotoPinching
             ))
-            .clipped()
-            .overlay(alignment: .bottom) {
-                if !post.hasVideo {
-                    LinearGradient(
-                        colors: [.clear, Theme.ink.opacity(0.14)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .frame(height: 60)
-                }
-            }
+            .zIndex(isPhotoPinching ? 80 : 0)
             .contentShape(Rectangle())
-            // Autoplay video owns taps (controls/scrub). Posters/images still open media.
+            // Videos/posters: tap opens. Photos use FeedPinchZoomPhoto.onTap (UIKit).
             .onTapGesture {
-                guard !isFeedAutoplayVideo else { return }
+                guard !isFeedAutoplayVideo, !isPhotoPinching else { return }
+                if post.feedImageURL != nil, !post.hasVideo { return }
                 openMedia()
             }
             .padding(.top, usesYouTubeVideoFrame || showsAuthorHeader || !post.displayExcerpt.isEmpty ? 0 : 8)
@@ -954,12 +1032,6 @@ struct FacebookPostCard: View {
                 .buttonStyle(.plain)
             }
 
-            if showsAuthorHeader, let title = post.displayTitle, !title.isEmpty {
-                Text(title)
-                    .postHeadlineStyle(lineLimit: 3)
-            }
-
-
         }
         .padding(.horizontal, horizontalGutter)
         .padding(.bottom, 14)
@@ -1064,6 +1136,27 @@ struct FacebookPostCard: View {
             return
         }
         appState.openPublicProfile(username: creator.username, userID: creator.authorID)
+    }
+
+    /// Origin channel / creator under a re-share — Hubs channel when stamped as one, else profile.
+    private func openOriginSource(_ source: OriginSource) {
+        let id = source.authorID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let username = source.username?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if id.isEmpty {
+            if let username, !username.isEmpty {
+                appState.openPlayChannel(username: username)
+            }
+            return
+        }
+        if id.hasPrefix("hub_")
+            || HubVideoSeedService.isArchiveChannelAuthor(id)
+            || isHubOriginShareCard
+            || PlayPlatformBridge.isHubOriginShare(post) {
+            appState.openPlayChannel(authorID: id, username: username)
+            return
+        }
+        appState.openPublicProfile(username: username, userID: id)
     }
 
     /// Share/hub cards: comments live on the **origin** post id when stamped.
@@ -1427,6 +1520,8 @@ private struct FeedMediaSizeModifier: ViewModifier {
     let photoAspect: CGFloat
     let usesYouTubeFrame: Bool
     var isHubCompact: Bool = false
+    /// False while pinching a photo so scaleEffect can grow past the box.
+    var clipsContent: Bool = true
 
     @ViewBuilder
     func body(content: Content) -> some View {
@@ -1435,13 +1530,17 @@ private struct FeedMediaSizeModifier: ViewModifier {
             let height = isHubCompact
                 ? FacebookMediaLayout.hubFeedVideoHeight()
                 : FacebookMediaLayout.dominantFeedVideoHeight()
-            content
+            let sized = content
                 .frame(minWidth: 0, maxWidth: .infinity)
                 .frame(height: height)
-                .clipped()
                 .contentShape(Rectangle())
+            if clipsContent {
+                sized.clipped()
+            } else {
+                sized
+            }
         } else {
-            content
+            let sized = content
                 .frame(minWidth: 0, maxWidth: .infinity)
                 .aspectRatio(aspect, contentMode: .fit)
                 .frame(
@@ -1451,8 +1550,12 @@ private struct FeedMediaSizeModifier: ViewModifier {
                         ? FacebookMediaLayout.maxFeedMediaHeight
                         : FacebookMediaLayout.maxFeedMediaHeight
                 )
-                .clipped()
                 .contentShape(Rectangle())
+            if clipsContent {
+                sized.clipped()
+            } else {
+                sized
+            }
         }
     }
 }

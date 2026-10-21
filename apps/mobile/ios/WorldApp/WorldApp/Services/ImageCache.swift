@@ -1,5 +1,6 @@
 import CryptoKit
 import ImageIO
+import Observation
 import SwiftUI
 import UIKit
 
@@ -587,6 +588,266 @@ struct CachedAsyncImage: View {
     private var taskID: String {
         guard let url else { return "nil" }
         return "\(url.absoluteString)|\(Int(maxPixelSize))"
+    }
+}
+
+/// Locks Home feed scrolling while a photo is pinched (Instagram-style).
+@MainActor
+@Observable
+final class FeedPhotoZoomGate {
+    static let shared = FeedPhotoZoomGate()
+    private(set) var isZooming = false
+    private var depth = 0
+
+    func begin() {
+        depth += 1
+        isZooming = true
+    }
+
+    func end() {
+        depth = max(0, depth - 1)
+        if depth == 0 { isZooming = false }
+    }
+}
+
+/// Feed photo: UIKit pinch (ScrollView swallows SwiftUI MagnificationGesture).
+/// Zooms under the fingers; release springs back to 1×.
+struct FeedPinchZoomPhoto: View {
+    let url: URL
+    var maxPixelSize: CGFloat = 1080
+    var contentMode: ContentMode = .fit
+    var placeholder: AnyView = AnyView(Theme.canvasMuted)
+    var onZoomingChanged: ((Bool) -> Void)? = nil
+    var onTap: (() -> Void)? = nil
+
+    @State private var scale: CGFloat = 1
+    @State private var offset: CGSize = .zero
+    @State private var announcedZooming = false
+
+    private var isZooming: Bool { scale > 1.01 || announcedZooming }
+
+    var body: some View {
+        ZStack {
+            Theme.canvasMuted
+            if isZooming {
+                Color.black.opacity(min(0.55, Double(max(scale, 1.15) - 1) * 0.35))
+                    .allowsHitTesting(false)
+            }
+            CachedAsyncImage(
+                url: url,
+                maxPixelSize: maxPixelSize,
+                contentMode: contentMode,
+                placeholder: placeholder
+            )
+            .scaleEffect(scale)
+            .offset(offset)
+            .allowsHitTesting(false)
+            // Must fill the photo box — zero-size UIViewRepresentable never gets pinches.
+            FeedPhotoPinchOverlay(
+                onBegan: {
+                    setZooming(true)
+                },
+                onChanged: { next, pan in
+                    let clamped = min(max(next, 1), 4)
+                    setZooming(true)
+                    scale = clamped
+                    offset = pan
+                },
+                onEnded: {
+                    withAnimation(.interpolatingSpring(stiffness: 260, damping: 28)) {
+                        scale = 1
+                        offset = .zero
+                    } completion: {
+                        setZooming(false)
+                    }
+                },
+                onTap: {
+                    guard !announcedZooming else { return }
+                    onTap?()
+                }
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+        }
+        .contentShape(Rectangle())
+        .onDisappear {
+            if announcedZooming {
+                announcedZooming = false
+                onZoomingChanged?(false)
+                FeedPhotoZoomGate.shared.end()
+            }
+            scale = 1
+            offset = .zero
+        }
+    }
+
+    private func setZooming(_ zooming: Bool) {
+        guard zooming != announcedZooming else { return }
+        announcedZooming = zooming
+        onZoomingChanged?(zooming)
+        if zooming {
+            FeedPhotoZoomGate.shared.begin()
+        } else {
+            FeedPhotoZoomGate.shared.end()
+        }
+    }
+}
+
+/// UIPinchGestureRecognizer host — two-finger pinch works inside ScrollView.
+private struct FeedPhotoPinchOverlay: UIViewRepresentable {
+    var onBegan: () -> Void
+    var onChanged: (_ scale: CGFloat, _ pan: CGSize) -> Void
+    var onEnded: () -> Void
+    var onTap: () -> Void
+
+    func makeUIView(context: Context) -> FeedPhotoPinchView {
+        let view = FeedPhotoPinchView()
+        view.isUserInteractionEnabled = true
+        view.isMultipleTouchEnabled = true
+        view.backgroundColor = .clear
+        view.isOpaque = false
+        view.onBegan = onBegan
+        view.onChanged = onChanged
+        view.onEnded = onEnded
+        view.onTap = onTap
+        return view
+    }
+
+    func updateUIView(_ uiView: FeedPhotoPinchView, context: Context) {
+        uiView.onBegan = onBegan
+        uiView.onChanged = onChanged
+        uiView.onEnded = onEnded
+        uiView.onTap = onTap
+    }
+}
+
+private final class FeedPhotoPinchView: UIView, UIGestureRecognizerDelegate {
+    var onBegan: (() -> Void)?
+    var onChanged: ((CGFloat, CGSize) -> Void)?
+    var onEnded: (() -> Void)?
+    var onTap: (() -> Void)?
+
+    private var pinch: UIPinchGestureRecognizer!
+    private var pan: UIPanGestureRecognizer!
+    private var tap: UITapGestureRecognizer!
+    private var baseScale: CGFloat = 1
+    private var liveScale: CGFloat = 1
+    private var panTranslation: CGSize = .zero
+    private var pinchActive = false
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        // Transparent but hit-testable fill (clear UIColor alone can skip hits).
+        backgroundColor = UIColor.black.withAlphaComponent(0.001)
+        isMultipleTouchEnabled = true
+        isUserInteractionEnabled = true
+
+        pinch = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
+        pinch.delegate = self
+        pinch.cancelsTouchesInView = true
+        pinch.delaysTouchesBegan = false
+        pinch.delaysTouchesEnded = false
+        addGestureRecognizer(pinch)
+
+        pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
+        pan.delegate = self
+        pan.minimumNumberOfTouches = 2
+        pan.maximumNumberOfTouches = 2
+        pan.cancelsTouchesInView = true
+        pan.delaysTouchesBegan = false
+        addGestureRecognizer(pan)
+
+        tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+        tap.delegate = self
+        tap.cancelsTouchesInView = false
+        tap.require(toFail: pinch)
+        addGestureRecognizer(tap)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        // Keep gesture view covering the full photo bounds SwiftUI proposes.
+        if bounds.width < 1 || bounds.height < 1 { return }
+    }
+
+    /// Accept hits across the full bounds even when subviews are empty.
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        bounds.contains(point)
+    }
+
+    @objc private func handlePinch(_ gr: UIPinchGestureRecognizer) {
+        switch gr.state {
+        case .began:
+            pinchActive = true
+            baseScale = max(liveScale, 1)
+            panTranslation = .zero
+            // Lock feed scroll immediately — before scale exceeds 1×.
+            onBegan?()
+            liveScale = min(max(baseScale * gr.scale, 1), 4)
+            onChanged?(liveScale, panTranslation)
+        case .changed:
+            liveScale = min(max(baseScale * gr.scale, 1), 4)
+            onChanged?(liveScale, panTranslation)
+        case .ended, .cancelled, .failed:
+            pinchActive = false
+            liveScale = 1
+            baseScale = 1
+            panTranslation = .zero
+            onEnded?()
+        default:
+            break
+        }
+    }
+
+    @objc private func handlePan(_ gr: UIPanGestureRecognizer) {
+        guard pinchActive || liveScale > 1.05 else { return }
+        let t = gr.translation(in: self)
+        panTranslation = CGSize(width: t.x, height: t.y)
+        onChanged?(max(liveScale, 1.05), panTranslation)
+        if gr.state == .ended || gr.state == .cancelled {
+            panTranslation = .zero
+        }
+    }
+
+    @objc private func handleTap(_ gr: UITapGestureRecognizer) {
+        guard !pinchActive, liveScale <= 1.02 else { return }
+        onTap?()
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+    ) -> Bool {
+        // Our pinch + 2-finger pan only. Never share with the ScrollView's 1-finger pan.
+        if gestureRecognizer === pinch && other === pan { return true }
+        if gestureRecognizer === pan && other === pinch { return true }
+        if other === pinch || other === pan { return false }
+        if gestureRecognizer === pinch { return true }
+        return false
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldBeRequiredToFailBy other: UIGestureRecognizer
+    ) -> Bool {
+        // ScrollView pan waits for our pinch to fail → 2-finger pinch wins the race.
+        if gestureRecognizer === pinch, other is UIPanGestureRecognizer, other !== pan {
+            return true
+        }
+        return false
+    }
+
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if gestureRecognizer === pan {
+            return pinchActive || liveScale > 1.05
+        }
+        if gestureRecognizer === tap {
+            return !pinchActive && liveScale <= 1.02
+        }
+        return true
     }
 }
 

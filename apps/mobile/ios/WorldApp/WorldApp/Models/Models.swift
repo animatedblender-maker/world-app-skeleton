@@ -1023,21 +1023,50 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
         if isReel || isSpark {
             return "spark:\(id.lowercased())"
         }
-        // Same media file (strip signed query) — share + original often differ only by id.
-        if let media = playableVideoURL?.absoluteString
-            ?? primaryMediaURL
-            ?? mediaPayload?.primaryURL {
-            let bare = media.split(separator: "?").first.map(String.init) ?? media
-            let lower = bare.lowercased()
-            if lower.contains("r2") || lower.contains("mp4") || lower.contains("video") {
-                return "media:\(lower)"
-            }
-        }
+        // Prefer stable R2 object key (same meme often re-seeded under new post ids).
         if let r2 = mediaPayload?.r2Key?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased(),
            !r2.isEmpty {
             return "r2:\(r2)"
+        }
+        if let raw = mediaURL,
+           let regex = try? NSRegularExpression(pattern: "\"r2_key\"\\s*:\\s*\"([^\"]+)\"", options: .caseInsensitive),
+           let m = regex.firstMatch(in: raw, range: NSRange(raw.startIndex..., in: raw)),
+           let r = Range(m.range(at: 1), in: raw) {
+            let key = String(raw[r]).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if !key.isEmpty { return "r2:\(key)" }
+        }
+        // Same media file (strip signed query) — share + original often differ only by id.
+        // Images must key by URL too (jpg/png/webp) or the same meme repeats under new ids.
+        if let media = playableVideoURL?.absoluteString
+            ?? feedImageURL?.absoluteString
+            ?? primaryMediaURL
+            ?? mediaPayload?.primaryURL {
+            let bare = media.split(separator: "?").first.map(String.init) ?? media
+            let lower = bare.lowercased()
+            if lower.contains("r2")
+                || lower.contains("mp4")
+                || lower.contains("video")
+                || lower.contains(".jpg")
+                || lower.contains(".jpeg")
+                || lower.contains(".png")
+                || lower.contains(".webp")
+                || lower.contains(".gif")
+                || lower.contains("image")
+                || hasImage {
+                return "media:\(lower)"
+            }
+        }
+        // Image/text with identical caption — collapse near-dupes from re-seeds.
+        let mt = (mediaType ?? "").lowercased()
+        if mt == "image" || mt == "photo" || mt == "gif" || hasImage {
+            let caption = (displayTitle ?? displayBody)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            if caption.count >= 12 {
+                return "imgcap:\(caption.prefix(160))"
+            }
         }
         return "id:\(id.lowercased())"
     }

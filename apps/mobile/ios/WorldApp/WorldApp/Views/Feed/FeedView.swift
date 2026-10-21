@@ -4,6 +4,8 @@ import SwiftUI
 struct FeedView: View {
     @Environment(AppState.self) private var appState
     @State private var store = HomeFeedStore.shared
+    /// @Observable singleton — Bindable so scrollDisabled tracks pinch begin/end.
+    @Bindable private var photoZoomGate = FeedPhotoZoomGate.shared
 
     @State private var continueWatching: [CountryPost] = []
     @State private var newOnPlay: [CountryPost] = []
@@ -228,6 +230,8 @@ struct FeedView: View {
                 .padding(.bottom, 16)
                 .animation(MatteryaMotion.insert, value: store.pendingUploads.map(\.id))
             }
+            // Hold the feed still while pinching a photo (Instagram-style).
+            .scrollDisabled(photoZoomGate.isZooming)
             .onChange(of: appState.feedScrollToTopToken) { _, _ in
                 withAnimation(MatteryaMotion.scroll) {
                     if let firstUpload = store.pendingUploads.first {
@@ -379,10 +383,14 @@ struct FeedView: View {
             )
         }
 
-        // Frame 0 for Continue watching / New on Hubs — dead r2.dev / expired thumbs must not stick.
-        let hubsStrip = Array((continueWatching + newOnPlay).prefix(8))
+        // Dense Hubs thumb path + Frame 0 for every Continue watching / New on Hubs card.
+        // Balanced-light prefetchPostThumbnails (cap 4) left most strip tiles black.
+        let hubsStrip = Array(continueWatching + newOnPlay)
         if !hubsStrip.isEmpty {
-            ImageCache.shared.prefetchPostThumbnails(hubsStrip, maxPixelSize: 320, aggressive: false)
+            ImageCache.shared.prefetchHubsListThumbnails(
+                hubsStrip,
+                maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel
+            )
             Task(priority: .utility) {
                 await Frame0PosterResolver.shared.prefetch(postIDs: hubsStrip.map(\.id))
             }
@@ -528,6 +536,15 @@ struct FeedView: View {
             pools.append(fast)
         }
         continueWatching = buildContinueWatching(pools: pools, allowSeed: false)
+        if !continueWatching.isEmpty {
+            ImageCache.shared.prefetchHubsListThumbnails(
+                continueWatching,
+                maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel
+            )
+            Task(priority: .utility) {
+                await Frame0PosterResolver.shared.prefetch(postIDs: continueWatching.map(\.id))
+            }
+        }
     }
 
     private func buildContinueWatching(pools: [[CountryPost]], allowSeed: Bool) -> [CountryPost] {

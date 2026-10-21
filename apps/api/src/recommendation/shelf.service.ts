@@ -826,6 +826,7 @@ async function fetchHomeLaneRows(opts: {
       )
     `;
   } else if (opts.kind === 'image') {
+    // Over-fetch a bit — caller dedupes near-identical media/captions.
     where += `
       and lower(coalesce(p.media_type, '')) in ('image', 'photo', 'gif')
       and p.media_url is not null
@@ -835,10 +836,12 @@ async function fetchHomeLaneRows(opts: {
     `;
   } else {
     // Pure text / status posts — never video or image cards.
+    // Drop DE/AT forum corpus from Home (German/Austrian written source).
     where += `
       and lower(coalesce(p.media_type, '')) not in ('story', 'moment', 'video', 'reel', 'spark', 'image', 'photo', 'gif')
       and coalesce(p.body, '') not ilike '%__spark__%'
       and coalesce(p.body, '') not ilike '%__hub_origin__%'
+      and upper(coalesce(p.country_code, '')) not in ('DE', 'AT')
       and (
         lower(coalesce(p.media_type, '')) in ('none', 'text')
         or (
@@ -880,6 +883,33 @@ function advanceLaneCursor(
   return { createdAt: toIso(last.created_at), id: last.id };
 }
 
+/** Collapse image re-seeds that share the same file / caption. */
+function dedupeHomeImageRows(rows: RawPostRow[]): RawPostRow[] {
+  const seen = new Set<string>();
+  const out: RawPostRow[] = [];
+  for (const row of rows) {
+    const key = homeImageDedupeKey(row);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+  }
+  return out;
+}
+
+function homeImageDedupeKey(row: RawPostRow): string {
+  const media = String(row.media_url ?? '');
+  const r2 = media.match(/"r2_key"\s*:\s*"([^"]+)"/i)?.[1];
+  if (r2) return `r2:${r2.toLowerCase()}`;
+  const url = media.match(/https?:\/\/[^"'\\\s?]+/i)?.[0];
+  if (url) return `url:${url.toLowerCase().split('?')[0]}`;
+  const caption = `${row.title ?? ''}\n${row.body ?? ''}`
+    .trim()
+    .toLowerCase()
+    .slice(0, 160);
+  if (caption.length >= 12) return `cap:${caption}`;
+  return `id:${row.id}`;
+}
+
 /**
  * Home feed thin page — even mix of Sparks, Hubs, images, and text.
  * Four independent cursors so ShortForm flood never buries LongForm / written.
@@ -891,8 +921,9 @@ export async function fetchHomeFeedPage(input: {
   viewerUserId?: string | null;
 }): Promise<SurfacePage> {
   const want = Math.min(Math.max(Number(input.limit) || 24, 1), 64);
-  // Even mix: ~1/4 each lane; over-fetch slightly so weave can fill gaps.
+  // Even mix: ~1/4 each lane; image lane over-fetches for media/caption dedupe.
   const perLane = Math.max(2, Math.ceil(want / 4) + 1);
+  const imageLaneWant = perLane + 4;
   const homeCur = decodeHomeFeedCursor(input.cursor);
   const hasCol = await hasHubSlugColumn();
   const slugSelect = hasCol ? 'p.hub_slug' : 'null::text as hub_slug';
@@ -921,7 +952,7 @@ export async function fetchHomeFeedPage(input: {
         }),
         fetchHomeLaneRows({
           kind: 'image',
-          limit: perLane,
+          limit: imageLaneWant,
           cursor: homeCur.image,
           slugSelect,
           under18,
@@ -947,7 +978,7 @@ export async function fetchHomeFeedPage(input: {
     }
     sparkRows = timed[0].filter(mediaLooksSpark);
     hubRows = timed[1].filter(mediaLooksHub);
-    imageRows = timed[2].filter(isHomeImageRow);
+    imageRows = dedupeHomeImageRows(timed[2].filter(isHomeImageRow));
     textRows = timed[3].filter(isHomeTextRow);
   } catch (err: any) {
     console.error('[feed] four-lane query failed', err?.message ?? err);
@@ -968,6 +999,7 @@ export async function fetchHomeFeedPage(input: {
   ];
   const woven: RawPostRow[] = [];
   const seen = new Set<string>();
+  const seenImageMedia = new Set<string>();
   let guard = 0;
   while (woven.length < want && guard < want * 4) {
     guard += 1;
@@ -977,6 +1009,11 @@ export async function fetchHomeFeedPage(input: {
       while (lane.i < lane.rows.length) {
         const row = lane.rows[lane.i++];
         if (seen.has(row.id)) continue;
+        if (lane.kind === 'image') {
+          const mediaKey = homeImageDedupeKey(row);
+          if (seenImageMedia.has(mediaKey)) continue;
+          seenImageMedia.add(mediaKey);
+        }
         seen.add(row.id);
         woven.push(row);
         progressed = true;

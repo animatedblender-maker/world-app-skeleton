@@ -817,6 +817,17 @@ final class HomeFeedStore {
             .excludingDeletedPosts()
             .forHomeFeed()
             .filter { under18 ? !$0.isAdultContent : true }
+            // Home: drop German/Austrian written (forum) posts — keep DE/AT images & videos.
+            .filter { post in
+                guard PlayPlatformBridge.isWrittenHomePost(post) else { return true }
+                let mt = (post.mediaType ?? "").lowercased()
+                let isImage = mt == "image" || mt == "photo" || mt == "gif" || post.feedImageURL != nil
+                if isImage { return true }
+                let cc = (post.countryCode ?? post.author?.countryCode ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .uppercased()
+                return cc != "DE" && cc != "AT"
+            }
         guard !base.isEmpty else { return [] }
         return base.filter { post in
             if PlayPlatformBridge.isWrittenHomePost(post) { return true }
