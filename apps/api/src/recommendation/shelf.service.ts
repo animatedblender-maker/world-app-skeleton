@@ -984,8 +984,9 @@ export async function fetchHomeFeedPage(input: {
   viewerUserId?: string | null;
 }): Promise<SurfacePage> {
   const want = Math.min(Math.max(Number(input.limit) || 24, 1), 64);
-  // Even mix: ~1/4 each lane; image lane over-fetches for media/caption dedupe.
-  const perLane = Math.max(2, Math.ceil(want / 4) + 1);
+  // Text lane paused — forum/written cards were freezing Home scroll.
+  // Mix spark / hub / image only (~1/3 each); image over-fetches for dedupe.
+  const perLane = Math.max(2, Math.ceil(want / 3) + 1);
   const imageLaneWant = perLane + 4;
   const homeCur = decodeHomeFeedCursor(input.cursor);
   const hasCol = await hasHubSlugColumn();
@@ -995,7 +996,7 @@ export async function fetchHomeFeedPage(input: {
   let sparkRows: RawPostRow[] = [];
   let hubRows: RawPostRow[] = [];
   let imageRows: RawPostRow[] = [];
-  let textRows: RawPostRow[] = [];
+  const textRows: RawPostRow[] = [];
   try {
     const timed = await Promise.race([
       Promise.all([
@@ -1020,18 +1021,11 @@ export async function fetchHomeFeedPage(input: {
           slugSelect,
           under18,
         }),
-        fetchHomeLaneRows({
-          kind: 'text',
-          limit: perLane,
-          cursor: homeCur.text,
-          slugSelect,
-          under18,
-        }),
       ]),
       new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 7000)),
     ]);
     if (timed === 'timeout') {
-      console.error('[feed] four-lane query timed out after 7s');
+      console.error('[feed] three-lane query timed out after 7s');
       return {
         surface: 'home_for_you',
         items: [],
@@ -1043,9 +1037,8 @@ export async function fetchHomeFeedPage(input: {
     sparkRows = dedupeHomeMediaRows(timed[0].filter(mediaLooksSpark));
     hubRows = dedupeHomeMediaRows(timed[1].filter(mediaLooksHub));
     imageRows = dedupeHomeImageRows(timed[2].filter(isHomeImageRow));
-    textRows = timed[3].filter(isHomeTextRow);
   } catch (err: any) {
-    console.error('[feed] four-lane query failed', err?.message ?? err);
+    console.error('[feed] three-lane query failed', err?.message ?? err);
     return {
       surface: 'home_for_you',
       items: [],
@@ -1054,12 +1047,11 @@ export async function fetchHomeFeedPage(input: {
     };
   }
 
-  // Round-robin: spark → hub → image → text (skip empty lanes).
+  // Round-robin: spark → hub → image (text lane off).
   const lanes: { kind: HomeLaneKind; rows: RawPostRow[]; i: number }[] = [
     { kind: 'spark', rows: sparkRows, i: 0 },
     { kind: 'hub', rows: hubRows, i: 0 },
     { kind: 'image', rows: imageRows, i: 0 },
-    { kind: 'text', rows: textRows, i: 0 },
   ];
   const woven: RawPostRow[] = [];
   const seen = new Set<string>();
@@ -1073,6 +1065,8 @@ export async function fetchHomeFeedPage(input: {
       while (lane.i < lane.rows.length) {
         const row = lane.rows[lane.i++];
         if (seen.has(row.id)) continue;
+        // Defense: never weave pure text even if a media lane misclassifies.
+        if (isHomeTextRow(row)) continue;
         const aliases = homeMediaAliasKeys(row);
         if (aliases.some((k) => seenMedia.has(k))) continue;
         seen.add(row.id);
@@ -1098,14 +1092,14 @@ export async function fetchHomeFeedPage(input: {
     spark: advanceLaneCursor(sparkRows, lanes[0].i, homeCur.spark),
     hub: advanceLaneCursor(hubRows, lanes[1].i, homeCur.hub),
     image: advanceLaneCursor(imageRows, lanes[2].i, homeCur.image),
-    text: advanceLaneCursor(textRows, lanes[3].i, homeCur.text),
+    // Freeze text cursor — lane paused so old cursors don't resurrect forum rows.
+    text: homeCur.text,
   };
-  // Keep paging while any lane still has a full slice (more inventory behind the cursor).
+  // Keep paging while any active lane still has a full slice.
   const hasMore =
     sparkRows.length >= perLane ||
     hubRows.length >= perLane ||
     imageRows.length >= perLane ||
-    textRows.length >= perLane ||
     liveItems.length >= want;
 
   return {

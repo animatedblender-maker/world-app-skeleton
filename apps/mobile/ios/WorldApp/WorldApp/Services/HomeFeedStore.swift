@@ -817,16 +817,20 @@ final class HomeFeedStore {
             .excludingDeletedPosts()
             .forHomeFeed()
             .filter { under18 ? !$0.isAdultContent : true }
-            // Home: drop German/Austrian written (forum) posts — keep DE/AT images & videos.
+            // Home: drop pure text/written cards (forum corpus freezes scroll). Keep images + video.
             .filter { post in
-                guard PlayPlatformBridge.isWrittenHomePost(post) else { return true }
                 let mt = (post.mediaType ?? "").lowercased()
-                let isImage = mt == "image" || mt == "photo" || mt == "gif" || post.feedImageURL != nil
-                if isImage { return true }
-                let cc = (post.countryCode ?? post.author?.countryCode ?? "")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                    .uppercased()
-                return cc != "DE" && cc != "AT"
+                if mt == "none" || mt == "text" { return false }
+                let hasMedia =
+                    post.hasVideo
+                    || post.hasImage
+                    || post.feedImageURL != nil
+                    || post.playableVideoURL != nil
+                    || mt == "image" || mt == "photo" || mt == "gif"
+                    || mt == "video" || mt == "reel" || mt == "spark"
+                if hasMedia { return true }
+                // Body-only written post with no attachment.
+                return !PlayPlatformBridge.isWrittenHomePost(post)
             }
         guard !base.isEmpty else { return [] }
         return base.filter { post in
