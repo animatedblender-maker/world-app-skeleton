@@ -7,16 +7,19 @@ import { CallService, IncomingCall } from './core/services/call.service';
 import { AuthService } from './core/services/auth.service';
 import { NotificationsService } from './core/services/notifications.service';
 import { NotificationEventsService } from './core/services/notification-events.service';
+import { NotificationsUiService } from './core/services/notifications-ui.service';
+import { NotificationsOverlayComponent } from './components/notifications-overlay.component';
 import { HubsMiniPlayerComponent } from './hubs/components/hubs-mini-player.component';
 import type { Subscription } from 'rxjs';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, RouterOutlet, HubsMiniPlayerComponent],
+  imports: [CommonModule, RouterOutlet, HubsMiniPlayerComponent, NotificationsOverlayComponent],
   template: `
     <router-outlet />
     <app-hubs-mini-player />
+    <app-notifications-overlay />
     <button
       type="button"
       class="global-alert"
@@ -223,7 +226,8 @@ export class AppComponent {
     private router: Router,
     private auth: AuthService,
     private notifications: NotificationsService,
-    private notificationEvents: NotificationEventsService
+    private notificationEvents: NotificationEventsService,
+    private notificationsUi: NotificationsUiService
   ) {
     this.checkForAppUpdate();
     const redirect = new URLSearchParams(window.location.search).get('redirect');
@@ -260,6 +264,7 @@ export class AppComponent {
       pathname === '/' ||
       pathname.startsWith('/feed') ||
       pathname.startsWith('/hubs') ||
+      pathname.startsWith('/anonymous') ||
       pathname.startsWith('/globe') ||
       pathname.startsWith('/globe-cesium') ||
       pathname.startsWith('/reels') ||
@@ -300,14 +305,12 @@ export class AppComponent {
       parsed = new URL(url, window.location.origin);
     } catch {}
     const pathname = parsed?.pathname ?? url;
-    const isGlobe =
-      pathname.startsWith('/globe') || pathname.startsWith('/globe-cesium');
-    const isReels = pathname.startsWith('/reels');
-    const isCountryFeed = isGlobe && !!parsed?.searchParams?.get('country');
+    const isReels = pathname.startsWith('/reels') || pathname.startsWith('/sparks');
     const isHomeFeed =
       pathname === '/' ||
       pathname.startsWith('/feed') ||
       pathname.startsWith('/hubs') ||
+      pathname.startsWith('/anonymous') ||
       pathname.startsWith('/country') ||
       pathname.startsWith('/messages') ||
       pathname.startsWith('/me') ||
@@ -320,7 +323,7 @@ export class AppComponent {
       pathname.startsWith('/legal');
 
 
-    if (isHomeFeed || isCountryFeed) {
+    if (isHomeFeed) {
       root.classList.add('app-bg-feed');
       // Clear any leftover inline overflow locks so paper pages can scroll.
       document.documentElement.style.overflowY = '';
@@ -329,7 +332,7 @@ export class AppComponent {
       setTheme(computed || '#f8f6f2');
       return;
     }
-    if (isGlobe || isReels) {
+    if (isReels) {
       root.classList.add('app-bg-globe');
       const computed = getComputedStyle(root).getPropertyValue('--app-bg').trim();
       setTheme(computed || '#05070b');
@@ -341,10 +344,7 @@ export class AppComponent {
   }
 
   openTravelSearch(): void {
-    void this.router.navigate(['/globe'], {
-      queryParams: { travel: '1' },
-      queryParamsHandling: 'merge',
-    });
+    void this.router.navigate(['/search']);
   }
 
   private checkForAppUpdate(): void {
@@ -397,17 +397,7 @@ export class AppComponent {
   }
 
   openNotifications(): void {
-    const url = this.router.url;
-    if (url.startsWith('/globe') || url === '/' || url.startsWith('/globe-cesium')) {
-      const target = new URL(url, window.location.origin);
-      target.searchParams.set('panel', 'notifications');
-      target.searchParams.set('search', '0');
-      void this.router.navigateByUrl(`${target.pathname}${target.search}${target.hash}`);
-      return;
-    }
-    void this.router.navigate(['/globe'], {
-      queryParams: { panel: 'notifications', search: '0' },
-    });
+    this.notificationsUi.open();
   }
 
   private async initNotificationBadge(): Promise<void> {

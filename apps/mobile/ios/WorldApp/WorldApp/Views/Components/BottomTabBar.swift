@@ -3,7 +3,7 @@ import SwiftUI
 struct BottomTabBar: View {
     @Environment(AppState.self) private var appState
 
-    private let leftTabs: [AppTab] = [.feed, .globe]
+    private let leftTabs: [AppTab] = [.feed, .anonymous]
     private let rightTabs: [AppTab] = [.hubs, .messages, .profile]
 
     var body: some View {

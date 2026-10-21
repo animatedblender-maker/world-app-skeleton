@@ -9,6 +9,7 @@ import { MatteryaTopbarComponent } from '../components/matterya-topbar.component
 import { SparksStripComponent } from '../components/sparks-strip.component';
 import type { CountryPost } from '../core/models/post.model';
 import { AuthService } from '../core/services/auth.service';
+import { NotificationsUiService } from '../core/services/notifications-ui.service';
 import { FollowService } from '../core/services/follow.service';
 import { LocationService } from '../core/services/location.service';
 import { ProfileService } from '../core/services/profile.service';
@@ -610,6 +611,7 @@ export class HubsPageComponent implements OnInit {
     private location: LocationService,
     private playback: HubsPlaybackService,
     private profiles: ProfileService,
+    private notificationsUi: NotificationsUiService,
     private router: Router
   ) {}
 
@@ -778,9 +780,7 @@ export class HubsPageComponent implements OnInit {
   }
 
   openNotifications(): void {
-    void this.router.navigate(['/globe'], {
-      queryParams: { panel: 'notifications', search: '0' },
-    });
+    this.notificationsUi.open();
   }
 
   openVideo(post: CountryPost): void {

@@ -3,7 +3,7 @@ import cors from 'cors';
 import { GraphQLError } from 'graphql';
 import { createYoga, createSchema, maskError as yogaMaskError } from 'graphql-yoga';
 import type { YogaInitialContext, YogaSchemaDefinition } from 'graphql-yoga';
-import { SignJWT, jwtVerify, createRemoteJWKSet } from 'jose';
+import { SignJWT } from 'jose';
 import http from 'node:http';
 import { WebSocketServer } from 'ws';
 
@@ -27,6 +27,12 @@ import { resolvers } from './graphql/resolvers.js';
 import { PushService } from './push/push.service.js';
 import { ApnsService } from './push/apns.service.js';
 import { pool } from './db.js';
+import {
+  getUserFromRequest,
+  getUserFromToken,
+  type AuthedUser,
+} from './auth/request-user.js';
+import { anonymousRouter } from './anonymous/index.js';
 import { runDailyInsights } from './insights/daily-insights.js';
 import {
   getAdminOverview,
@@ -95,13 +101,6 @@ import {
 import { handlePosterBatch, handlePosterGet } from './media/poster-route.js';
 import { kafkaEnabled } from './kafka/config.js';
 
-type AuthedUser = {
-  id: string;
-  email?: string;
-  role?: string;
-  aud?: string | string[];
-};
-
 type Context = YogaInitialContext & {
   user: AuthedUser | null;
 };
@@ -159,50 +158,7 @@ console.log(
   `📧 MAIL_FROM: ${(process.env.MAIL_FROM ?? '').trim() || 'Matterya <noreply@matterya.com> (default)'}`
 );
 
-const JWKS =
-  SUPABASE_URL
-    ? createRemoteJWKSet(new URL(`${SUPABASE_URL}/auth/v1/.well-known/jwks.json`))
-    : null;
-
-async function getUserFromRequest(req: Request): Promise<AuthedUser | null> {
-  try {
-    const authHeader = req.headers.authorization ?? '';
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-
-    if (!token || !JWKS) return null;
-
-    const { payload } = await jwtVerify(token, JWKS, {});
-    return {
-      id: String(payload.sub),
-      email: typeof payload['email'] === 'string' ? payload['email'] : undefined,
-      role: typeof payload['role'] === 'string' ? payload['role'] : undefined,
-      aud:
-        typeof payload['aud'] === 'string' || Array.isArray(payload['aud'])
-          ? payload['aud']
-          : undefined,
-    };
-  } catch {
-    return null;
-  }
-}
-
-async function getUserFromToken(token: string | null): Promise<AuthedUser | null> {
-  try {
-    if (!token || !JWKS) return null;
-    const { payload } = await jwtVerify(token, JWKS, {});
-    return {
-      id: String(payload.sub),
-      email: typeof payload['email'] === 'string' ? payload['email'] : undefined,
-      role: typeof payload['role'] === 'string' ? payload['role'] : undefined,
-      aud:
-        typeof payload['aud'] === 'string' || Array.isArray(payload['aud'])
-          ? payload['aud']
-          : undefined,
-    };
-  } catch {
-    return null;
-  }
-}
+// JWT verify: ./auth/request-user.ts (shared with /v1/anonymous)
 
 const schema: YogaSchemaDefinition<Context, {}> = createSchema({ typeDefs, resolvers }) as YogaSchemaDefinition<
   Context,
@@ -258,6 +214,9 @@ app.use(
     credentials: true,
   })
 );
+
+// Matterya Anonymous (adult-only pseudonymous Spaces) — JWT via getUserFromRequest
+app.use('/v1/anonymous', anonymousRouter);
 
 // ── Matterya reports page (password gate) ─────────────────────────────
 // https://api.matterya.com/reports  ·  password via REPORTS_PAGE_PASSWORD
@@ -328,6 +287,8 @@ app.get('/health', (_req: Request, res: Response) =>
       hubsSlugShelves: true,
       performanceMetrics: true,
       remoteConfig: true,
+      anonymous: true,
+      anonymousPaid: process.env.ANONYMOUS_PAID_ENABLED === 'true',
     },
     apnsConfigured: apns.isConfigured(),
     authMail: authMailStatus(),

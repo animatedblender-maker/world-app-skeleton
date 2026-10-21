@@ -284,6 +284,72 @@ enum MatteryaCopy {
     static let shareCreatorHub = "Share creator hub"
     static let aboutThisHub = "About this hub"
     static let featuredCreators = "Featured creators"
+
+    // MARK: Anonymous
+
+    static let anonymous = "Anonymous"
+    static let anonymousModeChip = "Anonymous mode"
+    static let anonymousPrivacyBoundary =
+        "Your Anonymous name is public within Anonymous. Other members can’t see your Matterya profile. Matterya may link identities for safety and legal compliance."
+    static let anonymousUnder18Title = "Adults only"
+    static let anonymousUnder18Body =
+        "Anonymous is only available to people 18 and older. No posts, Spaces, or search are shown until age eligibility is confirmed."
+    static let anonymousMissingBirthdateTitle = "Birthday needed"
+    static let anonymousMissingBirthdateBody =
+        "Add your birthday in Matterya profile settings before entering Anonymous."
+    static let anonymousAgeGateHint = "Return to Matterya from the tab bar anytime."
+    static let anonymousAttestTitle = "Confirm you’re 18+"
+    static let anonymousAttestBody =
+        "Before entering Anonymous, confirm you are at least 18 years old. Private Anonymous content stays hidden until you do."
+    static let anonymousAttestFinePrint =
+        "False confirmation may result in account restrictions. Age assurance may be re-checked over time."
+    static let anonymousClaimTitle = "Choose your Anonymous name"
+    static let anonymousClaimBody =
+        "You’ll get one persistent username for all Anonymous Spaces. It’s separate from your Matterya profile."
+    static let anonymousClaimIrreversible =
+        "Usernames can’t be changed later. Pick carefully."
+    static let anonymousClaimGeneratedOnly =
+        "v1 usernames are generated for you — custom real-name handles aren’t allowed."
+    static let anonymousNoSpaces = "No Spaces yet"
+    static let anonymousNoSpacesBody = "Create a free Space or pull to refresh when more appear."
+    static let anonymousNoJoinedSpaces = "No joined Spaces"
+    static let anonymousNoJoinedSpacesBody = "Join a free Space to see it here."
+    static let anonymousPaidComingSoonTitle = "Paid Spaces coming soon"
+    static let anonymousPaidComingSoonBody =
+        "Paid memberships aren’t live yet. You can browse labels, but joining paid Spaces stays disabled."
+    static let anonymousPaidJoinDisabled =
+        "Paid join isn’t available yet. Billing will unlock this Space later."
+    static let anonymousSpaceMissing = "Space unavailable"
+    static let anonymousSpaceMissingBody = "This Space may be private, removed, or temporarily unavailable."
+    static let anonymousSpaceEmptyPosts =
+        "No posts yet. Seed a thoughtful first conversation."
+    static let anonymousFeedEmptyTitle = "Nothing in your feed"
+    static let anonymousFeedEmptyBody =
+        "Join free Spaces or pull to refresh. Private previews stay hidden."
+    static let anonymousNoComments = "No comments yet — start the thread."
+    static let anonymousComposerPrivacyNudge =
+        "Don’t share real names, contact info, or anything that links to your Matterya profile."
+    static let anonymousMeHint =
+        "This identity is only for Anonymous. Your ordinary Matterya avatar and name never appear here."
+    static let anonymousExportPlaceholder = "Anonymous data export will open a request flow soon."
+    static let anonymousDeletePlaceholder = "Anonymous deletion requests will open a support flow soon."
+    static let anonymousSearchTitle = "Search Anonymous"
+    static let anonymousSearchHint = "Find Spaces and text posts you’ve already been shown."
+    static let anonymousSearchEmptyTitle = "No matches"
+    static let anonymousSearchEmptyBody = "Try another keyword. Private Spaces won’t appear in search."
+    static let anonymousInboxTitle = "Inbox coming soon"
+    static let anonymousInboxBody =
+        "Anonymous notifications will land here. Matterya alerts stay available from the bell."
+    static let anonymousInboxPrivacyNote =
+        "Lock-screen and push copy won’t reveal Anonymous Space titles to unauthorized recipients."
+    static let anonymousModPlaceholderBody =
+        "Moderator queue, removals, and sanctions will appear here. Platform policy still outranks Space rules."
+    static let anonymousSuspendedTitle = "Anonymous suspended"
+    static let anonymousSuspendedBody =
+        "Your Anonymous access is restricted. Contact support if you believe this is a mistake."
+    static let anonymousOfflineTitle = "Can’t reach Anonymous"
+    static let anonymousOfflineBody =
+        "Check your connection and try again. Cached identity may still load after a successful visit."
 }
 
 extension View {

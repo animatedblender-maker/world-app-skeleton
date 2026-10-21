@@ -331,7 +331,7 @@ export class NewsPageComponent implements OnInit, OnDestroy {
   }
 
   goHome(): void {
-    void this.router.navigateByUrl('/globe');
+    void this.router.navigateByUrl('/anonymous');
   }
 
   async loadComments(): Promise<void> {

@@ -2869,7 +2869,7 @@ export class ProfilePageComponent implements OnInit, OnDestroy {
     if (!shared) return;
     const targetId = shared.shared_post_id || shared.id;
     if (!targetId) return;
-    void this.router.navigate(['/globe'], {
+    void this.router.navigate(['/anonymous'], {
       queryParams: { post: targetId, tab: 'posts', panel: null },
     });
   }

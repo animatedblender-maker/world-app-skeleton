@@ -2350,13 +2350,13 @@ enum CountryTab: String, CaseIterable, Identifiable {
 }
 
 enum AppTab: String, CaseIterable, Identifiable {
-    case feed, globe, hubs, messages, profile
+    case feed, anonymous, hubs, messages, profile
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .feed: "Feed"
-        case .globe: "Globe"
+        case .anonymous: MatteryaCopy.anonymous
         case .hubs: MatteryaCopy.matteryaHubs
         case .messages: "Messages"
         case .profile: "Profile"
@@ -2366,7 +2366,7 @@ enum AppTab: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .feed: "house"
-        case .globe: "globe.americas"
+        case .anonymous: "theatermasks"
         case .hubs: "square.grid.2x2"
         case .messages: "bubble.left.and.bubble.right"
         case .profile: "person.circle"

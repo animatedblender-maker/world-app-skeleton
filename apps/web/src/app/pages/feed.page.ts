@@ -16,6 +16,7 @@ import { MatteryaPostCardComponent } from '../components/matterya-post-card.comp
 import { MatteryaTopbarComponent } from '../components/matterya-topbar.component';
 import { SparksStripComponent } from '../components/sparks-strip.component';
 import { AuthService } from '../core/services/auth.service';
+import { NotificationsUiService } from '../core/services/notifications-ui.service';
 import { LocationService } from '../core/services/location.service';
 import { Frame0PosterService } from '../core/services/frame0-poster.service';
 import { MediaSessionService } from '../core/services/media-session.service';
@@ -170,6 +171,7 @@ export class FeedPageComponent implements OnInit, AfterViewChecked, OnDestroy {
     private auth: AuthService,
     private profiles: ProfileService,
     private location: LocationService,
+    private notificationsUi: NotificationsUiService,
     private router: Router,
     private cdr: ChangeDetectorRef
   ) {}
@@ -378,9 +380,7 @@ export class FeedPageComponent implements OnInit, AfterViewChecked, OnDestroy {
   }
 
   openNotifications(): void {
-    void this.router.navigate(['/globe'], {
-      queryParams: { panel: 'notifications', search: '0' },
-    });
+    this.notificationsUi.open();
   }
 
   openAuthor(post: CountryPost): void {
@@ -401,9 +401,7 @@ export class FeedPageComponent implements OnInit, AfterViewChecked, OnDestroy {
   openCountry(post: CountryPost): void {
     const code = post.country_code?.trim().toUpperCase();
     if (!code) return;
-    void this.router.navigate(['/globe'], {
-      queryParams: { country: code, tab: 'posts' },
-    });
+    void this.router.navigate(['/country', code]);
   }
 
   openSparks(): void {

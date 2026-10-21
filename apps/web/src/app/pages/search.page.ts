@@ -1256,15 +1256,13 @@ export class SearchPageComponent implements OnInit, OnDestroy {
   }
 
   goHome(): void {
-    void this.router.navigate(['/globe']);
+    void this.router.navigate(['/anonymous']);
   }
 
   focusCountry(country: CountryModel): void {
     if (!country) return;
     const code = country.code || String(country.id);
-    void this.router.navigate(['/globe'], {
-      queryParams: { country: code, tab: 'posts', panel: null },
-    });
+    void this.router.navigate(['/country', code]);
   }
 
   openPost(post: CountryPost, event?: Event): void {
@@ -1273,7 +1271,7 @@ export class SearchPageComponent implements OnInit, OnDestroy {
     if (target && (target.closest('button') || target.closest('input') || target.closest('textarea'))) {
       return;
     }
-    void this.router.navigate(['/globe'], {
+    void this.router.navigate(['/anonymous'], {
       queryParams: { post: post.id, tab: 'posts', panel: null },
     });
   }
@@ -1796,7 +1794,7 @@ export class SearchPageComponent implements OnInit, OnDestroy {
     event?.stopPropagation?.();
     if (!post?.id) return;
     const targetId = post.shared_post_id || post.id;
-    void this.router.navigate(['/globe'], {
+    void this.router.navigate(['/anonymous'], {
       queryParams: { post: targetId, tab: 'posts', panel: null },
     });
   }

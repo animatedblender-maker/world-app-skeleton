@@ -4,6 +4,7 @@ import { ActivatedRoute, Router } from '@angular/router';
 
 import { PostsService } from '../core/services/posts.service';
 import { NotificationsService } from '../core/services/notifications.service';
+import { NotificationsUiService } from '../core/services/notifications-ui.service';
 import { VideoPlayerComponent } from '../components/video-player.component';
 import { BottomTabsComponent } from '../components/bottom-tabs.component';
 import type { CountryPost } from '../core/models/post.model';
@@ -563,7 +564,8 @@ export class PostPageComponent implements OnInit {
     private route: ActivatedRoute,
     private router: Router,
     private posts: PostsService,
-    private notifications: NotificationsService
+    private notifications: NotificationsService,
+    private notificationsUi: NotificationsUiService
   ) {}
 
   postHasVideo(post: CountryPost | null): boolean {
@@ -717,7 +719,7 @@ export class PostPageComponent implements OnInit {
   }
 
   goHome(): void {
-    void this.router.navigate(['/globe']);
+    void this.router.navigate(['/anonymous']);
   }
 
   goMessages(): void {
@@ -725,7 +727,7 @@ export class PostPageComponent implements OnInit {
   }
 
   openNotifications(): void {
-    void this.router.navigate(['/globe'], { queryParams: { panel: 'notifications' } });
+    this.notificationsUi.open();
   }
 
   openSearch(): void {
@@ -749,7 +751,7 @@ export class PostPageComponent implements OnInit {
     if (!shared) return;
     const targetId = shared.shared_post_id || shared.id;
     if (!targetId) return;
-    void this.router.navigate(['/globe'], {
+    void this.router.navigate(['/anonymous'], {
       queryParams: { post: targetId, tab: 'posts', panel: null },
     });
   }

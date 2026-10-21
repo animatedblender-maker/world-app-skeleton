@@ -2,6 +2,8 @@ import { CommonModule } from '@angular/common';
 import { Component, EventEmitter, Input, Output } from '@angular/core';
 import { Router } from '@angular/router';
 
+import { NotificationsUiService } from '../core/services/notifications-ui.service';
+
 @Component({
   selector: 'app-matterya-topbar',
   standalone: true,
@@ -194,7 +196,10 @@ export class MatteryaTopbarComponent {
   @Output() notifications = new EventEmitter<void>();
   @Output() menu = new EventEmitter<void>();
 
-  constructor(private router: Router) {}
+  constructor(
+    private router: Router,
+    private notificationsUi: NotificationsUiService
+  ) {}
 
   onMenu(): void {
     if (this.menuMode === 'emit') {
@@ -217,8 +222,6 @@ export class MatteryaTopbarComponent {
       this.notifications.emit();
       return;
     }
-    void this.router.navigate(['/globe'], {
-      queryParams: { panel: 'notifications', search: '0' },
-    });
+    this.notificationsUi.open();
   }
 }

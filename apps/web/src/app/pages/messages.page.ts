@@ -5,6 +5,7 @@ import { ActivatedRoute, Router } from '@angular/router';
 import { Subscription } from 'rxjs';
 
 import { AuthService } from '../core/services/auth.service';
+import { NotificationsUiService } from '../core/services/notifications-ui.service';
 import { MessagesService } from '../core/services/messages.service';
 import { MediaService } from '../core/services/media.service';
 import { NotificationsService, type NotificationItem } from '../core/services/notifications.service';
@@ -1381,6 +1382,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     private messagesService: MessagesService,
     private mediaService: MediaService,
     private notificationsService: NotificationsService,
+    private notificationsUi: NotificationsUiService,
     private push: PushService,
     private callService: CallService,
     private zone: NgZone,
@@ -3331,7 +3333,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   }
 
   goBack(): void {
-    void this.router.navigate(['/globe']);
+    void this.router.navigate(['/anonymous']);
   }
 
   /** iOS MessagesView compose → People */
@@ -3340,7 +3342,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   }
 
   goHome(): void {
-    void this.router.navigate(['/globe']);
+    void this.router.navigate(['/anonymous']);
   }
 
   /**
@@ -3371,7 +3373,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   }
 
   openNotifications(): void {
-    void this.router.navigate(['/globe'], { queryParams: { panel: 'notifications' } });
+    this.notificationsUi.open();
   }
 
   openSearch(): void {

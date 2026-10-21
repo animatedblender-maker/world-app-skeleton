@@ -435,7 +435,7 @@ export class CountryFeedPageComponent implements OnInit {
   }
 
   backToGlobe(): void {
-    void this.router.navigate(['/globe']);
+    void this.router.navigate(['/anonymous']);
   }
 
   openSparks(): void {
@@ -444,13 +444,7 @@ export class CountryFeedPageComponent implements OnInit {
   }
 
   openComposer(): void {
-    void this.router.navigate(['/globe'], {
-      queryParams: {
-        country: this.countryCode,
-        tab: 'posts',
-        compose: 'post',
-      },
-    });
+    void this.router.navigate(['/country', this.countryCode]);
   }
 
   openNews(item: ExternalNewsItem): void {

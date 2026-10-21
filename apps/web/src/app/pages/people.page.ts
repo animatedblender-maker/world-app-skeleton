@@ -257,7 +257,7 @@ export class PeoplePageComponent implements OnInit, OnDestroy {
   }
 
   goBack(): void {
-    void this.router.navigate(['/globe']);
+    void this.router.navigate(['/anonymous']);
   }
 
   openUserProfile(person: Profile): void {

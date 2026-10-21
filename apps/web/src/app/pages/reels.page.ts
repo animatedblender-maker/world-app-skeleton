@@ -975,16 +975,14 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
       return;
     }
     if (this.countryCode) {
-      void this.router.navigate(['/globe'], {
-        queryParams: { country: this.countryCode, tab: 'media' },
-      });
+      void this.router.navigate(['/country', this.countryCode]);
       return;
     }
     void this.router.navigate(['/hubs']);
   }
 
   goGlobe(): void {
-    void this.router.navigate(['/globe']);
+    void this.router.navigate(['/anonymous']);
   }
 
   openPost(post: CountryPost): void {

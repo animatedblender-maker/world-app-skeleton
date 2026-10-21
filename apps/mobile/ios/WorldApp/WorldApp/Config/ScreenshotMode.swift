@@ -2,7 +2,7 @@ import Foundation
 
 /// Demo / App Store screenshot helper.
 /// Code default stays inactive. Simulator captures: launch with
-/// `-UIScreenshotMode` and optional `-UIScreenshotTab feed|globe|hubs|messages|profile`.
+/// `-UIScreenshotMode` and optional `-UIScreenshotTab feed|anonymous|hubs|messages|profile`.
 enum ScreenshotMode {
     /// Active only when launched with `-UIScreenshotMode` (keeps Release clean).
     static var isActive: Bool {

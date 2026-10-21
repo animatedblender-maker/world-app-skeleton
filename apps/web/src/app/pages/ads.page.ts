@@ -1005,7 +1005,7 @@ export class AdsPageComponent implements OnInit, OnDestroy {
       window.history.back();
       return;
     }
-    void this.router.navigate(['/globe']);
+    void this.router.navigate(['/anonymous']);
   }
 
   formatMoney(cents: number): string {

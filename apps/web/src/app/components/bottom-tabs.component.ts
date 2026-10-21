@@ -9,7 +9,7 @@ import { NotificationsService } from '../core/services/notifications.service';
 import { ProfileService } from '../core/services/profile.service';
 import { resolveAvatarUrl } from '../core/utils/media-url.util';
 
-type TabKey = 'feed' | 'globe' | 'hubs' | 'messages' | 'profile';
+type TabKey = 'feed' | 'anonymous' | 'hubs' | 'messages' | 'profile';
 
 @Component({
   selector: 'app-bottom-tabs',
@@ -19,7 +19,7 @@ type TabKey = 'feed' | 'globe' | 'hubs' | 'messages' | 'profile';
     '[class.hidden]': 'tabsHidden',
   },
   template: `
-    <nav class="bottom-tabs" [class.globe-mode]="globeMode" role="navigation" aria-label="Primary">
+    <nav class="bottom-tabs" role="navigation" aria-label="Primary">
       <div class="rail-brand" aria-hidden="true">Matterya</div>
 
       <button type="button" class="tab-btn" aria-label="Feed" [class.active]="active === 'feed'" (click)="goFeed()">
@@ -29,12 +29,14 @@ type TabKey = 'feed' | 'globe' | 'hubs' | 'messages' | 'profile';
         <span class="tab-label">Feed</span>
       </button>
 
-      <button type="button" class="tab-btn" aria-label="Globe" [class.active]="active === 'globe'" (click)="goGlobe()">
+      <button type="button" class="tab-btn" aria-label="Anonymous" [class.active]="active === 'anonymous'" (click)="goAnonymous()">
         <svg class="tab-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
-          <circle cx="12" cy="12" r="8.5" />
-          <path d="M3.5 12h17M12 3.5c2.4 2.6 3.6 5.4 3.6 8.5S14.4 17.9 12 20.5C9.6 17.9 8.4 15.1 8.4 12S9.6 6.1 12 3.5z" />
+          <path d="M8.2 5.2c-2.2 0-4 2-4 4.5v1.8c0 1.7.9 3.2 2.3 4L5.2 19l2.6-1.8c.4.1.9.2 1.4.2 2.2 0 4-2 4-4.5V9.7c0-2.5-1.8-4.5-4-4.5z" stroke-linejoin="round" />
+          <path d="M15.8 5.2c2.2 0 4 2 4 4.5v1.8c0 1.7-.9 3.2-2.3 4L18.8 19l-2.6-1.8c-.4.1-.9.2-1.4.2-1.1 0-2.1-.5-2.8-1.3" stroke-linejoin="round" />
+          <path d="M6.6 9.4h.1M9.6 9.4h.1M14.4 9.4h.1M17.4 9.4h.1" stroke-linecap="round" />
+          <path d="M6.8 12.2c.7.5 1.5.5 2.2 0M15 12.2c.7.5 1.5.5 2.2 0" stroke-linecap="round" />
         </svg>
-        <span class="tab-label">Globe</span>
+        <span class="tab-label">Anonymous</span>
       </button>
 
       <button type="button" class="create-btn" aria-label="Create" (click)="toggleCreateMenu($event)">
@@ -158,9 +160,6 @@ type TabKey = 'feed' | 'globe' | 'hubs' | 'messages' | 'profile';
         background: rgba(253, 252, 250, 0.96);
         border-top: 0.5px solid var(--m-divider, #e2ded8);
         box-shadow: 0 -8px 24px rgba(44, 40, 37, 0.04);
-      }
-      .bottom-tabs.globe-mode {
-        background: rgba(253, 252, 250, 0.94);
       }
       .tab-btn {
         border: 0;
@@ -358,9 +357,6 @@ type TabKey = 'feed' | 'globe' | 'hubs' | 'messages' | 'profile';
           grid-template-columns: none;
           box-sizing: border-box;
         }
-        .bottom-tabs.globe-mode {
-          background: transparent;
-        }
         .rail-brand {
           display: block;
           font-family: 'Iowan Old Style', Palatino, Georgia, serif;
@@ -473,7 +469,6 @@ export class BottomTabsComponent implements OnInit, OnDestroy {
   messagesUnreadCount = 0;
   tabsHidden = false;
   createMenuOpen = false;
-  globeMode = false;
   avatarUrl: string | null = null;
   avatarInitials = 'ME';
 
@@ -533,13 +528,9 @@ export class BottomTabsComponent implements OnInit, OnDestroy {
     void this.router.navigate(['/feed']);
   }
 
-  goGlobe(): void {
+  goAnonymous(): void {
     this.createMenuOpen = false;
-    const cached = this.location.getCachedLocation();
-    const code = cached?.countryCode?.trim().toUpperCase();
-    void this.router.navigate(['/globe'], {
-      queryParams: code ? { country: null } : null,
-    });
+    void this.router.navigate(['/anonymous']);
   }
 
   goHubs(): void {
@@ -570,25 +561,19 @@ export class BottomTabsComponent implements OnInit, OnDestroy {
     this.createMenuOpen = false;
     const cached = this.location.getCachedLocation();
     const code = cached?.countryCode?.trim().toUpperCase();
-    if (kind === 'video' && code) {
-      void this.router.navigate(['/globe'], {
-        queryParams: { country: code, tab: 'posts', compose: 'video' },
-      });
-      return;
-    }
     if (kind === 'spark' && code) {
-      void this.router.navigate(['/globe'], {
-        queryParams: { country: code, tab: 'posts', compose: 'spark' },
-      });
+      void this.router.navigate(['/sparks', code]);
       return;
     }
-    void this.router.navigate(['/globe'], {
-      queryParams: {
-        country: code || null,
-        tab: 'posts',
-        compose: kind === 'moment' ? 'moment' : kind === 'video' ? 'video' : 'post',
-      },
-    });
+    if (kind === 'video') {
+      void this.router.navigate(['/hubs']);
+      return;
+    }
+    if (code) {
+      void this.router.navigate(['/country', code]);
+      return;
+    }
+    void this.router.navigate(['/feed']);
   }
 
   onAvatarError(): void {
@@ -678,8 +663,6 @@ export class BottomTabsComponent implements OnInit, OnDestroy {
       parsed = new URL(url, window.location.origin);
     } catch {}
     const pathname = parsed?.pathname ?? url;
-    this.globeMode =
-      pathname === '/globe' || pathname.startsWith('/globe-cesium');
 
     if (pathname.startsWith('/messages')) {
       this.active = 'messages';
@@ -693,8 +676,12 @@ export class BottomTabsComponent implements OnInit, OnDestroy {
       this.active = 'hubs';
       return;
     }
-    if (pathname.startsWith('/globe') || pathname.startsWith('/globe-cesium')) {
-      this.active = 'globe';
+    if (
+      pathname.startsWith('/anonymous') ||
+      pathname.startsWith('/globe') ||
+      pathname.startsWith('/globe-cesium')
+    ) {
+      this.active = 'anonymous';
       return;
     }
     if (pathname.startsWith('/feed') || pathname === '/') {

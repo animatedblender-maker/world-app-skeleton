@@ -68,16 +68,21 @@ export const routes: Routes = [
       import('./pages/hubs-channel.page').then((m) => m.HubsChannelPageComponent),
   },
   {
-    path: 'globe',
+    path: 'anonymous',
     canActivate: [authGuard],
     loadComponent: () =>
-      import('./pages/globe.page').then((m) => m.GlobePageComponent),
+      import('./pages/anonymous.page').then((m) => m.AnonymousPageComponent),
+  },
+  // Globe tab replaced by Matterya Anonymous — keep modules on disk, unused.
+  {
+    path: 'globe',
+    redirectTo: 'anonymous',
+    pathMatch: 'full',
   },
   {
     path: 'globe-cesium',
-    canActivate: [authGuard],
-    loadComponent: () =>
-      import('./pages/globe-cesium.page').then((m) => m.GlobeCesiumPageComponent),
+    redirectTo: 'anonymous',
+    pathMatch: 'full',
   },
   {
     path: 'messages',

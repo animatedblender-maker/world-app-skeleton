@@ -19,12 +19,12 @@ struct MainTabView: View {
                     persistentTab(.feed) { FeedView() }
                     persistentTab(.hubs) { MatteryaHubsView() }
 
-                    // Other tabs remount (lighter than keeping globe live off-screen).
+                    // Other tabs remount (lighter than keeping Anonymous live off-screen).
                     if appState.selectedTab != .feed && appState.selectedTab != .hubs {
                         Group {
                             switch appState.selectedTab {
-                            case .globe:
-                                GlobeView()
+                            case .anonymous:
+                                AnonymousRootView()
                             case .messages:
                                 MessagesView()
                             case .profile:
