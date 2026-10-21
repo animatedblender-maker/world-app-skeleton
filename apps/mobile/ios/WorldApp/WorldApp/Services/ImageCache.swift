@@ -134,13 +134,14 @@ final class ImageCache: @unchecked Sendable {
                 _ = await ImageCache.shared.image(for: url, maxPixelSize: maxPixelSize)
             }
         }
-        // Frame0 for every missing/expired thumb — not capped by ImageCache prefetch.
-        let frame0IDs = missingFrame0IDs.isEmpty
+        // Cap Frame0 to the same thumb cap — uncapped missing IDs stormed concurrency-2.
+        let frame0Source = missingFrame0IDs.isEmpty
             ? posts.prefix(cap).map(\.id)
             : missingFrame0IDs
+        let frame0IDs = Array(frame0Source.prefix(cap))
         if !frame0IDs.isEmpty {
             Task {
-                await Frame0PosterResolver.shared.prefetch(postIDs: Array(frame0IDs))
+                await Frame0PosterResolver.shared.prefetch(postIDs: frame0IDs)
             }
         }
     }
