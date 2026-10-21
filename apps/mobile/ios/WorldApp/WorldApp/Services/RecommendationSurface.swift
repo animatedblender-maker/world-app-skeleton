@@ -76,7 +76,8 @@ enum RecommendationSurface: String, Codable, CaseIterable, Sendable {
                 maxSameCreatorInWindow: 1,
                 creatorWindow: 6,
                 preferUnviewed: true,
-                allowRecycleWhenExhausted: true,
+                // Match Home: never re-queue watched Sparks (large R2 inventory).
+                allowRecycleWhenExhausted: false,
                 latencyBudgetMs: 280
             )
         case .hubsForYou:

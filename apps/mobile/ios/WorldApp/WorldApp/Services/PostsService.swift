@@ -546,6 +546,7 @@ final class PostsService {
             if page.isEmpty { break }
             for post in page where seen.insert(post.id).inserted {
                 guard ReelsRankingEngine.isSparkEligible(post) else { continue }
+                guard !SparkDiscoveryEngine.isViewed(post) else { continue }
                 catalog.append(post)
             }
             if let raw = page.last?.createdAt, !raw.isEmpty {
@@ -555,17 +556,22 @@ final class PostsService {
             if page.count < 40 { break }
         }
 
-        catalog = catalog.filter { ReelsRankingEngine.isSparkEligible($0) && $0.playableVideoURL != nil }
+        catalog = catalog.filter {
+            ReelsRankingEngine.isSparkEligible($0) && $0.playableVideoURL != nil
+        }
 
-        // Unviewed only at the head — never shuffle watched into the first swipes.
+        // Sparks player: unviewed only — never park watched at the tail for recycle.
+        let start = preferStart.map { ReelsRankingEngine.resolvePlayerStart($0) }
+        let startID = start?.id
         catalog = SparkDiscoveryEngine.rankForDiscovery(catalog)
-
-        if let rawStart = preferStart {
-            let start = ReelsRankingEngine.resolvePlayerStart(rawStart)
-            if start.playableVideoURL != nil {
-                catalog.removeAll { $0.id == start.id }
-                catalog.insert(start, at: 0)
+            .filter { post in
+                if let startID, post.id == startID { return true }
+                return !SparkDiscoveryEngine.isViewed(post)
             }
+
+        if let start, start.playableVideoURL != nil {
+            catalog.removeAll { $0.id == start.id }
+            catalog.insert(start, at: 0)
         }
 
         sparksSessionCatalog = catalog
@@ -2938,9 +2944,19 @@ enum SparkDiscoveryEngine {
         add(post.id)
         add(post.sharedPostID)
         add(SparkShareMarker.originID(from: post.body))
+        add(post.mediaPayload?.r2Key)
+        // Collapse same underlying file across authors (share + original).
         let hk = post.homeFeedContentKey
         if hk.hasPrefix("spark:") {
             add(String(hk.dropFirst("spark:".count)))
+        } else if hk.hasPrefix("r2:") {
+            add(String(hk.dropFirst("r2:".count)))
+            add(hk)
+        } else if hk.hasPrefix("clip:") {
+            add(String(hk.dropFirst("clip:".count)))
+            add(hk)
+        } else if hk.hasPrefix("media:") {
+            add(hk)
         }
         return keys
     }

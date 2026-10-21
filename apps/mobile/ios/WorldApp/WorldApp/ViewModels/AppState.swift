@@ -1888,6 +1888,7 @@ final class AppState {
     }
 
     /// Strip/rail first, then catalog fill — never block open on GraphQL.
+    /// Unviewed only after the opened head (Sparks never re-queues watched clips).
     private static func mergeSparksOpenSeeds(
         starting start: CountryPost,
         preferred: [CountryPost],
@@ -1902,6 +1903,8 @@ final class AppState {
                 let resolved = ReelsRankingEngine.resolvePlayerStart(post)
                 guard seen.insert(resolved.id).inserted else { continue }
                 guard ReelsRankingEngine.isSparkEligible(resolved) else { continue }
+                // Keep the opened clip even if already watched; skip every other watched.
+                if resolved.id != head.id, SparkDiscoveryEngine.isViewed(resolved) { continue }
                 out.append(resolved)
                 if out.count >= limit { return }
             }
@@ -1935,7 +1938,7 @@ final class AppState {
         }
     }
 
-    /// Instant swipe seed — **eligible originals only**, **unviewed discovery order**
+    /// Instant swipe seed — **eligible originals only**, **unviewed only**
     /// (not a sticky shuffle of the same catalog head).
     private static func instantSparksSeedQueue(starting start: CountryPost, limit: Int = 24) -> [CountryPost] {
         let head = ReelsRankingEngine.resolvePlayerStart(start)
@@ -1943,11 +1946,12 @@ final class AppState {
         var seen: Set<String> = [head.id]
 
         func absorb(_ posts: [CountryPost]) {
-            // rankForDiscovery = unviewed first (never re-queue watched ahead of fresh).
             let ranked = SparkDiscoveryEngine.rankForDiscovery(posts)
+                .filter { $0.id == head.id || !SparkDiscoveryEngine.isViewed($0) }
             for post in ranked {
                 guard seen.insert(post.id).inserted else { continue }
                 guard ReelsRankingEngine.isSparkEligible(post) else { continue }
+                if post.id != head.id, SparkDiscoveryEngine.isViewed(post) { continue }
                 out.append(post)
                 if out.count >= limit { return }
             }

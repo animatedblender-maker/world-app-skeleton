@@ -352,7 +352,11 @@ struct FeedView: View {
             var seen = Set<String>()
             var reels: [CountryPost] = []
             let pool = (catalog + living + home + sessionHubs)
-                .filter { ReelsRankingEngine.isSparkEligible($0) && $0.playableVideoURL != nil }
+                .filter {
+                    ReelsRankingEngine.isSparkEligible($0)
+                        && $0.playableVideoURL != nil
+                        && !SparkDiscoveryEngine.isViewed($0)
+                }
                 .shuffled()
             for post in pool {
                 guard seen.insert(post.id).inserted else { continue }
@@ -431,14 +435,19 @@ struct FeedView: View {
             pool = snapshot
         }
 
-        // Unviewed first so the rail matches discovery rules without heavy ranking.
+        // Unviewed only — strip seeds the Sparks player and must not re-offer watched clips.
         let ranked = SparkDiscoveryEngine.rankForDiscovery(
-            pool.filter { ReelsRankingEngine.isSparkEligible($0) && $0.playableVideoURL != nil }
+            pool.filter {
+                ReelsRankingEngine.isSparkEligible($0)
+                    && $0.playableVideoURL != nil
+                    && !SparkDiscoveryEngine.isViewed($0)
+            }
         )
         var seen = Set<String>()
         var merged: [CountryPost] = []
         for post in ranked {
             guard seen.insert(post.id).inserted else { continue }
+            guard !SparkDiscoveryEngine.isViewed(post) else { continue }
             merged.append(post)
             if merged.count >= 12 { break }
         }
