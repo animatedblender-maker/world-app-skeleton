@@ -1011,7 +1011,7 @@ struct YouTubeAppView: View {
     /// Extra Netflix rows carved from the growing For-you pool (skip what upper rails already show).
     private var hubsMoreWatchRails: [HubsMoreRail] {
         let heroID = hubsHeroPost?.id
-        let vibeIDs = Set(hubsVibeRails.flatMap(\.posts.map(\.id)))
+        let vibeIDs = Set(hubsVibeRails.flatMap { $0.posts.map(\.id) })
         let peopleCap = max(48, hubsDisplayLimit)
         let peopleIDs = Set(
             stableDiscoverVideos
