@@ -985,9 +985,9 @@ export async function fetchHomeFeedPage(input: {
 }): Promise<SurfacePage> {
   const want = Math.min(Math.max(Number(input.limit) || 24, 1), 64);
   // Text lane paused — forum/written cards were freezing Home scroll.
-  // Mix spark / hub / image only (~1/3 each); image over-fetches for dedupe.
-  const perLane = Math.max(2, Math.ceil(want / 3) + 1);
-  const imageLaneWant = perLane + 4;
+  // Mix spark / hub / image only (~1/3 each); over-fetch so pages stay dense after dedupe.
+  const perLane = Math.max(4, Math.ceil(want / 3) + 2);
+  const imageLaneWant = perLane + 6;
   const homeCur = decodeHomeFeedCursor(input.cursor);
   const hasCol = await hasHubSlugColumn();
   const slugSelect = hasCol ? 'p.hub_slug' : 'null::text as hub_slug';

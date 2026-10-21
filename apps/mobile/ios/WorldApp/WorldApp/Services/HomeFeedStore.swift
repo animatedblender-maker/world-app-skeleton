@@ -60,6 +60,8 @@ final class HomeFeedStore {
     private var pendingLoadMoreTask: Task<Void, Never>?
     /// True for the whole loadMore body — spinner `isLoadingMore` alone allowed parallel storms.
     private var loadMoreInFlight = false
+    /// Architecture: if near-tail while in-flight, run one more page when the flight ends.
+    private var loadMoreQueuedNearTail = false
     /// Consecutive `/v1/feed` timeouts/500s on the same thin cursor.
     private var thinFeedFailStreak = 0
     /// After repeated thin failures, skip `/v1/feed` briefly and top up from Sparks/Hubs.
@@ -85,8 +87,10 @@ final class HomeFeedStore {
     private let firstWindow = 10
     /// Prefetch next page later — early ratio stacked /v1/feed + Sparks while scrolling.
     private let prefetchRatio = 0.55
+    /// Architecture: request next batch when ~3 cards remain (use 4 for settle lag).
+    private let nearTailRemaining = 4
     /// Keep at least this many posts buffered in `posts` (beyond the visible window).
-    private let minBufferedPool = 24
+    private let minBufferedPool = 36
 
     private init() {}
 
@@ -887,9 +891,11 @@ final class HomeFeedStore {
         let fling = ScrollBudget.isFlinging
         // During a fling, jump the window ahead so LazyVStack always has cells ready.
         let growBy = fling ? windowPageSize * 2 : windowPageSize
-        let growWhenWithin = fling ? 6 : 3
+        let growWhenWithin = fling ? 8 : nearTailRemaining
+        let remainingDisplayed = max(0, displayedPosts.count - index - 1)
+        let nearTail = remainingDisplayed <= growWhenWithin
 
-        if index >= displayedPosts.count - growWhenWithin, windowLimit < posts.count {
+        if nearTail, windowLimit < posts.count {
             var t = Transaction()
             t.disablesAnimations = true
             withTransaction(t) {
@@ -927,11 +933,17 @@ final class HomeFeedStore {
         }
 
         // Don't kick network load-more mid-fling (causes hitch + image storms).
-        guard !fling else { return }
+        guard !fling else {
+            if nearTail || posts.count < minBufferedPool {
+                loadMoreQueuedNearTail = true
+            }
+            return
+        }
 
-        // Top up pool later — never wait until the last few cells.
-        let threshold = max(0, Int(Double(max(posts.count, 1)) * prefetchRatio) - 1)
-        if index >= threshold || posts.count < minBufferedPool {
+        // Architecture: next batch when ~3 remain — also keep min buffer and mid-pool top-up.
+        let ratioThreshold = max(0, Int(Double(max(posts.count, 1)) * prefetchRatio) - 1)
+        let poolNearExhaust = windowLimit >= max(0, posts.count - nearTailRemaining)
+        if nearTail || poolNearExhaust || index >= ratioThreshold || posts.count < minBufferedPool {
             requestLoadMore()
         }
     }
@@ -954,7 +966,10 @@ final class HomeFeedStore {
         }
         // Single-flight: UncancellableHTTP ignores Task.cancel, so parallel loadMores
         // storm the same /v1/feed cursor until -1001.
-        guard !loadMoreInFlight, !isLoadingMore, !isBootstrapping else { return }
+        if loadMoreInFlight || isLoadingMore || isBootstrapping {
+            loadMoreQueuedNearTail = true
+            return
+        }
         hasMore = true
         let gen = generation
         pendingLoadMoreTask?.cancel()
@@ -1121,9 +1136,22 @@ final class HomeFeedStore {
             return
         }
 
-        guard !loadMoreInFlight else { return }
+        if loadMoreInFlight {
+            loadMoreQueuedNearTail = true
+            return
+        }
         loadMoreInFlight = true
-        defer { loadMoreInFlight = false }
+        defer {
+            loadMoreInFlight = false
+            // Near-tail requests during flight must not die — one queued follow-up.
+            if loadMoreQueuedNearTail, gen == generation {
+                loadMoreQueuedNearTail = false
+                let followGen = generation
+                Task(priority: .utility) { [weak self] in
+                    await self?.loadMore(generation: followGen, forceNetwork: true)
+                }
+            }
+        }
 
         // Background buffer top-ups stay silent when the list already has rows.
         let showSpinner = displayedPosts.count < 8

@@ -33,6 +33,8 @@ struct YouTubeAppView: View {
     @State private var hubsDisplayLimit: Int = 64
     @State private var isLoadingMoreHubs = false
     @State private var hubsLoadMoreQueued = false
+    /// True only after server inventory is exhausted — never silent reshuffle (architecture).
+    @State private var hubsCaughtUp = false
     /// Coalesce mid-fling settle top-ups / thumb warms (onAppear storms).
     @State private var hubsSettledTopUpQueued = false
     @State private var hubsSettledThumbWarmIndex: Int? = nil
@@ -92,6 +94,7 @@ struct YouTubeAppView: View {
     /// Call on every navigate-to-Hubs / return-to-home / pull-to-refresh.
     private func refreshHubsVisitShuffle(remountList: Bool = true) {
         hubsVisitEpoch &+= 1
+        hubsCaughtUp = false
         hubsSessionSeed = UInt64.random(in: 1...UInt64.max)
             ^ UInt64(Date().timeIntervalSince1970 * 1_000_000)
         rebuildStableHomeLists(shuffle: true, remountList: remountList)
@@ -196,16 +199,22 @@ struct YouTubeAppView: View {
         // Thumbs come from settled onAppearRow / grow — no fat butterWarm after every page.
     }
 
-    /// Endless For you: grow window cheaply; network early so the list never feels thin.
+    /// Endless For you: grow window cheaply; prefetch network before the last ~3 cards.
     private func ensureMoreForYou(around index: Int) {
-        // Grow earlier than before so network/recycle starts before the user hits a wall.
-        let threshold = max(0, stableDiscoverVideos.count - max(8, Self.hubsGrowBy))
-        guard index >= threshold else { return }
+        guard !hubsCaughtUp else { return }
+        let remaining = max(0, stableDiscoverVideos.count - index - 1)
+        // Architecture: next batch when ~3 remain. Also grow while local pool still has rows.
+        let nearTail = remaining <= 4
+        let poolHeadroom = hubsForYouPool.count - hubsDisplayLimit
+        // Prefetch network while still painting from local pool so scroll never waits.
+        let shouldPrefetchNetwork = nearTail || poolHeadroom <= Self.hubsGrowBy
+        guard nearTail || poolHeadroom > 0 || shouldPrefetchNetwork else { return }
 
         // 1) Grow local pool only — warm the newly revealed thumbs so cells aren't blank.
         if hubsDisplayLimit < hubsForYouPool.count {
             growForYouDisplay(by: Self.hubsGrowBy, warmThumbs: true)
-            return
+            if !shouldPrefetchNetwork { return }
+            // Fall through to prefetch while user still has local rows.
         }
 
         // 2) Network only when not flinging and not already loading.
@@ -219,15 +228,14 @@ struct YouTubeAppView: View {
         }
         Task { @MainActor in
             // Settle gate — avoid load during rubber-band / momentum.
-            try? await Task.sleep(nanoseconds: 400_000_000)
-            guard appState.selectedTab == .hubs else { return }
+            try? await Task.sleep(nanoseconds: 180_000_000)
+            guard appState.selectedTab == .hubs, !hubsCaughtUp else { return }
             if ScrollBudget.isFlinging {
                 scheduleSettledHubsTopUp()
                 return
             }
             if hubsDisplayLimit < hubsForYouPool.count {
                 growForYouDisplay(by: Self.hubsGrowBy, warmThumbs: true)
-                return
             }
             await loadMoreActiveShelf()
             if hubsDisplayLimit >= hubsForYouPool.count {
@@ -393,28 +401,34 @@ struct YouTubeAppView: View {
         } else if hubsDisplayLimit < hubsForYouPool.count {
             growForYouDisplay(by: Self.hubsGrowBy, warmThumbs: true)
         } else {
-            // Network dry → fresh server mix / local re-rank so scroll never ends.
-            await appendEndlessRecyclePage()
+            // One more cursor-aware server page (no silent reshuffle of watched IDs).
+            let gotFresh = await fetchUnseenHubsPage()
+            if !gotFresh {
+                hubsCaughtUp = true
+            }
         }
 
         #if DEBUG
         let afterLong = allVideos.filter { PlayPlatformBridge.isHubsForYouLongForm($0) }.count
-        print("[Hubs] loadMore before=\(beforeLong) after=\(afterLong) pool=\(hubsForYouPool.count) display=\(hubsDisplayLimit) +\(added)")
+        print("[Hubs] loadMore before=\(beforeLong) after=\(afterLong) pool=\(hubsForYouPool.count) display=\(hubsDisplayLimit) +\(added) caughtUp=\(hubsCaughtUp)")
         #endif
     }
 
-    /// Keep For you endless: prefer a fresh server page; fall back to local re-rank.
-    private func appendEndlessRecyclePage() async {
-        hubsEndlessCycle += 1
-        let shown = Set(hubsForYouPool.prefix(hubsDisplayLimit).map(\.id))
-
-        // A) New server session → different mix (slug rotation), skip already-shown head.
-        SlugShelfStore.shared.newSession()
+    /// Fetch a server page of not-yet-shown LongForm. Returns false when inventory is dry.
+    @discardableResult
+    private func fetchUnseenHubsPage() async -> Bool {
+        let shown = Set(hubsForYouPool.map(\.id))
         let page: SlugShelfStore.Page
         if let slug = homeFilter.hubSlug {
-            page = await SlugShelfStore.shared.loadShelf(slug, force: true)
+            if SlugShelfStore.shared.hasMore(for: slug) {
+                page = await SlugShelfStore.shared.loadMoreShelf(slug)
+            } else {
+                return false
+            }
+        } else if SlugShelfStore.shared.hasMore(for: SlugShelfStore.forYouKey) {
+            page = await SlugShelfStore.shared.loadMoreForYou()
         } else {
-            page = await SlugShelfStore.shared.loadForYou(force: true)
+            return false
         }
         let fresh = page.items.filter {
             !shown.contains($0.id)
@@ -422,39 +436,38 @@ struct YouTubeAppView: View {
                     || PlayPlatformBridge.belongsInHubsCatalog($0)
                     || ($0.hasVideo && !$0.isReel))
         }
-        if !fresh.isEmpty {
-            softMergeHubCatalog(fresh)
-            let existingPool = Set(hubsForYouPool.map(\.id))
-            let newcomers = fresh.filter { existingPool.contains($0.id) == false }
-            if !newcomers.isEmpty {
-                hubsForYouPool.append(contentsOf: newcomers)
-            } else {
-                // Soft-merge already had them — still append a reshuffled tail so display grows.
-                hubsForYouPool.append(contentsOf: Self.pureShuffle(fresh))
-            }
+        guard !fresh.isEmpty else { return page.nextCursor != nil }
+        softMergeHubCatalog(fresh)
+        let existingPool = Set(hubsForYouPool.map(\.id))
+        let newcomers = fresh.filter { !existingPool.contains($0.id) }
+        if !newcomers.isEmpty {
+            hubsForYouPool.append(contentsOf: newcomers)
             growForYouDisplay(by: Self.hubsGrowBy * 2, warmThumbs: true)
-            #if DEBUG
-            print("[Hubs] endless server refresh cycle=\(hubsEndlessCycle) +\(fresh.count) pool=\(hubsForYouPool.count)")
-            #endif
-            return
+            hubsCaughtUp = false
+            return true
         }
+        return page.nextCursor != nil
+    }
 
-        // B) Local re-rank under a new seed (same inventory, new order).
-        let home = allVideos.filter { PlayPlatformBridge.isHubsForYouLongForm($0) }
-        guard !home.isEmpty else { return }
-        let recycled = catalog.rankForYouBySlugs(
-            home,
-            followingIDs: appState.followingIDs,
-            myUserID: appState.currentProfile?.userID ?? AuthService.shared.currentUser?.id,
-            sessionSeed: hubsSessionSeed &+ UInt64(hubsEndlessCycle) &* 0x9E3779B97F4A7C15,
-            focusSlug: homeFilter.hubSlug
-        )
-        guard !recycled.isEmpty else { return }
-        hubsForYouPool.append(contentsOf: recycled)
-        growForYouDisplay(by: Self.hubsGrowBy * 2, warmThumbs: true)
-        #if DEBUG
-        print("[Hubs] endless local recycle cycle=\(hubsEndlessCycle) pool=\(hubsForYouPool.count)")
-        #endif
+    /// Explicit Replay — architecture allows recycle only after user action.
+    private func replayHubsForYou() {
+        hubsCaughtUp = false
+        hubsEndlessCycle += 1
+        SlugShelfStore.shared.newSession()
+        Task { @MainActor in
+            let page: SlugShelfStore.Page
+            if let slug = homeFilter.hubSlug {
+                page = await SlugShelfStore.shared.loadShelf(slug, force: true)
+            } else {
+                page = await SlugShelfStore.shared.loadForYou(force: true)
+            }
+            softMergeHubCatalog(page.items)
+            rebuildStableHomeLists(shuffle: true, remountList: false)
+            hubsCaughtUp = false
+            if hubsDisplayLimit < hubsForYouPool.count {
+                growForYouDisplay(by: Self.hubsGrowBy * 2, warmThumbs: true)
+            }
+        }
     }
 
     private func rebuildContinueAndFollowingShuffled() {
@@ -664,6 +677,7 @@ struct YouTubeAppView: View {
                 // New server session → rotated slug order on /v1/hubs/for-you.
                 SlugShelfStore.shared.newSession()
                 hubsEndlessCycle = 0
+                hubsCaughtUp = false
                 await loadVideos(forceRefresh: true, mode: .fast)
                 refreshHubsVisitShuffle(remountList: true)
                 warmContinueWatchingThumbnails()
@@ -673,6 +687,7 @@ struct YouTubeAppView: View {
         .onChange(of: homeFilter) { _, filter in
             // Chip change = load **that slug page only** (not re-filter a fat catalog).
             EngagementTracker.shared.hubShelfSelected(filter.rawValue)
+            hubsCaughtUp = false
             Task { @MainActor in
                 isLoading = allVideos.isEmpty
                 let page: SlugShelfStore.Page
@@ -874,16 +889,21 @@ struct YouTubeAppView: View {
                                 })
                                 .padding(.bottom, 18)
                             }
-                            // Tail sentinel — never let For you look finished.
+                            // Tail sentinel — prefetch before the wall; end card only when caught up.
                             Color.clear
                                 .frame(height: 1)
                                 .onAppear {
                                     let tail = max(0, stableDiscoverVideos.count - 1)
                                     ensureMoreForYou(around: tail)
-                                    if hubsDisplayLimit >= hubsForYouPool.count {
+                                    if !hubsCaughtUp, hubsDisplayLimit >= hubsForYouPool.count {
                                         requestMoreHubsLongForm()
                                     }
                                 }
+                            if hubsCaughtUp {
+                                hubsCaughtUpCard
+                                    .padding(.horizontal, Theme.pagePadding)
+                                    .padding(.vertical, 28)
+                            }
                         }
                         // Avoid remounting entire list via .id — that freezes mid-scroll.
                         .padding(.top, 8)
@@ -900,6 +920,36 @@ struct YouTubeAppView: View {
                 }
             }
         }
+    }
+
+    private var hubsCaughtUpCard: some View {
+        VStack(spacing: 14) {
+            Text("You're caught up")
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(Theme.ink)
+            Text("No more new \(MatteryaCopy.matteryaHubs) videos right now. Replay to watch again, or check back later.")
+                .font(.subheadline)
+                .foregroundStyle(Theme.inkMuted)
+                .multilineTextAlignment(.center)
+            Button {
+                replayHubsForYou()
+            } label: {
+                Text("Replay watched")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.paper)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Theme.ink, in: RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                .stroke(Theme.border.opacity(0.8), lineWidth: 0.5)
+        )
     }
 
     private var homeScreenIsEmpty: Bool {
