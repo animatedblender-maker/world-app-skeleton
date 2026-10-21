@@ -77,6 +77,18 @@ struct YouTubeWatchView: View {
         return 1 - eased
     }
 
+    /// Whole watch surface opacity — continuous path snaps off as soon as pull/morph starts
+    /// so Theme.canvas never fades as a grey rectangle behind the shrinking film.
+    private var watchContentOpacity: Double {
+        if embedsPlayer {
+            return appState.hubPlaybackExpanded ? 1 : 0
+        }
+        guard appState.hubPlaybackExpanded else { return 0 }
+        // Once pull is underway, hide the entire watch chrome stack immediately.
+        if appState.hubPlaybackPullProgress > 0.08 { return 0 }
+        return chromeOpacity
+    }
+
     private var isMinimizingGrab: Bool {
         isPullingToMinimize
             || dismissDragOffset > 2
@@ -85,24 +97,20 @@ struct YouTubeWatchView: View {
 
     private static let watchScrollTopID = "hub-watch-meta-top"
 
-    /// Paper under chrome when expanded. Clear as soon as pull starts so home shows through.
+    /// Paper under chrome when expanded. Continuous path stays clear — home/paper underlay
+    /// paints through; canvas here was the grey box behind the morphing film.
     private var watchChromeBackground: Color {
+        if !embedsPlayer { return .clear }
         if isMinimizingGrab || appState.hubPlaybackPullProgress > 0.02 {
             return .clear
         }
         return Theme.canvas
     }
 
-    /// Root backdrop — clear on pull/mini so Hubs home (underlay) is never covered by white/ink.
-    /// Never leave a white slab over the video stage while continuous player owns the pixels.
+    /// Root backdrop — continuous path always clear so minimize never flashes canvas/ink.
     private var watchRootBackground: Color {
-        if !embedsPlayer {
-            if !appState.hubPlaybackExpanded { return .clear }
-            if isMinimizingGrab || appState.hubPlaybackPullProgress > 0.02 {
-                return .clear
-            }
-            // Stage hole is clear; only meta below needs paper. Use clear root so the
-            // continuous layer never sits under a canvas flash during expand/minimize.
+        if !embedsPlayer { return .clear }
+        if isMinimizingGrab || appState.hubPlaybackPullProgress > 0.02 {
             return .clear
         }
         return Theme.canvas
@@ -133,8 +141,9 @@ struct YouTubeWatchView: View {
             VStack(spacing: 0) {
                 playerSection
                     .frame(width: geo.size.width, height: max(120, reservedPlayerHeight))
-                    // Continuous player paints the stage — never canvas/white under the hole.
-                    .background(embedsPlayer ? Theme.ink : Theme.ink.opacity(isMinimizingGrab ? 0 : 1))
+                    // Continuous player paints the stage — never ink/canvas under the hole
+                    // (animated ink→clear was the grey box behind minimize).
+                    .background(embedsPlayer ? Theme.ink : Color.clear)
                     .background {
                         GeometryReader { stageGeo in
                             Color.clear.preference(
@@ -248,12 +257,11 @@ struct YouTubeWatchView: View {
                         .allowsHitTesting(false)
                 }
             }
-            // When continuous player collapses, never leave title/meta over a white hole.
-            .opacity(appState.hubPlaybackExpanded || embedsPlayer ? 1 : 0)
-            .allowsHitTesting(appState.hubPlaybackExpanded || embedsPlayer)
+            // Continuous: hide as soon as pull/morph starts so canvas never fades behind film.
+            .opacity(watchContentOpacity)
+            .allowsHitTesting(watchContentOpacity > 0.4)
         }
         // Continuous player: never flash paper-white under a faded watch route.
-        // Grab / mini → canvas (matches home paper) not pure white / ink slab.
         .background(watchRootBackground)
         // No implicit chrome animation while grabbing — 1:1 with finger via pull progress.
         .animation(isMinimizingGrab ? nil : MatteryaMotion.micro, value: chromeOpacity)

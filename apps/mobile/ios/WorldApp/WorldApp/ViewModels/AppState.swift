@@ -1402,32 +1402,44 @@ final class AppState {
     }
 
     /// Collapse to mini — **playback keeps running** (same continuous AVPlayer, only layout changes).
-    /// If this session started from a chat and user hasn't navigated elsewhere, restore that chat.
-    /// Chat messages stay warm in `MessagesService` cache so re-open is instant.
-    func minimizeHubPlayback(returnToChat: Bool = true) {
+    /// Morph-first: clear watch chrome instantly, let `GlobalHubPlaybackLayer` shrink the film
+    /// into the mini strip, then flip `hubPlaybackExpanded` so canvas/paper never flashes
+    /// behind the shrinking video.
+    func minimizeHubPlayback(returnToChat: Bool = true, animated: Bool = true) {
         guard hubPlaybackPost != nil else { return }
         // Landscape FS → portrait before shrinking to mini.
         if hubPlaybackLandscapeFullscreen {
             exitHubLandscapeFullscreen()
         }
         // Never stop/pause mini — GlobalHubPlaybackLayer only resizes the stage.
-        // Feed/profile autoplay must yield while mini is on.
         hubPlaybackPlaying = true
-        withAnimation(.interactiveSpring(response: 0.42, dampingFraction: 0.86)) {
-            hubPlaybackExpanded = false
+
+        // Instant chrome clear — animated ink/canvas→clear interpolates as a grey slab.
+        var clearChrome = Transaction()
+        clearChrome.disablesAnimations = true
+        withTransaction(clearChrome) {
+            hubPlaybackPullProgress = 1
+            hubFullscreenPullProgress = 0
         }
-        FeedVideoFocus.shared.resetAll()
 
-        // Drop return target if user already left that chat while minimized.
-        syncHubPlaybackChatReturnWithPath()
+        if animated, hubPlaybackExpanded {
+            hubMinimizeReturnToChat = returnToChat
+            hubMinimizeMorphToken &+= 1
+            return
+        }
 
-        if returnToChat, let conversationID = hubPlaybackReturnConversationID {
-            selectedTab = .messages
-            navigationPath = [.conversation(conversationID)]
+        finishMinimizeHubPlayback(returnToChat: returnToChat)
+    }
+
+    /// Live 0…1 pull while dragging the continuous film toward mini (finger 1:1, no animation).
+    func setHubPlaybackPullProgress(_ progress: CGFloat) {
+        let p = min(1, max(0, progress))
+        if abs(p - hubPlaybackPullProgress) > 0.008 {
+            hubPlaybackPullProgress = p
         }
     }
 
-    /// Called by `GlobalHubPlaybackLayer` after collapse≈1 (or for non-animated minimize).
+    /// Called by `GlobalHubPlaybackLayer` after the film has landed in the mini strip.
     func finishMinimizeHubPlayback(returnToChat: Bool) {
         guard hubPlaybackPost != nil else { return }
         hubPlaybackPlaying = true
@@ -1481,13 +1493,30 @@ final class AppState {
     func expandHubPlayback() {
         guard hubPlaybackPost != nil else { return }
         rememberHubPlaybackChatReturnIfNeeded()
-        // Always leave chat / other pushes so Hubs watch (player + comments) is the real screen.
-        navigationPath.removeAll()
-        selectedTab = .hubs
         hubPlaybackPlaying = true
-        withAnimation(.interactiveSpring(response: 0.42, dampingFraction: 0.86)) {
-            hubPlaybackExpanded = true
+        // Clear pull so watch chrome is fully visible during expand (no canvas flash).
+        var clearPull = Transaction()
+        clearPull.disablesAnimations = true
+        withTransaction(clearPull) {
+            hubPlaybackPullProgress = 0
+            hubFullscreenPullProgress = 0
         }
+        // Expand first — layer owns the snappy spring. Navigation after so film grows immediately.
+        if !hubPlaybackExpanded {
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) {
+                hubPlaybackExpanded = true
+            }
+            hubExpandToken &+= 1
+        }
+        if selectedTab != .hubs {
+            selectedTab = .hubs
+        }
+        if !navigationPath.isEmpty {
+            navigationPath.removeAll()
+        }
+        NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
     }
 
     /// YouTube: drag down on the meta strip / FS button → landscape fullscreen on the
@@ -1532,6 +1561,9 @@ final class AppState {
         hubPlaybackPost = nil
         hubPlaybackExpanded = false
         hubPlaybackPlaying = false
+        hubPlaybackPullProgress = 0
+        hubFullscreenPullProgress = 0
+        hubMinimizeMorphToken = 0
         hubPlaybackReturnConversationID = nil
         MediaPlaybackCoordinator.shared.stopAllPlayback()
         // Mini closed — feed/profile may elect autoplay again.

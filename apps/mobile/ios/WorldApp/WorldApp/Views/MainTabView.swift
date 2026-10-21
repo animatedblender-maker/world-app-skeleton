@@ -262,10 +262,12 @@ struct MainTabView: View {
     }
 
     /// Floating mini above the tab bar (not docked into chat).
+    /// Also mount during morph-to-mini (pull ≥ 0.5 / chrome cleared) so the continuous
+    /// film has a real dock hole — avoids parking mid-screen then snapping.
     private var showsFloatingMiniBar: Bool {
-        appState.hubPlaybackPost != nil
-            && !appState.hubPlaybackExpanded
-            && !appState.hubPlaybackDockInChat
+        guard appState.hubPlaybackPost != nil, !appState.hubPlaybackDockInChat else { return false }
+        if !appState.hubPlaybackExpanded { return true }
+        return appState.hubPlaybackPullProgress >= 0.5
     }
 
     private var tabContentBottomInset: CGFloat {

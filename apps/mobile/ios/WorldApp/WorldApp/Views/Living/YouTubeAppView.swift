@@ -536,10 +536,13 @@ struct YouTubeAppView: View {
         return appState.hubPlaybackPullProgress < 0.08
     }
 
-    /// Watch overlay opacity — never zero when expanded with pull cleared.
+    /// Watch overlay opacity — snaps clear once pull/morph starts so canvas never
+    /// fades as a grey box behind the continuous film shrinking to mini.
     private var watchOverlayOpacity: Double {
         guard appState.hubPlaybackExpanded else { return 0 }
-        return max(0, min(1, 1 - Double(appState.hubPlaybackPullProgress)))
+        let pull = Double(appState.hubPlaybackPullProgress)
+        if pull > 0.08 { return 0 }
+        return max(0, min(1, 1 - pull))
     }
 
     /// Content under the watch overlay — always kept alive so mini never leaves a white hole.
