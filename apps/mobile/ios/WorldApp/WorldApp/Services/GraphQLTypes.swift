@@ -25,6 +25,7 @@ struct GraphQLPost: Decodable {
     let countryCode: String?
     let cityName: String?
     let author: GraphQLAuthor?
+    let hubSlug: String?
 
     enum CodingKeys: String, CodingKey {
         case id, title, body, visibility, author
@@ -43,6 +44,7 @@ struct GraphQLPost: Decodable {
         case countryName = "country_name"
         case countryCode = "country_code"
         case cityName = "city_name"
+        case hubSlug = "hub_slug"
     }
 
     init(from decoder: Decoder) throws {
@@ -67,12 +69,15 @@ struct GraphQLPost: Decodable {
         countryCode = try container.decodeIfPresent(String.self, forKey: .countryCode)
         cityName = try container.decodeIfPresent(String.self, forKey: .cityName)
         author = try container.decodeIfPresent(GraphQLAuthor.self, forKey: .author)
+        hubSlug = try container.decodeIfPresent(String.self, forKey: .hubSlug)
     }
 
     var toModel: CountryPost {
         let preview = sharedPost?.toPreview
         // Prefer fuller origin thread count for spark/hub shares (local share often has 0 rows).
         let effectiveComments = max(commentCount, preview?.commentCount ?? 0)
+        let slug = hubSlug?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let hasSlug = !(slug ?? "").isEmpty
         return CountryPost(
             id: id, title: title, body: body,
             mediaType: mediaType, mediaURL: mediaURL, thumbURL: thumbURL,
@@ -83,7 +88,9 @@ struct GraphQLPost: Decodable {
             likedByMe: likedByMe, savedByMe: savedByMe ?? false,
             createdAt: createdAt, updatedAt: updatedAt,
             authorID: authorID, countryName: countryName, countryCode: countryCode,
-            cityName: cityName, author: author?.toModel
+            cityName: cityName, author: author?.toModel,
+            externalRefType: hasSlug ? "hub" : nil,
+            externalRefID: hasSlug ? slug : nil
         )
     }
 }

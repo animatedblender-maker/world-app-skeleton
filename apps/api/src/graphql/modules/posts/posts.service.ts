@@ -79,7 +79,34 @@ type CreatePostInput = {
   shared_post_id?: string | null;
   /** Post as this channel (actor must be owner/admin). author_id becomes channel owner. */
   channel_id?: string | null;
+  /** Hubs vibe shelf slug (food, nature, …). */
+  hub_slug?: string | null;
 };
+
+const HUB_SLUG_ALLOW = new Set([
+  'social',
+  'travel',
+  'nature',
+  'music',
+  'food',
+  'sports',
+  'tech',
+  'fitness',
+  'film',
+  'culture',
+  'daily',
+]);
+
+function normalizeHubSlug(raw: string | null | undefined): string | null {
+  const s = String(raw ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, '');
+  if (!s) return null;
+  // Parent slug only — drop child suffixes like food_recipe.
+  const parent = s.split('_')[0] || s;
+  return HUB_SLUG_ALLOW.has(parent) ? parent : null;
+}
 
 function isMomentRow(row: { body?: string | null; media_type?: string | null } | null | undefined): boolean {
   if (!row) return false;
@@ -946,16 +973,18 @@ export class PostsService {
       from public.posts p
       where coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
         and p.visibility in ('public', 'country')
+        and lower(coalesce(p.media_type, '')) in ('video', 'reel', 'spark')
+        and p.media_url is not null
+        and length(trim(p.media_url)) > 8
         ${EXCLUDE_MOMENTS_SQL}
+        and coalesce(p.media_path, '') not like '%/LongForm/%'
+        and position('__hub_channel__|' in coalesce(p.body, '')) = 0
+        and position('__hub_origin__|' in coalesce(p.body, '')) = 0
         and (
           lower(coalesce(p.media_type, '')) in ('reel', 'spark')
           or position('__spark__|' in coalesce(p.body, '')) > 0
+          or position('__spark_share__|' in coalesce(p.body, '')) > 0
           or position('"reel":true' in lower(coalesce(p.media_url, ''))) > 0
-          or (
-            coalesce(p.media_path, '') like 'r2:%'
-            and position('longform' in lower(coalesce(p.media_path, ''))) = 0
-            and position('LongForm' in coalesce(p.media_path, '')) = 0
-          )
         )
         ${excludeSql}
       `,
@@ -1041,16 +1070,18 @@ export class PostsService {
       left join public.profiles spr on spr.user_id = sp.author_id
       where coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
         and p.visibility in ('public', 'country')
+        and lower(coalesce(p.media_type, '')) in ('video', 'reel', 'spark')
+        and p.media_url is not null
+        and length(trim(p.media_url)) > 8
         ${EXCLUDE_MOMENTS_SQL}
+        and coalesce(p.media_path, '') not like '%/LongForm/%'
+        and position('__hub_channel__|' in coalesce(p.body, '')) = 0
+        and position('__hub_origin__|' in coalesce(p.body, '')) = 0
         and (
           lower(coalesce(p.media_type, '')) in ('reel', 'spark')
           or position('__spark__|' in coalesce(p.body, '')) > 0
+          or position('__spark_share__|' in coalesce(p.body, '')) > 0
           or position('"reel":true' in lower(coalesce(p.media_url, ''))) > 0
-          or (
-            coalesce(p.media_path, '') like 'r2:%'
-            and position('longform' in lower(coalesce(p.media_path, ''))) = 0
-            and position('LongForm' in coalesce(p.media_path, '')) = 0
-          )
         )
         ${excludeClause}
       order by p.id
@@ -1204,32 +1235,70 @@ export class PostsService {
       }
     }
 
-    const { rows } = await pool.query(
-      `
-      insert into public.posts
-        (author_id, category_id, country_name, country_code, city_name, title, body, visibility,
-         media_type, media_url, thumb_url, shared_post_id, channel_id, posted_by_user_id)
-      values
-        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-      returning id
-      `,
-      [
-        authorId,
-        categoryId,
-        input.country_name,
-        iso,
-        input.city_name ?? null,
-        input.title?.trim() || null,
-        bodyValue,
-        visibility,
-        mediaType,
-        mediaUrl,
-        thumbUrl,
-        sharedPostId,
-        channelId,
-        postedByUserId,
-      ]
-    );
+    const hubSlug = normalizeHubSlug(input.hub_slug);
+
+    let rows: { id: string }[];
+    try {
+      const result = await pool.query(
+        `
+        insert into public.posts
+          (author_id, category_id, country_name, country_code, city_name, title, body, visibility,
+           media_type, media_url, thumb_url, shared_post_id, channel_id, posted_by_user_id, hub_slug)
+        values
+          ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        returning id
+        `,
+        [
+          authorId,
+          categoryId,
+          input.country_name,
+          iso,
+          input.city_name ?? null,
+          input.title?.trim() || null,
+          bodyValue,
+          visibility,
+          mediaType,
+          mediaUrl,
+          thumbUrl,
+          sharedPostId,
+          channelId,
+          postedByUserId,
+          hubSlug,
+        ]
+      );
+      rows = result.rows;
+    } catch (err: any) {
+      // Migration lag: hub_slug column missing — insert without it.
+      const msg = String(err?.message ?? err ?? '');
+      if (!/hub_slug/i.test(msg)) throw err;
+      const result = await pool.query(
+        `
+        insert into public.posts
+          (author_id, category_id, country_name, country_code, city_name, title, body, visibility,
+           media_type, media_url, thumb_url, shared_post_id, channel_id, posted_by_user_id)
+        values
+          ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        returning id
+        `,
+        [
+          authorId,
+          categoryId,
+          input.country_name,
+          iso,
+          input.city_name ?? null,
+          input.title?.trim() || null,
+          bodyValue,
+          visibility,
+          mediaType,
+          mediaUrl,
+          thumbUrl,
+          sharedPostId,
+          channelId,
+          postedByUserId,
+        ]
+      );
+      rows = result.rows;
+    }
 
     const createdId = rows[0]?.id;
     if (!createdId) throw new Error('Failed to create post.');

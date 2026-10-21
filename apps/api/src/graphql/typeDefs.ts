@@ -106,6 +106,8 @@ export const typeDefs = `#graphql
     channel_id: ID
     posted_by_user_id: ID
     channel_hidden_at: String
+    """Hubs vibe shelf slug (food, nature, …) for long-form / Sparks cataloging."""
+    hub_slug: String
   }
 
   enum ChannelMemberRole {
@@ -321,6 +323,8 @@ export const typeDefs = `#graphql
     shared_post_id: ID
     """When set, post as this channel (actor must be owner or admin)."""
     channel_id: ID
+    """Optional Hubs category slug (food, travel, nature, …)."""
+    hub_slug: String
   }
 
   input UpdatePostInput {

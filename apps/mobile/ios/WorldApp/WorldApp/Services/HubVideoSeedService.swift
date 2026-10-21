@@ -484,8 +484,13 @@ actor HubVideoSeedService {
 
 extension CountryPost {
     var hubSlug: String? {
-        guard externalRefType == "hub" else { return nil }
-        return externalRefID?.lowercased()
+        let id = externalRefID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let id, !id.isEmpty else { return nil }
+        // Seed rows use externalRefType == hub; user uploads may set the same after hub_slug.
+        if let type = externalRefType?.lowercased(), type != "hub", type != "hub_slug" {
+            return nil
+        }
+        return id
     }
 
     var isHubSeedVideo: Bool { externalRefType == "hub" }

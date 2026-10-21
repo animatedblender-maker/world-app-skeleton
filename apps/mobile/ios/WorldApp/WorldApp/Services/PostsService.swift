@@ -12,7 +12,7 @@ final class PostsService {
     private init() {}
 
     private let postFields = """
-    id title body media_type media_url thumb_url shared_post_id
+    id title body media_type media_url thumb_url shared_post_id hub_slug
     shared_post {
       id title body media_type media_url thumb_url author_id
       like_count comment_count
@@ -24,7 +24,7 @@ final class PostsService {
     """
 
     private let postFieldsWithBookmarks = """
-    id title body media_type media_url thumb_url shared_post_id
+    id title body media_type media_url thumb_url shared_post_id hub_slug
     shared_post {
       id title body media_type media_url thumb_url author_id
       like_count comment_count
@@ -1697,6 +1697,7 @@ final class PostsService {
         mimeType: String = "video/mp4",
         fileExtension: String = "mp4",
         thumbnailImage: UIImage? = nil,
+        hubSlug: String? = nil,
         onUploadProgress: (@Sendable (UploadProgress) -> Void)? = nil,
         onPublishing: (@Sendable () -> Void)? = nil
     ) async throws -> CountryPost {
@@ -1731,7 +1732,8 @@ final class PostsService {
             // Prefer reel type so profile/API filters never drop Sparks as plain video.
             mediaType: "reel",
             mediaURL: mediaURL,
-            thumbURL: thumbURL
+            thumbURL: thumbURL,
+            hubSlug: hubSlug
         )
         // Profile grid + home feed must see the new Spark immediately.
         ContentCache.shared.invalidate(.profilePosts)
@@ -1793,6 +1795,7 @@ final class PostsService {
         fileExtension: String = "mp4",
         thumbnailImage: UIImage? = nil,
         publishToHubChannel: Bool = true,
+        hubSlug: String? = nil,
         onUploadProgress: (@Sendable (UploadProgress) -> Void)? = nil,
         onPublishing: (@Sendable () -> Void)? = nil
     ) async throws -> CountryPost {
@@ -1808,6 +1811,7 @@ final class PostsService {
             fileExtension: fileExtension,
             thumbnailImage: thumbnailImage,
             publishToHubChannel: publishToHubChannel,
+            hubSlug: hubSlug,
             onUploadProgress: onUploadProgress,
             onPublishing: onPublishing
         )
@@ -1825,6 +1829,7 @@ final class PostsService {
         fileExtension: String,
         thumbnailImage: UIImage?,
         publishToHubChannel: Bool,
+        hubSlug: String? = nil,
         onUploadProgress: (@Sendable (UploadProgress) -> Void)?,
         onPublishing: (@Sendable () -> Void)?
     ) async throws -> CountryPost {
@@ -1854,7 +1859,8 @@ final class PostsService {
             title: title,
             mediaType: "video",
             mediaURL: mediaURL,
-            thumbURL: thumbURL
+            thumbURL: thumbURL,
+            hubSlug: publishToHubChannel ? hubSlug : nil
         )
     }
 
@@ -2132,7 +2138,8 @@ final class PostsService {
         mediaType: String? = nil,
         mediaURL: String? = nil,
         thumbURL: String? = nil,
-        sharedPostID: String? = nil
+        sharedPostID: String? = nil,
+        hubSlug: String? = nil
     ) async throws -> CountryPost {
         struct Response: Decodable { let createPost: GraphQLPost }
         let normalizedMediaType = (mediaType ?? "").lowercased()
@@ -2155,10 +2162,30 @@ final class PostsService {
         if let mediaURL { input["media_url"] = mediaURL }
         if let thumbURL { input["thumb_url"] = thumbURL }
         if let sharedPostID { input["shared_post_id"] = sharedPostID }
+        if let hubSlug {
+            let slug = hubSlug.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if !slug.isEmpty { input["hub_slug"] = slug }
+        }
 
-        let mutation = "mutation($input: CreatePostInput!) { createPost(input: $input) { \(postFields) } }"
-        let result: Response = try await gql.authenticatedRequest(query: mutation, variables: ["input": input])
-        let created = result.createPost.toModel
+        // Prefer hub_slug in the selection set; older APIs without the field still create the post.
+        let mutationWithSlug = "mutation($input: CreatePostInput!) { createPost(input: $input) { \(postFields) } }"
+        let mutationPlain = "mutation($input: CreatePostInput!) { createPost(input: $input) { \(postFields.replacingOccurrences(of: " hub_slug", with: "")) } }"
+        let created: CountryPost
+        do {
+            let result: Response = try await gql.authenticatedRequest(
+                query: mutationWithSlug,
+                variables: ["input": input]
+            )
+            created = result.createPost.toModel
+        } catch {
+            // API not redeployed yet — retry without hub_slug field/input.
+            input.removeValue(forKey: "hub_slug")
+            let result: Response = try await gql.authenticatedRequest(
+                query: mutationPlain,
+                variables: ["input": input]
+            )
+            created = result.createPost.toModel
+        }
         if !created.isStory {
             ContentCache.shared.invalidateAllFeeds()
         }

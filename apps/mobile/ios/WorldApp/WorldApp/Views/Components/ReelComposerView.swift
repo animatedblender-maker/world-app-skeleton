@@ -3,6 +3,30 @@ import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 
+private enum VideoPublishAudience: String, CaseIterable, Identifiable {
+    case hubs
+    case sparks
+    case feed
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .hubs: return MatteryaCopy.matteryaHubs
+        case .sparks: return MatteryaCopy.spark
+        case .feed: return "Feed"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .hubs: return "Long-form on your channel"
+        case .sparks: return "Short vertical clip"
+        case .feed: return "Home feed only"
+        }
+    }
+}
+
 struct ReelComposerView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppState.self) private var appState
@@ -16,6 +40,8 @@ struct ReelComposerView: View {
     @State private var caption = ""
     /// Required for Hubs channel long-form uploads.
     @State private var videoTitle = ""
+    @State private var audience: VideoPublishAudience = .sparks
+    @State private var selectedCategory: YouTubeHomeFilter = .daily
     @State private var busy = false
     @State private var uploadPhase: MediaUploadPhase = .idle
     @State private var uploadProgress: UploadProgress?
@@ -30,10 +56,18 @@ struct ReelComposerView: View {
     @State private var videoMimeType = "video/mp4"
     @State private var videoFileExtension = "mp4"
 
+    private var isReelAudience: Bool { audience == .sparks }
+    private var isHubAudience: Bool { audience == .hubs }
+    private var needsCategory: Bool { audience == .hubs || audience == .sparks }
+
+    private var categoryChoices: [YouTubeHomeFilter] {
+        YouTubeHomeFilter.hubCategories.filter { $0.hubSlug != nil }
+    }
+
     private var titleOK: Bool {
         // Hub long-form always needs a title; feed videos / sparks use caption only.
-        if publishAsReel { return true }
-        if !publishToHubChannel { return true }
+        if isReelAudience { return true }
+        if !isHubAudience { return true }
         return !videoTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
@@ -46,8 +80,11 @@ struct ReelComposerView: View {
     }
 
     private var navTitle: String {
-        if publishAsReel { return MatteryaCopy.newSpark }
-        return publishToHubChannel ? "New channel video" : "New feed video"
+        switch audience {
+        case .sparks: return MatteryaCopy.newSpark
+        case .hubs: return "New channel video"
+        case .feed: return "New feed video"
+        }
     }
 
     var body: some View {
@@ -60,7 +97,11 @@ struct ReelComposerView: View {
                     VStack(alignment: .leading, spacing: 22) {
                         composerHeader
                         previewSection
-                        if publishToHubChannel && !publishAsReel {
+                        audiencePicker
+                        if needsCategory {
+                            categoryPicker
+                        }
+                        if isHubAudience {
                             titleField
                         }
                         captionField
@@ -91,6 +132,15 @@ struct ReelComposerView: View {
             }
         }
         .tint(Theme.accentBright)
+        .onAppear {
+            if publishAsReel {
+                audience = .sparks
+            } else if publishToHubChannel {
+                audience = .hubs
+            } else {
+                audience = .feed
+            }
+        }
         .onChange(of: selectedVideo) { _, item in
             Task { await loadVideo(item) }
         }
@@ -98,7 +148,7 @@ struct ReelComposerView: View {
 
     private var composerHeader: some View {
         HStack(spacing: 14) {
-            Image(systemName: publishAsReel ? "sparkles" : "film")
+            Image(systemName: isReelAudience ? "sparkles" : "film")
                 .font(.title2)
                 .foregroundStyle(Theme.accentBright)
                 .frame(width: 48, height: 48)
@@ -136,6 +186,96 @@ struct ReelComposerView: View {
                 .stroke(Theme.border, lineWidth: 0.5)
         )
         .shadow(color: Theme.ink.opacity(0.04), radius: 16, y: 8)
+    }
+
+    private var audiencePicker: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("WHERE")
+                .font(.caption.weight(.semibold))
+                .tracking(1.2)
+                .foregroundStyle(Theme.inkMuted)
+
+            HStack(spacing: 8) {
+                ForEach(VideoPublishAudience.allCases) { option in
+                    Button {
+                        audience = option
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(option.title)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(audience == option ? Theme.paper : Theme.ink)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.85)
+                            Text(option.subtitle)
+                                .font(.caption2)
+                                .foregroundStyle(audience == option ? Theme.paper.opacity(0.8) : Theme.inkMuted)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 12)
+                        .background(
+                            audience == option ? Theme.ink : Theme.surface,
+                            in: RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
+                                .stroke(Theme.border, lineWidth: 0.5)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private var categoryPicker: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Text("CATEGORY")
+                    .font(.caption.weight(.semibold))
+                    .tracking(1.2)
+                    .foregroundStyle(Theme.inkMuted)
+                Text("Required")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(Theme.danger)
+            }
+            Text("Helps people find your video on \(MatteryaCopy.matteryaHubs) shelves.")
+                .font(.caption2)
+                .foregroundStyle(Theme.inkMuted)
+
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 96), spacing: 8)],
+                spacing: 8
+            ) {
+                ForEach(categoryChoices) { filter in
+                    Button {
+                        selectedCategory = filter
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: filter.icon)
+                                .font(.caption.weight(.semibold))
+                            Text(filter.title)
+                                .font(.caption.weight(.semibold))
+                                .lineLimit(1)
+                        }
+                        .foregroundStyle(selectedCategory == filter ? Theme.paper : Theme.ink)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .frame(maxWidth: .infinity)
+                        .background(
+                            selectedCategory == filter ? Theme.ink : Theme.surface,
+                            in: Capsule()
+                        )
+                        .overlay(
+                            Capsule().stroke(Theme.border, lineWidth: 0.5)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -302,7 +442,7 @@ struct ReelComposerView: View {
                                 .tint(.white)
                                 .scaleEffect(0.85)
                         }
-                        Text(busy ? "Working…" : (publishAsReel ? MatteryaCopy.publishSpark : MatteryaCopy.publishVideo))
+                        Text(busy ? "Working…" : (isReelAudience ? MatteryaCopy.publishSpark : MatteryaCopy.publishVideo))
                             .font(.subheadline.weight(.semibold))
                     }
                     .foregroundStyle(.white)
@@ -324,20 +464,31 @@ struct ReelComposerView: View {
     }
 
     private var destinationHeadline: String {
-        if publishAsReel { return MatteryaCopy.postToYourFeed }
-        if publishToHubChannel {
+        switch audience {
+        case .sparks:
+            return MatteryaCopy.postToYourFeed
+        case .hubs:
             let name = LivingChannelMarker.parse(from: appState.currentProfile?.bio)
             return name.map { "Post to \($0)" } ?? "Post to your channel"
+        case .feed:
+            return "Post to your feed"
         }
-        return "Post to your feed"
     }
 
     private var destinationHint: String {
-        if publishAsReel { return MatteryaCopy.publishSparkHint }
-        if publishToHubChannel {
+        switch audience {
+        case .sparks:
+            return MatteryaCopy.publishSparkHint
+        case .hubs:
             return "Appears on your Hubs channel and as a simple card in the feed."
+        case .feed:
+            return "Appears in the home feed like a normal post with video."
         }
-        return "Appears in the home feed like a normal post with video."
+    }
+
+    private var resolvedHubSlug: String? {
+        guard needsCategory else { return nil }
+        return selectedCategory.hubSlug ?? selectedCategory.rawValue
     }
 
     private var compressionPercentText: String {
@@ -471,8 +622,9 @@ struct ReelComposerView: View {
         let localPreview = previewImage
         let localCountry = country
         let localProfileCity = profile.cityName
-        let asReel = publishAsReel
-        let toHub = publishToHubChannel
+        let asReel = isReelAudience
+        let toHub = isHubAudience
+        let hubSlug = resolvedHubSlug
 
         // Long-form video (feed or hubs): jump to feed top with a shadow card while uploading.
         // Sparks still publish then open sparks — they don't pin on the home feed list.
@@ -521,7 +673,8 @@ struct ReelComposerView: View {
         do {
             let post: CountryPost
             if asReel {
-                let sparkBody = toHub
+                // Sparks from Create also live on Hubs — stamp channel unless Feed-only.
+                let sparkBody = audience != .feed
                     ? HubChannelPostMarker.markBody(trimmedCaption)
                     : trimmedCaption
                 post = try await PostsService.shared.createReel(
@@ -534,6 +687,7 @@ struct ReelComposerView: View {
                     mimeType: localMime,
                     fileExtension: localExt,
                     thumbnailImage: localPreview,
+                    hubSlug: hubSlug,
                     onUploadProgress: progressHandler,
                     onPublishing: publishingHandler
                 )
@@ -556,6 +710,7 @@ struct ReelComposerView: View {
                     fileExtension: localExt,
                     thumbnailImage: localPreview,
                     publishToHubChannel: true,
+                    hubSlug: hubSlug,
                     onUploadProgress: progressHandler,
                     onPublishing: publishingHandler
                 )
