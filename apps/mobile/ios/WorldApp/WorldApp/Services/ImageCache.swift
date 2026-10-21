@@ -18,7 +18,7 @@ final class ImageCache: @unchecked Sendable {
     private let diskDirectory: URL
     private let ioQueue = DispatchQueue(label: "com.matterya.imagecache.io", qos: .utility)
     /// Sizes we may have prefetched — used to hit memory even if display size differs slightly.
-    private static let sizeBuckets: [CGFloat] = [240, 280, 320, 360, 420, 480, 720]
+    private static let sizeBuckets: [CGFloat] = [240, 280, 320, 360, 420, 480, 720, 1080, 1440]
 
     private init() {
         memoryCache.countLimit = 120
@@ -50,12 +50,14 @@ final class ImageCache: @unchecked Sendable {
     }
 
     /// Memory only — safe to call from the main thread during scroll.
-    /// Accepts any prefetched size bucket for the same URL so list/prefetch size mismatches still hit.
+    /// May reuse a **larger-or-equal** size bucket for the same URL — never a smaller one
+    /// (that made full-width feed photos look soft after a 420px prefetch).
     func imageIfCached(for url: URL, maxPixelSize: CGFloat) -> UIImage? {
         let fetchURL = Self.cacheableURL(from: url)
+        let want = Int(maxPixelSize)
         let primary = cacheKey(for: fetchURL, maxPixelSize: maxPixelSize)
         if let hit = memoryCache.object(forKey: primary as NSString) { return hit }
-        for size in Self.sizeBuckets where Int(size) != Int(maxPixelSize) {
+        for size in Self.sizeBuckets where Int(size) >= want && Int(size) != want {
             let key = cacheKey(for: fetchURL, maxPixelSize: size)
             if let hit = memoryCache.object(forKey: key as NSString) { return hit }
         }
@@ -181,24 +183,40 @@ final class ImageCache: @unchecked Sendable {
     }
 
     /// Feed cold-start warm: avatars + media so first scroll hits memory.
+    /// Full-width photos prefetch at 1080 so CachedAsyncImage(.fit, 1080) never paints a soft 360/420.
+    /// Video posters stay at `maxPixelSize` (Frame0 / thumbs).
     func prefetchFeedMedia(_ posts: [CountryPost], maxPixelSize: CGFloat = 420) {
         // Avatars first — every feed card has one; media is secondary for text-heavy demos.
         // Must match AvatarView feed maxPixelSize (size 36 → max(72, 72) = 72) or cache misses.
         let avatarMax: CGFloat = 72
+        let photoMax: CGFloat = 1080
         var missingFrame0IDs: [String] = []
-        let mediaURLs = posts.compactMap { post -> URL? in
+        var photoURLs: [URL] = []
+        var posterURLs: [URL] = []
+        for post in posts {
+            let isPhoto = PlayPlatformBridge.isWrittenHomePost(post)
+                && !post.hasVideo
+                && post.feedImageURL != nil
+            if isPhoto, let url = post.feedImageURL, MediaURLResolver.isUsablePosterURL(url) {
+                photoURLs.append(url)
+                continue
+            }
             let candidates = [
                 MediaURLResolver.hubsListPosterURL(for: post),
                 post.posterImageURL,
                 post.feedImageURL,
                 post.thumbURL.flatMap(URL.init(string:)),
             ]
+            var hit = false
             for candidate in candidates {
                 guard let url = candidate, MediaURLResolver.isUsablePosterURL(url) else { continue }
-                return url
+                posterURLs.append(url)
+                hit = true
+                break
             }
-            missingFrame0IDs.append(post.id)
-            return nil
+            if !hit {
+                missingFrame0IDs.append(post.id)
+            }
         }
         let avatarURLs = posts.compactMap { post -> URL? in
             guard let raw = post.author?.avatarURL else { return nil }
@@ -208,7 +226,8 @@ final class ImageCache: @unchecked Sendable {
             return URL(string: raw)
         }
         prefetch(avatarURLs, maxPixelSize: avatarMax)
-        prefetch(mediaURLs, maxPixelSize: maxPixelSize)
+        prefetch(photoURLs, maxPixelSize: photoMax)
+        prefetch(posterURLs, maxPixelSize: maxPixelSize)
         if !missingFrame0IDs.isEmpty {
             Task {
                 await Frame0PosterResolver.shared.prefetch(postIDs: missingFrame0IDs)
@@ -229,13 +248,14 @@ final class ImageCache: @unchecked Sendable {
 
         let fetchURL = Self.cacheableURL(from: url)
         let key = cacheKey(for: fetchURL, maxPixelSize: maxPixelSize)
+        let want = Int(maxPixelSize)
 
-        // Disk off main thread (exact key + any size-bucket key for this URL).
+        // Disk: exact key, then only larger-or-equal buckets (never serve a soft 420 as 1080).
         if let diskImage = await loadFromDiskAsync(key: key) {
             memoryCache.setObject(diskImage, forKey: key as NSString, cost: estimateCost(diskImage))
             return diskImage
         }
-        for size in Self.sizeBuckets where Int(size) != Int(maxPixelSize) {
+        for size in Self.sizeBuckets where Int(size) >= want && Int(size) != want {
             let altKey = cacheKey(for: fetchURL, maxPixelSize: size)
             if let diskImage = await loadFromDiskAsync(key: altKey) {
                 memoryCache.setObject(diskImage, forKey: key as NSString, cost: estimateCost(diskImage))

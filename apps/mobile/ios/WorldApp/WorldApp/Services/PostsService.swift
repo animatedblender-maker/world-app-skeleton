@@ -3149,109 +3149,56 @@ enum SparkDiscoveryEngine {
         return weaveWrittenThroughFeed(fresh)
     }
 
-    /// Media cards between written inserts — Home mix ~2 videos : 1 normal (image/text).
-    private static let homeWrittenMediaGap = 2
-
-    /// ~1 normal card per 2 media; media owns the first slots.
+    /// Even Home mix: spark → hub → image → text (round-robin).
     private static func weaveWrittenThroughFeed(_ posts: [CountryPost]) -> [CountryPost] {
-        guard posts.count > 1 else { return posts }
-        var media: [CountryPost] = []
-        var written: [CountryPost] = []
-        for p in posts {
-            if PlayPlatformBridge.isWrittenHomePost(p) {
-                written.append(p)
-            } else {
-                media.append(p)
-            }
-        }
-        guard !media.isEmpty else { return posts }
-        let maxWritten = max(1, media.count / homeWrittenMediaGap)
-        let writtenCap = Array(written.prefix(maxWritten))
-        guard !writtenCap.isEmpty else { return media }
-        var out: [CountryPost] = []
-        out.reserveCapacity(media.count + writtenCap.count)
-        var mi = 0
-        var wi = 0
-        var sinceWritten = 0
-        while mi < media.count || wi < writtenCap.count {
-            let wantWritten = wi < writtenCap.count
-                && (mi >= media.count || (sinceWritten >= homeWrittenMediaGap && out.count >= 2))
-            if wantWritten {
-                out.append(writtenCap[wi]); wi += 1
-                sinceWritten = 0
-            } else if mi < media.count {
-                out.append(media[mi]); mi += 1
-                sinceWritten += 1
-            } else if wi < writtenCap.count {
-                out.append(writtenCap[wi]); wi += 1
-                sinceWritten = 0
-            } else {
-                break
-            }
-        }
-        return out
+        weaveSparkAndHubFormats(posts, seed: 0xFEED)
     }
 
-    /// Interleave Sparks, Hubs, and written/text cards so Home isn't video-only.
+    /// Interleave Sparks, Hubs, images, and text so Home shows every kind.
     private static func weaveSparkAndHubFormats(_ posts: [CountryPost], seed: UInt64) -> [CountryPost] {
         guard posts.count > 1 else { return posts }
         var sparks: [CountryPost] = []
         var hubs: [CountryPost] = []
-        var written: [CountryPost] = []
+        var images: [CountryPost] = []
+        var texts: [CountryPost] = []
         var other: [CountryPost] = []
         for p in posts {
-            if PlayPlatformBridge.isHubFeedCardVideo(p) || PlayPlatformBridge.isHubOriginShare(p) {
+            if PlayPlatformBridge.isWrittenHomePost(p) {
+                let mt = (p.mediaType ?? "").lowercased()
+                if mt == "image" || mt == "photo" || mt == "gif" || p.feedImageURL != nil {
+                    images.append(p)
+                } else {
+                    texts.append(p)
+                }
+            } else if PlayPlatformBridge.isHubFeedCardVideo(p) || PlayPlatformBridge.isHubOriginShare(p) {
                 hubs.append(p)
             } else if PlayPlatformBridge.isSparkFeedCard(p) || p.isReel || p.isSpark {
                 sparks.append(p)
-            } else if PlayPlatformBridge.isWrittenHomePost(p) {
-                written.append(p)
             } else {
                 other.append(p)
             }
         }
-        // No media lanes to weave — keep input order (likely written-heavy).
-        if hubs.isEmpty, sparks.isEmpty {
-            return posts
-        }
+        _ = seed // reserved for future seeded shuffle within lanes
+        var lanes = [sparks, hubs, images, texts]
+        var idxs = [0, 0, 0, 0]
         var out: [CountryPost] = []
         out.reserveCapacity(posts.count)
-        var s = sparks
-        var h = hubs
-        var w = written
-        var rng = FeedSeededRNG(seed: seed == 0 ? 0xBEEF : seed ^ 0xA0B511)
-        // Roughly 1 Hubs per ~3 Sparks; insert a written card about every ~50 media cards.
-        var sinceHub = 0
-        var sinceWritten = 0
-        while !s.isEmpty || !h.isEmpty || !w.isEmpty {
-            let wantWritten = !w.isEmpty && (s.isEmpty && h.isEmpty || sinceWritten >= homeWrittenMediaGap)
-            if wantWritten {
-                out.append(w.removeFirst())
-                sinceWritten = 0
-                continue
+        var guardCount = 0
+        let total = sparks.count + hubs.count + images.count + texts.count
+        while out.count < total, guardCount < total * 4 {
+            guardCount += 1
+            var progressed = false
+            for li in 0..<4 {
+                if idxs[li] < lanes[li].count {
+                    out.append(lanes[li][idxs[li]])
+                    idxs[li] += 1
+                    progressed = true
+                }
             }
-            let wantHub = !h.isEmpty && (s.isEmpty || sinceHub >= 3 || (rng.next() % 4) == 0)
-            if wantHub, !h.isEmpty {
-                out.append(h.removeFirst())
-                sinceHub = 0
-                sinceWritten += 1
-            } else if !s.isEmpty {
-                out.append(s.removeFirst())
-                sinceHub += 1
-                sinceWritten += 1
-            } else if !h.isEmpty {
-                out.append(h.removeFirst())
-                sinceHub = 0
-                sinceWritten += 1
-            } else if !w.isEmpty {
-                out.append(w.removeFirst())
-                sinceWritten = 0
-            } else {
-                break
-            }
+            if !progressed { break }
         }
         out.append(contentsOf: other)
-        return out
+        return out.isEmpty ? posts : out
     }
 
     /// Interleave relationship posts with discovery so the top of feed is not a frozen follow-timeline.

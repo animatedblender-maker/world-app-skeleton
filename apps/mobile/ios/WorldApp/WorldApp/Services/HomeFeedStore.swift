@@ -245,6 +245,11 @@ final class HomeFeedStore {
     func applyServerRankIfPossible() async {
         let snapshot = posts
         guard snapshot.count >= 4 else { return }
+        // Four-lane /v1/feed (v3 cursor, base64 "v3|" → "djN8") already mixes
+        // spark/hub/image/text — server recsys re-rank would clump kinds again.
+        if let cur = nextCursor, cur.hasPrefix("djN8") || cur.hasPrefix("djJ8") {
+            return
+        }
         // Engaged: never reshuffle anything the user can see (or just watched).
         let pinCount: Int
         if userEngagedThisSession {
@@ -471,12 +476,12 @@ final class HomeFeedStore {
                 livePool = expanded.items
                 if let cur = expanded.cursor { nextCursor = cur }
             }
-            let fast = Self.liveOnlyPosts(livePool)
-            var rankedFast = rankForSessionSync(fast.isEmpty ? livePool : fast)
+            // Keep server four-lane weave (spark/hub/image/text) — do not re-rank thin pages.
+            var rankedFast = Self.liveOnlyPosts(livePool)
+            if rankedFast.isEmpty { rankedFast = livePool }
             if forceReplace {
                 rankedFast = demoteRecentHead(rankedFast)
             }
-            rankedFast = Self.weaveWrittenAmongMedia(rankedFast)
             let head = Array(rankedFast.prefix(forceReplace ? 36 : 24))
             if !head.isEmpty {
                 let preserveHead = !forceReplace
@@ -640,48 +645,66 @@ final class HomeFeedStore {
         )
     }
 
-    /// Media cards between written inserts — Home mix ~2 videos : 1 normal (image/text).
-    private static let homeWrittenMediaGap = 2
+    /// Home mix kind for even interleave (Sparks / Hubs / image / text).
+    private enum HomeFeedKind {
+        case spark, hub, image, text
 
-    /// Keep written cards in the mix — never a written block at the head.
+        static func classify(_ post: CountryPost) -> HomeFeedKind {
+            if PlayPlatformBridge.isWrittenHomePost(post) {
+                let mt = (post.mediaType ?? "").lowercased()
+                if mt == "image" || mt == "photo" || mt == "gif" || post.feedImageURL != nil {
+                    return .image
+                }
+                return .text
+            }
+            if PlayPlatformBridge.isHubFeedCardVideo(post)
+                || PlayPlatformBridge.isHubCatalogContent(post)
+                || post.externalRefType?.lowercased() == "hub" {
+                return .hub
+            }
+            return .spark
+        }
+    }
+
+    /// Even round-robin: spark → hub → image → text. Used when merging mixed sources.
+    /// Thin `/v1/feed` pages already arrive woven — preserve that order instead.
     private static func weaveWrittenAmongMedia(_ posts: [CountryPost]) -> [CountryPost] {
         guard posts.count > 1 else { return posts }
-        var media: [CountryPost] = []
-        var written: [CountryPost] = []
+        var spark: [CountryPost] = []
+        var hub: [CountryPost] = []
+        var image: [CountryPost] = []
+        var text: [CountryPost] = []
         for p in posts {
-            if PlayPlatformBridge.isWrittenHomePost(p) {
-                written.append(p)
-            } else {
-                media.append(p)
+            switch HomeFeedKind.classify(p) {
+            case .spark: spark.append(p)
+            case .hub: hub.append(p)
+            case .image: image.append(p)
+            case .text: text.append(p)
             }
         }
-        guard !media.isEmpty else { return posts }
-        // Cap density to ~1 normal per 2 media (2:1 video:normal).
-        let maxWritten = max(1, media.count / Self.homeWrittenMediaGap)
-        let writtenCap = Array(written.prefix(maxWritten))
-        guard !writtenCap.isEmpty else { return media }
+        // Already mixed from API (at least 3 kinds present) — keep order.
+        let kindsPresent = [spark, hub, image, text].filter { !$0.isEmpty }.count
+        if kindsPresent >= 3 {
+            return posts
+        }
+        var lanes = [spark, hub, image, text]
+        var idxs = [0, 0, 0, 0]
         var out: [CountryPost] = []
-        out.reserveCapacity(media.count + writtenCap.count)
-        var mi = 0
-        var wi = 0
-        var sinceWritten = 0
-        while mi < media.count || wi < writtenCap.count {
-            let wantWritten = wi < writtenCap.count
-                && (mi >= media.count || (sinceWritten >= Self.homeWrittenMediaGap && out.count >= 2))
-            if wantWritten {
-                out.append(writtenCap[wi]); wi += 1
-                sinceWritten = 0
-            } else if mi < media.count {
-                out.append(media[mi]); mi += 1
-                sinceWritten += 1
-            } else if wi < writtenCap.count {
-                out.append(writtenCap[wi]); wi += 1
-                sinceWritten = 0
-            } else {
-                break
+        out.reserveCapacity(posts.count)
+        var guardCount = 0
+        while out.count < posts.count, guardCount < posts.count * 4 {
+            guardCount += 1
+            var progressed = false
+            for li in 0..<4 {
+                if idxs[li] < lanes[li].count {
+                    out.append(lanes[li][idxs[li]])
+                    idxs[li] += 1
+                    progressed = true
+                }
             }
+            if !progressed { break }
         }
-        return out
+        return out.isEmpty ? posts : out
     }
 
     /// Smooth open: cache → tiny first-paint network → done.
@@ -721,14 +744,17 @@ final class HomeFeedStore {
 
         // 2) Thin surface page first (slug/light path) — fall back to GraphQL first-paint.
         let live: [CountryPost]
+        let fromThin: Bool
         if let thin = await SurfacePageClient.fetchHomeFeed(limit: 28, cursor: nil), !thin.items.isEmpty {
             nextCursor = thin.nextCursor
             live = Self.liveOnlyPosts(thin.items)
+            fromThin = true
             #if DEBUG
             print("[HomeFeed] thin /v1/feed firstPaint=\(live.count)")
             #endif
         } else {
             live = Self.liveOnlyPosts(await PostsService.shared.fetchFirstPaintHomePosts(limit: 48))
+            fromThin = false
         }
         guard gen == generation else { return }
 
@@ -744,7 +770,13 @@ final class HomeFeedStore {
         } else {
             let existingLive = posts.filter { !$0.isStory }
             let realBatch = Self.liveOnlyPosts(live + existingLive)
-            let capped = Array((await rankForSessionAsync(realBatch)).prefix(min(realBatch.count, 90)))
+            // Thin /v1/feed already weaves spark/hub/image/text — keep that order.
+            let capped: [CountryPost]
+            if fromThin {
+                capped = Array(realBatch.prefix(min(realBatch.count, 90)))
+            } else {
+                capped = Array((await rankForSessionAsync(realBatch)).prefix(min(realBatch.count, 90)))
+            }
 
             if !capped.isEmpty {
                 applyPosts(capped, replace: true, sessionId: feedSessionId, alreadyRanked: true)
@@ -754,7 +786,7 @@ final class HomeFeedStore {
                 hasMore = true
                 recyclePass = 0
                 #if DEBUG
-                print("[HomeFeed] firstPaint total=\(capped.count) network=\(live.count)")
+                print("[HomeFeed] firstPaint total=\(capped.count) network=\(live.count) thin=\(fromThin)")
                 #endif
             } else if posts.isEmpty {
                 applyPosts([], replace: true, sessionId: feedSessionId)
@@ -857,7 +889,8 @@ final class HomeFeedStore {
         let end = min(displayedPosts.count, index + thumbAhead)
         if index < end {
             let window = Array(displayedPosts[index..<end])
-            ImageCache.shared.prefetchFeedMedia(window, maxPixelSize: fling ? 240 : 320)
+            // Photos inside prefetchFeedMedia always warm at 1080; this size is video posters only.
+            ImageCache.shared.prefetchFeedMedia(window, maxPixelSize: fling ? 320 : 720)
             if !fling {
                 Task(priority: .utility) {
                     await Frame0PosterResolver.shared.prefetch(
@@ -1128,9 +1161,9 @@ final class HomeFeedStore {
         var seen = existingIDs
         var contentKeys = seenContent
         if !pageItems.isEmpty {
+            // Preserve API four-lane weave order — do not re-rank thin pages.
             let pageDeduped = pageItems.dedupeHomeFeedContent()
-            let rankedPage = SparkDiscoveryEngine.rankForDiscovery(pageDeduped)
-            for post in rankedPage {
+            for post in pageDeduped {
                 guard seen.insert(post.id).inserted else { continue }
                 guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
                 if SparkDiscoveryEngine.isViewed(post), !PlayPlatformBridge.isWrittenHomePost(post) {
@@ -1190,7 +1223,8 @@ final class HomeFeedStore {
             return
         }
 
-        let orderedAppend = await rankForSessionAsync(appended)
+        // Thin pages keep server weave order; spark/hub top-up still session-ranks.
+        let orderedAppend = pageItems.isEmpty ? await rankForSessionAsync(appended) : appended
         var poolIDs = Set(posts.map(\.id))
         let dedupedAppend = orderedAppend.filter { poolIDs.insert($0.id).inserted }
         posts.append(contentsOf: dedupedAppend)
@@ -1209,7 +1243,7 @@ final class HomeFeedStore {
         // Media session 09: page append = thumbs only (no AV pool).
         ImageCache.shared.prefetchFeedMedia(
             Array(appended.prefix(SparkWarmPool.MediaBudget.thumbAhead)),
-            maxPixelSize: 360
+            maxPixelSize: 720
         )
         Task {
             await Frame0PosterResolver.shared.prefetch(
@@ -1258,8 +1292,8 @@ final class HomeFeedStore {
     private func warmHead(lite: Bool = false) async {
         let thumbN = lite ? 4 : min(max(windowLimit, firstWindow), 8)
         let thumbBand = Array(posts.prefix(thumbN))
-        ImageCache.shared.prefetchFeedMedia(thumbBand, maxPixelSize: lite ? 240 : 320)
-        ImageCache.shared.prefetchPostThumbnails(thumbBand, maxPixelSize: 320, aggressive: false)
+        ImageCache.shared.prefetchFeedMedia(thumbBand, maxPixelSize: lite ? 420 : 720)
+        ImageCache.shared.prefetchPostThumbnails(thumbBand, maxPixelSize: 420, aggressive: false)
         Task(priority: .utility) {
             await Frame0PosterResolver.shared.prefetch(postIDs: Array(thumbBand.prefix(4).map(\.id)))
         }

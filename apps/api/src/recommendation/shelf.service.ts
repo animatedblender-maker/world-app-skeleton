@@ -658,60 +658,82 @@ export type SurfacePage = {
   count: number;
 };
 
-/** Dual cursor so media + written lanes page independently on Home. */
+/** Four-lane cursor: spark / hub / image / text page independently on Home. */
+type HomeLaneCursor = { createdAt: string; id: string } | null;
 type HomeFeedCursor = {
-  media: { createdAt: string; id: string } | null;
-  text: { createdAt: string; id: string } | null;
+  spark: HomeLaneCursor;
+  hub: HomeLaneCursor;
+  image: HomeLaneCursor;
+  text: HomeLaneCursor;
 };
 
 function encodeHomeFeedCursor(cur: HomeFeedCursor): string | null {
-  const m = cur.media;
-  const t = cur.text;
-  if (!m && !t) return null;
-  // v2|mediaAt|mediaId|textAt|textId — empty text lane uses "-" placeholders.
-  const raw = [
-    'v2',
-    m?.createdAt ?? '-',
-    m?.id ?? '-',
-    t?.createdAt ?? '-',
-    t?.id ?? '-',
-  ].join('|');
-  return Buffer.from(raw, 'utf8').toString('base64url');
+  const lanes: HomeLaneCursor[] = [cur.spark, cur.hub, cur.image, cur.text];
+  if (lanes.every((l) => !l)) return null;
+  // v3|sparkAt|sparkId|hubAt|hubId|imageAt|imageId|textAt|textId
+  const parts = ['v3'];
+  for (const lane of lanes) {
+    parts.push(lane?.createdAt ?? '-', lane?.id ?? '-');
+  }
+  return Buffer.from(parts.join('|'), 'utf8').toString('base64url');
+}
+
+function laneFromParts(at: string | undefined, id: string | undefined): HomeLaneCursor {
+  if (!at || !id || at === '-' || id === '-') return null;
+  return { createdAt: at, id };
 }
 
 function decodeHomeFeedCursor(cursor: string | null | undefined): HomeFeedCursor {
-  if (!cursor) return { media: null, text: null };
+  const empty: HomeFeedCursor = { spark: null, hub: null, image: null, text: null };
+  if (!cursor) return empty;
   try {
     const raw = Buffer.from(String(cursor), 'base64url').toString('utf8');
+    if (raw.startsWith('v3|')) {
+      const parts = raw.split('|');
+      // v3 + 8 fields
+      if (parts.length >= 9) {
+        return {
+          spark: laneFromParts(parts[1], parts[2]),
+          hub: laneFromParts(parts[3], parts[4]),
+          image: laneFromParts(parts[5], parts[6]),
+          text: laneFromParts(parts[7], parts[8]),
+        };
+      }
+    }
     if (raw.startsWith('v2|')) {
       const parts = raw.split('|');
-      // v2 | mediaAt | mediaId | textAt | textId
+      // v2 media+text → map media→spark, text→image (compat while clients refresh).
       if (parts.length >= 5) {
-        const media =
-          parts[1] !== '-' && parts[2] !== '-'
-            ? { createdAt: parts[1], id: parts[2] }
-            : null;
-        const text =
-          parts[3] !== '-' && parts[4] !== '-'
-            ? { createdAt: parts[3], id: parts[4] }
-            : null;
-        return { media, text };
+        return {
+          spark: laneFromParts(parts[1], parts[2]),
+          hub: null,
+          image: laneFromParts(parts[3], parts[4]),
+          text: null,
+        };
       }
     }
   } catch {
     /* fall through to legacy */
   }
-  // Legacy single cursor = media lane only.
   const legacy = decodeCursor(cursor);
-  return { media: legacy, text: null };
+  return { ...empty, spark: legacy };
 }
 
-/** Written / image posts (no video) — R2 video sync otherwise buries these forever. */
-function isWrittenFeedRow(row: RawPostRow): boolean {
+type HomeLaneKind = 'spark' | 'hub' | 'image' | 'text';
+
+function isHomeImageRow(row: RawPostRow): boolean {
   const mt = String(row.media_type ?? '')
     .trim()
     .toLowerCase();
-  if (mt === 'none' || mt === 'text' || mt === 'image' || mt === 'photo') return true;
+  return mt === 'image' || mt === 'photo' || mt === 'gif';
+}
+
+function isHomeTextRow(row: RawPostRow): boolean {
+  const mt = String(row.media_type ?? '')
+    .trim()
+    .toLowerCase();
+  if (mt === 'none' || mt === 'text') return true;
+  if (mt === 'image' || mt === 'photo' || mt === 'gif') return false;
   if (mt === 'video' || mt === 'reel' || mt === 'spark' || mt === 'story' || mt === 'moment') {
     return false;
   }
@@ -724,95 +746,32 @@ function isWrittenFeedRow(row: RawPostRow): boolean {
   return false;
 }
 
-async function fetchHomeWrittenRows(opts: {
-  limit: number;
-  cursor: { createdAt: string; id: string } | null;
-  slugSelect: string;
-  under18?: boolean;
-}): Promise<RawPostRow[]> {
-  const want = Math.min(Math.max(opts.limit, 1), 32);
-  const params: unknown[] = [];
-  let where = `
-    p.visibility = 'public'
-    and lower(coalesce(p.media_type, '')) not in ('story', 'moment', 'video', 'reel', 'spark')
-    and lower(coalesce(p.body, '')) not like '%__story__%'
-    and lower(coalesce(p.body, '')) not like '%__spark__%'
-    and lower(coalesce(p.body, '')) not like '%__hub_origin__%'
-    and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
-    ${adultContentSqlFilter(!!opts.under18, 'p')}
-    and (
-      lower(coalesce(p.media_type, '')) in ('none', 'text', 'image', 'photo')
-      or (
-        (p.media_url is null or length(trim(coalesce(p.media_url, ''))) < 4)
-        and (
-          length(trim(coalesce(p.body, ''))) > 0
-          or length(trim(coalesce(p.title, ''))) > 0
-        )
-      )
-    )
-  `;
-  if (opts.cursor) {
-    params.push(opts.cursor.createdAt, opts.cursor.id);
-    where += ` and (greatest(p.updated_at, p.created_at), p.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`;
-  }
-  params.push(want);
-  const sql = `
-    select
-      p.id, p.title, p.body, p.media_type, p.media_url, p.thumb_url,
-      p.like_count, p.comment_count, p.created_at, p.updated_at,
-      greatest(p.updated_at, p.created_at) as feed_at,
-      p.country_code, p.country_name,
-      p.author_id, p.shared_post_id, ${opts.slugSelect},
-      coalesce(p.moderation_status, 'active') as moderation_status,
-      pr.display_name as author_name, pr.username as author_username, pr.avatar_url as author_avatar
-    from public.posts p
-    left join public.profiles pr on pr.user_id = p.author_id
-    where ${where}
-    order by greatest(p.updated_at, p.created_at) desc, p.id desc
-    limit $${params.length}
-  `;
-  const { rows } = await pool.query<RawPostRow>(sql, params);
-  return rows;
+/** ShortForm / spark stamps — never LongForm hubs. */
+function mediaLooksSpark(row: RawPostRow): boolean {
+  const mt = String(row.media_type ?? '')
+    .trim()
+    .toLowerCase();
+  if (mt === 'reel' || mt === 'spark') return true;
+  const body = String(row.body ?? '').toLowerCase();
+  if (body.includes('__spark__') || body.includes('__spark_share__')) return true;
+  const blob = `${row.media_url ?? ''}`.toLowerCase();
+  if (blob.includes('/longform/')) return false;
+  if (blob.includes('/shortform/')) return true;
+  return false;
 }
 
-/**
- * Home feed thin page — weave ~2 videos : 1 normal post (image/text).
- * Media lane uses created_at (index-friendly) — greatest(updated_at, created_at)
- * was causing multi-second scans / intermittent 500s under cursor walk.
- */
-export async function fetchHomeFeedPage(input: {
-  limit?: number;
-  cursor?: string | null;
-  viewerUserId?: string | null;
-}): Promise<SurfacePage> {
-  const want = Math.min(Math.max(Number(input.limit) || 24, 1), 64);
-  // Home mix: 2 videos → 1 normal post (image/text).
-  const mediaBetweenWritten = 2;
-  // Enough normal cards for ~1/3 of the page (2:1 video:normal).
-  const textQuota = Math.max(1, Math.floor(want / 3));
-  const mediaWant = Math.max(1, want - textQuota);
-  const homeCur = decodeHomeFeedCursor(input.cursor);
-  const hasCol = await hasHubSlugColumn();
-  const slugSelect = hasCol ? 'p.hub_slug' : 'null::text as hub_slug';
-  const under18 = await viewerIsUnder18(input.viewerUserId);
-  const params: unknown[] = [];
-  // Tight video-only predicate — avoid OR media_url / lower(coalesce) that defeat indexes.
-  let where = `
-    p.visibility = 'public'
-    and p.media_type in ('video', 'reel', 'spark')
-    and p.media_url is not null
-    and length(trim(p.media_url)) > 8
-    and coalesce(p.body, '') not ilike '%__story__%'
-    and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
-    ${adultContentSqlFilter(under18, 'p')}
-  `;
-  if (homeCur.media) {
-    params.push(homeCur.media.createdAt, homeCur.media.id);
-    where += ` and (p.created_at, p.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`;
-  }
-  params.push(mediaWant);
-  const sql = `
-    select
+/** LongForm / hub stamps — never Sparks ShortForm. */
+function mediaLooksHub(row: RawPostRow): boolean {
+  const body = String(row.body ?? '').toLowerCase();
+  if (body.includes('__spark__') || body.includes('__spark_share__')) return false;
+  if (body.includes('__hub_origin__') || body.includes('__hub_channel__')) return true;
+  const blob = `${row.media_url ?? ''}`.toLowerCase();
+  if (blob.includes('/shortform/')) return false;
+  if (blob.includes('/longform/')) return true;
+  return false;
+}
+
+const HOME_FEED_SELECT = (slugSelect: string) => `
       p.id, p.title, p.body, p.media_type, p.media_url, p.thumb_url,
       p.like_count, p.comment_count, p.created_at, p.updated_at,
       p.created_at as feed_at,
@@ -820,33 +779,165 @@ export async function fetchHomeFeedPage(input: {
       p.author_id, p.shared_post_id, ${slugSelect},
       coalesce(p.moderation_status, 'active') as moderation_status,
       pr.display_name as author_name, pr.username as author_username, pr.avatar_url as author_avatar
+`;
+
+async function fetchHomeLaneRows(opts: {
+  kind: HomeLaneKind;
+  limit: number;
+  cursor: HomeLaneCursor;
+  slugSelect: string;
+  under18: boolean;
+}): Promise<RawPostRow[]> {
+  const want = Math.min(Math.max(opts.limit, 1), 32);
+  const params: unknown[] = [];
+  const adult = adultContentSqlFilter(opts.under18, 'p');
+  let where = `
+    p.visibility = 'public'
+    and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
+    and coalesce(p.body, '') not ilike '%__story__%'
+    ${adult}
+  `;
+
+  if (opts.kind === 'spark') {
+    where += `
+      and p.media_type in ('video', 'reel', 'spark')
+      and p.media_url is not null
+      and length(trim(p.media_url)) > 8
+      and coalesce(p.media_path, '') not like '%/LongForm/%'
+      and p.media_url::text not ilike '%/LongForm/%'
+      and (
+        p.media_type in ('reel', 'spark')
+        or coalesce(p.media_path, '') like '%/ShortForm/%'
+        or p.media_url::text ilike '%/ShortForm/%'
+        or coalesce(p.body, '') ilike '%__spark__%'
+      )
+    `;
+  } else if (opts.kind === 'hub') {
+    where += `
+      and p.media_type = 'video'
+      and p.media_url is not null
+      and length(trim(p.media_url)) > 8
+      and coalesce(p.body, '') not ilike '%__spark__%'
+      and (
+        coalesce(p.media_path, '') like '%/LongForm/%'
+        or p.media_url::text ilike '%/LongForm/%'
+        or coalesce(p.body, '') ilike '%__hub_origin__%'
+        or coalesce(p.body, '') ilike '%__hub_channel__%'
+      )
+    `;
+  } else if (opts.kind === 'image') {
+    where += `
+      and lower(coalesce(p.media_type, '')) in ('image', 'photo', 'gif')
+      and p.media_url is not null
+      and length(trim(p.media_url)) > 4
+      and coalesce(p.body, '') not ilike '%__spark__%'
+      and coalesce(p.body, '') not ilike '%__hub_origin__%'
+    `;
+  } else {
+    // Pure text / status posts — never video or image cards.
+    where += `
+      and lower(coalesce(p.media_type, '')) not in ('story', 'moment', 'video', 'reel', 'spark', 'image', 'photo', 'gif')
+      and coalesce(p.body, '') not ilike '%__spark__%'
+      and coalesce(p.body, '') not ilike '%__hub_origin__%'
+      and (
+        lower(coalesce(p.media_type, '')) in ('none', 'text')
+        or (
+          (p.media_url is null or length(trim(coalesce(p.media_url, ''))) < 4)
+          and (
+            length(trim(coalesce(p.body, ''))) > 0
+            or length(trim(coalesce(p.title, ''))) > 0
+          )
+        )
+      )
+    `;
+  }
+
+  if (opts.cursor) {
+    params.push(opts.cursor.createdAt, opts.cursor.id);
+    where += ` and (p.created_at, p.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`;
+  }
+  params.push(want);
+  const sql = `
+    select ${HOME_FEED_SELECT(opts.slugSelect)}
     from public.posts p
     left join public.profiles pr on pr.user_id = p.author_id
     where ${where}
     order by p.created_at desc, p.id desc
     limit $${params.length}
   `;
+  const { rows } = await pool.query<RawPostRow>(sql, params);
+  return rows;
+}
 
-  let mediaRows: RawPostRow[] = [];
-  let writtenRows: RawPostRow[] = [];
+function advanceLaneCursor(
+  rows: RawPostRow[],
+  consumed: number,
+  prior: HomeLaneCursor
+): HomeLaneCursor {
+  if (consumed <= 0) return prior;
+  const last = rows[Math.min(consumed, rows.length) - 1];
+  if (!last) return prior;
+  return { createdAt: toIso(last.created_at), id: last.id };
+}
+
+/**
+ * Home feed thin page — even mix of Sparks, Hubs, images, and text.
+ * Four independent cursors so ShortForm flood never buries LongForm / written.
+ * Lanes use created_at (index-friendly).
+ */
+export async function fetchHomeFeedPage(input: {
+  limit?: number;
+  cursor?: string | null;
+  viewerUserId?: string | null;
+}): Promise<SurfacePage> {
+  const want = Math.min(Math.max(Number(input.limit) || 24, 1), 64);
+  // Even mix: ~1/4 each lane; over-fetch slightly so weave can fill gaps.
+  const perLane = Math.max(2, Math.ceil(want / 4) + 1);
+  const homeCur = decodeHomeFeedCursor(input.cursor);
+  const hasCol = await hasHubSlugColumn();
+  const slugSelect = hasCol ? 'p.hub_slug' : 'null::text as hub_slug';
+  const under18 = await viewerIsUnder18(input.viewerUserId);
+
+  let sparkRows: RawPostRow[] = [];
+  let hubRows: RawPostRow[] = [];
+  let imageRows: RawPostRow[] = [];
+  let textRows: RawPostRow[] = [];
   try {
-    const mediaQuery = pool.query<RawPostRow>(sql, params);
-    const writtenQuery =
-      textQuota > 0
-        ? fetchHomeWrittenRows({
-            limit: textQuota,
-            cursor: homeCur.text,
-            slugSelect,
-            under18,
-          })
-        : Promise.resolve([] as RawPostRow[]);
-    // Bound the DB wait — prefer empty page over 12s+ hangs that storm iOS -1001.
     const timed = await Promise.race([
-      Promise.all([mediaQuery, writtenQuery]),
+      Promise.all([
+        fetchHomeLaneRows({
+          kind: 'spark',
+          limit: perLane,
+          cursor: homeCur.spark,
+          slugSelect,
+          under18,
+        }),
+        fetchHomeLaneRows({
+          kind: 'hub',
+          limit: perLane,
+          cursor: homeCur.hub,
+          slugSelect,
+          under18,
+        }),
+        fetchHomeLaneRows({
+          kind: 'image',
+          limit: perLane,
+          cursor: homeCur.image,
+          slugSelect,
+          under18,
+        }),
+        fetchHomeLaneRows({
+          kind: 'text',
+          limit: perLane,
+          cursor: homeCur.text,
+          slugSelect,
+          under18,
+        }),
+      ]),
       new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 7000)),
     ]);
     if (timed === 'timeout') {
-      console.error('[feed] media query timed out after 7s');
+      console.error('[feed] four-lane query timed out after 7s');
       return {
         surface: 'home_for_you',
         items: [],
@@ -854,10 +945,12 @@ export async function fetchHomeFeedPage(input: {
         count: 0,
       };
     }
-    mediaRows = timed[0].rows;
-    writtenRows = timed[1];
+    sparkRows = timed[0].filter(mediaLooksSpark);
+    hubRows = timed[1].filter(mediaLooksHub);
+    imageRows = timed[2].filter(isHomeImageRow);
+    textRows = timed[3].filter(isHomeTextRow);
   } catch (err: any) {
-    console.error('[feed] media query failed', err?.message ?? err);
+    console.error('[feed] four-lane query failed', err?.message ?? err);
     return {
       surface: 'home_for_you',
       items: [],
@@ -866,30 +959,31 @@ export async function fetchHomeFeedPage(input: {
     };
   }
 
-  const mediaOnly = mediaRows.filter((r) => !isWrittenFeedRow(r));
-  const writtenMerged = writtenRows.filter(isWrittenFeedRow).slice(0, textQuota);
-
-  // Weave 2 videos : 1 normal post (image/text).
+  // Round-robin: spark → hub → image → text (skip empty lanes).
+  const lanes: { kind: HomeLaneKind; rows: RawPostRow[]; i: number }[] = [
+    { kind: 'spark', rows: sparkRows, i: 0 },
+    { kind: 'hub', rows: hubRows, i: 0 },
+    { kind: 'image', rows: imageRows, i: 0 },
+    { kind: 'text', rows: textRows, i: 0 },
+  ];
   const woven: RawPostRow[] = [];
-  let mi = 0;
-  let ti = 0;
-  let sinceText = 0;
-  while (woven.length < want && (mi < mediaOnly.length || ti < writtenMerged.length)) {
-    const wantText =
-      ti < writtenMerged.length &&
-      (mi >= mediaOnly.length || sinceText >= mediaBetweenWritten);
-    if (wantText) {
-      woven.push(writtenMerged[ti++]);
-      sinceText = 0;
-    } else if (mi < mediaOnly.length) {
-      woven.push(mediaOnly[mi++]);
-      sinceText += 1;
-    } else if (ti < writtenMerged.length) {
-      woven.push(writtenMerged[ti++]);
-      sinceText = 0;
-    } else {
-      break;
+  const seen = new Set<string>();
+  let guard = 0;
+  while (woven.length < want && guard < want * 4) {
+    guard += 1;
+    let progressed = false;
+    for (const lane of lanes) {
+      if (woven.length >= want) break;
+      while (lane.i < lane.rows.length) {
+        const row = lane.rows[lane.i++];
+        if (seen.has(row.id)) continue;
+        seen.add(row.id);
+        woven.push(row);
+        progressed = true;
+        break;
+      }
     }
+    if (!progressed) break;
   }
 
   const items = woven.map((row) => rowToCard(row, classifyRow(row)));
@@ -901,33 +995,24 @@ export async function fetchHomeFeedPage(input: {
     liveItems = items;
   }
 
-  const lastMedia = mediaOnly[Math.min(mi, mediaOnly.length) - 1] ?? mediaOnly[mediaOnly.length - 1];
-  const lastText =
-    writtenMerged[Math.min(ti, writtenMerged.length) - 1] ?? writtenMerged[writtenMerged.length - 1];
-  const nextMedia = lastMedia
-    ? {
-        createdAt: toIso(lastMedia.created_at),
-        id: lastMedia.id,
-      }
-    : homeCur.media;
-  const nextText = lastText
-    ? {
-        createdAt: toIso(lastText.feed_at ?? lastText.updated_at ?? lastText.created_at),
-        id: lastText.id,
-      }
-    : homeCur.text;
+  const advanced: HomeFeedCursor = {
+    spark: advanceLaneCursor(sparkRows, lanes[0].i, homeCur.spark),
+    hub: advanceLaneCursor(hubRows, lanes[1].i, homeCur.hub),
+    image: advanceLaneCursor(imageRows, lanes[2].i, homeCur.image),
+    text: advanceLaneCursor(textRows, lanes[3].i, homeCur.text),
+  };
+  // Keep paging while any lane still has a full slice (more inventory behind the cursor).
   const hasMore =
-    mediaOnly.length >= mediaWant ||
-    liveItems.length >= want ||
-    (textQuota > 0 && writtenRows.length >= textQuota);
-  const nextCursor = hasMore
-    ? encodeHomeFeedCursor({ media: nextMedia, text: nextText })
-    : null;
+    sparkRows.length >= perLane ||
+    hubRows.length >= perLane ||
+    imageRows.length >= perLane ||
+    textRows.length >= perLane ||
+    liveItems.length >= want;
 
   return {
     surface: 'home_for_you',
     items: liveItems,
-    nextCursor,
+    nextCursor: hasMore ? encodeHomeFeedCursor(advanced) : null,
     count: liveItems.length,
   };
 }
