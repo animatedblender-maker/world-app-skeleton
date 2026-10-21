@@ -105,7 +105,11 @@ struct MainTabView: View {
                 .zIndex(appState.hubPlaybackLandscapeFullscreen ? 280 : 55)
 
             // Tab bar pinned to the physical bottom of the ZStack.
-            if appState.navigationPath.isEmpty, !appState.hubPlaybackLandscapeFullscreen {
+            // Hide while the in-app share sheet is open — otherwise the custom tab
+            // paints over the sheet and covers the last rows (e.g. Copy link).
+            if appState.navigationPath.isEmpty,
+               !appState.hubPlaybackLandscapeFullscreen,
+               appState.sharePostSheet == nil {
                 BottomTabBar()
                     .frame(maxWidth: .infinity)
                     .zIndex(70)

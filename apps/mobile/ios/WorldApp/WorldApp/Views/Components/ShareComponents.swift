@@ -674,10 +674,15 @@ struct SharePostSheet: View {
                     }
                 }
                 .padding(.horizontal, 20)
-                .padding(.bottom, 28)
+                // Clear home indicator + leave room so Copy link is never clipped.
+                .padding(.bottom, 28 + (keepsSparksPlaying ? Theme.tabBarHeight : 0))
             }
         }
         .background(Theme.canvas)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            // Keep the last share rows above the home indicator / any residual chrome.
+            Color.clear.frame(height: 8)
+        }
         .confirmationDialog(
             "Share again?",
             isPresented: $showRepeatShareConfirm,
@@ -934,7 +939,11 @@ private struct ShareSheetPresentationModifier: ViewModifier {
     func body(content: Content) -> some View {
         if enabled {
             content
-                .presentationDetents([.medium, .large])
+                // Tall enough that Send / Share to feed / Repost / Copy link all fit
+                // above the home indicator without sitting under the custom tab bar.
+                .presentationDetents([.fraction(0.62), .large])
+                .presentationDragIndicator(.visible)
+                .presentationContentInteraction(.scrolls)
         } else {
             content
         }
@@ -999,10 +1008,10 @@ struct HubsShareOverlay: View {
                 .fill(Theme.surface)
                 .shadow(color: .black.opacity(0.35), radius: 20, y: -4)
             )
-            .frame(maxHeight: UIScreen.main.bounds.height * 0.52)
-            .ignoresSafeArea(edges: .bottom)
+            .padding(.bottom, Theme.tabBarHeight)
+            .frame(maxHeight: UIScreen.main.bounds.height * 0.58)
         }
-        .ignoresSafeArea()
+        .ignoresSafeArea(edges: .top)
         .onAppear {
             appState.hubPlaybackPlaying = true
             NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
