@@ -11,25 +11,44 @@ enum SurfacePageClient {
 
     // MARK: - Surfaces
 
-    static func fetchHomeFeed(limit: Int = 24, cursor: String? = nil) async -> Page? {
-        await get(
+    static func fetchHomeFeed(
+        limit: Int = 24,
+        cursor: String? = nil,
+        idempotencyKey: String? = nil
+    ) async -> Page? {
+        var q: [String: String?] = [
+            // API caps at 64 — walk the full R2-backed library newest-first.
+            "limit": "\(min(max(limit, 1), 64))",
+            "cursor": cursor,
+        ]
+        // Architecture §5 — retry the same key after timeout; never double-consume ledger.
+        if let idempotencyKey, !idempotencyKey.isEmpty {
+            q["idempotencyKey"] = idempotencyKey
+        }
+        return await get(
             path: "/v1/feed",
-            query: [
-                // API caps at 64 — walk the full R2-backed library newest-first.
-                "limit": "\(min(max(limit, 1), 64))",
-                "cursor": cursor,
-            ].compactMapValues { $0 },
+            query: q.compactMapValues { $0 },
             allowMissingMedia: true
         )
     }
 
-    static func fetchSparks(limit: Int = 24, cursor: String? = nil, slug: String? = nil) async -> Page? {
+    static func fetchSparks(
+        limit: Int = 24,
+        cursor: String? = nil,
+        slug: String? = nil,
+        excludeIds: [String] = []
+    ) async -> Page? {
         var q: [String: String?] = [
             // API caps at 48 — endless Sparks pages by feed_at.
             "limit": "\(min(max(limit, 1), 48))",
             "cursor": cursor,
         ]
         if let slug, !slug.isEmpty { q["slug"] = slug }
+        // Server-side watched/already-in-pager exclude — keeps endless swipe on fresh R2.
+        let exclude = Array(excludeIds.prefix(400))
+        if !exclude.isEmpty {
+            q["exclude"] = exclude.joined(separator: ",")
+        }
         return await get(
             path: "/v1/sparks",
             query: q.compactMapValues { $0 },
@@ -51,16 +70,31 @@ enum SurfacePageClient {
         var cursor = startingCursor
         var pages = 0
         let pageSize = min(max(want, 24), 48)
+        // Merge local watched into server exclude so pages aren't wasted on already-seen clips.
+        var serverExclude = Array(excluding.prefix(200))
+        if skipViewed {
+            serverExclude.append(contentsOf: SparkDiscoveryEngine.viewedIDList(limit: 400))
+        }
+        var seenEx = Set<String>()
+        serverExclude = serverExclude.filter { seenEx.insert($0).inserted }
         while out.count < want, pages < maxPages {
             pages += 1
-            guard let page = await fetchSparks(limit: pageSize, cursor: cursor) else { break }
+            guard let page = await fetchSparks(
+                limit: pageSize,
+                cursor: cursor,
+                excludeIds: serverExclude
+            ) else { break }
             if page.items.isEmpty {
                 cursor = page.nextCursor
-                break
+                // Empty page with a next cursor → keep walking (exclude filtered the head).
+                if page.nextCursor == nil { break }
+                continue
             }
             for post in page.items {
                 guard seen.insert(post.id).inserted else { continue }
                 if skipViewed, SparkDiscoveryEngine.isViewed(post) { continue }
+                // Images / non-playable never belong in Sparks player.
+                guard post.playableVideoURL != nil || post.hasVideo else { continue }
                 out.append(post)
                 if out.count >= want { break }
             }
@@ -166,6 +200,14 @@ enum SurfacePageClient {
             return s
         }()
 
+        let adultFlag: Bool? = {
+            if let b = row["is_adult"] as? Bool { return b }
+            if let n = row["is_adult"] as? NSNumber { return n.boolValue }
+            let status = (row["moderation_status"] as? String)?.lowercased()
+            if status == "sensitive" { return true }
+            return nil
+        }()
+
         return CountryPost(
             id: id,
             title: row["title"] as? String,
@@ -187,7 +229,8 @@ enum SurfacePageClient {
             countryCode: row["country_code"] as? String,
             author: author,
             externalRefType: isHubSurface ? "hub" : nil,
-            externalRefID: isHubSurface ? slug : nil
+            externalRefID: isHubSurface ? slug : nil,
+            isAdult: adultFlag
         )
     }
 

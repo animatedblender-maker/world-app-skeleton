@@ -859,11 +859,22 @@ app.get('/v1/hubs/slugs', (_req: Request, res: Response) => {
 
 app.get('/v1/hubs/for-you', async (req: Request, res: Response) => {
   try {
-    await getUserFromRequest(req).catch(() => null);
+    const user = await getUserFromRequest(req).catch(() => null);
     const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 40);
     const cursor = req.query.cursor ? String(req.query.cursor) : null;
     const session = req.query.session ? String(req.query.session) : null;
-    const page = await fetchForYouPage({ limit, cursor, session });
+    const idempotencyKey = req.query.idempotencyKey
+      ? String(req.query.idempotencyKey)
+      : req.query.idempotency_key
+        ? String(req.query.idempotency_key)
+        : null;
+    const page = await fetchForYouPage({
+      limit,
+      cursor,
+      session,
+      viewerUserId: user?.id ?? null,
+      idempotencyKey,
+    });
     return res.json({ ok: true, ...page });
   } catch (err: any) {
     console.error('[hubs/for-you]', err?.message ?? err);
@@ -992,10 +1003,16 @@ app.get('/v1/feed', async (req: Request, res: Response) => {
     const user = await getUserFromRequest(req).catch(() => null);
     const limit = Math.min(Math.max(Number(req.query.limit) || 24, 1), 48);
     const cursor = req.query.cursor ? String(req.query.cursor) : null;
+    const idempotencyKey = req.query.idempotencyKey
+      ? String(req.query.idempotencyKey)
+      : req.query.idempotency_key
+        ? String(req.query.idempotency_key)
+        : null;
     const page = await fetchHomeFeedPage({
       limit,
       cursor,
       viewerUserId: user?.id ?? null,
+      idempotencyKey,
     });
     return res.json({ ok: true, ...page });
   } catch (err: any) {

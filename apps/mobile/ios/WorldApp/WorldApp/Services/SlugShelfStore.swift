@@ -33,6 +33,8 @@ final class SlugShelfStore {
         var nextCursor: String?
         var exhausted = false
         var lastFetchAt: Date?
+        /// Retry-safe batch key for /v1/hubs/for-you (architecture §5).
+        var pendingIdempotencyKey: String?
     }
 
     private var shelves: [String: ShelfState] = [:]
@@ -258,17 +260,30 @@ final class SlugShelfStore {
     // MARK: - Network
 
     private func fetchForYou(cursor: String?) async -> Page? {
+        var state = shelves[Self.forYouKey] ?? ShelfState()
+        let idem = state.pendingIdempotencyKey ?? UUID().uuidString
+        state.pendingIdempotencyKey = idem
+        shelves[Self.forYouKey] = state
+
         var comps = URLComponents(string: "\(AppConfig.apiBaseURL)/v1/hubs/for-you")
         var q: [URLQueryItem] = [
             URLQueryItem(name: "limit", value: "\(Self.pageSize)"),
             URLQueryItem(name: "session", value: sessionToken),
+            // Architecture §5 — one logical batch per key (retry-safe).
+            URLQueryItem(name: "idempotencyKey", value: idem),
         ]
         if let cursor, !cursor.isEmpty {
             q.append(URLQueryItem(name: "cursor", value: cursor))
         }
         comps?.queryItems = q
         guard let url = comps?.url else { return nil }
-        return await getPage(url: url, defaultSlug: nil)
+        let page = await getPage(url: url, defaultSlug: nil)
+        if page != nil {
+            var cleared = shelves[Self.forYouKey] ?? ShelfState()
+            cleared.pendingIdempotencyKey = nil
+            shelves[Self.forYouKey] = cleared
+        }
+        return page
     }
 
     private func fetchShelf(slug: String, cursor: String?) async -> Page? {

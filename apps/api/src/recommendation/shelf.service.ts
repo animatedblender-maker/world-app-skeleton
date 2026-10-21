@@ -16,6 +16,14 @@ import {
   textLooksNsfw,
   viewerIsUnder18,
 } from '../moderation/nsfw.js';
+import {
+  canonicalVideoKey,
+  loadCommittedBatch,
+  loadDeliveredCanonicalKeys,
+  orderRowsByIds,
+  reserveDeliveryBatch,
+} from './delivery.service.js';
+import { rankCandidates } from './rank.service.js';
 
 export const HUB_PARENT_SLUGS = [
   'comedy',
@@ -107,6 +115,8 @@ export type ForYouPage = {
   slugsUsed: string[];
   count: number;
   session: string;
+  batchId?: string | null;
+  deliveryPolicy?: 'ledger' | 'cursor';
 };
 
 type RawPostRow = {
@@ -575,11 +585,37 @@ export async function fetchForYouPage(input: {
   limit?: number;
   cursor?: string | null;
   session?: string | null;
+  viewerUserId?: string | null;
+  idempotencyKey?: string | null;
 }): Promise<ForYouPage> {
   const want = Math.min(Math.max(Number(input.limit) || 36, 1), 48);
   const session =
     String(input.session ?? '').trim().slice(0, 64) ||
     `s${Date.now().toString(36)}`;
+  const viewerId = input.viewerUserId ? String(input.viewerUserId).trim() : '';
+  const idem =
+    String(input.idempotencyKey ?? '').trim().slice(0, 128) || null;
+
+  if (viewerId && idem) {
+    const prior = await loadCommittedBatch(viewerId, 'hubs_for_you', idem);
+    if (prior?.videoIds.length) {
+      const rows = await loadRawPostsByIds(prior.videoIds);
+      const items = orderRowsByIds(rows, prior.videoIds).map((row) =>
+        rowToCard(row, classifyRow(row))
+      );
+      const liveItems = await freshenCardMedia(items);
+      return {
+        surface: 'hubs_for_you',
+        items: liveItems,
+        nextCursor: input.cursor ?? null,
+        slugsUsed: [...new Set(liveItems.map((i) => i.slug))],
+        count: liveItems.length,
+        session,
+        batchId: prior.batchId,
+        deliveryPolicy: 'ledger',
+      };
+    }
+  }
 
   // Rotate slug order by session hash for variety across opens.
   let order = [...HUB_PARENT_SLUGS];
@@ -592,46 +628,100 @@ export async function fetchForYouPage(input: {
 
   // Large candidate window so round-robin can fill dense pages from the R2 long-form library.
   const batch = await queryVideoPage({
-    limit: Math.min(want * 10, 200),
+    limit: Math.min(want * (viewerId ? 14 : 10), 220),
     cursor: input.cursor,
   });
 
-  const buckets = new Map<string, ThinShelfCard[]>();
+  const buckets = new Map<string, RawPostRow[]>();
   let lastCursor: string | null = null;
   for (const row of batch) {
     const slug = classifyRow(row);
     lastCursor = encodeCursor(toIso(row.created_at), row.id);
     const list = buckets.get(slug) ?? [];
-    list.push(rowToCard(row, slug));
+    list.push(row);
     buckets.set(slug, list);
   }
 
-  const queues = new Map<string, ThinShelfCard[]>();
+  const queues = new Map<string, RawPostRow[]>();
   for (const s of order) {
     const q = buckets.get(s);
     if (q?.length) queues.set(s, [...q]);
   }
-  // Unknown slugs (shouldn't happen) at end.
   for (const [s, q] of buckets) {
     if (!queues.has(s) && q.length) queues.set(s, [...q]);
   }
 
-  const items: ThinShelfCard[] = [];
+  const woven: RawPostRow[] = [];
   const slugsUsed = new Set<string>();
   let progressed = true;
-  while (items.length < want && progressed) {
+  const candidateWant = viewerId ? Math.min(want * 3, 96) : want;
+  while (woven.length < candidateWant && progressed) {
     progressed = false;
     for (const s of order) {
       const q = queues.get(s);
       if (!q?.length) continue;
       const next = q.shift()!;
-      items.push(next);
+      woven.push(next);
       slugsUsed.add(s);
       progressed = true;
-      if (items.length >= want) break;
+      if (woven.length >= candidateWant) break;
     }
   }
 
+  let servedRows = woven.slice(0, want);
+  let batchId: string | null = null;
+  let deliveryPolicy: 'ledger' | 'cursor' = 'cursor';
+
+  if (viewerId && woven.length) {
+    const delivered = await loadDeliveredCanonicalKeys(viewerId, 'hubs_for_you');
+    let eligible = woven.filter((row) => !delivered.has(canonicalVideoKey(row)));
+    eligible = dedupeHomeMediaRows(eligible);
+
+    if (eligible.length) {
+      let rankedIds = eligible.map((r) => r.id);
+      try {
+        const ranked = await rankCandidates({
+          entityId: viewerId,
+          surface: 'hubs_for_you',
+          candidateIds: rankedIds,
+          sessionId: session,
+          limit: Math.min(eligible.length, want * 2),
+        });
+        if (ranked.items.length) rankedIds = ranked.items.map((i) => i.id);
+      } catch (err: any) {
+        console.warn('[hubs/for-you] rankCandidates failed', err?.message ?? err);
+      }
+
+      const byId = new Map(eligible.map((r) => [r.id, r]));
+      const rankedRows = rankedIds
+        .map((id) => byId.get(id))
+        .filter((r): r is RawPostRow => !!r);
+
+      const reserved = await reserveDeliveryBatch({
+        userId: viewerId,
+        surface: 'hubs_for_you',
+        idempotencyKey:
+          idem || `hubs:${session}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+        candidates: rankedRows.map((r) => ({
+          id: r.id,
+          canonicalKey: canonicalVideoKey(r),
+        })),
+        limit: want,
+      });
+
+      if (reserved && reserved.videoIds.length) {
+        servedRows = orderRowsByIds(rankedRows, reserved.videoIds);
+        batchId = reserved.batchId;
+        deliveryPolicy = 'ledger';
+      } else {
+        servedRows = rankedRows.slice(0, want);
+      }
+    } else {
+      servedRows = [];
+    }
+  }
+
+  const items = servedRows.map((row) => rowToCard(row, classifyRow(row)));
   const liveItems = await freshenCardMedia(items);
   return {
     surface: 'hubs_for_you',
@@ -640,6 +730,8 @@ export async function fetchForYouPage(input: {
     slugsUsed: [...slugsUsed],
     count: liveItems.length,
     session,
+    batchId,
+    deliveryPolicy,
   };
 }
 
@@ -656,6 +748,8 @@ export type SurfacePage = {
   items: ThinShelfCard[];
   nextCursor: string | null;
   count: number;
+  batchId?: string | null;
+  deliveryPolicy?: 'ledger' | 'cursor';
 };
 
 /** Four-lane cursor: spark / hub / image / text page independently on Home. */
@@ -982,11 +1076,46 @@ export async function fetchHomeFeedPage(input: {
   limit?: number;
   cursor?: string | null;
   viewerUserId?: string | null;
+  /** Architecture §5 — retry same key returns the committed batch. */
+  idempotencyKey?: string | null;
 }): Promise<SurfacePage> {
   const want = Math.min(Math.max(Number(input.limit) || 24, 1), 64);
+  const viewerId = input.viewerUserId ? String(input.viewerUserId).trim() : '';
+  const idem =
+    String(input.idempotencyKey ?? '').trim().slice(0, 128) || null;
+
+  // Authenticated replay of an in-flight/timeout batch.
+  if (viewerId && idem) {
+    const prior = await loadCommittedBatch(viewerId, 'home_for_you', idem);
+    if (prior?.videoIds.length) {
+      const rows = await loadRawPostsByIds(prior.videoIds);
+      const items = orderRowsByIds(rows, prior.videoIds).map((row) =>
+        rowToCard(row, classifyRow(row))
+      );
+      let liveItems: ThinShelfCard[];
+      try {
+        liveItems = await freshenCardMedia(items);
+      } catch {
+        liveItems = items;
+      }
+      return {
+        surface: 'home_for_you',
+        items: liveItems,
+        nextCursor: input.cursor ?? null,
+        count: liveItems.length,
+        batchId: prior.batchId,
+        deliveryPolicy: 'ledger',
+      };
+    }
+  }
+
   // Text lane paused — forum/written cards were freezing Home scroll.
   // Mix spark / hub / image only (~1/3 each); over-fetch so pages stay dense after dedupe.
-  const perLane = Math.max(4, Math.ceil(want / 3) + 2);
+  // Auth path over-fetches more so delivery exclusion still fills `want`.
+  const perLane = Math.max(
+    4,
+    Math.ceil(want / 3) + (viewerId ? 4 : 2)
+  );
   const imageLaneWant = perLane + 6;
   const homeCur = decodeHomeFeedCursor(input.cursor);
   const hasCol = await hasHubSlugColumn();
@@ -996,7 +1125,6 @@ export async function fetchHomeFeedPage(input: {
   let sparkRows: RawPostRow[] = [];
   let hubRows: RawPostRow[] = [];
   let imageRows: RawPostRow[] = [];
-  const textRows: RawPostRow[] = [];
   try {
     const timed = await Promise.race([
       Promise.all([
@@ -1047,21 +1175,22 @@ export async function fetchHomeFeedPage(input: {
     };
   }
 
-  // Round-robin: spark → hub → image (text lane off).
+  // Round-robin: spark → hub → image (text lane off). Build a candidate pool ≥ want.
   const lanes: { kind: HomeLaneKind; rows: RawPostRow[]; i: number }[] = [
     { kind: 'spark', rows: sparkRows, i: 0 },
     { kind: 'hub', rows: hubRows, i: 0 },
     { kind: 'image', rows: imageRows, i: 0 },
   ];
+  const candidateWant = viewerId ? Math.min(want * 3, 96) : want;
   const woven: RawPostRow[] = [];
   const seen = new Set<string>();
   const seenMedia = new Set<string>();
   let guard = 0;
-  while (woven.length < want && guard < want * 4) {
+  while (woven.length < candidateWant && guard < candidateWant * 4) {
     guard += 1;
     let progressed = false;
     for (const lane of lanes) {
-      if (woven.length >= want) break;
+      if (woven.length >= candidateWant) break;
       while (lane.i < lane.rows.length) {
         const row = lane.rows[lane.i++];
         if (seen.has(row.id)) continue;
@@ -1079,7 +1208,65 @@ export async function fetchHomeFeedPage(input: {
     if (!progressed) break;
   }
 
-  const items = woven.map((row) => rowToCard(row, classifyRow(row)));
+  let servedRows = woven.slice(0, want);
+  let batchId: string | null = null;
+  let deliveryPolicy: 'ledger' | 'cursor' = 'cursor';
+
+  if (viewerId && woven.length) {
+    const delivered = await loadDeliveredCanonicalKeys(viewerId, 'home_for_you');
+    let eligible = woven.filter((row) => {
+      const key = canonicalVideoKey(row);
+      return !delivered.has(key);
+    });
+    // Prefer share over original when both somehow remain.
+    eligible = dedupeHomeMediaRows(eligible);
+
+    if (eligible.length) {
+      let rankedIds = eligible.map((r) => r.id);
+      try {
+        const ranked = await rankCandidates({
+          entityId: viewerId,
+          surface: 'home_for_you',
+          candidateIds: rankedIds,
+          limit: Math.min(eligible.length, want * 2),
+        });
+        if (ranked.items.length) {
+          rankedIds = ranked.items.map((i) => i.id);
+        }
+      } catch (err: any) {
+        console.warn('[feed] rankCandidates failed', err?.message ?? err);
+      }
+
+      const byId = new Map(eligible.map((r) => [r.id, r]));
+      const rankedRows = rankedIds
+        .map((id) => byId.get(id))
+        .filter((r): r is RawPostRow => !!r);
+
+      const reserved = await reserveDeliveryBatch({
+        userId: viewerId,
+        surface: 'home_for_you',
+        idempotencyKey: idem || `home:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`,
+        candidates: rankedRows.map((r) => ({
+          id: r.id,
+          canonicalKey: canonicalVideoKey(r),
+        })),
+        limit: want,
+      });
+
+      if (reserved && reserved.videoIds.length) {
+        servedRows = orderRowsByIds(rankedRows, reserved.videoIds);
+        batchId = reserved.batchId;
+        deliveryPolicy = 'ledger';
+      } else {
+        // Ledger unavailable — still exclude delivered client-side this response.
+        servedRows = rankedRows.slice(0, want);
+      }
+    } else {
+      servedRows = [];
+    }
+  }
+
+  const items = servedRows.map((row) => rowToCard(row, classifyRow(row)));
   let liveItems: ThinShelfCard[];
   try {
     liveItems = await freshenCardMedia(items);
@@ -1095,19 +1282,54 @@ export async function fetchHomeFeedPage(input: {
     // Freeze text cursor — lane paused so old cursors don't resurrect forum rows.
     text: homeCur.text,
   };
-  // Keep paging while any active lane still has a full slice.
+  // Keep paging while any active lane still has a full slice or we filled the page.
   const hasMore =
     sparkRows.length >= perLane ||
     hubRows.length >= perLane ||
     imageRows.length >= perLane ||
-    liveItems.length >= want;
+    liveItems.length >= Math.min(want, 8);
 
   return {
     surface: 'home_for_you',
     items: liveItems,
     nextCursor: hasMore ? encodeHomeFeedCursor(advanced) : null,
     count: liveItems.length,
+    batchId,
+    deliveryPolicy,
   };
+}
+
+/** Hydrate thin-feed rows by id (idempotent batch replay). */
+async function loadRawPostsByIds(ids: string[]): Promise<RawPostRow[]> {
+  const clean = [...new Set(ids.map((id) => String(id).trim()).filter(Boolean))].slice(
+    0,
+    80
+  );
+  if (!clean.length) return [];
+  const hasCol = await hasHubSlugColumn();
+  const slugSelect = hasCol ? 'p.hub_slug' : 'null::text as hub_slug';
+  try {
+    const { rows } = await pool.query<RawPostRow>(
+      `
+      select
+        p.id, p.title, p.body, p.media_type, p.media_url, p.thumb_url,
+        p.like_count, p.comment_count, p.created_at, p.updated_at,
+        p.country_code, p.country_name, p.author_id, p.shared_post_id,
+        p.moderation_status, ${slugSelect},
+        pr.display_name as author_name,
+        pr.username as author_username,
+        pr.avatar_url as author_avatar
+      from public.posts p
+      left join public.profiles pr on pr.user_id = p.author_id
+      where p.id = any($1::uuid[])
+      `,
+      [clean]
+    );
+    return rows;
+  } catch (err: any) {
+    console.warn('[feed] loadRawPostsByIds failed', err?.message ?? err);
+    return [];
+  }
 }
 
 /**

@@ -62,6 +62,8 @@ final class HomeFeedStore {
     private var loadMoreInFlight = false
     /// Architecture: if near-tail while in-flight, run one more page when the flight ends.
     private var loadMoreQueuedNearTail = false
+    /// Architecture §5 — retry the same key after timeout; clear only on success.
+    private var pendingFeedIdempotencyKey: String?
     /// Consecutive `/v1/feed` timeouts/500s on the same thin cursor.
     private var thinFeedFailStreak = 0
     /// After repeated thin failures, skip `/v1/feed` briefly and top up from Sparks/Hubs.
@@ -1168,9 +1170,16 @@ final class HomeFeedStore {
         var pageItems: [CountryPost] = []
         var pageNextCursor: String? = cursor
         if !thinCooling {
-            if let thin = await SurfacePageClient.fetchHomeFeed(limit: pageSize, cursor: cursor) {
+            let idem = pendingFeedIdempotencyKey ?? UUID().uuidString
+            pendingFeedIdempotencyKey = idem
+            if let thin = await SurfacePageClient.fetchHomeFeed(
+                limit: pageSize,
+                cursor: cursor,
+                idempotencyKey: idem
+            ) {
                 thinFeedFailStreak = 0
                 thinFeedCoolUntil = nil
+                pendingFeedIdempotencyKey = nil
                 if !thin.items.isEmpty {
                     pageItems = thin.items
                     pageNextCursor = thin.nextCursor
@@ -1185,6 +1194,7 @@ final class HomeFeedStore {
                     nextCursor = nil
                 }
             } else {
+                // Keep idem key so the next attempt replays the same reserved batch.
                 thinFeedFailStreak += 1
                 #if DEBUG
                 print("[HomeFeed] thin /v1/feed fail streak=\(thinFeedFailStreak) cursor=\(cursor?.prefix(24) ?? "nil")")
@@ -1195,6 +1205,7 @@ final class HomeFeedStore {
                     pageNextCursor = nil
                     thinFeedCoolUntil = Date().addingTimeInterval(45)
                     thinFeedFailStreak = 0
+                    pendingFeedIdempotencyKey = nil
                 }
             }
         }
