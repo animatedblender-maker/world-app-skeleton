@@ -65,6 +65,12 @@ export type PipelineOptions = {
    * Set false to skip (legacy CLI-only Frame 0).
    */
   frame0Inline?: boolean;
+  /**
+   * Cap comments seeded per new original from R2 comments.json.
+   * Default: unlimited (full thread).
+   * Pass 0 to skip comment seeding (fast flood — posts appear immediately).
+   */
+  maxCommentsPerPost?: number;
 };
 
 export type PipelineStats = {
