@@ -307,9 +307,9 @@ final class HomeFeedStore {
         var merged = ids
         for old in persistedLastHeadIDs() where !merged.contains(old) {
             merged.append(old)
-            if merged.count >= 80 { break }
+            if merged.count >= 120 { break }
         }
-        UserDefaults.standard.set(Array(merged.prefix(80)), forKey: Self.lastHeadDefaultsKey)
+        UserDefaults.standard.set(Array(merged.prefix(120)), forKey: Self.lastHeadDefaultsKey)
     }
 
     /// Put last-open head at the tail — API `/v1/feed` is newest-first and otherwise repeats.
@@ -340,12 +340,16 @@ final class HomeFeedStore {
         let recent = Set(persistedLastHeadIDs())
         let freshCount = pooled.filter { !recent.contains($0.id) }.count
         // Already enough new material — skip extra round-trips.
-        if freshCount >= 14 || cursor == nil { return (pooled, cursor) }
+        if freshCount >= 20 || cursor == nil { return (pooled, cursor) }
 
         var seen = Set(pooled.map(\.id))
-        for _ in 0..<3 {
+        for _ in 0..<5 {
             guard let cur = cursor, !cur.isEmpty else { break }
-            guard let page = await SurfacePageClient.fetchHomeFeed(limit: 48, cursor: cur) else { break }
+            guard let page = await SurfacePageClient.fetchHomeFeed(
+                limit: 48,
+                cursor: cur,
+                session: feedSessionId
+            ) else { break }
             cursor = page.nextCursor
             if page.items.isEmpty { break }
             for post in page.items where seen.insert(post.id).inserted {
@@ -466,9 +470,13 @@ final class HomeFeedStore {
 
         // 2) Thin feed only on the critical path (following refresh off-path).
         Task(priority: .utility) { await self.refreshFollowingContextOnly() }
-        // Fresh session: wider first page so demote+shuffle has room to differ.
+        // Fresh session: wider first page + session id so server rotates the mix.
         let thinLimit = forceReplace ? 48 : 24
-        let thin = await SurfacePageClient.fetchHomeFeed(limit: thinLimit, cursor: nil)
+        let thin = await SurfacePageClient.fetchHomeFeed(
+            limit: thinLimit,
+            cursor: nil,
+            session: feedSessionId
+        )
         guard gen == generation else {
             isRefreshing = false
             return
@@ -482,11 +490,11 @@ final class HomeFeedStore {
                 livePool = expanded.items
                 if let cur = expanded.cursor { nextCursor = cur }
             }
-            // Keep server four-lane weave (spark/hub/image/text) — do not re-rank thin pages.
             var rankedFast = Self.liveOnlyPosts(livePool)
             if rankedFast.isEmpty { rankedFast = livePool }
-            if forceReplace {
-                rankedFast = demoteRecentHead(rankedFast)
+            // Always session-rank on a fresh open so the head isn't identical every launch.
+            if forceReplace || !paintedBefore {
+                rankedFast = demoteRecentHead(rankForSessionSync(rankedFast))
             }
             let head = Array(rankedFast.prefix(forceReplace ? 36 : 24))
             if !head.isEmpty {
@@ -1175,7 +1183,8 @@ final class HomeFeedStore {
             if let thin = await SurfacePageClient.fetchHomeFeed(
                 limit: pageSize,
                 cursor: cursor,
-                idempotencyKey: idem
+                idempotencyKey: idem,
+                session: feedSessionId
             ) {
                 thinFeedFailStreak = 0
                 thinFeedCoolUntil = nil

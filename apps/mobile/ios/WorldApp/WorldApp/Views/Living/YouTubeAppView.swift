@@ -190,34 +190,37 @@ struct YouTubeAppView: View {
 
     /// Prefetch N more thin slug pages into the pool while user still scrolls the head.
     private func prefetchNextSlugPages(count: Int) async {
-        let n = max(1, min(count, 2))
+        // Prefetch several pages silently so deep scroll never waits on a cold round-trip.
+        let n = max(1, min(count, 5))
         for _ in 0..<n {
-            guard appState.selectedTab == .hubs else { return }
+            guard appState.selectedTab == .hubs, !hubsCaughtUp else { return }
             await loadMoreActiveShelf()
+            if hubsForYouPool.count - hubsDisplayLimit >= Self.hubsMinPoolHeadroom { break }
             if hubsForYouPool.count >= Self.hubsCatalogMemoryCap { break }
         }
         // Thumbs come from settled onAppearRow / grow — no fat butterWarm after every page.
     }
 
-    /// Endless For you: grow window cheaply; prefetch network before the last ~3 cards.
+    /// Keep ~2 pages ahead in memory so the user never watches a slow network load.
+    private static let hubsPrefetchRemaining = 24
+    private static let hubsMinPoolHeadroom = 80
+
+    /// Endless For you: grow locally first; prefetch network long before the tail.
     private func ensureMoreForYou(around index: Int) {
         guard !hubsCaughtUp else { return }
         let remaining = max(0, stableDiscoverVideos.count - index - 1)
-        // Architecture: next batch when ~3 remain. Also grow while local pool still has rows.
-        let nearTail = remaining <= 4
+        let nearTail = remaining <= Self.hubsPrefetchRemaining
         let poolHeadroom = hubsForYouPool.count - hubsDisplayLimit
-        // Prefetch network while still painting from local pool so scroll never waits.
-        let shouldPrefetchNetwork = nearTail || poolHeadroom <= Self.hubsGrowBy
+        let shouldPrefetchNetwork = nearTail || poolHeadroom <= Self.hubsMinPoolHeadroom
         guard nearTail || poolHeadroom > 0 || shouldPrefetchNetwork else { return }
 
-        // 1) Grow local pool only — warm the newly revealed thumbs so cells aren't blank.
+        // 1) Grow local pool instantly — never wait on network for the next cells.
         if hubsDisplayLimit < hubsForYouPool.count {
             growForYouDisplay(by: Self.hubsGrowBy, warmThumbs: true)
-            if !shouldPrefetchNetwork { return }
-            // Fall through to prefetch while user still has local rows.
         }
 
-        // 2) Network only when not flinging and not already loading.
+        // 2) Background top-up — silent, no spinner; queue if busy/flinging.
+        guard shouldPrefetchNetwork else { return }
         guard !ScrollBudget.isFlinging, !isLoadingMoreHubs else {
             if ScrollBudget.isFlinging {
                 scheduleSettledHubsTopUp()
@@ -227,8 +230,6 @@ struct YouTubeAppView: View {
             return
         }
         Task { @MainActor in
-            // Settle gate — avoid load during rubber-band / momentum.
-            try? await Task.sleep(nanoseconds: 180_000_000)
             guard appState.selectedTab == .hubs, !hubsCaughtUp else { return }
             if ScrollBudget.isFlinging {
                 scheduleSettledHubsTopUp()
@@ -237,7 +238,11 @@ struct YouTubeAppView: View {
             if hubsDisplayLimit < hubsForYouPool.count {
                 growForYouDisplay(by: Self.hubsGrowBy, warmThumbs: true)
             }
+            // Fill headroom with up to 2 silent pages so the next scroll is instant.
             await loadMoreActiveShelf()
+            if hubsForYouPool.count - hubsDisplayLimit < Self.hubsMinPoolHeadroom {
+                await loadMoreActiveShelf()
+            }
             if hubsDisplayLimit >= hubsForYouPool.count {
                 requestMoreHubsLongForm()
             }
@@ -645,7 +650,7 @@ struct YouTubeAppView: View {
             // 3) Prefetch next slug page + neighbor under the fold (Instagram-style).
             scheduleDeferredFullCatalogWarm()
             Task(priority: .utility) {
-                await prefetchNextSlugPages(count: 2)
+                await prefetchNextSlugPages(count: 4)
             }
         }
         .onAppear {
@@ -681,7 +686,7 @@ struct YouTubeAppView: View {
                 await loadVideos(forceRefresh: true, mode: .fast)
                 refreshHubsVisitShuffle(remountList: true)
                 warmContinueWatchingThumbnails()
-                await prefetchNextSlugPages(count: 2)
+                await prefetchNextSlugPages(count: 4)
             }
         }
         .onChange(of: homeFilter) { _, filter in
@@ -1536,7 +1541,7 @@ struct YouTubeAppView: View {
             if let slug = active {
                 SlugShelfStore.shared.warmNeighbor(of: SlugShelfStore.neighbor(of: slug))
             }
-            await prefetchNextSlugPages(count: 2)
+            await prefetchNextSlugPages(count: 4)
         }
     }
 

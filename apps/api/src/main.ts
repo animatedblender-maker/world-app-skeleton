@@ -1008,11 +1008,13 @@ app.get('/v1/feed', async (req: Request, res: Response) => {
       : req.query.idempotency_key
         ? String(req.query.idempotency_key)
         : null;
+    const session = req.query.session ? String(req.query.session) : null;
     const page = await fetchHomeFeedPage({
       limit,
       cursor,
       viewerUserId: user?.id ?? null,
       idempotencyKey,
+      session,
     });
     return res.json({ ok: true, ...page });
   } catch (err: any) {

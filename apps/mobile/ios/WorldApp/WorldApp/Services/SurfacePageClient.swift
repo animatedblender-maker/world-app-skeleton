@@ -14,7 +14,8 @@ enum SurfacePageClient {
     static func fetchHomeFeed(
         limit: Int = 24,
         cursor: String? = nil,
-        idempotencyKey: String? = nil
+        idempotencyKey: String? = nil,
+        session: String? = nil
     ) async -> Page? {
         var q: [String: String?] = [
             // API caps at 64 — walk the full R2-backed library newest-first.
@@ -24,6 +25,10 @@ enum SurfacePageClient {
         // Architecture §5 — retry the same key after timeout; never double-consume ledger.
         if let idempotencyKey, !idempotencyKey.isEmpty {
             q["idempotencyKey"] = idempotencyKey
+        }
+        // Session rotates first-page mix so each open isn't identical newest-first.
+        if let session, !session.isEmpty {
+            q["session"] = session
         }
         return await get(
             path: "/v1/feed",

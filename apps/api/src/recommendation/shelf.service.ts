@@ -1078,11 +1078,16 @@ export async function fetchHomeFeedPage(input: {
   viewerUserId?: string | null;
   /** Architecture §5 — retry same key returns the committed batch. */
   idempotencyKey?: string | null;
+  /** Client session — rotates first-page mix so each open isn't identical. */
+  session?: string | null;
 }): Promise<SurfacePage> {
   const want = Math.min(Math.max(Number(input.limit) || 24, 1), 64);
   const viewerId = input.viewerUserId ? String(input.viewerUserId).trim() : '';
   const idem =
     String(input.idempotencyKey ?? '').trim().slice(0, 128) || null;
+  const sessionSeed = hashSessionSeed(
+    String(input.session ?? '').trim() || idem || viewerId || 'anon'
+  );
 
   // Authenticated replay of an in-flight/timeout batch.
   if (viewerId && idem) {
@@ -1175,12 +1180,32 @@ export async function fetchHomeFeedPage(input: {
     };
   }
 
-  // Round-robin: spark → hub → image (text lane off). Build a candidate pool ≥ want.
-  const lanes: { kind: HomeLaneKind; rows: RawPostRow[]; i: number }[] = [
-    { kind: 'spark', rows: sparkRows, i: 0 },
-    { kind: 'hub', rows: hubRows, i: 0 },
-    { kind: 'image', rows: imageRows, i: 0 },
-  ];
+  // Session mix: skip a few newest per lane + rotate lane order so each open differs.
+  // (Anonymous /v1/feed is otherwise fully deterministic newest-first.)
+  if (!input.cursor) {
+    const skipSpark = sessionSeed % 6;
+    const skipHub = (sessionSeed >>> 3) % 6;
+    const skipImage = (sessionSeed >>> 6) % 6;
+    if (sparkRows.length > skipSpark + 2) sparkRows = sparkRows.slice(skipSpark);
+    if (hubRows.length > skipHub + 2) hubRows = hubRows.slice(skipHub);
+    if (imageRows.length > skipImage + 2) imageRows = imageRows.slice(skipImage);
+  }
+  const laneOrder: HomeLaneKind[] =
+    sessionSeed % 3 === 0
+      ? ['spark', 'hub', 'image']
+      : sessionSeed % 3 === 1
+        ? ['hub', 'image', 'spark']
+        : ['image', 'spark', 'hub'];
+
+  // Round-robin (text lane off). Build a candidate pool ≥ want.
+  const laneRows: Record<HomeLaneKind, RawPostRow[]> = {
+    spark: sparkRows,
+    hub: hubRows,
+    image: imageRows,
+    text: [],
+  };
+  const lanes: { kind: HomeLaneKind; rows: RawPostRow[]; i: number }[] =
+    laneOrder.map((kind) => ({ kind, rows: laneRows[kind], i: 0 }));
   const candidateWant = viewerId ? Math.min(want * 3, 96) : want;
   const woven: RawPostRow[] = [];
   const seen = new Set<string>();
@@ -1275,10 +1300,13 @@ export async function fetchHomeFeedPage(input: {
     liveItems = items;
   }
 
+  const sparkLane = lanes.find((l) => l.kind === 'spark')!;
+  const hubLane = lanes.find((l) => l.kind === 'hub')!;
+  const imageLane = lanes.find((l) => l.kind === 'image')!;
   const advanced: HomeFeedCursor = {
-    spark: advanceLaneCursor(sparkRows, lanes[0].i, homeCur.spark),
-    hub: advanceLaneCursor(hubRows, lanes[1].i, homeCur.hub),
-    image: advanceLaneCursor(imageRows, lanes[2].i, homeCur.image),
+    spark: advanceLaneCursor(sparkRows, sparkLane.i, homeCur.spark),
+    hub: advanceLaneCursor(hubRows, hubLane.i, homeCur.hub),
+    image: advanceLaneCursor(imageRows, imageLane.i, homeCur.image),
     // Freeze text cursor — lane paused so old cursors don't resurrect forum rows.
     text: homeCur.text,
   };
@@ -1297,6 +1325,16 @@ export async function fetchHomeFeedPage(input: {
     batchId,
     deliveryPolicy,
   };
+}
+
+/** Stable 32-bit mix from a session string (first-page rotation). */
+function hashSessionSeed(raw: string): number {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < raw.length; i++) {
+    h ^= raw.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h >>> 0;
 }
 
 /** Hydrate thin-feed rows by id (idempotent batch replay). */

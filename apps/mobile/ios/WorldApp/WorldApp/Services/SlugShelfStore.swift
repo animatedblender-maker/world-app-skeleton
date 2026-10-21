@@ -16,7 +16,8 @@ final class SlugShelfStore {
     /// Max distinct shelves kept in RAM.
     static let maxShelves = 10
     /// First paint / page size — denser than before for Instagram-speed fills.
-    static let pageSize = 40
+    /// Larger pages → fewer round-trips when scrolling deep into LongForm.
+    static let pageSize = 48
 
     /// Synthetic key for the mixed For you stream.
     static let forYouKey = "for_you"
