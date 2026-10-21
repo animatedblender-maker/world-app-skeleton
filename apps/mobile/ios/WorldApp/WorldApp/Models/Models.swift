@@ -1004,26 +1004,16 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
         return false
     }
 
-    /// Stable key so original Spark + its feed re-share collapse to one card.
+    /// Stable key so original Spark/Hub + feed re-share of the **same clip** collapse to one card.
+    /// Prefer R2 object key first — pipeline often seeds two authors (original + share) for one file.
     var homeFeedContentKey: String {
         if let origin = SparkShareMarker.originID(from: body)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased(),
            !origin.isEmpty {
-            return "spark:\(origin)"
+            return "clip:\(origin)"
         }
-        if let shared = sharedPostID?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased(),
-           !shared.isEmpty,
-           isSparkFeedShare || isReel || hasVideo {
-            return "spark:\(shared)"
-        }
-        // Original Sparks: key by own id so a later share of this id collapses onto it.
-        if isReel || isSpark {
-            return "spark:\(id.lowercased())"
-        }
-        // Prefer stable R2 object key (same meme often re-seeded under new post ids).
+        // Same underlying file — must win before spark:ownId or share+original both survive.
         if let r2 = mediaPayload?.r2Key?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased(),
@@ -1037,8 +1027,14 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
             let key = String(raw[r]).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             if !key.isEmpty { return "r2:\(key)" }
         }
-        // Same media file (strip signed query) — share + original often differ only by id.
-        // Images must key by URL too (jpg/png/webp) or the same meme repeats under new ids.
+        if let shared = sharedPostID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased(),
+           !shared.isEmpty,
+           isSparkFeedShare || isReel || isSpark || hasVideo || hasImage {
+            return "clip:\(shared)"
+        }
+        // Same media file (strip signed query).
         if let media = playableVideoURL?.absoluteString
             ?? feedImageURL?.absoluteString
             ?? primaryMediaURL
@@ -1054,9 +1050,14 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
                 || lower.contains(".webp")
                 || lower.contains(".gif")
                 || lower.contains("image")
-                || hasImage {
+                || hasImage
+                || hasVideo {
                 return "media:\(lower)"
             }
+        }
+        // Original Sparks/Hubs: key by own id so a later share of this id collapses onto it.
+        if isReel || isSpark || hasVideo {
+            return "clip:\(id.lowercased())"
         }
         // Image/text with identical caption — collapse near-dupes from re-seeds.
         let mt = (mediaType ?? "").lowercased()

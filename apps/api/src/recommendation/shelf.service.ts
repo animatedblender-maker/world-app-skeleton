@@ -885,29 +885,92 @@ function advanceLaneCursor(
 
 /** Collapse image re-seeds that share the same file / caption. */
 function dedupeHomeImageRows(rows: RawPostRow[]): RawPostRow[] {
-  const seen = new Set<string>();
-  const out: RawPostRow[] = [];
+  return dedupeHomeMediaRows(rows);
+}
+
+/**
+ * One card per underlying clip. Pipeline seeds original + feed share for the same
+ * R2 pack — without this, Home shows the same video from two people a few rows apart.
+ * Prefer the share (social context) when both are present.
+ */
+function dedupeHomeMediaRows(rows: RawPostRow[]): RawPostRow[] {
+  const best = new Map<string, RawPostRow>();
   for (const row of rows) {
-    const key = homeImageDedupeKey(row);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(row);
+    const key = homeMediaDedupeKey(row);
+    const prev = best.get(key);
+    if (!prev) {
+      best.set(key, row);
+      continue;
+    }
+    const rowShare = isHomeFeedShareRow(row);
+    const prevShare = isHomeFeedShareRow(prev);
+    if (rowShare && !prevShare) best.set(key, row);
   }
-  return out;
+  return [...best.values()];
+}
+
+function isHomeFeedShareRow(row: RawPostRow): boolean {
+  if (row.shared_post_id && String(row.shared_post_id).trim()) return true;
+  const body = String(row.body ?? '');
+  return (
+    body.includes('__spark__') ||
+    body.includes('__hub_origin__') ||
+    body.includes('__shared_post__')
+  );
 }
 
 function homeImageDedupeKey(row: RawPostRow): string {
+  return homeMediaDedupeKey(row);
+}
+
+/** Stable identity for the underlying media file / share origin. */
+function homeMediaDedupeKey(row: RawPostRow): string {
   const media = String(row.media_url ?? '');
   const r2 = media.match(/"r2_key"\s*:\s*"([^"]+)"/i)?.[1];
   if (r2) return `r2:${r2.toLowerCase()}`;
+  const shared = String(row.shared_post_id ?? '').trim();
+  if (shared) return `clip:${shared.toLowerCase()}`;
   const url = media.match(/https?:\/\/[^"'\\\s?]+/i)?.[0];
-  if (url) return `url:${url.toLowerCase().split('?')[0]}`;
+  if (url) {
+    const bare = url.toLowerCase().split('?')[0];
+    if (
+      bare.includes('.mp4') ||
+      bare.includes('/shortform/') ||
+      bare.includes('/longform/') ||
+      bare.includes('image') ||
+      bare.includes('.jpg') ||
+      bare.includes('.png') ||
+      bare.includes('.webp')
+    ) {
+      return `url:${bare}`;
+    }
+  }
+  const mt = String(row.media_type ?? '').toLowerCase();
+  if (mt === 'video' || mt === 'reel' || mt === 'spark' || mt === 'image' || mt === 'photo' || mt === 'gif') {
+    // Originals key by id so a later share (shared_post_id=this id) collapses onto them.
+    return `clip:${String(row.id).toLowerCase()}`;
+  }
   const caption = `${row.title ?? ''}\n${row.body ?? ''}`
     .trim()
     .toLowerCase()
     .slice(0, 160);
   if (caption.length >= 12) return `cap:${caption}`;
   return `id:${row.id}`;
+}
+
+/** Extra aliases so share+original collide even when one side only has id / shared_post_id. */
+function homeMediaAliasKeys(row: RawPostRow): string[] {
+  const keys = new Set<string>([homeMediaDedupeKey(row)]);
+  const shared = String(row.shared_post_id ?? '').trim().toLowerCase();
+  if (shared) keys.add(`clip:${shared}`);
+  const mt = String(row.media_type ?? '').toLowerCase();
+  if (mt === 'video' || mt === 'reel' || mt === 'spark' || mt === 'image' || mt === 'photo' || mt === 'gif') {
+    keys.add(`clip:${String(row.id).toLowerCase()}`);
+  }
+  const media = String(row.media_url ?? '');
+  const r2 = media.match(/"r2_key"\s*:\s*"([^"]+)"/i)?.[1];
+  if (r2) keys.add(`r2:${r2.toLowerCase()}`);
+  return [...keys];
 }
 
 /**
@@ -976,8 +1039,9 @@ export async function fetchHomeFeedPage(input: {
         count: 0,
       };
     }
-    sparkRows = timed[0].filter(mediaLooksSpark);
-    hubRows = timed[1].filter(mediaLooksHub);
+    // Collapse original + feed-share of the same R2 clip before weave.
+    sparkRows = dedupeHomeMediaRows(timed[0].filter(mediaLooksSpark));
+    hubRows = dedupeHomeMediaRows(timed[1].filter(mediaLooksHub));
     imageRows = dedupeHomeImageRows(timed[2].filter(isHomeImageRow));
     textRows = timed[3].filter(isHomeTextRow);
   } catch (err: any) {
@@ -999,7 +1063,7 @@ export async function fetchHomeFeedPage(input: {
   ];
   const woven: RawPostRow[] = [];
   const seen = new Set<string>();
-  const seenImageMedia = new Set<string>();
+  const seenMedia = new Set<string>();
   let guard = 0;
   while (woven.length < want && guard < want * 4) {
     guard += 1;
@@ -1009,12 +1073,10 @@ export async function fetchHomeFeedPage(input: {
       while (lane.i < lane.rows.length) {
         const row = lane.rows[lane.i++];
         if (seen.has(row.id)) continue;
-        if (lane.kind === 'image') {
-          const mediaKey = homeImageDedupeKey(row);
-          if (seenImageMedia.has(mediaKey)) continue;
-          seenImageMedia.add(mediaKey);
-        }
+        const aliases = homeMediaAliasKeys(row);
+        if (aliases.some((k) => seenMedia.has(k))) continue;
         seen.add(row.id);
+        for (const k of aliases) seenMedia.add(k);
         woven.push(row);
         progressed = true;
         break;
