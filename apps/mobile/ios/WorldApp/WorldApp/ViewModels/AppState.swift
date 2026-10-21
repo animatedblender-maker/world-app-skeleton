@@ -343,6 +343,13 @@ final class AppState {
                 print("[Feed] away \(Int(Date().timeIntervalSince(left)))s ≥ 5m → fresh session")
                 #endif
                 requestFreshFeedSession(reason: "away_5m")
+            } else {
+                // Soft return: drain fling-queued load-more + top up pool (no full reshape).
+                ScrollBudget.noteSettled()
+                HomeFeedStore.shared.drainQueuedLoadMoreIfNeeded()
+                Task(priority: .utility) {
+                    await HomeFeedStore.shared.ensureBufferedPool()
+                }
             }
             feedLeftAt = nil
         }

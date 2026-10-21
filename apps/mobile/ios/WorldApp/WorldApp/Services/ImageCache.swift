@@ -891,6 +891,9 @@ enum ScrollBudget: Sendable {
         defer { lock.unlock() }
         flingUntil = .distantPast
         burst = 0
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .scrollBudgetDidSettle, object: nil)
+        }
     }
 
     nonisolated static var isFlinging: Bool {

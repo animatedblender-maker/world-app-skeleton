@@ -15,4 +15,6 @@ extension Notification.Name {
     /// Frame0PosterCache gained signed posters — userInfo: `postIDs` ([String]).
     /// Strip/feed cells observe this because the cache itself is not SwiftUI state.
     static let frame0PostersDidUpdate = Notification.Name("frame0PostersDidUpdate")
+    /// ScrollBudget cleared fling — Home feed drains queued load-more that skipped mid-fling.
+    static let scrollBudgetDidSettle = Notification.Name("matterya.scrollBudget.didSettle")
 }

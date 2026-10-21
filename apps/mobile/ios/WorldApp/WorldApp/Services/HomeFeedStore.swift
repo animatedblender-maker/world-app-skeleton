@@ -62,6 +62,11 @@ final class HomeFeedStore {
     private var loadMoreInFlight = false
     /// Architecture: if near-tail while in-flight, run one more page when the flight ends.
     private var loadMoreQueuedNearTail = false
+    /// Coalesced delayed drain after fling-queued load-more (cells may not re-fire onAppear).
+    private var pendingDrainTask: Task<Void, Never>?
+    /// Empty thin/top-up pages (filtered viewed) — forceNetwork follow-ups per generation.
+    private var emptyAppendRetriesThisGeneration = 0
+    private let maxEmptyAppendRetries = 3
     /// Architecture §5 — retry the same key after timeout; clear only on success.
     private var pendingFeedIdempotencyKey: String?
     /// Consecutive `/v1/feed` timeouts/500s on the same thin cursor.
@@ -70,6 +75,8 @@ final class HomeFeedStore {
     private var thinFeedCoolUntil: Date?
     /// Soft recycle pass when unique network + catalog slices run dry — feed never ends.
     private var recyclePass = 0
+    /// Retains block observer for `.scrollBudgetDidSettle`.
+    private var scrollSettleObserver: NSObjectProtocol?
     /// New every app open / pull-to-refresh → different share mix.
     private var sessionRankSeed: UInt64 = UInt64.random(in: 1...UInt64.max)
     private var sessionFollowingIDs: Set<String> = []
@@ -94,7 +101,17 @@ final class HomeFeedStore {
     /// Keep at least this many posts buffered in `posts` (beyond the visible window).
     private let minBufferedPool = 36
 
-    private init() {}
+    private init() {
+        scrollSettleObserver = NotificationCenter.default.addObserver(
+            forName: .scrollBudgetDidSettle,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.drainQueuedLoadMoreIfNeeded()
+            }
+        }
+    }
 
     private func refreshSessionRankingContext() async {
         sessionRankSeed = UInt64.random(in: 1...UInt64.max)
@@ -402,6 +419,7 @@ final class HomeFeedStore {
     private func runFreshSession(forceReplace: Bool) async {
         generation += 1
         let gen = generation
+        emptyAppendRetriesThisGeneration = 0
         errorMessage = nil
         nextCursor = nil
         thinFeedFailStreak = 0
@@ -565,7 +583,7 @@ final class HomeFeedStore {
     }
 
     /// Keep a deep post pool so scroll rarely hits "loading more".
-    private func ensureBufferedPool() async {
+    func ensureBufferedPool() async {
         var guardPasses = 0
         var stagnant = 0
         var lastCount = posts.count
@@ -727,6 +745,7 @@ final class HomeFeedStore {
     func bootstrap(forceRefresh: Bool = false) async {
         generation += 1
         let gen = generation
+        emptyAppendRetriesThisGeneration = 0
         errorMessage = nil
 
         if forceRefresh {
@@ -946,6 +965,7 @@ final class HomeFeedStore {
         guard !fling else {
             if nearTail || posts.count < minBufferedPool {
                 loadMoreQueuedNearTail = true
+                scheduleDrainQueuedLoadMore(afterMs: 400, forceNearTailRetry: true)
             }
             return
         }
@@ -955,6 +975,32 @@ final class HomeFeedStore {
         let poolNearExhaust = windowLimit >= max(0, posts.count - nearTailRemaining)
         if nearTail || poolNearExhaust || index >= ratioThreshold || posts.count < minBufferedPool {
             requestLoadMore()
+        }
+    }
+
+    /// Drain load-more that was queued mid-fling / mid-flight after settle.
+    /// Without this, LazyVStack may not re-fire onAppear at the stuck tail.
+    func drainQueuedLoadMoreIfNeeded() {
+        guard loadMoreQueuedNearTail, !loadMoreInFlight, !isBootstrapping else { return }
+        loadMoreQueuedNearTail = false
+        requestLoadMore()
+    }
+
+    /// Coalesced delayed drain — fling settle + empty sentinel don't always re-fire onAppear.
+    private func scheduleDrainQueuedLoadMore(afterMs: UInt64, forceNearTailRetry: Bool = false) {
+        pendingDrainTask?.cancel()
+        let gen = generation
+        let force = forceNearTailRetry
+        pendingDrainTask = Task(priority: .utility) { [weak self] in
+            try? await Task.sleep(nanoseconds: afterMs * 1_000_000)
+            guard let self, !Task.isCancelled, gen == self.generation else { return }
+            self.drainQueuedLoadMoreIfNeeded()
+            // Absolute pool tail after fling/in-flight queue — one forced network retry.
+            if force, self.hasMore, !self.loadMoreInFlight, !self.isBootstrapping,
+               self.windowLimit >= self.posts.count {
+                let followGen = self.generation
+                await self.loadMore(generation: followGen, forceNetwork: true)
+            }
         }
     }
 
@@ -978,6 +1024,7 @@ final class HomeFeedStore {
         // storm the same /v1/feed cursor until -1001.
         if loadMoreInFlight || isLoadingMore || isBootstrapping {
             loadMoreQueuedNearTail = true
+            scheduleDrainQueuedLoadMore(afterMs: 400, forceNearTailRetry: true)
             return
         }
         hasMore = true
@@ -987,6 +1034,8 @@ final class HomeFeedStore {
             guard let self else { return }
             await self.loadMore(generation: gen)
         }
+        // Settle lag: drain any race-queued flag once (no forced double-fetch).
+        scheduleDrainQueuedLoadMore(afterMs: 400, forceNearTailRetry: false)
     }
 
     // MARK: - Mutations from UI
@@ -1283,8 +1332,20 @@ final class HomeFeedStore {
             if let next = pageNextCursor, next != cursor {
                 nextCursor = next
             }
+            // Filtered-viewed / empty thin must not leave the tail stuck until tab remount.
+            if emptyAppendRetriesThisGeneration < maxEmptyAppendRetries {
+                emptyAppendRetriesThisGeneration += 1
+                let followGen = gen
+                Task(priority: .utility) { [weak self] in
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    guard let self, followGen == self.generation else { return }
+                    await self.loadMore(generation: followGen, forceNetwork: true)
+                }
+            }
             return
         }
+
+        emptyAppendRetriesThisGeneration = 0
 
         // Thin pages keep server weave order; spark/hub top-up still session-ranks.
         let orderedAppend = pageItems.isEmpty ? await rankForSessionAsync(appended) : appended

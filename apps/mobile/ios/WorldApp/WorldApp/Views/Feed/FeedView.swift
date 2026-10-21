@@ -110,6 +110,12 @@ struct FeedView: View {
         .onAppear {
             paintStripsFromCache()
             PerformanceTelemetry.markIfAbsent("feed_on_appear")
+            // Soft return / remount: clear sticky fling gate and drain queued tail load-more.
+            ScrollBudget.noteSettled()
+            store.drainQueuedLoadMoreIfNeeded()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .scrollBudgetDidSettle)) { _ in
+            store.drainQueuedLoadMoreIfNeeded()
         }
         .onReceive(NotificationCenter.default.publisher(for: .userPostsDidChange)) { notification in
             guard let changed = notification.userInfo?["post"] as? CountryPost else { return }
@@ -217,8 +223,12 @@ struct FeedView: View {
 
                     Color.clear
                         .frame(height: 1)
-                        .onAppear {
+                        // Re-runs when the window grows so empty/filtered pages retry
+                        // without waiting for a tab remount.
+                        .task(id: store.windowLimit) {
                             store.requestLoadMore()
+                            try? await Task.sleep(nanoseconds: 600_000_000)
+                            store.drainQueuedLoadMoreIfNeeded()
                         }
                     if store.isLoadingMore, store.displayedPosts.count < 6 {
                         ProgressView()
