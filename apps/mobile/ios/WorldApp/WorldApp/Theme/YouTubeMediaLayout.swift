@@ -356,29 +356,6 @@ struct YouTubeVideoMetadataRow: View {
             } label: {
                 Label("Report video", systemImage: "flag")
             }
-            Button {
-                appState.presentShareSheet(for: post)
-            } label: {
-                Label("Share", systemImage: "arrowshape.turn.up.right")
-            }
-            Button {
-                Task { _ = await appState.toggleSavePost(post) }
-            } label: {
-                Label(
-                    appState.isPostSaved(post.id) ? "Remove from saved" : "Save video",
-                    systemImage: appState.isPostSaved(post.id) ? "bookmark.fill" : "bookmark"
-                )
-            }
-            Button {
-                appState.openPostInFeed(postID: post.id)
-            } label: {
-                Label("Open in Feed", systemImage: "newspaper")
-            }
-            Button {
-                appState.openPublicProfile(username: post.author?.username, userID: post.authorID)
-            } label: {
-                Label(MatteryaCopy.viewCreatorHub, systemImage: "globe.americas")
-            }
             if !post.authorID.isEmpty {
                 Button(role: .destructive) {
                     appState.blockUser(
@@ -391,7 +368,7 @@ struct YouTubeVideoMetadataRow: View {
                 }
             }
         } label: {
-            Image(systemName: "ellipsis")
+            Image(systemName: "ellipsis.vertical")
                 .font(.body.weight(.semibold))
                 .foregroundStyle(Theme.inkMuted)
                 .frame(width: 36, height: 36)

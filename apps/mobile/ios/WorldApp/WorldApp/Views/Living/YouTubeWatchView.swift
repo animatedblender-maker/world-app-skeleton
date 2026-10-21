@@ -612,52 +612,41 @@ struct YouTubeWatchView: View {
     @ViewBuilder
     private var titleAndActionsChrome: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top, spacing: 8) {
-                VStack(alignment: .leading, spacing: 0) {
-                    if let headline = currentPost.displayHeadline {
-                        Text(headline)
-                            .font(.system(size: 16, weight: .semibold, design: .default))
-                            .foregroundStyle(isMinimizingGrab ? Theme.paper : Theme.ink)
-                            .lineLimit(2)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-                    } else {
-                        Text(" ")
-                            .font(.system(size: 16, weight: .semibold, design: .default))
-                            .hidden()
-                            .accessibilityHidden(true)
-                    }
-                    // Meta — 2pt under title.
-                    if currentPost.viewCount > 0 || !currentPost.createdAt.isEmpty {
-                        HStack(spacing: 6) {
-                            if currentPost.viewCount > 0 {
-                                Text("\(currentPost.viewCount.formatted()) views")
-                                    .font(.caption2)
-                                    .foregroundStyle(isMinimizingGrab ? Theme.paper.opacity(0.7) : Theme.inkMuted)
-                            }
-                            if currentPost.viewCount > 0, !currentPost.createdAt.isEmpty {
-                                Text("·")
-                                    .font(.caption2)
-                                    .foregroundStyle(isMinimizingGrab ? Theme.paper.opacity(0.5) : Theme.inkMuted)
-                            }
-                            if !currentPost.createdAt.isEmpty {
-                                Text(RelativeTime.format(currentPost.createdAt))
-                                    .font(.caption2)
-                                    .foregroundStyle(isMinimizingGrab ? Theme.paper.opacity(0.7) : Theme.inkMuted)
-                            }
-                        }
-                        .padding(.top, 2)
-                    }
+            VStack(alignment: .leading, spacing: 0) {
+                if let headline = currentPost.displayHeadline {
+                    Text(headline)
+                        .font(.system(size: 16, weight: .semibold, design: .default))
+                        .foregroundStyle(isMinimizingGrab ? Theme.paper : Theme.ink)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                // Three horizontal dots — options (Report video, …) on the right under the film.
-                hubsWatchOverflowMenu
+                // Meta — 2pt under title.
+                if currentPost.viewCount > 0 || !currentPost.createdAt.isEmpty {
+                    HStack(spacing: 6) {
+                        if currentPost.viewCount > 0 {
+                            Text("\(currentPost.viewCount.formatted()) views")
+                                .font(.caption2)
+                                .foregroundStyle(isMinimizingGrab ? Theme.paper.opacity(0.7) : Theme.inkMuted)
+                        }
+                        if currentPost.viewCount > 0, !currentPost.createdAt.isEmpty {
+                            Text("·")
+                                .font(.caption2)
+                                .foregroundStyle(isMinimizingGrab ? Theme.paper.opacity(0.5) : Theme.inkMuted)
+                        }
+                        if !currentPost.createdAt.isEmpty {
+                            Text(RelativeTime.format(currentPost.createdAt))
+                                .font(.caption2)
+                                .foregroundStyle(isMinimizingGrab ? Theme.paper.opacity(0.7) : Theme.inkMuted)
+                        }
+                    }
+                    .padding(.top, 2)
+                }
             }
             .padding(.horizontal, Theme.pagePadding)
             .padding(.top, 8)
 
-            // Like · Send · Keep — immediately under meta (3pt only).
+            // Like · Send · Keep · ⋮ — vertical dots on the right of the action row.
             actionSection
                 .padding(.top, 3)
                 .padding(.bottom, 6)
@@ -695,19 +684,6 @@ struct YouTubeWatchView: View {
             } label: {
                 Label("Report video", systemImage: "flag")
             }
-            Button {
-                appState.presentShareSheet(for: currentPost)
-            } label: {
-                Label("Share", systemImage: "arrowshape.turn.up.right")
-            }
-            Button {
-                Task { _ = await appState.toggleSavePost(currentPost) }
-            } label: {
-                Label(
-                    appState.isPostSaved(currentPost.id) ? "Remove from saved" : "Save video",
-                    systemImage: appState.isPostSaved(currentPost.id) ? "bookmark.fill" : "bookmark"
-                )
-            }
             if !currentPost.authorID.isEmpty {
                 Button(role: .destructive) {
                     appState.blockUser(
@@ -720,7 +696,7 @@ struct YouTubeWatchView: View {
                 }
             }
         } label: {
-            Image(systemName: "ellipsis")
+            Image(systemName: "ellipsis.vertical")
                 .font(.body.weight(.semibold))
                 .foregroundStyle(isMinimizingGrab ? Theme.paper.opacity(0.85) : Theme.ink)
                 .frame(width: 36, height: 36)
@@ -793,6 +769,8 @@ struct YouTubeWatchView: View {
             }
 
             Spacer(minLength: 0)
+
+            hubsWatchOverflowMenu
         }
         .padding(.horizontal, Theme.pagePadding)
         .padding(.vertical, 0)

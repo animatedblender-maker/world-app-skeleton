@@ -11,11 +11,11 @@ import Foundation
 final class SlugShelfStore {
     static let shared = SlugShelfStore()
 
-    /// Max posts retained per slug (or for_you key) — hold a deep R2 long-form window.
-    static let maxPerShelf = 280
+    /// Max posts retained per slug (or for_you key) — hold the live for-you inventory (~680+).
+    static let maxPerShelf = 800
     /// Max distinct shelves kept in RAM (for_you + vibe slugs).
-    static let maxShelves = 12
-    /// Dense pages so Hubs Browse all fills from R2 without sparse walls.
+    static let maxShelves = 14
+    /// Dense pages so Netflix rails fill from the API long-form library.
     static let pageSize = 40
 
     /// Synthetic key for the mixed For you stream.

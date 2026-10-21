@@ -31,7 +31,7 @@ struct YouTubeAppView: View {
     @State private var hubsForYouPool: [CountryPost] = []
     /// How many ranked rows LazyVStack may show (grows on scroll — never ends).
     /// Match related-shelf richness: For you must not look sparse while Watch “More” is endless.
-    @State private var hubsDisplayLimit: Int = 48
+    @State private var hubsDisplayLimit: Int = 160
     @State private var isLoadingMoreHubs = false
     @State private var hubsLoadMoreQueued = false
     /// True only after server inventory is exhausted — never silent reshuffle (architecture).
@@ -50,11 +50,11 @@ struct YouTubeAppView: View {
     /// Bumps whenever we intentionally re-roll Hubs surfaces (tab enter / home return).
     @State private var hubsVisitEpoch: Int = 0
 
-    /// Dense For you — pull enough R2 long-form that Hubs never looks sparse vs Watch More.
-    private static let hubsFirstWindow = 64
-    private static let hubsGrowBy = 36
+    /// Dense For you — pull the live /v1/hubs inventory (~680+) into Netflix rails fast.
+    private static let hubsFirstWindow = 160
+    private static let hubsGrowBy = 48
     /// Soft memory ceiling — slug pages only; never keep thousands of posts on MainActor.
-    private static let hubsCatalogMemoryCap = 2_000
+    private static let hubsCatalogMemoryCap = 2_500
     /// How many times we re-cycle the ranked pool after the full catalog is shown (endless scroll).
     @State private var hubsEndlessCycle: Int = 0
 
@@ -650,7 +650,7 @@ struct YouTubeAppView: View {
             // 3) Silent pages + vibe shelves so every R2 long-form can land with thumbs.
             scheduleDeferredFullCatalogWarm()
             Task(priority: .utility) {
-                await prefetchNextSlugPages(count: 4)
+                await prefetchNextSlugPages(count: 8)
                 await densifyVibeShelvesFromNetwork()
             }
         }
@@ -690,7 +690,7 @@ struct YouTubeAppView: View {
                 await loadVideos(forceRefresh: true, mode: .fast)
                 refreshHubsVisitShuffle(remountList: true)
                 warmContinueWatchingThumbnails()
-                await prefetchNextSlugPages(count: 4)
+                await prefetchNextSlugPages(count: 8)
                 await densifyVibeShelvesFromNetwork()
             }
         }
@@ -838,7 +838,7 @@ struct YouTubeAppView: View {
                         SlugShelfStore.shared.newSession()
                         await loadVideos(forceRefresh: true, mode: .fast)
                         refreshHubsVisitShuffle(remountList: true)
-                        await prefetchNextSlugPages(count: 2)
+                        await prefetchNextSlugPages(count: 8)
                     }
                 }
                 .buttonStyle(.borderedProminent)
@@ -883,7 +883,7 @@ struct YouTubeAppView: View {
                                 let peopleRail = Array(
                                     stableDiscoverVideos
                                         .filter { $0.id != heroID }
-                                        .prefix(max(48, hubsDisplayLimit))
+                                        .prefix(max(96, hubsDisplayLimit))
                                 )
                                 if !peopleRail.isEmpty {
                                     hubsNetflixRail(
@@ -1012,7 +1012,7 @@ struct YouTubeAppView: View {
     private var hubsMoreWatchRails: [HubsMoreRail] {
         let heroID = hubsHeroPost?.id
         let vibeIDs = Set(hubsVibeRails.flatMap { $0.posts.map(\.id) })
-        let peopleCap = max(48, hubsDisplayLimit)
+        let peopleCap = max(120, hubsDisplayLimit)
         let peopleIDs = Set(
             stableDiscoverVideos
                 .filter { $0.id != heroID }
@@ -1858,7 +1858,7 @@ struct YouTubeAppView: View {
             // Skip heavy warm while a hubs video is open/minimized — keeps morph smooth.
             guard appState.hubPlaybackPost == nil else { return }
             SlugShelfStore.shared.warmNeighbor(of: homeFilter.hubSlug)
-            await prefetchNextSlugPages(count: 4)
+            await prefetchNextSlugPages(count: 8)
             await densifyVibeShelvesFromNetwork()
         }
     }
