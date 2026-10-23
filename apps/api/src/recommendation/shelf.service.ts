@@ -50,28 +50,41 @@ export const HUB_PARENT_SLUGS = [
 
 export type HubParentSlug = (typeof HUB_PARENT_SLUGS)[number];
 
+/**
+ * Keyword shelves — matched with word boundaries (see `wordHit`).
+ * Avoid short stems that sit inside unrelated words (sea⊂Sean, band⊂husband, art⊂party…).
+ * Prefer specific multi-word phrases; raise score weight for longer terms.
+ */
 const KEYWORD_BUCKETS: { category: HubParentSlug; words: string[] }[] = [
-  { category: 'comedy', words: ['comedy', 'funny', 'humor', 'humour', 'joke', 'sketch', 'laugh', 'gag', 'parody', 'satire', 'slapstick', 'standup', 'sitcom', 'prank'] },
-  { category: 'music', words: ['music', 'song', 'jazz', 'blues', 'concert', 'orchestra', 'band', 'singer', 'piano', 'guitar', 'opera', 'symphony', 'choir', 'melody', 'soundtrack', 'anthem', 'hymn'] },
-  { category: 'travel', words: ['travel', 'trip', 'tour', 'voyage', 'journey', 'city', 'paris', 'london', 'tokyo', 'vista', 'abroad', 'cruise', 'railway', 'train', 'airport', 'hotel'] },
-  { category: 'nature', words: ['nature', 'forest', 'wildlife', 'mountain', 'river', 'ocean', 'sea', 'lake', 'garden', 'flower', 'landscape', 'earth', 'weather', 'storm', 'volcano', 'glacier', 'timelapse'] },
-  { category: 'food', words: ['food', 'recipe', 'cook', 'kitchen', 'breakfast', 'dinner', 'coffee', 'restaurant', 'farm', 'bread', 'fruit', 'vegetable', 'meal'] },
-  { category: 'sports', words: ['sport', 'football', 'baseball', 'basketball', 'soccer', 'tennis', 'golf', 'olympics', 'race', 'racing', 'boxing', 'wrestling', 'athletic', 'stadium'] },
-  { category: 'tech', words: ['tech', 'computer', 'robot', 'electronic', 'telephone', 'engineering', 'invention', 'space', 'rocket', 'satellite', 'digital'] },
-  { category: 'fitness', words: ['fitness', 'exercise', 'workout', 'yoga', 'gym', 'posture', 'aerobics', 'strength'] },
-  { category: 'film', words: ['movie', 'cinema', 'trailer', 'cartoon', 'animation', 'animated', 'feature', 'disney', 'film', 'commercial', 'silent film'] },
-  { category: 'culture', words: ['culture', 'art', 'museum', 'dance', 'ballet', 'theatre', 'theater', 'architecture', 'literature', 'poetry'] },
-  { category: 'history', words: ['history', 'historical', 'war', 'wwii', 'ww2', 'civil war', 'newsreel', 'archival', 'vintage'] },
-  { category: 'education', words: ['education', 'school', 'classroom', 'lesson', 'howto', 'how to', 'tutorial', 'instruction', 'learn', 'teaching'] },
-  { category: 'animals', words: ['animal', 'dog', 'cat', 'pet', 'bird', 'horse', 'zoo', 'wildlife', 'creature', 'puppy', 'kitten'] },
-  { category: 'cars', words: ['car', 'auto', 'automobile', 'motor', 'vehicle', 'truck', 'honda', 'ford', 'chevrolet'] },
-  { category: 'news', words: ['news', 'broadcast', 'reporter', 'headline', 'bulletin', 'newscast', 'anchor'] },
-  { category: 'fashion', words: ['fashion', 'style', 'clothing', 'dress', 'runway', 'model', 'wardrobe', 'beauty'] },
-  { category: 'gaming', words: ['game', 'gaming', 'arcade', 'video game', 'nintendo', 'atari'] },
-  { category: 'kids', words: ['kids', 'children', 'child', 'nursery', 'story time', 'babies'] },
-  { category: 'social', words: ['people', 'family', 'community', 'street', 'crowd', 'party', 'wedding', 'social', 'friends'] },
-  { category: 'daily', words: ['daily', 'home', 'house', 'routine', 'morning', 'evening', 'housework', 'domestic'] },
+  { category: 'comedy', words: ['comedy', 'funny', 'humor', 'humour', 'joke', 'sketch comedy', 'standup', 'stand-up', 'sitcom', 'prank', 'parody', 'satire', 'slapstick', 'outtakes', 'blooper'] },
+  { category: 'music', words: ['music video', 'music', 'song', 'jazz', 'blues', 'concert', 'orchestra', 'singer', 'piano', 'guitar', 'opera', 'symphony', 'choir', 'melody', 'soundtrack', 'hip hop', 'hip-hop', 'rap song', 'album'] },
+  { category: 'travel', words: ['travel', 'tourist', 'tourism', 'voyage', 'journey', 'city walk', 'city tour', 'paris', 'london', 'tokyo', 'abroad', 'cruise', 'railway', 'airport', 'hotel', 'backpack', 'road trip'] },
+  { category: 'nature', words: ['nature', 'forest', 'wildlife', 'mountain', 'river', 'ocean', 'lake', 'garden', 'flower', 'landscape', 'weather', 'storm', 'volcano', 'glacier', 'timelapse', 'time lapse', 'national park', 'wilderness'] },
+  { category: 'food', words: ['food', 'recipe', 'cooking', 'cook', 'kitchen', 'breakfast', 'dinner', 'coffee', 'restaurant', 'bakery', 'bread', 'fruit', 'vegetable', 'meal', 'chef', 'cuisine', 'baking'] },
+  { category: 'sports', words: ['sports', 'sport', 'football', 'baseball', 'basketball', 'soccer', 'tennis', 'golf', 'olympics', 'olympic', 'racing', 'boxing', 'wrestling', 'athletic', 'stadium', 'nba', 'nfl', 'fifa', 'world cup'] },
+  { category: 'tech', words: ['technology', 'tech talk', 'computer', 'robot', 'robotics', 'electronics', 'engineering', 'invention', 'rocket', 'satellite', 'digital', 'software', 'hardware', 'artificial intelligence', 'machine learning', 'smartphone', 'ps5', 'iphone'] },
+  { category: 'fitness', words: ['fitness', 'exercise', 'workout', 'yoga', 'gym', 'aerobics', 'strength training', 'crossfit', 'calisthenics', 'bodybuilding'] },
+  { category: 'film', words: ['full movie', 'movie', 'cinema', 'trailer', 'cartoon', 'animation', 'animated', 'feature film', 'disney', 'film', 'silent film', 'short film'] },
+  { category: 'culture', words: ['culture', 'museum', 'ballet', 'theatre', 'theater', 'architecture', 'literature', 'poetry', 'art museum', 'art history', 'cultural'] },
+  { category: 'history', words: ['history', 'historical', 'world war', 'wwii', 'ww2', 'civil war', 'newsreel', 'archival', 'ancient', 'medieval', 'empire', 'dynasty'] },
+  { category: 'education', words: ['education', 'classroom', 'lesson', 'how to', 'howto', 'tutorial', 'instruction', 'lecture', 'course', 'teaching', 'learn english', 'learn spanish', 'learn french', 'learn german', 'learn italian', 'learn greek', 'language learning'] },
+  { category: 'animals', words: ['animals', 'animal', 'wildlife', 'dog farm', 'dogs', 'dog', 'cats', 'cat', 'pets', 'pet', 'birds', 'bird', 'horse', 'zoo', 'puppy', 'kitten', 'leopard', 'lion', 'tiger', 'elephant'] },
+  { category: 'cars', words: ['cars', 'car review', 'automobile', 'motorcycle', 'vehicle', 'truck', 'supercar', 'hypercar', 'tesla', 'porsche', 'ferrari', 'lamborghini', 'bmw', 'honda', 'ford', 'chevrolet'] },
+  { category: 'news', words: ['news', 'breaking news', 'broadcast', 'reporter', 'headline', 'bulletin', 'newscast', 'news anchor', 'journalism'] },
+  { category: 'fashion', words: ['fashion', 'runway', 'wardrobe', 'haute couture', 'streetwear', 'clothing brand', 'beauty tutorial', 'makeup tutorial'] },
+  { category: 'gaming', words: ['gaming', 'video game', 'videogame', 'gameplay', 'arcade', 'nintendo', 'playstation', 'xbox', 'steam', 'esports', 'speedrun'] },
+  { category: 'kids', words: ['for kids', 'kids', 'children', 'nursery rhyme', 'story time', 'storytime', 'babies', 'toddler', 'cartoon for kids'] },
+  { category: 'social', words: ['social media', 'community', 'wedding', 'friends', 'family life', 'street interview', 'vlog'] },
+  { category: 'daily', words: ['daily vlog', 'morning routine', 'evening routine', 'housework', 'domestic', 'day in the life'] },
 ];
+
+/** Whole-word / phrase hit — blocks sea⊂Sean, band⊂husband, art⊂party, cat⊂location. */
+function wordHit(blob: string, word: string): boolean {
+  const w = word.trim().toLowerCase();
+  if (!w) return false;
+  const escaped = w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?:^|[^a-z0-9])${escaped}(?:[^a-z0-9]|$)`, 'i').test(blob);
+}
 
 export type ThinShelfCard = {
   id: string;
@@ -189,26 +202,36 @@ export function normalizeParentSlug(raw: string | null | undefined): HubParentSl
   return 'daily';
 }
 
-/** Same idea as iOS HubCategoryClassifier — cheap keyword scores. */
+/** Same idea as iOS HubCategoryClassifier — cheap keyword scores with word boundaries. */
 export function classifyHubSlug(input: {
   title?: string | null;
   body?: string | null;
   seedSlug?: string | null;
   creator?: string | null;
 }): HubParentSlug {
-  // Explicit stored slug wins (migration / publisher).
+  // Explicit stored slug wins only when it is a known parent (else re-classify).
   const rawSeed = String(input.seedSlug ?? '').trim();
-  if (rawSeed) return normalizeParentSlug(rawSeed);
+  if (rawSeed) {
+    const normalized = normalizeParentSlug(rawSeed);
+    // normalizeParentSlug maps unknown → daily; treat bare unknown seeds as empty.
+    const seedLower = rawSeed.toLowerCase().replace(/[^a-z0-9_]+/g, '_');
+    const seedKnown =
+      (HUB_PARENT_SLUGS as readonly string[]).includes(seedLower) ||
+      (HUB_PARENT_SLUGS as readonly string[]).includes(seedLower.split('_')[0] || '');
+    if (seedKnown) return normalized;
+  }
 
-  const blob = [input.title ?? '', input.body ?? '', input.creator ?? '']
-    .join(' ')
-    .toLowerCase();
+  // Title carries the strongest signal; body/creator are weaker (often channel noise).
+  const titleBlob = String(input.title ?? '').toLowerCase();
+  const weakBlob = [input.body ?? '', input.creator ?? ''].join(' ').toLowerCase();
 
   const scores = new Map<string, number>();
   for (const bucket of KEYWORD_BUCKETS) {
     let score = 0;
     for (const word of bucket.words) {
-      if (blob.includes(word)) score += word.length >= 6 ? 3 : 2;
+      const weight = word.length >= 10 ? 5 : word.length >= 6 ? 3 : 2;
+      if (wordHit(titleBlob, word)) score += weight * 2; // title hits count double
+      else if (wordHit(weakBlob, word)) score += weight;
     }
     if (score > 0) scores.set(bucket.category, (scores.get(bucket.category) ?? 0) + score);
   }
@@ -221,7 +244,17 @@ export function classifyHubSlug(input: {
       bestScore = v;
     }
   }
-  if (best && bestScore >= 2) return best as HubParentSlug;
+  // Topic overrides — beat misleading single tokens (e.g. "Music Case" true crime).
+  const overrideBlob = `${titleBlob} ${weakBlob}`;
+  if (wordHit(overrideBlob, 'true crime') || wordHit(overrideBlob, 'forensic files') || wordHit(overrideBlob, 'serial killer')) {
+    return 'history';
+  }
+  if (wordHit(overrideBlob, 'wildlife') || wordHit(overrideBlob, 'snow leopard')) {
+    return 'animals';
+  }
+
+  // Require a clearer hit so weak single-token noise does not steal shelves.
+  if (best && bestScore >= 4) return best as HubParentSlug;
   return 'daily';
 }
 
@@ -266,10 +299,16 @@ async function freshenCardMedia(items: ThinShelfCard[]): Promise<ThinShelfCard[]
       if (fresh) {
         next = { ...next, media_url: fresh };
       }
-      // Live Frame 0: re-presign thumb, or mint from media_url pack key when missing.
-      const liveThumb = await freshenThumbUrlString(next.thumb_url, null, next.media_url);
-      if (liveThumb) {
-        next = { ...next, thumb_url: liveThumb };
+      // LongForm list photos: YouTube hqdefault (frame0_*.webp is often missing in R2 →
+      // re-signed ghost URLs 404 and Hubs tiles stay black). Non-LongForm keeps live thumb.
+      const ytThumb = synthesizeThumbFromMedia(next.media_url ?? card.media_url);
+      if (ytThumb) {
+        next = { ...next, thumb_url: ytThumb };
+      } else {
+        const liveThumb = await freshenThumbUrlString(next.thumb_url, null, next.media_url);
+        if (liveThumb) {
+          next = { ...next, thumb_url: liveThumb };
+        }
       }
       // Nested media_url.posters ladder often still carries Aug-expired embeds — refresh in place.
       const withPosters = await freshenEmbeddedPosters(next.media_url);
@@ -359,9 +398,10 @@ function rowToCard(row: RawPostRow, slug: HubParentSlug): ThinShelfCard {
   }
   if (body.length > 180) body = body.slice(0, 177) + '…';
 
+  // Prefer YouTube hqdefault for LongForm — DB thumb_url often points at missing frame0_*.webp.
   const thumb =
-    (row.thumb_url && String(row.thumb_url).trim()) ||
     synthesizeThumbFromMedia(row.media_url) ||
+    (row.thumb_url && String(row.thumb_url).trim()) ||
     null;
 
   const createdIso = toIso(row.created_at);
@@ -851,6 +891,9 @@ function mediaLooksSpark(row: RawPostRow): boolean {
   const blob = `${row.media_url ?? ''}`.toLowerCase();
   if (blob.includes('/longform/')) return false;
   if (blob.includes('/shortform/')) return true;
+  // TikTok country-root packs: `"kind":"spark"` / `"reel":true` in media_url JSON.
+  if (/"kind"\s*:\s*"spark"/i.test(blob) || /"reel"\s*:\s*true/i.test(blob)) return true;
+  if (homeMediaLooksTikTokCountry(blob)) return true;
   return false;
 }
 
@@ -863,6 +906,177 @@ function mediaLooksHub(row: RawPostRow): boolean {
   if (blob.includes('/shortform/')) return false;
   if (blob.includes('/longform/')) return true;
   return false;
+}
+
+/** YouTube Shorts under ShortForm/ — preferred Sparks on Home. */
+function mediaLooksShortFormSpark(row: RawPostRow): boolean {
+  const blob = `${row.media_url ?? ''}`.toLowerCase();
+  if (blob.includes('/longform/')) return false;
+  return blob.includes('/shortform/');
+}
+
+/** TikTok packs live at `<Country>/<digits>/video.mp4` (not ShortForm/LongForm/Posts). */
+function homeMediaLooksTikTokCountry(blob: string): boolean {
+  const lower = blob.toLowerCase();
+  if (lower.includes('/shortform/') || lower.includes('/longform/') || lower.includes('/posts/')) {
+    return false;
+  }
+  return /(?:united_states|germany|albania|egypt|kosovo)\/\d{8,}\//i.test(lower);
+}
+
+type HomeContentFamily = 'shortform' | 'tiktok' | 'hub' | 'image' | 'other';
+
+/** TikTok + stills share one budget so image firehose cannot flood Home. */
+function isExclusiveHomeFamily(fam: HomeContentFamily | null | undefined): boolean {
+  return fam === 'tiktok' || fam === 'image';
+}
+
+function homeContentFamily(row: RawPostRow): HomeContentFamily {
+  const blob = `${row.media_url ?? ''}\n${row.thumb_url ?? ''}`.toLowerCase();
+  // Country-pack stills count as TikTok family (same repeat budget).
+  if (homeMediaLooksTikTokCountry(blob)) return 'tiktok';
+  const mt = String(row.media_type ?? '')
+    .trim()
+    .toLowerCase();
+  if (mt === 'image' || mt === 'photo' || mt === 'gif') return 'image';
+  if (mediaLooksHub(row)) return 'hub';
+  if (mediaLooksShortFormSpark(row)) return 'shortform';
+  if (mediaLooksSpark(row)) return 'tiktok'; // stamped spark without ShortForm path
+  return 'other';
+}
+
+/**
+ * Variety weave — ShortForm/Hub preferred; TikTok+image capped (~1 per 4 cards)
+ * and never adjacent. Matches Instagram/TikTok list diversity serving.
+ */
+function weaveHomeFeedVariety(input: {
+  shortform: RawPostRow[];
+  tiktok: RawPostRow[];
+  hub: RawPostRow[];
+  image: RawPostRow[];
+  want: number;
+  /** Rotate which family leads on first page. */
+  rotationOffset?: number;
+  /** Max TikTok+image cards per this many slots. */
+  exclusiveEveryN?: number;
+}): RawPostRow[] {
+  const queues: Record<HomeContentFamily, RawPostRow[]> = {
+    shortform: [...input.shortform],
+    tiktok: [...input.tiktok],
+    hub: [...input.hub],
+    image: [...input.image],
+    other: [],
+  };
+  // Prefer ShortForm + hub; TikTok/image appear sparsely in the rotation.
+  const baseRotation: HomeContentFamily[] = [
+    'shortform',
+    'hub',
+    'shortform',
+    'hub',
+    'image',
+    'shortform',
+    'hub',
+    'tiktok',
+  ];
+  const offset = Math.abs(input.rotationOffset ?? 0) % baseRotation.length;
+  const rotation = [
+    ...baseRotation.slice(offset),
+    ...baseRotation.slice(0, offset),
+  ];
+  const exclusiveEveryN = Math.max(2, input.exclusiveEveryN ?? 4);
+
+  const woven: RawPostRow[] = [];
+  const seen = new Set<string>();
+  const seenMedia = new Set<string>();
+  let rot = 0;
+  let guard = 0;
+  const want = Math.max(1, input.want);
+
+  const takeFrom = (family: HomeContentFamily): RawPostRow | null => {
+    const q = queues[family];
+    while (q.length) {
+      const row = q.shift()!;
+      if (seen.has(row.id)) continue;
+      if (isHomeTextRow(row)) continue;
+      const aliases = homeMediaAliasKeys(row);
+      if (aliases.some((k) => seenMedia.has(k))) continue;
+      seen.add(row.id);
+      for (const k of aliases) seenMedia.add(k);
+      return row;
+    }
+    return null;
+  };
+
+  const exclusiveCount = () =>
+    woven.filter((r) => isExclusiveHomeFamily(homeContentFamily(r))).length;
+
+  const canTakeExclusive = (): boolean => {
+    const n = exclusiveCount();
+    return n < Math.max(1, Math.ceil((woven.length + 1) / exclusiveEveryN));
+  };
+
+  while (woven.length < want && guard < want * 10) {
+    guard += 1;
+    const prefer = rotation[rot % rotation.length]!;
+    rot += 1;
+    const prevFamily =
+      woven.length > 0 ? homeContentFamily(woven[woven.length - 1]!) : null;
+    const prevExclusive = isExclusiveHomeFamily(prevFamily);
+
+    let picked: RawPostRow | null = null;
+    const tryFam = (fam: HomeContentFamily): RawPostRow | null => {
+      if (fam === prevFamily) return null;
+      if (isExclusiveHomeFamily(fam)) {
+        if (prevExclusive) return null;
+        if (!canTakeExclusive()) return null;
+      }
+      return takeFrom(fam);
+    };
+
+    if (prefer !== prevFamily) {
+      picked = tryFam(prefer);
+    }
+
+    if (!picked) {
+      for (const fam of ['shortform', 'hub', 'other', 'image', 'tiktok'] as HomeContentFamily[]) {
+        picked = tryFam(fam);
+        if (picked) break;
+      }
+    }
+    // Last resort: non-exclusive only (never flood page with TikTok/image).
+    if (!picked) {
+      for (const fam of ['shortform', 'hub', 'other'] as HomeContentFamily[]) {
+        picked = takeFrom(fam);
+        if (picked) break;
+      }
+    }
+    if (!picked) break;
+    woven.push(picked);
+  }
+  return woven;
+}
+
+/** Re-interleave after ranker so auth delivery doesn't re-cluster TikToks. */
+function diversifyHomeRows(rows: RawPostRow[], want: number): RawPostRow[] {
+  if (rows.length <= 2) return rows.slice(0, want);
+  const buckets: Record<HomeContentFamily, RawPostRow[]> = {
+    shortform: [],
+    tiktok: [],
+    hub: [],
+    image: [],
+    other: [],
+  };
+  for (const row of rows) {
+    buckets[homeContentFamily(row)].push(row);
+  }
+  return weaveHomeFeedVariety({
+    shortform: buckets.shortform,
+    tiktok: buckets.tiktok,
+    hub: buckets.hub,
+    image: buckets.image,
+    want,
+    rotationOffset: 0,
+  });
 }
 
 const HOME_FEED_SELECT = (slugSelect: string) => `
@@ -904,6 +1118,8 @@ async function fetchHomeLaneRows(opts: {
         or coalesce(p.media_path, '') like '%/ShortForm/%'
         or p.media_url::text ilike '%/ShortForm/%'
         or coalesce(p.body, '') ilike '%__spark__%'
+        or p.media_url::text ilike '%"kind":"spark"%'
+        or p.media_url::text ilike '%"reel":true%'
       )
     `;
   } else if (opts.kind === 'hub') {
@@ -954,12 +1170,26 @@ async function fetchHomeLaneRows(opts: {
     where += ` and (p.created_at, p.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`;
   }
   params.push(want);
+  // Sparks: prefer YouTube ShortForm ahead of TikTok country packs so variety weave has SF stock.
+  const orderBy =
+    opts.kind === 'spark'
+      ? `
+    order by
+      case
+        when coalesce(p.media_path, '') like '%/ShortForm/%' then 0
+        when p.media_url::text ilike '%/ShortForm/%' then 0
+        else 1
+      end asc,
+      p.created_at desc,
+      p.id desc
+  `
+      : `order by p.created_at desc, p.id desc`;
   const sql = `
     select ${HOME_FEED_SELECT(opts.slugSelect)}
     from public.posts p
     left join public.profiles pr on pr.user_id = p.author_id
     where ${where}
-    order by p.created_at desc, p.id desc
+    ${orderBy}
     limit $${params.length}
   `;
   const { rows } = await pool.query<RawPostRow>(sql, params);
@@ -1019,37 +1249,8 @@ function homeImageDedupeKey(row: RawPostRow): string {
 
 /** Stable identity for the underlying media file / share origin. */
 function homeMediaDedupeKey(row: RawPostRow): string {
-  const media = String(row.media_url ?? '');
-  const r2 = media.match(/"r2_key"\s*:\s*"([^"]+)"/i)?.[1];
-  if (r2) return `r2:${r2.toLowerCase()}`;
-  const shared = String(row.shared_post_id ?? '').trim();
-  if (shared) return `clip:${shared.toLowerCase()}`;
-  const url = media.match(/https?:\/\/[^"'\\\s?]+/i)?.[0];
-  if (url) {
-    const bare = url.toLowerCase().split('?')[0];
-    if (
-      bare.includes('.mp4') ||
-      bare.includes('/shortform/') ||
-      bare.includes('/longform/') ||
-      bare.includes('image') ||
-      bare.includes('.jpg') ||
-      bare.includes('.png') ||
-      bare.includes('.webp')
-    ) {
-      return `url:${bare}`;
-    }
-  }
-  const mt = String(row.media_type ?? '').toLowerCase();
-  if (mt === 'video' || mt === 'reel' || mt === 'spark' || mt === 'image' || mt === 'photo' || mt === 'gif') {
-    // Originals key by id so a later share (shared_post_id=this id) collapses onto them.
-    return `clip:${String(row.id).toLowerCase()}`;
-  }
-  const caption = `${row.title ?? ''}\n${row.body ?? ''}`
-    .trim()
-    .toLowerCase()
-    .slice(0, 160);
-  if (caption.length >= 12) return `cap:${caption}`;
-  return `id:${row.id}`;
+  // Prefer shared canonical helper (TikTok pack + image paths).
+  return canonicalVideoKey(row);
 }
 
 /** Extra aliases so share+original collide even when one side only has id / shared_post_id. */
@@ -1115,12 +1316,14 @@ export async function fetchHomeFeedPage(input: {
   }
 
   // Text lane paused — forum/written cards were freezing Home scroll.
-  // Mix spark / hub / image only (~1/3 each); over-fetch so pages stay dense after dedupe.
-  // Auth path over-fetches more so delivery exclusion still fills `want`.
+  // Variety weave: ShortForm Sparks / TikTok / Hubs / images — never long same-family runs.
+  // Over-fetch sparks so ShortForm stock survives after TikTok split + dedupe.
   const perLane = Math.max(
     4,
     Math.ceil(want / 3) + (viewerId ? 4 : 2)
   );
+  // Pull enough ShortForm (ordered first in spark SQL) so TikTok cannot fill every spark slot.
+  const sparkLaneWant = Math.max(perLane + 10, Math.ceil(want * 0.55) + (viewerId ? 6 : 4));
   const imageLaneWant = perLane + 6;
   const homeCur = decodeHomeFeedCursor(input.cursor);
   const hasCol = await hasHubSlugColumn();
@@ -1135,7 +1338,7 @@ export async function fetchHomeFeedPage(input: {
       Promise.all([
         fetchHomeLaneRows({
           kind: 'spark',
-          limit: perLane,
+          limit: sparkLaneWant,
           cursor: homeCur.spark,
           slugSelect,
           under18,
@@ -1180,8 +1383,7 @@ export async function fetchHomeFeedPage(input: {
     };
   }
 
-  // Session mix: skip a few newest per lane + rotate lane order so each open differs.
-  // (Anonymous /v1/feed is otherwise fully deterministic newest-first.)
+  // Session mix: skip a few newest per lane so each open differs.
   if (!input.cursor) {
     const skipSpark = sessionSeed % 6;
     const skipHub = (sessionSeed >>> 3) % 6;
@@ -1190,48 +1392,29 @@ export async function fetchHomeFeedPage(input: {
     if (hubRows.length > skipHub + 2) hubRows = hubRows.slice(skipHub);
     if (imageRows.length > skipImage + 2) imageRows = imageRows.slice(skipImage);
   }
-  const laneOrder: HomeLaneKind[] =
-    sessionSeed % 3 === 0
-      ? ['spark', 'hub', 'image']
-      : sessionSeed % 3 === 1
-        ? ['hub', 'image', 'spark']
-        : ['image', 'spark', 'hub'];
 
-  // Round-robin (text lane off). Build a candidate pool ≥ want.
-  const laneRows: Record<HomeLaneKind, RawPostRow[]> = {
-    spark: sparkRows,
+  const shortformRows = sparkRows.filter(mediaLooksShortFormSpark);
+  const tiktokRows = sparkRows.filter((r) => !mediaLooksShortFormSpark(r));
+  const candidateWant = viewerId ? Math.min(want * 3, 96) : want;
+  const woven = weaveHomeFeedVariety({
+    shortform: shortformRows,
+    tiktok: tiktokRows,
     hub: hubRows,
     image: imageRows,
-    text: [],
-  };
-  const lanes: { kind: HomeLaneKind; rows: RawPostRow[]; i: number }[] =
-    laneOrder.map((kind) => ({ kind, rows: laneRows[kind], i: 0 }));
-  const candidateWant = viewerId ? Math.min(want * 3, 96) : want;
-  const woven: RawPostRow[] = [];
-  const seen = new Set<string>();
-  const seenMedia = new Set<string>();
-  let guard = 0;
-  while (woven.length < candidateWant && guard < candidateWant * 4) {
-    guard += 1;
-    let progressed = false;
-    for (const lane of lanes) {
-      if (woven.length >= candidateWant) break;
-      while (lane.i < lane.rows.length) {
-        const row = lane.rows[lane.i++];
-        if (seen.has(row.id)) continue;
-        // Defense: never weave pure text even if a media lane misclassifies.
-        if (isHomeTextRow(row)) continue;
-        const aliases = homeMediaAliasKeys(row);
-        if (aliases.some((k) => seenMedia.has(k))) continue;
-        seen.add(row.id);
-        for (const k of aliases) seenMedia.add(k);
-        woven.push(row);
-        progressed = true;
-        break;
-      }
-    }
-    if (!progressed) break;
-  }
+    want: candidateWant,
+    rotationOffset: sessionSeed % 7,
+  });
+
+  // Cursor advancement — approximate consumption from how many spark/hub/image ids were woven.
+  const wovenIds = new Set(woven.map((r) => r.id));
+  const sparkConsumed = sparkRows.filter((r) => wovenIds.has(r.id)).length;
+  const hubConsumed = hubRows.filter((r) => wovenIds.has(r.id)).length;
+  const imageConsumed = imageRows.filter((r) => wovenIds.has(r.id)).length;
+  const lanes: { kind: HomeLaneKind; rows: RawPostRow[]; i: number }[] = [
+    { kind: 'spark', rows: sparkRows, i: sparkConsumed },
+    { kind: 'hub', rows: hubRows, i: hubConsumed },
+    { kind: 'image', rows: imageRows, i: imageConsumed },
+  ];
 
   let servedRows = woven.slice(0, want);
   let batchId: string | null = null;
@@ -1266,12 +1449,14 @@ export async function fetchHomeFeedPage(input: {
       const rankedRows = rankedIds
         .map((id) => byId.get(id))
         .filter((r): r is RawPostRow => !!r);
+      // Ranker can re-cluster TikTok — re-weave for variety before delivery reserve.
+      const diversified = diversifyHomeRows(rankedRows, Math.min(rankedRows.length, want * 2));
 
       const reserved = await reserveDeliveryBatch({
         userId: viewerId,
         surface: 'home_for_you',
         idempotencyKey: idem || `home:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`,
-        candidates: rankedRows.map((r) => ({
+        candidates: diversified.map((r) => ({
           id: r.id,
           canonicalKey: canonicalVideoKey(r),
         })),
@@ -1279,14 +1464,20 @@ export async function fetchHomeFeedPage(input: {
       });
 
       if (reserved && reserved.videoIds.length) {
-        servedRows = orderRowsByIds(rankedRows, reserved.videoIds);
+        servedRows = diversifyHomeRows(
+          orderRowsByIds(diversified, reserved.videoIds),
+          want
+        );
         batchId = reserved.batchId;
         deliveryPolicy = 'ledger';
       } else {
         // Ledger unavailable — still exclude delivered client-side this response.
-        servedRows = rankedRows.slice(0, want);
+        servedRows = diversified.slice(0, want);
       }
     } else {
+      // Entire woven window already in the delivery ledger.
+      // Keep items empty and advance cursors (hasMore below) so the client can
+      // walk /v1/feed — never re-serve delivered ids (Home at-most-once).
       servedRows = [];
     }
   }

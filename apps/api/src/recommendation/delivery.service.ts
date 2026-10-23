@@ -8,7 +8,7 @@
 import { randomUUID } from 'node:crypto';
 import { pool, type PoolClient } from '../db.js';
 
-export type FeedSurface = 'home_for_you' | 'hubs_for_you';
+export type FeedSurface = 'home_for_you' | 'hubs_for_you' | 'masquerade_for_you';
 
 export type DeliveryCandidate = {
   id: string;
@@ -64,14 +64,16 @@ export function ensureFeedDeliverySchema(): Promise<boolean> {
   return schemaReady;
 }
 
-/** Stable identity for original + share of the same R2 pack. */
+/** Stable identity for original + share of the same R2 pack (video or image). */
 export function canonicalVideoKey(row: {
   id: string;
   media_url?: string | null;
+  thumb_url?: string | null;
   shared_post_id?: string | null;
   body?: string | null;
+  media_type?: string | null;
 }): string {
-  const media = String(row.media_url ?? '');
+  const media = `${row.media_url ?? ''}\n${row.thumb_url ?? ''}`;
   const r2 = media.match(/"r2_key"\s*:\s*"([^"]+)"/i)?.[1];
   if (r2) return `r2:${r2.toLowerCase()}`;
 
@@ -87,16 +89,39 @@ export function canonicalVideoKey(row: {
     return `clip:${stamp.toLowerCase()}`;
   }
 
+  // TikTok country packs: …/United_States/1234567890/video.mp4 (or media/01.jpg)
+  const pack = media.match(
+    /(?:united_states|germany|albania|egypt|kosovo)\/(\d{8,})\//i
+  )?.[1];
+  if (pack) return `tt:${pack}`;
+
+  // SecretsStrange / ShortForm pack folders: …/ss_xxxxx/ or …/ShortForm/…/id/
+  const ss = media.match(/\/(ss_[a-z0-9]+)(?:\/|$)/i)?.[1];
+  if (ss) return `pack:${ss.toLowerCase()}`;
+
   const url = media.match(/https?:\/\/[^"'\\\s?]+/i)?.[0];
   if (url) {
     const bare = url.toLowerCase().split('?')[0];
     if (
       bare.includes('.mp4') ||
       bare.includes('/shortform/') ||
-      bare.includes('/longform/')
+      bare.includes('/longform/') ||
+      bare.includes('/posts/') ||
+      /\.(jpe?g|png|webp|gif)$/i.test(bare) ||
+      bare.includes('/media/')
     ) {
+      // Strip filename so video.mp4 and media/01.jpg of same pack collide when path shares pack id.
+      const dir = bare.replace(/\/[^/]+$/, '');
+      if (dir.includes('/united_states/') || dir.includes('/germany/') || dir.includes('/albania/') || dir.includes('/egypt/')) {
+        return `url:${dir}`;
+      }
       return `url:${bare}`;
     }
+  }
+
+  const mt = String(row.media_type ?? '').toLowerCase();
+  if (mt === 'image' || mt === 'photo' || mt === 'gif' || mt === 'video' || mt === 'reel' || mt === 'spark') {
+    return `clip:${String(row.id).toLowerCase()}`;
   }
   return `clip:${String(row.id).toLowerCase()}`;
 }

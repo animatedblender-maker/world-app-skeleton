@@ -19,6 +19,7 @@ import {
   rebuildNeighborsForEntity,
   upsertPersonalityFeatureVector,
 } from './knn.service.js';
+import { mmrPick } from './social-score.js';
 
 export type RankSurface =
   | 'home_for_you'
@@ -55,7 +56,7 @@ export type RankResponse = {
   };
 };
 
-const POLICY_VERSION = 'server.v3-knn-bubbles';
+const POLICY_VERSION = 'server.v4-social-mmr';
 
 /** Short-lived rank cache — same candidate set within ~20s reuses work (feed soft-rerank). */
 const RANK_CACHE_TTL_MS = 20_000;
@@ -269,9 +270,26 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
     scored.push({ id, score, sources, authorId });
   }
 
-  // Sort by score, then greedy diversity (creator window)
+  // Sort by score, then MMR diversity (creator window + exclusive-family gap).
   scored.sort((a, b) => b.score - a.score);
-  const picked = greedyDiversity(scored, limit, surface === 'sparks' ? 1 : 2, 8);
+  const byId = new Map(scored.map((s) => [s.id, s]));
+  const picked = mmrPick(
+    scored.map((s) => ({
+      id: s.id,
+      score: s.score,
+      authorId: s.authorId,
+    })),
+    {
+      limit,
+      lambda: 0.74,
+      maxSameCreator: surface === 'sparks' ? 1 : 2,
+      creatorWindow: 8,
+      exclusiveFamilies: ['tiktok', 'image', 'tiktok_image'],
+      exclusiveEveryN: surface === 'home_for_you' ? 4 : 3,
+    }
+  )
+    .map((p) => byId.get(p.id))
+    .filter((s): s is (typeof scored)[number] => !!s);
 
   const latencyMs = Date.now() - started;
 
@@ -316,46 +334,6 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
   }
 
   return response;
-}
-
-function greedyDiversity(
-  scored: {
-    id: string;
-    score: number;
-    sources: string[];
-    authorId: string | null;
-  }[],
-  limit: number,
-  maxSameCreator: number,
-  window: number
-) {
-  const out: typeof scored = [];
-  const used = new Set<string>();
-  const remaining = [...scored];
-
-  while (out.length < limit && remaining.length) {
-    let bestI = -1;
-    let bestM = -Infinity;
-    for (let i = 0; i < remaining.length; i++) {
-      const c = remaining[i];
-      if (used.has(c.id)) continue;
-      let m = c.score;
-      const recent = out.slice(-window);
-      const same = recent.filter((x) => x.authorId && x.authorId === c.authorId).length;
-      if (same >= maxSameCreator) m -= 8;
-      else if (same > 0) m -= same * 1.5;
-      if (out.length && out[out.length - 1].authorId === c.authorId) m -= 4;
-      if (m > bestM) {
-        bestM = m;
-        bestI = i;
-      }
-    }
-    if (bestI < 0) break;
-    const [pick] = remaining.splice(bestI, 1);
-    used.add(pick.id);
-    out.push(pick);
-  }
-  return out;
 }
 
 async function loadCreatorAffinity(entityId: string): Promise<Map<string, number>> {
