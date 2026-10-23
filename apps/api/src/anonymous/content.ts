@@ -2,11 +2,13 @@ import { pool } from '../db.js';
 import { canAccess } from './policy.js';
 import { getSpaceById } from './spaces.js';
 import type { AnonymousProfilePublic } from './identity.js';
+import { withResolvedMedia, withResolvedMediaMany } from './media.js';
 
 export type PostPublic = {
   id: string;
   space_id: string;
   space_slug?: string;
+  space_title?: string;
   author: { id: string; username: string; avatar_seed: string };
   title: string | null;
   body: string;
@@ -16,6 +18,9 @@ export type PostPublic = {
   created_at: string;
   edited_at: string | null;
   my_vote?: number;
+  media_type?: string | null;
+  media_url?: string | null;
+  thumb_url?: string | null;
 };
 
 export type CommentPublic = {
@@ -94,7 +99,7 @@ export async function listSpacePosts(opts: {
   const { rows } = await pool.query<any>(
     `
     select p.id, p.space_id, p.title, p.body, p.state, p.score, p.comment_count,
-           p.created_at, p.edited_at,
+           p.created_at, p.edited_at, p.media_type, p.media_url, p.thumb_url,
            a.id as author_id, a.username as author_username, a.avatar_seed as author_avatar_seed,
            coalesce(v.value, 0) as my_vote
     from anonymous.posts p
@@ -114,23 +119,28 @@ export async function listSpacePosts(opts: {
   );
 
   const page = rows.slice(0, limit);
-  const posts: PostPublic[] = page.map((r) => ({
-    id: r.id,
-    space_id: r.space_id,
-    author: {
-      id: r.author_id,
-      username: r.author_username,
-      avatar_seed: r.author_avatar_seed,
-    },
-    title: r.title,
-    body: r.body,
-    state: r.state,
-    score: Number(r.score) || 0,
-    comment_count: Number(r.comment_count) || 0,
-    created_at: iso(r.created_at)!,
-    edited_at: iso(r.edited_at),
-    my_vote: Number(r.my_vote) || 0,
-  }));
+  const posts: PostPublic[] = await withResolvedMediaMany(
+    page.map((r) => ({
+      id: r.id,
+      space_id: r.space_id,
+      author: {
+        id: r.author_id,
+        username: r.author_username,
+        avatar_seed: r.author_avatar_seed,
+      },
+      title: r.title,
+      body: r.body,
+      state: r.state,
+      score: Number(r.score) || 0,
+      comment_count: Number(r.comment_count) || 0,
+      created_at: iso(r.created_at)!,
+      edited_at: iso(r.edited_at),
+      my_vote: Number(r.my_vote) || 0,
+      media_type: r.media_type ?? null,
+      media_url: r.media_url ?? null,
+      thumb_url: r.thumb_url ?? null,
+    }))
+  );
 
   let next_cursor: string | null = null;
   if (rows.length > limit) {
@@ -147,6 +157,9 @@ export async function createPost(opts: {
   spaceId: string;
   title?: string;
   body: string;
+  mediaType?: string | null;
+  mediaUrl?: string | null;
+  thumbUrl?: string | null;
   ageEligible: boolean;
   ageAttested: boolean;
 }): Promise<
@@ -174,8 +187,34 @@ export async function createPost(opts: {
 
   const body = String(opts.body || '').trim().slice(0, 10000);
   const title = opts.title != null ? String(opts.title).trim().slice(0, 200) : null;
-  if (!body && !title) {
-    return { ok: false, code: 'empty', reason: 'Post body required.', status: 400 };
+  const mediaTypeRaw = opts.mediaType != null ? String(opts.mediaType).trim().toLowerCase() : '';
+  const mediaType =
+    mediaTypeRaw === 'image' || mediaTypeRaw === 'video' || mediaTypeRaw === 'gif'
+      ? mediaTypeRaw
+      : null;
+  const mediaUrl =
+    opts.mediaUrl != null && String(opts.mediaUrl).trim()
+      ? String(opts.mediaUrl).trim().slice(0, 2000)
+      : null;
+  const thumbUrl =
+    opts.thumbUrl != null && String(opts.thumbUrl).trim()
+      ? String(opts.thumbUrl).trim().slice(0, 2000)
+      : null;
+  if (!body && !title && !mediaUrl) {
+    return {
+      ok: false,
+      code: 'empty',
+      reason: 'Write something or attach a photo/video.',
+      status: 400,
+    };
+  }
+  if (mediaUrl && !mediaType) {
+    return {
+      ok: false,
+      code: 'bad_media',
+      reason: 'media_type required with media_url.',
+      status: 400,
+    };
   }
 
   const client = await pool.connect();
@@ -183,11 +222,22 @@ export async function createPost(opts: {
     await client.query('begin');
     const { rows } = await client.query<any>(
       `
-      insert into anonymous.posts (space_id, author_profile_id, title, body)
-      values ($1::uuid, $2::uuid, $3, $4)
-      returning id, space_id, title, body, state, score, comment_count, created_at, edited_at
+      insert into anonymous.posts (
+        space_id, author_profile_id, title, body, media_type, media_url, thumb_url
+      )
+      values ($1::uuid, $2::uuid, $3, $4, $5, $6, $7)
+      returning id, space_id, title, body, state, score, comment_count, created_at, edited_at,
+                media_type, media_url, thumb_url
       `,
-      [space.id, opts.profile.id, title || null, body || title || '']
+      [
+        space.id,
+        opts.profile.id,
+        title || null,
+        body || title || '',
+        mediaType,
+        mediaUrl,
+        thumbUrl,
+      ]
     );
     await client.query(
       `update anonymous.spaces set post_count = post_count + 1, updated_at = now() where id = $1::uuid`,
@@ -200,6 +250,8 @@ export async function createPost(opts: {
       post: {
         id: r.id,
         space_id: r.space_id,
+        space_slug: space.slug,
+        space_title: space.title,
         author: {
           id: opts.profile.id,
           username: opts.profile.username,
@@ -213,6 +265,9 @@ export async function createPost(opts: {
         created_at: iso(r.created_at)!,
         edited_at: null,
         my_vote: 0,
+        media_type: r.media_type ?? null,
+        media_url: r.media_url ?? null,
+        thumb_url: r.thumb_url ?? null,
       },
     };
   } catch (err) {
@@ -239,7 +294,8 @@ export async function getPost(opts: {
   const { rows } = await pool.query<any>(
     `
     select p.id, p.space_id, p.title, p.body, p.state, p.score, p.comment_count,
-           p.created_at, p.edited_at, s.slug as space_slug,
+           p.created_at, p.edited_at, p.media_type, p.media_url, p.thumb_url,
+           s.slug as space_slug, s.title as space_title,
            a.id as author_id, a.username as author_username, a.avatar_seed as author_avatar_seed,
            coalesce(v.value, 0) as my_vote
     from anonymous.posts p
@@ -275,26 +331,32 @@ export async function getPost(opts: {
     return { ok: false, code: decision.code, reason: decision.reason, status: 403 };
   }
 
+  const post = await withResolvedMedia({
+    id: r.id,
+    space_id: r.space_id,
+    space_slug: r.space_slug,
+    space_title: r.space_title,
+    author: {
+      id: r.author_id,
+      username: r.author_username,
+      avatar_seed: r.author_avatar_seed,
+    },
+    title: r.title,
+    body: r.body,
+    state: r.state,
+    score: Number(r.score) || 0,
+    comment_count: Number(r.comment_count) || 0,
+    created_at: iso(r.created_at)!,
+    edited_at: iso(r.edited_at),
+    my_vote: Number(r.my_vote) || 0,
+    media_type: r.media_type ?? null,
+    media_url: r.media_url ?? null,
+    thumb_url: r.thumb_url ?? null,
+  });
+
   return {
     ok: true,
-    post: {
-      id: r.id,
-      space_id: r.space_id,
-      space_slug: r.space_slug,
-      author: {
-        id: r.author_id,
-        username: r.author_username,
-        avatar_seed: r.author_avatar_seed,
-      },
-      title: r.title,
-      body: r.body,
-      state: r.state,
-      score: Number(r.score) || 0,
-      comment_count: Number(r.comment_count) || 0,
-      created_at: iso(r.created_at)!,
-      edited_at: iso(r.edited_at),
-      my_vote: Number(r.my_vote) || 0,
-    },
+    post,
   };
 }
 

@@ -1,6 +1,7 @@
 import { pool } from '../db.js';
 import type { AnonymousProfilePublic } from './identity.js';
 import type { PostPublic } from './content.js';
+import { withResolvedMediaMany } from './media.js';
 
 function iso(v: Date | string | null | undefined): string | null {
   if (v == null) return null;
@@ -48,7 +49,8 @@ export async function getFeed(opts: {
   const { rows } = await pool.query<any>(
     `
     select p.id, p.space_id, p.title, p.body, p.state, p.score, p.comment_count,
-           p.created_at, p.edited_at, s.slug as space_slug,
+           p.created_at, p.edited_at, p.media_type, p.media_url, p.thumb_url,
+           s.slug as space_slug, s.title as space_title,
            a.id as author_id, a.username as author_username, a.avatar_seed as author_avatar_seed,
            coalesce(v.value, 0) as my_vote
     from anonymous.posts p
@@ -76,24 +78,30 @@ export async function getFeed(opts: {
   );
 
   const page = rows.slice(0, limit);
-  const posts: PostPublic[] = page.map((r) => ({
-    id: r.id,
-    space_id: r.space_id,
-    space_slug: r.space_slug,
-    author: {
-      id: r.author_id,
-      username: r.author_username,
-      avatar_seed: r.author_avatar_seed,
-    },
-    title: r.title,
-    body: r.body,
-    state: r.state,
-    score: Number(r.score) || 0,
-    comment_count: Number(r.comment_count) || 0,
-    created_at: iso(r.created_at)!,
-    edited_at: iso(r.edited_at),
-    my_vote: Number(r.my_vote) || 0,
-  }));
+  const posts: PostPublic[] = await withResolvedMediaMany(
+    page.map((r) => ({
+      id: r.id,
+      space_id: r.space_id,
+      space_slug: r.space_slug,
+      space_title: r.space_title,
+      author: {
+        id: r.author_id,
+        username: r.author_username,
+        avatar_seed: r.author_avatar_seed,
+      },
+      title: r.title,
+      body: r.body,
+      state: r.state,
+      score: Number(r.score) || 0,
+      comment_count: Number(r.comment_count) || 0,
+      created_at: iso(r.created_at)!,
+      edited_at: iso(r.edited_at),
+      my_vote: Number(r.my_vote) || 0,
+      media_type: r.media_type ?? null,
+      media_url: r.media_url ?? null,
+      thumb_url: r.thumb_url ?? null,
+    }))
+  );
 
   let next_cursor: string | null = null;
   if (rows.length > limit) {
