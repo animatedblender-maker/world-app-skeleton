@@ -33,7 +33,9 @@ export const messagesResolvers = {
       const limit = typeof args?.limit === 'number' ? args.limit : 20;
       const inboxRaw = String(args?.inbox ?? 'primary').toLowerCase();
       const inbox =
-        inboxRaw === 'requests' || inboxRaw === 'all' ? inboxRaw : 'primary';
+        inboxRaw === 'requests' || inboxRaw === 'all' || inboxRaw === 'masquerade'
+          ? inboxRaw
+          : 'primary';
       return await svc().listConversations(user.id, limit, inbox);
     },
     conversationById: async (_: any, args: { conversation_id: string }, ctx: Context) => {

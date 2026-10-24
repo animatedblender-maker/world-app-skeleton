@@ -77,6 +77,8 @@ type ConversationRow = {
   /** Viewer-side: pending message request from a non-follower. */
   is_request?: boolean;
   request_status?: string | null;
+  /** primary = Messages; masquerade = Masquerade Inbox only. */
+  surface?: string | null;
   members: Array<{
     user_id: string;
     display_name: string | null;
@@ -91,10 +93,43 @@ type ConversationRow = {
 };
 
 export type MessagePrivacy = 'everyone' | 'following' | 'requests';
-export type ConversationInbox = 'primary' | 'requests' | 'all';
+export type ConversationInbox = 'primary' | 'requests' | 'all' | 'masquerade';
+export type ConversationSurface = 'primary' | 'masquerade';
 
 let messagePrivacyColumnReady: boolean | null = null;
 let requestColumnsReady: boolean | null = null;
+let conversationSurfaceReady: boolean | null = null;
+
+/** Ensure conversations.surface exists (primary | masquerade). */
+export async function ensureConversationSurfaceColumn(): Promise<boolean> {
+  if (conversationSurfaceReady !== null) return conversationSurfaceReady;
+  try {
+    await pool.query(`
+      alter table public.conversations
+        add column if not exists surface text not null default 'primary'
+    `);
+    await pool.query(`
+      do $$
+      begin
+        if not exists (
+          select 1 from pg_constraint where conname = 'conversations_surface_check'
+        ) then
+          alter table public.conversations
+            add constraint conversations_surface_check
+            check (surface = any (array['primary'::text, 'masquerade'::text]));
+        end if;
+      end $$;
+    `);
+    conversationSurfaceReady = true;
+  } catch (err) {
+    console.warn(
+      '[messages] conversations.surface ensure failed',
+      err instanceof Error ? err.message : err
+    );
+    conversationSurfaceReady = false;
+  }
+  return conversationSurfaceReady;
+}
 
 async function supportsMessagePrivacyColumn(): Promise<boolean> {
   if (messagePrivacyColumnReady !== null) return messagePrivacyColumnReady;
@@ -193,10 +228,14 @@ export class MessagesService {
     const safeLimit = Math.max(1, Math.min(50, limit || 20));
     const inboxFilter = await inboxVisibilityFilter('cm');
     const hasRequestCols = await supportsRequestColumns();
+    const hasSurface = await ensureConversationSurfaceColumn();
     const folder = String(inbox || 'primary').toLowerCase() as ConversationInbox;
 
     let requestFilter = '';
-    if (hasRequestCols) {
+    if (folder === 'masquerade') {
+      // Masquerade Inbox is its own folder — ignore request state.
+      requestFilter = '';
+    } else if (hasRequestCols) {
       if (folder === 'requests') {
         requestFilter = `and coalesce(cm.is_request, false) = true and coalesce(cm.request_status, 'pending') = 'pending'`;
       } else if (folder === 'primary') {
@@ -206,6 +245,18 @@ export class MessagesService {
         )`;
       }
     } else if (folder === 'requests') {
+      return [];
+    }
+
+    // Keep Masquerade team threads out of normal Messages (and vice versa).
+    let surfaceFilter = '';
+    if (hasSurface) {
+      if (folder === 'masquerade') {
+        surfaceFilter = `and coalesce(c.surface, 'primary') = 'masquerade'`;
+      } else {
+        surfaceFilter = `and coalesce(c.surface, 'primary') = 'primary'`;
+      }
+    } else if (folder === 'masquerade') {
       return [];
     }
 
@@ -276,6 +327,7 @@ export class MessagesService {
       where cm.user_id = $1
         ${inboxFilter}
         ${requestFilter}
+        ${surfaceFilter}
       order by coalesce(c.last_message_at, c.updated_at, c.created_at) desc
       limit $2
       `,
@@ -338,6 +390,8 @@ export class MessagesService {
       throw new Error('Invalid target.');
     }
 
+    const hasSurface = await ensureConversationSurfaceColumn();
+    // User-started DMs are always the primary (Messages) surface — never Masquerade.
     const existing = await pool.query<{ id: string }>(
       `
       select c.id
@@ -345,6 +399,7 @@ export class MessagesService {
       join public.conversation_members m1 on m1.conversation_id = c.id and m1.user_id = $1
       join public.conversation_members m2 on m2.conversation_id = c.id and m2.user_id = $2
       where c.is_direct = true
+        ${hasSurface ? `and coalesce(c.surface, 'primary') = 'primary'` : ''}
       limit 1
       `,
       [userId, targetId]
@@ -367,7 +422,9 @@ export class MessagesService {
     try {
       await client.query('begin');
       const inserted = await client.query<{ id: string }>(
-        `insert into public.conversations (is_direct) values (true) returning id`,
+        hasSurface
+          ? `insert into public.conversations (is_direct, surface) values (true, 'primary') returning id`
+          : `insert into public.conversations (is_direct) values (true) returning id`,
         []
       );
       convoId = inserted.rows[0]?.id ?? null;

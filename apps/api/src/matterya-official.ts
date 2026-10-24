@@ -11,20 +11,82 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pool } from './db.js';
 import { createAuthUser, supabaseAdminConfigured, supabaseUrl } from './supabase-admin.js';
-import { MessagesService } from './graphql/modules/messages/messages.service.js';
+import {
+  ensureConversationSurfaceColumn,
+  MessagesService,
+  type ConversationSurface,
+} from './graphql/modules/messages/messages.service.js';
 
 const DEFAULT_EMAIL = 'official@matterya.com';
 const DEFAULT_USERNAME = 'matterya';
 const DEFAULT_DISPLAY = 'Matterya';
 
+/** Normal Messages welcome from @matterya after account creation. */
 export const WELCOME_MESSAGE = [
-  'Hey — welcome to Matterya.',
+  '**Well, hello there. Welcome to Matterya!**',
   '',
-  'This is the official account.',
+  'We know, another social media platform. As if there weren\'t enough already, right?',
   '',
-  'In Masquerade you’re anonymous: Spaces, posts, and replies stay behind your handle. Your real Matterya chats never mix into Masquerade Inbox.',
+  'But we wanted to try something different.',
   '',
-  'Hit reply if something’s off.',
+  'We believe the internet should be a place where people can speak their minds, question things, disagree, and still get along. You shouldn\'t have to follow the crowd or ask for permission to have an opinion.',
+  '',
+  'Of course, freedom comes with responsibility. Disagree with ideas, challenge opinions, but remember there\'s a person behind every screen.',
+  '',
+  'We\'re still growing, and we\'d rather build this place with you than decide everything for you.',
+  '',
+  'So, look around, make some friends, speak your mind, and make yourself at home.',
+  '',
+  '**This place is as much yours as it is ours.**',
+  '',
+  '**Matterya Team**',
+].join('\n');
+
+/** First live @matterya feed post. */
+export const OFFICIAL_POST_BODY = [
+  '**A few words about Matterya.**',
+  '',
+  'We didn\'t build Matterya because the internet needed another social media platform.',
+  '',
+  'We built it because we missed what the internet was supposed to be. A place where people could speak their minds, disagree, share things that matter to them, and meet others without constantly worrying about saying the wrong thing.',
+  '',
+  'We don\'t expect everyone here to think alike. In fact, we hope they don\'t. Some conversations will be uncomfortable, some opinions unpopular, and some discussions will get heated. That\'s part of having a voice. Just don\'t forget that the person you\'re arguing with has one too.',
+  '',
+  'We also don\'t believe a handful of people should get to decide what everyone else is allowed to think.',
+  '',
+  'Matterya is ours to build, but it\'s yours to make something of.',
+  '',
+  'We\'re just getting started, and we\'ll probably get a few things wrong along the way. When we do, tell us.',
+  '',
+  'Anyway, welcome. We\'re glad you found us.',
+  '',
+  '— Matterya Team',
+].join('\n');
+
+/**
+ * Masquerade Inbox welcome — lives on a separate conversation (`surface='masquerade'`).
+ * Never mixed into normal Messages. Phrasing uses "Matterya" (never "the Matterya").
+ */
+export const MASQUERADE_WELCOME_MESSAGE = [
+  '**Well, look who wandered in.**',
+  '',
+  'Welcome to Masquerade.',
+  '',
+  'Out there, you have a name, a face, and a reputation. In here, you leave all that behind.',
+  '',
+  "You'll find rooms filled with curious minds, untold stories, unusual questions, and strangers with plenty to say.",
+  '',
+  'You have a new name here, one that belongs only to this side of Matterya. Make it your own.',
+  '',
+  "Just remember, there's a real person behind every mask. Treat them accordingly.",
+  '',
+  'Now, go on. There are plenty of doors waiting to be opened.',
+  '',
+  '**Enjoy the Masquerade.**',
+  '',
+  '**Masquerade Team**',
+  '',
+  '*“Give him a mask, and he will tell you the truth.” — Oscar Wilde*',
 ].join('\n');
 
 let cachedOfficialId: string | null = null;
@@ -116,11 +178,12 @@ async function upsertOfficialProfile(
     insert into public.profiles (
       user_id, email, display_name, username, country_name, is_verified, message_privacy
     )
-    values ($1::uuid, $2, $3, $4, 'Global', true, 'everyone')
+    values ($1::uuid, $2, $3, $4, '', true, 'everyone')
     on conflict (user_id) do update
       set email = excluded.email,
           display_name = excluded.display_name,
           username = excluded.username,
+          country_name = '',
           is_verified = true,
           message_privacy = 'everyone',
           updated_at = now()
@@ -206,7 +269,9 @@ export async function sendMatteryaWelcomeMessage(
     throw new Error('invalid_recipient');
   }
 
-  // Idempotency: already welcomed? Refresh body if we find an older welcome draft.
+  await ensureConversationSurfaceColumn();
+
+  // Idempotency: already welcomed on the primary (Messages) surface?
   const prior = await pool.query<{ conversation_id: string; message_id: string; body: string }>(
     `
     select c.id::text as conversation_id, m.id::text as message_id, m.body
@@ -215,10 +280,15 @@ export async function sendMatteryaWelcomeMessage(
     join public.conversation_members b on b.conversation_id = c.id and b.user_id = $2::uuid
     join public.messages m on m.conversation_id = c.id and m.sender_id = $1::uuid
     where c.is_direct = true
+      and coalesce(c.surface, 'primary') = 'primary'
       and (
-        m.body like 'Welcome to Matterya.%'
-        or m.body like 'Hey — welcome to Matterya.%'
-        or m.body like 'Hey - welcome to Matterya.%'
+        ltrim(m.body) like 'Welcome to Matterya.%'
+        or ltrim(m.body) like 'Hey — welcome to Matterya.%'
+        or ltrim(m.body) like 'Hey - welcome to Matterya.%'
+        or ltrim(m.body) like '**Hey, welcome to Matterya!**%'
+        or ltrim(m.body) like 'Hey, welcome to Matterya!%'
+        or ltrim(m.body) like '**Well, hello there. Welcome to Matterya!**%'
+        or ltrim(m.body) like 'Well, hello there. Welcome to Matterya!%'
       )
     order by m.created_at asc
     limit 1
@@ -241,15 +311,71 @@ export async function sendMatteryaWelcomeMessage(
 
   const svc = new MessagesService();
   // Bypass recipient privacy for the official welcome (start as Matterya → user).
-  const convo = await startOfficialConversation(officialId, recipientUserId);
+  const convo = await startOfficialConversation(officialId, recipientUserId, 'primary');
+  const msg = await svc.sendMessage(convo, officialId, { body });
+  return { conversationId: convo, messageId: msg.id, created: true };
+}
+
+/** Send (or ensure) the Masquerade welcome DM after a handle is claimed. Idempotent per pair. */
+export async function sendMatteryaMasqueradeWelcomeMessage(
+  recipientUserId: string,
+  body = MASQUERADE_WELCOME_MESSAGE
+): Promise<{ conversationId: string; messageId: string; created: boolean }> {
+  const officialId = await ensureMatteryaOfficialUser();
+  if (!recipientUserId || recipientUserId === officialId) {
+    throw new Error('invalid_recipient');
+  }
+
+  await ensureConversationSurfaceColumn();
+
+  // Only match Masquerade-surface threads — never the normal Messages welcome.
+  const prior = await pool.query<{ conversation_id: string; message_id: string; body: string }>(
+    `
+    select c.id::text as conversation_id, m.id::text as message_id, m.body
+    from public.conversations c
+    join public.conversation_members a on a.conversation_id = c.id and a.user_id = $1::uuid
+    join public.conversation_members b on b.conversation_id = c.id and b.user_id = $2::uuid
+    join public.messages m on m.conversation_id = c.id and m.sender_id = $1::uuid
+    where c.is_direct = true
+      and coalesce(c.surface, 'primary') = 'masquerade'
+      and (
+        ltrim(m.body) like '**Well, look who wandered in.**%'
+        or ltrim(m.body) like 'Well, look who wandered in.%'
+        or ltrim(m.body) like 'Welcome to Masquerade.%'
+      )
+    order by m.created_at asc
+    limit 1
+    `,
+    [officialId, recipientUserId]
+  );
+  if (prior.rows[0]) {
+    if (prior.rows[0].body !== body) {
+      await pool.query(
+        `update public.messages set body = $2, updated_at = now() where id = $1::uuid`,
+        [prior.rows[0].message_id, body]
+      );
+    }
+    return {
+      conversationId: prior.rows[0].conversation_id,
+      messageId: prior.rows[0].message_id,
+      created: false,
+    };
+  }
+
+  const svc = new MessagesService();
+  const convo = await startOfficialConversation(officialId, recipientUserId, 'masquerade');
   const msg = await svc.sendMessage(convo, officialId, { body });
   return { conversationId: convo, messageId: msg.id, created: true };
 }
 
 async function startOfficialConversation(
   officialId: string,
-  recipientId: string
+  recipientId: string,
+  surface: ConversationSurface = 'primary'
 ): Promise<string> {
+  const hasSurface = await ensureConversationSurfaceColumn();
+  const surfaceValue: ConversationSurface = surface === 'masquerade' ? 'masquerade' : 'primary';
+
   const existing = await pool.query<{ id: string }>(
     `
     select c.id::text as id
@@ -257,9 +383,10 @@ async function startOfficialConversation(
     join public.conversation_members m1 on m1.conversation_id = c.id and m1.user_id = $1::uuid
     join public.conversation_members m2 on m2.conversation_id = c.id and m2.user_id = $2::uuid
     where c.is_direct = true
+      ${hasSurface ? `and coalesce(c.surface, 'primary') = $3` : ''}
     limit 1
     `,
-    [officialId, recipientId]
+    hasSurface ? [officialId, recipientId, surfaceValue] : [officialId, recipientId]
   );
   if (existing.rows[0]?.id) return existing.rows[0].id;
 
@@ -267,7 +394,10 @@ async function startOfficialConversation(
   try {
     await client.query('begin');
     const inserted = await client.query<{ id: string }>(
-      `insert into public.conversations (is_direct) values (true) returning id::text as id`
+      hasSurface
+        ? `insert into public.conversations (is_direct, surface) values (true, $1) returning id::text as id`
+        : `insert into public.conversations (is_direct) values (true) returning id::text as id`,
+      hasSurface ? [surfaceValue] : []
     );
     const convoId = inserted.rows[0]?.id;
     if (!convoId) throw new Error('failed_create_conversation');

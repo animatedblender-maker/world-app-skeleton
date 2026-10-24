@@ -247,6 +247,8 @@ export const typeDefs = `#graphql
     """Viewer-side pending message request"""
     is_request: Boolean
     request_status: String
+    """primary = Messages inbox; masquerade = Masquerade Inbox only (never mixed)."""
+    surface: String
     members: [PostAuthor!]!
     last_message: Message
   }
@@ -617,7 +619,7 @@ export const typeDefs = `#graphql
     isFollowing(user_id: ID!): Boolean!
 
     # Messaging
-    """inbox: primary (default) | requests | all"""
+    """inbox: primary (default) | requests | all | masquerade"""
     conversations(limit: Int, inbox: String): [Conversation!]!
     conversationById(conversation_id: ID!): Conversation
     messagesByConversation(conversation_id: ID!, limit: Int, before: String): [Message!]!

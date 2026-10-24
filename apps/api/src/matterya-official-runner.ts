@@ -3,6 +3,8 @@
  *
  *   npx tsx src/matterya-official-runner.ts --password='…' --welcome=USER_ID
  *   npx tsx src/matterya-official-runner.ts --welcome-email=amr@…
+ *   npx tsx src/matterya-official-runner.ts --masquerade-welcome=USER_ID
+ *   npx tsx src/matterya-official-runner.ts --masquerade-welcome-email=amr@…
  */
 import dotenv from 'dotenv';
 import path from 'node:path';
@@ -11,6 +13,8 @@ import { pool } from './db.js';
 import {
   defaultOfficialAvatarPath,
   ensureMatteryaOfficialUser,
+  MASQUERADE_WELCOME_MESSAGE,
+  sendMatteryaMasqueradeWelcomeMessage,
   sendMatteryaWelcomeMessage,
   WELCOME_MESSAGE,
 } from './matterya-official.js';
@@ -36,6 +40,8 @@ async function main() {
 
   const welcomeId = argValue('welcome');
   const welcomeEmail = argValue('welcome-email');
+  const masqueradeWelcomeId = argValue('masquerade-welcome');
+  const masqueradeWelcomeEmail = argValue('masquerade-welcome-email');
   let target = welcomeId;
   if (!target && welcomeEmail) {
     const hit = await pool.query<{ user_id: string }>(
@@ -47,6 +53,22 @@ async function main() {
   if (target) {
     const result = await sendMatteryaWelcomeMessage(target, WELCOME_MESSAGE);
     console.log('[welcome]', result);
+  }
+
+  let masqueradeTarget = masqueradeWelcomeId;
+  if (!masqueradeTarget && masqueradeWelcomeEmail) {
+    const hit = await pool.query<{ user_id: string }>(
+      `select user_id::text as user_id from public.profiles where lower(email)=lower($1) limit 1`,
+      [masqueradeWelcomeEmail]
+    );
+    masqueradeTarget = hit.rows[0]?.user_id ?? null;
+  }
+  if (masqueradeTarget) {
+    const result = await sendMatteryaMasqueradeWelcomeMessage(
+      masqueradeTarget,
+      MASQUERADE_WELCOME_MESSAGE
+    );
+    console.log('[masquerade-welcome]', result);
   }
 }
 
