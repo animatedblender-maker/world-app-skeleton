@@ -144,19 +144,26 @@ export async function getFeed(opts: {
         };
       });
 
-    // At-most-once: drop already delivered canonical keys for this masquerade profile.
-    // Ledger is keyed by Matterya account when available; fall back to anon profile id.
-    // Own posts are never ledger-filtered — they stay pinned above ranked results.
+    // Prefer never-seen keys, but always fill a full page.
+    // Old behavior dropped already-delivered posts entirely — after a few soft
+    // refreshes (or opening a post and returning) the Hot window was exhausted
+    // and the feed collapsed to the viewer's one pinned post.
+    const rankedSlots = Math.max(1, limit + 1 - Math.min(ownRows.length, 3));
     const ledgerUser = await resolveLedgerUserId(opts.profile.id);
     let eligible = scored;
     if (ledgerUser) {
       const delivered = await loadDeliveredCanonicalKeys(ledgerUser, 'masquerade_for_you');
-      eligible = scored.filter((c) => !delivered.has(c.mediaKey));
+      const fresh = scored.filter((c) => !delivered.has(c.mediaKey));
+      if (fresh.length >= rankedSlots) {
+        eligible = fresh;
+      } else {
+        const seen = scored.filter((c) => delivered.has(c.mediaKey));
+        eligible = [...fresh, ...seen];
+      }
     }
 
-    const rankedSlots = Math.max(1, limit + 1 - Math.min(ownRows.length, 3));
     // Prefer fresh text/video mix — image-only Reddit packs were freezing the top of Hot.
-    const picked = mmrPick(eligible.length ? eligible : scored, {
+    const picked = mmrPick(eligible, {
       limit: rankedSlots,
       lambda: 0.72,
       maxSameCreator: 1,
@@ -166,9 +173,12 @@ export async function getFeed(opts: {
       exclusiveEveryN: 4,
     });
 
-    let rankedRows: any[] = [];
+    // Always serve the ranked page from `picked`. Reserve is bookkeeping only —
+    // using a partial reserve (most candidates already in the ledger) was
+    // shrinking the response to 1–2 cards.
+    const rankedRows = picked.slice(0, rankedSlots).map((c) => c.row);
     if (ledgerUser && picked.length) {
-      const reserved = await reserveDeliveryBatch({
+      void reserveDeliveryBatch({
         userId: ledgerUser,
         surface: 'masquerade_for_you',
         idempotencyKey: `masq:${opts.profile.id}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
@@ -177,17 +187,7 @@ export async function getFeed(opts: {
           canonicalKey: c.mediaKey,
         })),
         limit: rankedSlots,
-      });
-      if (reserved?.videoIds?.length) {
-        const byId = new Map(picked.map((c) => [c.id, c]));
-        rankedRows = reserved.videoIds
-          .map((id) => byId.get(id)?.row)
-          .filter(Boolean);
-      } else {
-        rankedRows = picked.slice(0, rankedSlots).map((c) => c.row);
-      }
-    } else {
-      rankedRows = picked.slice(0, rankedSlots).map((c) => c.row);
+      }).catch(() => undefined);
     }
 
     // Newest own posts first, then ranked feed (dedupe).

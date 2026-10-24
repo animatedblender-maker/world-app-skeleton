@@ -515,7 +515,13 @@ final class AnonymousStore {
             for item in page.items {
                 postById[item.id] = item
             }
-            let merged = mergeOwnRecentPosts(into: page.items)
+            var merged = mergeOwnRecentPosts(into: page.items)
+            // Never let a thin ranked page wipe a healthy feed (ledger exhaustion).
+            if merged.count < 6, feed.count > merged.count {
+                let incomingIds = Set(merged.map(\.id))
+                let keep = feed.filter { !incomingIds.contains($0.id) }
+                merged = mergeOwnRecentPosts(into: Array((merged + keep).prefix(48)))
+            }
             withAnimation(MatteryaMotion.insert) {
                 feed = merged
                 feedCursor = page.nextCursor
