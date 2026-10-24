@@ -243,11 +243,11 @@ final class MessagesService {
             id is_direct created_at updated_at last_message_at
             is_request request_status
             members {
-              user_id display_name username avatar_url country_name country_code last_read_at
+              user_id display_name username avatar_url country_name country_code last_read_at is_verified is_verified
             }
             last_message {
               id conversation_id sender_id body media_type media_path media_name created_at updated_at
-              sender { user_id display_name username avatar_url country_name country_code }
+              sender { user_id display_name username avatar_url country_name country_code is_verified }
             }
           }
         }
@@ -293,11 +293,11 @@ final class MessagesService {
             id is_direct created_at updated_at last_message_at
             is_request request_status
             members {
-              user_id display_name username avatar_url country_name country_code last_read_at
+              user_id display_name username avatar_url country_name country_code last_read_at is_verified
             }
             last_message {
               id conversation_id sender_id body media_type media_path media_name media_mime media_size created_at updated_at
-              sender { user_id display_name username avatar_url country_name country_code }
+              sender { user_id display_name username avatar_url country_name country_code is_verified }
             }
           }
         }
@@ -338,11 +338,11 @@ final class MessagesService {
           conversations(limit: $limit) {
             id is_direct created_at updated_at last_message_at
             members {
-              user_id display_name username avatar_url country_name country_code last_read_at
+              user_id display_name username avatar_url country_name country_code last_read_at is_verified
             }
             last_message {
               id conversation_id sender_id body media_type media_path media_name media_mime media_size created_at updated_at
-              sender { user_id display_name username avatar_url country_name country_code }
+              sender { user_id display_name username avatar_url country_name country_code is_verified }
             }
           }
         }
@@ -363,7 +363,7 @@ final class MessagesService {
         query MessagesByConversation($conversationId: ID!, $limit: Int) {
           messagesByConversation(conversation_id: $conversationId, limit: $limit) {
             id conversation_id sender_id body media_type media_path media_name media_mime media_size created_at updated_at
-            sender { user_id display_name username avatar_url country_name country_code }
+            sender { user_id display_name username avatar_url country_name country_code is_verified }
           }
         }
         """
@@ -416,11 +416,11 @@ final class MessagesService {
             id is_direct created_at updated_at last_message_at
             is_request request_status
             members {
-              user_id display_name username avatar_url country_name country_code last_read_at
+              user_id display_name username avatar_url country_name country_code last_read_at is_verified
             }
             last_message {
               id conversation_id sender_id body media_type media_path media_name created_at updated_at
-              sender { user_id display_name username avatar_url country_name country_code }
+              sender { user_id display_name username avatar_url country_name country_code is_verified }
             }
           }
         }
@@ -446,11 +446,11 @@ final class MessagesService {
             id is_direct created_at updated_at last_message_at
             is_request request_status
             members {
-              user_id display_name username avatar_url country_name country_code last_read_at
+              user_id display_name username avatar_url country_name country_code last_read_at is_verified
             }
             last_message {
               id conversation_id sender_id body media_type media_path media_name media_mime media_size created_at updated_at
-              sender { user_id display_name username avatar_url country_name country_code }
+              sender { user_id display_name username avatar_url country_name country_code is_verified }
             }
           }
         }
@@ -572,7 +572,7 @@ final class MessagesService {
             media_size: $mediaSize
           ) {
             id conversation_id sender_id body media_type media_path media_name media_mime media_size created_at updated_at
-            sender { user_id display_name username avatar_url country_name country_code }
+            sender { user_id display_name username avatar_url country_name country_code is_verified }
           }
         }
         """

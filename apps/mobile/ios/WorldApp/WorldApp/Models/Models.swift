@@ -13,6 +13,8 @@ struct PostAuthor: Codable, Identifiable, Hashable, Sendable {
     let countryName: String?
     let countryCode: String?
     let lastReadAt: String?
+    /// Official / admin accounts (Matterya).
+    var isVerified: Bool? = nil
 
     enum CodingKeys: String, CodingKey {
         case userID = "user_id"
@@ -22,6 +24,7 @@ struct PostAuthor: Codable, Identifiable, Hashable, Sendable {
         case countryName = "country_name"
         case countryCode = "country_code"
         case lastReadAt = "last_read_at"
+        case isVerified = "is_verified"
     }
 }
 
@@ -980,13 +983,13 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
         return String(text.prefix(120))
     }
 
+    /// Single feed caption: body when present; headline only when body is empty.
+    /// Never show headline + body together (pipeline often duplicates the same string in both).
     var displayExcerpt: String {
         let text = displayBody
-        // Marker-only hub/spark bodies clean to empty — never show sid= lines.
-        if text.isEmpty { return "" }
-        guard let title = displayTitle, !title.isEmpty else { return text }
-        if text == title { return "" }
-        return text
+        // Marker-only hub/spark bodies clean to empty — fall through to title.
+        if !text.isEmpty { return text }
+        return displayTitle ?? ""
     }
 
     /// True when a feed/profile card would show something meaningful (text, media, or share).
@@ -2419,11 +2422,19 @@ enum AppDestination: Hashable, Identifiable {
 }
 
 enum RelativeTime {
+    /// Relative until 29 days (just now / Nm / Nh / Nd), then absolute `DD/MM/YY`.
     static func format(_ iso: String) -> String {
         guard let date = parseDate(iso) else { return "" }
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: date, relativeTo: Date())
+        let seconds = max(0, Int(Date().timeIntervalSince(date)))
+        if seconds < 60 { return "just now" }
+        if seconds < 3600 { return "\(seconds / 60)m" }
+        if seconds < 86_400 { return "\(seconds / 3600)h" }
+        let days = seconds / 86_400
+        if days <= 29 { return "\(days)d" }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_GB")
+        formatter.dateFormat = "dd/MM/yy"
+        return formatter.string(from: date)
     }
 
     static func formatClock(_ iso: String) -> String {

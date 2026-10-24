@@ -352,6 +352,17 @@ export async function confirmEmailWithToken(token: string): Promise<ConfirmResul
     row.id,
   ]);
 
+  // Official Matterya welcome DM (normal Messages inbox) — best-effort.
+  void import('../matterya-official.js')
+    .then(({ sendMatteryaWelcomeMessage }) => sendMatteryaWelcomeMessage(row.user_id))
+    .catch((err) =>
+      console.warn(
+        '[auth] welcome DM failed',
+        row.user_id,
+        err instanceof Error ? err.message : err
+      )
+    );
+
   return { ok: true, email: row.email };
 }
 

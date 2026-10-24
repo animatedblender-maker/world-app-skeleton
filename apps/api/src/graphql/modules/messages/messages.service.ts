@@ -64,6 +64,7 @@ type MessageRow = {
     avatar_url: string | null;
     country_name: string | null;
     country_code: string | null;
+    is_verified?: boolean | null;
   } | null;
 };
 
@@ -84,6 +85,7 @@ type ConversationRow = {
     country_name: string | null;
     country_code: string | null;
     last_read_at: string | null;
+    is_verified?: boolean | null;
   }>;
   last_message: MessageRow | null;
 };
@@ -226,7 +228,8 @@ export class MessagesService {
                 'avatar_url', pr.avatar_url,
                 'country_name', pr.country_name,
                 'country_code', pr.country_code,
-                'last_read_at', cm2.last_read_at
+                'last_read_at', cm2.last_read_at,
+                'is_verified', coalesce(pr.is_verified, false)
               )
             )
             from public.conversation_members cm2
@@ -257,7 +260,8 @@ export class MessagesService {
                 'username', pr2.username,
                 'avatar_url', pr2.avatar_url,
                 'country_name', pr2.country_name,
-                'country_code', pr2.country_code
+                'country_code', pr2.country_code,
+                'is_verified', coalesce(pr2.is_verified, false)
               )
             end
           )
@@ -313,7 +317,8 @@ export class MessagesService {
           'username', pr.username,
           'avatar_url', pr.avatar_url,
           'country_name', pr.country_name,
-          'country_code', pr.country_code
+          'country_code', pr.country_code,
+          'is_verified', coalesce(pr.is_verified, false)
         ) as sender
       from public.messages m
       left join public.profiles pr on pr.user_id = m.sender_id
@@ -840,7 +845,8 @@ export class MessagesService {
                 'avatar_url', pr.avatar_url,
                 'country_name', pr.country_name,
                 'country_code', pr.country_code,
-                'last_read_at', cm2.last_read_at
+                'last_read_at', cm2.last_read_at,
+                'is_verified', coalesce(pr.is_verified, false)
               )
             )
             from public.conversation_members cm2
@@ -871,7 +877,8 @@ export class MessagesService {
                 'username', pr2.username,
                 'avatar_url', pr2.avatar_url,
                 'country_name', pr2.country_name,
-                'country_code', pr2.country_code
+                'country_code', pr2.country_code,
+                'is_verified', coalesce(pr2.is_verified, false)
               )
             end
           )
@@ -907,7 +914,8 @@ export class MessagesService {
           'username', pr.username,
           'avatar_url', pr.avatar_url,
           'country_name', pr.country_name,
-          'country_code', pr.country_code
+          'country_code', pr.country_code,
+          'is_verified', coalesce(pr.is_verified, false)
         ) as sender
       from public.messages m
       left join public.profiles pr on pr.user_id = m.sender_id

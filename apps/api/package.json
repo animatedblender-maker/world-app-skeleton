@@ -17,7 +17,9 @@
     "media:frame0-progress": "tsx src/media/frame0-progress-server.ts",
     "media:transcribe": "tsx src/media/transcribe-runner.ts",
     "media:transcribe:backfill": "tsx src/media/transcribe-runner.ts --backfill --limit=40",
-    "docker:media-worker:build": "docker build -f Dockerfile.media-worker -t matterya-media-worker ."
+    "docker:media-worker:build": "docker build -f Dockerfile.media-worker -t matterya-media-worker .",
+    "matterya:official": "tsx src/matterya-official-runner.ts",
+    "matterya:official:welcome": "tsx src/matterya-official-runner.ts"
   },
   "engines": {
     "node": "22.x"

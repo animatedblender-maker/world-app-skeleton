@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum AnonymousShellTab: String, CaseIterable, Identifiable {
-    case feed, spaces, search, inbox, me
+    case feed, spaces, search, inbox, notifications, me
 
     var id: String { rawValue }
 
@@ -11,9 +11,13 @@ enum AnonymousShellTab: String, CaseIterable, Identifiable {
         case .spaces: "Spaces"
         case .search: "Search"
         case .inbox: "Inbox"
+        case .notifications: "Notifications"
         case .me: "Me"
         }
     }
+
+    /// Tabs shown in the shell chip row (bell opens Notifications separately).
+    static var chipTabs: [AnonymousShellTab] { [.feed, .spaces, .search, .inbox, .me] }
 }
 
 struct AnonymousRootView: View {
@@ -152,15 +156,18 @@ struct AnonymousRootView: View {
                 }
 
                 Button {
-                    withAnimation(MatteryaMotion.snappy) { shellTab = .inbox }
+                    withAnimation(MatteryaMotion.snappy) {
+                        store.resetNavigation()
+                        shellTab = .notifications
+                    }
                 } label: {
                     Image(systemName: "bell")
                         .font(.system(size: 20, weight: .medium))
-                        .foregroundStyle(shellTab == .inbox ? Theme.ink : Theme.inkMuted)
+                        .foregroundStyle(shellTab == .notifications ? Theme.ink : Theme.inkMuted)
                         .frame(width: 40, height: 40)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Masquerade inbox")
+                .accessibilityLabel("Masquerade notifications")
             }
             .padding(.horizontal, Theme.pagePadding)
             .padding(.vertical, 8)
@@ -193,7 +200,7 @@ struct AnonymousRootView: View {
     private var shellTabs: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 4) {
-                ForEach(AnonymousShellTab.allCases) { tab in
+                ForEach(AnonymousShellTab.chipTabs) { tab in
                     Button {
                         withAnimation(MatteryaMotion.snappy) {
                             store.resetNavigation()
@@ -335,7 +342,9 @@ private struct AnonymousReadyStack<Header: View>: View {
         case .search:
             AnonymousSearchView()
         case .inbox:
-            AnonymousInboxView()
+            AnonymousMessagesInboxView()
+        case .notifications:
+            AnonymousNotificationsView()
         case .me:
             AnonymousMeView()
         }

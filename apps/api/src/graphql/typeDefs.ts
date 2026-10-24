@@ -36,6 +36,8 @@ export const typeDefs = `#graphql
     is_private: Boolean!
     """everyone | following | requests — who can message you"""
     message_privacy: String!
+    """Official Matterya / admin — show verified badge"""
+    is_verified: Boolean
     account_status: String
     deactivated_at: String
     deleted_at: String
@@ -72,6 +74,7 @@ export const typeDefs = `#graphql
     country_name: String
     country_code: String
     last_read_at: String
+    is_verified: Boolean
   }
 
   type NotificationActor {

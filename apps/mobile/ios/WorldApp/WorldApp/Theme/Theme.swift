@@ -285,27 +285,37 @@ enum MatteryaCopy {
     static let aboutThisHub = "About this hub"
     static let featuredCreators = "Featured creators"
 
-    // MARK: Anonymous
+    // MARK: Masquerade (Anonymous mode)
 
-    static let anonymous = "Anonymous"
+    private static let masqueradeBrand = "Matterya\(nbsp)Masquerade"
+
+    /// Short product name (tabs, short labels).
+    static let anonymous = "Masquerade"
+    /// Header wordmark — same pattern as Matterya Hubs.
+    static let matteryaMasquerade = masqueradeBrand
+    /// Kept as the mode chip under the title where a chip is useful.
     static let anonymousModeChip = "Anonymous mode"
+    static let anonymousTagline = "Leave your identity outside."
+    static let anonymousWildeQuote =
+        "“Give him a mask, and he will tell you the truth.”"
+    static let anonymousWildeAttribution = "— Oscar Wilde, 1891"
     static let anonymousPrivacyBoundary =
-        "Your Anonymous name is public within Anonymous. Other members can’t see your Matterya profile. Matterya may link identities for safety and legal compliance."
+        "Your Masquerade name is public inside Spaces. Other members can’t see your Matterya profile. Matterya may link identities for safety and legal compliance."
     static let anonymousUnder18Title = "Adults only"
     static let anonymousUnder18Body =
-        "Anonymous is only available to people 18 and older. No posts, Spaces, or search are shown until age eligibility is confirmed."
+        "Masquerade is only available to people 18 and older. No posts, Spaces, or search are shown until age eligibility is confirmed."
     static let anonymousMissingBirthdateTitle = "Birthday needed"
     static let anonymousMissingBirthdateBody =
-        "Add your birthday in Matterya profile settings before entering Anonymous."
+        "Add your birthday in Matterya profile settings before entering Masquerade."
     static let anonymousAgeGateHint = "Return to Matterya from the tab bar anytime."
     static let anonymousAttestTitle = "Confirm you’re 18+"
     static let anonymousAttestBody =
-        "Before entering Anonymous, confirm you are at least 18 years old. Private Anonymous content stays hidden until you do."
+        "Before entering Masquerade, confirm you are at least 18 years old. Private Space content stays hidden until you do."
     static let anonymousAttestFinePrint =
         "False confirmation may result in account restrictions. Age assurance may be re-checked over time."
-    static let anonymousClaimTitle = "Choose your Anonymous name"
+    static let anonymousClaimTitle = "Choose your Masquerade name"
     static let anonymousClaimBody =
-        "You’ll get one persistent username for all Anonymous Spaces. It’s separate from your Matterya profile."
+        "You’ll get one persistent username for all Spaces. It’s separate from your Matterya profile."
     static let anonymousClaimIrreversible =
         "Usernames can’t be changed later. Pick carefully."
     static let anonymousClaimGeneratedOnly =
@@ -325,31 +335,40 @@ enum MatteryaCopy {
         "No posts yet. Seed a thoughtful first conversation."
     static let anonymousFeedEmptyTitle = "Nothing in your feed"
     static let anonymousFeedEmptyBody =
-        "Join free Spaces or pull to refresh. Private previews stay hidden."
+        "Pull to refresh — free Spaces show up here automatically."
+    static let anonymousFeedWakeTitle = "Still waking up"
+    static let anonymousFeedWakeBody =
+        "Masquerade timed out on the first try. Pull to refresh — posts are already live."
     static let anonymousNoComments = "No comments yet — start the thread."
     static let anonymousComposerPrivacyNudge =
         "Don’t share real names, contact info, or anything that links to your Matterya profile."
     static let anonymousMeHint =
-        "This identity is only for Anonymous. Your ordinary Matterya avatar and name never appear here."
-    static let anonymousExportPlaceholder = "Anonymous data export will open a request flow soon."
-    static let anonymousDeletePlaceholder = "Anonymous deletion requests will open a support flow soon."
-    static let anonymousSearchTitle = "Search Anonymous"
+        "This identity is only for Masquerade. Your ordinary Matterya avatar and name never appear here."
+    static let anonymousExportPlaceholder = "Masquerade data export will open a request flow soon."
+    static let anonymousDeletePlaceholder = "Masquerade deletion requests will open a support flow soon."
+    static let anonymousSearchTitle = "Search Masquerade"
     static let anonymousSearchHint = "Find Spaces and text posts you’ve already been shown."
     static let anonymousSearchEmptyTitle = "No matches"
     static let anonymousSearchEmptyBody = "Try another keyword. Private Spaces won’t appear in search."
-    static let anonymousInboxTitle = "Inbox coming soon"
-    static let anonymousInboxBody =
-        "Anonymous notifications will land here. Matterya alerts stay available from the bell."
+    static let anonymousNotificationsTitle = "No Masquerade notifications yet"
+    static let anonymousNotificationsBody =
+        "Replies, mentions, and Space updates land only here — never mixed with Matterya notifications or Inbox."
+    static let anonymousMessagesInboxTitle = "Inbox is empty"
+    static let anonymousMessagesInboxBody =
+        "Messages with people (and official Matterya) show up here. Notifications stay under the bell."
     static let anonymousInboxPrivacyNote =
-        "Lock-screen and push copy won’t reveal Anonymous Space titles to unauthorized recipients."
+        "Lock-screen and push copy won’t reveal Space titles to unauthorized recipients."
     static let anonymousModPlaceholderBody =
         "Moderator queue, removals, and sanctions will appear here. Platform policy still outranks Space rules."
-    static let anonymousSuspendedTitle = "Anonymous suspended"
+    static let anonymousSuspendedTitle = "Masquerade suspended"
     static let anonymousSuspendedBody =
-        "Your Anonymous access is restricted. Contact support if you believe this is a mistake."
-    static let anonymousOfflineTitle = "Can’t reach Anonymous"
+        "Your Masquerade access is restricted. Contact support if you believe this is a mistake."
+    static let anonymousOfflineTitle = "Masquerade isn’t live yet"
     static let anonymousOfflineBody =
-        "Check your connection and try again. Cached identity may still load after a successful visit."
+        "The Masquerade API isn’t reachable on this build. After the server migration and Manual Deploy, pull to try again."
+    static let anonymousCreateMenuTitle = "Create in Masquerade"
+    static let anonymousCreateSpace = "Create a Space"
+    static let anonymousCreatePost = "New post in a Space"
 }
 
 extension View {

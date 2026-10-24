@@ -313,7 +313,7 @@ struct MessagesView: View {
 }
 
 @MainActor
-private enum ConversationInboxStore {
+enum ConversationInboxStore {
     private static var storagePrefix: String {
         "conversation.inbox.\(AuthService.shared.currentUser?.id ?? "anonymous")"
     }
@@ -390,9 +390,15 @@ private struct ConversationRow: View {
                 size: 48
             )
             VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Theme.ink)
+                HStack(spacing: 6) {
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.ink)
+                    if otherMember?.isVerified == true
+                        || otherMember?.username?.lowercased() == "matterya" {
+                        MatteryaVerifiedBadge(size: 14)
+                    }
+                }
                 Text(preview)
                     .font(.caption)
                     .foregroundStyle(Theme.inkMuted)

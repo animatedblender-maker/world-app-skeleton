@@ -157,6 +157,7 @@ struct GraphQLAuthor: Decodable {
     let countryName: String?
     let countryCode: String?
     let lastReadAt: String?
+    let isVerified: Bool?
 
     enum CodingKeys: String, CodingKey {
         case userID = "user_id"
@@ -166,6 +167,7 @@ struct GraphQLAuthor: Decodable {
         case countryName = "country_name"
         case countryCode = "country_code"
         case lastReadAt = "last_read_at"
+        case isVerified = "is_verified"
     }
 
     init(from decoder: Decoder) throws {
@@ -177,13 +179,14 @@ struct GraphQLAuthor: Decodable {
         countryName = try container.decodeIfPresent(String.self, forKey: .countryName)
         countryCode = try container.decodeIfPresent(String.self, forKey: .countryCode)
         lastReadAt = try container.decodeIfPresent(String.self, forKey: .lastReadAt)
+        isVerified = try container.decodeIfPresent(Bool.self, forKey: .isVerified)
     }
 
     var toModel: PostAuthor {
         PostAuthor(
             userID: userID, displayName: displayName, username: username,
             avatarURL: avatarURL, countryName: countryName, countryCode: countryCode,
-            lastReadAt: lastReadAt
+            lastReadAt: lastReadAt, isVerified: isVerified
         )
     }
 
@@ -193,7 +196,7 @@ struct GraphQLAuthor: Decodable {
         return PostAuthor(
             userID: normalized, displayName: displayName, username: username,
             avatarURL: avatarURL, countryName: countryName, countryCode: countryCode,
-            lastReadAt: lastReadAt
+            lastReadAt: lastReadAt, isVerified: isVerified
         )
     }
 }

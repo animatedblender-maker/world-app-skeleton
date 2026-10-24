@@ -231,11 +231,21 @@ struct ConversationView: View {
         .animation(.easeInOut(duration: 0.22), value: appState.hubPlaybackPost?.id)
         .animation(.easeInOut(duration: 0.22), value: chatMiniShare?.postID)
         .screenBackground()
-        .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(Theme.canvas, for: .navigationBar)
         .scrollDismissesKeyboard(.interactively)
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                HStack(spacing: 6) {
+                    Text(title)
+                        .font(.headline)
+                        .foregroundStyle(Theme.ink)
+                    if otherMember?.isVerified == true
+                        || otherMember?.username?.lowercased() == "matterya" {
+                        MatteryaVerifiedBadge(size: 15)
+                    }
+                }
+            }
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button {
                     Task { await callManager.startCall(conversationID: conversation.id, kind: .audio, peer: otherMember) }

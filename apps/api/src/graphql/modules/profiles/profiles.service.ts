@@ -19,6 +19,7 @@ export type ProfileRow = {
   birthdate: string | null;
   is_private: boolean;
   message_privacy: MessagePrivacy;
+  is_verified?: boolean;
   account_status: AccountStatus;
   deactivated_at: string | null;
   deleted_at: string | null;
@@ -540,6 +541,7 @@ export class ProfilesService {
       birthdate,
       is_private: !!(row as any).is_private,
       message_privacy: normalizeMessagePrivacy((row as any).message_privacy),
+      is_verified: !!(row as any).is_verified,
       account_status,
       deactivated_at: (row as any).deactivated_at ?? null,
       deleted_at: (row as any).deleted_at ?? null,
