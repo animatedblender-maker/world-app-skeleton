@@ -347,7 +347,8 @@ app.post('/v1/transcript/:postId/enqueue', async (req: Request, res: Response) =
     if (!transcriptionConfigured()) {
       return res.status(503).json({ error: 'transcription_not_configured' });
     }
-    await enqueueTranscript(postId, 'api_enqueue');
+    // On-demand captions (CC tap). Source `cc` can revive skipped free-tier backlog rows.
+    await enqueueTranscript(postId, 'cc');
     const runNow = req.body?.run === true || req.query.run === '1';
     if (runNow) {
       const status = await transcribePost(postId);

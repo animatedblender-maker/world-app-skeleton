@@ -36,7 +36,7 @@ type SpaceDb = SpaceRow & {
   joined?: boolean;
 };
 
-function mapSpace(row: SpaceDb, joined = false): SpacePublic {
+export function mapSpace(row: SpaceDb, joined = false): SpacePublic {
   return {
     id: row.id,
     slug: row.slug,

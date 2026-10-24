@@ -54,11 +54,26 @@ export function moderationStatusForText(
 export function rebrandCompetitorNames(value: string | null | undefined): string | null {
   if (value == null) return null;
   let out = String(value);
-  // Longer tokens first so "subreddit" → "matterya".
-  for (const token of ['subreddit', 'reddit', 'tiktok']) {
-    if (!new RegExp(token, 'i').test(out)) continue;
-    out = out.replace(new RegExp(token, 'gi'), 'matterya');
+  // Longer tokens first so "subreddit" → "matterya", "تيك توك" / "tik tok" → "matterya".
+  for (const token of [
+    'تيك توك',
+    'تيك\u200cتوك',
+    'تيك-توك',
+    'تيكتوك',
+    'tik tok',
+    'subreddit',
+    'reddit',
+    'tiktok',
+  ]) {
+    if (!out.toLowerCase().includes(token.toLowerCase()) && !out.includes(token)) continue;
+    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    out = out.replace(new RegExp(escaped, 'gi'), 'matterya');
   }
+  // Reddit shorthand " sub " (spaces required) → Masquerade " space ".
+  out = out
+    .replace(/ SUB /g, ' SPACE ')
+    .replace(/ Sub /g, ' Space ')
+    .replace(/ sub /g, ' space ');
   return out;
 }
 
@@ -92,8 +107,10 @@ export async function viewerIsUnder18(userId: string | null | undefined): Promis
   }
 }
 
-/** SQL fragment: hide sensitive (18+) posts from under-18 viewers. */
-export function adultContentSqlFilter(under18: boolean, alias = 'p'): string {
-  if (!under18) return '';
+/**
+ * SQL fragment: NSFW (`sensitive`) never serves on public Feed / Sparks / Hubs.
+ * Those packs route to Masquerade `secrets` at ingest. `under18` kept for call-site compat.
+ */
+export function adultContentSqlFilter(_under18: boolean, alias = 'p'): string {
   return ` and coalesce(${alias}.moderation_status, 'active') <> 'sensitive'`;
 }

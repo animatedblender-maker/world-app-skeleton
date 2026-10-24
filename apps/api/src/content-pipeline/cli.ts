@@ -7,6 +7,7 @@
  *   npx tsx src/content-pipeline/cli.ts --fast       # no Frame0 + comments capped at 40 (posts ASAP)
  *   npx tsx src/content-pipeline/cli.ts --cap-40     # optional throttle
  *   npx tsx src/content-pipeline/cli.ts --timed      # 50s soft deadline
+ *   npx tsx src/content-pipeline/cli.ts --amiugly-only  # Posts/au_* image packs only
  */
 import dotenv from 'dotenv';
 import path from 'node:path';
@@ -21,6 +22,7 @@ const dryRun = args.has('--dry-run');
 const resignOnly = args.has('--resign-only');
 const ingestOnly = args.has('--ingest-only');
 const fast = args.has('--fast');
+const amiuglyOnly = args.has('--amiugly-only');
 
 // Default: flood every new R2 pack. Optional throttles only when flags are set.
 const cap = args.has('--cap-40') ? 40 : args.has('--cap-200') ? 200 : undefined;
@@ -29,6 +31,7 @@ const stats = await runContentPipeline({
   dryRun,
   resignOnly,
   ingestOnly,
+  amiuglyOnly,
   // undefined = ALL new packs (flood Matterya)
   maxOriginals: cap,
   maxShares: cap != null ? cap * 2 : undefined,

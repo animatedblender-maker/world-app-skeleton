@@ -6,6 +6,11 @@ export {
   validateGeneratedCandidate,
 } from './usernames.js';
 export {
+  pickSeedAuthor,
+  ensureSeedPersonas,
+  listSeedPersonas,
+} from './seed-personas.js';
+export {
   getOrCreateProfile,
   getProfileForAccount,
   sessionForAccount,

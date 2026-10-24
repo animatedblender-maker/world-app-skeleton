@@ -84,14 +84,26 @@ export async function getObjectJson(client: S3Client, key: string): Promise<unkn
   }
 }
 
+/** r/funny ShortForm+Posts packs — excluded from Matterya feed ingest. */
+export function isExcludedFunnyPackId(id: string): boolean {
+  return id.startsWith('fy_');
+}
+
+/** r/amiuglytruth image packs under Posts/ (and ShortForm videos). */
+export function isAmiuglyPackId(id: string): boolean {
+  return id.startsWith('au_');
+}
+
 /**
  * List complete packs (video.mp4 present). meta.json optional but preferred.
  * Layout (bucket matterya-sparks):
  *   Sparks (TikTok):        <Country>/<tiktok_id>/video.mp4
  *   Sparks (YouTube Shorts): ShortForm/<Country>/<youtube_id>/video.mp4  ← still kind=spark
  *   LongForm (Hubs):         LongForm/<Country>/<youtube_id>/video.mp4
+ *   Feed images (amiugly):   Posts/<Country>/<au_id>/media/01.jpg
  *
  * ShortForm is Sparks — same product surface, different R2 folder only.
+ * r/funny `fy_*` packs are skipped (replaced by amiuglytruth on the feed).
  * @see AGENT_HANDOFF_YOUTUBE_SHORTFORM.md
  *
  * Default: **paginate every prefix to completion** (no 5k object truncations).
@@ -99,7 +111,12 @@ export async function getObjectJson(client: S3Client, key: string): Promise<unkn
  */
 export async function discoverPacks(
   client: S3Client,
-  opts: { maxPacksPerPrefix?: number; maxKeysPerPrefix?: number } = {}
+  opts: {
+    maxPacksPerPrefix?: number;
+    maxKeysPerPrefix?: number;
+    /** Only Posts/au_* image packs (skip video catalog). */
+    amiuglyOnly?: boolean;
+  } = {}
 ): Promise<R2Pack[]> {
   // Legacy alias: maxKeysPerPrefix meant “stop after N listed objects” and silently
   // dropped most of the bucket once frame0_*.webp inflated key counts. Prefer pack cap.
@@ -111,68 +128,100 @@ export async function discoverPacks(
         : 0; // 0 = unlimited
   const packs: R2Pack[] = [];
   const seen = new Set<string>();
+  const amiuglyOnly = !!opts.amiuglyOnly;
 
   for (const c of FOCUS_COUNTRIES) {
-    // Sparks (TikTok) under country root — only Country/<id>/video.mp4 (depth 1)
-    const sparkIds = await listVideoPackIds(client, `${c.folder}/`, maxPacks, {
-      depth: 1,
-    });
-    for (const videoId of sparkIds) {
-      if (videoId === 'LongForm' || videoId === 'ShortForm') continue;
-      const videoKey = `${c.folder}/${videoId}/video.mp4`;
-      const mediaPath = `r2:${getBucket()}/${videoKey}`;
-      if (seen.has(mediaPath)) continue;
-      seen.add(mediaPath);
-      packs.push({
-        kind: 'spark',
-        countryFolder: c.folder,
-        countryCode: c.code,
-        countryName: c.name,
-        videoId,
-        videoKey,
-        metaKey: `${c.folder}/${videoId}/meta.json`,
-        commentsKey: `${c.folder}/${videoId}/comments.json`,
-        mediaPath,
+    if (!amiuglyOnly) {
+      // Sparks (TikTok) under country root — only Country/<id>/video.mp4 (depth 1)
+      const sparkIds = await listVideoPackIds(client, `${c.folder}/`, maxPacks, {
+        depth: 1,
       });
+      for (const { id: videoId, lastModifiedMs } of sparkIds) {
+        if (videoId === 'LongForm' || videoId === 'ShortForm') continue;
+        if (isExcludedFunnyPackId(videoId)) continue;
+        const videoKey = `${c.folder}/${videoId}/video.mp4`;
+        const mediaPath = `r2:${getBucket()}/${videoKey}`;
+        if (seen.has(mediaPath)) continue;
+        seen.add(mediaPath);
+        packs.push({
+          kind: 'spark',
+          countryFolder: c.folder,
+          countryCode: c.code,
+          countryName: c.name,
+          videoId,
+          videoKey,
+          metaKey: `${c.folder}/${videoId}/meta.json`,
+          commentsKey: `${c.folder}/${videoId}/comments.json`,
+          mediaPath,
+          lastModifiedMs,
+        });
+      }
+
+      // YouTube Shorts live under ShortForm/ but are **Sparks** in the app.
+      // Skip r/funny fy_* — amiuglytruth (au_*) + real Shorts remain.
+      const sfIds = await listVideoPackIds(client, `ShortForm/${c.folder}/`, maxPacks);
+      for (const { id: videoId, lastModifiedMs } of sfIds) {
+        if (isExcludedFunnyPackId(videoId)) continue;
+        const videoKey = `ShortForm/${c.folder}/${videoId}/video.mp4`;
+        const mediaPath = `r2:${getBucket()}/${videoKey}`;
+        if (seen.has(mediaPath)) continue;
+        seen.add(mediaPath);
+        packs.push({
+          kind: 'spark',
+          countryFolder: c.folder,
+          countryCode: c.code,
+          countryName: c.name,
+          videoId,
+          videoKey,
+          metaKey: `ShortForm/${c.folder}/${videoId}/meta.json`,
+          commentsKey: `ShortForm/${c.folder}/${videoId}/comments.json`,
+          mediaPath,
+          lastModifiedMs,
+        });
+      }
+
+      // LongForm (YouTube long) — Hubs only
+      const lfIds = await listVideoPackIds(client, `LongForm/${c.folder}/`, maxPacks);
+      for (const { id: videoId, lastModifiedMs } of lfIds) {
+        if (isExcludedFunnyPackId(videoId)) continue;
+        const videoKey = `LongForm/${c.folder}/${videoId}/video.mp4`;
+        const mediaPath = `r2:${getBucket()}/${videoKey}`;
+        if (seen.has(mediaPath)) continue;
+        seen.add(mediaPath);
+        packs.push({
+          kind: 'longform',
+          countryFolder: c.folder,
+          countryCode: c.code,
+          countryName: c.name,
+          videoId,
+          videoKey,
+          metaKey: `LongForm/${c.folder}/${videoId}/meta.json`,
+          commentsKey: `LongForm/${c.folder}/${videoId}/comments.json`,
+          mediaPath,
+          lastModifiedMs,
+        });
+      }
     }
 
-    // YouTube Shorts live under ShortForm/ but are **Sparks** in the app.
-    const sfIds = await listVideoPackIds(client, `ShortForm/${c.folder}/`, maxPacks);
-    for (const videoId of sfIds) {
-      const videoKey = `ShortForm/${c.folder}/${videoId}/video.mp4`;
-      const mediaPath = `r2:${getBucket()}/${videoKey}`;
+    // r/amiuglytruth image packs → normal feed image posts (idempotent by media_path).
+    const postIds = await listImagePackIds(client, `Posts/${c.folder}/`, maxPacks);
+    for (const { id: videoId, lastModifiedMs, primaryImageKey } of postIds) {
+      if (isExcludedFunnyPackId(videoId)) continue;
+      if (!isAmiuglyPackId(videoId)) continue;
+      const mediaPath = `r2:${getBucket()}/${primaryImageKey}`;
       if (seen.has(mediaPath)) continue;
       seen.add(mediaPath);
       packs.push({
-        kind: 'spark',
+        kind: 'spark', // planPackMedia demotes missing video.mp4 → feed_image
         countryFolder: c.folder,
         countryCode: c.code,
         countryName: c.name,
         videoId,
-        videoKey,
-        metaKey: `ShortForm/${c.folder}/${videoId}/meta.json`,
-        commentsKey: `ShortForm/${c.folder}/${videoId}/comments.json`,
+        videoKey: `Posts/${c.folder}/${videoId}/video.mp4`,
+        metaKey: `Posts/${c.folder}/${videoId}/meta.json`,
+        commentsKey: `Posts/${c.folder}/${videoId}/comments.json`,
         mediaPath,
-      });
-    }
-
-    // LongForm (YouTube long) — Hubs only
-    const lfIds = await listVideoPackIds(client, `LongForm/${c.folder}/`, maxPacks);
-    for (const videoId of lfIds) {
-      const videoKey = `LongForm/${c.folder}/${videoId}/video.mp4`;
-      const mediaPath = `r2:${getBucket()}/${videoKey}`;
-      if (seen.has(mediaPath)) continue;
-      seen.add(mediaPath);
-      packs.push({
-        kind: 'longform',
-        countryFolder: c.folder,
-        countryCode: c.code,
-        countryName: c.name,
-        videoId,
-        videoKey,
-        metaKey: `LongForm/${c.folder}/${videoId}/meta.json`,
-        commentsKey: `LongForm/${c.folder}/${videoId}/comments.json`,
-        mediaPath,
+        lastModifiedMs,
       });
     }
   }
@@ -196,8 +245,8 @@ async function listVideoPackIds(
   prefix: string,
   maxPacks: number,
   opts: { depth?: number } = {}
-): Promise<string[]> {
-  const ids = new Set<string>();
+): Promise<Array<{ id: string; lastModifiedMs: number }>> {
+  const byId = new Map<string, number>();
   let token: string | undefined;
   let pages = 0;
   // depth=1: only keys like `prefix/<id>/video.mp4` (not nested ShortForm under a country root)
@@ -224,39 +273,122 @@ async function listVideoPackIds(
         // parts = [id, video.mp4] for depth 1
         if (parts.length !== depth + 1) continue;
       }
-      ids.add(m[1]);
-      if (maxPacks > 0 && ids.size >= maxPacks) {
-        return [...ids];
+      const ms = obj.LastModified ? obj.LastModified.getTime() : 0;
+      const prev = byId.get(m[1]) ?? 0;
+      if (ms >= prev) byId.set(m[1], ms);
+      if (maxPacks > 0 && byId.size >= maxPacks) {
+        return [...byId.entries()].map(([id, lastModifiedMs]) => ({ id, lastModifiedMs }));
       }
     }
     token = page.IsTruncated ? page.NextContinuationToken : undefined;
   } while (token);
-  if (pages > 1 || ids.size > 200) {
+  if (pages > 1 || byId.size > 200) {
     pipelineLog(
-      `Listed ${ids.size} video pack(s) under ${prefix} (${pages} ListObjects page(s))`,
+      `Listed ${byId.size} video pack(s) under ${prefix} (${pages} ListObjects page(s))`,
       'info'
     );
   }
-  return [...ids];
+  return [...byId.entries()].map(([id, lastModifiedMs]) => ({ id, lastModifiedMs }));
+}
+
+const IMAGE_MEDIA_RE = /^media\/\d+\.(jpe?g|png|gif|webp)$/i;
+
+/**
+ * Image-only social packs under Posts/<Country>/<id>/ (meta.json + media/*).
+ * Used for r/amiuglytruth (au_*) — no video.mp4 required.
+ */
+async function listImagePackIds(
+  client: S3Client,
+  prefix: string,
+  maxPacks: number
+): Promise<Array<{ id: string; lastModifiedMs: number; primaryImageKey: string }>> {
+  type Acc = { lastModifiedMs: number; images: string[]; hasMeta: boolean };
+  const byId = new Map<string, Acc>();
+  let token: string | undefined;
+  let pages = 0;
+  do {
+    const page = await client.send(
+      new ListObjectsV2Command({
+        Bucket: getBucket(),
+        Prefix: prefix,
+        ContinuationToken: token,
+        MaxKeys: 1000,
+      })
+    );
+    pages += 1;
+    for (const obj of page.Contents ?? []) {
+      const key = obj.Key || '';
+      const rel = key.startsWith(prefix) ? key.slice(prefix.length) : key;
+      const parts = rel.split('/').filter(Boolean);
+      if (parts.length < 2) continue;
+      const id = parts[0];
+      if (!id || isExcludedFunnyPackId(id)) continue;
+      const rest = parts.slice(1).join('/');
+      const ms = obj.LastModified ? obj.LastModified.getTime() : 0;
+      let acc = byId.get(id);
+      if (!acc) {
+        acc = { lastModifiedMs: ms, images: [], hasMeta: false };
+        byId.set(id, acc);
+      }
+      if (ms > acc.lastModifiedMs) acc.lastModifiedMs = ms;
+      if (rest === 'meta.json' || rest === 'post.json') acc.hasMeta = true;
+      if (IMAGE_MEDIA_RE.test(rest)) {
+        if (!acc.images.includes(rest)) acc.images.push(rest);
+      }
+    }
+    token = page.IsTruncated ? page.NextContinuationToken : undefined;
+    if (maxPacks > 0 && byId.size >= maxPacks * 4) break;
+  } while (token);
+
+  const out: Array<{ id: string; lastModifiedMs: number; primaryImageKey: string }> = [];
+  for (const [id, acc] of byId) {
+    if (!acc.images.length) continue;
+    if (!acc.hasMeta && acc.images.length === 0) continue;
+    acc.images.sort();
+    const primaryRel = acc.images[0];
+    out.push({
+      id,
+      lastModifiedMs: acc.lastModifiedMs,
+      primaryImageKey: `${prefix}${id}/${primaryRel}`,
+    });
+    if (maxPacks > 0 && out.length >= maxPacks) break;
+  }
+  if (pages > 1 || out.length > 200) {
+    pipelineLog(
+      `Listed ${out.length} image pack(s) under ${prefix} (${pages} ListObjects page(s))`,
+      'info'
+    );
+  }
+  return out;
 }
 
 export function encodeMediaUrl(opts: {
   signedUrl: string;
+  /** Extra signed image URLs for galleries (media/02.jpg …). Primary remains signedUrl. */
+  extraSignedUrls?: string[];
   reel: boolean;
   r2Key: string;
+  /** All R2 image keys when gallery (primary first). */
+  imageKeys?: string[];
   sourceId: string;
-  kind: PackKind;
+  kind: PackKind | 'feed';
+  /** Default video. Image posts (demoted reddit memes) use image. */
+  mediaKind?: 'video' | 'image';
 }): string {
+  const mediaKind = opts.mediaKind || 'video';
+  const urls = [opts.signedUrl, ...(opts.extraSignedUrls ?? [])].filter(Boolean);
+  const types = urls.map(() => mediaKind);
   const payload: Record<string, unknown> = {
-    urls: [opts.signedUrl],
-    types: ['video'],
+    urls,
+    types,
     r2_key: opts.r2Key,
     source: 'r2_focus_seed',
     source_id: opts.sourceId,
     kind: opts.kind,
     signed_at: new Date().toISOString(),
   };
-  if (opts.reel) payload.reel = true;
+  if (opts.imageKeys?.length) payload.image_keys = opts.imageKeys;
+  if (opts.reel && mediaKind === 'video') payload.reel = true;
   return JSON.stringify(payload);
 }
 

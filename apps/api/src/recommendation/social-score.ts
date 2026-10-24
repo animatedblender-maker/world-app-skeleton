@@ -41,6 +41,9 @@ export type MmrOptions = {
   limit: number;
   creatorWindow?: number;
   maxSameCreator?: number;
+  /** Soft cap: same Space in the recent window (Masquerade For you). */
+  spaceWindow?: number;
+  maxSameSpace?: number;
   /** Families that must not sit adjacent (e.g. tiktok + image). */
   exclusiveFamilies?: string[];
   /** Max exclusive-family cards per this many slots (e.g. 1 per 4). */
@@ -60,6 +63,8 @@ export function mmrPick<T extends MmrCandidate>(
   const lambda = Math.min(1, Math.max(0, opts.lambda ?? 0.72));
   const creatorWindow = Math.max(1, opts.creatorWindow ?? 8);
   const maxSameCreator = Math.max(1, opts.maxSameCreator ?? 2);
+  const spaceWindow = Math.max(1, opts.spaceWindow ?? 8);
+  const maxSameSpace = Math.max(1, opts.maxSameSpace ?? 2);
   const exclusive = new Set(
     (opts.exclusiveFamilies ?? ['tiktok', 'image', 'tiktok_image']).map((s) =>
       s.toLowerCase()
@@ -106,8 +111,12 @@ export function mmrPick<T extends MmrCandidate>(
         if (out.length && out[out.length - 1]?.authorId === c.authorId) m -= 4;
       }
 
-      if (c.spaceId && out.length && out[out.length - 1]?.spaceId === c.spaceId) {
-        m -= 1.2;
+      if (c.spaceId) {
+        const recentSpaces = out.slice(-spaceWindow);
+        const sameSpace = recentSpaces.filter((x) => x.spaceId === c.spaceId).length;
+        if (sameSpace >= maxSameSpace) m -= 10;
+        else if (sameSpace > 0) m -= sameSpace * 2.4;
+        if (out.length && out[out.length - 1]?.spaceId === c.spaceId) m -= 5;
       }
       if (c.family && out.length && out[out.length - 1]?.family === c.family) {
         m -= 2.5;
@@ -119,7 +128,7 @@ export function mmrPick<T extends MmrCandidate>(
         if (c.authorId && p.authorId === c.authorId) sim += 0.45;
         if (c.family && p.family === c.family) sim += 0.35;
         if (c.mediaKey && p.mediaKey === c.mediaKey) sim += 1;
-        if (c.spaceId && p.spaceId === c.spaceId) sim += 0.2;
+        if (c.spaceId && p.spaceId === c.spaceId) sim += 0.55;
       }
       m -= (1 - lambda) * sim;
 

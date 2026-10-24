@@ -104,7 +104,7 @@ const CHANNEL_SELECT = `
       from public.posts p
       where p.channel_id = c.id
         and p.channel_hidden_at is null
-        and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
+        and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted', 'sensitive')
         and p.media_type in ('video', 'reel')
         -- Feed re-shares of Archive/Hubs must never count as channel uploads.
         and coalesce(p.body, '') not like '%__hub_origin__|%'

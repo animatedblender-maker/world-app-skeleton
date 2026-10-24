@@ -68,21 +68,7 @@ export async function startMediaConsumer(): Promise<void> {
         console.log(
           `[kafka-media] MediaReady post=${p.postId} outputs=${ready.outputs.length} thumb=${ready.thumbPath}`
         );
-        // Automatic captions for every new video — server-side Groq Whisper (app stays light).
-        void import('../../media/transcribe.js')
-          .then(({ enqueueTranscript, transcriptionConfigured, transcribePost }) => {
-            if (!transcriptionConfigured()) return;
-            return enqueueTranscript(p.postId, 'media_ready').then(() =>
-              transcribePost(p.postId)
-            );
-          })
-          .catch((err) =>
-            console.warn(
-              '[kafka-media] transcript enqueue failed',
-              p.postId,
-              err instanceof Error ? err.message : err
-            )
-          );
+        // Captions are on-demand only (user taps CC) — free Groq quota can't backfill every video.
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error('[kafka-media] failed', p.postId, msg);

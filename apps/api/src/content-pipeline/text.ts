@@ -25,7 +25,26 @@ export function cleanText(value: unknown, maxLen: number): string {
   let text = String(value).replace(/\x00/g, ' ').trim();
   // Keep newlines as spaces for single-line captions; collapse runs of space.
   text = text.replace(/\s+/g, ' ');
-  text = text.replace(/tiktok/gi, 'matterya');
+  // Longer tokens first so "subreddit" → "matterya", Arabic TikTok → "matterya".
+  for (const token of [
+    'تيك توك',
+    'تيك\u200cتوك',
+    'تيك-توك',
+    'تيكتوك',
+    'tik tok',
+    'subreddit',
+    'reddit',
+    'tiktok',
+  ]) {
+    if (!text.toLowerCase().includes(token.toLowerCase()) && !text.includes(token)) continue;
+    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    text = text.replace(new RegExp(escaped, 'gi'), 'matterya');
+  }
+  // Reddit shorthand " sub " (spaces required) → Masquerade " space ".
+  text = text
+    .replace(/ SUB /g, ' SPACE ')
+    .replace(/ Sub /g, ' Space ')
+    .replace(/ sub /g, ' space ');
   if (text.length > maxLen) text = `${text.slice(0, maxLen - 1).trimEnd()}…`;
   return text;
 }
@@ -126,13 +145,17 @@ export function pickTitle(meta: Record<string, unknown>, kind: string, videoId: 
 
 export function pickBody(kind: string, caption: string, meta: Record<string, unknown>): string {
   const t = cleanText(caption, 3980) || 'Clip';
-  // All Sparks (TikTok + YouTube Shorts under ShortForm/) use `__spark__|`.
+  // Real Sparks only (TikTok / YouTube Shorts video) — never image memes.
   if (kind === 'spark') {
     return `__spark__|${t}`;
   }
   // LongForm Hubs catalog originals — intentional channel publish marker (iOS badge + Hubs shelves).
   if (kind === 'longform') {
     return `__hub_channel__|\n${t}`;
+  }
+  // Normal feed posts (images / demoted non-video packs) — plain caption, no spark stamp.
+  if (kind === 'feed' || kind === 'feed_image') {
+    return t;
   }
   const channel = cleanText(meta.channel ?? meta.author_name, 80);
   if (channel) return cleanText(`${t}\n\n— ${channel}`, 4000);

@@ -83,17 +83,27 @@ type CreatePostInput = {
   hub_slug?: string | null;
 };
 
+/** Keep in sync with HUB_PARENT_SLUGS in recommendation/shelf.service.ts */
 const HUB_SLUG_ALLOW = new Set([
-  'social',
+  'comedy',
+  'music',
   'travel',
   'nature',
-  'music',
   'food',
   'sports',
   'tech',
   'fitness',
   'film',
   'culture',
+  'history',
+  'education',
+  'animals',
+  'cars',
+  'news',
+  'fashion',
+  'gaming',
+  'kids',
+  'social',
   'daily',
 ]);
 
@@ -477,10 +487,10 @@ export class PostsService {
       from public.posts p
       left join public.profiles pr on pr.user_id = p.author_id
       left join public.posts sp on sp.id = p.shared_post_id
-        and coalesce(sp.moderation_status, 'active') not in ('hidden', 'deleted')
+        and coalesce(sp.moderation_status, 'active') not in ('hidden', 'deleted', 'sensitive')
       left join public.profiles spr on spr.user_id = sp.author_id
       where upper(coalesce(p.country_code, '')) = $1
-        and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
+        and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted', 'sensitive')
         ${EXCLUDE_MOMENTS_SQL}
         and (
           p.visibility in ('public', 'country')
@@ -596,10 +606,10 @@ export class PostsService {
         from public.posts p
         left join public.profiles pr on pr.user_id = p.author_id
         left join public.posts sp on sp.id = p.shared_post_id
-          and coalesce(sp.moderation_status, 'active') not in ('hidden', 'deleted')
+          and coalesce(sp.moderation_status, 'active') not in ('hidden', 'deleted', 'sensitive')
         left join public.profiles spr on spr.user_id = sp.author_id
         where p.author_id = $1
-          and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
+          and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted', 'sensitive')
         order by p.created_at desc
         limit $3
         `,
@@ -682,10 +692,10 @@ export class PostsService {
       from public.posts p
       left join public.profiles pr on pr.user_id = p.author_id
       left join public.posts sp on sp.id = p.shared_post_id
-        and coalesce(sp.moderation_status, 'active') not in ('hidden', 'deleted')
+        and coalesce(sp.moderation_status, 'active') not in ('hidden', 'deleted', 'sensitive')
       left join public.profiles spr on spr.user_id = sp.author_id
       where p.author_id = $1
-        and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
+        and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted', 'sensitive')
         and (
           p.visibility in ('public', 'country')
           or (
@@ -796,9 +806,9 @@ export class PostsService {
       from public.posts p
       left join public.profiles pr on pr.user_id = p.author_id
       left join public.posts sp on sp.id = p.shared_post_id
-        and coalesce(sp.moderation_status, 'active') not in ('hidden', 'deleted')
+        and coalesce(sp.moderation_status, 'active') not in ('hidden', 'deleted', 'sensitive')
       left join public.profiles spr on spr.user_id = sp.author_id
-      where coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
+      where coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted', 'sensitive')
         ${EXCLUDE_MOMENTS_SQL}
         and (
           p.visibility in ('public', 'country')
@@ -825,101 +835,40 @@ export class PostsService {
   }
 
   async searchPosts(query: string, limit: number, viewerId: string | null): Promise<PostRow[]> {
-    const savedByMe = await this.savedByMeExpr('$4::uuid');
-    const savedByMeShared = await this.savedByMeSharedExpr('$4::uuid');
-    const term = String(query ?? '').trim();
+    const term = String(query ?? '').trim().replace(/^@+/, '');
     if (!term) return [];
-    const max = Math.max(1, Math.min(100, limit || 25));
-    const like = `%${term.toLowerCase()}%`;
+    // Typeahead — small pages, prefix-first, no correlated counts / shared_post tree.
+    const max = Math.max(1, Math.min(40, limit || 16));
+    const q = term.toLowerCase();
+    const escaped = q.replace(/[%_\\]/g, '\\$&');
+    const prefix = `${escaped}%`;
+    const contains = `%${escaped}%`;
+    const privacySql = await this.privateAuthorVisibleSql('$4::uuid');
 
     const { rows } = await pool.query(
       `
-      with q as (
-        select websearch_to_tsquery('simple', $1) as tsq
-      )
       select
-        p.*,
-        greatest(
-          coalesce(p.like_count, 0),
-          (select count(*)::int from public.post_likes pl where pl.post_id = p.id)
-        ) as like_count,
-        (select count(*)::int from public.post_comments pc where pc.post_id = p.id) as comment_count,
-        case
-          when $4::uuid is not null
-            and exists (
-              select 1
-              from public.post_likes pl
-              where pl.post_id = p.id and pl.user_id = $4::uuid
-            )
-          then true
-          else false
-        end as liked_by_me,${savedByMe},
+        p.id, p.author_id, p.category_id, p.country_name, p.country_code, p.city_name,
+        p.title, p.body, p.media_type, p.media_url, p.thumb_url, p.visibility,
+        p.shared_post_id, p.hub_slug, p.moderation_status,
+        p.created_at, p.updated_at,
+        coalesce(p.like_count, 0)::int as like_count,
+        coalesce(p.comment_count, 0)::int as comment_count,
+        false as liked_by_me,
+        false as saved_by_me,
         jsonb_build_object(
           'user_id', pr.user_id,
           'display_name', pr.display_name,
           'username', pr.username,
           'avatar_url', pr.avatar_url,
           'country_name', pr.country_name,
-          'country_code', pr.country_code
+          'country_code', pr.country_code,
+          'is_verified', coalesce(pr.is_verified, false)
         ) as author,
-        case
-          when sp.id is null then null
-          else jsonb_build_object(
-            'id', sp.id,
-            'author_id', sp.author_id,
-            'category_id', sp.category_id,
-            'country_name', sp.country_name,
-            'country_code', sp.country_code,
-            'city_name', sp.city_name,
-            'title', sp.title,
-            'body', sp.body,
-            'media_type', sp.media_type,
-            'media_url', sp.media_url,
-            'thumb_url', sp.thumb_url,
-            'visibility', sp.visibility,
-            'like_count', greatest(
-              coalesce(sp.like_count, 0),
-              (select count(*)::int from public.post_likes spl where spl.post_id = sp.id)
-            ),
-            'comment_count', (select count(*)::int from public.post_comments spc where spc.post_id = sp.id),
-            'liked_by_me', case
-              when $4::uuid is not null
-                and exists (
-                  select 1
-                  from public.post_likes spl
-                  where spl.post_id = sp.id and spl.user_id = $4::uuid
-                )
-              then true
-              else false
-            end,${savedByMeShared}
-            'created_at', sp.created_at,
-            'updated_at', sp.updated_at,
-            'author', jsonb_build_object(
-              'user_id', spr.user_id,
-              'display_name', spr.display_name,
-              'username', spr.username,
-              'avatar_url', spr.avatar_url,
-              'country_name', spr.country_name,
-              'country_code', spr.country_code
-            )
-          )
-        end as shared_post,
-        ts_rank_cd(
-          to_tsvector('simple', coalesce(p.title, '') || ' ' || coalesce(p.body, '')),
-          q.tsq
-        ) as rank
+        null::jsonb as shared_post
       from public.posts p
-      cross join q
       left join public.profiles pr on pr.user_id = p.author_id
-      left join public.posts sp on sp.id = p.shared_post_id
-        and coalesce(sp.moderation_status, 'active') not in ('hidden', 'deleted')
-      left join public.profiles spr on spr.user_id = sp.author_id
-      where (
-          to_tsvector('simple', coalesce(p.title, '') || ' ' || coalesce(p.body, '')) @@ q.tsq
-          or lower(coalesce(p.title, '')) like $2
-          or lower(coalesce(p.body, '')) like $2
-        )
-        and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
+      where coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted', 'sensitive')
         ${EXCLUDE_MOMENTS_SQL}
         and (
           p.visibility = 'public'
@@ -934,11 +883,30 @@ export class PostsService {
             )
           )
         )
-        ${await this.privateAuthorVisibleSql('$4::uuid')}
-      order by rank desc nulls last, p.created_at desc, p.id desc
-      limit $3
+        ${privacySql}
+        and (
+          lower(coalesce(pr.username, '')) like $2 escape '\\'
+          or lower(coalesce(pr.display_name, '')) like $2 escape '\\'
+          or lower(coalesce(p.title, '')) like $2 escape '\\'
+          or ($5::int >= 3 and (
+            lower(coalesce(p.title, '')) like $1 escape '\\'
+            or lower(coalesce(pr.username, '')) like $1 escape '\\'
+            or lower(coalesce(pr.display_name, '')) like $1 escape '\\'
+            or lower(left(coalesce(p.body, ''), 240)) like $1 escape '\\'
+          ))
+        )
+      order by
+        case
+          when lower(coalesce(pr.username, '')) = $3 then 0
+          when lower(coalesce(p.title, '')) like $2 escape '\\' then 1
+          when lower(coalesce(pr.username, '')) like $2 escape '\\' then 2
+          else 3
+        end,
+        p.created_at desc,
+        p.id desc
+      limit $6
       `,
-      [term, like, max, viewerId]
+      [contains, prefix, q, viewerId, q.length, max]
     );
 
     return await withoutMoments(rows as PostRow[]);
@@ -971,7 +939,7 @@ export class PostsService {
       `
       select count(*)::text as n
       from public.posts p
-      where coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
+      where coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted', 'sensitive')
         and p.visibility in ('public', 'country')
         and lower(coalesce(p.media_type, '')) in ('video', 'reel', 'spark')
         and p.media_url is not null
@@ -1066,9 +1034,9 @@ export class PostsService {
       from public.posts p
       left join public.profiles pr on pr.user_id = p.author_id
       left join public.posts sp on sp.id = p.shared_post_id
-        and coalesce(sp.moderation_status, 'active') not in ('hidden', 'deleted')
+        and coalesce(sp.moderation_status, 'active') not in ('hidden', 'deleted', 'sensitive')
       left join public.profiles spr on spr.user_id = sp.author_id
-      where coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
+      where coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted', 'sensitive')
         and p.visibility in ('public', 'country')
         and lower(coalesce(p.media_type, '')) in ('video', 'reel', 'spark')
         and p.media_url is not null
@@ -2162,10 +2130,10 @@ export class PostsService {
       from public.posts p
       left join public.profiles pr on pr.user_id = p.author_id
       left join public.posts sp on sp.id = p.shared_post_id
-        and coalesce(sp.moderation_status, 'active') not in ('hidden', 'deleted')
+        and coalesce(sp.moderation_status, 'active') not in ('hidden', 'deleted', 'sensitive')
       left join public.profiles spr on spr.user_id = sp.author_id
       where p.id = $1
-        and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
+        and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted', 'sensitive')
         and (
           p.visibility in ('public', 'country')
           or ($2::uuid is not null and p.author_id = $2::uuid)

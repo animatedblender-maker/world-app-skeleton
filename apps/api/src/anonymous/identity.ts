@@ -80,6 +80,29 @@ export async function getProfileById(
   return rows[0] ? toPublic(rows[0]) : null;
 }
 
+/** Public Masquerade profile lookup by handle (never returns account_id). */
+export async function getProfileByUsername(
+  username: string
+): Promise<AnonymousProfilePublic | null> {
+  const raw = String(username || '')
+    .trim()
+    .replace(/^@+/, '')
+    .toLowerCase();
+  if (!raw || raw.length > 40) return null;
+  const { rows } = await pool.query<ProfileDb>(
+    `
+    select id, username, normalized_username, avatar_seed, state,
+           age_attested_at, created_at
+    from anonymous.profiles
+    where normalized_username = $1
+      and state = 'active'
+    limit 1
+    `,
+    [raw]
+  );
+  return rows[0] ? toPublic(rows[0]) : null;
+}
+
 async function loadOrdinaryProfileHints(accountId: string) {
   const { rows } = await pool.query<{
     display_name: string | null;
@@ -118,12 +141,12 @@ async function insertProfileWithLink(
 }
 
 /**
- * Get existing Anonymous profile or create one with a generated username.
+ * Get existing Anonymous profile or create one with a generated (or preferred) username.
  * Exactly one profile per account. Never returns account_id.
  */
 export async function getOrCreateProfile(
   accountId: string,
-  opts?: { regenerate?: boolean }
+  opts?: { regenerate?: boolean; username?: string | null }
 ): Promise<
   | { ok: true; profile: AnonymousProfilePublic; created: boolean }
   | { ok: false; code: string; reason: string }
@@ -146,6 +169,18 @@ export async function getOrCreateProfile(
   }
 
   const hints = await loadOrdinaryProfileHints(accountId);
+  const preferredRaw = typeof opts?.username === 'string' ? opts.username.trim() : '';
+  if (preferredRaw) {
+    const preferred = validateGeneratedCandidate(preferredRaw, hints);
+    if (!preferred.ok) {
+      return {
+        ok: false,
+        code: preferred.code === 'invalid_syntax' ? 'username_invalid' : preferred.code,
+        reason: 'That username isn’t allowed. Try another suggestion.',
+      };
+    }
+  }
+
   const client = await pool.connect();
   try {
     await client.query('begin');
@@ -176,8 +211,15 @@ export async function getOrCreateProfile(
     const attestedAlready = priorAttest.rows.length > 0;
 
     let created: ProfileDb | null = null;
+    const preferredValidated = preferredRaw
+      ? validateGeneratedCandidate(preferredRaw, hints)
+      : null;
+
     for (let attempt = 0; attempt < 12; attempt++) {
-      const candidate = generateSafeUsername();
+      const candidate =
+        attempt === 0 && preferredValidated && preferredValidated.ok
+          ? preferredValidated.normalized
+          : generateSafeUsername();
       const validated = validateGeneratedCandidate(candidate, hints);
       if (!validated.ok) continue;
 
@@ -186,7 +228,17 @@ export async function getOrCreateProfile(
         `select 1 from anonymous.username_tombstones where normalized_username = $1 limit 1`,
         [validated.normalized]
       );
-      if (tomb.rows.length) continue;
+      if (tomb.rows.length) {
+        if (attempt === 0 && preferredValidated && preferredValidated.ok) {
+          await client.query('rollback');
+          return {
+            ok: false,
+            code: 'username_taken',
+            reason: 'That username was just taken. Try another suggestion.',
+          };
+        }
+        continue;
+      }
 
       try {
         created = await insertProfileWithLink(
@@ -210,7 +262,17 @@ export async function getOrCreateProfile(
         }
         break;
       } catch (err: any) {
-        if (err?.code === '23505') continue; // unique_violation
+        if (err?.code === '23505') {
+          if (attempt === 0 && preferredValidated && preferredValidated.ok) {
+            await client.query('rollback');
+            return {
+              ok: false,
+              code: 'username_taken',
+              reason: 'That username was just taken. Try another suggestion.',
+            };
+          }
+          continue; // unique_violation
+        }
         throw err;
       }
     }

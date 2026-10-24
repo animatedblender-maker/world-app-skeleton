@@ -17,6 +17,7 @@ import {
   viewerIsUnder18,
 } from '../moderation/nsfw.js';
 import {
+  canonicalVideoAliasKeys,
   canonicalVideoKey,
   loadCommittedBatch,
   loadDeliveredCanonicalKeys,
@@ -714,7 +715,9 @@ export async function fetchForYouPage(input: {
 
   if (viewerId && woven.length) {
     const delivered = await loadDeliveredCanonicalKeys(viewerId, 'hubs_for_you');
-    let eligible = woven.filter((row) => !delivered.has(canonicalVideoKey(row)));
+    let eligible = woven.filter(
+      (row) => !canonicalVideoAliasKeys(row).some((k) => delivered.has(k))
+    );
     eligible = dedupeHomeMediaRows(eligible);
 
     if (eligible.length) {
@@ -1422,10 +1425,9 @@ export async function fetchHomeFeedPage(input: {
 
   if (viewerId && woven.length) {
     const delivered = await loadDeliveredCanonicalKeys(viewerId, 'home_for_you');
-    let eligible = woven.filter((row) => {
-      const key = canonicalVideoKey(row);
-      return !delivered.has(key);
-    });
+    let eligible = woven.filter(
+      (row) => !canonicalVideoAliasKeys(row).some((k) => delivered.has(k))
+    );
     // Prefer share over original when both somehow remain.
     eligible = dedupeHomeMediaRows(eligible);
 

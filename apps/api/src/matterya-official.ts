@@ -18,11 +18,13 @@ const DEFAULT_USERNAME = 'matterya';
 const DEFAULT_DISPLAY = 'Matterya';
 
 export const WELCOME_MESSAGE = [
-  'Welcome to Matterya.',
+  'Hey — welcome to Matterya.',
   '',
-  'This is the official Matterya account — tips, product notes, and important updates will land here.',
+  'This is the official account.',
   '',
-  'Explore Feed, Sparks, Hubs, and Masquerade. If you need help, reply anytime.',
+  'In Masquerade you’re anonymous: Spaces, posts, and replies stay behind your handle. Your real Matterya chats never mix into Masquerade Inbox.',
+  '',
+  'Hit reply if something’s off.',
 ].join('\n');
 
 let cachedOfficialId: string | null = null;
@@ -204,22 +206,32 @@ export async function sendMatteryaWelcomeMessage(
     throw new Error('invalid_recipient');
   }
 
-  // Idempotency: already welcomed?
-  const prior = await pool.query<{ conversation_id: string; message_id: string }>(
+  // Idempotency: already welcomed? Refresh body if we find an older welcome draft.
+  const prior = await pool.query<{ conversation_id: string; message_id: string; body: string }>(
     `
-    select c.id::text as conversation_id, m.id::text as message_id
+    select c.id::text as conversation_id, m.id::text as message_id, m.body
     from public.conversations c
     join public.conversation_members a on a.conversation_id = c.id and a.user_id = $1::uuid
     join public.conversation_members b on b.conversation_id = c.id and b.user_id = $2::uuid
     join public.messages m on m.conversation_id = c.id and m.sender_id = $1::uuid
     where c.is_direct = true
-      and m.body like 'Welcome to Matterya.%'
+      and (
+        m.body like 'Welcome to Matterya.%'
+        or m.body like 'Hey — welcome to Matterya.%'
+        or m.body like 'Hey - welcome to Matterya.%'
+      )
     order by m.created_at asc
     limit 1
     `,
     [officialId, recipientUserId]
   );
   if (prior.rows[0]) {
+    if (prior.rows[0].body !== body) {
+      await pool.query(
+        `update public.messages set body = $2, updated_at = now() where id = $1::uuid`,
+        [prior.rows[0].message_id, body]
+      );
+    }
     return {
       conversationId: prior.rows[0].conversation_id,
       messageId: prior.rows[0].message_id,

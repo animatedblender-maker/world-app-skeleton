@@ -467,33 +467,40 @@ export class ProfilesService {
   }
 
   async searchProfiles(query: string, limit: number, viewerId: string | null = null): Promise<ProfileRow[]> {
-    const raw = (query || '').trim();
+    const raw = (query || '').trim().replace(/^@+/, '');
     if (!raw) return [];
-    const iso = raw.toLowerCase();
-    const pattern = `%${iso}%`;
-    const max = Math.max(1, Math.min(100, limit));
+    const q = raw.toLowerCase();
+    const escaped = q.replace(/[%_\\]/g, '\\$&');
+    const prefix = `${escaped}%`;
+    const contains = `%${escaped}%`;
+    // Search typeahead — keep the first page small and prefix-first.
+    const max = Math.max(1, Math.min(40, limit));
 
     const { rows } = await pool.query(
       `
-      with q as (
-        select websearch_to_tsquery('simple', $1) as tsq
-      )
-      select *,
-        ts_rank_cd(
-          to_tsvector('simple', coalesce(username, '') || ' ' || coalesce(display_name, '')),
-          q.tsq
-        ) as rank
-      from public.profiles, q
+      select *
+      from public.profiles
       where coalesce(account_status, 'active') = 'active'
         and (
-        to_tsvector('simple', coalesce(username, '') || ' ' || coalesce(display_name, '')) @@ q.tsq
-        or lower(coalesce(username, '')) like $2
-        or lower(coalesce(display_name, '')) like $2
-      )
-      order by rank desc nulls last, username nulls last
-      limit $3
+          lower(coalesce(username, '')) = $1
+          or lower(coalesce(username, '')) like $2 escape '\\'
+          or lower(coalesce(display_name, '')) like $2 escape '\\'
+          or ($4::int >= 3 and (
+            lower(coalesce(username, '')) like $3 escape '\\'
+            or lower(coalesce(display_name, '')) like $3 escape '\\'
+          ))
+        )
+      order by
+        case
+          when lower(coalesce(username, '')) = $1 then 0
+          when lower(coalesce(username, '')) like $2 escape '\\' then 1
+          when lower(coalesce(display_name, '')) like $2 escape '\\' then 2
+          else 3
+        end,
+        username nulls last
+      limit $5
       `,
-      [raw, pattern, max]
+      [q, prefix, contains, q.length, max]
     );
 
     return (rows as ProfileRow[])

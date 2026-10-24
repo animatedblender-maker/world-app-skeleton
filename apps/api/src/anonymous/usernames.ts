@@ -7,6 +7,10 @@ const ADJECTIVES = [
   'amber', 'azure', 'coral', 'cosmic', 'crimson', 'distant', 'frosty', 'golden',
   'hidden', 'ivory', 'jade', 'lunar', 'misty', 'neon', 'orbit', 'polar',
   'radiant', 'silver', 'solar', 'steel', 'tidal', 'velvet', 'violet', 'winter',
+  'ancient', 'arctic', 'blooming', 'copper', 'drift', 'ember', 'feral', 'glinting',
+  'hollow', 'indigo', 'jolly', 'kindled', 'luminous', 'mossy', 'northern', 'opal',
+  'pale', 'quieted', 'rustic', 'sable', 'teal', 'umber', 'veiled', 'woven',
+  'ambered', 'brisk', 'cedar', 'dusk', 'eerie', 'faint', 'gilded', 'hushed',
 ];
 
 const NOUNS = [
@@ -15,7 +19,16 @@ const NOUNS = [
   'anchor', 'beacon', 'canyon', 'delta', 'ember', 'falcon', 'glacier', 'horizon',
   'island', 'jasper', 'kite', 'lantern', 'mirror', 'nova', 'oasis', 'prism',
   'quill', 'reef', 'shadow', 'temple', 'umbra', 'voyage', 'whisper', 'zenith',
+  'archive', 'brook', 'cipher', 'dusk', 'echo', 'fjord', 'grove', 'haven',
+  'inkwell', 'junction', 'keel', 'ledge', 'mosaic', 'nightfall', 'onyx', 'petal',
+  'quarry', 'ridge', 'sigil', 'thicket', 'undertow', 'vault', 'wick', 'zephyr',
+  'atlas', 'bough', 'cradle', 'driftwood', 'emberlit', 'foghorn', 'glyph', 'hearth',
 ];
+
+/** Combinatorial pool is large; suffix 1000–9999 keeps suggestions effectively endless. */
+export function usernamePoolSize(): number {
+  return ADJECTIVES.length * NOUNS.length * 9000;
+}
 
 const RESERVED = new Set(
   [

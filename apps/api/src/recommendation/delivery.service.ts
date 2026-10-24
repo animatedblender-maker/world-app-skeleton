@@ -64,6 +64,49 @@ export function ensureFeedDeliverySchema(): Promise<boolean> {
   return schemaReady;
 }
 
+/** Pack folder id inside R2 keys (ShortForm, Reddit Posts/amiugly, Masquerade, …). */
+const PACK_FOLDER_RE = /\/((?:ss|fy|om|pn|au)_[a-z0-9]+)(?:\/|$)/i;
+
+/**
+ * Object key from signed/public R2 HTTPS (JSON urls[] or plain).
+ * Matches ledger shape `r2:posts/united_states/au_…/media/01.jpg`.
+ */
+function r2ObjectKeyFromMediaBlob(media: string): string | null {
+  const r2Json = media.match(/"r2_key"\s*:\s*"([^"]+)"/i)?.[1];
+  if (r2Json) return r2Json.replace(/^\/+/, '');
+  // Durable Masquerade refs are bare `r2:bucket/key` or `r2:key`.
+  const r2Bare = media.match(/(?:^|\n)r2:(?:matterya-sparks\/)?([^\s?]+)/i)?.[1];
+  if (r2Bare) return r2Bare.replace(/^\/+/, '');
+
+  const url = media.match(/https?:\/\/[^"'\\\s?]+/i)?.[0];
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase();
+    if (
+      !host.includes('r2.cloudflarestorage.com') &&
+      !host.includes('r2.dev') &&
+      !host.includes('matterya')
+    ) {
+      return null;
+    }
+    const parts = u.pathname.replace(/^\/+/, '').split('/').filter(Boolean);
+    if (!parts.length) return null;
+    // Path-style: /matterya-sparks/<key…>
+    if (parts[0] === 'matterya-sparks' && parts.length >= 2) {
+      return parts.slice(1).join('/');
+    }
+    if (parts.length >= 2) return parts.join('/');
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+function packIdFromKey(key: string): string | null {
+  return key.match(PACK_FOLDER_RE)?.[1]?.toLowerCase() ?? null;
+}
+
 /** Stable identity for original + share of the same R2 pack (video or image). */
 export function canonicalVideoKey(row: {
   id: string;
@@ -74,8 +117,14 @@ export function canonicalVideoKey(row: {
   media_type?: string | null;
 }): string {
   const media = `${row.media_url ?? ''}\n${row.thumb_url ?? ''}`;
-  const r2 = media.match(/"r2_key"\s*:\s*"([^"]+)"/i)?.[1];
-  if (r2) return `r2:${r2.toLowerCase()}`;
+  const objectKey = r2ObjectKeyFromMediaBlob(media);
+  if (objectKey) {
+    const key = objectKey.toLowerCase();
+    const packFromR2 = packIdFromKey(`/${key}/`) ?? packIdFromKey(key);
+    // Prefer pack id so video.mp4 + media/01.jpg (and resign URL churn) collapse.
+    if (packFromR2) return `pack:${packFromR2}`;
+    return `r2:${key}`;
+  }
 
   const shared = String(row.shared_post_id ?? '').trim();
   if (shared) return `clip:${shared.toLowerCase()}`;
@@ -95,8 +144,8 @@ export function canonicalVideoKey(row: {
   )?.[1];
   if (pack) return `tt:${pack}`;
 
-  // SecretsStrange / ShortForm pack folders: …/ss_xxxxx/ or …/ShortForm/…/id/
-  const ss = media.match(/\/(ss_[a-z0-9]+)(?:\/|$)/i)?.[1];
+  // SecretsStrange / ShortForm / funny / amiugly pack folders.
+  const ss = media.match(PACK_FOLDER_RE)?.[1];
   if (ss) return `pack:${ss.toLowerCase()}`;
 
   const url = media.match(/https?:\/\/[^"'\\\s?]+/i)?.[0];
@@ -110,20 +159,57 @@ export function canonicalVideoKey(row: {
       /\.(jpe?g|png|webp|gif)$/i.test(bare) ||
       bare.includes('/media/')
     ) {
-      // Strip filename so video.mp4 and media/01.jpg of same pack collide when path shares pack id.
       const dir = bare.replace(/\/[^/]+$/, '');
-      if (dir.includes('/united_states/') || dir.includes('/germany/') || dir.includes('/albania/') || dir.includes('/egypt/')) {
+      if (
+        dir.includes('/united_states/') ||
+        dir.includes('/germany/') ||
+        dir.includes('/albania/') ||
+        dir.includes('/egypt/')
+      ) {
         return `url:${dir}`;
       }
       return `url:${bare}`;
     }
   }
 
-  const mt = String(row.media_type ?? '').toLowerCase();
-  if (mt === 'image' || mt === 'photo' || mt === 'gif' || mt === 'video' || mt === 'reel' || mt === 'spark') {
-    return `clip:${String(row.id).toLowerCase()}`;
-  }
   return `clip:${String(row.id).toLowerCase()}`;
+}
+
+/**
+ * All identities that mean "same underlying media" for delivery exclusion.
+ * Covers legacy ledger rows (`r2:posts/…`) after pack: preference, and clip ids.
+ */
+export function canonicalVideoAliasKeys(row: {
+  id: string;
+  media_url?: string | null;
+  thumb_url?: string | null;
+  shared_post_id?: string | null;
+  body?: string | null;
+  media_type?: string | null;
+}): string[] {
+  const keys = new Set<string>();
+  const primary = canonicalVideoKey(row);
+  keys.add(primary);
+
+  const media = `${row.media_url ?? ''}\n${row.thumb_url ?? ''}`;
+  const objectKey = r2ObjectKeyFromMediaBlob(media)?.toLowerCase();
+  if (objectKey) {
+    keys.add(`r2:${objectKey}`);
+    const pack = packIdFromKey(`/${objectKey}/`) ?? packIdFromKey(objectKey);
+    if (pack) keys.add(`pack:${pack}`);
+    // Legacy full-URL keys from earlier canonicalVideoKey revisions.
+    const url = media.match(/https?:\/\/[^"'\\\s?]+/i)?.[0];
+    if (url) {
+      const bare = url.toLowerCase().split('?')[0];
+      keys.add(`url:${bare}`);
+      keys.add(`url:${bare.replace(/\/[^/]+$/, '')}`);
+    }
+  }
+
+  const shared = String(row.shared_post_id ?? '').trim().toLowerCase();
+  if (shared) keys.add(`clip:${shared}`);
+  keys.add(`clip:${String(row.id).toLowerCase()}`);
+  return [...keys];
 }
 
 export async function loadDeliveredCanonicalKeys(

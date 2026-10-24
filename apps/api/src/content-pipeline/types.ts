@@ -14,6 +14,9 @@ export type ProfileOwner = {
   countryCode: string;
   countryName: string | null;
   cityName: string | null;
+  /** Real person name from profiles — never country / "Hubs". */
+  displayName: string | null;
+  username: string | null;
 };
 
 export type R2Pack = {
@@ -28,6 +31,8 @@ export type R2Pack = {
   commentsKey: string;
   /** Idempotency key stored on posts.media_path */
   mediaPath: string;
+  /** R2 LastModified of video.mp4 — newest ingest first. */
+  lastModifiedMs?: number;
 };
 
 export type PipelineOptions = {
@@ -71,6 +76,11 @@ export type PipelineOptions = {
    * Pass 0 to skip comment seeding (fast flood — posts appear immediately).
    */
   maxCommentsPerPost?: number;
+  /**
+   * Only discover/ingest r/amiuglytruth Posts/au_* image packs
+   * (skip TikTok/ShortForm/LongForm catalog flood).
+   */
+  amiuglyOnly?: boolean;
 };
 
 export type PipelineStats = {

@@ -114,17 +114,18 @@ export async function handlePosterGet(req: Request, res: Response): Promise<void
     const map = await lookupPostKeys([postId]);
     const hit = map.get(postId);
     if (!hit) {
-      res.status(404).json({ error: 'not_found' });
+      // Soft miss — clients treat ok:false as negative cache (avoids NSURLError -1011 storms).
+      res.status(200).json({ ok: false, error: 'not_found', post_id: postId });
       return;
     }
     const key = frame0KeyFromVideoKey(hit.videoKey, size);
     if (!(await frame0ObjectExists(key))) {
-      res.status(404).json({ error: 'poster_unavailable', key });
+      res.status(200).json({ ok: false, error: 'poster_unavailable', key, post_id: postId });
       return;
     }
     const url = await resolvePlayUrlForKey(key);
     if (!url) {
-      res.status(404).json({ error: 'poster_unavailable', key });
+      res.status(200).json({ ok: false, error: 'poster_unavailable', key, post_id: postId });
       return;
     }
     res.json({ ok: true, post_id: postId, url, key, size });

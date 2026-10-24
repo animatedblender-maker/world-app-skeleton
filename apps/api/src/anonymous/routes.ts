@@ -1,4 +1,5 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
+import { pool } from '../db.js';
 import { getUserFromRequest, type AuthedUser } from '../auth/request-user.js';
 import {
   attestAge,
@@ -6,6 +7,7 @@ import {
   getProfileForAccount,
   sessionForAccount,
 } from './identity.js';
+import { generateSafeUsername, validateGeneratedCandidate } from './usernames.js';
 import {
   createFreeSpace,
   getSpaceDetail,
@@ -78,24 +80,52 @@ export function createAnonymousRouter(): Router {
   router.get('/session', async (req: AuthedReq, res: Response) => {
     try {
       const session = await gateAnonymous(req.user!.id);
+      const birthdateMissing =
+        session.code === 'birthdate_required'
+        || session.code === 'birthdate_missing'
+        || session.code === 'under_18';
+      const suspended = String(session.profile?.state ?? '').toLowerCase() === 'suspended';
       return res.json({
         ok: true,
+        // Dual keys — iOS AnonymousSession reads eligibleAdult / ageAttested (snake or camel).
         eligible: session.eligible,
+        eligible_adult: session.eligible,
+        eligibleAdult: session.eligible,
         reason: session.reason,
         code: session.code,
         profile: session.profile,
         age_attested: session.age_attested,
+        ageAttested: session.age_attested,
+        birthdate_missing: birthdateMissing,
+        birthdateMissing,
+        suspended,
         paid_enabled: session.paid_enabled,
+        paidEnabled: session.paid_enabled,
       });
     } catch (err: any) {
-      console.error('[anonymous/session]', err?.message ?? err);
-      return res.status(500).json({ ok: false, error: 'session_failed' });
+      const msg = String(err?.message ?? err ?? '');
+      console.error('[anonymous/session]', msg);
+      // Schema not migrated yet — clearer than opaque session_failed.
+      if (/relation .* does not exist|schema .* does not exist/i.test(msg)) {
+        return res.status(503).json({
+          ok: false,
+          error: 'schema_missing',
+          code: 'schema_missing',
+          message: 'Masquerade database migration is not applied yet.',
+        });
+      }
+      return res.status(500).json({
+        ok: false,
+        error: 'session_failed',
+        code: 'session_failed',
+        message: msg.slice(0, 180),
+      });
     }
   });
 
   router.post('/attest', async (req: AuthedReq, res: Response) => {
     try {
-      if (req.body?.attest !== true) {
+      if (req.body?.attest !== true && req.body?.confirmed !== true) {
         return res.status(400).json({
           ok: false,
           error: 'attest_required',
@@ -123,7 +153,7 @@ export function createAnonymousRouter(): Router {
     }
   });
 
-  router.post('/profile', async (req: AuthedReq, res: Response) => {
+  async function handleProfileClaim(req: AuthedReq, res: Response) {
     try {
       const session = await gateAnonymous(req.user!.id);
       if (!session.eligible) {
@@ -135,14 +165,26 @@ export function createAnonymousRouter(): Router {
         });
       }
       const regenerate = req.body?.regenerate === true;
-      const result = await getOrCreateProfile(req.user!.id, { regenerate });
+      const username =
+        typeof req.body?.username === 'string' ? String(req.body.username).trim() : null;
+      const result = await getOrCreateProfile(req.user!.id, { regenerate, username });
       if (!result.ok) {
-        const status = result.code === 'username_immutable' ? 409 : 403;
+        const status =
+          result.code === 'username_immutable' || result.code === 'username_taken'
+            ? 409
+            : result.code === 'username_invalid' ||
+                result.code === 'invalid_syntax' ||
+                result.code === 'reserved' ||
+                result.code === 'disallowed' ||
+                result.code === 'real_name_heuristic'
+              ? 422
+              : 403;
         return res.status(status).json({
           ok: false,
           error: result.code,
           code: result.code,
           reason: result.reason,
+          message: result.reason,
         });
       }
       return res.json({ ok: true, profile: result.profile, created: result.created });
@@ -150,9 +192,13 @@ export function createAnonymousRouter(): Router {
       console.error('[anonymous/profile]', err?.message ?? err);
       return res.status(500).json({ ok: false, error: 'profile_failed' });
     }
-  });
+  }
 
-  router.get('/profile/me', async (req: AuthedReq, res: Response) => {
+  router.post('/profile', handleProfileClaim);
+  // Alias — older iOS builds posted /profile/claim.
+  router.post('/profile/claim', handleProfileClaim);
+
+  async function handleProfileMe(req: AuthedReq, res: Response) {
     try {
       const session = await gateAnonymous(req.user!.id);
       if (!session.eligible) {
@@ -176,6 +222,64 @@ export function createAnonymousRouter(): Router {
     } catch (err: any) {
       console.error('[anonymous/profile/me]', err?.message ?? err);
       return res.status(500).json({ ok: false, error: 'profile_failed' });
+    }
+  }
+
+  router.get('/profile/me', handleProfileMe);
+  // Alias — older iOS builds used /me.
+  router.get('/me', handleProfileMe);
+
+  router.get('/username/suggest', async (req: AuthedReq, res: Response) => {
+    try {
+      const session = await gateAnonymous(req.user!.id);
+      if (!session.eligible) {
+        return res.status(403).json({
+          ok: false,
+          error: session.code,
+          code: session.code,
+          reason: session.reason,
+        });
+      }
+      // Endless recommendations: large vocab × suffix, skip taken + tombstoned.
+      const tried = new Set<string>();
+      for (let i = 0; i < 80; i++) {
+        const candidate = generateSafeUsername();
+        const validated = validateGeneratedCandidate(candidate);
+        if (!validated.ok) continue;
+        if (tried.has(validated.normalized)) continue;
+        tried.add(validated.normalized);
+        const taken = await pool.query(
+          `
+          select 1
+          where exists (
+            select 1 from anonymous.profiles
+            where normalized_username = $1
+          )
+          or exists (
+            select 1 from anonymous.username_tombstones
+            where normalized_username = $1
+          )
+          limit 1
+          `,
+          [validated.normalized]
+        );
+        if (taken.rows.length) continue;
+        return res.json({
+          ok: true,
+          username: validated.normalized,
+          suggestedUsername: validated.normalized,
+          suggested_username: validated.normalized,
+        });
+      }
+      return res.status(500).json({
+        ok: false,
+        error: 'username_unavailable',
+        code: 'username_unavailable',
+        reason: 'Could not suggest a username. Try again.',
+      });
+    } catch (err: any) {
+      console.error('[anonymous/username/suggest]', err?.message ?? err);
+      return res.status(500).json({ ok: false, error: 'suggest_failed' });
     }
   });
 
@@ -375,6 +479,9 @@ export function createAnonymousRouter(): Router {
         spaceId: String(req.params.id),
         title: req.body?.title,
         body: String(req.body?.body ?? ''),
+        mediaType: req.body?.media_type ?? req.body?.mediaType ?? null,
+        mediaUrl: req.body?.media_url ?? req.body?.mediaUrl ?? null,
+        thumbUrl: req.body?.thumb_url ?? req.body?.thumbUrl ?? null,
         ageEligible: true,
         ageAttested: true,
       });
@@ -476,8 +583,8 @@ export function createAnonymousRouter(): Router {
       if (!session) return;
       const result = await castVote({
         profile: session.profile!,
-        targetType: String(req.body?.target_type ?? ''),
-        targetId: String(req.body?.target_id ?? ''),
+        targetType: String(req.body?.target_type ?? req.body?.targetType ?? ''),
+        targetId: String(req.body?.target_id ?? req.body?.targetId ?? ''),
         value: Number(req.body?.value ?? 0),
         ageEligible: true,
         ageAttested: true,
@@ -497,27 +604,41 @@ export function createAnonymousRouter(): Router {
     }
   });
 
+  async function handleReport(req: AuthedReq, res: Response) {
+    const session = await requireReady(req, res);
+    if (!session) return;
+    const result = await createReport({
+      profile: session.profile!,
+      targetType: String(req.body?.target_type ?? req.body?.targetType ?? ''),
+      targetId: String(req.body?.target_id ?? req.body?.targetId ?? ''),
+      reason: String(req.body?.reason ?? ''),
+    });
+    if (!result.ok) {
+      return res.status(result.status).json({
+        ok: false,
+        error: result.code,
+        code: result.code,
+        reason: result.reason,
+      });
+    }
+    return res.status(201).json({ ok: true, report_id: result.report_id });
+  }
+
   router.post('/reports', async (req: AuthedReq, res: Response) => {
     try {
-      const session = await requireReady(req, res);
-      if (!session) return;
-      const result = await createReport({
-        profile: session.profile!,
-        targetType: String(req.body?.target_type ?? ''),
-        targetId: String(req.body?.target_id ?? ''),
-        reason: String(req.body?.reason ?? ''),
-      });
-      if (!result.ok) {
-        return res.status(result.status).json({
-          ok: false,
-          error: result.code,
-          code: result.code,
-          reason: result.reason,
-        });
-      }
-      return res.status(201).json({ ok: true, report_id: result.report_id });
+      return await handleReport(req, res);
     } catch (err: any) {
       console.error('[anonymous/reports]', err?.message ?? err);
+      return res.status(500).json({ ok: false, error: 'report_failed' });
+    }
+  });
+
+  // Alias — older clients posted /report.
+  router.post('/report', async (req: AuthedReq, res: Response) => {
+    try {
+      return await handleReport(req, res);
+    } catch (err: any) {
+      console.error('[anonymous/report]', err?.message ?? err);
       return res.status(500).json({ ok: false, error: 'report_failed' });
     }
   });
@@ -526,9 +647,12 @@ export function createAnonymousRouter(): Router {
     try {
       const session = await requireReady(req, res);
       if (!session) return;
+      const blockedProfileId = String(
+        req.body?.blocked_profile_id ?? req.body?.blockedProfileId ?? req.body?.profileId ?? ''
+      ).trim();
       const result = await blockProfile({
         profile: session.profile!,
-        blockedProfileId: String(req.body?.blocked_profile_id ?? ''),
+        blockedProfileId,
       });
       if (!result.ok) {
         return res.status(result.status).json({
@@ -541,6 +665,33 @@ export function createAnonymousRouter(): Router {
       return res.json({ ok: true });
     } catch (err: any) {
       console.error('[anonymous/blocks]', err?.message ?? err);
+      return res.status(500).json({ ok: false, error: 'block_failed' });
+    }
+  });
+
+  // Alias — older clients posted /block with profileId.
+  router.post('/block', async (req: AuthedReq, res: Response) => {
+    try {
+      const session = await requireReady(req, res);
+      if (!session) return;
+      const blockedProfileId = String(
+        req.body?.blocked_profile_id ?? req.body?.blockedProfileId ?? req.body?.profileId ?? ''
+      ).trim();
+      const result = await blockProfile({
+        profile: session.profile!,
+        blockedProfileId,
+      });
+      if (!result.ok) {
+        return res.status(result.status).json({
+          ok: false,
+          error: result.code,
+          code: result.code,
+          reason: result.reason,
+        });
+      }
+      return res.json({ ok: true });
+    } catch (err: any) {
+      console.error('[anonymous/block]', err?.message ?? err);
       return res.status(500).json({ ok: false, error: 'block_failed' });
     }
   });
@@ -559,6 +710,82 @@ export function createAnonymousRouter(): Router {
     } catch (err: any) {
       console.error('[anonymous/feed]', err?.message ?? err);
       return res.status(500).json({ ok: false, error: 'feed_failed' });
+    }
+  });
+
+  router.get('/search', async (req: AuthedReq, res: Response) => {
+    try {
+      const session = await requireReady(req, res);
+      if (!session) return;
+      const { searchMasquerade } = await import('./search.js');
+      const result = await searchMasquerade({
+        profile: session.profile!,
+        q: String(req.query.q ?? ''),
+        limit: Number(req.query.limit ?? 12),
+      });
+      return res.json({ ok: true, ...result });
+    } catch (err: any) {
+      console.error('[anonymous/search]', err?.message ?? err);
+      return res.status(500).json({ ok: false, error: 'search_failed' });
+    }
+  });
+
+  router.get('/profiles/:username', async (req: AuthedReq, res: Response) => {
+    try {
+      const session = await requireReady(req, res);
+      if (!session) return;
+      const { getProfileByUsername } = await import('./identity.js');
+      const profile = await getProfileByUsername(String(req.params.username || ''));
+      if (!profile) {
+        return res.status(404).json({ ok: false, error: 'not_found', reason: 'Profile not found.' });
+      }
+      const counts = await pool.query<{ posts: string; spaces: string }>(
+        `
+        select
+          (select count(*)::text from anonymous.posts p
+             join anonymous.spaces s on s.id = p.space_id
+            where p.author_profile_id = $1::uuid and p.state = 'active'
+              and s.visibility = 'adult_public' and s.admission = 'free'
+              and s.status in ('active','read_only')) as posts,
+          (select count(*)::text from anonymous.space_memberships m
+             join anonymous.spaces s on s.id = m.space_id
+            where m.anon_profile_id = $1::uuid and m.state = 'active'
+              and s.visibility = 'adult_public' and s.admission = 'free') as spaces
+        `,
+        [profile.id]
+      );
+      return res.json({
+        ok: true,
+        profile,
+        post_count: Number(counts.rows[0]?.posts ?? 0) || 0,
+        space_count: Number(counts.rows[0]?.spaces ?? 0) || 0,
+      });
+    } catch (err: any) {
+      console.error('[anonymous/profiles/:username]', err?.message ?? err);
+      return res.status(500).json({ ok: false, error: 'profile_failed' });
+    }
+  });
+
+  router.get('/profiles/:username/posts', async (req: AuthedReq, res: Response) => {
+    try {
+      const session = await requireReady(req, res);
+      if (!session) return;
+      const { getProfileByUsername } = await import('./identity.js');
+      const { listAuthorPosts } = await import('./content.js');
+      const profile = await getProfileByUsername(String(req.params.username || ''));
+      if (!profile) {
+        return res.status(404).json({ ok: false, error: 'not_found', reason: 'Profile not found.' });
+      }
+      const result = await listAuthorPosts({
+        viewer: session.profile!,
+        authorProfileId: profile.id,
+        cursor: req.query.cursor ? String(req.query.cursor) : null,
+        limit: Number(req.query.limit ?? 24),
+      });
+      return res.json({ ok: true, ...result });
+    } catch (err: any) {
+      console.error('[anonymous/profiles/:username/posts]', err?.message ?? err);
+      return res.status(500).json({ ok: false, error: 'posts_failed' });
     }
   });
 

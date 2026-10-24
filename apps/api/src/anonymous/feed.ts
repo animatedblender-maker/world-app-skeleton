@@ -168,6 +168,9 @@ export async function getFeed(opts: {
       lambda: 0.72,
       maxSameCreator: 1,
       creatorWindow: 10,
+      // Big Spaces (e.g. HighlyStrange) must not own the whole first page.
+      maxSameSpace: 2,
+      spaceWindow: 10,
       exclusiveFamilies: ['tiktok', 'image', 'video'],
       // Image at most ~1 in 4 so photo cards cannot pin the whole first page.
       exclusiveEveryN: 4,

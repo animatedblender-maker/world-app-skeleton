@@ -1296,7 +1296,18 @@ async function repairR2Comments(opts: {
       const n = await seedCommentsForPost({
         postId: row.id,
         texts: missing,
-        owners: owners.length ? owners : [{ userId: row.author_id, countryCode: cc, countryName: null, cityName: null }],
+        owners: owners.length
+          ? owners
+          : [
+              {
+                userId: row.author_id,
+                countryCode: cc,
+                countryName: null,
+                cityName: null,
+                displayName: null,
+                username: null,
+              },
+            ],
         authorUserId: row.author_id,
       });
       // seedCommentsForPost sets count from total rows — good.

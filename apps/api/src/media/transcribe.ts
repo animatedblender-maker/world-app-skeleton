@@ -78,14 +78,22 @@ export async function enqueueTranscript(
 ): Promise<void> {
   if (!postId) return;
   await ensureTranscriptSchema();
+  // User CC / API enqueue may revive skipped backfill rows; never overwrite ready.
+  const revive =
+    source === 'api_enqueue' || source === 'cc'
+      ? `('failed', 'pending', 'skipped', 'processing')`
+      : `('failed', 'pending')`;
   await pool.query(
     `
     insert into public.video_transcripts (post_id, status, source, updated_at)
     values ($1::uuid, 'pending', $2, now())
     on conflict (post_id) do update
-      set updated_at = now(),
-          source = coalesce(public.video_transcripts.source, excluded.source)
-      where public.video_transcripts.status in ('failed', 'pending')
+      set status = 'pending',
+          error = null,
+          updated_at = now(),
+          source = excluded.source
+      where public.video_transcripts.status in ${revive}
+        and public.video_transcripts.status is distinct from 'ready'
     `,
     [postId, source]
   );
