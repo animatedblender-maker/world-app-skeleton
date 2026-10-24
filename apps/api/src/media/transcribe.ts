@@ -188,19 +188,23 @@ async function downloadR2ObjectToFile(key: string, destPath: string): Promise<vo
   await pipeline(out.Body as NodeJS.ReadableStream, createWriteStream(destPath));
 }
 
+type AudioExtractMode = 'cc' | 'batch';
+
 function runFfmpegExtract(
   inputPathOrUrl: string,
   outPath: string,
-  opts: { timeoutMs?: number } = {}
+  opts: { timeoutMs?: number; maxSeconds?: number } = {}
 ): Promise<void> {
   const ffmpeg = resolveFfmpegPath();
   const timeoutMs = opts.timeoutMs ?? 180_000;
+  const maxSeconds = opts.maxSeconds ?? 600;
   return new Promise((resolve, reject) => {
-    // Cap 10 min audio for Whisper cost/latency on free tier.
+    // Stream audio only — never buffer the whole LongForm file on disk for CC.
     const args = [
       '-hide_banner',
       '-loglevel',
       'error',
+      '-nostdin',
       '-y',
       '-i',
       inputPathOrUrl,
@@ -210,9 +214,9 @@ function runFfmpegExtract(
       '-ar',
       '16000',
       '-b:a',
-      '48k',
+      '32k',
       '-t',
-      '600',
+      String(maxSeconds),
       outPath,
     ];
     const child = spawn(ffmpeg, args, { stdio: ['ignore', 'ignore', 'pipe'] });
@@ -258,26 +262,43 @@ function runFfmpegExtract(
 
 /**
  * Materialize audio for Whisper.
- * Prefer a fresh signed URL + ffmpeg (fast, no full-file download).
- * Fall back to R2 SDK download for smaller objects when HTTP extract fails.
+ * CC mode: signed URL + short ffmpeg window only (seconds, not minutes).
+ * Batch mode may fall back to a bounded R2 download.
  */
 async function prepareAudioForWhisper(opts: {
   mediaUrl: string | null;
   mediaPath: string | null;
   workDir: string;
+  mode?: AudioExtractMode;
 }): Promise<string> {
+  const mode: AudioExtractMode = opts.mode ?? 'batch';
   const audioPath = path.join(opts.workDir, 'audio.mp3');
+  // CC: first ~90s is enough for live captions; Whisper turbo finishes in a few seconds.
+  const maxSeconds = mode === 'cc' ? 90 : 600;
+  const httpTimeoutMs = mode === 'cc' ? 35_000 : 120_000;
+
   const playUrl = await resolveAudioSourceUrl(opts.mediaUrl, opts.mediaPath);
   if (playUrl) {
     try {
-      await runFfmpegExtract(playUrl, audioPath, { timeoutMs: 120_000 });
+      await runFfmpegExtract(playUrl, audioPath, {
+        timeoutMs: httpTimeoutMs,
+        maxSeconds,
+      });
       return audioPath;
     } catch (err: any) {
+      if (mode === 'cc') {
+        // Do not download 100MB+ LongForm files on a CC tap — that is the 1–2 min path.
+        throw new Error(`cc_ffmpeg_http_failed:${err?.message ?? err}`);
+      }
       console.warn(
         '[transcribe] http ffmpeg failed, trying R2 download',
         err?.message ?? err
       );
     }
+  }
+
+  if (mode === 'cc') {
+    throw new Error(playUrl ? 'cc_ffmpeg_http_failed' : 'no_playable_url');
   }
 
   const key = extractR2Key(opts.mediaUrl, opts.mediaPath);
@@ -286,7 +307,6 @@ async function prepareAudioForWhisper(opts: {
     throw new Error('ffmpeg_http_failed');
   }
 
-  // Skip huge LongForm downloads that OOM/kill Render mid-CC.
   if (r2Configured()) {
     try {
       const client = createR2Client();
@@ -297,12 +317,11 @@ async function prepareAudioForWhisper(opts: {
         })
       );
       const size = Number(head.ContentLength ?? 0);
-      if (size > 120 * 1024 * 1024) {
+      if (size > 80 * 1024 * 1024) {
         throw new Error(`r2_object_too_large:${size}`);
       }
     } catch (err: any) {
       if (String(err?.message ?? '').startsWith('r2_object_too_large')) throw err;
-      // Head failed — still attempt download below.
     }
   }
 
@@ -310,7 +329,10 @@ async function prepareAudioForWhisper(opts: {
   await downloadR2ObjectToFile(key, srcPath);
   const st = await fs.stat(srcPath);
   if (st.size < 1024) throw new Error('r2_download_too_small');
-  await runFfmpegExtract(srcPath, audioPath, { timeoutMs: 180_000 });
+  await runFfmpegExtract(srcPath, audioPath, {
+    timeoutMs: 180_000,
+    maxSeconds,
+  });
   return audioPath;
 }
 
@@ -348,7 +370,11 @@ async function groqTranscribeFile(filePath: string): Promise<GroqVerbose> {
 const activeJobs = new Set<string>();
 
 /** Process one pending/failed post. Returns final status. */
-export async function transcribePost(postId: string): Promise<TranscriptStatus> {
+export async function transcribePost(
+  postId: string,
+  opts: { mode?: AudioExtractMode } = {}
+): Promise<TranscriptStatus> {
+  const mode: AudioExtractMode = opts.mode ?? 'batch';
   if (!transcriptionConfigured()) {
     await pool.query(
       `
@@ -406,6 +432,7 @@ export async function transcribePost(postId: string): Promise<TranscriptStatus> 
       mediaUrl: post.mediaUrl,
       mediaPath: post.mediaPath,
       workDir: tmpDir,
+      mode,
     });
     const stat = await fs.stat(audioPath);
     if (stat.size < 256) throw new Error('audio_too_small');
