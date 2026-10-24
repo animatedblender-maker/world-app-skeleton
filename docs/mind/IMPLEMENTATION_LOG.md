@@ -47,6 +47,7 @@ npx tsc -p tsconfig.json --noEmit
 
 - **phase1.v2** — P0 feed reliability (§2/§10/§11 shipped)
 - **phase1.v3** — Events hygiene (`sanitizeEngagementMeta`) + `/mind` live event/decision panels (§5/§19 shipped)
+- **phase1.v4** — Masquerade isolation proofs + surface namespace asserts (§6 shipped)
 
 ## Not in this pass
 

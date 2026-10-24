@@ -338,9 +338,10 @@ function mindHtml(): string {
         <div id="rooms"></div>
       </div>
       <div class="card">
-        <h2>Isolation check</h2>
+        <h2>Isolation proofs (handbook §6)</h2>
         <p id="isoNote" class="muted"></p>
         <span class="pill ok" id="isoPill">…</span>
+        <div id="isoChecks" style="margin-top:14px"></div>
       </div>
     </section>
 
@@ -373,7 +374,7 @@ const GAPS = [
   ['2','Invariants','shipped','At-most-once ledger; soft-recycle penalty; fail → cursor'],
   ['3','Architecture','shipped','This Architecture tab'],
   ['5','Events','shipped','Allowlist ingest + meta scrub + Kafka/PG'],
-  ['6','Masquerade isolation','partial','anonymous.* + check panel'],
+  ['6','Masquerade isolation','shipped','Live proofs + surface namespace guards'],
   ['7','Media understanding','missing','Phase 2'],
   ['8','Interest features','partial','personality / affinity'],
   ['9','Candidates','partial','shelf multi-lane'],
@@ -483,9 +484,15 @@ async function refresh(){
       '<div class="room"><span><strong>'+r.title+'</strong> <span class="muted">'+r.slug+'</span></span><strong>'+fmt(r.posts)+'</strong></div>'
     ).join('') || '<p class="muted">No active rooms.</p>';
 
-    $('isoNote').textContent = s.masquerade.isolation.note;
-    $('isoPill').textContent = 'isolation ' + s.masquerade.isolation.publicTablesTouchAnonPrefs;
-    $('isoPill').className = 'pill ok';
+    const iso = s.masquerade.isolation || {};
+    $('isoNote').textContent = iso.note || '';
+    const overall = iso.overall || 'warn';
+    $('isoPill').textContent = 'isolation ' + overall;
+    $('isoPill').className = 'pill ' + (overall === 'pass' ? 'ok' : overall === 'fail' ? 'bad' : 'warn');
+    $('isoChecks').innerHTML = (iso.checks || []).map(c => {
+      const cls = c.status === 'pass' ? 'ok' : c.status === 'fail' ? 'bad' : 'warn';
+      return '<div class="room"><span><span class="pill '+cls+'">'+c.status+'</span> <strong>'+c.label+'</strong><br/><span class="muted">'+c.detail+'</span></span></div>';
+    }).join('') || '<p class="muted">No checks returned.</p>';
 
     if (!$('docNav').dataset.ready) {
       $('docNav').dataset.ready = '1';

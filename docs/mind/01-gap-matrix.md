@@ -9,7 +9,7 @@ Status legend: **shipped** · **partial** · **missing** (roadmap)
 | 3 | Architecture diagram | shipped | Admin `/mind` architecture wall |
 | 4 | Repo layout `intelligence/` | partial | Kept under `recommendation/` + `ops/` |
 | 5 | Event envelope | shipped | Allowlist ingest + meta scrub + Kafka/PG |
-| 6 | Masquerade isolation | partial | Separate schemas/routes; admin check panel |
+| 6 | Masquerade isolation | shipped | Live proofs + surface namespace guards |
 | 7 | Media understanding | missing | Phase 2 |
 | 8 | Interest memory / features | partial | `entity_personality`, affinity tables |
 | 9 | Candidate generation | partial | Shelf multi-lane |

@@ -29,6 +29,7 @@ import {
   mindLedgerEnabled,
   newMindRequestId,
 } from './mind-contracts.js';
+import { assertSurfaceNamespace } from './mind-isolation.js';
 import { rankCandidates } from './rank.service.js';
 
 export const HUB_PARENT_SLUGS = [
@@ -722,6 +723,7 @@ export async function fetchForYouPage(input: {
   let batchId: string | null = null;
   let deliveryPolicy: 'ledger' | 'cursor' = 'cursor';
   const requestId = newMindRequestId();
+  assertSurfaceNamespace('hubs_for_you', 'public');
 
   if (viewerId && woven.length && mindLedgerEnabled()) {
     const delivered = await loadDeliveredCanonicalKeys(viewerId, 'hubs_for_you');
@@ -1438,6 +1440,7 @@ export async function fetchHomeFeedPage(input: {
   let batchId: string | null = null;
   let deliveryPolicy: 'ledger' | 'cursor' = 'cursor';
   const requestId = newMindRequestId();
+  assertSurfaceNamespace('home_for_you', 'public');
 
   if (viewerId && woven.length && mindLedgerEnabled()) {
     const delivered = await loadDeliveredCanonicalKeys(viewerId, 'home_for_you');

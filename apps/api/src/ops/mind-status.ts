@@ -12,6 +12,11 @@ import {
   MIND_POSITIVE_EVENTS,
   mindLedgerEnabled,
 } from '../recommendation/mind-contracts.js';
+import {
+  isolationOverall,
+  runMasqueradeIsolationChecks,
+  type IsolationCheck,
+} from '../recommendation/mind-isolation.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 function resolveDocsMind(): string {
@@ -72,8 +77,9 @@ export type MindStatus = {
     posts: number;
     r2media: number;
     isolation: {
-      publicTablesTouchAnonPrefs: 'pass' | 'unknown';
+      overall: 'pass' | 'fail' | 'warn';
       note: string;
+      checks: IsolationCheck[];
     };
   };
   seed: {
@@ -210,13 +216,14 @@ export async function getMindStatus(): Promise<MindStatus> {
     allowlistSize: MIND_CLIENT_EVENT_KEYS.length,
   };
   const decisions: MindStatus['decisions'] = { count24h: 0, recent: [] };
-  const masquerade = {
-    rooms: [] as { slug: string; title: string; posts: number }[],
+  const masquerade: MindStatus['masquerade'] = {
+    rooms: [],
     posts: 0,
     r2media: 0,
     isolation: {
-      publicTablesTouchAnonPrefs: 'pass' as const,
+      overall: 'pass',
       note: 'Public ranker reads public.* only; Masquerade feed uses anonymous.* separately.',
+      checks: [],
     },
   };
   const recent: MindStatus['recent'] = [];
@@ -413,6 +420,21 @@ export async function getMindStatus(): Promise<MindStatus> {
     /* ignore */
   }
 
+  try {
+    const checks = await runMasqueradeIsolationChecks();
+    masquerade.isolation = {
+      overall: isolationOverall(checks),
+      note: 'Public ranker reads public.* only; Masquerade feed uses anonymous.* separately. Link table is ledger identity only.',
+      checks,
+    };
+  } catch (err: any) {
+    masquerade.isolation = {
+      overall: 'warn',
+      note: err?.message ?? 'isolation checks failed',
+      checks: [],
+    };
+  }
+
   return {
     ok: true,
     at: new Date().toISOString(),
@@ -422,7 +444,7 @@ export async function getMindStatus(): Promise<MindStatus> {
     engagement,
     masquerade,
     seed: readSeedProgress(),
-    gapSummary: { shipped: 9, partial: 7, missing: 6 },
+    gapSummary: { shipped: 10, partial: 6, missing: 6 },
     docs: listDocs(),
     recent,
     decisions,

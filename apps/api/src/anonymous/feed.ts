@@ -15,6 +15,7 @@ import {
   type MindDeliveryPolicy,
   type MindFeedMeta,
 } from '../recommendation/mind-contracts.js';
+import { assertSurfaceNamespace } from '../recommendation/mind-isolation.js';
 
 function iso(v: Date | string | null | undefined): string | null {
   if (v == null) return null;
@@ -56,6 +57,7 @@ export async function getFeed(opts: {
   const useSocial = sort === 'hot' || sort === 'for_you';
   const requestId = newMindRequestId();
   let deliveryPolicy: MindDeliveryPolicy = 'cursor';
+  assertSurfaceNamespace('masquerade_for_you', 'masquerade');
 
   const params: unknown[] = [opts.profile.id];
   let cursorClause = '';
