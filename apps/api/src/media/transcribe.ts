@@ -74,13 +74,33 @@ export async function ensureTranscriptSchema(): Promise<boolean> {
   }
 }
 
-/** Queue a post for transcription (idempotent). */
+/** Queue a post for transcription (idempotent). `force` resets a ready row (e.g. short 60s CC). */
 export async function enqueueTranscript(
   postId: string,
-  source = 'auto'
+  source = 'auto',
+  opts: { force?: boolean } = {}
 ): Promise<void> {
   if (!postId) return;
   await ensureTranscriptSchema();
+  if (opts.force) {
+    await pool.query(
+      `
+      insert into public.video_transcripts (post_id, status, source, error, updated_at)
+      values ($1::uuid, 'pending', $2, null, now())
+      on conflict (post_id) do update
+        set status = 'pending',
+            error = null,
+            text = null,
+            segments = null,
+            duration_seconds = null,
+            completed_at = null,
+            updated_at = now(),
+            source = excluded.source
+      `,
+      [postId, source]
+    );
+    return;
+  }
   // User CC / API enqueue may revive skipped backfill rows; never overwrite ready.
   const revive =
     source === 'api_enqueue' || source === 'cc'
@@ -285,8 +305,9 @@ async function prepareAudioForWhisper(opts: {
 }): Promise<string> {
   const mode: AudioExtractMode = opts.mode ?? 'batch';
   const audioPath = path.join(opts.workDir, 'audio.mp3');
-  // CC: ~60s audio is enough for live captions and stays under free-tier ASPH spikes.
-  const maxSeconds = mode === 'cc' ? 60 : 600;
+  // CC must cover the film (up to 10 min) — the old 60s cut left captions blank mid-video.
+  // 32kbps mono ≈ 2.4MB / 10 min, well under Groq’s ~25MB upload cap.
+  const maxSeconds = 600;
   const key = extractR2Key(opts.mediaUrl, opts.mediaPath);
 
   if (key && r2Configured()) {
@@ -303,57 +324,46 @@ async function prepareAudioForWhisper(opts: {
     }
 
     const srcPath = path.join(opts.workDir, 'source.mp4');
-    // CC: full object if small; otherwise first ~18MB (faststart moov) for a quick extract.
-    const ccFullMax = 40 * 1024 * 1024;
-    const ccRangeBytes = 18 * 1024 * 1024;
-    const batchMax = 80 * 1024 * 1024;
+    // Prefer enough of the object to extract ≤10 min of audio (faststart moov + body).
+    const fullMax = 80 * 1024 * 1024;
+    const rangeBytes = 48 * 1024 * 1024;
 
-    if (mode === 'cc') {
-      if (size > 0 && size <= ccFullMax) {
+    if (size > 0 && size <= fullMax) {
+      await downloadR2ObjectToFile(clean, srcPath);
+    } else {
+      await downloadR2ObjectToFile(clean, srcPath, {
+        rangeBytes: `bytes=0-${rangeBytes - 1}`,
+      });
+    }
+    const st = await fs.stat(srcPath);
+    if (st.size < 1024) throw new Error('r2_download_too_small');
+    try {
+      await runFfmpegExtract(srcPath, audioPath, {
+        timeoutMs: mode === 'cc' ? 90_000 : 180_000,
+        maxSeconds,
+      });
+      return audioPath;
+    } catch (err: any) {
+      // Partial range sometimes lacks moov — one bounded full retry under 90MB.
+      if (size > 0 && size <= 90 * 1024 * 1024 && st.size < size) {
         await downloadR2ObjectToFile(clean, srcPath);
-      } else {
-        await downloadR2ObjectToFile(clean, srcPath, {
-          rangeBytes: `bytes=0-${ccRangeBytes - 1}`,
-        });
-      }
-      const st = await fs.stat(srcPath);
-      if (st.size < 1024) throw new Error('r2_download_too_small');
-      try {
         await runFfmpegExtract(srcPath, audioPath, {
-          timeoutMs: 45_000,
+          timeoutMs: 180_000,
           maxSeconds,
         });
         return audioPath;
-      } catch (err: any) {
-        // Partial range sometimes lacks moov — one bounded full retry under 55MB.
-        if (size > 0 && size <= 55 * 1024 * 1024 && st.size < size) {
-          await downloadR2ObjectToFile(clean, srcPath);
-          await runFfmpegExtract(srcPath, audioPath, {
-            timeoutMs: 60_000,
-            maxSeconds,
-          });
-          return audioPath;
-        }
-        throw new Error(`cc_local_ffmpeg_failed:${err?.message ?? err}`);
       }
+      throw new Error(
+        `${mode === 'cc' ? 'cc' : 'batch'}_local_ffmpeg_failed:${err?.message ?? err}`
+      );
     }
-
-    if (size > batchMax) throw new Error(`r2_object_too_large:${size}`);
-    await downloadR2ObjectToFile(clean, srcPath);
-    const st = await fs.stat(srcPath);
-    if (st.size < 1024) throw new Error('r2_download_too_small');
-    await runFfmpegExtract(srcPath, audioPath, {
-      timeoutMs: 180_000,
-      maxSeconds,
-    });
-    return audioPath;
   }
 
   // Non-R2 media only: last resort HTTP (may SIGSEGV on Render — prefer R2).
   const playUrl = await resolveAudioSourceUrl(opts.mediaUrl, opts.mediaPath);
   if (!playUrl) throw new Error('no_playable_url');
   await runFfmpegExtract(playUrl, audioPath, {
-    timeoutMs: mode === 'cc' ? 35_000 : 120_000,
+    timeoutMs: mode === 'cc' ? 90_000 : 120_000,
     maxSeconds,
   });
   return audioPath;
@@ -395,7 +405,7 @@ const activeJobs = new Set<string>();
 /** Process one pending/failed post. Returns final status. */
 export async function transcribePost(
   postId: string,
-  opts: { mode?: AudioExtractMode } = {}
+  opts: { mode?: AudioExtractMode; force?: boolean } = {}
 ): Promise<TranscriptStatus> {
   const mode: AudioExtractMode = opts.mode ?? 'batch';
   if (!transcriptionConfigured()) {
@@ -418,9 +428,13 @@ export async function transcribePost(
   let tmpDir: string | null = null;
   try {
     await ensureTranscriptSchema();
-    // Already ready — don't burn Whisper again.
+    // Already ready — don't burn Whisper again (unless force, e.g. replace short CC).
     const existing = await getTranscript(postId);
-    if (existing?.status === 'ready' && (existing.text || existing.segments)) {
+    if (
+      !opts.force &&
+      existing?.status === 'ready' &&
+      (existing.text || existing.segments)
+    ) {
       return 'ready';
     }
 

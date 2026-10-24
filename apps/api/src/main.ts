@@ -348,11 +348,16 @@ app.post('/v1/transcript/:postId/enqueue', async (req: Request, res: Response) =
       return res.status(503).json({ error: 'transcription_not_configured' });
     }
     // On-demand captions (CC tap). Source `cc` can revive skipped free-tier backlog rows.
-    await enqueueTranscript(postId, 'cc');
+    // `force=1` replaces a short/ready row so captions can cover the full film.
+    const force =
+      req.body?.force === true ||
+      req.query.force === '1' ||
+      req.query.force === 'true';
+    await enqueueTranscript(postId, 'cc', { force });
     const runNow = req.body?.run === true || req.query.run === '1';
     if (runNow) {
-      // Async + CC-fast path (≤~90s audio over signed URL). Never block HTTP on Whisper.
-      void transcribePost(postId, { mode: 'cc' }).catch((err) => {
+      // Async Whisper — never block HTTP. CC extracts up to ~10 min of audio.
+      void transcribePost(postId, { mode: 'cc', force }).catch((err) => {
         console.error('[transcript/runNow]', postId, err?.message ?? err);
       });
       return res.json({
@@ -362,6 +367,7 @@ app.post('/v1/transcript/:postId/enqueue', async (req: Request, res: Response) =
         ran: true,
         async: true,
         mode: 'cc',
+        force: !!force,
       });
     }
     return res.json({ ok: true, post_id: postId, status: 'pending', ran: false });
