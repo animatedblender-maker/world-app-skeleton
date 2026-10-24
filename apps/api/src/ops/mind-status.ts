@@ -23,6 +23,11 @@ import {
   type CandidateLaneDef,
 } from '../recommendation/mind-candidates.js';
 import { MIND_INTEREST_SOURCES } from '../recommendation/mind-interest.js';
+import {
+  MIND_PURPOSE_BLURB,
+  MIND_SURFACE_CATALOG,
+  type MindSurfaceCatalogEntry,
+} from '../recommendation/mind-surfaces.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 function resolveDocsMind(): string {
@@ -94,6 +99,10 @@ export type MindStatus = {
       withPersonality: number;
       sample: number;
     };
+  };
+  purpose: {
+    blurb: string;
+    surfaces: MindSurfaceCatalogEntry[];
   };
   masquerade: {
     rooms: { slug: string; title: string; posts: number }[];
@@ -251,6 +260,10 @@ export async function getMindStatus(): Promise<MindStatus> {
     creatorAffinityRows: 0,
     itemStatsRows: 0,
     recentHits: { withAffinity: 0, withPersonality: 0, sample: 0 },
+  };
+  const purpose: MindStatus['purpose'] = {
+    blurb: MIND_PURPOSE_BLURB,
+    surfaces: MIND_SURFACE_CATALOG,
   };
   const masquerade: MindStatus['masquerade'] = {
     rooms: [],
@@ -573,11 +586,12 @@ export async function getMindStatus(): Promise<MindStatus> {
     engagement,
     masquerade,
     seed: readSeedProgress(),
-    gapSummary: { shipped: 12, partial: 4, missing: 6 },
+    gapSummary: { shipped: 13, partial: 3, missing: 6 },
     docs: listDocs(),
     recent,
     decisions,
     candidates,
     interest,
+    purpose,
   };
 }

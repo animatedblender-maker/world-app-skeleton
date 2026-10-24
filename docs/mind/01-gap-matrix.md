@@ -4,7 +4,7 @@ Status legend: **shipped** · **partial** · **missing** (roadmap)
 
 | Handbook § | Topic | Status | Matterya location / ticket |
 |---|---|---|---|
-| 1 | Purpose / surfaces | partial | Surfaces exist; admin docs explain |
+| 1 | Purpose / surfaces | shipped | Surface catalog + endpoints + ledger keys on `/mind` |
 | 2 | Invariants (no-repeat, fail closed) | shipped | Ledger PK; soft-recycle penalty; fail → cursor |
 | 3 | Architecture diagram | shipped | Admin `/mind` architecture wall |
 | 4 | Repo layout `intelligence/` | partial | Kept under `recommendation/` + `ops/` |

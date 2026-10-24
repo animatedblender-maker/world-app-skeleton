@@ -50,6 +50,7 @@ npx tsc -p tsconfig.json --noEmit
 - **phase1.v4** — Masquerade isolation proofs + surface namespace asserts (§6 shipped)
 - **phase1.v5** — Candidate lanes catalog, feed `candidateMix`, admin inventory (§9 shipped)
 - **phase1.v6** — Interest features panel + decision featureHits (§8 shipped)
+- **phase1.v7** — Purpose / surface catalog on Overview (§1 shipped; Phase 1 matrix complete)
 
 ## Not in this pass
 

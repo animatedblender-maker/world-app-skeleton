@@ -226,12 +226,7 @@ function mindHtml(): string {
     <section class="panel active" id="panel-overview">
       <div class="card">
         <h2>What is MIND?</h2>
-        <p class="muted">
-          MIND (Matterya Intelligence &amp; Discovery) is the shared recommendation layer behind
-          Home For You, Hubs, Sparks, and the separate Masquerade environment.
-          It must recommend <strong>eligible, unseen</strong> content with a durable delivery ledger,
-          diversity, and hard privacy boundaries — especially between Public and Masquerade.
-        </p>
+        <p class="muted" id="purposeBlurb">Loading purpose…</p>
         <ul class="help">
           <li>This console documents what is <em>actually deployed</em>, not only the handbook ideal.</li>
           <li>Handbook name <code>mind_feed_exposure</code> maps to Matterya table <code>feed_video_delivery</code> (ADR 0001).</li>
@@ -241,6 +236,11 @@ function mindHtml(): string {
       </div>
       <div class="grid" id="overviewStats"></div>
       <div class="card">
+        <h2>Product surfaces (§1)</h2>
+        <p class="muted">Every surface MIND powers today — HTTP route, ledger key, client, namespace.</p>
+        <div id="surfaceCatalog"></div>
+      </div>
+      <div class="card">
         <h2>Admin guide (plain language)</h2>
         <div class="two">
           <div>
@@ -248,15 +248,14 @@ function mindHtml(): string {
             <ul class="help">
               <li><strong>Same video repeating</strong> → Live system → Ledger. If policy is <code>cursor</code>, ledger is off or failing.</li>
               <li><strong>Masquerade empty</strong> → Masquerade tab → room post counts + seed bar.</li>
-              <li><strong>Odd ranking</strong> → note policy version pill; check engagement/hour.</li>
+              <li><strong>Odd ranking</strong> → note policy version pill; check engagement/hour + interest featureHits.</li>
             </ul>
           </div>
           <div>
-            <h3>Surfaces</h3>
+            <h3>Phase 1 complete</h3>
             <ul class="help">
-              <li><strong>Home For You</strong> — <code>/v1/feed</code> · ledger <code>home_for_you</code></li>
-              <li><strong>Hubs For You</strong> — <code>/v1/hubs/for-you</code> · <code>hubs_for_you</code></li>
-              <li><strong>Masquerade</strong> — <code>/v1/anonymous/feed</code> · <code>masquerade_for_you</code></li>
+              <li>Gap matrix rows §1–§6, §8–§11, §19 are <strong>shipped</strong>.</li>
+              <li>§7 media understanding, §14 ads, §15 GraphQL, §18 ML eval remain roadmap.</li>
             </ul>
           </div>
         </div>
@@ -385,7 +384,7 @@ function mindHtml(): string {
 
 <script>
 const GAPS = [
-  ['1','Purpose / surfaces','partial','Admin docs + live surfaces'],
+  ['1','Purpose / surfaces','shipped','Surface catalog + endpoints + ledger keys'],
   ['2','Invariants','shipped','At-most-once ledger; soft-recycle penalty; fail → cursor'],
   ['3','Architecture','shipped','This Architecture tab'],
   ['5','Events','shipped','Allowlist ingest + meta scrub + Kafka/PG'],
@@ -442,6 +441,17 @@ async function refresh(){
     const led = s.flags.mindLedgerEnabled;
     $('ledgerFlag').textContent = led ? 'ledger ON' : 'ledger OFF';
     $('ledgerFlag').className = 'pill ' + (led ? 'ok' : 'warn');
+
+    const purpose = s.purpose || {};
+    if (purpose.blurb) $('purposeBlurb').textContent = purpose.blurb;
+    $('surfaceCatalog').innerHTML = (purpose.surfaces||[]).map(surf =>
+      '<div class="room" style="align-items:flex-start">'
+      + '<span><strong>'+surf.label+'</strong> <span class="pill">'+surf.namespace+'</span><br/>'
+      + '<span class="muted">'+surf.purpose+'</span><br/>'
+      + '<span class="muted"><code>'+surf.http+'</code>'
+      + (surf.ledgerSurface ? ' · ledger <code>'+surf.ledgerSurface+'</code>' : ' · no ledger')
+      + ' · '+surf.client+'</span></span></div>'
+    ).join('') || '<p class="muted">No surfaces.</p>';
 
     const eng = s.engagement || {};
     const dec = s.decisions || {};
