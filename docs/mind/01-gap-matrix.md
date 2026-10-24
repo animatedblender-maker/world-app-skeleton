@@ -12,7 +12,7 @@ Status legend: **shipped** · **partial** · **missing** (roadmap)
 | 6 | Masquerade isolation | shipped | Live proofs + surface namespace guards |
 | 7 | Media understanding | missing | Phase 2 |
 | 8 | Interest memory / features | partial | `entity_personality`, affinity tables |
-| 9 | Candidate generation | partial | Shelf multi-lane |
+| 9 | Candidate generation | shipped | Multi-lane retrieval + mix meta + inventory |
 | 10 | Rank + diversity | shipped | MMR + family caps on Home/Hubs/Masquerade |
 | 11 | Exposure ledger | shipped | `feed_video_delivery` on all For You surfaces |
 | 12 | Search / world / rooms | partial | Search exists; world map later |

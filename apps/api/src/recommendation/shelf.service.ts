@@ -29,6 +29,7 @@ import {
   mindLedgerEnabled,
   newMindRequestId,
 } from './mind-contracts.js';
+import type { CandidateMix } from './mind-candidates.js';
 import { assertSurfaceNamespace } from './mind-isolation.js';
 import { rankCandidates } from './rank.service.js';
 
@@ -139,6 +140,7 @@ export type ForYouPage = {
   deliveryPolicy?: 'ledger' | 'cursor';
   requestId?: string;
   modelVersion?: string;
+  candidateMix?: CandidateMix[];
 };
 
 type RawPostRow = {
@@ -777,6 +779,11 @@ export async function fetchForYouPage(input: {
 
   const items = servedRows.map((row) => rowToCard(row, classifyRow(row)));
   const liveItems = await freshenCardMedia(items);
+  const slugCounts = new Map<string, number>();
+  for (const card of liveItems) {
+    const s = card.slug || 'unknown';
+    slugCounts.set(s, (slugCounts.get(s) ?? 0) + 1);
+  }
   return {
     surface: 'hubs_for_you',
     items: liveItems,
@@ -788,6 +795,13 @@ export async function fetchForYouPage(input: {
     deliveryPolicy,
     requestId,
     modelVersion: MIND_POLICY_VERSION,
+    candidateMix: [
+      { lane: 'hubs_slug_rotate', count: liveItems.length },
+      ...[...slugCounts.entries()].map(([lane, count]) => ({
+        lane: `hub:${lane}`,
+        count,
+      })),
+    ],
   };
 }
 
@@ -808,7 +822,22 @@ export type SurfacePage = {
   deliveryPolicy?: 'ledger' | 'cursor';
   requestId?: string;
   modelVersion?: string;
+  candidateMix?: CandidateMix[];
 };
+
+function tallyCandidateMix(
+  rows: RawPostRow[],
+  mapFamily: (row: RawPostRow) => string
+): CandidateMix[] {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const lane = mapFamily(row);
+    counts.set(lane, (counts.get(lane) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([lane, count]) => ({ lane, count }))
+    .sort((a, b) => b.count - a.count);
+}
 
 /** Four-lane cursor: spark / hub / image / text page independently on Home. */
 type HomeLaneCursor = { createdAt: string; id: string } | null;
@@ -1529,6 +1558,17 @@ export async function fetchHomeFeedPage(input: {
     imageRows.length >= perLane ||
     liveItems.length >= Math.min(want, 8);
 
+  const servedIds = new Set(liveItems.map((i) => i.id));
+  const servedRaw = servedRows.filter((r) => servedIds.has(r.id));
+  const familyMix = tallyCandidateMix(servedRaw, (r) => {
+    const fam = homeContentFamily(r);
+    if (fam === 'shortform') return 'home_shortform';
+    if (fam === 'tiktok') return 'home_tiktok';
+    if (fam === 'hub') return 'home_hub';
+    if (fam === 'image') return 'home_image';
+    return `home_${fam}`;
+  });
+
   return {
     surface: 'home_for_you',
     items: liveItems,
@@ -1538,6 +1578,7 @@ export async function fetchHomeFeedPage(input: {
     deliveryPolicy,
     requestId,
     modelVersion: MIND_POLICY_VERSION,
+    candidateMix: familyMix,
   };
 }
 

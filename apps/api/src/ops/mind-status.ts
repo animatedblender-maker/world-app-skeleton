@@ -17,6 +17,11 @@ import {
   runMasqueradeIsolationChecks,
   type IsolationCheck,
 } from '../recommendation/mind-isolation.js';
+import {
+  MIND_CANDIDATE_LANES,
+  MIND_RETRIEVAL_BUDGETS,
+  type CandidateLaneDef,
+} from '../recommendation/mind-candidates.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 function resolveDocsMind(): string {
@@ -71,6 +76,11 @@ export type MindStatus = {
       latencyMs: number;
       requestId: string;
     }[];
+  };
+  candidates: {
+    lanes: CandidateLaneDef[];
+    budgets: typeof MIND_RETRIEVAL_BUDGETS;
+    inventory: { lane: string; n: number }[];
   };
   masquerade: {
     rooms: { slug: string; title: string; posts: number }[];
@@ -216,6 +226,11 @@ export async function getMindStatus(): Promise<MindStatus> {
     allowlistSize: MIND_CLIENT_EVENT_KEYS.length,
   };
   const decisions: MindStatus['decisions'] = { count24h: 0, recent: [] };
+  const candidates: MindStatus['candidates'] = {
+    lanes: MIND_CANDIDATE_LANES,
+    budgets: MIND_RETRIEVAL_BUDGETS,
+    inventory: [],
+  };
   const masquerade: MindStatus['masquerade'] = {
     rooms: [],
     posts: 0,
@@ -421,6 +436,43 @@ export async function getMindStatus(): Promise<MindStatus> {
   }
 
   try {
+    const { rows } = await pool.query<{ lane: string; n: string }>(`
+      select 'home_sparkish'::text as lane, count(*)::text as n
+      from public.posts p
+      where coalesce(p.visibility,'public') = 'public'
+        and (
+          coalesce(p.media_path,'') ilike '%/ShortForm/%'
+          or coalesce(p.media_url,'') ilike '%/ShortForm/%'
+          or coalesce(p.body,'') like '%__spark__%'
+        )
+      union all
+      select 'home_hubish', count(*)::text
+      from public.posts p
+      where coalesce(p.visibility,'public') = 'public'
+        and (
+          coalesce(p.media_path,'') ilike '%/LongForm/%'
+          or coalesce(p.media_url,'') ilike '%/LongForm/%'
+          or coalesce(p.body,'') like '%__hub_origin__%'
+        )
+      union all
+      select 'home_image', count(*)::text
+      from public.posts p
+      where coalesce(p.visibility,'public') = 'public'
+        and lower(coalesce(p.media_type,'')) in ('image','photo','gif')
+      union all
+      select 'masquerade_posts', count(*)::text
+      from anonymous.posts
+      where state = 'active'
+    `);
+    candidates.inventory = rows.map((r) => ({
+      lane: r.lane,
+      n: Number(r.n) || 0,
+    }));
+  } catch {
+    /* ignore inventory probe failures */
+  }
+
+  try {
     const checks = await runMasqueradeIsolationChecks();
     masquerade.isolation = {
       overall: isolationOverall(checks),
@@ -444,9 +496,10 @@ export async function getMindStatus(): Promise<MindStatus> {
     engagement,
     masquerade,
     seed: readSeedProgress(),
-    gapSummary: { shipped: 10, partial: 6, missing: 6 },
+    gapSummary: { shipped: 11, partial: 5, missing: 6 },
     docs: listDocs(),
     recent,
     decisions,
+    candidates,
   };
 }

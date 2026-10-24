@@ -318,6 +318,14 @@ function mindHtml(): string {
           Masquerade uses <code>anonymous/*</code> schemas and never feeds Public preference vectors.
         </p>
       </div>
+      <div class="card">
+        <h2>Candidate lanes (§9)</h2>
+        <p class="muted">Phase 1 multi-lane retrieval. ANN / collaborative sources are Phase 2+.</p>
+        <div id="candLanes"></div>
+        <h3>Live inventory (approx)</h3>
+        <div id="candInv"></div>
+        <p class="muted" id="candBudgets"></p>
+      </div>
     </section>
 
     <section class="panel" id="panel-gaps">
@@ -377,7 +385,7 @@ const GAPS = [
   ['6','Masquerade isolation','shipped','Live proofs + surface namespace guards'],
   ['7','Media understanding','missing','Phase 2'],
   ['8','Interest features','partial','personality / affinity'],
-  ['9','Candidates','partial','shelf multi-lane'],
+  ['9','Candidates','shipped','Multi-lane retrieval + mix meta + inventory'],
   ['10','Rank + diversity','shipped','MMR + family caps (Home/Hubs/Masquerade)'],
   ['11','Exposure ledger','shipped','feed_video_delivery on all For You surfaces'],
   ['14','Ads / economy','missing','Phase 4+'],
@@ -493,6 +501,18 @@ async function refresh(){
       const cls = c.status === 'pass' ? 'ok' : c.status === 'fail' ? 'bad' : 'warn';
       return '<div class="room"><span><span class="pill '+cls+'">'+c.status+'</span> <strong>'+c.label+'</strong><br/><span class="muted">'+c.detail+'</span></span></div>';
     }).join('') || '<p class="muted">No checks returned.</p>';
+
+    const cand = s.candidates || {};
+    $('candLanes').innerHTML = (cand.lanes||[]).map(l =>
+      '<div class="room"><span><strong>'+l.label+'</strong><br/><span class="muted">'+l.description+'</span></span><span class="pill">'+l.surface+'</span></div>'
+    ).join('') || '<p class="muted">No lanes.</p>';
+    $('candInv').innerHTML = (cand.inventory||[]).map(r =>
+      '<div class="room"><span>'+r.lane+'</span><strong>'+fmt(r.n)+'</strong></div>'
+    ).join('') || '<p class="muted">Inventory probe unavailable.</p>';
+    const b = cand.budgets || {};
+    $('candBudgets').textContent = b.homeRawPool
+      ? 'Budgets: home pool '+b.homeRawPool+' · hubs pool '+b.hubsRawPool+' · masquerade window '+b.masqueradeHotWindow+' · page ~'+b.servePage
+      : '';
 
     if (!$('docNav').dataset.ready) {
       $('docNav').dataset.ready = '1';

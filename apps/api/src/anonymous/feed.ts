@@ -15,6 +15,7 @@ import {
   type MindDeliveryPolicy,
   type MindFeedMeta,
 } from '../recommendation/mind-contracts.js';
+import type { CandidateMix } from '../recommendation/mind-candidates.js';
 import { assertSurfaceNamespace } from '../recommendation/mind-isolation.js';
 
 function iso(v: Date | string | null | undefined): string | null {
@@ -50,7 +51,7 @@ export async function getFeed(opts: {
 }): Promise<{
   posts: PostPublic[];
   next_cursor: string | null;
-  mind?: MindFeedMeta;
+  mind?: MindFeedMeta & { candidateMix?: CandidateMix[] };
 }> {
   const limit = Math.min(Math.max(opts.limit || 20, 1), 50);
   const sort = (opts.sort || 'for_you').toLowerCase();
@@ -58,6 +59,7 @@ export async function getFeed(opts: {
   const requestId = newMindRequestId();
   let deliveryPolicy: MindDeliveryPolicy = 'cursor';
   assertSurfaceNamespace('masquerade_for_you', 'masquerade');
+  let candidateMix: CandidateMix[] = [];
 
   const params: unknown[] = [opts.profile.id];
   let cursorClause = '';
@@ -165,21 +167,30 @@ export async function getFeed(opts: {
     const rankedSlots = Math.max(1, limit + 1 - Math.min(ownRows.length, 3));
     const ledgerUser = await resolveLedgerUserId(opts.profile.id);
     let eligible = scored;
+    let freshCount = scored.length;
+    let recycleCount = 0;
     if (ledgerUser && mindLedgerEnabled()) {
       const delivered = await loadDeliveredCanonicalKeys(
         ledgerUser,
         'masquerade_for_you'
       );
       const fresh = scored.filter((c) => !delivered.has(c.mediaKey));
+      freshCount = fresh.length;
       if (fresh.length >= rankedSlots) {
         eligible = fresh;
       } else {
         const seen = scored
           .filter((c) => delivered.has(c.mediaKey))
           .map((c) => ({ ...c, score: c.score * 0.28 }));
+        recycleCount = seen.length;
         eligible = [...fresh, ...seen];
       }
     }
+    candidateMix = [
+      { lane: 'masquerade_own', count: Math.min(ownRows.length, 3) },
+      { lane: 'masquerade_fresh', count: freshCount },
+      { lane: 'masquerade_soft_recycle', count: recycleCount },
+    ];
 
     // Prefer fresh text/video mix — image-only Reddit packs were freezing the top of Hot.
     const picked = mmrPick(eligible, {
@@ -281,6 +292,7 @@ export async function getFeed(opts: {
       modelVersion: MIND_POLICY_VERSION,
       deliveryPolicy,
       surface: 'masquerade_for_you',
+      candidateMix,
     },
   };
 }
