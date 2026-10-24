@@ -351,8 +351,18 @@ app.post('/v1/transcript/:postId/enqueue', async (req: Request, res: Response) =
     await enqueueTranscript(postId, 'cc');
     const runNow = req.body?.run === true || req.query.run === '1';
     if (runNow) {
-      const status = await transcribePost(postId);
-      return res.json({ ok: true, post_id: postId, status, ran: true });
+      // Never block the HTTP request on R2 download + Whisper — that left rows stuck
+      // in `processing` when the client timed out, and the UI only showed “Generating…”.
+      void transcribePost(postId).catch((err) => {
+        console.error('[transcript/runNow]', postId, err?.message ?? err);
+      });
+      return res.json({
+        ok: true,
+        post_id: postId,
+        status: 'processing',
+        ran: true,
+        async: true,
+      });
     }
     return res.json({ ok: true, post_id: postId, status: 'pending', ran: false });
   } catch (err: any) {

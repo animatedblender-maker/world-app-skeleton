@@ -11,7 +11,7 @@ import { createWriteStream, promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
-import { GetObjectCommand } from '@aws-sdk/client-s3';
+import { GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
 import { createR2Client, getBucket, r2Configured } from '../content-pipeline/r2.js';
 import { pool } from '../db.js';
 import { resolveFfmpegPath } from './frame0.js';
@@ -188,10 +188,15 @@ async function downloadR2ObjectToFile(key: string, destPath: string): Promise<vo
   await pipeline(out.Body as NodeJS.ReadableStream, createWriteStream(destPath));
 }
 
-function runFfmpegExtract(inputPathOrUrl: string, outPath: string): Promise<void> {
+function runFfmpegExtract(
+  inputPathOrUrl: string,
+  outPath: string,
+  opts: { timeoutMs?: number } = {}
+): Promise<void> {
   const ffmpeg = resolveFfmpegPath();
+  const timeoutMs = opts.timeoutMs ?? 180_000;
   return new Promise((resolve, reject) => {
-    // Local file preferred. Cap 15 min for Whisper cost/latency on free tier.
+    // Cap 10 min audio for Whisper cost/latency on free tier.
     const args = [
       '-hide_banner',
       '-loglevel',
@@ -207,17 +212,36 @@ function runFfmpegExtract(inputPathOrUrl: string, outPath: string): Promise<void
       '-b:a',
       '48k',
       '-t',
-      '900',
+      '600',
       outPath,
     ];
     const child = spawn(ffmpeg, args, { stdio: ['ignore', 'ignore', 'pipe'] });
     let err = '';
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* ignore */
+      }
+      reject(new Error(`ffmpeg_extract_timeout:${timeoutMs}ms`));
+    }, timeoutMs);
     child.stderr.on('data', (d) => {
       err += String(d);
       if (err.length > 6000) err = err.slice(-6000);
     });
-    child.on('error', (e) => reject(e));
+    child.on('error', (e) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(e);
+    });
     child.on('close', (code, signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       if (code === 0) {
         resolve();
         return;
@@ -233,8 +257,9 @@ function runFfmpegExtract(inputPathOrUrl: string, outPath: string): Promise<void
 }
 
 /**
- * Materialize audio for Whisper: R2 download → local ffmpeg (Render-safe).
- * Falls back to signed HTTPS input only when there is no R2 key.
+ * Materialize audio for Whisper.
+ * Prefer a fresh signed URL + ffmpeg (fast, no full-file download).
+ * Fall back to R2 SDK download for smaller objects when HTTP extract fails.
  */
 async function prepareAudioForWhisper(opts: {
   mediaUrl: string | null;
@@ -242,18 +267,50 @@ async function prepareAudioForWhisper(opts: {
   workDir: string;
 }): Promise<string> {
   const audioPath = path.join(opts.workDir, 'audio.mp3');
-  const key = extractR2Key(opts.mediaUrl, opts.mediaPath);
-  if (key) {
-    const srcPath = path.join(opts.workDir, 'source.mp4');
-    await downloadR2ObjectToFile(key, srcPath);
-    const st = await fs.stat(srcPath);
-    if (st.size < 1024) throw new Error('r2_download_too_small');
-    await runFfmpegExtract(srcPath, audioPath);
-    return audioPath;
-  }
   const playUrl = await resolveAudioSourceUrl(opts.mediaUrl, opts.mediaPath);
-  if (!playUrl) throw new Error('no_playable_url');
-  await runFfmpegExtract(playUrl, audioPath);
+  if (playUrl) {
+    try {
+      await runFfmpegExtract(playUrl, audioPath, { timeoutMs: 120_000 });
+      return audioPath;
+    } catch (err: any) {
+      console.warn(
+        '[transcribe] http ffmpeg failed, trying R2 download',
+        err?.message ?? err
+      );
+    }
+  }
+
+  const key = extractR2Key(opts.mediaUrl, opts.mediaPath);
+  if (!key) {
+    if (!playUrl) throw new Error('no_playable_url');
+    throw new Error('ffmpeg_http_failed');
+  }
+
+  // Skip huge LongForm downloads that OOM/kill Render mid-CC.
+  if (r2Configured()) {
+    try {
+      const client = createR2Client();
+      const head = await client.send(
+        new HeadObjectCommand({
+          Bucket: getBucket(),
+          Key: key.replace(/^\/+/, ''),
+        })
+      );
+      const size = Number(head.ContentLength ?? 0);
+      if (size > 120 * 1024 * 1024) {
+        throw new Error(`r2_object_too_large:${size}`);
+      }
+    } catch (err: any) {
+      if (String(err?.message ?? '').startsWith('r2_object_too_large')) throw err;
+      // Head failed — still attempt download below.
+    }
+  }
+
+  const srcPath = path.join(opts.workDir, 'source.mp4');
+  await downloadR2ObjectToFile(key, srcPath);
+  const st = await fs.stat(srcPath);
+  if (st.size < 1024) throw new Error('r2_download_too_small');
+  await runFfmpegExtract(srcPath, audioPath, { timeoutMs: 180_000 });
   return audioPath;
 }
 
@@ -287,6 +344,9 @@ async function groqTranscribeFile(filePath: string): Promise<GroqVerbose> {
   return (await res.json()) as GroqVerbose;
 }
 
+/** In-process lock so CC + backfill don't double-run the same post. */
+const activeJobs = new Set<string>();
+
 /** Process one pending/failed post. Returns final status. */
 export async function transcribePost(postId: string): Promise<TranscriptStatus> {
   if (!transcriptionConfigured()) {
@@ -302,19 +362,30 @@ export async function transcribePost(postId: string): Promise<TranscriptStatus> 
     return 'skipped';
   }
 
-  await ensureTranscriptSchema();
-  await pool.query(
-    `
-    insert into public.video_transcripts (post_id, status, updated_at)
-    values ($1::uuid, 'processing', now())
-    on conflict (post_id) do update
-      set status = 'processing', error = null, updated_at = now()
-    `,
-    [postId]
-  );
-
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'matterya-tx-'));
+  if (activeJobs.has(postId)) {
+    return 'processing';
+  }
+  activeJobs.add(postId);
+  let tmpDir: string | null = null;
   try {
+    await ensureTranscriptSchema();
+    // Already ready — don't burn Whisper again.
+    const existing = await getTranscript(postId);
+    if (existing?.status === 'ready' && (existing.text || existing.segments)) {
+      return 'ready';
+    }
+
+    await pool.query(
+      `
+      insert into public.video_transcripts (post_id, status, updated_at)
+      values ($1::uuid, 'processing', now())
+      on conflict (post_id) do update
+        set status = 'processing', error = null, updated_at = now()
+      `,
+      [postId]
+    );
+
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'matterya-tx-'));
     const post = await loadPostMedia(postId);
     if (!post) throw new Error('post_not_found');
     const mt = String(post.mediaType ?? '').toLowerCase();
@@ -384,7 +455,10 @@ export async function transcribePost(postId: string): Promise<TranscriptStatus> 
     );
     return rateLimited ? 'pending' : 'failed';
   } finally {
-    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
+    activeJobs.delete(postId);
+    if (tmpDir) {
+      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 }
 
