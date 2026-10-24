@@ -106,6 +106,7 @@ import {
   handleMindStatus,
   handleMindStream,
 } from './ops/mind-page.js';
+import { MIND_POLICY_VERSION } from './recommendation/mind-contracts.js';
 import { handlePosterBatch, handlePosterGet } from './media/poster-route.js';
 import { kafkaEnabled } from './kafka/config.js';
 
@@ -338,6 +339,8 @@ app.get('/health', (_req: Request, res: Response) =>
       anonymous: true,
       anonymousPaid: process.env.ANONYMOUS_PAID_ENABLED === 'true',
       videoTranscripts: !!process.env.GROQ_API_KEY?.trim(),
+      mindAdminPage: true,
+      mindPolicyVersion: MIND_POLICY_VERSION,
     },
     apnsConfigured: apns.isConfigured(),
     authMail: authMailStatus(),
