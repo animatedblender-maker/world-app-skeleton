@@ -312,15 +312,18 @@ export async function transcribePost(postId: string): Promise<TranscriptStatus> 
     return 'ready';
   } catch (err: any) {
     const msg = String(err?.message ?? err).slice(0, 500);
+    // Rate limits stay pending so the loop retries after backoff.
+    const rateLimited = /groq_429|rate limit/i.test(msg);
+    const status = rateLimited ? 'pending' : 'failed';
     await pool.query(
       `
       update public.video_transcripts
-      set status = 'failed', error = $2, updated_at = now()
+      set status = $3, error = $2, updated_at = now()
       where post_id = $1::uuid
       `,
-      [postId, msg]
+      [postId, msg, status]
     );
-    return 'failed';
+    return rateLimited ? 'pending' : 'failed';
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
   }

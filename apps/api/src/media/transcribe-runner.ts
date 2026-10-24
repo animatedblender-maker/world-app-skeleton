@@ -46,11 +46,16 @@ async function main(): Promise<void> {
   }
 
   if (argFlag('loop')) {
-    const limit = argValue('limit', 8);
-    console.log(`[transcribe] loop mode limit=${limit}`);
+    const limit = argValue('limit', 3);
+    const sleepMs = argValue('sleepMs', 90_000);
+    console.log(`[transcribe] loop mode limit=${limit} sleepMs=${sleepMs}`);
     for (;;) {
-      await processTranscriptQueue({ limit, backfillMissing: true });
-      await new Promise((r) => setTimeout(r, 15_000));
+      const result = await processTranscriptQueue({ limit, backfillMissing: true });
+      console.log(
+        `[transcribe] processed=${result.processed} ready=${result.ready} failed=${result.failed} skipped=${result.skipped}`
+      );
+      // Groq free tier is tight — default ~90s between batches.
+      await new Promise((r) => setTimeout(r, sleepMs));
     }
   }
 
