@@ -11,7 +11,7 @@ Status legend: **shipped** · **partial** · **missing** (roadmap)
 | 5 | Event envelope | shipped | Allowlist ingest + meta scrub + Kafka/PG |
 | 6 | Masquerade isolation | shipped | Live proofs + surface namespace guards |
 | 7 | Media understanding | missing | Phase 2 |
-| 8 | Interest memory / features | partial | `entity_personality`, affinity tables |
+| 8 | Interest memory / features | shipped | Personality + creator affinity + featureHits on decisions |
 | 9 | Candidate generation | shipped | Multi-lane retrieval + mix meta + inventory |
 | 10 | Rank + diversity | shipped | MMR + family caps on Home/Hubs/Masquerade |
 | 11 | Exposure ledger | shipped | `feed_video_delivery` on all For You surfaces |

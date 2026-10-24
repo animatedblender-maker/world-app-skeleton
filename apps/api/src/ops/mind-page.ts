@@ -326,6 +326,13 @@ function mindHtml(): string {
         <div id="candInv"></div>
         <p class="muted" id="candBudgets"></p>
       </div>
+      <div class="card">
+        <h2>Interest features (§8)</h2>
+        <p class="muted">Online preference memory used by rank. Session embeddings / trained models are Phase 2+.</p>
+        <div class="grid" id="interestStats"></div>
+        <div id="interestSources" style="margin-top:12px"></div>
+        <p class="muted" id="interestHits"></p>
+      </div>
     </section>
 
     <section class="panel" id="panel-gaps">
@@ -384,7 +391,7 @@ const GAPS = [
   ['5','Events','shipped','Allowlist ingest + meta scrub + Kafka/PG'],
   ['6','Masquerade isolation','shipped','Live proofs + surface namespace guards'],
   ['7','Media understanding','missing','Phase 2'],
-  ['8','Interest features','partial','personality / affinity'],
+  ['8','Interest features','shipped','Personality + creator affinity + featureHits'],
   ['9','Candidates','shipped','Multi-lane retrieval + mix meta + inventory'],
   ['10','Rank + diversity','shipped','MMR + family caps (Home/Hubs/Masquerade)'],
   ['11','Exposure ledger','shipped','feed_video_delivery on all For You surfaces'],
@@ -513,6 +520,21 @@ async function refresh(){
     $('candBudgets').textContent = b.homeRawPool
       ? 'Budgets: home pool '+b.homeRawPool+' · hubs pool '+b.hubsRawPool+' · masquerade window '+b.masqueradeHotWindow+' · page ~'+b.servePage
       : '';
+
+    const interest = s.interest || {};
+    $('interestStats').innerHTML = [
+      ['Personality rows', interest.personalityRows],
+      ['Personality warm', interest.personalityWarm],
+      ['Creator affinity rows', interest.creatorAffinityRows],
+      ['Item stats rows', interest.itemStatsRows],
+    ].map(([l,n]) => '<div class="stat"><div class="n">'+fmt(n)+'</div><div class="l">'+l+'</div></div>').join('');
+    $('interestSources').innerHTML = (interest.sources||[]).map(src =>
+      '<div class="room"><span><strong>'+src.label+'</strong><br/><span class="muted"><code>'+src.table+'</code> · '+src.usedBy+'</span></span></div>'
+    ).join('');
+    const rh = interest.recentHits || {};
+    $('interestHits').textContent = rh.sample
+      ? 'Last '+fmt(rh.sample)+' decisions: affinity hit '+fmt(rh.withAffinity)+' · personality hit '+fmt(rh.withPersonality)
+      : 'No recent decision featureHits yet (fills as rank runs after deploy).';
 
     if (!$('docNav').dataset.ready) {
       $('docNav').dataset.ready = '1';

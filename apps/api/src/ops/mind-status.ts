@@ -22,6 +22,7 @@ import {
   MIND_RETRIEVAL_BUDGETS,
   type CandidateLaneDef,
 } from '../recommendation/mind-candidates.js';
+import { MIND_INTEREST_SOURCES } from '../recommendation/mind-interest.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 function resolveDocsMind(): string {
@@ -81,6 +82,18 @@ export type MindStatus = {
     lanes: CandidateLaneDef[];
     budgets: typeof MIND_RETRIEVAL_BUDGETS;
     inventory: { lane: string; n: number }[];
+  };
+  interest: {
+    sources: typeof MIND_INTEREST_SOURCES;
+    personalityRows: number;
+    personalityWarm: number;
+    creatorAffinityRows: number;
+    itemStatsRows: number;
+    recentHits: {
+      withAffinity: number;
+      withPersonality: number;
+      sample: number;
+    };
   };
   masquerade: {
     rooms: { slug: string; title: string; posts: number }[];
@@ -230,6 +243,14 @@ export async function getMindStatus(): Promise<MindStatus> {
     lanes: MIND_CANDIDATE_LANES,
     budgets: MIND_RETRIEVAL_BUDGETS,
     inventory: [],
+  };
+  const interest: MindStatus['interest'] = {
+    sources: MIND_INTEREST_SOURCES,
+    personalityRows: 0,
+    personalityWarm: 0,
+    creatorAffinityRows: 0,
+    itemStatsRows: 0,
+    recentHits: { withAffinity: 0, withPersonality: 0, sample: 0 },
   };
   const masquerade: MindStatus['masquerade'] = {
     rooms: [],
@@ -473,6 +494,62 @@ export async function getMindStatus(): Promise<MindStatus> {
   }
 
   try {
+    const { rows } = await pool.query<{
+      personality: string;
+      warm: string;
+      affinity: string;
+      items: string;
+    }>(`
+      select
+        (select count(*)::text from public.entity_personality) as personality,
+        (select count(*)::text from public.entity_personality where events_counted > 0) as warm,
+        (select count(*)::text from public.recsys_user_creator_affinity) as affinity,
+        (select count(*)::text from public.recsys_item_stats) as items
+    `);
+    const r = rows[0];
+    if (r) {
+      interest.personalityRows = Number(r.personality) || 0;
+      interest.personalityWarm = Number(r.warm) || 0;
+      interest.creatorAffinityRows = Number(r.affinity) || 0;
+      interest.itemStatsRows = Number(r.items) || 0;
+    }
+  } catch {
+    /* ignore */
+  }
+
+  try {
+    const { rows } = await pool.query<{
+      sample: string;
+      with_aff: string;
+      with_pers: string;
+    }>(`
+      select
+        count(*)::text as sample,
+        count(*) filter (
+          where coalesce((meta->'featureHits'->>'affinityCreators')::int, 0) > 0
+        )::text as with_aff,
+        count(*) filter (
+          where coalesce(meta->'featureHits'->>'personality', 'false') = 'true'
+        )::text as with_pers
+      from (
+        select meta from public.recommendation_decisions
+        order by created_at desc
+        limit 200
+      ) t
+    `);
+    const r = rows[0];
+    if (r) {
+      interest.recentHits = {
+        sample: Number(r.sample) || 0,
+        withAffinity: Number(r.with_aff) || 0,
+        withPersonality: Number(r.with_pers) || 0,
+      };
+    }
+  } catch {
+    /* ignore */
+  }
+
+  try {
     const checks = await runMasqueradeIsolationChecks();
     masquerade.isolation = {
       overall: isolationOverall(checks),
@@ -496,10 +573,11 @@ export async function getMindStatus(): Promise<MindStatus> {
     engagement,
     masquerade,
     seed: readSeedProgress(),
-    gapSummary: { shipped: 11, partial: 5, missing: 6 },
+    gapSummary: { shipped: 12, partial: 4, missing: 6 },
     docs: listDocs(),
     recent,
     decisions,
     candidates,
+    interest,
   };
 }

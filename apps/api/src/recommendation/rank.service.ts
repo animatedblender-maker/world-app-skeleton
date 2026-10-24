@@ -293,6 +293,12 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
 
   const latencyMs = Date.now() - started;
 
+  const featureHits = {
+    affinityCreators: affinityMap.size,
+    itemStats: itemStats.size,
+    personality: !!bubbles && bubbles.eventsCounted > 0,
+  };
+
   // Fire-and-forget warehouse log + optional affinity refresh
   void logDecision({
     requestId,
@@ -302,6 +308,7 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
     candidateCount: candidateIds.length,
     items: picked,
     latencyMs,
+    featureHits,
   }).catch(() => {});
 
   // Keep personality warm while traffic is live
@@ -319,11 +326,7 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
       sources: p.sources,
     })),
     latencyMs,
-    featureHits: {
-      affinityCreators: affinityMap.size,
-      itemStats: itemStats.size,
-      personality: !!bubbles && bubbles.eventsCounted > 0,
-    },
+    featureHits,
   };
 
   rankCache.set(ck, { at: Date.now(), response });
@@ -540,6 +543,11 @@ async function logDecision(args: {
   candidateCount: number;
   items: { id: string; score: number; sources: string[] }[];
   latencyMs: number;
+  featureHits?: {
+    affinityCreators: number;
+    itemStats: number;
+    personality: boolean;
+  };
 }): Promise<void> {
   const uuidItems = args.items.filter((i) => isUuid(i.id));
   try {
@@ -566,7 +574,10 @@ async function logDecision(args: {
         uuidItems.map((i) => i.score),
         JSON.stringify(uuidItems.map((i) => ({ id: i.id, sources: i.sources }))),
         args.latencyMs,
-        JSON.stringify({ nonUuidDropped: args.items.length - uuidItems.length }),
+        JSON.stringify({
+          nonUuidDropped: args.items.length - uuidItems.length,
+          featureHits: args.featureHits ?? null,
+        }),
       ]
     );
   } catch {

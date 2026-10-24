@@ -49,6 +49,7 @@ npx tsc -p tsconfig.json --noEmit
 - **phase1.v3** — Events hygiene (`sanitizeEngagementMeta`) + `/mind` live event/decision panels (§5/§19 shipped)
 - **phase1.v4** — Masquerade isolation proofs + surface namespace asserts (§6 shipped)
 - **phase1.v5** — Candidate lanes catalog, feed `candidateMix`, admin inventory (§9 shipped)
+- **phase1.v6** — Interest features panel + decision featureHits (§8 shipped)
 
 ## Not in this pass
 

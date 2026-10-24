@@ -124,13 +124,13 @@ export async function runMasqueradeIsolationChecks(): Promise<IsolationCheck[]> 
   try {
     const { rows } = await pool.query<{ n: string }>(`
       select count(*)::text as n
-      from public.entity_affinity ea
-      join anonymous.profiles p on p.id = ea.entity_id
+      from public.recsys_user_creator_affinity a
+      join anonymous.profiles p on p.id = a.entity_id
     `);
     const n = Number(rows[0]?.n) || 0;
     checks.push({
       id: 'affinity_no_anon_entity',
-      label: 'Public affinity has no anonymous.profile entity ids',
+      label: 'Creator affinity has no anonymous.profile user ids',
       status: n === 0 ? 'pass' : 'fail',
       detail:
         n === 0
@@ -140,9 +140,9 @@ export async function runMasqueradeIsolationChecks(): Promise<IsolationCheck[]> 
   } catch (err: any) {
     checks.push({
       id: 'affinity_no_anon_entity',
-      label: 'Public affinity vs anon profiles',
+      label: 'Creator affinity vs anon profiles',
       status: 'warn',
-      detail: err?.message ?? 'entity_affinity or join unavailable',
+      detail: err?.message ?? 'recsys_user_creator_affinity join unavailable',
     });
   }
 
