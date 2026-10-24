@@ -178,12 +178,22 @@ async function resolveAudioSourceUrl(
 }
 
 /** Download R2 object to disk (same pattern as Frame0) — avoids ffmpeg HTTP kills on Render. */
-async function downloadR2ObjectToFile(key: string, destPath: string): Promise<void> {
+async function downloadR2ObjectToFile(
+  key: string,
+  destPath: string,
+  opts: { rangeBytes?: string } = {}
+): Promise<void> {
   if (!r2Configured()) throw new Error('r2_not_configured');
   const client = createR2Client();
   const bucket = getBucket();
   const clean = key.replace(/^\/+/, '');
-  const out = await client.send(new GetObjectCommand({ Bucket: bucket, Key: clean }));
+  const out = await client.send(
+    new GetObjectCommand({
+      Bucket: bucket,
+      Key: clean,
+      ...(opts.rangeBytes ? { Range: opts.rangeBytes } : {}),
+    })
+  );
   if (!out.Body) throw new Error(`empty_r2_body:${clean}`);
   await pipeline(out.Body as NodeJS.ReadableStream, createWriteStream(destPath));
 }
@@ -262,8 +272,10 @@ function runFfmpegExtract(
 
 /**
  * Materialize audio for Whisper.
- * CC mode: signed URL + short ffmpeg window only (seconds, not minutes).
- * Batch mode may fall back to a bounded R2 download.
+ *
+ * Render's ffmpeg-static **SIGSEGVs on HTTPS inputs** — never feed signed URLs to it.
+ * Always R2 SDK → local file → ffmpeg (same pattern Frame0 uses successfully).
+ * CC keeps downloads bounded so captions stay interactive.
  */
 async function prepareAudioForWhisper(opts: {
   mediaUrl: string | null;
@@ -273,64 +285,75 @@ async function prepareAudioForWhisper(opts: {
 }): Promise<string> {
   const mode: AudioExtractMode = opts.mode ?? 'batch';
   const audioPath = path.join(opts.workDir, 'audio.mp3');
-  // CC: first ~90s is enough for live captions; Whisper turbo finishes in a few seconds.
-  const maxSeconds = mode === 'cc' ? 90 : 600;
-  const httpTimeoutMs = mode === 'cc' ? 35_000 : 120_000;
-
-  const playUrl = await resolveAudioSourceUrl(opts.mediaUrl, opts.mediaPath);
-  if (playUrl) {
-    try {
-      await runFfmpegExtract(playUrl, audioPath, {
-        timeoutMs: httpTimeoutMs,
-        maxSeconds,
-      });
-      return audioPath;
-    } catch (err: any) {
-      if (mode === 'cc') {
-        // Do not download 100MB+ LongForm files on a CC tap — that is the 1–2 min path.
-        throw new Error(`cc_ffmpeg_http_failed:${err?.message ?? err}`);
-      }
-      console.warn(
-        '[transcribe] http ffmpeg failed, trying R2 download',
-        err?.message ?? err
-      );
-    }
-  }
-
-  if (mode === 'cc') {
-    throw new Error(playUrl ? 'cc_ffmpeg_http_failed' : 'no_playable_url');
-  }
-
+  // CC: ~60s audio is enough for live captions and stays under free-tier ASPH spikes.
+  const maxSeconds = mode === 'cc' ? 60 : 600;
   const key = extractR2Key(opts.mediaUrl, opts.mediaPath);
-  if (!key) {
-    if (!playUrl) throw new Error('no_playable_url');
-    throw new Error('ffmpeg_http_failed');
-  }
 
-  if (r2Configured()) {
+  if (key && r2Configured()) {
+    const client = createR2Client();
+    const clean = key.replace(/^\/+/, '');
+    let size = 0;
     try {
-      const client = createR2Client();
       const head = await client.send(
-        new HeadObjectCommand({
-          Bucket: getBucket(),
-          Key: key.replace(/^\/+/, ''),
-        })
+        new HeadObjectCommand({ Bucket: getBucket(), Key: clean })
       );
-      const size = Number(head.ContentLength ?? 0);
-      if (size > 80 * 1024 * 1024) {
-        throw new Error(`r2_object_too_large:${size}`);
-      }
-    } catch (err: any) {
-      if (String(err?.message ?? '').startsWith('r2_object_too_large')) throw err;
+      size = Number(head.ContentLength ?? 0);
+    } catch {
+      size = 0;
     }
+
+    const srcPath = path.join(opts.workDir, 'source.mp4');
+    // CC: full object if small; otherwise first ~18MB (faststart moov) for a quick extract.
+    const ccFullMax = 40 * 1024 * 1024;
+    const ccRangeBytes = 18 * 1024 * 1024;
+    const batchMax = 80 * 1024 * 1024;
+
+    if (mode === 'cc') {
+      if (size > 0 && size <= ccFullMax) {
+        await downloadR2ObjectToFile(clean, srcPath);
+      } else {
+        await downloadR2ObjectToFile(clean, srcPath, {
+          rangeBytes: `bytes=0-${ccRangeBytes - 1}`,
+        });
+      }
+      const st = await fs.stat(srcPath);
+      if (st.size < 1024) throw new Error('r2_download_too_small');
+      try {
+        await runFfmpegExtract(srcPath, audioPath, {
+          timeoutMs: 45_000,
+          maxSeconds,
+        });
+        return audioPath;
+      } catch (err: any) {
+        // Partial range sometimes lacks moov — one bounded full retry under 55MB.
+        if (size > 0 && size <= 55 * 1024 * 1024 && st.size < size) {
+          await downloadR2ObjectToFile(clean, srcPath);
+          await runFfmpegExtract(srcPath, audioPath, {
+            timeoutMs: 60_000,
+            maxSeconds,
+          });
+          return audioPath;
+        }
+        throw new Error(`cc_local_ffmpeg_failed:${err?.message ?? err}`);
+      }
+    }
+
+    if (size > batchMax) throw new Error(`r2_object_too_large:${size}`);
+    await downloadR2ObjectToFile(clean, srcPath);
+    const st = await fs.stat(srcPath);
+    if (st.size < 1024) throw new Error('r2_download_too_small');
+    await runFfmpegExtract(srcPath, audioPath, {
+      timeoutMs: 180_000,
+      maxSeconds,
+    });
+    return audioPath;
   }
 
-  const srcPath = path.join(opts.workDir, 'source.mp4');
-  await downloadR2ObjectToFile(key, srcPath);
-  const st = await fs.stat(srcPath);
-  if (st.size < 1024) throw new Error('r2_download_too_small');
-  await runFfmpegExtract(srcPath, audioPath, {
-    timeoutMs: 180_000,
+  // Non-R2 media only: last resort HTTP (may SIGSEGV on Render — prefer R2).
+  const playUrl = await resolveAudioSourceUrl(opts.mediaUrl, opts.mediaPath);
+  if (!playUrl) throw new Error('no_playable_url');
+  await runFfmpegExtract(playUrl, audioPath, {
+    timeoutMs: mode === 'cc' ? 35_000 : 120_000,
     maxSeconds,
   });
   return audioPath;
