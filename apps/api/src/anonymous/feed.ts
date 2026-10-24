@@ -30,7 +30,8 @@ function masqueradeFamily(row: {
 }
 
 /**
- * Feed from joined Spaces + adult_public Spaces.
+ * Feed from joined Spaces + public (adult_public + free) Spaces only.
+ * Restricted / private / paid Spaces never appear unless the viewer is an active member.
  * For you / hot: Wilson + time decay + membership → MMR diversity → at-most-once delivery.
  */
 export async function getFeed(opts: {
@@ -83,10 +84,14 @@ export async function getFeed(opts: {
       and s.status in ('active', 'read_only')
       and b.id is null
       and (
+        -- Joined: include that Space's posts (private / restricted / paid ok).
         m.id is not null
-        or (s.visibility = 'adult_public' and s.admission = 'free')
+        -- Not joined: public Spaces only — never restricted/private/paid.
+        or (
+          s.visibility = 'adult_public'
+          and s.admission = 'free'
+        )
       )
-      and (s.visibility <> 'private' or m.id is not null)
       ${cursorClause}
     order by p.created_at desc, p.id desc
     limit $${params.length}
@@ -98,36 +103,50 @@ export async function getFeed(opts: {
 
   if (useSocial && rows.length) {
     const now = Date.now();
-    const scored = rows.map((r: any) => {
+    const viewerId = String(opts.profile.id);
+    // Keep the viewer's own posts at the top for ~3 days — Hot/ledger was wiping
+    // brand-new score-0 posts on the next soft refresh (showed once, then gone).
+    const ownRows = rows.filter((r: any) => {
+      if (String(r.author_id) !== viewerId) return false;
       const created = r.created_at instanceof Date ? r.created_at : new Date(r.created_at);
       const ageHours = Math.max(0, (now - created.getTime()) / 3600_000);
-      const ups = Math.max(0, Number(r.score) || 0);
-      const membershipBoost = Number(r.is_member) === 1 ? 1 : 0.35;
-      const score = socialHotScore({
-        ups,
-        commentCount: Number(r.comment_count) || 0,
-        ageHours,
-        membershipBoost,
-        halfLifeHours: 18,
-      });
-      return {
-        row: r,
-        id: String(r.id),
-        score,
-        authorId: String(r.author_id ?? ''),
-        family: masqueradeFamily(r),
-        mediaKey: canonicalVideoKey({
-          id: String(r.id),
-          media_url: r.media_url,
-          thumb_url: r.thumb_url,
-          media_type: r.media_type,
-        }),
-        spaceId: String(r.space_id ?? ''),
-      };
+      return ageHours <= 72;
     });
+    const ownIds = new Set(ownRows.map((r: any) => String(r.id)));
+
+    const scored = rows
+      .filter((r: any) => !ownIds.has(String(r.id)))
+      .map((r: any) => {
+        const created = r.created_at instanceof Date ? r.created_at : new Date(r.created_at);
+        const ageHours = Math.max(0, (now - created.getTime()) / 3600_000);
+        const ups = Math.max(0, Number(r.score) || 0);
+        const membershipBoost = Number(r.is_member) === 1 ? 1 : 0.35;
+        const score = socialHotScore({
+          ups,
+          commentCount: Number(r.comment_count) || 0,
+          ageHours,
+          membershipBoost,
+          halfLifeHours: 18,
+        });
+        return {
+          row: r,
+          id: String(r.id),
+          score,
+          authorId: String(r.author_id ?? ''),
+          family: masqueradeFamily(r),
+          mediaKey: canonicalVideoKey({
+            id: String(r.id),
+            media_url: r.media_url,
+            thumb_url: r.thumb_url,
+            media_type: r.media_type,
+          }),
+          spaceId: String(r.space_id ?? ''),
+        };
+      });
 
     // At-most-once: drop already delivered canonical keys for this masquerade profile.
     // Ledger is keyed by Matterya account when available; fall back to anon profile id.
+    // Own posts are never ledger-filtered — they stay pinned above ranked results.
     const ledgerUser = await resolveLedgerUserId(opts.profile.id);
     let eligible = scored;
     if (ledgerUser) {
@@ -135,37 +154,49 @@ export async function getFeed(opts: {
       eligible = scored.filter((c) => !delivered.has(c.mediaKey));
     }
 
-    const picked = mmrPick(eligible, {
-      limit: limit + 1,
-      lambda: 0.7,
-      maxSameCreator: 2,
-      creatorWindow: 8,
+    const rankedSlots = Math.max(1, limit + 1 - Math.min(ownRows.length, 3));
+    // Prefer fresh text/video mix — image-only Reddit packs were freezing the top of Hot.
+    const picked = mmrPick(eligible.length ? eligible : scored, {
+      limit: rankedSlots,
+      lambda: 0.72,
+      maxSameCreator: 1,
+      creatorWindow: 10,
       exclusiveFamilies: ['tiktok', 'image', 'video'],
-      exclusiveEveryN: 3,
+      // Image at most ~1 in 4 so photo cards cannot pin the whole first page.
+      exclusiveEveryN: 4,
     });
 
+    let rankedRows: any[] = [];
     if (ledgerUser && picked.length) {
       const reserved = await reserveDeliveryBatch({
         userId: ledgerUser,
         surface: 'masquerade_for_you',
         idempotencyKey: `masq:${opts.profile.id}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
-        candidates: picked.slice(0, limit).map((c) => ({
+        candidates: picked.slice(0, rankedSlots).map((c) => ({
           id: c.id,
           canonicalKey: c.mediaKey,
         })),
-        limit,
+        limit: rankedSlots,
       });
       if (reserved?.videoIds?.length) {
         const byId = new Map(picked.map((c) => [c.id, c]));
-        selected = reserved.videoIds
+        rankedRows = reserved.videoIds
           .map((id) => byId.get(id)?.row)
           .filter(Boolean);
       } else {
-        selected = picked.slice(0, limit + 1).map((c) => c.row);
+        rankedRows = picked.slice(0, rankedSlots).map((c) => c.row);
       }
     } else {
-      selected = picked.slice(0, limit + 1).map((c) => c.row);
+      rankedRows = picked.slice(0, rankedSlots).map((c) => c.row);
     }
+
+    // Newest own posts first, then ranked feed (dedupe).
+    const ownSorted = [...ownRows].sort((a: any, b: any) => {
+      const ta = a.created_at instanceof Date ? a.created_at.getTime() : new Date(a.created_at).getTime();
+      const tb = b.created_at instanceof Date ? b.created_at.getTime() : new Date(b.created_at).getTime();
+      return tb - ta;
+    });
+    selected = [...ownSorted.slice(0, 3), ...rankedRows];
   }
 
   const page = selected.slice(0, limit);

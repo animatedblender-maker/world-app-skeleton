@@ -289,12 +289,76 @@ app.get('/health', (_req: Request, res: Response) =>
       remoteConfig: true,
       anonymous: true,
       anonymousPaid: process.env.ANONYMOUS_PAID_ENABLED === 'true',
+      videoTranscripts: !!process.env.GROQ_API_KEY?.trim(),
     },
     apnsConfigured: apns.isConfigured(),
     authMail: authMailStatus(),
     contentPipeline: getPipelineStatus(),
   })
 );
+
+// ─── Video transcripts (Groq Whisper, server-side — keeps the iOS app light) ──
+// GET  /v1/transcript/:postId  → { status, text, segments, language, … }
+// POST /v1/transcript/:postId/enqueue → queue / re-queue one post
+app.get('/v1/transcript/:postId', async (req: Request, res: Response) => {
+  try {
+    const postId = String(req.params.postId || '').trim();
+    const uuidRe =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (!uuidRe.test(postId)) return res.status(400).json({ error: 'post_id_required' });
+    const { getTranscript } = await import('./media/transcribe.js');
+    const row = await getTranscript(postId);
+    if (!row) {
+      return res.json({
+        ok: true,
+        post_id: postId,
+        status: 'missing',
+        text: null,
+        segments: null,
+      });
+    }
+    return res.json({
+      ok: true,
+      post_id: row.post_id,
+      status: row.status,
+      language: row.language,
+      model: row.model,
+      text: row.text,
+      segments: row.segments,
+      error: row.error,
+      duration_seconds: row.duration_seconds,
+      completed_at: row.completed_at,
+    });
+  } catch (err: any) {
+    console.error('[transcript]', err?.message ?? err);
+    return res.status(500).json({ error: 'transcript_failed', message: err?.message ?? 'error' });
+  }
+});
+
+app.post('/v1/transcript/:postId/enqueue', async (req: Request, res: Response) => {
+  try {
+    const postId = String(req.params.postId || '').trim();
+    const uuidRe =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (!uuidRe.test(postId)) return res.status(400).json({ error: 'post_id_required' });
+    const { enqueueTranscript, transcriptionConfigured, transcribePost } = await import(
+      './media/transcribe.js'
+    );
+    if (!transcriptionConfigured()) {
+      return res.status(503).json({ error: 'transcription_not_configured' });
+    }
+    await enqueueTranscript(postId, 'api_enqueue');
+    const runNow = req.body?.run === true || req.query.run === '1';
+    if (runNow) {
+      const status = await transcribePost(postId);
+      return res.json({ ok: true, post_id: postId, status, ran: true });
+    }
+    return res.json({ ok: true, post_id: postId, status: 'pending', ran: false });
+  } catch (err: any) {
+    console.error('[transcript/enqueue]', err?.message ?? err);
+    return res.status(500).json({ error: 'enqueue_failed', message: err?.message ?? 'error' });
+  }
+});
 
 // ─── Instant Frame 0 posters from R2 pack path ───────────────────────────────
 // GET  /v1/poster/:postId  → { url, key }   (…/frame0_512.webp signed)

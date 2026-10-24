@@ -23,25 +23,35 @@ struct AnonymousMeView: View {
                             )
                     } else {
                         ForEach(joined.prefix(12)) { space in
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(space.title)
-                                        .font(.body.weight(.medium))
-                                        .foregroundStyle(Theme.ink)
-                                    Text("a/\(space.slug)")
-                                        .font(.caption)
+                            Button {
+                                store.pushSpace(slug: space.slug)
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(space.title)
+                                            .font(.body.weight(.medium))
+                                            .foregroundStyle(Theme.ink)
+                                        if let count = space.memberCount {
+                                            Text("\(count.formatted()) members")
+                                                .font(.caption)
+                                                .foregroundStyle(Theme.inkMuted)
+                                        }
+                                    }
+                                    Spacer()
+                                    if space.isPaid {
+                                        Text("Paid")
+                                            .font(.caption2.weight(.bold))
+                                            .padding(.horizontal, 7)
+                                            .padding(.vertical, 3)
+                                            .background(Theme.matteDeep, in: Capsule())
+                                    }
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption.weight(.semibold))
                                         .foregroundStyle(Theme.inkMuted)
                                 }
-                                Spacer()
-                                if space.isPaid {
-                                    Text("Paid")
-                                        .font(.caption2.weight(.bold))
-                                        .padding(.horizontal, 7)
-                                        .padding(.vertical, 3)
-                                        .background(Theme.matteDeep, in: Capsule())
-                                }
+                                .matteryaSettingsCard()
                             }
-                            .matteryaSettingsCard()
+                            .buttonStyle(.plain)
                         }
                     }
                 }
@@ -85,6 +95,7 @@ struct AnonymousMeView: View {
             .padding(Theme.pagePadding)
             .padding(.bottom, 28)
         }
+        .toolbar(.hidden, for: .navigationBar)
         .task {
             await store.loadSpaces(filter: .joined)
         }
@@ -92,12 +103,12 @@ struct AnonymousMeView: View {
 
     private var profileCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Anonymous identity")
+            Text("Masquerade identity")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(Theme.inkMuted)
                 .textCase(.uppercase)
 
-            Text(store.session.profile?.username ?? "—")
+            Text("@\(store.displayUsername)")
                 .font(.system(size: 28, weight: .regular, design: .serif))
                 .foregroundStyle(Theme.ink)
 

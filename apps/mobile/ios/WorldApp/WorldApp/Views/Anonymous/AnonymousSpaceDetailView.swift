@@ -7,7 +7,7 @@ struct AnonymousSpaceDetailView: View {
     @State private var showComposer = false
     @State private var showModPanel = false
     @State private var showReport = false
-    @State private var selectedPost: AnonymousPost?
+    @State private var isPreparingComposer = false
 
     var body: some View {
         Group {
@@ -25,8 +25,9 @@ struct AnonymousSpaceDetailView: View {
                 )
             }
         }
-        .navigationTitle(store.currentSpace?.title ?? slug)
-        .navigationBarTitleDisplayMode(.inline)
+        // Back + title live on MasqueradePushChrome; New post stays in the space actions body.
+        .toolbar(.hidden, for: .navigationBar)
+        .tint(Theme.ink)
         .task {
             await store.openSpace(slug: slug)
         }
@@ -45,32 +46,36 @@ struct AnonymousSpaceDetailView: View {
             Button("Illegal or harmful", role: .destructive) { Task { await report("illegal") } }
             Button("Cancel", role: .cancel) {}
         }
-        .navigationDestination(item: $selectedPost) { post in
-            AnonymousPostDetailView(post: post)
-        }
     }
 
     @ViewBuilder
     private func spaceBody(_ space: AnonymousSpace) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                header(space)
-                rules(space)
-                actions(space)
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 16) {
+                    header(space)
+                    rules(space)
+                    actions(space)
+                    Text("Posts")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.ink)
+                }
+                .padding(Theme.pagePadding)
+
                 postsSection
             }
-            .padding(Theme.pagePadding)
         }
+        .background(Theme.canvas)
         .refreshable { await store.openSpace(slug: slug) }
     }
 
     private func header(_ space: AnonymousSpace) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("a/\(space.slug)")
-                    .font(.caption)
-                    .foregroundStyle(Theme.inkMuted)
-                Spacer()
+                Text("About this space")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.ink)
+                Spacer(minLength: 8)
                 if space.isPaid {
                     Text("Paid")
                         .font(.caption2.weight(.bold))
@@ -130,90 +135,130 @@ struct AnonymousSpaceDetailView: View {
     }
 
     private func actions(_ space: AnonymousSpace) -> some View {
-        VStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 10) {
             if space.isPaid {
                 Text(MatteryaCopy.anonymousPaidJoinDisabled)
                     .font(.caption)
                     .foregroundStyle(Theme.inkMuted)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Text("Join — coming soon")
-                    .elegantButton()
-                    .opacity(0.45)
-            } else if space.isJoined == true {
-                HStack(spacing: 10) {
-                    Button { showComposer = true } label: {
-                        Text("New post").elegantButton()
-                    }
-                    .buttonStyle(.plain)
-                    Button {
-                        Task { await store.leaveCurrentSpace() }
-                    } label: {
-                        Text("Leave").elegantButton(outlined: true)
-                    }
-                    .buttonStyle(.plain)
-                }
+                spaceChip("Join soon", systemImage: "lock.fill", style: .quiet)
+                    .opacity(0.5)
             } else {
-                Button {
-                    Task { await store.joinCurrentSpace() }
-                } label: {
-                    Text("Join Space").elegantButton()
-                }
-                .buttonStyle(.plain)
-            }
+                HStack(spacing: 8) {
+                    Button {
+                        Task { await openComposer() }
+                    } label: {
+                        spaceChip(
+                            isPreparingComposer ? "Joining…" : "New post",
+                            systemImage: "square.and.pencil",
+                            style: .primary
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isPreparingComposer)
 
-            HStack(spacing: 10) {
-                if space.isOwner == true || space.isModerator == true {
-                    Button { showModPanel = true } label: {
-                        Text("Mod tools")
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(Theme.ink)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 10)
-                            .background(Theme.matteDeep, in: RoundedRectangle(cornerRadius: Theme.controlRadius))
+                    if space.isJoined == true {
+                        Button {
+                            Task { await store.leaveCurrentSpace() }
+                        } label: {
+                            spaceChip("Leave", systemImage: "rectangle.portrait.and.arrow.right", style: .quiet)
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        Button {
+                            Task { await store.joinCurrentSpace() }
+                        } label: {
+                            spaceChip("Join", systemImage: "person.badge.plus", style: .outline)
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    Spacer(minLength: 4)
+
+                    if space.isOwner == true || space.isModerator == true {
+                        Button { showModPanel = true } label: {
+                            spaceChip("Mod", systemImage: "shield", style: .quiet)
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    Button { showReport = true } label: {
+                        spaceChip("Report", systemImage: "flag", style: .subtle)
                     }
                     .buttonStyle(.plain)
                 }
-                Button { showReport = true } label: {
-                    Text("Report")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(Theme.danger)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.controlRadius))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: Theme.controlRadius)
-                                .stroke(Theme.border, lineWidth: 0.5)
-                        )
-                }
-                .buttonStyle(.plain)
             }
         }
     }
 
+    private enum SpaceChipStyle {
+        case primary, outline, quiet, subtle
+    }
+
+    /// Compact paper chips — fit the action row without full-width slabs.
+    private func spaceChip(
+        _ title: String,
+        systemImage: String,
+        style: SpaceChipStyle
+    ) -> some View {
+        let fg: Color = {
+            switch style {
+            case .primary: return Theme.surface
+            case .subtle: return Theme.danger.opacity(0.85)
+            case .outline, .quiet: return Theme.ink
+            }
+        }()
+        let fill: Color = {
+            switch style {
+            case .primary: return Theme.ink
+            case .quiet: return Theme.matteDeep.opacity(0.9)
+            case .outline, .subtle: return Theme.surface
+            }
+        }()
+        return Label(title, systemImage: systemImage)
+            .labelStyle(.titleAndIcon)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(fg)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 7)
+            .background(Capsule(style: .continuous).fill(fill))
+            .overlay {
+                if style == .outline || style == .subtle {
+                    Capsule(style: .continuous)
+                        .stroke(Theme.border.opacity(style == .outline ? 1 : 0.7), lineWidth: style == .outline ? 0.8 : 0.5)
+                }
+            }
+    }
+
     @ViewBuilder
     private var postsSection: some View {
-        Text("Posts")
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(Theme.ink)
-
         if store.spacePosts.isEmpty {
             Text(MatteryaCopy.anonymousSpaceEmptyPosts)
                 .font(.subheadline)
                 .foregroundStyle(Theme.inkMuted)
+                .padding(.horizontal, Theme.pagePadding)
                 .padding(.vertical, 12)
         } else {
-            LazyVStack(spacing: 12) {
+            LazyVStack(spacing: 0) {
                 ForEach(store.spacePosts) { post in
-                    Button {
-                        selectedPost = post
-                    } label: {
-                        AnonymousPostCard(post: post) {
-                            Task { await store.vote(post: post, value: post.myVote == 1 ? 0 : 1) }
-                        } onDownvote: {
-                            Task { await store.vote(post: post, value: post.myVote == -1 ? 0 : -1) }
+                    AnonymousPostCard(
+                        post: post,
+                        style: .feed,
+                        onOpenSpace: {
+                            // Already inside this Space — keep chip inert / no-op push.
+                            if let slug = post.spaceSlug, !slug.isEmpty,
+                               slug != store.currentSpace?.slug {
+                                store.pushSpace(slug: slug)
+                            }
+                        },
+                        onToggleLike: {
+                            Task {
+                                let next = (post.myVote ?? 0) > 0 ? 0 : 1
+                                await store.vote(post: post, value: next)
+                            }
                         }
+                    ) {
+                        store.pushPost(post)
                     }
-                    .buttonStyle(.plain)
                 }
             }
         }
@@ -224,70 +269,342 @@ struct AnonymousSpaceDetailView: View {
         await store.report(targetType: "space", targetId: id, reason: reason)
         appState.showToast("Report submitted.", style: .info)
     }
+
+    /// Join when needed, then open the composer (API requires membership to POST).
+    private func openComposer() async {
+        guard let space = store.currentSpace, space.slug == slug else { return }
+        if space.isPaid {
+            appState.showToast(AnonymousError.paidDisabled.errorDescription ?? "Paid Spaces coming soon.", style: .info)
+            return
+        }
+        isPreparingComposer = true
+        defer { isPreparingComposer = false }
+        let ok = await store.ensureJoined(space)
+        if ok {
+            showComposer = true
+        } else if let err = store.consumeError() {
+            appState.showToast(err, style: .error)
+        }
+    }
 }
 
+/// Full-width Reddit-scale post card — Matterya paper/serif, no upvote chrome.
 struct AnonymousPostCard: View {
+    enum Style {
+        /// Feed / Space list — full-bleed with hairline separator.
+        case feed
+        /// Thread hero — same scale, no bottom rule (comments follow).
+        case thread
+    }
+
     let post: AnonymousPost
-    var onUpvote: () -> Void = {}
-    var onDownvote: () -> Void = {}
+    var style: Style = .feed
+    /// Opens the Space from the feed meta chip.
+    var onOpenSpace: (() -> Void)? = nil
+    /// Toggles like (heart) on this post.
+    var onToggleLike: (() -> Void)? = nil
+    /// Opens the full post (See more / comments / media). Trailing closure target.
+    var onOpenPost: (() -> Void)? = nil
+
+    /// Longer feed preview; full body lives on the thread.
+    private static let feedLineLimit = 12
+    @State private var videoMuted = false
+    @State private var showFeedVideoPlayer = false
+
+    private var bodyText: String {
+        post.body.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var showsSeeMore: Bool {
+        guard style == .feed, onOpenPost != nil else { return false }
+        // Rough truncation signal — enough that 12 lines likely clips.
+        return bodyText.count > 280 || bodyText.split(whereSeparator: \.isNewline).count > 8
+    }
+
+    private var spaceLabel: String? {
+        let title = post.spaceTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !title.isEmpty { return title }
+        let slug = post.spaceSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return slug.isEmpty ? nil : slug
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Text("@\(post.authorUsername)")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Theme.ink)
-                if let space = post.spaceTitle ?? post.spaceSlug {
-                    Text("in \(space)")
+        VStack(alignment: .leading, spacing: 12) {
+            // Meta row — community · author · time
+            HStack(spacing: 6) {
+                if let space = spaceLabel {
+                    if let onOpenSpace {
+                        Button(action: onOpenSpace) {
+                            Text(space)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Theme.ink)
+                                .lineLimit(1)
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        Text(space)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.ink)
+                            .lineLimit(1)
+                    }
+                    Text("·")
                         .font(.caption)
                         .foregroundStyle(Theme.inkMuted)
-                        .lineLimit(1)
                 }
-                Spacer()
-                Text(post.createdAt.prefix(10))
-                    .font(.caption2)
+                Text("@\(post.authorUsername)")
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.inkMuted)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Text(RelativeTime.format(post.createdAt))
+                    .font(.caption)
                     .foregroundStyle(Theme.inkMuted)
             }
 
             if let title = post.title, !title.isEmpty {
                 Text(title)
-                    .font(.headline)
+                    .font(.system(size: 22, weight: .regular, design: .serif))
                     .foregroundStyle(Theme.ink)
                     .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            Text(post.body)
-                .font(.subheadline)
-                .foregroundStyle(Theme.inkSecondary)
-                .lineLimit(6)
-                .multilineTextAlignment(.leading)
+            if !bodyText.isEmpty {
+                Text(post.body)
+                    .font(.body)
+                    .foregroundStyle(Theme.inkSecondary)
+                    .lineLimit(style == .thread ? nil : Self.feedLineLimit)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
 
+                if showsSeeMore {
+                    Button {
+                        onOpenPost?()
+                    } label: {
+                        Text("See more")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.ink)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, -4)
+                }
+            }
+
+            mediaBlock
+
+            // Like · comments → full post thread (not an in-feed expand).
             HStack(spacing: 16) {
-                Button(action: onUpvote) {
-                    Label("\(post.score ?? 0)", systemImage: post.myVote == 1 ? "arrow.up.circle.fill" : "arrow.up.circle")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Theme.ink)
+                Button {
+                    onToggleLike?()
+                } label: {
+                    let liked = (post.myVote ?? 0) > 0
+                    Label(
+                        "\((post.score ?? 0))",
+                        systemImage: liked ? "heart.fill" : "heart"
+                    )
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(liked ? Theme.danger : Theme.inkMuted)
                 }
                 .buttonStyle(.plain)
+                .disabled(onToggleLike == nil)
+                .accessibilityLabel((post.myVote ?? 0) > 0 ? "Unlike" : "Like")
 
-                Button(action: onDownvote) {
-                    Image(systemName: post.myVote == -1 ? "arrow.down.circle.fill" : "arrow.down.circle")
-                        .font(.caption.weight(.semibold))
+                Button {
+                    onOpenPost?()
+                } label: {
+                    Label("\(post.commentCount ?? 0) comments", systemImage: "bubble.left")
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Theme.inkMuted)
                 }
                 .buttonStyle(.plain)
+                .disabled(onOpenPost == nil)
 
-                Label("\(post.commentCount ?? 0)", systemImage: "bubble.left")
-                    .font(.caption)
-                    .foregroundStyle(Theme.inkMuted)
+                Spacer(minLength: 0)
+                if post.hasImage {
+                    Label("Photo", systemImage: "photo")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.inkMuted)
+                } else if post.hasVideo {
+                    Label("Video", systemImage: "play.rectangle")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.inkMuted)
+                }
             }
         }
-        .padding(14)
+        .padding(.horizontal, Theme.pagePadding)
+        .padding(.vertical, 18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
-                .stroke(Theme.border, lineWidth: 0.5)
-        )
+        .background(Theme.surface)
+        .overlay(alignment: .bottom) {
+            if style == .feed {
+                Theme.divider.frame(height: 0.5)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var mediaBlock: some View {
+        if post.hasImage, let url = post.mediaURLValue {
+            // Feed-list decode budget — 1080px bitmaps made Masquerade scroll laggy.
+            let listPx: CGFloat = style == .thread ? 900 : 540
+            let image = CachedAsyncImage(
+                url: url,
+                maxPixelSize: listPx,
+                contentMode: .fit,
+                placeholder: AnyView(
+                    Rectangle()
+                        .fill(Theme.canvasMuted)
+                        .frame(height: 180)
+                        .overlay {
+                            Image(systemName: "photo")
+                                .font(.title2)
+                                .foregroundStyle(Theme.inkMuted)
+                        }
+                )
+            )
+            .frame(maxWidth: .infinity)
+            .frame(maxHeight: style == .thread ? 440 : 360)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Theme.border.opacity(0.7), lineWidth: 0.5)
+            )
+
+            if let onOpenPost, style == .feed {
+                Button(action: onOpenPost) { image }
+                    .buttonStyle(.plain)
+            } else {
+                image
+            }
+        } else if post.hasVideo, let url = post.mediaURLValue {
+            let posterH: CGFloat = style == .thread ? 280 : 240
+            if style == .thread {
+                // Real AVPlayer — do NOT pass anonymous post id (Hubs R2PlaybackResolver
+                // only understands CountryPost ids and would break signed Masquerade URLs).
+                // Tall unclipped stage + chrome reserves so mute/speed/timeline stay visible.
+                MatteryaHubPlayerView(
+                    url: url,
+                    posterURL: post.thumbURLValue,
+                    isActive: true,
+                    postID: nil,
+                    showsControls: true,
+                    loops: false,
+                    fillsFrame: false,
+                    topChromeReserve: 8,
+                    bottomChromeReserve: 14,
+                    isMuted: $videoMuted,
+                    allowsFullscreen: true
+                )
+                .frame(maxWidth: .infinity)
+                .frame(height: 380)
+                .background(Color.black)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Theme.border.opacity(0.7), lineWidth: 0.5)
+                )
+            } else {
+                let poster = post.thumbURLValue
+                let videoPoster = ZStack {
+                    if let poster {
+                        CachedAsyncImage(
+                            url: poster,
+                            maxPixelSize: 540,
+                            contentMode: .fill,
+                            placeholder: AnyView(Color.black)
+                        )
+                        .frame(maxWidth: .infinity)
+                        .frame(height: posterH)
+                        .clipped()
+                    } else {
+                        Color.black.frame(height: posterH)
+                    }
+                    Image(systemName: "play.circle.fill")
+                        .font(.system(size: 52, weight: .light))
+                        .foregroundStyle(.white.opacity(0.92))
+                        .shadow(color: .black.opacity(0.35), radius: 8, y: 2)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: posterH)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Theme.border.opacity(0.7), lineWidth: 0.5)
+                )
+
+                Button {
+                    showFeedVideoPlayer = true
+                } label: {
+                    videoPoster
+                }
+                .buttonStyle(.plain)
+                .fullScreenCover(isPresented: $showFeedVideoPlayer) {
+                    MasqueradeVideoPlayerCover(
+                        url: url,
+                        posterURL: post.thumbURLValue
+                    )
+                }
+            }
+        } else if post.hasVideo {
+            // Video typed but no playable URL yet — keep poster affordance.
+            let posterH: CGFloat = style == .thread ? 280 : 240
+            ZStack {
+                Color.black.frame(height: posterH)
+                Image(systemName: "play.circle.fill")
+                    .font(.system(size: 52, weight: .light))
+                    .foregroundStyle(.white.opacity(0.5))
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: posterH)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+    }
+
+}
+
+/// Full-screen Masquerade video — same archive player chrome as Hubs, signed R2 MP4.
+private struct MasqueradeVideoPlayerCover: View {
+    let url: URL
+    var posterURL: URL? = nil
+    @Environment(\.dismiss) private var dismiss
+    @State private var muted = false
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Color.black.ignoresSafeArea()
+            // Keep player inside the safe area so top chrome + timeline are not
+            // cropped by the notch / home indicator (ignoresSafeArea was clipping both).
+            MatteryaHubPlayerView(
+                url: url,
+                posterURL: posterURL,
+                isActive: true,
+                postID: nil,
+                showsControls: true,
+                loops: false,
+                fillsFrame: false,
+                topChromeReserve: 8,
+                bottomChromeReserve: 12,
+                isMuted: $muted,
+                allowsFullscreen: true
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.top, 4)
+            .padding(.bottom, 4)
+
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 36, height: 36)
+                    .background(Theme.ink.opacity(0.55), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .padding(.leading, 16)
+            .safeAreaPadding(.top, 12)
+            .accessibilityLabel("Close")
+        }
+        .statusBarHidden(true)
     }
 }

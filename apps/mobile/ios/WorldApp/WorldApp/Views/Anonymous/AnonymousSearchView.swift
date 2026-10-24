@@ -3,25 +3,16 @@ import SwiftUI
 struct AnonymousSearchView: View {
     @State private var store = AnonymousStore.shared
     @State private var query = ""
-    @State private var selectedPost: AnonymousPost?
-    @State private var path: [String] = []
 
     var body: some View {
-        NavigationStack(path: $path) {
-            VStack(spacing: 0) {
-                searchField
-                results
-            }
-            .navigationDestination(for: String.self) { slug in
-                AnonymousSpaceDetailView(slug: slug)
-            }
-            .navigationDestination(item: $selectedPost) { post in
-                AnonymousPostDetailView(post: post)
-            }
+        VStack(spacing: 0) {
+            searchField
+            results
         }
+        .toolbar(.hidden, for: .navigationBar)
         .task {
+            // Spaces only — loading the full Masquerade feed here doubled network + decode cost.
             await store.loadSpaces(filter: .popular)
-            await store.loadFeed()
         }
     }
 
@@ -82,17 +73,22 @@ struct AnonymousSearchView: View {
             )
         } else {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 16) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     if !spaces.isEmpty {
                         Text("Spaces")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(Theme.inkMuted)
                             .textCase(.uppercase)
+                            .padding(.horizontal, Theme.pagePadding)
+                            .padding(.top, 8)
+                            .padding(.bottom, 10)
                         ForEach(spaces.prefix(20)) { space in
-                            Button { path.append(space.slug) } label: {
+                            Button { store.pushSpace(slug: space.slug) } label: {
                                 AnonymousSpaceCard(space: space)
                             }
                             .buttonStyle(.plain)
+                            .padding(.horizontal, Theme.pagePadding)
+                            .padding(.bottom, 10)
                         }
                     }
                     if !posts.isEmpty {
@@ -100,17 +96,33 @@ struct AnonymousSearchView: View {
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(Theme.inkMuted)
                             .textCase(.uppercase)
+                            .padding(.horizontal, Theme.pagePadding)
+                            .padding(.top, 12)
+                            .padding(.bottom, 8)
                         ForEach(posts.prefix(30)) { post in
-                            Button { selectedPost = post } label: {
-                                AnonymousPostCard(post: post)
+                            AnonymousPostCard(
+                                post: post,
+                                style: .feed,
+                                onOpenSpace: {
+                                    if let slug = post.spaceSlug, !slug.isEmpty {
+                                        store.pushSpace(slug: slug)
+                                    }
+                                },
+                                onToggleLike: {
+                                    Task {
+                                        let next = (post.myVote ?? 0) > 0 ? 0 : 1
+                                        await store.vote(post: post, value: next)
+                                    }
+                                }
+                            ) {
+                                store.pushPost(post)
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                 }
-                .padding(.horizontal, Theme.pagePadding)
                 .padding(.bottom, 24)
             }
+            .background(Theme.canvas)
         }
     }
 

@@ -1,8 +1,11 @@
 import Foundation
 
-/// REST client for `/v1/anonymous/*` — Mirror SurfacePageClient style (12s timeout, Bearer, UncancellableHTTP).
+/// REST client for `/v1/anonymous/*` — Bearer + UncancellableHTTP.
+/// Cold Render wakes need headroom beyond a strict 12s (matches raised Feed surface timeouts).
 enum AnonymousService {
-    private static let timeout: TimeInterval = 12
+    /// First paint stays under a soft budget; one retry covers cold wakes.
+    private static let timeout: TimeInterval = 45
+    private static let feedFirstLimit = 12
 
     // MARK: - Session / identity
 
@@ -11,10 +14,13 @@ enum AnonymousService {
     }
 
     static func attest() async throws -> AnonymousSession {
-        try await post("/v1/anonymous/attest", body: ["confirmed": true], as: AnonymousSession.self)
+        // API requires `{ attest: true }` (not confirmed).
+        try await post("/v1/anonymous/attest", body: ["attest": true], as: AnonymousSession.self)
     }
 
     static func claimProfile(username: String? = nil) async throws -> AnonymousProfile {
+        // Live API: POST /v1/anonymous/profile (server allocates a safe handle).
+        // Optional username is forwarded for forward-compat; ignored until API accepts it.
         var body: [String: Any] = [:]
         if let username, !username.isEmpty {
             body["username"] = username
@@ -40,13 +46,13 @@ enum AnonymousService {
                 )
             }
         }
-        let env: Envelope = try await post("/v1/anonymous/profile/claim", body: body, as: Envelope.self)
+        let env: Envelope = try await post("/v1/anonymous/profile", body: body, as: Envelope.self)
         guard let profile = env.resolved else { throw AnonymousError.decoding }
         return profile
     }
 
     static func me() async throws -> AnonymousProfile {
-        try await get("/v1/anonymous/me", as: AnonymousProfile.self)
+        try await get("/v1/anonymous/profile/me", as: AnonymousProfile.self)
     }
 
     static func suggestUsername() async throws -> String {
@@ -54,6 +60,7 @@ enum AnonymousService {
             let username: String?
             let suggestedUsername: String?
         }
+        // Prefer live suggest when deployed; otherwise caller falls back to localSafeUsername.
         let resp: Resp = try await get("/v1/anonymous/username/suggest", as: Resp.self)
         if let u = resp.username ?? resp.suggestedUsername, !u.isEmpty { return u }
         throw AnonymousError.server("No username suggestion available.")
@@ -110,9 +117,30 @@ enum AnonymousService {
     }
 
     static func createPost(spaceId: String, input: AnonymousCreatePostInput) async throws -> AnonymousPost {
-        let data = try JSONEncoder().encode(input)
-        let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
-        return try await post("/v1/anonymous/spaces/\(spaceId)/posts", body: obj, as: AnonymousPost.self)
+        // Explicit dict — JSONEncoder Optional nulls + CodingKeys have dropped media before.
+        var body: [String: Any] = [
+            "body": input.body,
+        ]
+        if let title = input.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            body["title"] = title
+        }
+        if let mediaType = input.mediaType?.trimmingCharacters(in: .whitespacesAndNewlines), !mediaType.isEmpty {
+            body["media_type"] = mediaType
+            body["mediaType"] = mediaType
+        }
+        if let mediaURL = input.mediaURL?.trimmingCharacters(in: .whitespacesAndNewlines), !mediaURL.isEmpty {
+            body["media_url"] = mediaURL
+            body["mediaUrl"] = mediaURL
+        }
+        if let thumbURL = input.thumbURL?.trimmingCharacters(in: .whitespacesAndNewlines), !thumbURL.isEmpty {
+            body["thumb_url"] = thumbURL
+            body["thumbUrl"] = thumbURL
+        }
+        return try await post("/v1/anonymous/spaces/\(spaceId)/posts", body: body, as: AnonymousPost.self)
+    }
+
+    static func getPost(id: String) async throws -> AnonymousPost {
+        try await get("/v1/anonymous/posts/\(id)", as: AnonymousPost.self)
     }
 
     static func listComments(
@@ -122,20 +150,71 @@ enum AnonymousService {
     ) async throws -> AnonymousPage<AnonymousComment> {
         var q: [String: String] = ["limit": "\(min(max(limit, 1), 80))"]
         if let cursor, !cursor.isEmpty { q["cursor"] = cursor }
-        return try await getPage("/v1/anonymous/posts/\(postId)/comments", query: q, itemType: AnonymousComment.self)
+        // Dedicated path — generic getPage + convertFromSnakeCase silently dropped comments.
+        let req = try await makeRequest(
+            path: "/v1/anonymous/posts/\(postId)/comments",
+            method: "GET",
+            query: q,
+            body: nil
+        )
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await UncancellableHTTP.data(for: req)
+        } catch {
+            throw AnonymousError.network(error.localizedDescription)
+        }
+        guard let http = response as? HTTPURLResponse else {
+            throw AnonymousError.network("Bad response.")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            var code: String?
+            var message: String?
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                code = json["code"] as? String
+                message = Self.apiMessage(from: json)
+            }
+            throw AnonymousError.from(code: code, message: message ?? "HTTP \(http.statusCode)")
+        }
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw AnonymousError.decoding
+        }
+        if let code = json["code"] as? String, json["ok"] as? Bool == false {
+            throw AnonymousError.from(code: code, message: Self.apiMessage(from: json))
+        }
+        let payload = (json["data"] as? [String: Any]) ?? json
+        let rawItems = (payload["comments"] as? [[String: Any]])
+            ?? (payload["items"] as? [[String: Any]])
+            ?? []
+        let itemsData = try JSONSerialization.data(withJSONObject: rawItems)
+        // Plain decoder — models already accept snake_case CodingKeys.
+        let decoder = JSONDecoder()
+        let items = try decoder.decode([AnonymousComment].self, from: itemsData)
+        let cursorOut = payload["nextCursor"] as? String ?? payload["next_cursor"] as? String
+        return AnonymousPage(items: items, nextCursor: cursorOut)
     }
 
     static func createComment(postId: String, input: AnonymousCreateCommentInput) async throws -> AnonymousComment {
-        let data = try JSONEncoder().encode(input)
-        let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
-        return try await post("/v1/anonymous/posts/\(postId)/comments", body: obj, as: AnonymousComment.self)
+        var body: [String: Any] = ["body": input.body]
+        if let parent = input.parentCommentId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !parent.isEmpty {
+            body["parent_id"] = parent
+        }
+        return try await post("/v1/anonymous/posts/\(postId)/comments", body: body, as: AnonymousComment.self)
     }
 
     static func vote(targetType: String, targetId: String, value: Int) async throws {
         struct Empty: Decodable {}
+        // API route is `/votes` and reads snake_case (`target_type` / `target_id`).
         let _: Empty = try await post(
-            "/v1/anonymous/vote",
-            body: ["targetType": targetType, "targetId": targetId, "value": value],
+            "/v1/anonymous/votes",
+            body: [
+                "target_type": targetType,
+                "target_id": targetId,
+                "value": value,
+                "targetType": targetType,
+                "targetId": targetId,
+            ],
             as: Empty.self,
             allowEmpty: true
         )
@@ -143,9 +222,16 @@ enum AnonymousService {
 
     static func report(targetType: String, targetId: String, reason: String) async throws {
         struct Empty: Decodable {}
+        // API: POST /v1/anonymous/reports with snake_case fields.
         let _: Empty = try await post(
-            "/v1/anonymous/report",
-            body: ["targetType": targetType, "targetId": targetId, "reason": reason],
+            "/v1/anonymous/reports",
+            body: [
+                "target_type": targetType,
+                "target_id": targetId,
+                "reason": reason,
+                "targetType": targetType,
+                "targetId": targetId,
+            ],
             as: Empty.self,
             allowEmpty: true
         )
@@ -153,9 +239,13 @@ enum AnonymousService {
 
     static func block(profileId: String) async throws {
         struct Empty: Codable {}
+        // API: POST /v1/anonymous/blocks with blocked_profile_id (snake_case).
         let _: Empty = try await post(
-            "/v1/anonymous/block",
-            body: ["profileId": profileId],
+            "/v1/anonymous/blocks",
+            body: [
+                "blocked_profile_id": profileId,
+                "blockedProfileId": profileId,
+            ],
             as: Empty.self,
             allowEmpty: true
         )
@@ -164,14 +254,26 @@ enum AnonymousService {
     static func feed(
         sort: AnonymousFeedSort = .hot,
         cursor: String? = nil,
-        limit: Int = 24
+        limit: Int? = nil
     ) async throws -> AnonymousPage<AnonymousPost> {
+        let resolvedLimit = min(max(limit ?? feedFirstLimit, 1), 48)
         var q: [String: String] = [
             "sort": sort.rawValue,
-            "limit": "\(min(max(limit, 1), 48))",
+            "limit": "\(resolvedLimit)",
         ]
         if let cursor, !cursor.isEmpty { q["cursor"] = cursor }
         return try await getPage("/v1/anonymous/feed", query: q, itemType: AnonymousPost.self)
+    }
+
+    static func notifications(
+        cursor: String? = nil,
+        limit: Int = 40
+    ) async throws -> AnonymousPage<AnonymousNotification> {
+        var q: [String: String] = [
+            "limit": "\(min(max(limit, 1), 80))",
+        ]
+        if let cursor, !cursor.isEmpty { q["cursor"] = cursor }
+        return try await getPage("/v1/anonymous/notifications", query: q, itemType: AnonymousNotification.self)
     }
 
     // MARK: - HTTP
@@ -202,7 +304,7 @@ enum AnonymousService {
             var message: String?
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 code = json["code"] as? String
-                message = json["message"] as? String ?? json["error"] as? String
+                message = Self.apiMessage(from: json)
             }
             throw AnonymousError.from(code: code, message: message ?? "HTTP \(http.statusCode)")
         }
@@ -210,12 +312,26 @@ enum AnonymousService {
             throw AnonymousError.decoding
         }
         if let code = json["code"] as? String, json["ok"] as? Bool == false {
-            throw AnonymousError.from(code: code, message: json["message"] as? String)
+            throw AnonymousError.from(code: code, message: Self.apiMessage(from: json))
         }
         let payload = (json["data"] as? [String: Any]) ?? json
-        let rawItems = payload["items"] as? [[String: Any]] ?? []
+        // API uses resource keys (spaces / posts / notifications / comments), not always `items`.
+        let rawItems: [[String: Any]] = {
+            for key in ["items", "spaces", "posts", "notifications", "comments"] {
+                if let arr = payload[key] as? [[String: Any]] { return arr }
+            }
+            return []
+        }()
         let itemsData = try JSONSerialization.data(withJSONObject: rawItems)
-        let items = (try? JSONDecoder.anonymous.decode([T].self, from: itemsData)) ?? []
+        // Models already declare snake_case CodingKeys — convertFromSnakeCase silently
+        // emptied comments before; use a plain decoder and surface failures.
+        let decoder = JSONDecoder()
+        let items: [T]
+        do {
+            items = try decoder.decode([T].self, from: itemsData)
+        } catch {
+            throw AnonymousError.decoding
+        }
         let cursor = payload["nextCursor"] as? String ?? payload["next_cursor"] as? String
         return AnonymousPage(items: items, nextCursor: cursor)
     }
@@ -249,9 +365,12 @@ enum AnonymousService {
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         req.timeoutInterval = timeout
 
-        // Cached token only — never stall first paint on token refresh.
-        if let token = await MainActor.run(body: { AuthService.shared.accessToken() }) {
+        // Always refresh-near-expiry — a stale non-empty token caused 401 → empty feed.
+        do {
+            let token = try await AuthService.shared.ensureValidToken()
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        } catch {
+            throw AnonymousError.network("Sign in again to open Masquerade.")
         }
 
         if let body {
@@ -287,7 +406,7 @@ enum AnonymousService {
             // Prefer unwrapping `{ ok, ...payload }` envelopes.
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 if let code = json["code"] as? String, json["ok"] as? Bool == false {
-                    throw AnonymousError.from(code: code, message: json["message"] as? String)
+                    throw AnonymousError.from(code: code, message: Self.apiMessage(from: json))
                 }
                 // If top-level matches the type fields, decode whole body.
                 if let decoded = try? JSONDecoder.anonymous.decode(type, from: data) {
@@ -315,7 +434,7 @@ enum AnonymousService {
         var message: String?
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             code = json["code"] as? String
-            message = json["message"] as? String ?? json["error"] as? String
+            message = Self.apiMessage(from: json)
         }
 
         switch http.statusCode {
@@ -333,12 +452,22 @@ enum AnonymousService {
             throw AnonymousError.from(code: code, message: message ?? "HTTP \(http.statusCode)")
         }
     }
+
+    /// API errors use `reason` (and sometimes `message` / `error`).
+    private static func apiMessage(from json: [String: Any]) -> String? {
+        if let reason = json["reason"] as? String, !reason.isEmpty { return reason }
+        if let message = json["message"] as? String, !message.isEmpty { return message }
+        if let error = json["error"] as? String, !error.isEmpty { return error }
+        return nil
+    }
 }
 
 private extension JSONDecoder {
+    /// Plain decoder — Anonymous models already declare dual snake/camel CodingKeys.
+    /// `convertFromSnakeCase` maps `media_url` → `mediaUrl`, which never matches
+    /// CodingKey `mediaURL`, so getPost silently dropped image/video URLs and
+    /// rememberPost then blanked feed cards on back navigation.
     static let anonymous: JSONDecoder = {
-        let d = JSONDecoder()
-        d.keyDecodingStrategy = .convertFromSnakeCase
-        return d
+        JSONDecoder()
     }()
 }

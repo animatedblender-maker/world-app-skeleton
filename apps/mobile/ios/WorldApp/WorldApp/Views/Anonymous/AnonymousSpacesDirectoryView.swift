@@ -3,17 +3,15 @@ import SwiftUI
 struct AnonymousSpacesDirectoryView: View {
     var onCreate: () -> Void
     @State private var store = AnonymousStore.shared
-    @State private var path: [String] = []
 
     var body: some View {
-        NavigationStack(path: $path) {
-            VStack(spacing: 0) {
-                filterBar
-                content
-            }
-            .navigationDestination(for: String.self) { slug in
-                AnonymousSpaceDetailView(slug: slug)
-            }
+        VStack(spacing: 0) {
+            filterBar
+            content
+        }
+        .toolbar(.hidden, for: .navigationBar)
+        .task {
+            await store.loadSpaces(filter: store.activeSpaceFilter, force: false)
         }
     }
 
@@ -79,7 +77,7 @@ struct AnonymousSpacesDirectoryView: View {
                 LazyVStack(spacing: 12) {
                     ForEach(spaces) { space in
                         Button {
-                            path.append(space.slug)
+                            store.pushSpace(slug: space.slug)
                         } label: {
                             AnonymousSpaceCard(space: space)
                         }
@@ -140,9 +138,11 @@ struct AnonymousSpaceCard: View {
                                 .overlay(Capsule().stroke(Theme.border, lineWidth: 0.5))
                         }
                     }
-                    Text("a/\(space.slug)")
-                        .font(.caption)
-                        .foregroundStyle(Theme.inkMuted)
+                    if let category = space.category, !category.isEmpty {
+                        Text(category)
+                            .font(.caption)
+                            .foregroundStyle(Theme.inkMuted)
+                    }
                 }
                 Spacer(minLength: 0)
             }

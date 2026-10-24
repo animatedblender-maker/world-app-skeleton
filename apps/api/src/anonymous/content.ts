@@ -118,7 +118,35 @@ export async function listSpacePosts(opts: {
     params
   );
 
-  const page = rows.slice(0, limit);
+  let page = rows.slice(0, limit);
+
+  // First page: pin the viewer's own recent posts so Hot score-0 cards don't vanish.
+  if (!opts.cursor) {
+    const { rows: own } = await pool.query<any>(
+      `
+      select p.id, p.space_id, p.title, p.body, p.state, p.score, p.comment_count,
+             p.created_at, p.edited_at, p.media_type, p.media_url, p.thumb_url,
+             a.id as author_id, a.username as author_username, a.avatar_seed as author_avatar_seed,
+             coalesce(v.value, 0) as my_vote
+      from anonymous.posts p
+      join anonymous.profiles a on a.id = p.author_profile_id
+      left join anonymous.votes v
+        on v.target_type = 'post' and v.target_id = p.id and v.anon_profile_id = $2::uuid
+      where p.space_id = $1::uuid
+        and p.author_profile_id = $2::uuid
+        and p.state = 'active'
+        and p.created_at > now() - interval '3 days'
+      order by p.created_at desc
+      limit 3
+      `,
+      [opts.spaceId, opts.profile.id]
+    );
+    if (own.length) {
+      const ownIds = new Set(own.map((r: any) => String(r.id)));
+      page = [...own, ...page.filter((r: any) => !ownIds.has(String(r.id)))].slice(0, limit);
+    }
+  }
+
   const posts: PostPublic[] = await withResolvedMediaMany(
     page.map((r) => ({
       id: r.id,
@@ -188,11 +216,11 @@ export async function createPost(opts: {
   const body = String(opts.body || '').trim().slice(0, 10000);
   const title = opts.title != null ? String(opts.title).trim().slice(0, 200) : null;
   const mediaTypeRaw = opts.mediaType != null ? String(opts.mediaType).trim().toLowerCase() : '';
-  const mediaType =
+  let mediaType =
     mediaTypeRaw === 'image' || mediaTypeRaw === 'video' || mediaTypeRaw === 'gif'
       ? mediaTypeRaw
       : null;
-  const mediaUrl =
+  let mediaUrl =
     opts.mediaUrl != null && String(opts.mediaUrl).trim()
       ? String(opts.mediaUrl).trim().slice(0, 2000)
       : null;
@@ -200,6 +228,17 @@ export async function createPost(opts: {
     opts.thumbUrl != null && String(opts.thumbUrl).trim()
       ? String(opts.thumbUrl).trim().slice(0, 2000)
       : null;
+  // Infer type from URL when the client sent a URL without media_type.
+  if (mediaUrl && !mediaType) {
+    const lower = mediaUrl.toLowerCase();
+    if (/\.(mp4|mov|webm|m4v)(\?|$)/i.test(lower) || lower.includes('/video')) {
+      mediaType = 'video';
+    } else if (/\.(gif)(\?|$)/i.test(lower)) {
+      mediaType = 'gif';
+    } else if (/\.(jpe?g|png|webp|heic)(\?|$)/i.test(lower) || lower.includes('/object/public/posts/')) {
+      mediaType = 'image';
+    }
+  }
   if (!body && !title && !mediaUrl) {
     return {
       ok: false,
@@ -245,31 +284,29 @@ export async function createPost(opts: {
     );
     await client.query('commit');
     const r = rows[0];
-    return {
-      ok: true,
-      post: {
-        id: r.id,
-        space_id: r.space_id,
-        space_slug: space.slug,
-        space_title: space.title,
-        author: {
-          id: opts.profile.id,
-          username: opts.profile.username,
-          avatar_seed: opts.profile.avatar_seed,
-        },
-        title: r.title,
-        body: r.body,
-        state: r.state,
-        score: 0,
-        comment_count: 0,
-        created_at: iso(r.created_at)!,
-        edited_at: null,
-        my_vote: 0,
-        media_type: r.media_type ?? null,
-        media_url: r.media_url ?? null,
-        thumb_url: r.thumb_url ?? null,
+    const post = await withResolvedMedia({
+      id: r.id,
+      space_id: r.space_id,
+      space_slug: space.slug,
+      space_title: space.title,
+      author: {
+        id: opts.profile.id,
+        username: opts.profile.username,
+        avatar_seed: opts.profile.avatar_seed,
       },
-    };
+      title: r.title,
+      body: r.body,
+      state: r.state,
+      score: 0,
+      comment_count: 0,
+      created_at: iso(r.created_at)!,
+      edited_at: null,
+      my_vote: 0,
+      media_type: r.media_type ?? null,
+      media_url: r.media_url ?? null,
+      thumb_url: r.thumb_url ?? null,
+    });
+    return { ok: true, post };
   } catch (err) {
     try {
       await client.query('rollback');

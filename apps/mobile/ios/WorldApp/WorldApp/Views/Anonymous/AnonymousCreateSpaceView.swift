@@ -63,18 +63,12 @@ struct AnonymousCreateSpaceView: View {
 
     private var metadataStep: some View {
         VStack(alignment: .leading, spacing: 16) {
-            fieldLabel("Title")
-            matteryaField(text: $title, placeholder: "Space title")
+            fieldLabel("Name")
+            matteryaField(text: $title, placeholder: "Space name")
                 .onChange(of: title) { _, value in
-                    if slug.isEmpty || slug == slugify(String(title.dropLast())) {
-                        slug = slugify(value)
-                    }
+                    // Internal URL key only — never shown as a/… naming.
+                    slug = slugify(value)
                 }
-
-            fieldLabel("Slug")
-            matteryaField(text: $slug, placeholder: "space_slug")
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
 
             fieldLabel("Description")
             matteryaEditor(text: $description, placeholder: "What is this Space about?")
@@ -159,8 +153,7 @@ struct AnonymousCreateSpaceView: View {
 
     private var reviewStep: some View {
         VStack(alignment: .leading, spacing: 12) {
-            reviewRow("Title", title)
-            reviewRow("Slug", "a/\(slug)")
+            reviewRow("Name", title)
             reviewRow("Category", category)
             reviewRow("Visibility", visibility.rawValue.replacingOccurrences(of: "_", with: " "))
             reviewRow("Admission", admission == .free ? "Free" : "Paid (not available yet)")
@@ -217,9 +210,9 @@ struct AnonymousCreateSpaceView: View {
         switch step {
         case 0:
             let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
-            let s = slug.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard t.count >= 3, s.count >= 3 else {
-                appState.showToast("Title and slug need at least 3 characters.", style: .error)
+            slug = slugify(t)
+            guard t.count >= 3, slug.count >= 3 else {
+                appState.showToast("Name needs at least 3 characters.", style: .error)
                 return false
             }
             return true
@@ -256,7 +249,7 @@ struct AnonymousCreateSpaceView: View {
             admission: AnonymousSpaceAdmission.free.rawValue
         )
         if let space = await store.createSpace(input) {
-            appState.showToast("Created a/\(space.slug)", style: .success)
+            appState.showToast("Created \(space.title)", style: .success)
             dismiss()
         } else if let err = store.consumeError() {
             appState.showToast(err, style: .error)
