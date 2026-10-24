@@ -358,15 +358,15 @@ function mindHtml(): string {
 <script>
 const GAPS = [
   ['1','Purpose / surfaces','partial','Admin docs + live surfaces'],
-  ['2','Invariants','partial','Ledger PK; fail → cursor'],
+  ['2','Invariants','shipped','At-most-once ledger; soft-recycle penalty; fail → cursor'],
   ['3','Architecture','shipped','This Architecture tab'],
   ['5','Events','partial','entity_engagement_events'],
   ['6','Masquerade isolation','partial','anonymous.* + check panel'],
   ['7','Media understanding','missing','Phase 2'],
   ['8','Interest features','partial','personality / affinity'],
   ['9','Candidates','partial','shelf multi-lane'],
-  ['10','Rank + diversity','partial','rank.service + MMR'],
-  ['11','Exposure ledger','partial','feed_video_delivery'],
+  ['10','Rank + diversity','shipped','MMR + family caps (Home/Hubs/Masquerade)'],
+  ['11','Exposure ledger','shipped','feed_video_delivery on all For You surfaces'],
   ['14','Ads / economy','missing','Phase 4+'],
   ['15','GraphQL FeedItem','missing','REST (ADR 0002)'],
   ['18','ML evaluation','missing','Phase 2–3'],

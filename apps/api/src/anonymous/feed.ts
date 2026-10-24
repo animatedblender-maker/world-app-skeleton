@@ -158,19 +158,23 @@ export async function getFeed(opts: {
       });
 
     // Prefer never-seen keys, but always fill a full page.
-    // Old behavior dropped already-delivered posts entirely — after a few soft
-    // refreshes (or opening a post and returning) the Hot window was exhausted
-    // and the feed collapsed to the viewer's one pinned post.
+    // Soft recycle only when unviewed inventory is short — seen cards get a
+    // hard score penalty so fresh content still wins MMR (MIND §2 / §11).
     const rankedSlots = Math.max(1, limit + 1 - Math.min(ownRows.length, 3));
     const ledgerUser = await resolveLedgerUserId(opts.profile.id);
     let eligible = scored;
-    if (ledgerUser) {
-      const delivered = await loadDeliveredCanonicalKeys(ledgerUser, 'masquerade_for_you');
+    if (ledgerUser && mindLedgerEnabled()) {
+      const delivered = await loadDeliveredCanonicalKeys(
+        ledgerUser,
+        'masquerade_for_you'
+      );
       const fresh = scored.filter((c) => !delivered.has(c.mediaKey));
       if (fresh.length >= rankedSlots) {
         eligible = fresh;
       } else {
-        const seen = scored.filter((c) => delivered.has(c.mediaKey));
+        const seen = scored
+          .filter((c) => delivered.has(c.mediaKey))
+          .map((c) => ({ ...c, score: c.score * 0.28 }));
         eligible = [...fresh, ...seen];
       }
     }
@@ -185,28 +189,42 @@ export async function getFeed(opts: {
       maxSameSpace: 2,
       spaceWindow: 10,
       exclusiveFamilies: ['tiktok', 'image', 'video'],
-      // Image at most ~1 in 4 so photo cards cannot pin the whole first page.
+      // Image/video at most ~1 in 4 so media cards cannot pin the whole first page.
       exclusiveEveryN: 4,
     });
 
-    // Always serve the ranked page from `picked`. Reserve is bookkeeping only —
-    // using a partial reserve (most candidates already in the ledger) was
-    // shrinking the response to 1–2 cards.
-    const rankedRows = picked.slice(0, rankedSlots).map((c) => c.row);
+    // Serve full MMR page (never shrink on partial reserve). Await ledger so
+    // deliveryPolicy is truthful and concurrent tabs share the same reservations.
+    let rankedRows = picked.slice(0, rankedSlots).map((c) => c.row);
     if (ledgerUser && picked.length && mindLedgerEnabled()) {
-      deliveryPolicy = 'ledger';
-      void reserveDeliveryBatch({
-        userId: ledgerUser,
-        surface: 'masquerade_for_you',
-        idempotencyKey: `masq:${opts.profile.id}:${requestId}`,
-        candidates: picked.slice(0, rankedSlots).map((c) => ({
-          id: c.id,
-          canonicalKey: c.mediaKey,
-        })),
-        limit: rankedSlots,
-      }).catch(() => {
+      try {
+        const reserved = await reserveDeliveryBatch({
+          userId: ledgerUser,
+          surface: 'masquerade_for_you',
+          idempotencyKey: `masq:${opts.profile.id}:${requestId}`,
+          candidates: picked.slice(0, rankedSlots).map((c) => ({
+            id: c.id,
+            canonicalKey: c.mediaKey,
+          })),
+          limit: rankedSlots,
+        });
+        if (reserved && reserved.videoIds.length) {
+          deliveryPolicy = 'ledger';
+          const byId = new Map(picked.map((c) => [c.id, c]));
+          const reservedOrdered = reserved.videoIds
+            .map((id) => byId.get(id)?.row)
+            .filter((r): r is (typeof picked)[number]['row'] => !!r);
+          const reservedSet = new Set(reserved.videoIds);
+          const fill = picked
+            .filter((c) => !reservedSet.has(c.id))
+            .map((c) => c.row);
+          rankedRows = [...reservedOrdered, ...fill].slice(0, rankedSlots);
+        } else {
+          deliveryPolicy = 'cursor';
+        }
+      } catch {
         deliveryPolicy = 'cursor';
-      });
+      }
     }
 
     // Newest own posts first, then ranked feed (dedupe).

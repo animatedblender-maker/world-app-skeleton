@@ -315,7 +315,7 @@ export async function getMindStatus(): Promise<MindStatus> {
     engagement,
     masquerade,
     seed: readSeedProgress(),
-    gapSummary: { shipped: 4, partial: 12, missing: 6 },
+    gapSummary: { shipped: 7, partial: 9, missing: 6 },
     docs: listDocs(),
     recent,
   };

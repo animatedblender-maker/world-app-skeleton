@@ -24,6 +24,11 @@ import {
   orderRowsByIds,
   reserveDeliveryBatch,
 } from './delivery.service.js';
+import {
+  MIND_POLICY_VERSION,
+  mindLedgerEnabled,
+  newMindRequestId,
+} from './mind-contracts.js';
 import { rankCandidates } from './rank.service.js';
 
 export const HUB_PARENT_SLUGS = [
@@ -131,6 +136,8 @@ export type ForYouPage = {
   session: string;
   batchId?: string | null;
   deliveryPolicy?: 'ledger' | 'cursor';
+  requestId?: string;
+  modelVersion?: string;
 };
 
 type RawPostRow = {
@@ -654,6 +661,8 @@ export async function fetchForYouPage(input: {
         session,
         batchId: prior.batchId,
         deliveryPolicy: 'ledger',
+        requestId: newMindRequestId(),
+        modelVersion: MIND_POLICY_VERSION,
       };
     }
   }
@@ -712,8 +721,9 @@ export async function fetchForYouPage(input: {
   let servedRows = woven.slice(0, want);
   let batchId: string | null = null;
   let deliveryPolicy: 'ledger' | 'cursor' = 'cursor';
+  const requestId = newMindRequestId();
 
-  if (viewerId && woven.length) {
+  if (viewerId && woven.length && mindLedgerEnabled()) {
     const delivered = await loadDeliveredCanonicalKeys(viewerId, 'hubs_for_you');
     let eligible = woven.filter(
       (row) => !canonicalVideoAliasKeys(row).some((k) => delivered.has(k))
@@ -743,8 +753,7 @@ export async function fetchForYouPage(input: {
       const reserved = await reserveDeliveryBatch({
         userId: viewerId,
         surface: 'hubs_for_you',
-        idempotencyKey:
-          idem || `hubs:${session}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+        idempotencyKey: idem || `hubs:${session}:${requestId}`,
         candidates: rankedRows.map((r) => ({
           id: r.id,
           canonicalKey: canonicalVideoKey(r),
@@ -775,6 +784,8 @@ export async function fetchForYouPage(input: {
     session,
     batchId,
     deliveryPolicy,
+    requestId,
+    modelVersion: MIND_POLICY_VERSION,
   };
 }
 
@@ -793,6 +804,8 @@ export type SurfacePage = {
   count: number;
   batchId?: string | null;
   deliveryPolicy?: 'ledger' | 'cursor';
+  requestId?: string;
+  modelVersion?: string;
 };
 
 /** Four-lane cursor: spark / hub / image / text page independently on Home. */
@@ -1314,6 +1327,8 @@ export async function fetchHomeFeedPage(input: {
         count: liveItems.length,
         batchId: prior.batchId,
         deliveryPolicy: 'ledger',
+        requestId: newMindRequestId(),
+        modelVersion: MIND_POLICY_VERSION,
       };
     }
   }
@@ -1422,8 +1437,9 @@ export async function fetchHomeFeedPage(input: {
   let servedRows = woven.slice(0, want);
   let batchId: string | null = null;
   let deliveryPolicy: 'ledger' | 'cursor' = 'cursor';
+  const requestId = newMindRequestId();
 
-  if (viewerId && woven.length) {
+  if (viewerId && woven.length && mindLedgerEnabled()) {
     const delivered = await loadDeliveredCanonicalKeys(viewerId, 'home_for_you');
     let eligible = woven.filter(
       (row) => !canonicalVideoAliasKeys(row).some((k) => delivered.has(k))
@@ -1457,7 +1473,7 @@ export async function fetchHomeFeedPage(input: {
       const reserved = await reserveDeliveryBatch({
         userId: viewerId,
         surface: 'home_for_you',
-        idempotencyKey: idem || `home:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`,
+        idempotencyKey: idem || `home:${requestId}`,
         candidates: diversified.map((r) => ({
           id: r.id,
           canonicalKey: canonicalVideoKey(r),
@@ -1517,6 +1533,8 @@ export async function fetchHomeFeedPage(input: {
     count: liveItems.length,
     batchId,
     deliveryPolicy,
+    requestId,
+    modelVersion: MIND_POLICY_VERSION,
   };
 }
 
