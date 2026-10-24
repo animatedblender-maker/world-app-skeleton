@@ -8,6 +8,7 @@ import {
   type ContentPostedPayload,
   type EngagementPayload,
 } from '../kafka/types.js';
+import { sanitizeEngagementMeta } from '../recommendation/mind-contracts.js';
 
 /** Client-facing event type → Kafka eventType + default strength */
 const CLIENT_TYPES: Record<
@@ -199,7 +200,11 @@ export async function ingestEngagementBatch(
         sessionId,
         surface: ev.surface ? String(ev.surface).slice(0, 32) : null,
         deviceClass: ev.deviceClass ? String(ev.deviceClass).slice(0, 16) : null,
-        meta: ev.meta && typeof ev.meta === 'object' ? ev.meta : null,
+        meta: sanitizeEngagementMeta(
+          ev.meta && typeof ev.meta === 'object' && !Array.isArray(ev.meta)
+            ? (ev.meta as Record<string, unknown>)
+            : null
+        ),
       };
 
       try {

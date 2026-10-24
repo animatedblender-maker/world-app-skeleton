@@ -8,7 +8,7 @@ Status legend: **shipped** · **partial** · **missing** (roadmap)
 | 2 | Invariants (no-repeat, fail closed) | shipped | Ledger PK; soft-recycle penalty; fail → cursor |
 | 3 | Architecture diagram | shipped | Admin `/mind` architecture wall |
 | 4 | Repo layout `intelligence/` | partial | Kept under `recommendation/` + `ops/` |
-| 5 | Event envelope | partial | `entity_engagement_events` + Kafka; MIND-001/002 |
+| 5 | Event envelope | shipped | Allowlist ingest + meta scrub + Kafka/PG |
 | 6 | Masquerade isolation | partial | Separate schemas/routes; admin check panel |
 | 7 | Media understanding | missing | Phase 2 |
 | 8 | Interest memory / features | partial | `entity_personality`, affinity tables |
@@ -22,7 +22,7 @@ Status legend: **shipped** · **partial** · **missing** (roadmap)
 | 16 | Schema | partial | Delivery migration applied |
 | 17 | Workers | partial | Pipeline + frame0; not full MIND workers |
 | 18 | ML eval | missing | Phase 2–3 |
-| 19 | Observability | partial | `/mind` live + metrics ingest |
+| 19 | Observability | shipped | `/mind` events, decisions, ledger, seed |
 | 20 | Tests | partial | MIND-008 concurrency |
 | 21 | Roadmap | shipped | Documented on admin page |
 

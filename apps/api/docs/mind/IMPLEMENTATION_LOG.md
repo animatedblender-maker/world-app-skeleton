@@ -43,6 +43,11 @@ npx tsc -p tsconfig.json --noEmit
 # then open http://127.0.0.1:3000/mind
 ```
 
+## Follow-ups shipped
+
+- **phase1.v2** — P0 feed reliability (§2/§10/§11 shipped)
+- **phase1.v3** — Events hygiene (`sanitizeEngagementMeta`) + `/mind` live event/decision panels (§5/§19 shipped)
+
 ## Not in this pass
 
 Phase 2–5 (embeddings, trained rankers, ads GraphQL FeedItem, Guardian depth). Shown as roadmap on `/mind`.

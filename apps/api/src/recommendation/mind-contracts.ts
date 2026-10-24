@@ -3,7 +3,7 @@
  * Handbook alias: mind_feed_exposure → feed_video_delivery (ADR 0001).
  */
 
-export const MIND_POLICY_VERSION = 'mind.phase1.v2';
+export const MIND_POLICY_VERSION = 'mind.phase1.v3';
 
 /** Handbook FeedSurface → Matterya ledger / rank surface keys. */
 export type MindSurface =
@@ -61,3 +61,60 @@ export function mindLedgerEnabled(): boolean {
 export function newMindRequestId(): string {
   return `mind_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
+
+/** Keys never persisted from client `meta` (handbook §5 event hygiene). */
+const META_DENY =
+  /^(email|password|token|authorization|cookie|access_token|refresh_token|ssn|phone|raw_query|query|gps|lat|lng|latitude|longitude|exact_location)$/i;
+
+/**
+ * Strict allowlist scrub for client-provided engagement meta.
+ * Drops denied keys, non-primitive nests deeper than one level, and caps size.
+ */
+export function sanitizeEngagementMeta(
+  meta: Record<string, unknown> | null | undefined
+): Record<string, unknown> | null {
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return null;
+  const out: Record<string, unknown> = {};
+  let n = 0;
+  for (const [k, v] of Object.entries(meta)) {
+    if (n >= 24) break;
+    if (!k || k.length > 40 || META_DENY.test(k)) continue;
+    if (v == null) continue;
+    if (typeof v === 'string') {
+      out[k] = v.slice(0, 200);
+      n += 1;
+    } else if (typeof v === 'number' || typeof v === 'boolean') {
+      out[k] = v;
+      n += 1;
+    }
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/** Client event type keys accepted by ingest (handbook taxonomy → Kafka names). */
+export const MIND_CLIENT_EVENT_KEYS = [
+  'like',
+  'unlike',
+  'comment',
+  'share',
+  'save',
+  'unsave',
+  'watch_partial',
+  'watch_complete',
+  'scroll_dwell',
+  'scroll_skip',
+  'profile_open',
+  'person_follow',
+  'person_unfollow',
+  'hub_open',
+  'hub_leave',
+  'hub_shelf',
+  'hub_video_open',
+  'screen_open',
+  'screen_leave',
+  'impression',
+  'ranked_served',
+  'viewport_visible',
+  'hide',
+  'not_interested',
+] as const;

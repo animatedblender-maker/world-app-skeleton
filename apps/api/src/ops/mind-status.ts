@@ -6,7 +6,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pool } from '../db.js';
 import {
+  MIND_CLIENT_EVENT_KEYS,
+  MIND_NEGATIVE_EVENTS,
   MIND_POLICY_VERSION,
+  MIND_POSITIVE_EVENTS,
   mindLedgerEnabled,
 } from '../recommendation/mind-contracts.js';
 
@@ -47,6 +50,22 @@ export type MindStatus = {
   engagement: {
     events: number;
     events1h: number;
+    events24h: number;
+    positives1h: number;
+    negatives1h: number;
+    byType1h: { type: string; n: number }[];
+    allowlistSize: number;
+  };
+  decisions: {
+    count24h: number;
+    recent: {
+      at: string;
+      surface: string;
+      policy: string;
+      served: number;
+      latencyMs: number;
+      requestId: string;
+    }[];
   };
   masquerade: {
     rooms: { slug: string; title: string; posts: number }[];
@@ -181,7 +200,16 @@ export async function getMindStatus(): Promise<MindStatus> {
     deliveries24h: 0,
     bySurface: [] as { surface: string; n: number }[],
   };
-  const engagement = { events: 0, events1h: 0 };
+  const engagement: MindStatus['engagement'] = {
+    events: 0,
+    events1h: 0,
+    events24h: 0,
+    positives1h: 0,
+    negatives1h: 0,
+    byType1h: [],
+    allowlistSize: MIND_CLIENT_EVENT_KEYS.length,
+  };
+  const decisions: MindStatus['decisions'] = { count24h: 0, recent: [] };
   const masquerade = {
     rooms: [] as { slug: string; title: string; posts: number }[],
     posts: 0,
@@ -231,16 +259,95 @@ export async function getMindStatus(): Promise<MindStatus> {
   }
 
   try {
-    const { rows } = await pool.query<{ n: string; n1h: string }>(`
+    const { rows } = await pool.query<{
+      n: string;
+      n1h: string;
+      n24: string;
+      pos1h: string;
+      neg1h: string;
+    }>(`
       select
         count(*)::text as n,
-        count(*) filter (where occurred_at > now() - interval '1 hour')::text as n1h
+        count(*) filter (where occurred_at > now() - interval '1 hour')::text as n1h,
+        count(*) filter (where occurred_at > now() - interval '24 hours')::text as n24,
+        count(*) filter (
+          where occurred_at > now() - interval '1 hour'
+            and event_type = any($1::text[])
+        )::text as pos1h,
+        count(*) filter (
+          where occurred_at > now() - interval '1 hour'
+            and event_type = any($2::text[])
+        )::text as neg1h
       from public.entity_engagement_events
-    `);
+    `, [Array.from(MIND_POSITIVE_EVENTS), Array.from(MIND_NEGATIVE_EVENTS)]);
     const r = rows[0];
     if (r) {
       engagement.events = Number(r.n) || 0;
       engagement.events1h = Number(r.n1h) || 0;
+      engagement.events24h = Number(r.n24) || 0;
+      engagement.positives1h = Number(r.pos1h) || 0;
+      engagement.negatives1h = Number(r.neg1h) || 0;
+    }
+  } catch {
+    /* ignore */
+  }
+
+  try {
+    const { rows } = await pool.query<{ type: string; n: string }>(`
+      select event_type as type, count(*)::text as n
+      from public.entity_engagement_events
+      where occurred_at > now() - interval '1 hour'
+      group by event_type
+      order by count(*) desc
+      limit 12
+    `);
+    engagement.byType1h = rows.map((x) => ({
+      type: x.type,
+      n: Number(x.n) || 0,
+    }));
+  } catch {
+    /* ignore */
+  }
+
+  try {
+    const { rows } = await pool.query<{ n: string }>(`
+      select count(*)::text as n
+      from public.recommendation_decisions
+      where created_at > now() - interval '24 hours'
+    `);
+    decisions.count24h = Number(rows[0]?.n) || 0;
+  } catch {
+    /* ignore */
+  }
+
+  try {
+    const { rows } = await pool.query<{
+      created_at: Date;
+      surface: string;
+      policy_version: string;
+      served_count: number;
+      latency_ms: number;
+      request_id: string;
+    }>(`
+      select created_at, surface, policy_version, served_count, latency_ms, request_id
+      from public.recommendation_decisions
+      order by created_at desc
+      limit 10
+    `);
+    decisions.recent = rows.map((r) => ({
+      at: new Date(r.created_at).toISOString(),
+      surface: r.surface,
+      policy: r.policy_version,
+      served: Number(r.served_count) || 0,
+      latencyMs: Number(r.latency_ms) || 0,
+      requestId: String(r.request_id).slice(0, 36),
+    }));
+    for (const r of decisions.recent.slice(0, 5)) {
+      recent.push({
+        kind: 'decision',
+        at: r.at,
+        text: `${r.surface} · served=${r.served} · ${r.latencyMs}ms · ${r.policy}`,
+      });
     }
   } catch {
     /* ignore */
@@ -315,8 +422,9 @@ export async function getMindStatus(): Promise<MindStatus> {
     engagement,
     masquerade,
     seed: readSeedProgress(),
-    gapSummary: { shipped: 7, partial: 9, missing: 6 },
+    gapSummary: { shipped: 9, partial: 7, missing: 6 },
     docs: listDocs(),
     recent,
+    decisions,
   };
 }

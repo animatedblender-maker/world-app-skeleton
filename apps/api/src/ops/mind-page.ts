@@ -270,6 +270,18 @@ function mindHtml(): string {
         <p class="muted">At-most-once reservations (handbook §11). Unique per user + surface + canonical media key.</p>
         <div id="surfaceTable"></div>
       </div>
+      <div class="two">
+        <div class="card">
+          <h2>Engagement (last hour)</h2>
+          <p class="muted">Allowlisted client events → <code>entity_engagement_events</code> + Kafka. Meta is scrubbed (no email/token/GPS).</p>
+          <div id="eventTypes"></div>
+        </div>
+        <div class="card">
+          <h2>Rank decisions (24h)</h2>
+          <p class="muted">From <code>recommendation_decisions</code> — why a batch was served.</p>
+          <div id="decisions"></div>
+        </div>
+      </div>
       <div class="card">
         <h2>Seed pipeline (local host)</h2>
         <p class="muted" id="seedMeta">…</p>
@@ -278,7 +290,7 @@ function mindHtml(): string {
       </div>
       <div class="card">
         <h2>Live feedback</h2>
-        <p class="muted">Recent sanitized delivery lines (no emails / tokens).</p>
+        <p class="muted">Recent sanitized delivery + decision lines (no emails / tokens).</p>
         <div id="liveLog">Waiting for status…</div>
       </div>
     </section>
@@ -360,7 +372,7 @@ const GAPS = [
   ['1','Purpose / surfaces','partial','Admin docs + live surfaces'],
   ['2','Invariants','shipped','At-most-once ledger; soft-recycle penalty; fail → cursor'],
   ['3','Architecture','shipped','This Architecture tab'],
-  ['5','Events','partial','entity_engagement_events'],
+  ['5','Events','shipped','Allowlist ingest + meta scrub + Kafka/PG'],
   ['6','Masquerade isolation','partial','anonymous.* + check panel'],
   ['7','Media understanding','missing','Phase 2'],
   ['8','Interest features','partial','personality / affinity'],
@@ -370,7 +382,7 @@ const GAPS = [
   ['14','Ads / economy','missing','Phase 4+'],
   ['15','GraphQL FeedItem','missing','REST (ADR 0002)'],
   ['18','ML evaluation','missing','Phase 2–3'],
-  ['19','Observability','partial','/mind live panels'],
+  ['19','Observability','shipped','Live events, decisions, ledger, seed'],
 ];
 
 function $(id){ return document.getElementById(id); }
@@ -415,12 +427,16 @@ async function refresh(){
     $('ledgerFlag').textContent = led ? 'ledger ON' : 'ledger OFF';
     $('ledgerFlag').className = 'pill ' + (led ? 'ok' : 'warn');
 
+    const eng = s.engagement || {};
+    const dec = s.decisions || {};
     $('overviewStats').innerHTML = [
       ['Deliveries', s.ledger.deliveries],
-      ['Batches', s.ledger.batches],
       ['Deliveries 24h', s.ledger.deliveries24h],
-      ['Engagement events', s.engagement.events],
-      ['Events / hour', s.engagement.events1h],
+      ['Events / hour', eng.events1h],
+      ['Events 24h', eng.events24h],
+      ['Positives / hour', eng.positives1h],
+      ['Negatives / hour', eng.negatives1h],
+      ['Decisions 24h', dec.count24h],
       ['Masquerade posts', s.masquerade.posts],
       ['R2 media posts', s.masquerade.r2media],
       ['Gap shipped', s.gapSummary.shipped],
@@ -431,6 +447,23 @@ async function refresh(){
     $('surfaceTable').innerHTML = (s.ledger.bySurface||[]).map(r =>
       '<div class="room"><span>'+r.surface+'</span><strong>'+fmt(r.n)+'</strong></div>'
     ).join('') || '<p class="muted">No ledger rows yet.</p>';
+
+    const maxEv = Math.max(1, ...((eng.byType1h||[]).map(x => x.n)));
+    $('eventTypes').innerHTML = (eng.byType1h||[]).length
+      ? (eng.byType1h||[]).map(r => {
+          const pct = Math.round(100 * r.n / maxEv);
+          return '<div class="room"><span style="min-width:0;flex:1">'+r.type.replace('Engagement','')+'</span><strong>'+fmt(r.n)+'</strong></div>'
+            + '<div class="bar" style="margin:2px 0 8px"><i style="width:'+pct+'%"></i></div>';
+        }).join('')
+        + '<p class="muted" style="margin-top:8px">Allowlist size: '+fmt(eng.allowlistSize||0)+' client types</p>'
+      : '<p class="muted">No engagement in the last hour.</p>';
+
+    $('decisions').innerHTML = (dec.recent||[]).length
+      ? (dec.recent||[]).map(r =>
+          '<div class="room"><span><strong>'+r.surface+'</strong> · '+r.policy+' · '+r.latencyMs+'ms</span><strong>'+fmt(r.served)+'</strong></div>'
+        ).join('')
+        + '<p class="muted" style="margin-top:8px">24h decisions: '+fmt(dec.count24h||0)+'</p>'
+      : '<p class="muted">No rank decisions logged yet (ranker writes when candidates are scored).</p>';
 
     const seed = s.seed || {};
     if (!seed.available) {
