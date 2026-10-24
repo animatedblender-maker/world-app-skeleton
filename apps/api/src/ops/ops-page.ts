@@ -280,6 +280,7 @@ function opsHtml(activeTab: 'overview' | 'pipeline' | 'frame0'): string {
     <button type="button" class="tab ${activeTab === 'overview' ? 'active' : ''}" data-tab="overview">Overview</button>
     <button type="button" class="tab ${activeTab === 'pipeline' ? 'active' : ''}" data-tab="pipeline">Pipeline</button>
     <button type="button" class="tab ${activeTab === 'frame0' ? 'active' : ''}" data-tab="frame0">Frame 0</button>
+    <a class="tab" href="/mind">MIND</a>
   </nav>
 
   <main>
@@ -318,6 +319,7 @@ function opsHtml(activeTab: 'overview' | 'pipeline' | 'frame0'): string {
             <li>Browser “network error”? → <em>Reconnect log</em> (run keeps going; already-posted packs stay)</li>
             <li>Old posts still black? → <em>Frame 0 → Backfill ALL</em></li>
             <li>Expired play links? → <em>Pipeline → Re-sign URLs</em></li>
+            <li>Recommendations / ledger / handbook? → <a class="out" href="/mind">MIND admin console</a></li>
           </ul>
           <p class="meta" id="ovMeta"></p>
         </div>

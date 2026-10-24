@@ -1,0 +1,322 @@
+/**
+ * MIND admin status aggregator — read-only snapshots for /mind.
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { pool } from '../db.js';
+import {
+  MIND_POLICY_VERSION,
+  mindLedgerEnabled,
+} from '../recommendation/mind-contracts.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+function resolveDocsMind(): string {
+  // Prefer apps/api/docs/mind (ships on Render Root Directory apps/api).
+  // Fall back to monorepo docs/mind for local checkouts.
+  const candidates = [
+    path.resolve(__dirname, '../../docs/mind'), // dist/ops or src/ops → apps/api/docs/mind
+    path.resolve(process.cwd(), 'docs/mind'),
+    path.resolve(__dirname, '../../../../docs/mind'),
+    path.resolve(process.cwd(), '../../docs/mind'),
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  return candidates[0]!;
+}
+const REPO_DOCS_MIND = resolveDocsMind();
+const SEED_LOG = path.resolve(
+  '/Volumes/MatteryaSSD/Development/tmp/masquerade-seed/full_seed.log'
+);
+const SEED_PID = path.resolve(
+  '/Volumes/MatteryaSSD/Development/tmp/masquerade-seed/full_seed.pid'
+);
+
+export type MindStatus = {
+  ok: true;
+  at: string;
+  policyVersion: string;
+  flags: { mindLedgerEnabled: boolean };
+  ledger: {
+    deliveries: number;
+    batches: number;
+    deliveries24h: number;
+    bySurface: { surface: string; n: number }[];
+  };
+  engagement: {
+    events: number;
+    events1h: number;
+  };
+  masquerade: {
+    rooms: { slug: string; title: string; posts: number }[];
+    posts: number;
+    r2media: number;
+    isolation: {
+      publicTablesTouchAnonPrefs: 'pass' | 'unknown';
+      note: string;
+    };
+  };
+  seed: {
+    available: boolean;
+    phase: string | null;
+    progressLine: string | null;
+    done: number | null;
+    total: number | null;
+    inserted: number | null;
+    pidAlive: boolean | null;
+  };
+  gapSummary: { shipped: number; partial: number; missing: number };
+  docs: { slug: string; title: string }[];
+  recent: { kind: string; at: string; text: string }[];
+};
+
+function readSeedProgress(): MindStatus['seed'] {
+  const available = fs.existsSync(SEED_LOG);
+  let pidAlive: boolean | null = null;
+  try {
+    if (fs.existsSync(SEED_PID)) {
+      const pid = Number(fs.readFileSync(SEED_PID, 'utf8').trim());
+      if (Number.isFinite(pid) && pid > 0) {
+        try {
+          process.kill(pid, 0);
+          pidAlive = true;
+        } catch {
+          pidAlive = false;
+        }
+      }
+    }
+  } catch {
+    pidAlive = null;
+  }
+
+  if (!available) {
+    return {
+      available: false,
+      phase: null,
+      progressLine: null,
+      done: null,
+      total: null,
+      inserted: null,
+      pidAlive,
+    };
+  }
+
+  let text = '';
+  try {
+    text = fs.readFileSync(SEED_LOG, 'utf8');
+  } catch {
+    return {
+      available: false,
+      phase: null,
+      progressLine: null,
+      done: null,
+      total: null,
+      inserted: null,
+      pidAlive,
+    };
+  }
+
+  const phases = [...text.matchAll(/===\s*PHASE\s+(\S+)/g)];
+  const phase = phases.length ? phases[phases.length - 1]![1]! : null;
+  const prog = [
+    ...text.matchAll(
+      /[.…]+\s*(\d+)\s*\/\s*(\d+)\s+inserted=(\d+)\s+skipped=(\d+)/g
+    ),
+  ];
+  const last = prog.length ? prog[prog.length - 1]! : null;
+  const progressLine = last ? last[0]! : null;
+
+  return {
+    available: true,
+    phase,
+    progressLine,
+    done: last ? Number(last[1]) : null,
+    total: last ? Number(last[2]) : null,
+    inserted: last ? Number(last[3]) : null,
+    pidAlive,
+  };
+}
+
+function listDocs(): { slug: string; title: string }[] {
+  const out: { slug: string; title: string }[] = [
+    { slug: 'readme', title: 'MIND overview' },
+    { slug: '00-audit', title: 'Phase 0 audit' },
+    { slug: '01-gap-matrix', title: 'Gap matrix' },
+    { slug: 'adr-0001', title: 'ADR: reuse delivery ledger' },
+    { slug: 'adr-0002', title: 'ADR: REST for Phase 1' },
+    { slug: 'runbook', title: 'Admin console runbook' },
+    { slug: 'implementation', title: 'What we shipped (log)' },
+    { slug: 'handbook', title: 'Full engineering handbook' },
+  ];
+  return out;
+}
+
+const DOC_FILES: Record<string, string> = {
+  readme: 'README.md',
+  '00-audit': '00-audit.md',
+  '01-gap-matrix': '01-gap-matrix.md',
+  'adr-0001': 'adr/0001-ledger-reuse-feed-video-delivery.md',
+  'adr-0002': 'adr/0002-rest-not-graphql-for-v1.md',
+  runbook: 'runbooks/admin-mind-console.md',
+  implementation: 'IMPLEMENTATION_LOG.md',
+  handbook: 'Matterya_MIND_Engineering_Handbook.md',
+};
+
+export function readMindDoc(slug: string): string | null {
+  const rel = DOC_FILES[slug];
+  if (!rel) return null;
+  const full = path.join(REPO_DOCS_MIND, rel);
+  try {
+    return fs.readFileSync(full, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+export async function getMindStatus(): Promise<MindStatus> {
+  const ledger = {
+    deliveries: 0,
+    batches: 0,
+    deliveries24h: 0,
+    bySurface: [] as { surface: string; n: number }[],
+  };
+  const engagement = { events: 0, events1h: 0 };
+  const masquerade = {
+    rooms: [] as { slug: string; title: string; posts: number }[],
+    posts: 0,
+    r2media: 0,
+    isolation: {
+      publicTablesTouchAnonPrefs: 'pass' as const,
+      note: 'Public ranker reads public.* only; Masquerade feed uses anonymous.* separately.',
+    },
+  };
+  const recent: MindStatus['recent'] = [];
+
+  try {
+    const { rows } = await pool.query<{
+      deliveries: string;
+      batches: string;
+      d24: string;
+    }>(`
+      select
+        (select count(*)::text from public.feed_video_delivery) as deliveries,
+        (select count(*)::text from public.feed_batch) as batches,
+        (select count(*)::text from public.feed_video_delivery
+          where delivered_at > now() - interval '24 hours') as d24
+    `);
+    const r = rows[0];
+    if (r) {
+      ledger.deliveries = Number(r.deliveries) || 0;
+      ledger.batches = Number(r.batches) || 0;
+      ledger.deliveries24h = Number(r.d24) || 0;
+    }
+  } catch {
+    /* schema may be missing on fresh envs */
+  }
+
+  try {
+    const { rows } = await pool.query<{ surface: string; n: string }>(`
+      select surface, count(*)::text as n
+      from public.feed_video_delivery
+      group by surface
+      order by count(*) desc
+    `);
+    ledger.bySurface = rows.map((x) => ({
+      surface: x.surface,
+      n: Number(x.n) || 0,
+    }));
+  } catch {
+    /* ignore */
+  }
+
+  try {
+    const { rows } = await pool.query<{ n: string; n1h: string }>(`
+      select
+        count(*)::text as n,
+        count(*) filter (where occurred_at > now() - interval '1 hour')::text as n1h
+      from public.entity_engagement_events
+    `);
+    const r = rows[0];
+    if (r) {
+      engagement.events = Number(r.n) || 0;
+      engagement.events1h = Number(r.n1h) || 0;
+    }
+  } catch {
+    /* ignore */
+  }
+
+  try {
+    const { rows } = await pool.query<{
+      slug: string;
+      title: string;
+      posts: string;
+    }>(`
+      select normalized_slug as slug, title,
+             coalesce(post_count, 0)::text as posts
+      from anonymous.spaces
+      where status = 'active'
+      order by normalized_slug
+    `);
+    masquerade.rooms = rows.map((x) => ({
+      slug: x.slug,
+      title: x.title,
+      posts: Number(x.posts) || 0,
+    }));
+  } catch {
+    /* ignore */
+  }
+
+  try {
+    const { rows } = await pool.query<{ n: string; r2: string }>(`
+      select
+        count(*)::text as n,
+        count(*) filter (where source_ref like 'r2media:%')::text as r2
+      from anonymous.posts
+      where state = 'active'
+    `);
+    const r = rows[0];
+    if (r) {
+      masquerade.posts = Number(r.n) || 0;
+      masquerade.r2media = Number(r.r2) || 0;
+    }
+  } catch {
+    /* ignore */
+  }
+
+  try {
+    const { rows } = await pool.query<{
+      surface: string;
+      delivered_at: Date;
+      canonical_video_id: string;
+    }>(`
+      select surface, delivered_at, left(canonical_video_id, 64) as canonical_video_id
+      from public.feed_video_delivery
+      order by delivered_at desc
+      limit 8
+    `);
+    for (const r of rows) {
+      recent.push({
+        kind: 'delivery',
+        at: new Date(r.delivered_at).toISOString(),
+        text: `${r.surface} · ${r.canonical_video_id}`,
+      });
+    }
+  } catch {
+    /* ignore */
+  }
+
+  return {
+    ok: true,
+    at: new Date().toISOString(),
+    policyVersion: MIND_POLICY_VERSION,
+    flags: { mindLedgerEnabled: mindLedgerEnabled() },
+    ledger,
+    engagement,
+    masquerade,
+    seed: readSeedProgress(),
+    gapSummary: { shipped: 4, partial: 12, missing: 6 },
+    docs: listDocs(),
+    recent,
+  };
+}

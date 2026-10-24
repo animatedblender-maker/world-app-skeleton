@@ -98,6 +98,14 @@ import {
   handleFrame0Status,
   handleFrame0Run,
 } from './ops/ops-page.js';
+import {
+  handleMindDoc,
+  handleMindGet,
+  handleMindLogin,
+  handleMindLogout,
+  handleMindStatus,
+  handleMindStream,
+} from './ops/mind-page.js';
 import { handlePosterBatch, handlePosterGet } from './media/poster-route.js';
 import { kafkaEnabled } from './kafka/config.js';
 
@@ -111,6 +119,9 @@ const DEFAULT_ORIGINS = [
   'http://localhost',
   'https://localhost',
   'http://localhost:4200',
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:4200',
   'capacitor://localhost',
   'ionic://localhost',
 ];
@@ -120,6 +131,18 @@ const ALLOWED_ORIGINS = Array.from(
   .map((value) => value.trim().replace(/\/$/, ''))
   .filter(Boolean);
 const PORT = Number(process.env.PORT ?? 3000);
+
+/** Local API / ops pages (e.g. /mind on :3000) send Origin matching the API itself. */
+function isDevLoopbackOrigin(origin: string): boolean {
+  try {
+    const u = new URL(origin);
+    if (u.hostname !== 'localhost' && u.hostname !== '127.0.0.1') return false;
+    const port = u.port || (u.protocol === 'https:' ? '443' : '80');
+    return port === String(PORT) || ['3000', '4200', '4091', '5173'].includes(port);
+  } catch {
+    return false;
+  }
+}
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY;
@@ -206,7 +229,11 @@ app.use(
   cors({
     origin: (incomingOrigin, callback) => {
       const normalized = incomingOrigin ? incomingOrigin.replace(/\/$/, '') : '';
-      if (!incomingOrigin || ALLOWED_ORIGINS.includes(normalized)) {
+      if (
+        !incomingOrigin ||
+        ALLOWED_ORIGINS.includes(normalized) ||
+        isDevLoopbackOrigin(normalized)
+      ) {
         return callback(null, true);
       }
       return callback(new Error(`CORS origin ${incomingOrigin} not allowed`));
@@ -268,6 +295,27 @@ app.get('/frame0/status', (req, res) => {
 });
 app.post('/frame0/run', (req, res) => {
   void handleFrame0Run(req, res);
+});
+
+// ── MIND admin console (handbook + live recommendation ops) ───────────
+// https://api.matterya.com/mind  ·  same password as pipeline/reports
+app.get('/mind', (req, res) => {
+  void handleMindGet(req, res);
+});
+app.post('/mind/login', handleMindLogin);
+app.get('/mind/logout', handleMindLogout);
+app.get('/mind/api/status', (req, res) => {
+  void handleMindStatus(req, res);
+});
+app.get('/mind/api/stream', (req, res) => {
+  void handleMindStream(req, res);
+});
+app.get('/mind/api/docs/:slug', (req, res) => {
+  void handleMindDoc(req, res);
+});
+app.get('/mind/api/handbook', (req, res) => {
+  (req.params as Record<string, string>).slug = 'handbook';
+  void handleMindDoc(req, res);
 });
 
 // ✅ health endpoint (typed _req to avoid implicit any)

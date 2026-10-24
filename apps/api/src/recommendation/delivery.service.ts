@@ -7,6 +7,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { pool, type PoolClient } from '../db.js';
+import { mindLedgerEnabled } from './mind-contracts.js';
 
 export type FeedSurface = 'home_for_you' | 'hubs_for_you' | 'masquerade_for_you';
 
@@ -305,6 +306,9 @@ export async function reserveDeliveryBatch(input: {
   candidates: DeliveryCandidate[];
   limit: number;
 }): Promise<ReservedBatch | null> {
+  // MIND-009: kill switch → callers fall back to cursor weave.
+  if (!mindLedgerEnabled()) return null;
+
   const ok = await ensureFeedDeliverySchema();
   if (!ok) return null;
 

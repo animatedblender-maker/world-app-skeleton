@@ -17,6 +17,8 @@ export type RemoteFlags = {
   feed_soft_stale_minutes: number;
   /** Text moderation MVP — rules + stub/http provider. */
   moderation_text_enabled: boolean;
+  /** MIND at-most-once delivery ledger (kill switch → cursor weave). */
+  mind_ledger_enabled: boolean;
 };
 
 const DEFAULT_FLAGS: RemoteFlags = {
@@ -32,6 +34,7 @@ const DEFAULT_FLAGS: RemoteFlags = {
   feed_snapshot_max_age_hours: 24,
   feed_soft_stale_minutes: 10,
   moderation_text_enabled: true,
+  mind_ledger_enabled: true,
 };
 
 /** Bump when flag defaults change so clients refresh. */
@@ -77,6 +80,10 @@ export function getRemoteConfig(clientVersion?: string | null): {
     feed_snapshot_max_age_hours: envNum(
       'FLAG_FEED_SNAPSHOT_HOURS',
       DEFAULT_FLAGS.feed_snapshot_max_age_hours
+    ),
+    mind_ledger_enabled: envBool(
+      'MIND_LEDGER_ENABLED',
+      DEFAULT_FLAGS.mind_ledger_enabled
     ),
     feed_soft_stale_minutes: envNum(
       'FLAG_FEED_SOFT_STALE_MIN',

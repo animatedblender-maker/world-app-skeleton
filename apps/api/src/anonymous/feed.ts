@@ -8,6 +8,13 @@ import {
   reserveDeliveryBatch,
 } from '../recommendation/delivery.service.js';
 import { mmrPick, socialHotScore } from '../recommendation/social-score.js';
+import {
+  MIND_POLICY_VERSION,
+  mindLedgerEnabled,
+  newMindRequestId,
+  type MindDeliveryPolicy,
+  type MindFeedMeta,
+} from '../recommendation/mind-contracts.js';
 
 function iso(v: Date | string | null | undefined): string | null {
   if (v == null) return null;
@@ -39,10 +46,16 @@ export async function getFeed(opts: {
   sort: string;
   cursor?: string | null;
   limit: number;
-}): Promise<{ posts: PostPublic[]; next_cursor: string | null }> {
+}): Promise<{
+  posts: PostPublic[];
+  next_cursor: string | null;
+  mind?: MindFeedMeta;
+}> {
   const limit = Math.min(Math.max(opts.limit || 20, 1), 50);
   const sort = (opts.sort || 'for_you').toLowerCase();
   const useSocial = sort === 'hot' || sort === 'for_you';
+  const requestId = newMindRequestId();
+  let deliveryPolicy: MindDeliveryPolicy = 'cursor';
 
   const params: unknown[] = [opts.profile.id];
   let cursorClause = '';
@@ -180,17 +193,20 @@ export async function getFeed(opts: {
     // using a partial reserve (most candidates already in the ledger) was
     // shrinking the response to 1–2 cards.
     const rankedRows = picked.slice(0, rankedSlots).map((c) => c.row);
-    if (ledgerUser && picked.length) {
+    if (ledgerUser && picked.length && mindLedgerEnabled()) {
+      deliveryPolicy = 'ledger';
       void reserveDeliveryBatch({
         userId: ledgerUser,
         surface: 'masquerade_for_you',
-        idempotencyKey: `masq:${opts.profile.id}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+        idempotencyKey: `masq:${opts.profile.id}:${requestId}`,
         candidates: picked.slice(0, rankedSlots).map((c) => ({
           id: c.id,
           canonicalKey: c.mediaKey,
         })),
         limit: rankedSlots,
-      }).catch(() => undefined);
+      }).catch(() => {
+        deliveryPolicy = 'cursor';
+      });
     }
 
     // Newest own posts first, then ranked feed (dedupe).
@@ -237,7 +253,16 @@ export async function getFeed(opts: {
       );
     }
   }
-  return { posts, next_cursor };
+  return {
+    posts,
+    next_cursor,
+    mind: {
+      requestId,
+      modelVersion: MIND_POLICY_VERSION,
+      deliveryPolicy,
+      surface: 'masquerade_for_you',
+    },
+  };
 }
 
 /** Map anonymous profile → Matterya account for the shared delivery ledger. */
