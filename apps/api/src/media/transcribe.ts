@@ -7,9 +7,12 @@
  *   GROQ_WHISPER_MODEL  optional (default whisper-large-v3-turbo)
  */
 import { spawn } from 'node:child_process';
-import { createReadStream, promises as fs } from 'node:fs';
+import { createWriteStream, promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
+import { GetObjectCommand } from '@aws-sdk/client-s3';
+import { createR2Client, getBucket, r2Configured } from '../content-pipeline/r2.js';
 import { pool } from '../db.js';
 import { resolveFfmpegPath } from './frame0.js';
 import { extractR2Key, resolvePlayUrlForKey } from './r2-playback.js';
@@ -174,13 +177,28 @@ async function resolveAudioSourceUrl(
   return null;
 }
 
-function runFfmpegExtract(inputUrl: string, outPath: string): Promise<void> {
+/** Download R2 object to disk (same pattern as Frame0) — avoids ffmpeg HTTP kills on Render. */
+async function downloadR2ObjectToFile(key: string, destPath: string): Promise<void> {
+  if (!r2Configured()) throw new Error('r2_not_configured');
+  const client = createR2Client();
+  const bucket = getBucket();
+  const clean = key.replace(/^\/+/, '');
+  const out = await client.send(new GetObjectCommand({ Bucket: bucket, Key: clean }));
+  if (!out.Body) throw new Error(`empty_r2_body:${clean}`);
+  await pipeline(out.Body as NodeJS.ReadableStream, createWriteStream(destPath));
+}
+
+function runFfmpegExtract(inputPathOrUrl: string, outPath: string): Promise<void> {
   const ffmpeg = resolveFfmpegPath();
   return new Promise((resolve, reject) => {
+    // Local file preferred. Cap 15 min for Whisper cost/latency on free tier.
     const args = [
+      '-hide_banner',
+      '-loglevel',
+      'error',
       '-y',
       '-i',
-      inputUrl,
+      inputPathOrUrl,
       '-vn',
       '-ac',
       '1',
@@ -189,21 +207,54 @@ function runFfmpegExtract(inputUrl: string, outPath: string): Promise<void> {
       '-b:a',
       '48k',
       '-t',
-      '1800', // cap 30 min per clip for cost/latency
+      '900',
       outPath,
     ];
     const child = spawn(ffmpeg, args, { stdio: ['ignore', 'ignore', 'pipe'] });
     let err = '';
     child.stderr.on('data', (d) => {
       err += String(d);
-      if (err.length > 4000) err = err.slice(-4000);
+      if (err.length > 6000) err = err.slice(-6000);
     });
-    child.on('error', reject);
-    child.on('close', (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`ffmpeg_extract_failed:${code}:${err.slice(-500)}`));
+    child.on('error', (e) => reject(e));
+    child.on('close', (code, signal) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      const tail = err.trim().slice(-800) || '(no ffmpeg stderr)';
+      reject(
+        new Error(
+          `ffmpeg_extract_failed:code=${code}:signal=${signal ?? ''}:${tail}`
+        )
+      );
     });
   });
+}
+
+/**
+ * Materialize audio for Whisper: R2 download → local ffmpeg (Render-safe).
+ * Falls back to signed HTTPS input only when there is no R2 key.
+ */
+async function prepareAudioForWhisper(opts: {
+  mediaUrl: string | null;
+  mediaPath: string | null;
+  workDir: string;
+}): Promise<string> {
+  const audioPath = path.join(opts.workDir, 'audio.mp3');
+  const key = extractR2Key(opts.mediaUrl, opts.mediaPath);
+  if (key) {
+    const srcPath = path.join(opts.workDir, 'source.mp4');
+    await downloadR2ObjectToFile(key, srcPath);
+    const st = await fs.stat(srcPath);
+    if (st.size < 1024) throw new Error('r2_download_too_small');
+    await runFfmpegExtract(srcPath, audioPath);
+    return audioPath;
+  }
+  const playUrl = await resolveAudioSourceUrl(opts.mediaUrl, opts.mediaPath);
+  if (!playUrl) throw new Error('no_playable_url');
+  await runFfmpegExtract(playUrl, audioPath);
+  return audioPath;
 }
 
 type GroqVerbose = {
@@ -263,7 +314,6 @@ export async function transcribePost(postId: string): Promise<TranscriptStatus> 
   );
 
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'matterya-tx-'));
-  const audioPath = path.join(tmpDir, 'audio.mp3');
   try {
     const post = await loadPostMedia(postId);
     if (!post) throw new Error('post_not_found');
@@ -281,10 +331,11 @@ export async function transcribePost(postId: string): Promise<TranscriptStatus> 
       return 'skipped';
     }
 
-    const playUrl = await resolveAudioSourceUrl(post.mediaUrl, post.mediaPath);
-    if (!playUrl) throw new Error('no_playable_url');
-
-    await runFfmpegExtract(playUrl, audioPath);
+    const audioPath = await prepareAudioForWhisper({
+      mediaUrl: post.mediaUrl,
+      mediaPath: post.mediaPath,
+      workDir: tmpDir,
+    });
     const stat = await fs.stat(audioPath);
     if (stat.size < 256) throw new Error('audio_too_small');
     // Groq free tier ~25MB
