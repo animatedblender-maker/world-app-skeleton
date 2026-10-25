@@ -16,8 +16,8 @@ enum AnonymousShellTab: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Tabs shown in the shell chip row (bell opens Notifications separately).
-    static var chipTabs: [AnonymousShellTab] { [.feed, .spaces, .search, .inbox, .me] }
+    /// Tabs shown in the shell chip row (bell / search / + live in the header).
+    static var chipTabs: [AnonymousShellTab] { [.feed, .spaces, .inbox, .me] }
 }
 
 struct AnonymousRootView: View {
@@ -28,9 +28,19 @@ struct AnonymousRootView: View {
     @State private var showCreateSpace = false
     /// Matterya dropdown anchored under the header + button.
     @State private var showHeaderCreateMenu = false
+    /// Bell dropdown — Masquerade notifications only (same pattern as main NotificationsOverlay).
+    @State private var showNotificationsMenu = false
+    /// Always-visible search field under brand/icons (not a chip, never replaces the header).
+    @State private var searchQuery = ""
+    @State private var tabBeforeSearch: AnonymousShellTab = .feed
+    @FocusState private var searchFieldFocused: Bool
 
     /// True while a Space or thread is pushed — collapse Masquerade shell chrome only.
     private var isPushed: Bool { !store.navigationPath.isEmpty }
+
+    private var masqueradeUnreadCount: Int {
+        store.inbox.filter(\.isUnread).count
+    }
 
     var body: some View {
         phaseBody
@@ -45,9 +55,13 @@ struct AnonymousRootView: View {
                     appState.showToast(msg, style: .error)
                 }
             }
-            .onChange(of: store.navigationPath.count) { _, _ in
+            .onChange(of: store.navigationPath.count) { _, count in
                 syncMasqueradeTabBar()
-                if store.navigationPath.isEmpty {
+                if count == 0 {
+                    showHeaderCreateMenu = false
+                } else {
+                    searchFieldFocused = false
+                    showNotificationsMenu = false
                     showHeaderCreateMenu = false
                 }
             }
@@ -57,13 +71,35 @@ struct AnonymousRootView: View {
                 if tab != .anonymous {
                     store.resetNavigation()
                     appState.masqueradeHidesTabBar = false
+                    appState.masqueradeChatChrome = false
                     showHeaderCreateMenu = false
+                    showNotificationsMenu = false
+                    searchFieldFocused = false
                 } else {
                     syncMasqueradeTabBar()
                     // Re-entry only — first paint is owned by `.task` on mount.
                     if store.phase == .ready {
                         Task { await store.bootstrap() }
                     }
+                }
+            }
+            .onChange(of: searchQuery) { _, query in
+                let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    if shellTab != .search {
+                        tabBeforeSearch = shellTab == .search ? .feed : shellTab
+                    }
+                    if shellTab != .search {
+                        withAnimation(MatteryaMotion.snappy) {
+                            store.resetNavigation()
+                            shellTab = .search
+                        }
+                    }
+                }
+            }
+            .task(id: store.phase) {
+                if store.phase == .ready {
+                    await store.loadInbox()
                 }
             }
             .onDisappear {
@@ -125,23 +161,82 @@ struct AnonymousRootView: View {
                             }
                         )
                         .padding(.top, 56)
-                        .padding(.trailing, Theme.pagePadding + 48)
+                        .padding(.trailing, Theme.pagePadding)
                         .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .topTrailing)))
                     }
                 }
             }
+            .overlay {
+                if showNotificationsMenu, store.phase == .ready, !isPushed {
+                    ZStack(alignment: .topTrailing) {
+                        Color.black.opacity(0.18)
+                            .ignoresSafeArea()
+                            .onTapGesture {
+                                withAnimation(.easeOut(duration: 0.18)) {
+                                    showNotificationsMenu = false
+                                }
+                            }
+
+                        MasqueradeNotificationsPanel(
+                            onClose: {
+                                withAnimation(.easeOut(duration: 0.18)) {
+                                    showNotificationsMenu = false
+                                }
+                            },
+                            onSelect: { item in
+                                withAnimation(.easeOut(duration: 0.18)) {
+                                    showNotificationsMenu = false
+                                }
+                                openMasqueradeNotification(item)
+                            }
+                        )
+                        .padding(.trailing, Theme.pagePadding)
+                        .padding(.top, 52)
+                        .padding(.leading, Theme.pagePadding)
+                        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .topTrailing)))
+                    }
+                    .transition(.opacity)
+                }
+            }
             .animation(.easeOut(duration: 0.18), value: showHeaderCreateMenu)
+            .animation(.easeOut(duration: 0.18), value: showNotificationsMenu)
     }
 
     private var header: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
+            HStack(spacing: 4) {
                 MasqueradeBrandMark(compact: true, ringSize: 22)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .layoutPriority(-1)
 
                 if store.phase == .ready {
                     Button {
+                        showHeaderCreateMenu = false
+                        withAnimation(.easeOut(duration: 0.18)) {
+                            showNotificationsMenu.toggle()
+                        }
+                        if showNotificationsMenu {
+                            Task { await store.loadInbox(force: true) }
+                        }
+                    } label: {
+                        ZStack(alignment: .topTrailing) {
+                            Image(systemName: "bell")
+                                .font(.system(size: 20, weight: .medium))
+                                .foregroundStyle(showNotificationsMenu ? Theme.ink : Theme.inkMuted)
+                            if masqueradeUnreadCount > 0 {
+                                Circle()
+                                    .fill(Theme.danger)
+                                    .frame(width: 7, height: 7)
+                                    .offset(x: 4, y: -2)
+                            }
+                        }
+                        .frame(width: 40, height: 40)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Masquerade notifications")
+
+                    Button {
+                        showNotificationsMenu = false
                         withAnimation(.easeOut(duration: 0.18)) {
                             showHeaderCreateMenu.toggle()
                         }
@@ -154,23 +249,14 @@ struct AnonymousRootView: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel(MatteryaCopy.anonymousCreateMenuTitle)
                 }
-
-                Button {
-                    withAnimation(MatteryaMotion.snappy) {
-                        store.resetNavigation()
-                        shellTab = .notifications
-                    }
-                } label: {
-                    Image(systemName: "bell")
-                        .font(.system(size: 20, weight: .medium))
-                        .foregroundStyle(shellTab == .notifications ? Theme.ink : Theme.inkMuted)
-                        .frame(width: 40, height: 40)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Masquerade notifications")
             }
             .padding(.horizontal, Theme.pagePadding)
             .padding(.vertical, 8)
+
+            // Persistent search — under brand + icons, never replaces them.
+            if store.phase == .ready {
+                persistentSearchField
+            }
 
             if store.showWildeEpigraph, store.phase == .needAttest || store.phase == .needUsername {
                 VStack(alignment: .leading, spacing: 4) {
@@ -197,18 +283,107 @@ struct AnonymousRootView: View {
         }
     }
 
+    private var persistentSearchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Theme.inkMuted)
+            TextField("Search people, spaces, posts", text: $searchQuery)
+                .focused($searchFieldFocused)
+                .foregroundStyle(Theme.ink)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.search)
+                .onSubmit {
+                    showNotificationsMenu = false
+                    showHeaderCreateMenu = false
+                    let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !q.isEmpty {
+                        // Record only on Return — never while typing.
+                        SearchHistoryStore.record(q, surface: .masquerade)
+                    }
+                    activateSearchTab()
+                }
+            if !searchQuery.isEmpty {
+                Button {
+                    searchQuery = ""
+                    searchFieldFocused = false
+                    if shellTab == .search {
+                        withAnimation(MatteryaMotion.snappy) {
+                            shellTab = tabBeforeSearch == .search ? .feed : tabBeforeSearch
+                        }
+                    }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 16))
+                        .foregroundStyle(Theme.inkMuted)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 40)
+        .background(Theme.canvasMuted, in: RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
+                .stroke(Theme.border, lineWidth: 0.5)
+        )
+        .padding(.horizontal, Theme.pagePadding)
+        .padding(.bottom, 8)
+        .onTapGesture {
+            showNotificationsMenu = false
+            showHeaderCreateMenu = false
+        }
+        .onChange(of: searchFieldFocused) { _, focused in
+            if focused {
+                showNotificationsMenu = false
+                showHeaderCreateMenu = false
+                activateSearchTab()
+            }
+        }
+    }
+
+    private func activateSearchTab() {
+        if shellTab != .search {
+            tabBeforeSearch = shellTab == .notifications ? .feed : shellTab
+            withAnimation(MatteryaMotion.snappy) {
+                store.resetNavigation()
+                shellTab = .search
+            }
+        }
+    }
+
+    private func openMasqueradeNotification(_ item: AnonymousNotification) {
+        if let postId = item.postId, !postId.isEmpty {
+            store.pushPostId(postId)
+            return
+        }
+        if let spaceId = item.spaceId, !spaceId.isEmpty {
+            // Prefer slug from title/cache; fall back to directory open by id via spaces list.
+            if let space = store.spacesByFilter.values.flatMap({ $0 }).first(where: { $0.id == spaceId }) {
+                store.pushSpace(slug: space.slug)
+            }
+        }
+    }
+
     private var shellTabs: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 4) {
                 ForEach(AnonymousShellTab.chipTabs) { tab in
                     Button {
+                        searchFieldFocused = false
+                        showNotificationsMenu = false
+                        if searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            // Keep field visible; leave query alone if user is mid-search on Search tab.
+                        }
                         withAnimation(MatteryaMotion.snappy) {
                             store.resetNavigation()
                             shellTab = tab
                         }
                     } label: {
                         Text(tab.title)
-                            .pillTab(isSelected: shellTab == tab)
+                            .pillTab(isSelected: shellTab == tab && !searchFieldFocused)
                     }
                     .buttonStyle(.plain)
                 }
@@ -247,6 +422,7 @@ struct AnonymousRootView: View {
         case .ready:
             AnonymousReadyStack(
                 shellTab: $shellTab,
+                searchQuery: $searchQuery,
                 onCreateSpace: { showCreateSpace = true },
                 header: { header },
                 syncMasqueradeTabBar: syncMasqueradeTabBar
@@ -266,8 +442,10 @@ struct AnonymousRootView: View {
 /// MainTabView crashed on post tap, and system toolbars often stay hidden so users
 /// get a dead end (no Back, tab bar already hidden).
 private struct AnonymousReadyStack<Header: View>: View {
+    @Environment(AppState.self) private var appState
     private var store: AnonymousStore { AnonymousStore.shared }
     @Binding var shellTab: AnonymousShellTab
+    @Binding var searchQuery: String
     var onCreateSpace: () -> Void
     @ViewBuilder var header: () -> Header
     var syncMasqueradeTabBar: () -> Void
@@ -286,7 +464,21 @@ private struct AnonymousReadyStack<Header: View>: View {
                 VStack(spacing: 0) {
                     MasqueradePushChrome(
                         title: chromeTitle(for: route),
-                        onBack: { store.popNavigation() }
+                        showsCallActions: {
+                            if case .conversation = route { return true }
+                            return false
+                        }(),
+                        conversationID: {
+                            if case .conversation(let id) = route { return id }
+                            return nil
+                        }(),
+                        peer: conversationPeer(for: route),
+                        onBack: {
+                            if case .conversation = route {
+                                appState.masqueradeChatChrome = false
+                            }
+                            store.popNavigation()
+                        }
                     )
                     Group {
                         switch route {
@@ -294,6 +486,12 @@ private struct AnonymousReadyStack<Header: View>: View {
                             AnonymousSpaceDetailView(slug: slug)
                         case .post(let id):
                             AnonymousPostRouteView(postId: id)
+                        case .profile(let username):
+                            AnonymousPublicProfileView(username: username)
+                        case .conversation(let id):
+                            // Embedded chat — system Messages tab stays out of the way.
+                            ConversationRouteView(conversationID: id)
+                                .toolbar(.hidden, for: .navigationBar)
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -309,6 +507,9 @@ private struct AnonymousReadyStack<Header: View>: View {
                             guard value.startLocation.x < 28,
                                   value.translation.width > 80,
                                   abs(value.translation.height) < 80 else { return }
+                            if case .conversation = route {
+                                appState.masqueradeChatChrome = false
+                            }
                             store.popNavigation()
                         }
                 )
@@ -329,7 +530,30 @@ private struct AnonymousReadyStack<Header: View>: View {
             return slug
         case .post:
             return "Post"
+        case .profile(let username):
+            let handle = username
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "@"))
+            return handle.isEmpty ? "Profile" : "@\(handle)"
+        case .conversation(let id):
+            let me = AuthService.shared.currentUser?.id
+            let conv = MessagesService.shared.cachedConversation(id: id)
+            let other = me.flatMap { conv?.otherMember(currentUserID: $0) }
+            let handle = (other?.username ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if handle.lowercased() == "matterya" {
+                return other?.displayName ?? "Matterya"
+            }
+            if !handle.isEmpty { return "@\(handle)" }
+            return other?.displayName ?? "Chat"
         }
+    }
+
+    private func conversationPeer(for route: AnonymousRoute) -> PostAuthor? {
+        guard case .conversation(let id) = route else { return nil }
+        let me = AuthService.shared.currentUser?.id
+        let conv = MessagesService.shared.cachedConversation(id: id)
+        return me.flatMap { conv?.otherMember(currentUserID: $0) }
     }
 
     @ViewBuilder
@@ -340,21 +564,27 @@ private struct AnonymousReadyStack<Header: View>: View {
         case .spaces:
             AnonymousSpacesDirectoryView(onCreate: onCreateSpace)
         case .search:
-            AnonymousSearchView()
+            AnonymousSearchView(query: $searchQuery, showsSearchField: false)
         case .inbox:
             AnonymousMessagesInboxView()
         case .notifications:
-            AnonymousNotificationsView()
+            // Bell opens a dropdown now — keep Feed if this case is ever selected.
+            AnonymousFeedView()
         case .me:
             AnonymousMeView()
         }
     }
 }
 
-/// Always-visible Back row for Masquerade Space/post overlays (Matterya paper chrome).
+/// Always-visible Back row for Masquerade Space/post/chat overlays (Matterya paper chrome).
 private struct MasqueradePushChrome: View {
     let title: String
+    var showsCallActions: Bool = false
+    var conversationID: String? = nil
+    var peer: PostAuthor? = nil
     var onBack: () -> Void
+
+    @Bindable private var callManager = CallSessionManager.shared
 
     var body: some View {
         ZStack {
@@ -363,7 +593,7 @@ private struct MasqueradePushChrome: View {
                 .foregroundStyle(Theme.ink)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity)
-                .padding(.horizontal, 72)
+                .padding(.horizontal, showsCallActions ? 96 : 72)
                 .accessibilityAddTraits(.isHeader)
 
             HStack(spacing: 0) {
@@ -383,6 +613,43 @@ private struct MasqueradePushChrome: View {
                 .accessibilityLabel("Back")
 
                 Spacer(minLength: 0)
+
+                if showsCallActions, let conversationID {
+                    HStack(spacing: 14) {
+                        Button {
+                            Task {
+                                await callManager.startCall(
+                                    conversationID: conversationID,
+                                    kind: .audio,
+                                    peer: peer
+                                )
+                            }
+                        } label: {
+                            Image(systemName: "phone.fill")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(callManager.canStartCall ? Theme.ink : Theme.inkMuted)
+                        }
+                        .disabled(!callManager.canStartCall)
+                        .accessibilityLabel("Audio call")
+
+                        Button {
+                            Task {
+                                await callManager.startCall(
+                                    conversationID: conversationID,
+                                    kind: .video,
+                                    peer: peer
+                                )
+                            }
+                        } label: {
+                            Image(systemName: "video.fill")
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(callManager.canStartCall ? Theme.ink : Theme.inkMuted)
+                        }
+                        .disabled(!callManager.canStartCall)
+                        .accessibilityLabel("Video call")
+                    }
+                    .padding(.vertical, 10)
+                }
             }
         }
         .padding(.horizontal, Theme.pagePadding)

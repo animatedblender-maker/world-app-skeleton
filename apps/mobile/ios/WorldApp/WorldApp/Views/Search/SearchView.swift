@@ -27,7 +27,7 @@ struct SearchView: View {
     @State private var contentNextOffset = 0
     @State private var searchError: String?
     @State private var searchGeneration = 0
-    @State private var recentQueries: [String] = SearchHistoryStore.shared.recent
+    @State private var recentQueries: [String] = SearchHistoryStore.recent(for: .main)
 
     private var normalizedQuery: String {
         query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -36,15 +36,7 @@ struct SearchView: View {
     private var isSearching: Bool { isSearchingPeople || isSearchingContent }
 
     private var historySuggestions: [String] {
-        let q = normalizedQuery.lowercased()
-        guard !q.isEmpty else { return Array(recentQueries.prefix(10)) }
-        return recentQueries
-            .filter {
-                let n = $0.lowercased()
-                return n.contains(q) || n.hasPrefix(q)
-            }
-            .prefix(8)
-            .map { $0 }
+        SearchHistoryStore.suggestions(matching: normalizedQuery, surface: .main, limit: 8)
     }
 
     private var topPeople: [Profile] { Array(profiles.prefix(6)) }
@@ -187,7 +179,7 @@ struct SearchView: View {
                                 .foregroundStyle(Theme.ink)
                             Spacer()
                             Button("Clear all") {
-                                SearchHistoryStore.shared.clear()
+                                SearchHistoryStore.clear(surface: .main)
                                 reloadRecent()
                             }
                             .font(.subheadline.weight(.semibold))
@@ -233,7 +225,7 @@ struct SearchView: View {
             .buttonStyle(.plain)
 
             Button {
-                SearchHistoryStore.shared.remove(item)
+                SearchHistoryStore.remove(item, surface: .main)
                 reloadRecent()
             } label: {
                 Image(systemName: "xmark")
@@ -582,13 +574,13 @@ struct SearchView: View {
     }
 
     private func reloadRecent() {
-        recentQueries = SearchHistoryStore.shared.recent
+        recentQueries = SearchHistoryStore.recent(for: .main)
     }
 
     private func recordHistory(_ raw: String) {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        SearchHistoryStore.shared.record(trimmed)
+        SearchHistoryStore.record(trimmed, surface: .main)
         reloadRecent()
     }
 
@@ -613,8 +605,7 @@ struct SearchView: View {
             guard normalizedQuery == trimmed else { return }
         }
 
-        recordHistory(trimmed)
-
+        // Do NOT record here — typing debounce must not pollute Recent.
         let generation = searchGeneration + 1
         searchGeneration = generation
         searchError = nil

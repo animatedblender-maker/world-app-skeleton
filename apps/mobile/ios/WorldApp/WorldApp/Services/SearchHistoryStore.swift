@@ -1,58 +1,67 @@
 import Foundation
-import Observation
 
 /// Recent Search queries (device-local), like other engines — tap to re-run, X to remove one.
+/// Surfaces keep **separate** histories (main / hubs / masquerade).
 @MainActor
-@Observable
-final class SearchHistoryStore {
-    static let shared = SearchHistoryStore()
+enum SearchHistoryStore {
+    enum Surface: String {
+        case main
+        case hubs
+        case masquerade
 
-    private let defaultsKey = "matterya.search.history.v1"
-    private let maxEntries = 24
-
-    private(set) var recent: [String] = []
-
-    private init() {
-        let stored = UserDefaults.standard.stringArray(forKey: defaultsKey) ?? []
-        recent = Self.normalizeList(stored)
+        fileprivate var defaultsKey: String {
+            switch self {
+            case .main: "matterya.search.history.v1"
+            case .hubs: "matterya.search.history.hubs.v1"
+            case .masquerade: "matterya.search.history.masquerade.v1"
+            }
+        }
     }
 
-    /// Matching history while typing (prefix / contains), newest first.
-    func suggestions(matching raw: String, limit: Int = 8) -> [String] {
-        let q = Self.normalize(raw)
-        guard !q.isEmpty else { return Array(recent.prefix(limit)) }
-        return recent
-            .filter { Self.normalize($0).contains(q) || Self.normalize($0).hasPrefix(q) }
+    private static let maxEntries = 24
+
+    static func recent(for surface: Surface) -> [String] {
+        let stored = UserDefaults.standard.stringArray(forKey: surface.defaultsKey) ?? []
+        return normalizeList(stored)
+    }
+
+    /// Matching history while typing. Never includes the exact in-progress query.
+    static func suggestions(matching raw: String, surface: Surface, limit: Int = 8) -> [String] {
+        let q = normalize(raw)
+        let all = recent(for: surface)
+        guard !q.isEmpty else { return Array(all.prefix(limit)) }
+        return all
+            .filter {
+                let n = normalize($0)
+                // Do not show the word currently being typed as if it were already history.
+                if n == q { return false }
+                return n.contains(q) || n.hasPrefix(q)
+            }
             .prefix(limit)
             .map { $0 }
     }
 
-    func record(_ raw: String) {
-        let value = Self.normalizeDisplay(raw)
+    /// Call only on Return, result tap, or picking a Recent row — never on every keystroke.
+    static func record(_ raw: String, surface: Surface) {
+        let value = normalizeDisplay(raw)
         guard !value.isEmpty else { return }
-        var next = recent.filter { Self.normalize($0) != Self.normalize(value) }
+        var next = recent(for: surface).filter { normalize($0) != normalize(value) }
         next.insert(value, at: 0)
         if next.count > maxEntries {
             next = Array(next.prefix(maxEntries))
         }
-        recent = next
-        persist()
+        UserDefaults.standard.set(next, forKey: surface.defaultsKey)
     }
 
-    func remove(_ raw: String) {
-        let key = Self.normalize(raw)
+    static func remove(_ raw: String, surface: Surface) {
+        let key = normalize(raw)
         guard !key.isEmpty else { return }
-        recent = recent.filter { Self.normalize($0) != key }
-        persist()
+        let next = recent(for: surface).filter { normalize($0) != key }
+        UserDefaults.standard.set(next, forKey: surface.defaultsKey)
     }
 
-    func clear() {
-        recent = []
-        persist()
-    }
-
-    private func persist() {
-        UserDefaults.standard.set(recent, forKey: defaultsKey)
+    static func clear(surface: Surface) {
+        UserDefaults.standard.set([String](), forKey: surface.defaultsKey)
     }
 
     private static func normalizeDisplay(_ value: String) -> String {
@@ -72,7 +81,7 @@ final class SearchHistoryStore {
             guard !key.isEmpty, !seen.contains(key) else { continue }
             seen.insert(key)
             out.append(display)
-            if out.count >= 24 { break }
+            if out.count >= maxEntries { break }
         }
         return out
     }
