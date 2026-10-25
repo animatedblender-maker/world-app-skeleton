@@ -497,6 +497,10 @@ struct SearchView: View {
                 peopleNextOffset = MatteryaSearchEngine.peoplePageSize
                 peopleHasMore = loaded.count >= MatteryaSearchEngine.peoplePageSize
                     && peopleNextOffset < MatteryaSearchEngine.maxPeopleTotal
+                // Record once results land (typing debounce or submit) so Recent fills without Return.
+                if !loaded.isEmpty || !content.isEmpty {
+                    history.record(trimmed)
+                }
             } catch {
                 guard searchGeneration == generation else { return }
                 if profiles.isEmpty && content.isEmpty {
@@ -522,6 +526,9 @@ struct SearchView: View {
                 contentNextOffset = MatteryaSearchEngine.contentPageSize
                 contentHasMore = loaded.count >= MatteryaSearchEngine.contentPageSize
                     && contentNextOffset < MatteryaSearchEngine.maxContentTotal
+                if !loaded.isEmpty || !profiles.isEmpty {
+                    history.record(trimmed)
+                }
             } catch {
                 guard searchGeneration == generation else { return }
                 content = []
