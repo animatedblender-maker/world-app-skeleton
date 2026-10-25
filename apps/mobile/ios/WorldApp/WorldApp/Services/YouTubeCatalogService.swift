@@ -22,11 +22,12 @@ enum YouTubeMainTab: String, CaseIterable, Identifiable {
     }
 }
 
-/// Hubs home chips — aligned with seed `hub_slug` / HubCategoryClassifier (not YouTube clones).
+/// Hubs home chips — aligned with API `HUB_PARENT_SLUGS` / HubCategoryClassifier.
 enum YouTubeHomeFilter: String, CaseIterable, Identifiable {
     case all
-    case social, travel, nature, music, food, sports
-    case tech, fitness, film, culture, daily
+    case comedy, music, travel, nature, food, sports
+    case tech, fitness, film, culture, history, education
+    case animals, cars, news, fashion, gaming, kids, social, daily
     case trending, recent
 
     var id: String { rawValue }
@@ -34,16 +35,25 @@ enum YouTubeHomeFilter: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .all: "For you"
-        case .social: "Social"
+        case .comedy: "Comedy"
+        case .music: "Music"
         case .travel: "Travel"
         case .nature: "Nature"
-        case .music: "Music"
         case .food: "Food"
         case .sports: "Sports"
         case .tech: "Tech"
         case .fitness: "Fitness"
         case .film: "Film"
         case .culture: "Culture"
+        case .history: "History"
+        case .education: "Education"
+        case .animals: "Animals"
+        case .cars: "Cars"
+        case .news: "News"
+        case .fashion: "Fashion"
+        case .gaming: "Gaming"
+        case .kids: "Kids"
+        case .social: "Social"
         case .daily: "Daily"
         case .trending: "Trending"
         case .recent: "Latest"
@@ -53,16 +63,25 @@ enum YouTubeHomeFilter: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .all: "square.grid.2x2"
-        case .social: "person.2"
+        case .comedy: "face.smiling"
+        case .music: "music.note"
         case .travel: "airplane"
         case .nature: "leaf"
-        case .music: "music.note"
         case .food: "fork.knife"
         case .sports: "sportscourt"
         case .tech: "desktopcomputer"
         case .fitness: "figure.run"
         case .film: "film"
         case .culture: "theatermasks"
+        case .history: "clock.arrow.circlepath"
+        case .education: "book"
+        case .animals: "pawprint"
+        case .cars: "car"
+        case .news: "newspaper"
+        case .fashion: "tshirt"
+        case .gaming: "gamecontroller"
+        case .kids: "figure.and.child.holdinghands"
+        case .social: "person.2"
         case .daily: "sun.max"
         case .trending: "flame"
         case .recent: "clock"
@@ -77,11 +96,13 @@ enum YouTubeHomeFilter: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Chips shown under Hubs home (ordered like TF shelves).
+    /// Vibe rails / chips — same order as API `HUB_PARENT_SLUGS`.
     static var hubCategories: [YouTubeHomeFilter] {
         [
-            .social, .travel, .nature, .music, .food, .sports,
-            .tech, .fitness, .film, .culture, .daily,
+            .comedy, .music, .travel, .nature, .food, .sports,
+            .tech, .fitness, .film, .culture, .history, .education,
+            .animals, .cars, .news, .fashion, .gaming, .kids,
+            .social, .daily,
             .trending, .recent,
         ]
     }
@@ -194,15 +215,14 @@ final class YouTubeCatalogService {
 
     func buildChannels(from videos: [CountryPost], profiles: [String: Profile] = [:]) -> [YouTubeChannel] {
         let eligible = videos.filter(livingEligible)
-        // Collapse every Archive / hub seed author into one channel id.
-        // Also: user-authored rows that only re-host Archive media must never form a personal channel.
+        // Collapse only true Internet Archive seed authors into The Archive channel.
+        // Live R2 Hubs (Dokumentar AL, Doku Deutschland, …) keep their own channel ids —
+        // never rewrite them to The Archive via the old externalRefType=hub seed stamp.
         let grouped = Dictionary(grouping: eligible) { post -> String in
-            if post.isHubSeedVideo || HubVideoSeedService.isArchiveChannelAuthor(post.authorID) {
+            if HubVideoSeedService.isArchiveChannelAuthor(post.authorID) {
                 return HubVideoSeedService.archiveChannelAuthorID
             }
-            // Legacy feed shares of Archive clips (wrong author) → still The Archive, not the sharer.
-            if PlayPlatformBridge.isArchiveCatalogMedia(post),
-               !PlayPlatformBridge.isHubChannelUpload(post) {
+            if post.isHubSeedVideo {
                 return HubVideoSeedService.archiveChannelAuthorID
             }
             return post.authorID
@@ -303,8 +323,10 @@ final class YouTubeCatalogService {
             }
         case .recent:
             return base.sorted { $0.createdAt > $1.createdAt }
-        case .social, .travel, .nature, .music, .food, .sports,
-                .tech, .fitness, .film, .culture, .daily:
+        case .comedy, .music, .travel, .nature, .food, .sports,
+                .tech, .fitness, .film, .culture, .history, .education,
+                .animals, .cars, .news, .fashion, .gaming, .kids,
+                .social, .daily:
             let slug = homeFilter.hubSlug ?? homeFilter.rawValue
             return base.filter { post in
                 let postSlug = (post.hubSlug ?? post.externalRefID ?? "").lowercased()
@@ -470,6 +492,7 @@ final class YouTubeCatalogService {
         }
 
         /// Unviewed first; watched of this slug park at the end (endless For you).
+        /// Within each bucket, round-robin creators so one archive channel cannot own the rail.
         func rankSlugFresh(_ items: [CountryPost], salt: UInt64) -> [CountryPost] {
             var followFresh: [CountryPost] = []
             var mineFresh: [CountryPost] = []
@@ -487,9 +510,14 @@ final class YouTubeCatalogService {
             func newest(_ a: [CountryPost]) -> [CountryPost] {
                 a.sorted { ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast) }
             }
-            let others = salt == 0 ? newest(otherFresh) : seededInterleavePure(newest(otherFresh), seed: salt)
+            let others = salt == 0
+                ? diversifyByCreatorPure(newest(otherFresh), seed: 0)
+                : diversifyByCreatorPure(newest(otherFresh), seed: salt)
             // Watched last within the slug so For you stays endless after unviewed.
-            return newest(mineFresh) + newest(followFresh) + others + newest(viewed)
+            return newest(mineFresh)
+                + diversifyByCreatorPure(newest(followFresh), seed: salt &+ 17)
+                + others
+                + newest(viewed)
         }
 
         let slugOrder: [String]
@@ -541,17 +569,55 @@ final class YouTubeCatalogService {
         return out + viewedTail
     }
 
+    /// Full seeded shuffle — the old 8-swap interleave barely moved order.
     nonisolated private static func seededInterleavePure(_ items: [CountryPost], seed: UInt64) -> [CountryPost] {
         guard items.count > 2 else { return items }
         var arr = items
         var state = seed == 0 ? 0xC0FFEE : seed
-        let swaps = min(arr.count, 8)
-        for i in 0..<swaps {
+        for i in stride(from: arr.count - 1, through: 1, by: -1) {
             state = state &* 1_103_515_245 &+ 12_345
-            let j = Int(state % UInt64(arr.count))
-            arr.swapAt(i % arr.count, j)
+            let j = Int(state % UInt64(i + 1))
+            if j != i { arr.swapAt(i, j) }
         }
         return arr
+    }
+
+    /// Round-robin by author so For you / rails are not 20× the same archive channel.
+    nonisolated private static func diversifyByCreatorPure(_ items: [CountryPost], seed: UInt64) -> [CountryPost] {
+        guard items.count > 2 else { return items }
+        var byAuthor: [String: [CountryPost]] = [:]
+        var authorOrder: [String] = []
+        for p in items {
+            if byAuthor[p.authorID] == nil {
+                authorOrder.append(p.authorID)
+            }
+            byAuthor[p.authorID, default: []].append(p)
+        }
+        guard authorOrder.count > 1 else {
+            return seed == 0 ? items : seededInterleavePure(items, seed: seed)
+        }
+        var order = authorOrder
+        var state = seed == 0 ? 0xC0FFEE : seed
+        for i in stride(from: order.count - 1, through: 1, by: -1) {
+            state = state &* 1_103_515_245 &+ 12_345
+            let j = Int(state % UInt64(i + 1))
+            order.swapAt(i, j)
+        }
+        var queues = byAuthor
+        var out: [CountryPost] = []
+        out.reserveCapacity(items.count)
+        var progressed = true
+        while progressed {
+            progressed = false
+            for author in order {
+                guard var q = queues[author], let next = q.first else { continue }
+                q.removeFirst()
+                queues[author] = q
+                out.append(next)
+                progressed = true
+            }
+        }
+        return out
     }
 
     func playbackPosition(for postID: String) -> Double {

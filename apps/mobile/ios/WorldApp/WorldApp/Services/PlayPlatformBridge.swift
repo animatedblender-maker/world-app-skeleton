@@ -213,14 +213,17 @@ enum PlayPlatformBridge {
         authorID: String,
         username: String?
     ) {
-        // 1) Explicit hub-origin stamp (feed share of a Hubs video).
+        // 1) Explicit hub-origin stamp (feed share of a Hubs video) → source channel.
         if let origin = HubOriginShareMarker.originPresentation(from: post) {
             let name = origin.authorDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
             let avatar = origin.author?.avatarURL
                 ?? post.sharedPost?.asCountryPost.author?.avatarURL
-            // Never fall back to the sharer's face when we know a different channel id.
+            // Prefer stamped channel name; only fall back to The Archive for true seed authors.
+            let fallback = HubVideoSeedService.isArchiveChannelAuthor(origin.authorID)
+                ? HubVideoSeedService.archiveChannelDisplayName
+                : (post.authorDisplayName.isEmpty ? HubVideoSeedService.archiveChannelDisplayName : post.authorDisplayName)
             return (
-                name.isEmpty ? HubVideoSeedService.archiveChannelDisplayName : name,
+                name.isEmpty ? fallback : name,
                 avatar,
                 origin.authorID,
                 origin.authorID,
@@ -228,8 +231,10 @@ enum PlayPlatformBridge {
             )
         }
 
-        // 2) Archive / seed catalog — always The Archive channel.
-        if isArchiveCatalogMedia(post) || HubVideoSeedService.isArchiveChannelAuthor(post.authorID) {
+        // 2) Native Archive seed channel only — never rewrite live Sparks/Hubs authors.
+        // (Live posts stamped externalRefType=hub used to hit isArchiveCatalogMedia via
+        // isHubSeedVideo and every card became "The Archive".)
+        if HubVideoSeedService.isArchiveChannelAuthor(post.authorID) {
             return (
                 HubVideoSeedService.archiveChannelDisplayName,
                 nil,
@@ -253,7 +258,7 @@ enum PlayPlatformBridge {
             )
         }
 
-        // 4) Native channel / creator row.
+        // 4) Native person / channel row (Sparks uploaders, Hubs channels like Dokumentar AL).
         return (
             post.authorDisplayName,
             post.author?.avatarURL,
@@ -463,6 +468,14 @@ enum PlayPlatformBridge {
         return post.hasImage || (!post.displayBody.isEmpty || (post.displayTitle?.isEmpty == false))
     }
 
+    /// Still photo / gif on Home (not Sparks/Hubs video). Used for once-seen suppression.
+    static func isHomeImageCard(_ post: CountryPost) -> Bool {
+        if post.hasVideo || post.isReel || post.isSpark || post.isStory { return false }
+        let mt = (post.mediaType ?? "").lowercased()
+        if mt == "image" || mt == "photo" || mt == "gif" { return true }
+        return post.hasImage && !post.hasVideo
+    }
+
     /// True when the feed should show a Spark card (original or re-share).
     static func isSparkFeedCard(_ post: CountryPost) -> Bool {
         if post.isStory { return false }
@@ -511,14 +524,13 @@ enum PlayPlatformBridge {
         .home
     }
 
+    /// iOS-only deep link — opens WorldApp via `matterya://`, never a web page.
     static func shareURL(for post: CountryPost) -> URL {
-        if isSparkFeedCard(post) {
-            return URL(string: "https://matterya.com/post/\(post.sharedPostID ?? post.id)")!
+        let id = post.sharedPostID ?? post.id
+        if isHubCatalogContent(post), post.hasVideo, !isSparkFeedCard(post) {
+            return URL(string: "matterya://play/watch/\(id)")!
         }
-        if isHubCatalogContent(post), post.hasVideo {
-            return URL(string: "https://matterya.com/play/watch/\(post.sharedPostID ?? post.id)")!
-        }
-        return URL(string: "https://matterya.com/post/\(post.sharedPostID ?? post.id)")!
+        return URL(string: "matterya://post/\(id)")!
     }
 
     /// Only true hub long-form gets the feed Hubs card + badge.
@@ -532,8 +544,8 @@ enum PlayPlatformBridge {
 
     static func channelURL(authorID: String, username: String?) -> URL {
         if let username, !username.isEmpty {
-            return URL(string: "https://matterya.com/play/channel/\(username)")!
+            return URL(string: "matterya://play/channel/\(username)")!
         }
-        return URL(string: "https://matterya.com/play/channel/id/\(authorID)")!
+        return URL(string: "matterya://play/channel/id/\(authorID)")!
     }
 }

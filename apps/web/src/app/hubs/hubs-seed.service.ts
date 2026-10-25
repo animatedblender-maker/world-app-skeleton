@@ -26,17 +26,27 @@ export class HubsSeedService {
   static readonly ARCHIVE_CONTENT_ENABLED = false;
 
   static readonly sparkMaxDurationSeconds = 60;
+  /** Keep in sync with API HUB_PARENT_SLUGS / iOS HubVideoSeedService.hubOrder */
   static readonly hubOrder = [
-    'social',
+    'comedy',
+    'music',
     'travel',
     'nature',
-    'music',
     'food',
     'sports',
     'tech',
     'fitness',
     'film',
     'culture',
+    'history',
+    'education',
+    'animals',
+    'cars',
+    'news',
+    'fashion',
+    'gaming',
+    'kids',
+    'social',
     'daily',
   ] as const;
 
@@ -138,10 +148,24 @@ export class HubsSeedService {
     return this.attributions.get(id) ?? null;
   }
 
+  /**
+   * Internet Archive / local seed-catalog rows only.
+   * Live R2 Hubs also stamp external_ref_type=hub — do not treat that as a seed
+   * (that forced every feed card onto The Archive / seed identity on iOS).
+   */
   isHubSeedVideo(post: CountryPost | null | undefined): boolean {
     if (!post) return false;
-    if (String(post.external_ref_type || '').toLowerCase() === 'hub') return true;
-    return this.videosByID.has(post.id);
+    if (this.videosByID.has(post.id)) return true;
+    const author = String(post.author_id || '').toLowerCase();
+    if (author === 'hub_archive' || author.startsWith('hub_spark_') || /^hub_[a-z0-9_]+$/.test(author)) {
+      // Synthetic seed authors only (not UUID live accounts).
+      if (!/^[0-9a-f-]{36}$/i.test(String(post.author_id || ''))) return true;
+    }
+    const id = String(post.id || '').toLowerCase();
+    if (id.startsWith('ia_') || id.startsWith('hub_spark_')) return true;
+    const ext = String(post.external_ref_id || '').toLowerCase();
+    if (ext.startsWith('ia_') || ext.startsWith('hub_spark_')) return true;
+    return false;
   }
 
   hubSlug(post: CountryPost | null | undefined): string | null {

@@ -114,28 +114,39 @@ enum HubCategoryClassifier {
         ],
     ]
 
+    /// Word-boundary keywords — keep in sync with API `KEYWORD_BUCKETS` in shelf.service.ts.
+    /// Avoid short stems that sit inside unrelated words (sea⊂Sean, band⊂husband).
     private static let keywordBuckets: [(category: String, words: [String])] = [
-        ("comedy", ["comedy", "funny", "humor", "humour", "joke", "sketch", "laugh", "gag", "parody", "satire", "slapstick", "standup", "sitcom", "prank"]),
-        ("music", ["music", "song", "jazz", "blues", "concert", "orchestra", "band", "singer", "piano", "guitar", "opera", "symphony", "choir", "melody", "soundtrack", "anthem", "hymn"]),
-        ("travel", ["travel", "trip", "tour", "voyage", "journey", "city", "paris", "london", "tokyo", "san francisco", "market street", "vista", "abroad", "cruise", "railway", "train", "airport", "hotel", "stockholm", "ridderholmen"]),
-        ("nature", ["nature", "forest", "wildlife", "mountain", "river", "ocean", "sea", "lake", "garden", "flower", "landscape", "earth", "weather", "storm", "volcano", "glacier", "time lapse", "timelapse"]),
-        ("food", ["food", "recipe", "cook", "kitchen", "breakfast", "dinner", "cereal", "coffee", "restaurant", "farm", "bread", "fruit", "vegetable", "meal", "bananas", "preserve", "frosted flakes", "kellogg"]),
-        ("sports", ["sport", "football", "baseball", "basketball", "soccer", "tennis", "golf", "olympics", "race", "racing", "boxing", "wrestling", "athletic", "stadium", "team", "fireman"]),
-        ("tech", ["tech", "computer", "robot", "electronic", "telephone", "engineering", "invention", "space", "rocket", "satellite", "digital", "technicolor", "countdown"]),
-        ("fitness", ["fitness", "exercise", "workout", "yoga", "gym", "posture", "calisthenics", "aerobics", "strength", "physical education", "health: your"]),
-        ("film", ["movie", "cinema", "trailer", "cartoon", "animation", "animated", "feature", "disney", "film", "commercial", "commercials", "tv classic", "silent film"]),
-        ("culture", ["culture", "art", "museum", "dance", "ballet", "theatre", "theater", "architecture", "literature", "poetry", "fashion show"]),
-        ("history", ["history", "historical", "war", "wwii", "ww2", "civil war", "newsreel", "archival", "vintage 19", "hindenburg", "korean war", "world war"]),
-        ("education", ["education", "school", "classroom", "lesson", "howto", "how to", "tutorial", "instruction", "science for", "learn", "teaching"]),
-        ("animals", ["animal", "dog", "cat", "pet", "bird", "horse", "zoo", "wildlife", "creature", "puppy", "kitten"]),
-        ("cars", ["car", "auto", "automobile", "motor", "vehicle", "truck", "honda", "ford", "chevrolet", "racing car", "drive"]),
-        ("news", ["news", "broadcast", "reporter", "headline", "bulletin", "newscast", "anchor"]),
-        ("fashion", ["fashion", "style", "clothing", "dress", "runway", "model", "wardrobe", "beauty"]),
-        ("gaming", ["game", "gaming", "arcade", "video game", "play station", "nintendo", "atari"]),
-        ("kids", ["kids", "children", "child", "nursery", "cartoon for kids", "story time", "babies"]),
-        ("social", ["people", "family", "community", "street", "crowd", "party", "wedding", "social", "friends"]),
-        ("daily", ["daily", "home", "house", "routine", "morning", "evening", "housework", "domestic"]),
+        ("comedy", ["comedy", "funny", "humor", "humour", "joke", "sketch comedy", "standup", "stand-up", "sitcom", "prank", "parody", "satire", "slapstick", "outtakes", "blooper"]),
+        ("music", ["music video", "music", "song", "jazz", "blues", "concert", "orchestra", "singer", "piano", "guitar", "opera", "symphony", "choir", "melody", "soundtrack", "hip hop", "hip-hop", "rap song", "album"]),
+        ("travel", ["travel", "tourist", "tourism", "voyage", "journey", "city walk", "city tour", "paris", "london", "tokyo", "abroad", "cruise", "railway", "airport", "hotel", "backpack", "road trip"]),
+        ("nature", ["nature", "forest", "wildlife", "mountain", "river", "ocean", "lake", "garden", "flower", "landscape", "weather", "storm", "volcano", "glacier", "timelapse", "time lapse", "national park", "wilderness"]),
+        ("food", ["food", "recipe", "cooking", "cook", "kitchen", "breakfast", "dinner", "coffee", "restaurant", "bakery", "bread", "fruit", "vegetable", "meal", "chef", "cuisine", "baking"]),
+        ("sports", ["sports", "sport", "football", "baseball", "basketball", "soccer", "tennis", "golf", "olympics", "olympic", "racing", "boxing", "wrestling", "athletic", "stadium", "nba", "nfl", "fifa", "world cup"]),
+        ("tech", ["technology", "tech talk", "computer", "robot", "robotics", "electronics", "engineering", "invention", "rocket", "satellite", "digital", "software", "hardware", "artificial intelligence", "machine learning", "smartphone", "ps5", "iphone"]),
+        ("fitness", ["fitness", "exercise", "workout", "yoga", "gym", "aerobics", "strength training", "crossfit", "calisthenics", "bodybuilding"]),
+        ("film", ["full movie", "movie", "cinema", "trailer", "cartoon", "animation", "animated", "feature film", "disney", "film", "silent film", "short film"]),
+        ("culture", ["culture", "museum", "ballet", "theatre", "theater", "architecture", "literature", "poetry", "art museum", "art history", "cultural"]),
+        ("history", ["history", "historical", "world war", "wwii", "ww2", "civil war", "newsreel", "archival", "ancient", "medieval", "empire", "dynasty"]),
+        ("education", ["education", "classroom", "lesson", "how to", "howto", "tutorial", "instruction", "lecture", "course", "teaching", "learn english", "learn spanish", "learn french", "learn german", "learn italian", "learn greek", "language learning"]),
+        ("animals", ["animals", "animal", "wildlife", "dog farm", "dogs", "dog", "cats", "cat", "pets", "pet", "birds", "bird", "horse", "zoo", "puppy", "kitten", "leopard", "lion", "tiger", "elephant"]),
+        ("cars", ["cars", "car review", "automobile", "motorcycle", "vehicle", "truck", "supercar", "hypercar", "tesla", "porsche", "ferrari", "lamborghini", "bmw", "honda", "ford", "chevrolet"]),
+        ("news", ["news", "breaking news", "broadcast", "reporter", "headline", "bulletin", "newscast", "news anchor", "journalism"]),
+        ("fashion", ["fashion", "runway", "wardrobe", "haute couture", "streetwear", "clothing brand", "beauty tutorial", "makeup tutorial"]),
+        ("gaming", ["gaming", "video game", "videogame", "gameplay", "arcade", "nintendo", "playstation", "xbox", "steam", "esports", "speedrun"]),
+        ("kids", ["for kids", "kids", "children", "nursery rhyme", "story time", "storytime", "babies", "toddler", "cartoon for kids"]),
+        ("social", ["social media", "community", "wedding", "friends", "family life", "street interview", "vlog"]),
+        ("daily", ["daily vlog", "morning routine", "evening routine", "housework", "domestic", "day in the life"]),
     ]
+
+    /// Whole-word / phrase hit — blocks sea⊂Sean, band⊂husband, art⊂party.
+    nonisolated private static func wordHit(_ blob: String, _ word: String) -> Bool {
+        let w = word.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !w.isEmpty else { return false }
+        let escaped = NSRegularExpression.escapedPattern(for: w)
+        let pattern = "(?:^|[^a-z0-9])\(escaped)(?:[^a-z0-9]|$)"
+        return blob.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+    }
 
     /// Pick best parent category from free text (+ optional seed slug as weak prior).
     nonisolated static func classify(
@@ -145,8 +156,8 @@ enum HubCategoryClassifier {
         creator: String?,
         seedSlug: String?
     ) -> String {
-        let blob = [
-            title ?? "",
+        let titleBlob = (title ?? "").lowercased()
+        let weakBlob = [
             body ?? "",
             creator ?? "",
             tags.joined(separator: " "),
@@ -158,8 +169,11 @@ enum HubCategoryClassifier {
         for bucket in keywordBuckets {
             var score = 0
             for word in bucket.words {
-                if blob.contains(word) {
-                    score += word.count >= 6 ? 3 : 2
+                let weight = word.count >= 10 ? 5 : word.count >= 6 ? 3 : 2
+                if wordHit(titleBlob, word) {
+                    score += weight * 2
+                } else if wordHit(weakBlob, word) {
+                    score += weight
                 }
             }
             if score > 0 {
@@ -183,11 +197,21 @@ enum HubCategoryClassifier {
             scores[seed, default: 0] += 1
         }
 
-        // Prefer the highest score; on ties keep seed if valid, else comedy/social last resort.
+        let overrideBlob = "\(titleBlob) \(weakBlob)"
+        if wordHit(overrideBlob, "true crime")
+            || wordHit(overrideBlob, "forensic files")
+            || wordHit(overrideBlob, "serial killer")
+        {
+            return "history"
+        }
+        if wordHit(overrideBlob, "wildlife") || wordHit(overrideBlob, "snow leopard") {
+            return "animals"
+        }
+
         if let best = scores.max(by: { a, b in
             if a.value != b.value { return a.value < b.value }
             return a.key > b.key
-        }), best.value >= 2 {
+        }), best.value >= 4 {
             return best.key
         }
 
@@ -219,11 +243,17 @@ enum HubCategoryClassifier {
         return s
     }
 
-    /// Catalog channel display — always **The Archive** (single R2 / hub channel).
+    /// Display name for a hub persona slug. Prefers a titled slug (e.g. "Film") over
+    /// collapsing everything to The Archive — live channels keep their own names elsewhere.
     nonisolated static func displayName(forPersonaSlug slug: String, isSpark: Bool) -> String {
-        _ = slug
         _ = isSpark
-        return HubVideoSeedService.archiveChannelDisplayName
+        let s = slug.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !s.isEmpty else { return HubVideoSeedService.archiveChannelDisplayName }
+        // Seed-only fallback when no live channel/profile name is available.
+        if HubVideoSeedService.hubOrder.contains(s) {
+            return s.prefix(1).uppercased() + s.dropFirst()
+        }
+        return HubVideoSeedService.channelDisplayName(hubSlug: s, isSpark: isSpark)
     }
 
     nonisolated private static func stableHash(_ value: String) -> UInt64 {

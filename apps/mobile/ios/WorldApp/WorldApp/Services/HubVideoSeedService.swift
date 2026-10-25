@@ -1,10 +1,11 @@
 import Foundation
 
-/// Hub catalog loader for Matterya Hubs + Sparks (Internet Archive / R2 media).
+/// Hub catalog loader for Matterya Hubs + Sparks (Internet Archive seed media).
 ///
 /// Loads `hub_videos.jsonl` and maps rows to playable `CountryPost` videos.
-/// **All catalog videos + Sparks belong to one channel: The Archive.**
-/// Category shelves (`hub_slug`) still group content for browsing; channel identity is unified.
+/// **Internet Archive seed rows** use the single channel **The Archive**.
+/// Live R2 Sparks/Hubs keep real person/channel authors (Dokumentar AL, uploaders, …)
+/// — never rewrite those to The Archive. Category shelves (`hub_slug`) still group browsing.
 /// **Spark rule:** duration under 60 seconds → `mediaType = "reel"` (Sparks feed).
 ///
 /// **Disabled by default** via `AppConfig.archiveContentEnabled` — seed file + helpers stay
@@ -57,18 +58,26 @@ actor HubVideoSeedService {
 
     private var attributions: [String: HubVideoMeta] = [:]
 
-    /// Ordered hub shelves (long-form). Keep in sync with `YouTubeHomeFilter.hubCategories`.
+    /// Ordered hub shelves (long-form). Keep in sync with API `HUB_PARENT_SLUGS`
+    /// and `YouTubeHomeFilter.hubCategories`.
     /// Shorts still land under these hubs as Sparks — but channel is always The Archive.
     static let hubOrder = [
-        "social", "travel", "nature", "music", "food", "sports",
-        "tech", "fitness", "film", "culture", "daily",
+        "comedy", "music", "travel", "nature", "food", "sports",
+        "tech", "fitness", "film", "culture", "history", "education",
+        "animals", "cars", "news", "fashion", "gaming", "kids",
+        "social", "daily",
     ]
 
-    /// Human-readable channel name — always **The Archive** (single catalog channel).
-    /// `hubSlug` / `isSpark` kept for call-site compatibility; ignored for display.
+    /// Human-readable name for a hub category slug (shelves). Live channel profiles
+    /// (Dokumentar AL, …) keep their own display names from `profiles` / `channels`.
+    /// This helper is only a slug fallback — not a blanket “everything is The Archive”.
     static func channelDisplayName(hubSlug: String, isSpark: Bool = false) -> String {
-        _ = hubSlug
         _ = isSpark
+        let slug = hubSlug.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !slug.isEmpty else { return archiveChannelDisplayName }
+        if hubOrder.contains(slug) {
+            return slug.prefix(1).uppercased() + slug.dropFirst()
+        }
         return archiveChannelDisplayName
     }
 
@@ -486,14 +495,29 @@ extension CountryPost {
     var hubSlug: String? {
         let id = externalRefID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard let id, !id.isEmpty else { return nil }
-        // Seed rows use externalRefType == hub; user uploads may set the same after hub_slug.
+        // Seed rows use externalRefType == hub; live R2 Hubs posts may use hub / hub_slug.
         if let type = externalRefType?.lowercased(), type != "hub", type != "hub_slug" {
             return nil
         }
         return id
     }
 
-    var isHubSeedVideo: Bool { externalRefType == "hub" }
+    /// Internet Archive / local seed-catalog rows only.
+    ///
+    /// Live R2 Hubs + Sparks also get `externalRefType == "hub"` from SurfacePageClient /
+    /// GraphQL when a hub_slug is present. Treating that stamp as a seed forced every
+    /// feed/Hubs card to show **The Archive** instead of the real person or channel
+    /// (Dokumentar AL, Doku Deutschland, uploading users, etc.).
+    var isHubSeedVideo: Bool {
+        if HubVideoSeedService.isArchiveChannelAuthor(authorID) { return true }
+        let lid = id.lowercased()
+        if lid.hasPrefix("ia_") || lid.hasPrefix("hub_spark_") { return true }
+        if let ext = externalRefID?.lowercased(),
+           ext.hasPrefix("ia_") || ext.hasPrefix("hub_spark_") {
+            return true
+        }
+        return false
+    }
 
     var hubAttributionText: String? {
         guard isHubSeedVideo else { return nil }

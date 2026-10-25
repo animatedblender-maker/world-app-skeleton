@@ -55,6 +55,8 @@ enum Theme {
     static let matte = Color(red: 0.965, green: 0.953, blue: 0.937)
     /// Soft matte fill for chips / selected controls (flat paper, no sheen).
     static let matteDeep = Color(red: 0.941, green: 0.929, blue: 0.910)
+    /// Verified seal fill — warm bronze `#96713F`.
+    static let verifiedMark = Color(red: 150 / 255, green: 113 / 255, blue: 63 / 255)
     /// Warm ink accent for text/icons on paper (flat — not gold).
     static let accent = ink
     /// Former gold/bronze bright → matte off-white (fills, tints, checkmarks).
@@ -96,7 +98,8 @@ enum Theme {
     /// Readable side inset for post body text on full-width feed cards.
     static let feedTextInset: CGFloat = 16
     static let cardPadding: CGFloat = 12
-    static let tabBarHeight: CGFloat = 49
+    /// Tall enough for large equal tab marks (Feed / Masquerade / Hubs / Messages / Profile).
+    static let tabBarHeight: CGFloat = 56
 }
 
 // MARK: - Premium motion (YouTube / IG / FB snappy feel — short easeOut, no hangy springs)
@@ -105,12 +108,12 @@ enum Theme {
 enum MatteryaMotion {
     /// Page / tab morph — lands immediately.
     static let snappy = Animation.easeOut(duration: 0.12)
-    /// YouTube mini settle after finger-up (snappy spring, not a hangy bounce).
-    static let minimize = Animation.spring(response: 0.22, dampingFraction: 0.92)
+    /// YouTube/IG mini settle after finger-up — feather-light, no mid-screen hang.
+    static let minimize = Animation.easeOut(duration: 0.11)
     /// Sheets, comments, share overlays.
     static let sheet = Animation.easeOut(duration: 0.16)
-    /// YouTube maximize from mini → full watch (snappy — was hanging at ~0.34s + tab work).
-    static let expand = Animation.spring(response: 0.22, dampingFraction: 0.92)
+    /// YouTube maximize from mini → full watch.
+    static let expand = Animation.easeOut(duration: 0.14)
     /// Fullscreen present / dismiss (legacy alias).
     static let fullscreen = Animation.spring(response: 0.28, dampingFraction: 0.94)
     /// Micro UI (mute chip, glyph, heart pop settle).
@@ -124,8 +127,9 @@ enum MatteryaMotion {
 
     // MARK: YouTube-parity hubs geometry (stage ↔ FS ↔ mini)
 
-    /// Continuous morph settle — finger-up stage/FS/mini (tight, no hang).
-    static let ytMorph = Animation.spring(response: 0.28, dampingFraction: 0.94)
+    /// Continuous morph settle — finger-up stage/FS/mini.
+    /// Ease-out (not spring): springs visibly slow mid-path and feel like a 1–2s hang.
+    static let ytMorph = Animation.easeOut(duration: 0.22)
     /// Maximize from mini → watch stage.
     static let ytExpand = Animation.spring(response: 0.24, dampingFraction: 0.93)
     /// Device tilt / content rotation while FS (short ease, no bounce).
@@ -347,15 +351,15 @@ enum MatteryaCopy {
     static let anonymousExportPlaceholder = "Masquerade data export will open a request flow soon."
     static let anonymousDeletePlaceholder = "Masquerade deletion requests will open a support flow soon."
     static let anonymousSearchTitle = "Search Masquerade"
-    static let anonymousSearchHint = "Find Spaces and text posts you’ve already been shown."
+    static let anonymousSearchHint = "Find people, Spaces, and posts across Masquerade."
     static let anonymousSearchEmptyTitle = "No matches"
     static let anonymousSearchEmptyBody = "Try another keyword. Private Spaces won’t appear in search."
     static let anonymousNotificationsTitle = "No Masquerade notifications yet"
     static let anonymousNotificationsBody =
         "Replies, mentions, and Space updates land only here — never mixed with Matterya notifications or Inbox."
-    static let anonymousMessagesInboxTitle = "Inbox is empty"
+    static let anonymousMessagesInboxTitle = "No Masquerade messages yet"
     static let anonymousMessagesInboxBody =
-        "Messages with people (and official Matterya) show up here. Notifications stay under the bell."
+        "Masquerade Inbox is anonymous-only. Official Matterya notes appear here — never your normal Matterya chats."
     static let anonymousInboxPrivacyNote =
         "Lock-screen and push copy won’t reveal Space titles to unauthorized recipients."
     static let anonymousModPlaceholderBody =

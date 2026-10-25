@@ -14,8 +14,8 @@ struct BottomTabBar: View {
             }
 
             createButton
-                .frame(width: 52)
-                .offset(y: -10)
+                .frame(width: 56)
+                .offset(y: -8)
 
             ForEach(rightTabs) { tab in
                 tabButton(tab)
@@ -42,15 +42,20 @@ struct BottomTabBar: View {
             withAnimation(.easeOut(duration: 0.24)) {
                 appState.showAppMenu = false
                 appState.globePanel = nil
-                appState.showCreateMenu.toggle()
+                if appState.selectedTab == .anonymous {
+                    // Reddit-style create for Masquerade Spaces / posts.
+                    appState.showMasqueradeCreateMenu = true
+                } else {
+                    appState.showCreateMenu.toggle()
+                }
             }
         } label: {
-            HandDrawnPlusIcon(size: 30)
-                .frame(width: 44, height: 44)
+            HandDrawnPlusIcon(size: 34)
+                .frame(width: 48, height: 48)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Create")
+        .accessibilityLabel(appState.selectedTab == .anonymous ? MatteryaCopy.anonymousCreateMenuTitle : "Create")
     }
 
     private func tabButton(_ tab: AppTab) -> some View {
@@ -70,37 +75,46 @@ struct BottomTabBar: View {
         .accessibilityLabel(tab.title)
     }
 
-    private func tabIconSize(_ tab: AppTab) -> CGFloat {
-        switch tab {
-        case .feed: 26
-        case .hubs, .messages: 22
-        default: 24
-        }
-    }
+    /// Large equal marks — fills the bar so it doesn’t look sparse / “white gaps”.
+    private static let tabIconSize: CGFloat = 34
 
     @ViewBuilder
     private func tabIcon(_ tab: AppTab) -> some View {
         let selected = appState.selectedTab == tab
+        let size = Self.tabIconSize
 
-        switch tab {
-        case .profile:
-            ProfileTabAvatar(
-                profile: appState.currentProfile,
-                isSelected: selected
-            )
-        default:
-            ZStack(alignment: .topTrailing) {
+        ZStack {
+            switch tab {
+            case .profile:
+                ProfileTabAvatar(
+                    profile: appState.currentProfile,
+                    isSelected: selected,
+                    size: size
+                )
+            case .hubs:
+                MatteryaHubsLogoView(size: size)
+                    .opacity(selected ? 1 : 0.92)
+            case .anonymous:
+                MatteryaMasqueradeLogoView(size: size)
+                    .opacity(selected ? 1 : 0.92)
+            default:
+                // Resizable so SF Symbols fill the same H×W as canvas logos / avatar.
                 Image(systemName: tab.systemImage)
-                    .font(.system(size: tabIconSize(tab), weight: selected ? .semibold : .regular))
-                    .foregroundStyle(selected ? Theme.ink : Theme.ink)
+                    .resizable()
+                    .scaledToFit()
+                    .fontWeight(selected ? .semibold : .regular)
                     .symbolVariant(selected ? .fill : .none)
-
-                if tab == .messages, appState.messagesUnreadCount > 0 {
-                    Circle()
-                        .fill(Theme.danger)
-                        .frame(width: 8, height: 8)
-                        .offset(x: 4, y: -2)
-                }
+                    .symbolRenderingMode(.monochrome)
+                    .foregroundStyle(Theme.ink)
+            }
+        }
+        .frame(width: size, height: size, alignment: .center)
+        .overlay(alignment: .topTrailing) {
+            if tab == .messages, appState.messagesUnreadCount > 0 {
+                Circle()
+                    .fill(Theme.danger)
+                    .frame(width: 9, height: 9)
+                    .offset(x: 5, y: -2)
             }
         }
     }
@@ -109,19 +123,23 @@ struct BottomTabBar: View {
 struct ProfileTabAvatar: View {
     let profile: Profile?
     let isSelected: Bool
+    /// Same diameter as every other tab icon.
+    var size: CGFloat = 34
 
     var body: some View {
         ZStack {
-            if isSelected {
-                HandDrawnGlobeStoryRing(size: 30, highlighted: true)
-            }
-
             AvatarView(
                 url: profile?.avatarURL,
                 seed: profile?.userID ?? "me",
-                size: isSelected ? 26 : 28
+                size: size
             )
             .opacity(isSelected ? 1 : 0.92)
+
+            if isSelected {
+                HandDrawnGlobeStoryRing(size: size, highlighted: true)
+                    .allowsHitTesting(false)
+            }
         }
+        .frame(width: size, height: size)
     }
 }

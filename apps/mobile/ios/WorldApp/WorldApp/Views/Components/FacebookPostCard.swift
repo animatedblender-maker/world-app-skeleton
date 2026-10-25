@@ -106,6 +106,17 @@ struct FacebookPostCard: View {
         return PlayPlatformBridge.displayCreator(for: post).name
     }
 
+    private var cardPrimaryShowsVerified: Bool {
+        if isFeedReshareCard {
+            return post.author?.showsVerifiedBadge == true
+        }
+        if let author = post.author, author.showsVerifiedBadge { return true }
+        let handle = (PlayPlatformBridge.displayCreator(for: post).username ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return handle == "matterya"
+    }
+
     private var cardPrimaryAvatarURL: String? {
         if isFeedReshareCard {
             return post.author?.avatarURL
@@ -181,9 +192,8 @@ struct FacebookPostCard: View {
             }
         }
 
-        // Archive / seed media without stamp fields.
-        if PlayPlatformBridge.isArchiveCatalogMedia(post)
-            || post.isHubSeedVideo
+        // True Internet Archive seed without stamp fields → "Shared from The Archive".
+        if post.isHubSeedVideo
             || HubVideoSeedService.isArchiveChannelAuthor(
                 HubOriginShareMarker.originPresentation(from: post)?.authorID
                     ?? post.sharedPost?.asCountryPost.authorID
@@ -196,7 +206,7 @@ struct FacebookPostCard: View {
             )
         }
 
-        // Hubs long-form feed share — channel identity only (never brand fallback).
+        // Hubs long-form feed share — real channel name (Dokumentar AL, etc.), never brand.
         if isHubOriginShareCard {
             let creator = PlayPlatformBridge.displayCreator(for: post)
             let n = creator.name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -208,6 +218,17 @@ struct FacebookPostCard: View {
                     authorID: creator.authorID,
                     username: creator.username
                 )
+            }
+            // Person is primary; if displayCreator collapsed to the same person, try embed.
+            if let embed = post.sharedPost?.asCountryPost {
+                let en = embed.authorDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+                if isUsableOriginName(en), embed.authorID != post.authorID {
+                    return OriginSource(
+                        name: en,
+                        authorID: embed.authorID,
+                        username: embed.author?.username
+                    )
+                }
             }
         }
 
@@ -317,11 +338,9 @@ struct FacebookPostCard: View {
                 journalHeader
             }
 
-            // Image posts: caption above the photo (body, or title text when body empty — never as a headline).
+            // Image posts: caption above the photo (body, or headline when body empty — never both).
             if isImageOnlyPost {
-                let caption = !post.displayBody.isEmpty
-                    ? post.displayBody
-                    : (post.displayTitle ?? "")
+                let caption = post.displayExcerpt
                 if !caption.isEmpty {
                     captionBlock(text: caption, topPadding: 4, bottomPadding: 10)
                 }
@@ -377,19 +396,10 @@ struct FacebookPostCard: View {
                 }
                 meta
             } else {
-                // Written/text: prefer excerpt; fall back to body when title==body cleared excerpt.
-                let writtenCaption: String = {
-                    if !post.displayExcerpt.isEmpty { return post.displayExcerpt }
-                    if PlayPlatformBridge.isWrittenHomePost(post), !post.displayBody.isEmpty {
-                        // Title already in journalHeader — only repeat body when it differs.
-                        if let title = post.displayTitle, title == post.displayBody { return "" }
-                        return post.displayBody
-                    }
-                    return ""
-                }()
-                if !isImageOnlyPost, !writtenCaption.isEmpty {
+                // Written/text: one caption line (body, or headline-only when body empty).
+                if !isImageOnlyPost, !post.displayExcerpt.isEmpty {
                     captionBlock(
-                        text: writtenCaption,
+                        text: post.displayExcerpt,
                         topPadding: post.hasMedia || post.sharedPost != nil ? 12 : 10,
                         bottomPadding: 4
                     )
@@ -540,10 +550,15 @@ struct FacebookPostCard: View {
                     Button {
                         openAuthorProfile()
                     } label: {
-                        Text(cardPrimaryName)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(Theme.ink)
-                            .lineLimit(1)
+                        HStack(spacing: 5) {
+                            Text(cardPrimaryName)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Theme.ink)
+                                .lineLimit(1)
+                            if cardPrimaryShowsVerified {
+                                MatteryaVerifiedBadge(size: 14)
+                            }
+                        }
                     }
                     .buttonStyle(.plain)
 
@@ -601,10 +616,15 @@ struct FacebookPostCard: View {
                             Button {
                                 openAuthorProfile()
                             } label: {
-                                Text(cardPrimaryName)
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(Theme.ink)
-                                    .lineLimit(1)
+                                HStack(spacing: 5) {
+                                    Text(cardPrimaryName)
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(Theme.ink)
+                                        .lineLimit(1)
+                                    if cardPrimaryShowsVerified {
+                                        MatteryaVerifiedBadge(size: 14)
+                                    }
+                                }
                             }
                             .buttonStyle(.plain)
 
@@ -667,13 +687,14 @@ struct FacebookPostCard: View {
         // UIKit truncation measure hitch Home scroll (Sparks/Hubs captions are short/absent).
         Group {
             if isImageOnlyPost {
-                Text(text)
-                    .font(.body)
-                    .foregroundStyle(Theme.inkSecondary)
-                    .lineSpacing(4)
-                    .lineLimit(4)
-                    .multilineTextAlignment(.leading)
-                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                MatteryaRichText(
+                    text: text,
+                    font: .body,
+                    color: Theme.inkSecondary,
+                    lineSpacing: 4,
+                    lineLimit: 4
+                )
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
             } else {
                 ExpandableBodyText(
                     text: text,
@@ -698,17 +719,18 @@ struct FacebookPostCard: View {
 
     /// Extra channel link under journal titles only when the name row does **not** already
     /// show the origin source (avoids duplicating the channel name on feed + profile cards).
-    /// Native hub_* posts already show the channel as the author — no extra line.
+    /// Native hub_* / channel posts already show the channel as the author — no extra line.
     private var hubChannelAttributionSource: OriginSource? {
         // Re-shares: only under the name once — never again under the title.
         if isFeedReshareCard { return nil }
         if originSource != nil { return nil }
         guard showsPlayLinkInFeed else { return nil }
-        // Channel is already the name card for The Archive / hub seed posts.
+        // Channel is already the name card for The Archive seed posts.
         if HubVideoSeedService.isArchiveChannelAuthor(post.authorID) {
             return nil
         }
-        if post.hubSlug != nil || post.isHubSeedVideo {
+        // True Archive seeds only — never rewrite live hub_slug posts to The Archive.
+        if post.isHubSeedVideo {
             return OriginSource(
                 name: HubVideoSeedService.archiveChannelDisplayName,
                 authorID: HubVideoSeedService.archiveChannelAuthorID,
@@ -846,20 +868,32 @@ struct FacebookPostCard: View {
                     } else {
                         feedVideoPoster
                     }
-                } else if let url = post.feedImageURL {
-                    // UIKit pinch (ScrollView-safe); release springs back.
+                } else if !post.feedImageURLs.isEmpty {
+                    // Multi-photo gallery (amiuglytruth etc.) or single pinch photo.
                     // 540 decode + scroll-simultaneous pinch — image cards were freezing
                     // Home while Sparks/Hubs (no pinch overlay) stayed smooth.
-                    FeedPinchZoomPhoto(
-                        url: url,
-                        maxPixelSize: 540,
-                        contentMode: .fit,
-                        placeholder: AnyView(mediaPlaceholder),
-                        onZoomingChanged: { zooming in
-                            isPhotoPinching = zooming
-                        },
-                        onTap: { openMedia() }
-                    )
+                    let urls = post.feedImageURLs
+                    if urls.count > 1 {
+                        MatteryaImageGallery(
+                            urls: urls,
+                            maxPixelSize: 540,
+                            onZoomingChanged: { zooming in
+                                isPhotoPinching = zooming
+                            },
+                            onTap: { openMedia() }
+                        )
+                    } else if let url = urls.first {
+                        FeedPinchZoomPhoto(
+                            url: url,
+                            maxPixelSize: 540,
+                            contentMode: .fit,
+                            placeholder: AnyView(mediaPlaceholder),
+                            onZoomingChanged: { zooming in
+                                isPhotoPinching = zooming
+                            },
+                            onTap: { openMedia() }
+                        )
+                    }
                 } else {
                     mediaPlaceholder
                 }
@@ -893,11 +927,13 @@ struct FacebookPostCard: View {
         // Feed: only Archive CDN needs MatteryaHubPlayer. R2 hubs use light AV path —
         // mounting the hub UIKit player on every cell froze scroll.
         let useArchivePath = ArchiveVideoPlayback.isArchiveURL(url)
-        // Prefer usable Frame 0 — feed thumb_url is often an expired signed webp (403).
+        // Prefer usable Frame 0 / LongForm YouTube — feed thumb_url is often expired (403).
         let posterCandidates: [URL?] = [
             Frame0PosterCache.url(for: post.id),
+            MediaURLResolver.r2LongformYouTubePosterURL(for: post),
             MediaURLResolver.posterURL(for: post),
             post.sharedPost.flatMap { MediaURLResolver.posterURL(for: $0.asCountryPost) },
+            post.sharedPost.flatMap { MediaURLResolver.r2LongformYouTubePosterURL(for: $0.asCountryPost) },
         ]
         let poster: URL? = {
             for candidate in posterCandidates {
@@ -914,7 +950,7 @@ struct FacebookPostCard: View {
             if let poster {
                 CachedAsyncImage(
                     url: poster,
-                    maxPixelSize: 720,
+                    maxPixelSize: 480,
                     contentMode: isHubFilm ? .fit : .fill,
                     placeholder: AnyView(Color.black)
                 )
@@ -948,8 +984,11 @@ struct FacebookPostCard: View {
                 fillsFrame: !isHubFilm,
                 bottomChromeReserve: 0,
                 autoplaySurface: autoplaySurface,
+                tapToRevealControls: isHubFilm,
                 // Hubs on feed: FS → continuous landscape player (same buffer, no remount lag).
                 allowsFullscreen: isHubFilm,
+                // CC on Home-feed Hubs (light R2 path + archive path). Never Sparks.
+                allowsCaptions: isHubFilm,
                 onFullscreenRequest: isHubFilm ? {
                     appState.startHubPlayback(post, expanded: true)
                     appState.requestHubFullscreen()

@@ -1,21 +1,21 @@
 import Foundation
 
-/// Slug-first Hubs load unit — thin pages only, never the full catalog.
+/// Slug-first Hubs load unit — thin pages; grows toward full LongForm inventory (~1.9k).
 ///
 /// Surfaces:
 /// - `for_you` → GET /v1/hubs/for-you
 /// - chip slug → GET /v1/hubs/shelves/:slug
 ///
-/// Memory: at most a few shelves × ~80 thin posts. Warm only active + 1 neighbor.
+/// Memory: for_you + a few chip shelves; warm only active + 1 neighbor.
 @MainActor
 final class SlugShelfStore {
     static let shared = SlugShelfStore()
 
-    /// Max posts retained per slug (or for_you key) — hold the live for-you inventory (~680+).
-    static let maxPerShelf = 800
+    /// Max posts retained per slug (or for_you) — covers ~1.9k unique LongForm hubs.
+    static let maxPerShelf = 2200
     /// Max distinct shelves kept in RAM (for_you + vibe slugs).
-    static let maxShelves = 14
-    /// Dense pages so Netflix rails fill from the API long-form library.
+    static let maxShelves = 16
+    /// Page size — larger pages fill toward full inventory with fewer round-trips.
     static let pageSize = 40
 
     /// Synthetic key for the mixed For you stream.
@@ -198,18 +198,22 @@ final class SlugShelfStore {
         shelves[key] = state
         pruneShelves(keeping: key)
 
-        // Warm first-screen thumbs + Frame 0 only (AV warm is Watch/related).
+        // Warm first-screen thumbs only (AV warm is Watch/related).
         let warmBand = Array(
-            (append ? remote.items : state.posts).prefix(16)
+            (append ? remote.items : state.posts).prefix(12)
         )
         ImageCache.shared.prefetchHubsListThumbnails(
             warmBand,
             maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel
         )
-        Task {
-            await Frame0PosterResolver.shared.prefetch(
-                postIDs: Array(warmBand.prefix(16).map(\.id))
-            )
+        let needFrame0 = warmBand
+            .filter { MediaURLResolver.r2LongformYouTubePosterURL(for: $0) == nil }
+            .prefix(6)
+            .map(\.id)
+        if !needFrame0.isEmpty {
+            Task {
+                await Frame0PosterResolver.shared.prefetch(postIDs: Array(needFrame0))
+            }
         }
 
         return Page(
@@ -306,8 +310,8 @@ final class SlugShelfStore {
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
         req.setValue("application/json", forHTTPHeaderField: "Accept")
-        // Shelves share API budget with feed; allow cold-start headroom (was 6s).
-        req.timeoutInterval = 12
+        // Cold shelf classify + freshen can exceed 8s; 12s still timed out on first chip.
+        req.timeoutInterval = 20
         // Cached access token only (public shelves work without auth too).
         if let token = AuthService.shared.accessToken() {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -334,16 +338,21 @@ final class SlugShelfStore {
             #if DEBUG
             print("[SlugShelf] \(url.path) items=\(posts.count) next=\(next != nil)")
             #endif
-            // Media session 09: shelf list = posters only. Continuous player warms on open.
-            let head = Array(posts.prefix(16))
+            // Media session 09: shelf list = posters only. Prefer YouTube hqdefault warm;
+            // Frame0 batch 404s on missing frame0_*.webp and starved first paint.
+            let head = Array(posts.prefix(12))
             ImageCache.shared.prefetchHubsListThumbnails(
                 head,
                 maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel
             )
-            Task {
-                await Frame0PosterResolver.shared.prefetch(
-                    postIDs: Array(head.prefix(16).map(\.id))
-                )
+            let needFrame0 = head
+                .filter { MediaURLResolver.r2LongformYouTubePosterURL(for: $0) == nil }
+                .prefix(6)
+                .map(\.id)
+            if !needFrame0.isEmpty {
+                Task {
+                    await Frame0PosterResolver.shared.prefetch(postIDs: Array(needFrame0))
+                }
             }
             return Page(items: posts, nextCursor: next, slugsUsed: slugsUsed, session: session)
         } catch {
