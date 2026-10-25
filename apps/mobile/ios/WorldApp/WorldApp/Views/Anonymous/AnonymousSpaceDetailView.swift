@@ -95,10 +95,21 @@ struct AnonymousSpaceDetailView: View {
                         .font(.caption)
                         .foregroundStyle(Theme.inkMuted)
                 }
-                if let owner = space.ownerUsername {
-                    Text("Owner @\(owner)")
+                if let posts = space.postCount {
+                    Text("\(posts.formatted()) posts")
                         .font(.caption)
                         .foregroundStyle(Theme.inkMuted)
+                }
+                if let owner = space.ownerUsername {
+                    Button {
+                        store.pushProfile(username: owner)
+                    } label: {
+                        Text("Owner @\(owner)")
+                            .font(.caption)
+                            .foregroundStyle(Theme.inkMuted)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open @\(owner)")
                 }
             }
         }
@@ -239,7 +250,7 @@ struct AnonymousSpaceDetailView: View {
                 .padding(.vertical, 12)
         } else {
             LazyVStack(spacing: 0) {
-                ForEach(store.spacePosts) { post in
+                ForEach(Array(store.spacePosts.enumerated()), id: \.element.id) { index, post in
                     AnonymousPostCard(
                         post: post,
                         style: .feed,
@@ -259,6 +270,17 @@ struct AnonymousSpaceDetailView: View {
                     ) {
                         store.pushPost(post)
                     }
+                    .onAppear {
+                        if index >= store.spacePosts.count - 6 {
+                            Task { await store.loadMoreSpacePosts() }
+                        }
+                    }
+                }
+                if store.spacePostsLoadingMore {
+                    ProgressView()
+                        .tint(Theme.inkMuted)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
                 }
             }
         }
@@ -308,11 +330,14 @@ struct AnonymousPostCard: View {
 
     /// Longer feed preview; full body lives on the thread.
     private static let feedLineLimit = 12
+    @Environment(AppState.self) private var appState
     @State private var videoMuted = false
     @State private var showFeedVideoPlayer = false
+    @State private var showReport = false
+    private var store: AnonymousStore { AnonymousStore.shared }
 
     private var bodyText: String {
-        post.body.trimmingCharacters(in: .whitespacesAndNewlines)
+        post.displayBody.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private var showsSeeMore: Bool {
@@ -328,10 +353,20 @@ struct AnonymousPostCard: View {
         return slug.isEmpty ? nil : slug
     }
 
+    private var isOfficialMatteryaAuthor: Bool {
+        post.authorUsername
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() == "matterya"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            // Meta row — community · author · time
+            // Meta row — community · author · time · ⋯
+            // Only official Matterya keeps an avatar in Masquerade; everyone else is @username.
             HStack(spacing: 6) {
+                if isOfficialMatteryaAuthor {
+                    AvatarView(url: nil, seed: "matterya", size: 22)
+                }
                 if let space = spaceLabel {
                     if let onOpenSpace {
                         Button(action: onOpenSpace) {
@@ -351,17 +386,32 @@ struct AnonymousPostCard: View {
                         .font(.caption)
                         .foregroundStyle(Theme.inkMuted)
                 }
-                Text("@\(post.authorUsername)")
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.inkMuted)
-                    .lineLimit(1)
+                if isOfficialMatteryaAuthor {
+                    Text("Matterya")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.ink)
+                        .lineLimit(1)
+                    MatteryaVerifiedBadge(size: 13)
+                } else {
+                    Button {
+                        store.pushProfile(username: post.authorUsername)
+                    } label: {
+                        Text("@\(post.authorUsername)")
+                            .font(.subheadline)
+                            .foregroundStyle(Theme.inkMuted)
+                            .lineLimit(1)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open @\(post.authorUsername)")
+                }
                 Spacer(minLength: 4)
                 Text(RelativeTime.format(post.createdAt))
                     .font(.caption)
                     .foregroundStyle(Theme.inkMuted)
+                postOverflowMenu
             }
 
-            if let title = post.title, !title.isEmpty {
+            if let title = post.displayTitle, !title.isEmpty {
                 Text(title)
                     .font(.system(size: 22, weight: .regular, design: .serif))
                     .foregroundStyle(Theme.ink)
@@ -370,12 +420,13 @@ struct AnonymousPostCard: View {
             }
 
             if !bodyText.isEmpty {
-                Text(post.body)
-                    .font(.body)
-                    .foregroundStyle(Theme.inkSecondary)
-                    .lineLimit(style == .thread ? nil : Self.feedLineLimit)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
+                MatteryaRichText(
+                    text: bodyText,
+                    font: .body,
+                    color: Theme.inkSecondary,
+                    lineLimit: style == .thread ? nil : Self.feedLineLimit
+                )
+                .fixedSize(horizontal: false, vertical: true)
 
                 if showsSeeMore {
                     Button {
@@ -420,7 +471,7 @@ struct AnonymousPostCard: View {
                 .disabled(onOpenPost == nil)
 
                 Spacer(minLength: 0)
-                if post.hasImage {
+                if post.hasImage, post.mediaURLValue != nil {
                     Label("Photo", systemImage: "photo")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(Theme.inkMuted)
@@ -440,6 +491,51 @@ struct AnonymousPostCard: View {
                 Theme.divider.frame(height: 0.5)
             }
         }
+        .confirmationDialog("Report post", isPresented: $showReport, titleVisibility: .visible) {
+            Button("Harassment", role: .destructive) { Task { await reportPost("harassment") } }
+            Button("Spam", role: .destructive) { Task { await reportPost("spam") } }
+            Button("Doxxing / identity", role: .destructive) { Task { await reportPost("doxxing") } }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    private var postOverflowMenu: some View {
+        Menu {
+            Button(role: .destructive) {
+                showReport = true
+            } label: {
+                Label("Report", systemImage: "flag")
+            }
+            Button(role: .destructive) {
+                Task { await blockAuthor() }
+            } label: {
+                Label("Block author", systemImage: "hand.raised")
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Theme.inkMuted)
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Post options")
+    }
+
+    private func reportPost(_ reason: String) async {
+        await store.report(targetType: "post", targetId: post.id, reason: reason)
+        appState.showToast("Report submitted.", style: .info)
+    }
+
+    private func blockAuthor() async {
+        let ok = await store.block(profileId: post.authorProfileId)
+        if ok {
+            appState.showToast("Blocked @\(post.authorUsername)", style: .info)
+        } else if let msg = store.consumeError() {
+            appState.showToast(msg, style: .error)
+        } else {
+            appState.showToast("Couldn’t block this author.", style: .error)
+        }
     }
 
     @ViewBuilder
@@ -456,11 +552,14 @@ struct AnonymousPostCard: View {
                         .fill(Theme.canvasMuted)
                         .frame(height: 180)
                         .overlay {
-                            Image(systemName: "photo")
-                                .font(.title2)
-                                .foregroundStyle(Theme.inkMuted)
+                            ProgressView()
+                                .tint(Theme.inkMuted)
                         }
-                )
+                ),
+                onLoadFailed: { _ in
+                    // HTML-as-jpg scrape poison — drop the whole post; body without photo is empty context.
+                    store.removeBrokenPhotoPost(id: post.id)
+                }
             )
             .frame(maxWidth: .infinity)
             .frame(maxHeight: style == .thread ? 440 : 360)

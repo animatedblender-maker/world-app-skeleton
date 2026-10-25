@@ -44,6 +44,8 @@ final class AnonymousStore {
     var feedCursor: String?
     var feedSort: AnonymousFeedSort = .hot
     var feedLoading = false
+    var feedLoadingMore = false
+    var feedHasMore = true
     /// Coalesce bootstrap + Feed tab `.task` so Masquerade doesn't double-hit `/feed`.
     private var feedLoadTask: Task<Void, Never>?
 
@@ -55,6 +57,8 @@ final class AnonymousStore {
     var spacePosts: [AnonymousPost] = []
     var spacePostsCursor: String?
     var spacePostsLoading = false
+    var spacePostsLoadingMore = false
+    var spacePostsHasMore = true
 
     var composerTitle: String = ""
     var composerBody: String = ""
@@ -111,6 +115,46 @@ final class AnonymousStore {
         navigationPath = navigationPath + [.post(id: id)]
     }
 
+    /// Push by id when we only have a notification / deep-link reference.
+    func pushPostId(_ id: String) {
+        let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if navigationPath.last == .post(id: trimmed) { return }
+        navigationPath = navigationPath + [.post(id: trimmed)]
+    }
+
+    /// Open a Masquerade anonymous profile by handle (`@name` or `name`).
+    func pushProfile(username: String) {
+        let trimmed = username
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "@"))
+        guard !trimmed.isEmpty else { return }
+        // Official Matterya is not an anonymous handle — leave to Messages / public profile.
+        if trimmed.lowercased() == "matterya" { return }
+        if case .profile(let current) = navigationPath.last,
+           current.lowercased() == trimmed.lowercased() {
+            return
+        }
+        navigationPath = navigationPath + [.profile(username: trimmed)]
+    }
+
+    /// Open a Masquerade inbox thread **inside** Masquerade (never jumps to the Messages tab).
+    func pushConversation(id: String, seed: Conversation? = nil) {
+        let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if let seed {
+            MessagesService.shared.storeConversation(seed)
+        }
+        if case .conversation(let current) = navigationPath.last, current == trimmed {
+            return
+        }
+        // Drop any prior conversation push so Back always lands on Inbox.
+        navigationPath = navigationPath.filter {
+            if case .conversation = $0 { return false }
+            return true
+        } + [.conversation(id: trimmed)]
+    }
+
     func post(forId id: String) -> AnonymousPost? {
         let key = id.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return nil }
@@ -124,6 +168,25 @@ final class AnonymousStore {
             return hit
         }
         return nil
+    }
+
+    /// Drop a photo post whose media failed to decode (HTML scrape poison as .jpg).
+    /// Context without the image is useless — remove from every local list and pop the thread.
+    func removeBrokenPhotoPost(id: String) {
+        let key = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return }
+        feed.removeAll { $0.id == key }
+        spacePosts.removeAll { $0.id == key }
+        postById.removeValue(forKey: key)
+        if case .post(let top) = navigationPath.last, top == key {
+            navigationPath = Array(navigationPath.dropLast())
+        } else {
+            navigationPath = navigationPath.filter {
+                if case .post(let pid) = $0 { return pid != key }
+                return true
+            }
+        }
+        cacheFeed(feed, cursor: feedCursor)
     }
 
     /// Keep feed / space / detail caches in sync after a fresh GET (e.g. re-signed media).
@@ -364,7 +427,12 @@ final class AnonymousStore {
             withAnimation(MatteryaMotion.snappy) {
                 currentSpace = space
             }
-            let page = try await AnonymousService.listPosts(spaceId: space.id)
+            // Chronological + cursor — Hot/score order breaks keyset pagination.
+            let page = try await AnonymousService.listPosts(
+                spaceId: space.id,
+                sort: .new,
+                limit: AnonymousService.spacePostsPageLimit
+            )
             for item in page.items {
                 postById[item.id] = item
             }
@@ -372,6 +440,7 @@ final class AnonymousStore {
             let spaceOwn = mergeOwnRecentPosts(into: page.items).filter { $0.spaceId == space.id }
             spacePosts = spaceOwn
             spacePostsCursor = page.nextCursor
+            spacePostsHasMore = page.nextCursor != nil
         } catch let err as AnonymousError {
             lastError = err.errorDescription
             // Toast only when we have nothing to show for this slug.
@@ -379,6 +448,37 @@ final class AnonymousStore {
         } catch {
             lastError = error.localizedDescription
             shouldToastLastError = currentSpace?.slug != slug
+        }
+    }
+
+    /// Endless Space posts — append next chronological page.
+    func loadMoreSpacePosts() async {
+        guard let space = currentSpace else { return }
+        guard !spacePostsLoading, !spacePostsLoadingMore else { return }
+        guard spacePostsHasMore, let cursor = spacePostsCursor, !cursor.isEmpty else { return }
+        spacePostsLoadingMore = true
+        defer { spacePostsLoadingMore = false }
+        do {
+            let page = try await AnonymousService.listPosts(
+                spaceId: space.id,
+                cursor: cursor,
+                sort: .new,
+                limit: AnonymousService.spacePostsPageLimit
+            )
+            var seen = Set(spacePosts.map(\.id))
+            var appended: [AnonymousPost] = []
+            for item in page.items where seen.insert(item.id).inserted {
+                postById[item.id] = item
+                appended.append(item)
+            }
+            if !appended.isEmpty {
+                spacePosts.append(contentsOf: appended)
+            }
+            spacePostsCursor = page.nextCursor
+            spacePostsHasMore = page.nextCursor != nil && !page.items.isEmpty
+        } catch {
+            // Soft — keep what we have; user can scroll again.
+            spacePostsHasMore = spacePostsCursor != nil
         }
     }
 
@@ -525,6 +625,7 @@ final class AnonymousStore {
             withAnimation(MatteryaMotion.insert) {
                 feed = merged
                 feedCursor = page.nextCursor
+                feedHasMore = page.nextCursor != nil
             }
             cacheFeed(merged, cursor: page.nextCursor)
             // Clear soft timeout copy once paint succeeds.
@@ -543,6 +644,38 @@ final class AnonymousStore {
         }
     }
 
+    /// Endless Masquerade For you — append the next ranked page.
+    func loadMoreFeed() async {
+        guard !feedLoading, !feedLoadingMore else { return }
+        guard feedHasMore, let cursor = feedCursor, !cursor.isEmpty else { return }
+        feedLoadingMore = true
+        defer { feedLoadingMore = false }
+        do {
+            let page = try await AnonymousService.feed(
+                sort: feedSort,
+                cursor: cursor,
+                limit: AnonymousService.feedPageLimit
+            )
+            var seen = Set(feed.map(\.id))
+            var appended: [AnonymousPost] = []
+            for item in page.items where seen.insert(item.id).inserted {
+                postById[item.id] = item
+                appended.append(item)
+            }
+            if !appended.isEmpty {
+                withAnimation(MatteryaMotion.insert) {
+                    feed.append(contentsOf: appended)
+                }
+            }
+            feedCursor = page.nextCursor
+            // Empty page or no cursor → stop; also stop if we got zero new ids (exhausted).
+            feedHasMore = page.nextCursor != nil && !appended.isEmpty
+            cacheFeed(feed, cursor: feedCursor)
+        } catch {
+            feedHasMore = feedCursor != nil
+        }
+    }
+
     private func isFeedCacheStale() -> Bool {
         let saved = UserDefaults.standard.double(forKey: feedCacheSavedAtKey)
         guard saved > 0 else { return !feed.isEmpty }
@@ -552,14 +685,23 @@ final class AnonymousStore {
     /// One retry covers Render cold wakes / device -1001 without doubling every success path.
     private func fetchFeedPageWithRetry() async throws -> AnonymousPage<AnonymousPost> {
         do {
-            return try await AnonymousService.feed(sort: feedSort)
+            return try await AnonymousService.feed(
+                sort: feedSort,
+                limit: AnonymousService.feedPageLimit
+            )
         } catch let err as AnonymousError {
             guard case .network = err else { throw err }
             try await Task.sleep(nanoseconds: 400_000_000)
-            return try await AnonymousService.feed(sort: feedSort)
+            return try await AnonymousService.feed(
+                sort: feedSort,
+                limit: AnonymousService.feedPageLimit
+            )
         } catch {
             try await Task.sleep(nanoseconds: 400_000_000)
-            return try await AnonymousService.feed(sort: feedSort)
+            return try await AnonymousService.feed(
+                sort: feedSort,
+                limit: AnonymousService.feedPageLimit
+            )
         }
     }
 
@@ -687,6 +829,9 @@ final class AnonymousStore {
         feed.removeAll { $0.id == post.id }
         feed.insert(post, at: 0)
         postById[post.id] = post
+        if currentSpace?.id == spaceId {
+            currentSpace?.postCount = (currentSpace?.postCount ?? 0) + 1
+        }
         // Persist so soft-refresh doesn't treat the feed as stale and wipe this post.
         cacheFeed(feed, cursor: feedCursor)
         rememberOwnRecentPost(post.id)
@@ -952,6 +1097,7 @@ final class AnonymousStore {
         else { return }
         feed = cached.items
         feedCursor = cached.cursor
+        feedHasMore = cached.cursor != nil
         for item in cached.items {
             postById[item.id] = item
         }
