@@ -28,6 +28,11 @@ import {
   MIND_SURFACE_CATALOG,
   type MindSurfaceCatalogEntry,
 } from '../recommendation/mind-surfaces.js';
+import {
+  getMediaUnderstandingStatus,
+  MIND_MEDIA_FEATURE_CATALOG,
+  type MediaUnderstandingStatus,
+} from '../recommendation/mind-media.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 function resolveDocsMind(): string {
@@ -104,6 +109,7 @@ export type MindStatus = {
     blurb: string;
     surfaces: MindSurfaceCatalogEntry[];
   };
+  mediaUnderstanding: MediaUnderstandingStatus;
   masquerade: {
     rooms: { slug: string; title: string; posts: number }[];
     posts: number;
@@ -577,6 +583,22 @@ export async function getMindStatus(): Promise<MindStatus> {
     };
   }
 
+  let mediaUnderstanding: MediaUnderstandingStatus;
+  try {
+    mediaUnderstanding = await getMediaUnderstandingStatus();
+  } catch (err: any) {
+    mediaUnderstanding = {
+      pipelineVersion: 'media.v1',
+      enabled: false,
+      groqConfigured: !!process.env.GROQ_API_KEY?.trim(),
+      transcripts: [],
+      features: 0,
+      readyWithFeatures: 0,
+      catalog: MIND_MEDIA_FEATURE_CATALOG,
+    };
+    console.warn('[mind-status] mediaUnderstanding', err?.message ?? err);
+  }
+
   return {
     ok: true,
     at: new Date().toISOString(),
@@ -586,12 +608,14 @@ export async function getMindStatus(): Promise<MindStatus> {
     engagement,
     masquerade,
     seed: readSeedProgress(),
-    gapSummary: { shipped: 13, partial: 3, missing: 6 },
+    // Phase 2a: §7 media shipped; remaining missing = §14/15/18 (+ handbook partials outside console table)
+    gapSummary: { shipped: 14, partial: 3, missing: 5 },
     docs: listDocs(),
     recent,
     decisions,
     candidates,
     interest,
     purpose,
+    mediaUnderstanding,
   };
 }

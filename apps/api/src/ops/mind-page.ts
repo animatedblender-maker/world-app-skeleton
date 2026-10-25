@@ -252,10 +252,10 @@ function mindHtml(): string {
             </ul>
           </div>
           <div>
-            <h3>Phase 1 complete</h3>
+            <h3>Phase 1 + 2a</h3>
             <ul class="help">
-              <li>Gap matrix rows §1–§6, §8–§11, §19 are <strong>shipped</strong>.</li>
-              <li>§7 media understanding, §14 ads, §15 GraphQL, §18 ML eval remain roadmap.</li>
+              <li>Gap matrix §1–§6, §7 media (2a), §8–§11, §19 are <strong>shipped</strong>.</li>
+              <li>§14 ads, §15 GraphQL, §18 ML eval remain roadmap; pgvector ANN is Phase 2b.</li>
             </ul>
           </div>
         </div>
@@ -311,6 +311,7 @@ function mindHtml(): string {
         <div class="arch">
           <div class="box"><strong>Events</strong>engagement ingest + Kafka</div>
           <div class="box"><strong>Features</strong>personality / affinity</div>
+          <div class="box"><strong>Media</strong>transcripts → mind_content_features</div>
           <div class="box"><strong>Ops</strong>this /mind console</div>
         </div>
         <p class="muted" style="margin-top:12px">
@@ -331,6 +332,13 @@ function mindHtml(): string {
         <div class="grid" id="interestStats"></div>
         <div id="interestSources" style="margin-top:12px"></div>
         <p class="muted" id="interestHits"></p>
+      </div>
+      <div class="card">
+        <h2>Media understanding (§7)</h2>
+        <p class="muted">Phase 2a: Groq transcripts → <code>mind_content_features</code> (topics/language). pgvector embeddings = Phase 2b.</p>
+        <div class="grid" id="mediaStats"></div>
+        <div id="mediaCatalog" style="margin-top:12px"></div>
+        <p class="muted" id="mediaNote"></p>
       </div>
     </section>
 
@@ -372,8 +380,9 @@ function mindHtml(): string {
       <div class="card">
         <h2>Roadmap</h2>
         <div class="grid">
-          <div class="stat"><div class="n" style="font-size:1rem">Phase 0+1</div><div class="l">Audit · ledger · admin · REST meta</div><span class="pill ok">this pass</span></div>
-          <div class="stat"><div class="n" style="font-size:1rem">Phase 2</div><div class="l">Transcripts · embeddings · pgvector</div><span class="pill">not built</span></div>
+          <div class="stat"><div class="n" style="font-size:1rem">Phase 0+1</div><div class="l">Audit · ledger · admin · REST meta</div><span class="pill ok">shipped</span></div>
+          <div class="stat"><div class="n" style="font-size:1rem">Phase 2a</div><div class="l">Transcript features live · embeddings next</div><span class="pill ok">phase2.v1</span></div>
+          <div class="stat"><div class="n" style="font-size:1rem">Phase 2b</div><div class="l">pgvector ANN · content embeddings</div><span class="pill">not built</span></div>
           <div class="stat"><div class="n" style="font-size:1rem">Phase 3</div><div class="l">Trained ranker · experiments</div><span class="pill">not built</span></div>
           <div class="stat"><div class="n" style="font-size:1rem">Phase 4</div><div class="l">Search · world · Guardian depth</div><span class="pill">not built</span></div>
           <div class="stat"><div class="n" style="font-size:1rem">Phase 5</div><div class="l">Scale only after measured need</div><span class="pill">not built</span></div>
@@ -389,7 +398,7 @@ const GAPS = [
   ['3','Architecture','shipped','This Architecture tab'],
   ['5','Events','shipped','Allowlist ingest + meta scrub + Kafka/PG'],
   ['6','Masquerade isolation','shipped','Live proofs + surface namespace guards'],
-  ['7','Media understanding','missing','Phase 2'],
+  ['7','Media understanding','shipped','Transcripts + mind_content_features (Phase 2a; pgvector later)'],
   ['8','Interest features','shipped','Personality + creator affinity + featureHits'],
   ['9','Candidates','shipped','Multi-lane retrieval + mix meta + inventory'],
   ['10','Rank + diversity','shipped','MMR + family caps (Home/Hubs/Masquerade)'],
@@ -545,6 +554,26 @@ async function refresh(){
     $('interestHits').textContent = rh.sample
       ? 'Last '+fmt(rh.sample)+' decisions: affinity hit '+fmt(rh.withAffinity)+' · personality hit '+fmt(rh.withPersonality)
       : 'No recent decision featureHits yet (fills as rank runs after deploy).';
+
+    const media = s.mediaUnderstanding || {};
+    const tBy = {};
+    (media.transcripts||[]).forEach(r => { tBy[r.status] = r.n; });
+    $('mediaStats').innerHTML = [
+      ['Features', media.features],
+      ['Ready+features', media.readyWithFeatures],
+      ['Transcript ready', tBy.ready||0],
+      ['Transcript pending', tBy.pending||0],
+      ['Skipped', tBy.skipped||0],
+      ['Failed', tBy.failed||0],
+    ].map(([l,n]) => '<div class="stat"><div class="n">'+fmt(n)+'</div><div class="l">'+l+'</div></div>').join('');
+    $('mediaCatalog').innerHTML = (media.catalog||[]).map(c =>
+      '<div class="room"><span><strong>'+c.label+'</strong><br/><span class="muted">'+c.description+'</span></span><span class="pill">'+c.id+'</span></div>'
+    ).join('') || '<p class="muted">No feature catalog.</p>';
+    $('mediaNote').textContent =
+      'pipeline '+ (media.pipelineVersion||'?')
+      + ' · features ' + (media.enabled ? 'ON' : 'OFF')
+      + ' · Groq ' + (media.groqConfigured ? 'configured' : 'missing key')
+      + ' · missing transcript = UNKNOWN (never demoted)';
 
     if (!$('docNav').dataset.ready) {
       $('docNav').dataset.ready = '1';

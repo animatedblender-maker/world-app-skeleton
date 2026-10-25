@@ -1,8 +1,12 @@
 /**
- * Server-side video transcription via Groq Whisper.
- * Keeps the iOS app light — never embeds an ASR model on device.
+ * Server-side video transcription via Groq Whisper — RETIRED for product CC.
+ * iOS captions now use on-device WhisperKit (Small). Routes in main.ts return
+ * skipped/on_device_only and do not call into this module for CC.
  *
- * Env:
+ * Kept for optional ops/backfill scripts only. Do not re-enable /v1/transcript
+ * enqueue for the app without an explicit product decision.
+ *
+ * Env (ops only):
  *   GROQ_API_KEY   required for live transcription
  *   GROQ_WHISPER_MODEL  optional (default whisper-large-v3-turbo)
  */
@@ -503,6 +507,10 @@ export async function transcribePost(
         result.duration ?? null,
       ]
     );
+    // MIND §7 Phase 2a — derive content features (best-effort).
+    void import('../recommendation/mind-media.js')
+      .then((m) => m.upsertFeaturesForPost(postId))
+      .catch(() => undefined);
     return 'ready';
   } catch (err: any) {
     const msg = String(err?.message ?? err).slice(0, 500);

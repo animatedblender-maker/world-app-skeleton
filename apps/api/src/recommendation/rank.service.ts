@@ -20,6 +20,7 @@ import {
   upsertPersonalityFeatureVector,
 } from './knn.service.js';
 import { mmrPick } from './social-score.js';
+import { loadMediaFeaturesForPosts } from './mind-media.js';
 
 export type RankSurface =
   | 'home_for_you'
@@ -53,6 +54,8 @@ export type RankResponse = {
     affinityCreators: number;
     itemStats: number;
     personality: boolean;
+    transcriptReady?: number;
+    topicHits?: number;
   };
 };
 
@@ -132,7 +135,13 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
         sources: ['passthrough'],
       })),
       latencyMs: Date.now() - started,
-      featureHits: { affinityCreators: 0, itemStats: 0, personality: false },
+      featureHits: {
+        affinityCreators: 0,
+        itemStats: 0,
+        personality: false,
+        transcriptReady: 0,
+        topicHits: 0,
+      },
     };
   }
 
@@ -159,8 +168,14 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
   );
   const uuidCandidates = candidateIds.filter(isUuid);
 
-  // Parallel feature reads (affinity + KNN bubbles + neighbor collab)
-  const [affinityMap, itemStats, postMeta, hidden, bubbles, neighborBoosts] =
+  // Parallel feature reads (affinity + KNN bubbles + neighbor collab + media §7)
+  const publicSurface =
+    surface === 'home_for_you' ||
+    surface === 'hubs_for_you' ||
+    surface === 'sparks' ||
+    surface === 'explore' ||
+    surface === 'home_following';
+  const [affinityMap, itemStats, postMeta, hidden, bubbles, neighborBoosts, mediaFeatures] =
     await Promise.all([
       loadCreatorAffinity(entityId),
       loadItemStats(uuidCandidates),
@@ -168,6 +183,14 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
       loadHiddenContent(entityId),
       loadInterestBubbles(entityId),
       loadNeighborEngagementBoosts(entityId),
+      publicSurface
+        ? loadMediaFeaturesForPosts(uuidCandidates)
+        : Promise.resolve(
+            new Map<
+              string,
+              { topics: string[]; transcriptReady: boolean; language: string | null }
+            >()
+          ),
     ]);
 
   type Scored = {
@@ -179,6 +202,9 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
 
   const scored: Scored[] = [];
   const coldStart = !bubbles || bubbles.eventsCounted < 25;
+  const viewerTopics = bubbles?.hubs ? [...bubbles.hubs.keys()] : [];
+  let transcriptReadyHits = 0;
+  let topicHitCount = 0;
   for (const id of candidateIds) {
     if (hidden.has(id)) continue;
 
@@ -246,6 +272,22 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
       sources.push('knn_creator');
     }
 
+    // MIND §7 Phase 2a — soft topic boost from transcript features (Public only).
+    // Missing transcript = UNKNOWN: never demote.
+    const media = mediaFeatures.get(id);
+    if (media?.transcriptReady) transcriptReadyHits += 1;
+    if (media && media.topics.length > 0 && viewerTopics.length > 0) {
+      let overlap = 0;
+      for (const t of media.topics) {
+        if (bubbles?.hubs.has(t)) overlap += 1;
+      }
+      if (overlap > 0) {
+        score += Math.min(1.2, overlap * 0.45);
+        sources.push('media_topic');
+        topicHitCount += 1;
+      }
+    }
+
     // Surface policy tweaks
     if (surface === 'home_following') {
       if (!(authorId && following.has(authorId))) {
@@ -297,6 +339,8 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
     affinityCreators: affinityMap.size,
     itemStats: itemStats.size,
     personality: !!bubbles && bubbles.eventsCounted > 0,
+    transcriptReady: transcriptReadyHits,
+    topicHits: topicHitCount,
   };
 
   // Fire-and-forget warehouse log + optional affinity refresh
@@ -547,6 +591,8 @@ async function logDecision(args: {
     affinityCreators: number;
     itemStats: number;
     personality: boolean;
+    transcriptReady?: number;
+    topicHits?: number;
   };
 }): Promise<void> {
   const uuidItems = args.items.filter((i) => isUuid(i.id));

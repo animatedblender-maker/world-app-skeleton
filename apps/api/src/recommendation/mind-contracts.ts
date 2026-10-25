@@ -3,7 +3,7 @@
  * Handbook alias: mind_feed_exposure → feed_video_delivery (ADR 0001).
  */
 
-export const MIND_POLICY_VERSION = 'mind.phase1.v7';
+export const MIND_POLICY_VERSION = 'mind.phase2.v1';
 
 /** Handbook FeedSurface → Matterya ledger / rank surface keys. */
 export type MindSurface =

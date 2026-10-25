@@ -51,10 +51,11 @@ npx tsc -p tsconfig.json --noEmit
 - **phase1.v5** — Candidate lanes catalog, feed `candidateMix`, admin inventory (§9 shipped)
 - **phase1.v6** — Interest features panel + decision featureHits (§8 shipped)
 - **phase1.v7** — Purpose / surface catalog on Overview (§1 shipped; Phase 1 matrix complete)
+- **phase2.v1** — §7 Media understanding Phase 2a: `mind_content_features` from `video_transcripts`, soft topic boost, `/mind` media panel (pgvector deferred — ADR 0003)
 
 ## Not in this pass
 
-Phase 2–5 (embeddings, trained rankers, ads GraphQL FeedItem, Guardian depth). Shown as roadmap on `/mind`.
+Phase 2b+ (pgvector ANN, trained rankers), ads, GraphQL FeedItem, Guardian depth. Shown as roadmap on `/mind`.
 
 ## Production
 

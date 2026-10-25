@@ -10,7 +10,7 @@ Status legend: **shipped** · **partial** · **missing** (roadmap)
 | 4 | Repo layout `intelligence/` | partial | Kept under `recommendation/` + `ops/` |
 | 5 | Event envelope | shipped | Allowlist ingest + meta scrub + Kafka/PG |
 | 6 | Masquerade isolation | shipped | Live proofs + surface namespace guards |
-| 7 | Media understanding | missing | Phase 2 |
+| 7 | Media understanding | shipped | Phase 2a: `video_transcripts` → `mind_content_features`; pgvector = 2b |
 | 8 | Interest memory / features | shipped | Personality + creator affinity + featureHits on decisions |
 | 9 | Candidate generation | shipped | Multi-lane retrieval + mix meta + inventory |
 | 10 | Rank + diversity | shipped | MMR + family caps on Home/Hubs/Masquerade |
