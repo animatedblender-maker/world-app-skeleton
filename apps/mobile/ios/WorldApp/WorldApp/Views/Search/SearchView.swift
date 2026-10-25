@@ -1,9 +1,20 @@
 import SwiftUI
 
+/// Premium Search — Instagram / X style: Cancel, Recent + X, Top | People | Content.
 struct SearchView: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.dismiss) private var dismiss
+    @FocusState private var fieldFocused: Bool
+
+    private enum ResultScope: String, CaseIterable, Identifiable {
+        case top = "Top"
+        case people = "People"
+        case content = "Content"
+        var id: String { rawValue }
+    }
 
     @State private var query = ""
+    @State private var scope: ResultScope = .top
     @State private var profiles: [Profile] = []
     @State private var content: [CountryPost] = []
     @State private var isSearchingPeople = false
@@ -12,12 +23,10 @@ struct SearchView: View {
     @State private var isLoadingMoreContent = false
     @State private var peopleHasMore = false
     @State private var contentHasMore = false
-    /// Next server offset (page-size steps — not result.count, which drifts when rows filter out).
     @State private var peopleNextOffset = 0
     @State private var contentNextOffset = 0
     @State private var searchError: String?
     @State private var searchGeneration = 0
-    /// Local mirror of SearchHistoryStore so SwiftUI always repaints (List-in-VStack + Observable were flaky).
     @State private var recentQueries: [String] = SearchHistoryStore.shared.recent
 
     private var normalizedQuery: String {
@@ -28,7 +37,7 @@ struct SearchView: View {
 
     private var historySuggestions: [String] {
         let q = normalizedQuery.lowercased()
-        guard !q.isEmpty else { return Array(recentQueries.prefix(8)) }
+        guard !q.isEmpty else { return Array(recentQueries.prefix(10)) }
         return recentQueries
             .filter {
                 let n = $0.lowercased()
@@ -38,38 +47,30 @@ struct SearchView: View {
             .map { $0 }
     }
 
+    private var topPeople: [Profile] { Array(profiles.prefix(6)) }
+    private var topContent: [CountryPost] { Array(content.prefix(24)) }
+
     var body: some View {
         VStack(spacing: 0) {
-            searchField
+            searchChrome
 
             if normalizedQuery.isEmpty {
-                if recentQueries.isEmpty {
-                    emptyPrompt
-                } else {
-                    recentPanel(title: "Recent", queries: recentQueries, showsClearAll: true)
-                }
-            } else if isSearching && profiles.isEmpty && content.isEmpty {
-                if !historySuggestions.isEmpty {
-                    recentPanel(title: "Recent", queries: historySuggestions, showsClearAll: false)
-                        .frame(maxHeight: 220)
-                }
-                ProgressView().tint(Theme.ink).padding()
-                Spacer()
+                idleBody
             } else {
-                resultsList
+                if !isSearching || !profiles.isEmpty || !content.isEmpty {
+                    scopePicker
+                }
+                resultsBody
             }
         }
+        .background(Theme.canvas.ignoresSafeArea())
+        .navigationBarBackButtonHidden(true)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(Theme.surface, for: .navigationBar)
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                Text("Search")
-                    .font(.headline.weight(.semibold))
-            }
-        }
+        .toolbar(.hidden, for: .navigationBar)
         .task {
             appState.searchPrefersCountries = false
             reloadRecent()
+            fieldFocused = true
         }
         .onAppear {
             reloadRecent()
@@ -77,231 +78,378 @@ struct SearchView: View {
         }
     }
 
-    private var searchField: some View {
+    // MARK: - Chrome (field + Cancel)
+
+    private var searchChrome: some View {
         HStack(spacing: 10) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(Theme.inkMuted)
-            TextField("Search people and content…", text: $query)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .foregroundStyle(Theme.ink)
-                .submitLabel(.search)
-                .onSubmit {
-                    recordHistory(normalizedQuery)
-                    Task { await runSearch(immediate: true) }
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(Theme.inkMuted)
+                TextField("Search", text: $query)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .foregroundStyle(Theme.ink)
+                    .submitLabel(.search)
+                    .focused($fieldFocused)
+                    .onSubmit {
+                        recordHistory(normalizedQuery)
+                        Task { await runSearch(immediate: true) }
+                    }
+                if !query.isEmpty {
+                    Button {
+                        clearQuery(keepFocus: true)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 16))
+                            .foregroundStyle(Theme.inkMuted.opacity(0.85))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Clear")
                 }
-            if !query.isEmpty {
-                Button {
-                    clearQuery()
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(Theme.inkMuted)
-                }
-                .accessibilityLabel("Clear search")
             }
-            if isSearching {
-                ProgressView()
-                    .controlSize(.small)
-                    .tint(Theme.inkMuted)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(Theme.canvasMuted, in: Capsule(style: .continuous))
+
+            Button("Cancel") {
+                fieldFocused = false
+                dismiss()
             }
+            .font(.body.weight(.regular))
+            .foregroundStyle(Theme.ink)
+            .buttonStyle(.plain)
         }
-        .padding(14)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
-                .stroke(Theme.border, lineWidth: 0.5)
-        )
-        .shadow(color: Theme.ink.opacity(0.04), radius: 12, y: 4)
-        .padding(Theme.pagePadding)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Theme.surface)
+        .overlay(alignment: .bottom) {
+            Theme.divider.frame(height: 0.5)
+        }
         .onChange(of: query) { _, _ in
             Task { await runSearch(immediate: false) }
         }
     }
 
-    private var emptyPrompt: some View {
-        ContentUnavailableView(
-            "Search Matterya",
-            systemImage: "magnifyingglass",
-            description: Text("Find people and posts, Sparks, and videos. Recent searches will show up here.")
-        )
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    /// ScrollView (not List-in-VStack) so Recent actually gets height under the field.
-    private func recentPanel(title: String, queries: [String], showsClearAll: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text(title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Theme.inkMuted)
-                Spacer()
-                if showsClearAll, !recentQueries.isEmpty {
-                    Button("Clear") {
-                        SearchHistoryStore.shared.clear()
-                        reloadRecent()
-                    }
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Theme.inkMuted)
-                }
-            }
-            .padding(.horizontal, Theme.pagePadding)
-            .padding(.top, 4)
-            .padding(.bottom, 8)
-
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(queries, id: \.self) { item in
-                        HStack(spacing: 12) {
-                            Button {
-                                applyHistoryQuery(item)
-                            } label: {
-                                HStack(spacing: 12) {
-                                    Image(systemName: "clock.arrow.circlepath")
-                                        .font(.subheadline)
-                                        .foregroundStyle(Theme.inkMuted)
-                                        .frame(width: 22)
-                                    Text(item)
-                                        .font(.subheadline.weight(.medium))
-                                        .foregroundStyle(Theme.ink)
-                                        .lineLimit(1)
-                                    Spacer(minLength: 0)
-                                }
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-
-                            Button {
-                                SearchHistoryStore.shared.remove(item)
-                                reloadRecent()
-                            } label: {
-                                Image(systemName: "xmark")
-                                    .font(.caption.weight(.bold))
-                                    .foregroundStyle(Theme.inkMuted)
-                                    .frame(width: 32, height: 32)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Remove \(item) from search history")
-                        }
-                        .padding(.horizontal, Theme.pagePadding)
-                        .padding(.vertical, 12)
-                        .background(Theme.surface)
-                        Divider()
-                            .padding(.leading, Theme.pagePadding + 34)
+    private var scopePicker: some View {
+        HStack(spacing: 0) {
+            ForEach(ResultScope.allCases) { item in
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) { scope = item }
+                } label: {
+                    VStack(spacing: 8) {
+                        Text(item.rawValue)
+                            .font(.subheadline.weight(scope == item ? .semibold : .medium))
+                            .foregroundStyle(scope == item ? Theme.ink : Theme.inkMuted)
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 12)
+                        Rectangle()
+                            .fill(scope == item ? Theme.ink : Color.clear)
+                            .frame(height: 2)
                     }
                 }
-                .background(Theme.surface)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous))
-                .padding(.horizontal, Theme.pagePadding)
-                .padding(.bottom, Theme.pagePadding)
+                .buttonStyle(.plain)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Theme.canvas)
+        .background(Theme.surface)
+        .overlay(alignment: .bottom) {
+            Theme.divider.frame(height: 0.5)
+        }
     }
 
-    private var resultsList: some View {
+    // MARK: - Idle (Recent)
+
+    private var idleBody: some View {
         Group {
-            if let searchError, profiles.isEmpty && content.isEmpty {
-                ContentUnavailableView("Search failed", systemImage: "magnifyingglass", description: Text(searchError))
-            } else if profiles.isEmpty && content.isEmpty && !isSearching {
-                VStack(spacing: 0) {
-                    if !historySuggestions.isEmpty {
-                        recentPanel(title: "Recent", queries: historySuggestions, showsClearAll: false)
-                            .frame(maxHeight: 240)
-                    }
-                    ContentUnavailableView(
-                        "No results",
-                        systemImage: "text.magnifyingglass",
-                        description: Text("Try another person or keyword.")
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if recentQueries.isEmpty {
+                VStack(spacing: 14) {
+                    Spacer(minLength: 40)
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 36, weight: .ultraLight))
+                        .foregroundStyle(Theme.inkMuted.opacity(0.55))
+                    Text("Search Matterya")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(Theme.ink)
+                    Text("People, posts, Sparks, and videos")
+                        .font(.subheadline)
+                        .foregroundStyle(Theme.inkMuted)
+                        .multilineTextAlignment(.center)
+                    Spacer()
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.horizontal, 32)
             } else {
-                List {
-                    if !historySuggestions.isEmpty, normalizedQuery.count < 24 {
-                        Section("Recent") {
-                            ForEach(historySuggestions.prefix(5), id: \.self) { item in
-                                HStack(spacing: 12) {
-                                    Button {
-                                        applyHistoryQuery(item)
-                                    } label: {
-                                        HStack(spacing: 12) {
-                                            Image(systemName: "clock.arrow.circlepath")
-                                                .font(.subheadline)
-                                                .foregroundStyle(Theme.inkMuted)
-                                                .frame(width: 22)
-                                            Text(item)
-                                                .font(.subheadline.weight(.medium))
-                                                .foregroundStyle(Theme.ink)
-                                                .lineLimit(1)
-                                            Spacer(minLength: 0)
-                                        }
-                                        .contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(.plain)
-
-                                    Button {
-                                        SearchHistoryStore.shared.remove(item)
-                                        reloadRecent()
-                                    } label: {
-                                        Image(systemName: "xmark")
-                                            .font(.caption.weight(.bold))
-                                            .foregroundStyle(Theme.inkMuted)
-                                            .frame(width: 28, height: 28)
-                                            .contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(.plain)
-                                    .accessibilityLabel("Remove \(item) from search history")
-                                }
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        HStack {
+                            Text("Recent")
+                                .font(.headline.weight(.semibold))
+                                .foregroundStyle(Theme.ink)
+                            Spacer()
+                            Button("Clear all") {
+                                SearchHistoryStore.shared.clear()
+                                reloadRecent()
                             }
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.ink)
+                            .buttonStyle(.plain)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.top, 18)
+                        .padding(.bottom, 8)
+
+                        ForEach(recentQueries, id: \.self) { item in
+                            recentRow(item)
                         }
                     }
+                    .padding(.bottom, 24)
+                }
+            }
+        }
+    }
 
-                    if !profiles.isEmpty {
-                        Section("People · \(profiles.count)") {
-                            ForEach(profiles) { profile in
-                                HStack {
-                                    profileRow(profile)
-                                    Spacer()
-                                    if !profile.isDemoUser, profile.userID != appState.currentProfile?.userID {
-                                        FollowButton(userID: profile.userID)
-                                    }
-                                }
+    private func recentRow(_ item: String) -> some View {
+        HStack(spacing: 14) {
+            Button {
+                applyHistoryQuery(item)
+            } label: {
+                HStack(spacing: 14) {
+                    ZStack {
+                        Circle()
+                            .fill(Theme.canvasMuted)
+                            .frame(width: 44, height: 44)
+                        Image(systemName: "clock.arrow.circlepath")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(Theme.ink)
+                    }
+                    Text(item)
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(Theme.ink)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                SearchHistoryStore.shared.remove(item)
+                reloadRecent()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Theme.inkMuted)
+                    .frame(width: 36, height: 36)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Remove \(item)")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
+
+    // MARK: - Results
+
+    @ViewBuilder
+    private var resultsBody: some View {
+        if isSearching && profiles.isEmpty && content.isEmpty {
+            VStack(spacing: 12) {
+                if !historySuggestions.isEmpty {
+                    suggestionsStrip
+                }
+                ProgressView()
+                    .tint(Theme.ink)
+                    .padding(.top, 24)
+                Spacer()
+            }
+        } else if let searchError, profiles.isEmpty && content.isEmpty {
+            ContentUnavailableView(
+                "Search failed",
+                systemImage: "exclamationmark.magnifyingglass",
+                description: Text(searchError)
+            )
+        } else if profiles.isEmpty && content.isEmpty {
+            VStack(spacing: 0) {
+                if !historySuggestions.isEmpty {
+                    suggestionsStrip
+                }
+                ContentUnavailableView(
+                    "No results",
+                    systemImage: "text.magnifyingglass",
+                    description: Text("Try another name or keyword.")
+                )
+            }
+        } else {
+            List {
+                if !historySuggestions.isEmpty, normalizedQuery.count < 20, scope == .top {
+                    Section {
+                        ForEach(historySuggestions.prefix(4), id: \.self) { item in
+                            recentRow(item)
+                                .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                                .listRowSeparator(.hidden)
+                                .listRowBackground(Theme.canvas)
+                        }
+                    } header: {
+                        Text("Recent")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(Theme.inkMuted)
+                            .textCase(nil)
+                    }
+                }
+
+                switch scope {
+                case .top:
+                    if !topPeople.isEmpty {
+                        Section {
+                            ForEach(topPeople) { profile in
+                                peopleRow(profile)
                             }
-                            if peopleHasMore {
-                                loadMoreRow(
-                                    title: "Load more people",
-                                    busy: isLoadingMorePeople
-                                ) {
-                                    Task { await loadMorePeople() }
+                            if profiles.count > topPeople.count {
+                                Button {
+                                    scope = .people
+                                } label: {
+                                    Text("See all people")
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(Theme.ink)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.vertical, 6)
                                 }
+                                .buttonStyle(.plain)
                             }
+                        } header: {
+                            Text("People")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(Theme.inkMuted)
+                                .textCase(nil)
                         }
                     }
-
-                    if !content.isEmpty {
-                        Section("Content · \(content.count)") {
-                            ForEach(content) { post in
+                    if !topContent.isEmpty {
+                        Section {
+                            ForEach(topContent) { post in
                                 contentRow(post)
                             }
-                            if contentHasMore {
-                                loadMoreRow(
-                                    title: "Load more content",
-                                    busy: isLoadingMoreContent
-                                ) {
-                                    Task { await loadMoreContent() }
+                            if contentHasMore || content.count > topContent.count {
+                                Button {
+                                    scope = .content
+                                } label: {
+                                    Text("See all content")
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(Theme.ink)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.vertical, 6)
                                 }
+                                .buttonStyle(.plain)
                             }
+                        } header: {
+                            Text("Content")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(Theme.inkMuted)
+                                .textCase(nil)
                         }
                     }
+                case .people:
+                    Section {
+                        ForEach(profiles) { profile in
+                            peopleRow(profile)
+                        }
+                        if peopleHasMore {
+                            loadMoreRow(title: "Load more people", busy: isLoadingMorePeople) {
+                                Task { await loadMorePeople() }
+                            }
+                        }
+                    } header: {
+                        Text("\(profiles.count) people")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(Theme.inkMuted)
+                            .textCase(nil)
+                    }
+                case .content:
+                    Section {
+                        ForEach(content) { post in
+                            contentRow(post)
+                        }
+                        if contentHasMore {
+                            loadMoreRow(title: "Load more content", busy: isLoadingMoreContent) {
+                                Task { await loadMoreContent() }
+                            }
+                        }
+                    } header: {
+                        Text("\(content.count) posts")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(Theme.inkMuted)
+                            .textCase(nil)
+                    }
                 }
-                .listStyle(.insetGrouped)
-                .scrollContentBackground(.hidden)
-                .background(Theme.canvas)
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(Theme.canvas)
+        }
+    }
+
+    private var suggestionsStrip: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Recent")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(Theme.inkMuted)
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 4)
+            ForEach(historySuggestions.prefix(4), id: \.self) { item in
+                recentRow(item)
+            }
+            Theme.divider.frame(height: 0.5)
+                .padding(.top, 4)
+        }
+        .background(Theme.surface)
+    }
+
+    // MARK: - Rows
+
+    private func peopleRow(_ profile: Profile) -> some View {
+        HStack(spacing: 12) {
+            Button {
+                recordHistory(normalizedQuery)
+                appState.openPublicProfile(username: profile.username, userID: profile.userID)
+            } label: {
+                HStack(spacing: 12) {
+                    AvatarView(url: profile.avatarURL, seed: profile.userID, size: 52)
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 4) {
+                            Text(profile.displayName ?? profile.username ?? "User")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Theme.ink)
+                                .lineLimit(1)
+                            if profile.isVerified {
+                                Image(systemName: "checkmark.seal.fill")
+                                    .font(.caption2)
+                                    .foregroundStyle(Theme.ink)
+                            }
+                        }
+                        if let username = profile.username {
+                            Text("@\(username)")
+                                .font(.caption)
+                                .foregroundStyle(Theme.inkMuted)
+                                .lineLimit(1)
+                        } else if let country = profile.countryName {
+                            Text(country)
+                                .font(.caption)
+                                .foregroundStyle(Theme.inkMuted)
+                                .lineLimit(1)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if !profile.isDemoUser, profile.userID != appState.currentProfile?.userID {
+                FollowButton(userID: profile.userID)
             }
         }
+        .padding(.vertical, 4)
     }
 
     private func contentRow(_ post: CountryPost) -> some View {
@@ -312,131 +460,110 @@ struct SearchView: View {
             HStack(alignment: .center, spacing: 12) {
                 contentThumbnail(post)
 
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 5) {
                     Text(post.authorDisplayName)
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(Theme.ink)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.inkMuted)
+                        .lineLimit(1)
 
                     let excerpt = post.displayExcerpt
-                    if !excerpt.isEmpty {
-                        Text(excerpt)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(Theme.ink)
-                            .lineLimit(2)
-                    }
+                    Text(excerpt.isEmpty ? (post.hasVideo ? "Video" : "Post") : excerpt)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(Theme.ink)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
 
                     HStack(spacing: 8) {
-                        if let country = post.countryName ?? post.countryCode?.uppercased() {
-                            Text(country)
-                                .font(.caption2)
+                        if post.hasVideo {
+                            Label(
+                                post.isReel || PlayPlatformBridge.isSparkFeedCard(post)
+                                    ? MatteryaCopy.spark
+                                    : "Video",
+                                systemImage: "play.fill"
+                            )
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(Theme.inkMuted)
+                            .labelStyle(.titleAndIcon)
+                        } else if post.hasImage {
+                            Text("Photo")
+                                .font(.caption2.weight(.semibold))
                                 .foregroundStyle(Theme.inkMuted)
                         }
                         Text(RelativeTime.format(post.createdAt))
                             .font(.caption2)
                             .foregroundStyle(Theme.inkMuted)
-                        if post.hasVideo {
-                            Text(post.isReel || PlayPlatformBridge.isSparkFeedCard(post) ? MatteryaCopy.spark : "Video")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(Theme.inkMuted)
-                        } else if post.hasImage {
-                            Text("Photo")
-                                .font(.caption2)
-                                .foregroundStyle(Theme.inkMuted)
-                        }
                     }
                 }
                 Spacer(minLength: 0)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
 
     @ViewBuilder
     private func contentThumbnail(_ post: CountryPost) -> some View {
-        if post.hasVideo {
-            let sparkLike = post.isReel || PlayPlatformBridge.isSparkFeedCard(post)
-            let w: CGFloat = sparkLike ? 72 : 128
-            let h: CGFloat = sparkLike ? 128 : 72
-            YouTubeVideoThumbnail(
-                post: post,
-                maxPixelSize: 360,
-                showsPlayIcon: false,
-                frameStyle: .card,
-                extractFrameIfNeeded: false,
-                showsHubBadge: false
-            )
-            .frame(width: w, height: h)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        } else if let url = post.feedImageURL ?? post.resolvedImageURL {
-            CachedAsyncImage(url: url, maxPixelSize: 160, contentMode: .fill)
-                .frame(width: 64, height: 64)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        } else {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Theme.canvasMuted)
-                .frame(width: 64, height: 64)
-                .overlay {
-                    Image(systemName: "text.alignleft")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Theme.inkMuted)
-                }
-        }
-    }
+        let sparkLike = post.hasVideo && (post.isReel || PlayPlatformBridge.isSparkFeedCard(post))
+        let w: CGFloat = sparkLike ? 64 : (post.hasVideo ? 104 : 64)
+        let h: CGFloat = sparkLike ? 96 : 64
 
-    private func profileRow(_ profile: Profile) -> some View {
-        HStack(spacing: 12) {
-            Button {
-                recordHistory(normalizedQuery)
-                appState.openPublicProfile(username: profile.username, userID: profile.userID)
-            } label: {
-                HStack(spacing: 12) {
-                    AvatarView(url: profile.avatarURL, seed: profile.userID, size: 40)
-                    VStack(alignment: .leading) {
-                        Text(profile.displayName ?? profile.username ?? "User")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(Theme.ink)
-                        if let username = profile.username {
-                            Text("@\(username)")
-                                .font(.caption)
-                                .foregroundStyle(Theme.inkMuted)
-                        } else if let country = profile.countryName {
-                            Text(country)
-                                .font(.caption)
-                                .foregroundStyle(Theme.inkMuted)
-                        }
-                    }
-                }
-            }
-            .buttonStyle(.plain)
-
-            Spacer()
-
-            Button {
-                appState.openPlayChannel(
-                    authorID: profile.userID,
-                    username: profile.username
+        Group {
+            if post.hasVideo {
+                YouTubeVideoThumbnail(
+                    post: post,
+                    maxPixelSize: 360,
+                    showsPlayIcon: true,
+                    frameStyle: .card,
+                    extractFrameIfNeeded: false,
+                    showsHubBadge: false
                 )
-            } label: {
-                Image(systemName: "globe.americas")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Theme.accentBright)
-                    .frame(width: 32, height: 32)
-                    .background(Theme.accentSoft, in: Circle())
+            } else if let url = post.feedImageURL ?? post.resolvedImageURL {
+                CachedAsyncImage(url: url, maxPixelSize: 160, contentMode: .fill)
+            } else {
+                Theme.canvasMuted
+                    .overlay {
+                        Image(systemName: "text.alignleft")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Theme.inkMuted)
+                    }
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Open \(MatteryaCopy.matteryaHubs) channel")
         }
+        .frame(width: w, height: h)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
+
+    private func loadMoreRow(title: String, busy: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                Spacer()
+                if busy {
+                    ProgressView().controlSize(.small).tint(Theme.ink)
+                } else {
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.ink)
+                }
+                Spacer()
+            }
+            .padding(.vertical, 10)
+        }
+        .buttonStyle(.plain)
+        .disabled(busy)
+    }
+
+    // MARK: - Actions
 
     private func applyHistoryQuery(_ item: String) {
         query = item
+        scope = .top
         recordHistory(item)
         Task { await runSearch(immediate: true) }
     }
 
-    private func clearQuery() {
+    private func clearQuery(keepFocus: Bool) {
         query = ""
+        scope = .top
         profiles = []
         content = []
         searchError = nil
@@ -450,6 +577,7 @@ struct SearchView: View {
         peopleNextOffset = 0
         contentNextOffset = 0
         reloadRecent()
+        fieldFocused = keepFocus
         appState.silencePlaybackForSearchBrowse()
     }
 
@@ -462,27 +590,6 @@ struct SearchView: View {
         guard !trimmed.isEmpty else { return }
         SearchHistoryStore.shared.record(trimmed)
         reloadRecent()
-    }
-
-    private func loadMoreRow(title: String, busy: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack {
-                Spacer()
-                if busy {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(Theme.ink)
-                } else {
-                    Text(title)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Theme.ink)
-                }
-                Spacer()
-            }
-            .padding(.vertical, 6)
-        }
-        .buttonStyle(.plain)
-        .disabled(busy)
     }
 
     private func runSearch(immediate: Bool) async {
@@ -506,7 +613,6 @@ struct SearchView: View {
             guard normalizedQuery == trimmed else { return }
         }
 
-        // Record as soon as a real search starts (do not wait for network).
         recordHistory(trimmed)
 
         let generation = searchGeneration + 1
@@ -593,8 +699,7 @@ struct SearchView: View {
             )
             guard searchGeneration == generation else { return }
             let existing = Set(profiles.map(\.userID))
-            let appended = loaded.filter { !existing.contains($0.userID) }
-            profiles.append(contentsOf: appended)
+            profiles.append(contentsOf: loaded.filter { !existing.contains($0.userID) })
             peopleNextOffset = offset + MatteryaSearchEngine.peoplePageSize
             peopleHasMore = loaded.count >= MatteryaSearchEngine.peoplePageSize
                 && peopleNextOffset < MatteryaSearchEngine.maxPeopleTotal
@@ -623,8 +728,7 @@ struct SearchView: View {
             )
             guard searchGeneration == generation else { return }
             let existing = Set(content.map(\.id))
-            let appended = loaded.filter { !existing.contains($0.id) }
-            content.append(contentsOf: appended)
+            content.append(contentsOf: loaded.filter { !existing.contains($0.id) })
             contentNextOffset = offset + MatteryaSearchEngine.contentPageSize
             contentHasMore = loaded.count >= MatteryaSearchEngine.contentPageSize
                 && contentNextOffset < MatteryaSearchEngine.maxContentTotal
