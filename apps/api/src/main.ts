@@ -106,6 +106,8 @@ import {
   handleMindLogout,
   handleMindStatus,
   handleMindStream,
+  handleMindPeopleSearch,
+  handleMindPersonDossier,
 } from './ops/mind-page.js';
 import { MIND_POLICY_VERSION } from './recommendation/mind-contracts.js';
 import { handlePosterBatch, handlePosterGet } from './media/poster-route.js';
@@ -318,6 +320,12 @@ app.get('/mind/api/docs/:slug', (req, res) => {
 app.get('/mind/api/handbook', (req, res) => {
   (req.params as Record<string, string>).slug = 'handbook';
   void handleMindDoc(req, res);
+});
+app.get('/mind/api/people', (req, res) => {
+  void handleMindPeopleSearch(req, res);
+});
+app.get('/mind/api/people/:userId', (req, res) => {
+  void handleMindPersonDossier(req, res);
 });
 
 // ✅ health endpoint (typed _req to avoid implicit any)
@@ -954,7 +962,8 @@ app.get('/v1/hubs/slugs', (_req: Request, res: Response) => {
 app.get('/v1/hubs/for-you', async (req: Request, res: Response) => {
   try {
     const user = await getUserFromRequest(req).catch(() => null);
-    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 40);
+    // Raised so clients can page toward full LongForm inventory (~1.9k).
+    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 80);
     const cursor = req.query.cursor ? String(req.query.cursor) : null;
     const session = req.query.session ? String(req.query.session) : null;
     const idempotencyKey = req.query.idempotencyKey
@@ -984,7 +993,7 @@ app.get('/v1/hubs/shelves/:slug', async (req: Request, res: Response) => {
     await getUserFromRequest(req).catch(() => null);
     const slug = String(req.params.slug || '').trim();
     if (!slug) return res.status(400).json({ error: 'slug_required' });
-    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 40);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 80);
     const cursor = req.query.cursor ? String(req.query.cursor) : null;
     const page = await fetchShelfPage({ slug, limit, cursor });
     return res.json({ ok: true, ...page });

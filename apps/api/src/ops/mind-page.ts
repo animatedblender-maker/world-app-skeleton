@@ -5,6 +5,7 @@
 import type { Request, Response } from 'express';
 import { hasOpsAccess, handleOpsLogin } from './ops-page.js';
 import { getMindStatus, readMindDoc } from './mind-status.js';
+import { getUserDossier, searchPeople } from './mind-people.js';
 
 function escapeHtml(s: string): string {
   return s
@@ -215,6 +216,7 @@ function mindHtml(): string {
   <div class="tabs">
     <button type="button" class="tab active" data-tab="overview">Overview</button>
     <button type="button" class="tab" data-tab="live">Live system</button>
+    <button type="button" class="tab" data-tab="people">People</button>
     <button type="button" class="tab" data-tab="arch">Architecture</button>
     <button type="button" class="tab" data-tab="gaps">Gap matrix</button>
     <button type="button" class="tab" data-tab="masq">Masquerade</button>
@@ -291,6 +293,54 @@ function mindHtml(): string {
         <h2>Live feedback</h2>
         <p class="muted">Recent sanitized delivery + decision lines (no emails / tokens).</p>
         <div id="liveLog">Waiting for status…</div>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-people">
+      <div class="card">
+        <h2>People — interest dossier</h2>
+        <p class="muted">Ops-only. Search any <strong>real</strong> Matterya user by name, @username, email, or UUID. Shows everything MIND knows: profile, hub/country interests, creator affinity, engagement, deliveries, neighbors, recent rank decisions (incl. ANN hits when present).</p>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;align-items:center">
+          <input id="peopleQ" type="search" placeholder="Search name, @username, email, or uuid…"
+            style="flex:1;min-width:220px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--ink);font-size:15px"/>
+          <button type="button" id="peopleSearchBtn" class="out" style="cursor:pointer">Search</button>
+          <button type="button" id="peopleActiveBtn" class="out" style="cursor:pointer">Most active (7d)</button>
+        </div>
+        <div id="peopleHits" style="margin-top:14px"></div>
+      </div>
+      <div id="peopleDossier" class="card" style="display:none">
+        <div id="peopleHead"></div>
+        <div class="grid" id="peopleStats" style="margin:14px 0"></div>
+        <div class="two">
+          <div>
+            <h3>Hub interests</h3>
+            <div id="peopleHubs" class="muted">—</div>
+            <h3 style="margin-top:14px">Countries</h3>
+            <div id="peopleCountries" class="muted">—</div>
+            <h3 style="margin-top:14px">Media taste</h3>
+            <div id="peopleMedia" class="muted">—</div>
+          </div>
+          <div>
+            <h3>Creator affinity (top)</h3>
+            <div id="peopleAffinity" class="muted">—</div>
+          </div>
+        </div>
+        <div class="two" style="margin-top:16px">
+          <div>
+            <h3>Engagement (7d)</h3>
+            <div id="peopleEng7d"></div>
+          </div>
+          <div>
+            <h3>Deliveries by surface</h3>
+            <div id="peopleDeliveries"></div>
+          </div>
+        </div>
+        <h3 style="margin-top:16px">Recent events</h3>
+        <div id="peopleRecent" class="muted" style="font-family:ui-monospace,monospace;font-size:12px;max-height:220px;overflow:auto"></div>
+        <h3 style="margin-top:16px">Recent rank decisions</h3>
+        <div id="peopleDecisions" class="muted"></div>
+        <h3 style="margin-top:16px">Similar users (neighbors)</h3>
+        <div id="peopleNeighbors" class="muted">—</div>
       </div>
     </section>
 
@@ -418,7 +468,126 @@ document.querySelectorAll('.tab').forEach(btn => {
     document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
     btn.classList.add('active');
     $('panel-' + btn.dataset.tab).classList.add('active');
+    if (btn.dataset.tab === 'people' && !$('peopleHits').dataset.loaded) {
+      void searchPeople('');
+    }
   });
+});
+
+function chipList(items, empty){
+  if (!items || !items.length) return '<p class="muted">'+(empty||'None yet')+'</p>';
+  return items.map(it => {
+    const label = it.key || it.name || it.type || it.surface || '?';
+    const score = it.score != null ? it.score : (it.count != null ? it.count : '');
+    return '<div class="room"><span><strong>'+esc(label)+'</strong></span><span class="pill">'+esc(String(score))+'</span></div>';
+  }).join('');
+}
+function esc(s){
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+async function searchPeople(q){
+  $('peopleHits').innerHTML = '<p class="muted">Loading…</p>';
+  const url = '/mind/api/people' + (q ? ('?q='+encodeURIComponent(q)) : '');
+  const res = await fetch(url, { credentials:'same-origin' });
+  if (res.status === 401) { location.reload(); return; }
+  const data = await res.json();
+  if (!data.ok) { $('peopleHits').innerHTML = '<p class="err">'+(data.error||'failed')+'</p>'; return; }
+  $('peopleHits').dataset.loaded = '1';
+  const hits = data.people || [];
+  if (!hits.length) { $('peopleHits').innerHTML = '<p class="muted">No people matched.</p>'; return; }
+  $('peopleHits').innerHTML = hits.map(h =>
+    '<button type="button" class="room people-hit" data-id="'+esc(h.userId)+'" style="width:100%;text-align:left;cursor:pointer;margin:0 0 8px;border:1px solid var(--border);background:var(--surface)">'
+    + '<span><strong>'+esc(h.displayName)+'</strong>'
+    + (h.username ? ' <span class="muted">@'+esc(h.username)+'</span>' : '')
+    + '<br/><span class="muted">'+(h.countryName||h.countryCode||'')+' · events7d '+fmt(h.events7d)+' · creators '+fmt(h.affinityCreators)+'</span></span>'
+    + '<span class="pill">Open</span></button>'
+  ).join('');
+  document.querySelectorAll('.people-hit').forEach(btn => {
+    btn.addEventListener('click', () => void openPerson(btn.dataset.id));
+  });
+}
+
+async function openPerson(id){
+  $('peopleDossier').style.display = 'block';
+  $('peopleHead').innerHTML = '<p class="muted">Loading dossier…</p>';
+  const res = await fetch('/mind/api/people/'+encodeURIComponent(id), { credentials:'same-origin' });
+  if (res.status === 401) { location.reload(); return; }
+  const data = await res.json();
+  if (!data.ok || !data.dossier) {
+    $('peopleHead').innerHTML = '<p class="err">'+(data.error||'not found')+'</p>';
+    return;
+  }
+  const d = data.dossier;
+  const p = d.profile || {};
+  const s = d.social || {};
+  const i = d.interests || {};
+  $('peopleHead').innerHTML =
+    '<div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap">'
+    + (p.avatarUrl ? '<img src="'+esc(p.avatarUrl)+'" alt="" width="64" height="64" style="border-radius:50%;object-fit:cover;border:1px solid var(--border)"/>' : '')
+    + '<div><div class="mark">Real user dossier</div>'
+    + '<h2 style="margin:6px 0 4px">'+esc(p.displayName)+'</h2>'
+    + '<p class="muted" style="margin:0">@'+esc(p.username||'—')
+    + (p.email ? ' · '+esc(p.email) : '')
+    + '<br/>'+esc([p.cityName, p.countryName||p.countryCode].filter(Boolean).join(', '))
+    + '<br/><code style="font-size:11px">'+esc(p.userId)+'</code>'
+    + (d.summary && d.summary.coldStart ? ' · <span class="pill">cold start</span>' : ' · <span class="pill ok">warm</span>')
+    + '</p>'
+    + (p.bio ? '<p style="margin:8px 0 0">'+esc(p.bio)+'</p>' : '')
+    + '</div></div>';
+  $('peopleStats').innerHTML = [
+    ['Following', s.following],
+    ['Followers', s.followers],
+    ['Posts', s.posts],
+    ['Sparks', s.sparks],
+    ['Videos', s.videos],
+    ['Interest events', i.eventsCounted],
+    ['Feature dims', i.featureVectorDims],
+    ['Creators liked', (d.creatorAffinity||[]).length],
+  ].map(([l,n]) => '<div class="stat"><div class="n">'+fmt(n)+'</div><div class="l">'+l+'</div></div>').join('');
+  $('peopleHubs').innerHTML = chipList(i.hubs, 'No hub bubbles yet');
+  $('peopleCountries').innerHTML = chipList(i.countries, 'No country affinity yet');
+  $('peopleMedia').innerHTML = chipList(i.media, 'No media affinity yet');
+  $('peopleAffinity').innerHTML = (d.creatorAffinity||[]).length
+    ? d.creatorAffinity.slice(0,24).map(a =>
+        '<div class="room"><span><strong>'+esc(a.name)+'</strong>'
+        +(a.username?' <span class="muted">@'+esc(a.username)+'</span>':'')
+        +'<br/><span class="muted">+'+fmt(a.positives)+' / −'+fmt(a.negatives)+'</span></span>'
+        +'<span class="pill">'+esc(String(Math.round(a.score*100)/100))+'</span></div>'
+      ).join('')
+    : '<p class="muted">No creator affinity yet</p>';
+  $('peopleEng7d').innerHTML = chipList((d.engagement7d||[]).map(e => ({key:e.type, score:e.count})), 'No events in 7d');
+  $('peopleDeliveries').innerHTML = chipList((d.deliveriesBySurface||[]).map(e => ({key:e.surface, score:e.count})), 'No deliveries');
+  $('peopleRecent').innerHTML = (d.recentEvents||[]).slice(0,30).map(e =>
+    esc((e.at||'').toString().slice(0,19).replace('T',' '))+'  '+esc(e.type)
+    +(e.hubSlug?' · '+esc(e.hubSlug):'')
+    +(e.surface?' · '+esc(e.surface):'')
+    +(e.contentId?' · '+esc(String(e.contentId).slice(0,8)):'')
+  ).join('<br/>') || '—';
+  $('peopleDecisions').innerHTML = (d.recentDecisions||[]).length
+    ? d.recentDecisions.map(x =>
+        '<div class="room"><span><strong>'+esc(x.surface)+'</strong><br/><span class="muted">'
+        +esc((x.at||'').toString().slice(0,19).replace('T',' '))
+        +' · served '+fmt(x.served)+' · '+fmt(x.latencyMs)+'ms'
+        +(x.annHits!=null?' · annHits '+fmt(x.annHits):'')
+        +(x.topicHits!=null?' · topics '+fmt(x.topicHits):'')
+        +'</span></span><span class="pill">'+esc(x.policy||'')+'</span></div>'
+      ).join('')
+    : '<p class="muted">No decisions logged for this user</p>';
+  $('peopleNeighbors').innerHTML = (d.neighbors||[]).length
+    ? d.neighbors.map(n =>
+        '<div class="room"><span><strong>'+esc(n.name)+'</strong>'
+        +(n.username?' <span class="muted">@'+esc(n.username)+'</span>':'')
+        +'</span><span class="pill">d='+esc(String(Math.round(n.distance*1000)/1000))+'</span></div>'
+      ).join('')
+    : '<p class="muted">No KNN neighbors yet</p>';
+  $('peopleDossier').scrollIntoView({ behavior:'smooth', block:'start' });
+}
+
+$('peopleSearchBtn')?.addEventListener('click', () => void searchPeople($('peopleQ').value.trim()));
+$('peopleActiveBtn')?.addEventListener('click', () => { $('peopleQ').value=''; void searchPeople(''); });
+$('peopleQ')?.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Enter') { ev.preventDefault(); void searchPeople($('peopleQ').value.trim()); }
 });
 
 const gapBody = document.querySelector('#gapTable tbody');
@@ -684,4 +853,46 @@ export async function handleMindStream(req: Request, res: Response): Promise<voi
     void tick();
   }, 8000);
   req.on('close', () => clearInterval(iv));
+}
+
+/** GET /mind/api/people?q= — search real users (Ops). */
+export async function handleMindPeopleSearch(
+  req: Request,
+  res: Response
+): Promise<void> {
+  if (!hasOpsAccess(req)) {
+    res.status(401).json({ ok: false, error: 'unauthorized' });
+    return;
+  }
+  try {
+    const q = typeof req.query.q === 'string' ? req.query.q : '';
+    const people = await searchPeople(q, 24);
+    res.json({ ok: true, people });
+  } catch (err: any) {
+    console.error('[mind/people]', err?.message ?? err);
+    res.status(500).json({ ok: false, error: err?.message ?? 'people_search_failed' });
+  }
+}
+
+/** GET /mind/api/people/:userId — full interest dossier (Ops). */
+export async function handleMindPersonDossier(
+  req: Request,
+  res: Response
+): Promise<void> {
+  if (!hasOpsAccess(req)) {
+    res.status(401).json({ ok: false, error: 'unauthorized' });
+    return;
+  }
+  try {
+    const userId = String(req.params.userId || '').trim();
+    const dossier = await getUserDossier(userId);
+    if (!dossier) {
+      res.status(404).json({ ok: false, error: 'not_found' });
+      return;
+    }
+    res.json({ ok: true, dossier });
+  } catch (err: any) {
+    console.error('[mind/people/:id]', err?.message ?? err);
+    res.status(500).json({ ok: false, error: err?.message ?? 'dossier_failed' });
+  }
 }
