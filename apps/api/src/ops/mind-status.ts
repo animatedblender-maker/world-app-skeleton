@@ -237,7 +237,21 @@ export function readMindDoc(slug: string): string | null {
   }
 }
 
+/** Short TTL — /mind polls ~5s; full COUNTs every tick burn Disk IO budget. */
+const MIND_STATUS_TTL_MS = 20_000;
+let mindStatusCache: { at: number; value: MindStatus } | null = null;
+
 export async function getMindStatus(): Promise<MindStatus> {
+  const now = Date.now();
+  if (mindStatusCache && now - mindStatusCache.at < MIND_STATUS_TTL_MS) {
+    return mindStatusCache.value;
+  }
+  const value = await buildMindStatus();
+  mindStatusCache = { at: now, value };
+  return value;
+}
+
+async function buildMindStatus(): Promise<MindStatus> {
   const ledger = {
     deliveries: 0,
     batches: 0,

@@ -592,7 +592,8 @@ async function refresh(){
 }
 
 refresh();
-setInterval(refresh, 5000);
+// 15s — status API also caches ~20s; tighter polls burned Supabase Disk IO.
+setInterval(refresh, 15000);
 </script>
 </body>
 </html>`;
