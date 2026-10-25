@@ -59,6 +59,42 @@ export const MIND_SURFACE_CATALOG: MindSurfaceCatalogEntry[] = [
     client: 'iOS Masquerade',
     namespace: 'masquerade',
   },
+  {
+    id: 'search_hybrid',
+    label: 'Search · Hybrid',
+    purpose: 'Keyword + Voyage semantic retrieval for Public posts (MIND-020).',
+    http: 'GET /v1/search',
+    ledgerSurface: null,
+    client: 'iOS / web Search',
+    namespace: 'public',
+  },
+  {
+    id: 'world_country',
+    label: 'World · Country',
+    purpose: 'Country-scoped discovery with soft MIND rank (MIND-022); geoprivacy: country tag only.',
+    http: 'GET /v1/world/country/:code',
+    ledgerSurface: null,
+    client: 'iOS / web Globe',
+    namespace: 'public',
+  },
+  {
+    id: 'people_discovery',
+    label: 'People · Discover',
+    purpose: 'Suggested creators from public signals only (MIND-021).',
+    http: 'GET /v1/people/suggest',
+    ledgerSurface: null,
+    client: 'iOS / web Search people',
+    namespace: 'public',
+  },
+  {
+    id: 'creator_insights',
+    label: 'Creator · Insights',
+    purpose: 'Owner-only organic engagement rollups (MIND-025).',
+    http: 'GET /v1/creator/insights',
+    ledgerSurface: null,
+    client: 'Creator dashboard',
+    namespace: 'public',
+  },
 ];
 
 export const MIND_PURPOSE_BLURB =

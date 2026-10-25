@@ -13,6 +13,7 @@ export type CandidateLaneId =
   | 'home_image'
   | 'home_ann_title'
   | 'home_cold_start'
+  | 'home_new_creator'
   | 'hubs_slug_rotate'
   | 'masquerade_fresh'
   | 'masquerade_soft_recycle'
@@ -63,6 +64,13 @@ export const MIND_CANDIDATE_LANES: CandidateLaneDef[] = [
     label: 'Home · Cold-start priors',
     description:
       'Phase 3a (MIND-015 light): country/hub priors + popular recent + ANN when eventsCounted < 25.',
+  },
+  {
+    id: 'home_new_creator',
+    surface: 'home_for_you',
+    label: 'Home · Creator opportunity',
+    description:
+      'Phase 3b (MIND-018): soft boost for under-exposed creators with recent posts.',
   },
   {
     id: 'hubs_slug_rotate',

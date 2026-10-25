@@ -33,6 +33,9 @@ Panels: overview, live ledger/seed, architecture wall, gap matrix, Masquerade ro
 | `remote-config.ts` | Exposes `mind_ledger_enabled` |
 | `scripts/mind-delivery-concurrency-check.ts` | MIND-008 concurrent reserve test |
 | `scripts/mind-offline-eval.ts` | §18 offline metrics over `recommendation_decisions` |
+| `scripts/mind-isolation-tests.ts` | MIND-023 CI isolation checks |
+| `scripts/mind-fit-ranker.ts` | MIND-016 offline co-occurrence weight stub |
+| `scripts/mind-scale-benchmark.ts` | ADR 0004 Phase 5 readiness probe |
 
 ## Verification run locally
 
@@ -40,6 +43,9 @@ Panels: overview, live ledger/seed, architecture wall, gap matrix, Masquerade ro
 cd apps/api
 npx tsx src/recommendation/eligibility.test.ts
 npx tsx scripts/mind-delivery-concurrency-check.ts
+npx tsx scripts/mind-isolation-tests.ts
+npx tsx scripts/mind-offline-eval.ts
+npx tsx scripts/mind-scale-benchmark.ts
 npx tsc -p tsconfig.json --noEmit
 # then open http://127.0.0.1:3000/mind
 ```
@@ -55,10 +61,12 @@ npx tsc -p tsconfig.json --noEmit
 - **phase2.v1** — §7 Media understanding Phase 2a: `mind_content_features` from `video_transcripts`, soft topic boost, `/mind` media panel
 - **phase2.v2** — §7 Phase 2b: Voyage `voyage-4-lite` title/body embeddings → `mind_content_embeddings` (pgvector), soft ANN lane `home_ann_title` / rank `ann` boost
 - **phase3.v1** — Phase 3a (MIND-015 light + §18 stub): cold-start prior blend in `rank.service` (`server.v5-cold-start`, eventsCounted &lt; 25 → country/hub/popular/fresh/ANN priors; lane `home_cold_start`); offline eval harness `scripts/mind-offline-eval.ts`; ADR 0004 (Phase 5 scale gate) + ADR 0005 (Phase 4 surfaces scaffold)
+- **phase3.v2** — Phase 3b thin: interest controls (`mind_user_interest_controls` + MIND-019 API), session short-TTL (MIND-017), opportunity lane (MIND-018), logistic ranker behind flag (MIND-016) + `scripts/mind-fit-ranker.ts` co-occurrence stub → `data/mind-ranker-weights.json`
+- **phase4.v1** — Phase 4 thin: hybrid search (`GET /v1/search`), world/country shelf, Guardian panel on `/mind`, people discovery hooks, MIND-023 `scripts/mind-isolation-tests.ts`, ADR 0004 probe `scripts/mind-scale-benchmark.ts` (Phase 5 still gated)
 
 ## Not in this pass
 
-Trained rankers (MIND-016), session re-rank (017), ads, GraphQL FeedItem, Guardian depth (024), hybrid search (020), full long-form STT catalog. Phase 4–5 scaffolded as ADRs; shown as roadmap on `/mind`.
+Full sklearn/registry training, ads/economy, GraphQL FeedItem, deep Guardian appeals, full long-form STT catalog, Phase 5 infra (feature store / ANN cluster / autoscaling — wait for `mind-scale-benchmark` + separate ADR).
 
 ## Production
 

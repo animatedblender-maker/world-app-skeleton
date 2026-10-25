@@ -37,6 +37,11 @@ import {
   getEmbeddingsStatus,
   type EmbeddingsStatus,
 } from '../recommendation/mind-embeddings.js';
+import { getGuardianStatus } from '../recommendation/mind-guardian.js';
+import { mindSessionFeaturesEnabled } from '../recommendation/mind-session.js';
+import { mindOpportunityEnabled } from '../recommendation/mind-opportunity.js';
+import { mindTrainedRankerEnabled } from '../recommendation/mind-trained-ranker.js';
+import { mindHybridSearchEnabled } from '../recommendation/mind-search.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 function resolveDocsMind(): string {
@@ -65,7 +70,27 @@ export type MindStatus = {
   ok: true;
   at: string;
   policyVersion: string;
-  flags: { mindLedgerEnabled: boolean };
+  flags: {
+    mindLedgerEnabled: boolean;
+    mindSessionFeatures: boolean;
+    mindOpportunity: boolean;
+    mindTrainedRanker: boolean;
+    mindHybridSearch: boolean;
+  };
+  guardian?: {
+    openPostReports: number;
+    openCommentReports: number;
+    moderationReviewHeld: number;
+    recentQueue: {
+      entityType: string;
+      entityId: string;
+      decision: string;
+      servingStatus: string | null;
+      excerpt: string | null;
+      createdAt: string;
+    }[];
+    policyNote: string;
+  };
   ledger: {
     deliveries: number;
     batches: number;
@@ -634,17 +659,36 @@ async function buildMindStatus(): Promise<MindStatus> {
     console.warn('[mind-status] embeddings', err?.message ?? err);
   }
 
+  let guardian;
+  try {
+    guardian = await getGuardianStatus();
+  } catch (err: any) {
+    guardian = {
+      openPostReports: 0,
+      openCommentReports: 0,
+      moderationReviewHeld: 0,
+      recentQueue: [],
+      policyNote: `guardian unavailable: ${err?.message ?? err}`,
+    };
+  }
+
   return {
     ok: true,
     at: new Date().toISOString(),
     policyVersion: MIND_POLICY_VERSION,
-    flags: { mindLedgerEnabled: mindLedgerEnabled() },
+    flags: {
+      mindLedgerEnabled: mindLedgerEnabled(),
+      mindSessionFeatures: mindSessionFeaturesEnabled(),
+      mindOpportunity: mindOpportunityEnabled(),
+      mindTrainedRanker: mindTrainedRankerEnabled(),
+      mindHybridSearch: mindHybridSearchEnabled(),
+    },
     ledger,
     engagement,
     masquerade,
     seed: readSeedProgress(),
-    // Phase 2b: embeddings + ANN; remaining missing = §14/15/18
-    gapSummary: { shipped: 14, partial: 3, missing: 5 },
+    // Phase 3b+4: adaptive + surfaces; missing = §14 ads auction / §15 GraphQL FeedItem
+    gapSummary: { shipped: 16, partial: 4, missing: 2 },
     docs: listDocs(),
     recent,
     decisions,
@@ -653,5 +697,6 @@ async function buildMindStatus(): Promise<MindStatus> {
     purpose,
     mediaUnderstanding,
     embeddings,
+    guardian,
   };
 }

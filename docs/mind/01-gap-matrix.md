@@ -13,18 +13,18 @@ Status legend: **shipped** · **partial** · **missing** (roadmap)
 | 7 | Media understanding | shipped | Phase 2a features + Phase 2b Voyage/`pgvector` title embeddings + ANN |
 | 8 | Interest memory / features | shipped | Personality + creator affinity + featureHits on decisions |
 | 9 | Candidate generation | shipped | Multi-lane retrieval + mix meta + inventory + `home_cold_start` |
-| 10 | Rank + diversity | shipped | MMR + family caps; Phase 3a cold-start priors (`server.v5-cold-start`) |
+| 10 | Rank + diversity | shipped | MMR + session + controls + logistic flag (`server.v5-cold-start`+) |
 | 11 | Exposure ledger | shipped | `feed_video_delivery` on all For You surfaces |
-| 12 | Search / world / rooms | partial | Search exists; Phase 4 MIND-020 hybrid (ADR 0005) |
-| 13 | Guardian | partial | Reports / moderation queues; Phase 4 MIND-024 deepen |
+| 12 | Search / world / rooms | shipped | `GET /v1/search` hybrid + `/v1/world/country` (world still thin) |
+| 13 | Guardian | shipped | `/mind` Guardian panel + report/mod queues (MIND-024 deepen later) |
 | 14 | Ads / economy | missing | Phase 4+ product gate |
 | 15 | GraphQL FeedItem | missing | REST instead (ADR 0002); MIND-006 metadata |
-| 16 | Schema | partial | Delivery migration applied |
-| 17 | Workers | partial | Pipeline + frame0; not full MIND workers |
-| 18 | ML eval | partial | Phase 3a stub `scripts/mind-offline-eval.ts`; trained ranker later |
-| 19 | Observability | shipped | `/mind` events, decisions, ledger, seed |
-| 20 | Tests | partial | MIND-008 concurrency |
-| 21 | Roadmap | shipped | Documented on admin page; ADR 0004 Phase 5 gate |
+| 16 | Schema | partial | Delivery + interest-controls migrations; runtime ensure still used |
+| 17 | Workers | partial | Pipeline + frame0 + mind-embeddings cron; not full handbook worker set |
+| 18 | ML eval | partial | `mind-offline-eval` + `mind-fit-ranker` stub; trained ranker flag default off |
+| 19 | Observability | shipped | `/mind` events, decisions, ledger, seed, guardian |
+| 20 | Tests | partial | MIND-008 concurrency + MIND-023 `mind-isolation-tests` + scale benchmark |
+| 21 | Roadmap | shipped | Documented on admin page; ADR 0004 Phase 5 gate + `mind-scale-benchmark` |
 
 ## Phase 1 tickets
 

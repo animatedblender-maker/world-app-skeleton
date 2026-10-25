@@ -19,6 +19,12 @@ export type RemoteFlags = {
   moderation_text_enabled: boolean;
   /** MIND at-most-once delivery ledger (kill switch → cursor weave). */
   mind_ledger_enabled: boolean;
+  /** MIND-016 logistic ranker (default off). */
+  mind_trained_ranker_enabled: boolean;
+  /** MIND-020 hybrid search. */
+  mind_hybrid_search_enabled: boolean;
+  /** MIND-017 session short-TTL features. */
+  mind_session_features_enabled: boolean;
 };
 
 const DEFAULT_FLAGS: RemoteFlags = {
@@ -35,6 +41,9 @@ const DEFAULT_FLAGS: RemoteFlags = {
   feed_soft_stale_minutes: 10,
   moderation_text_enabled: true,
   mind_ledger_enabled: true,
+  mind_trained_ranker_enabled: false,
+  mind_hybrid_search_enabled: true,
+  mind_session_features_enabled: true,
 };
 
 /** Bump when flag defaults change so clients refresh. */
@@ -84,6 +93,18 @@ export function getRemoteConfig(clientVersion?: string | null): {
     mind_ledger_enabled: envBool(
       'MIND_LEDGER_ENABLED',
       DEFAULT_FLAGS.mind_ledger_enabled
+    ),
+    mind_trained_ranker_enabled: envBool(
+      'MIND_TRAINED_RANKER_ENABLED',
+      DEFAULT_FLAGS.mind_trained_ranker_enabled
+    ),
+    mind_hybrid_search_enabled: envBool(
+      'MIND_HYBRID_SEARCH_ENABLED',
+      DEFAULT_FLAGS.mind_hybrid_search_enabled
+    ),
+    mind_session_features_enabled: envBool(
+      'MIND_SESSION_FEATURES_ENABLED',
+      DEFAULT_FLAGS.mind_session_features_enabled
     ),
     feed_soft_stale_minutes: envNum(
       'FLAG_FEED_SOFT_STALE_MIN',

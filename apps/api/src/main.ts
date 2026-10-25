@@ -110,6 +110,17 @@ import {
   handleMindPersonDossier,
 } from './ops/mind-page.js';
 import { MIND_POLICY_VERSION } from './recommendation/mind-contracts.js';
+import {
+  getInterestSnapshot,
+  patchInterestControls,
+  resetInterestControls,
+  explainDecision,
+} from './recommendation/mind-interest-controls.js';
+import { hybridSearch } from './recommendation/mind-search.js';
+import { suggestPeople } from './recommendation/mind-people-discovery.js';
+import { getCreatorInsights } from './recommendation/mind-creator-insights.js';
+import { worldCountryFeed } from './recommendation/mind-world.js';
+import { bustSessionCache } from './recommendation/mind-session.js';
 import { handlePosterBatch, handlePosterGet } from './media/poster-route.js';
 import { kafkaEnabled } from './kafka/config.js';
 
@@ -929,18 +940,136 @@ app.post('/v1/engagement/batch', async (req: Request, res: Response) => {
   const user = await getUserFromRequest(req);
   if (!user?.id) return res.status(401).json({ error: 'unauthenticated' });
   try {
+    const sessionId = req.body?.sessionId ?? null;
     const result = await ingestEngagementBatch({
       entityId: user.id,
-      sessionId: req.body?.sessionId ?? null,
+      sessionId,
       events: Array.isArray(req.body?.events) ? req.body.events : [],
     });
     // Keep online features warm while users scroll (async — never block the client).
     if (result.accepted > 0) {
       void refreshUserFeatures(user.id).catch(() => {});
+      bustSessionCache(user.id, sessionId);
     }
     return res.json({ ok: true, ...result });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message ?? 'engagement_ingest_failed' });
+  }
+});
+
+// ── MIND Phase 3b/4 user surfaces ───────────────────────────────────────────
+// Interest controls (MIND-019)
+app.get('/v1/me/interests', async (req: Request, res: Response) => {
+  const user = await getUserFromRequest(req);
+  if (!user?.id) return res.status(401).json({ error: 'unauthenticated' });
+  try {
+    const snapshot = await getInterestSnapshot(user.id);
+    return res.json({ ok: true, ...snapshot });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'interests_failed' });
+  }
+});
+
+app.patch('/v1/me/interests', async (req: Request, res: Response) => {
+  const user = await getUserFromRequest(req);
+  if (!user?.id) return res.status(401).json({ error: 'unauthenticated' });
+  try {
+    const controls = await patchInterestControls(user.id, {
+      mutedHubs: req.body?.mutedHubs,
+      mutedCreators: req.body?.mutedCreators,
+      boostedTopics: req.body?.boostedTopics,
+      chronoPreferred: req.body?.chronoPreferred,
+      mode: req.body?.mode === 'replace' ? 'replace' : 'merge',
+    });
+    return res.json({ ok: true, controls });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'interests_patch_failed' });
+  }
+});
+
+app.post('/v1/me/interests/reset', async (req: Request, res: Response) => {
+  const user = await getUserFromRequest(req);
+  if (!user?.id) return res.status(401).json({ error: 'unauthenticated' });
+  try {
+    await resetInterestControls(user.id);
+    return res.json({ ok: true, reset: true });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'interests_reset_failed' });
+  }
+});
+
+app.get('/v1/recommendation/why', async (req: Request, res: Response) => {
+  const user = await getUserFromRequest(req);
+  if (!user?.id) return res.status(401).json({ error: 'unauthenticated' });
+  const requestId = String(req.query.requestId ?? '').trim();
+  if (!requestId) return res.status(400).json({ error: 'requestId_required' });
+  const explained = await explainDecision({ requestId, entityId: user.id });
+  const status = explained.ok ? 200 : explained.error === 'forbidden' ? 403 : 404;
+  return res.status(status).json(explained);
+});
+
+// Hybrid search (MIND-020)
+app.get('/v1/search', async (req: Request, res: Response) => {
+  const user = await getUserFromRequest(req);
+  const q = String(req.query.q ?? req.query.query ?? '').trim();
+  const limit = Number(req.query.limit) || 20;
+  try {
+    const result = await hybridSearch({
+      query: q,
+      limit,
+      viewerId: user?.id ?? null,
+    });
+    return res.json({ ok: true, ...result });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'search_failed' });
+  }
+});
+
+// People discovery (MIND-021)
+app.get('/v1/people/suggest', async (req: Request, res: Response) => {
+  const user = await getUserFromRequest(req);
+  const limit = Number(req.query.limit) || 12;
+  const countryCode = String(req.query.country ?? req.query.countryCode ?? '').trim() || null;
+  try {
+    const people = await suggestPeople({
+      viewerId: user?.id ?? null,
+      limit,
+      countryCode,
+    });
+    return res.json({ ok: true, people });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'people_suggest_failed' });
+  }
+});
+
+// World / country (MIND-022)
+app.get('/v1/world/country/:code', async (req: Request, res: Response) => {
+  const user = await getUserFromRequest(req);
+  const code = String(req.params.code ?? '').trim();
+  const limit = Number(req.query.limit) || 24;
+  const sessionId = String(req.query.session ?? '').trim() || null;
+  try {
+    const result = await worldCountryFeed({
+      countryCode: code,
+      limit,
+      viewerId: user?.id ?? null,
+      sessionId,
+    });
+    return res.json({ ok: true, ...result });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'world_country_failed' });
+  }
+});
+
+// Creator insights (MIND-025) — owner only
+app.get('/v1/creator/insights', async (req: Request, res: Response) => {
+  const user = await getUserFromRequest(req);
+  if (!user?.id) return res.status(401).json({ error: 'unauthenticated' });
+  try {
+    const insights = await getCreatorInsights(user.id);
+    return res.json({ ok: true, insights });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'creator_insights_failed' });
   }
 });
 

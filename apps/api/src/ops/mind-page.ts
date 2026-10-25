@@ -284,6 +284,13 @@ function mindHtml(): string {
         </div>
       </div>
       <div class="card">
+        <h2>Guardian (MIND-024)</h2>
+        <p class="muted">Report + text-moderation queue depth. Appeals stay on <code>/admin/reports</code>.</p>
+        <div class="grid" id="guardianStats"></div>
+        <div id="guardianQueue" style="margin-top:10px"></div>
+        <p class="muted" id="guardianNote" style="margin-top:8px"></p>
+      </div>
+      <div class="card">
         <h2>Seed pipeline (local host)</h2>
         <p class="muted" id="seedMeta">…</p>
         <div class="bar"><i id="seedBar"></i></div>
@@ -434,8 +441,8 @@ function mindHtml(): string {
           <div class="stat"><div class="n" style="font-size:1rem">Phase 2a</div><div class="l">Transcript features live</div><span class="pill ok">shipped</span></div>
           <div class="stat"><div class="n" style="font-size:1rem">Phase 2b</div><div class="l">Voyage title embeddings · pgvector ANN</div><span class="pill ok">phase2.v2</span></div>
           <div class="stat"><div class="n" style="font-size:1rem">Phase 3a</div><div class="l">Cold-start priors · offline eval</div><span class="pill ok">phase3.v1</span></div>
-          <div class="stat"><div class="n" style="font-size:1rem">Phase 3b</div><div class="l">Trained ranker · session · controls</div><span class="pill">not built</span></div>
-          <div class="stat"><div class="n" style="font-size:1rem">Phase 4</div><div class="l">Search hybrid · Guardian (ADR 0005)</div><span class="pill">scaffold</span></div>
+          <div class="stat"><div class="n" style="font-size:1rem">Phase 3b</div><div class="l">Controls · session · opportunity · logistic flag</div><span class="pill ok">phase4.v1</span></div>
+          <div class="stat"><div class="n" style="font-size:1rem">Phase 4</div><div class="l">Search · Guardian · people · world · insights</div><span class="pill ok">phase4.v1</span></div>
           <div class="stat"><div class="n" style="font-size:1rem">Phase 5</div><div class="l">Scale after measured need (ADR 0004)</div><span class="pill">gated</span></div>
         </div>
       </div>
@@ -451,13 +458,15 @@ const GAPS = [
   ['6','Masquerade isolation','shipped','Live proofs + surface namespace guards'],
   ['7','Media understanding','shipped','2a features + 2b Voyage/pgvector title embeddings'],
   ['8','Interest features','shipped','Personality + creator affinity + featureHits'],
-  ['9','Candidates','shipped','Multi-lane + home_cold_start (Phase 3a)'],
-  ['10','Rank + diversity','shipped','MMR + cold-start priors (server.v5-cold-start)'],
+  ['9','Candidates','shipped','Multi-lane + cold-start + opportunity'],
+  ['10','Rank + diversity','shipped','MMR + session + controls + logistic flag'],
   ['11','Exposure ledger','shipped','feed_video_delivery on all For You surfaces'],
-  ['14','Ads / economy','missing','Phase 4+ product gate'],
+  ['12','Search / world','shipped','GET /v1/search hybrid · /v1/world/country'],
+  ['13','Guardian','shipped','/mind Guardian panel + report/mod queues'],
+  ['14','Ads / economy','missing','Product gate (insights organic only)'],
   ['15','GraphQL FeedItem','missing','REST (ADR 0002)'],
-  ['18','ML evaluation','partial','mind-offline-eval.ts stub; trained ranker later'],
-  ['19','Observability','shipped','Live events, decisions, ledger, seed'],
+  ['18','ML evaluation','partial','offline-eval + fit-ranker stub; flag default off'],
+  ['19','Observability','shipped','Live events, decisions, ledger, seed, guardian'],
 ];
 
 function $(id){ return document.getElementById(id); }
@@ -669,6 +678,31 @@ async function refresh(){
         ).join('')
         + '<p class="muted" style="margin-top:8px">24h decisions: '+fmt(dec.count24h||0)+'</p>'
       : '<p class="muted">No rank decisions logged yet (ranker writes when candidates are scored).</p>';
+
+    const g = s.guardian || {};
+    if ($('guardianStats')) {
+      $('guardianStats').innerHTML = [
+        ['Open post reports', g.openPostReports],
+        ['Open comment reports', g.openCommentReports],
+        ['Mod review/held (14d)', g.moderationReviewHeld],
+      ].map(([l,n]) => '<div class="stat"><div class="n">'+fmt(n)+'</div><div class="l">'+l+'</div></div>').join('');
+      $('guardianQueue').innerHTML = (g.recentQueue||[]).length
+        ? (g.recentQueue||[]).slice(0,8).map(q =>
+            '<div class="room"><span><strong>'+esc(q.entityType)+'</strong> · '+esc(q.decision)
+            + (q.servingStatus ? ' · '+esc(q.servingStatus) : '')
+            + '<br/><span class="muted">'+esc(q.excerpt||q.entityId)+'</span></span></div>'
+          ).join('')
+        : '<p class="muted">Queue empty or unavailable.</p>';
+      $('guardianNote').textContent = g.policyNote || '';
+    }
+
+    const fl = s.flags || {};
+    $('ledgerFlag').title = [
+      'session=' + !!fl.mindSessionFeatures,
+      'opportunity=' + !!fl.mindOpportunity,
+      'trained=' + !!fl.mindTrainedRanker,
+      'hybridSearch=' + !!fl.mindHybridSearch,
+    ].join(' · ');
 
     const seed = s.seed || {};
     if (!seed.available) {

@@ -22,6 +22,19 @@ import {
 import { mmrPick } from './social-score.js';
 import { loadMediaFeaturesForPosts } from './mind-media.js';
 import { annCandidates, mindEmbeddingsEnabled } from './mind-embeddings.js';
+import { loadInterestControls } from './mind-interest-controls.js';
+import {
+  loadSessionFeatures,
+  sessionMatchScore,
+} from './mind-session.js';
+import { loadCreatorOpportunity } from './mind-opportunity.js';
+import {
+  emptyFeatures,
+  loadRankerWeights,
+  mindTrainedRankerEnabled,
+  trainedScore,
+  type RankerFeatures,
+} from './mind-trained-ranker.js';
 
 export type RankSurface =
   | 'home_for_you'
@@ -62,11 +75,17 @@ export type RankResponse = {
     coldStart?: boolean;
     /** Items that received an explicit cold-start prior boost. */
     coldStartHits?: number;
+    sessionHits?: number;
+    opportunityHits?: number;
+    trainedRanker?: boolean;
+    controlMutes?: number;
   };
 };
 
-/** Phase 3a cold-start + social MMR (MIND-015 light). */
-const POLICY_VERSION = 'server.v5-cold-start';
+/** Phase 3b: cold-start + session + opportunity + optional logistic. */
+const POLICY_VERSION = mindTrainedRankerEnabled()
+  ? 'server.v6-logistic'
+  : 'server.v6-adaptive';
 
 /** Interest events below this → cold-start prior blend (country/hub/popular/ANN). */
 export const COLD_START_EVENT_THRESHOLD = 25;
@@ -154,6 +173,10 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
         annHits: 0,
         coldStart: true,
         coldStartHits: 0,
+        sessionHits: 0,
+        opportunityHits: 0,
+        trainedRanker: mindTrainedRankerEnabled(),
+        controlMutes: 0,
       },
     };
   }
@@ -197,6 +220,8 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
     neighborBoosts,
     mediaFeatures,
     viewerCountry,
+    controls,
+    sessionFeatures,
   ] = await Promise.all([
     loadCreatorAffinity(entityId),
     loadItemStats(uuidCandidates),
@@ -213,13 +238,21 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
           >()
         ),
     loadViewerCountry(entityId),
+    loadInterestControls(entityId),
+    loadSessionFeatures(entityId, sessionId),
   ]);
+
+  const mutedCreatorSet = new Set(controls.mutedCreators);
+  const mutedHubSet = new Set(controls.mutedHubs);
+  const boostedTopicSet = new Set(controls.boostedTopics);
 
   // Phase 2b ANN — after bubbles so we can bias the query; never blocks ranking hard.
   let annIdSet = new Set<string>();
   if (publicSurface && mindEmbeddingsEnabled()) {
+    const hubKeys = [...(bubbles?.hubs ? bubbles.hubs.keys() : [])].slice(0, 6);
+    const boostKeys = [...boostedTopicSet].slice(0, 4);
     const annQueryText =
-      [...(bubbles?.hubs ? bubbles.hubs.keys() : [])].slice(0, 6).join(' ') ||
+      [...new Set([...boostKeys, ...hubKeys])].join(' ') ||
       'matterya hubs travel music comedy food';
     try {
       const annIds = await annCandidates({
@@ -228,7 +261,6 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
         excludeIds: [],
       });
       annIdSet = new Set(annIds);
-      // Pull ANN hits into the score pool (and load meta for any new ids).
       const missing = annIds.filter((id) => !postMeta.has(id) && isUuid(id));
       if (missing.length) {
         const extraMeta = await loadPostMeta(missing);
@@ -240,6 +272,18 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
   }
 
   const scorePool = [...new Set([...candidateIds, ...annIdSet])];
+  const authorIdsForOpp = [
+    ...new Set(
+      [...scorePool]
+        .map((id) => postMeta.get(id)?.authorId)
+        .filter((x): x is string => !!x)
+    ),
+  ];
+  const opportunityMap = publicSurface
+    ? await loadCreatorOpportunity(authorIdsForOpp)
+    : new Map<string, number>();
+  const useTrained = mindTrainedRankerEnabled();
+  const rankerWeights = useTrained ? loadRankerWeights() : null;
 
   type Scored = {
     id: string;
@@ -251,32 +295,54 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
   const scored: Scored[] = [];
   const coldStart =
     !bubbles || bubbles.eventsCounted < COLD_START_EVENT_THRESHOLD;
-  const viewerTopics = bubbles?.hubs ? [...bubbles.hubs.keys()] : [];
   let transcriptReadyHits = 0;
   let topicHitCount = 0;
   let annHitCount = 0;
   let coldStartHits = 0;
+  let sessionHits = 0;
+  let opportunityHits = 0;
+  let controlMutes = 0;
   for (const id of scorePool) {
     if (hidden.has(id)) continue;
 
     const meta = postMeta.get(id);
     const authorId = meta?.authorId ?? null;
+    const hubSlug = (meta?.hubSlug ?? '').trim().toLowerCase();
+
+    // MIND-019 explicit mutes — hard skip (user agency).
+    if (authorId && mutedCreatorSet.has(authorId)) {
+      controlMutes += 1;
+      continue;
+    }
+    if (hubSlug && mutedHubSet.has(hubSlug)) {
+      controlMutes += 1;
+      continue;
+    }
+
     const sources: string[] = [];
     let score = 0.01;
     let gotColdPrior = false;
+    const feat: RankerFeatures = emptyFeatures();
+    if (coldStart) feat.coldStart = 1;
+
+    // Chrono preference — flatten personalization toward recency.
+    const chronoMul = controls.chronoPreferred ? 0.35 : 1;
 
     // Following relationship
     if (authorId && following.has(authorId)) {
-      score += 3.0;
+      score += 3.0 * chronoMul;
       sources.push('following');
+      feat.following = 1;
     }
 
     // Personalized creator affinity (sparse for cold-start users — still apply when present)
     if (authorId && affinityMap.has(authorId)) {
       const a = affinityMap.get(authorId)!;
       const weight = coldStart ? 1.4 : 2.2;
-      score += Math.max(-2, Math.min(4, a * weight));
+      const contrib = Math.max(-2, Math.min(4, a * weight)) * chronoMul;
+      score += contrib;
       sources.push('affinity');
+      feat.affinity = Math.min(1, Math.abs(a));
     }
 
     // Global item quality (cold start / social proof) — heavier when cold
@@ -285,6 +351,7 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
       const weight = coldStart ? 1.55 : 1.15;
       score += Math.max(-1.5, Math.min(3.6, st * weight));
       sources.push(coldStart ? 'cold_prior_quality' : 'item_stats');
+      feat.itemStats = Math.min(1, Math.abs(st));
       if (coldStart) gotColdPrior = true;
     }
 
@@ -292,11 +359,14 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
     if (meta?.createdAt) {
       const ageH = (Date.now() - meta.createdAt.getTime()) / 3_600_000;
       if (ageH < 24) {
-        score += (coldStart ? 1.8 : 1.2) - ageH / 24;
+        const freshBoost = (coldStart ? 1.8 : 1.2) - ageH / 24;
+        score += controls.chronoPreferred ? freshBoost * 2.2 : freshBoost;
         sources.push(coldStart ? 'cold_prior_fresh' : 'fresh');
+        feat.fresh = 1;
         if (coldStart) gotColdPrior = true;
       } else if (ageH < 168) {
         score += coldStart ? 0.55 : 0.3;
+        feat.fresh = 0.4;
         if (coldStart) {
           sources.push('cold_prior_fresh');
           gotColdPrior = true;
@@ -313,7 +383,8 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
       isSpark: meta?.isSpark,
     });
     if (!coldStart) {
-      score += bubble.score * 2.4;
+      score += bubble.score * 2.4 * chronoMul;
+      feat.bubble = bubble.score;
       if (bubble.inBubble && bubble.reasons[0] !== 'cold_start') {
         sources.push('bubble');
       } else if (!bubble.inBubble) {
@@ -328,12 +399,14 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
         sources.push('cold_prior_country');
         gotColdPrior = true;
       }
-      const hub = (meta?.hubSlug ?? '').trim().toLowerCase();
-      if (hub && bubbles?.hubs.has(hub)) {
+      if (hubSlug && bubbles?.hubs.has(hubSlug)) {
         score += 0.85;
         sources.push('cold_prior_hub');
         gotColdPrior = true;
-      } else if (bubble.reasons.includes('country_bubble') || bubble.reasons.includes('hub_bubble')) {
+      } else if (
+        bubble.reasons.includes('country_bubble') ||
+        bubble.reasons.includes('hub_bubble')
+      ) {
         score += bubble.score * 1.2;
         sources.push('cold_prior_bubble');
         gotColdPrior = true;
@@ -344,35 +417,76 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
     // KNN collaborative: content / creators neighbors liked (skip hard rely when cold)
     const knnContent = neighborBoosts.content.get(id);
     if (knnContent && !coldStart) {
-      score += Math.min(2.5, knnContent * 0.85);
+      score += Math.min(2.5, knnContent * 0.85) * chronoMul;
       sources.push('knn');
+      feat.knn = Math.min(1, knnContent);
     } else if (authorId && neighborBoosts.creators.has(authorId) && !coldStart) {
-      score += Math.min(1.8, (neighborBoosts.creators.get(authorId) ?? 0) * 0.55);
+      score +=
+        Math.min(1.8, (neighborBoosts.creators.get(authorId) ?? 0) * 0.55) * chronoMul;
       sources.push('knn_creator');
+      feat.knn = 0.5;
     }
 
     // MIND §7 Phase 2a — soft topic boost from transcript features (Public only).
-    // Missing transcript = UNKNOWN: never demote.
     const media = mediaFeatures.get(id);
     if (media?.transcriptReady) transcriptReadyHits += 1;
-    if (media && media.topics.length > 0 && viewerTopics.length > 0) {
+    if (media && media.topics.length > 0) {
       let overlap = 0;
       for (const t of media.topics) {
-        if (bubbles?.hubs.has(t)) overlap += 1;
+        if (bubbles?.hubs.has(t) || boostedTopicSet.has(t.toLowerCase())) overlap += 1;
       }
       if (overlap > 0) {
-        score += Math.min(1.2, overlap * 0.45);
+        const boost = Math.min(1.2, overlap * 0.45) * chronoMul;
+        score += boost + (boostedTopicSet.size ? 0.35 : 0);
         sources.push('media_topic');
         topicHitCount += 1;
+        feat.mediaTopic = Math.min(1, overlap / 3);
       }
+    }
+    if (hubSlug && boostedTopicSet.has(hubSlug)) {
+      score += 0.9 * chronoMul;
+      sources.push('media_topic');
+      feat.mediaTopic = Math.max(feat.mediaTopic, 0.7);
     }
 
     // Phase 2b — soft ANN boost; Phase 3a cold-start leans harder on ANN exploration.
     if (annIdSet.has(id)) {
-      score += coldStart ? 1.85 : 1.35;
+      score += (coldStart ? 1.85 : 1.35) * chronoMul;
       sources.push(coldStart ? 'cold_prior_ann' : 'ann');
       annHitCount += 1;
+      feat.ann = 1;
       if (coldStart) gotColdPrior = true;
+    }
+
+    // MIND-017 session soft blend
+    const sess = sessionMatchScore(sessionFeatures, {
+      authorId,
+      countryCode: meta?.countryCode,
+      hubSlug: meta?.hubSlug,
+      mediaType: meta?.mediaType,
+      isSpark: meta?.isSpark,
+    });
+    if (sess.hit) {
+      score += sess.score * 1.6 * chronoMul;
+      sources.push('session');
+      sessionHits += 1;
+      feat.session = sess.score;
+    }
+
+    // MIND-018 creator opportunity
+    if (authorId && opportunityMap.has(authorId)) {
+      const opp = opportunityMap.get(authorId)!;
+      score += Math.min(1.1, opp * 1.0);
+      sources.push('opportunity');
+      opportunityHits += 1;
+      feat.opportunity = opp;
+    }
+
+    // MIND-016 optional logistic blend (replaces raw score scale when enabled)
+    if (useTrained && rankerWeights) {
+      const ts = trainedScore(feat, rankerWeights);
+      score = score * 0.35 + ts * 0.65;
+      sources.push('trained');
     }
 
     // Surface policy tweaks
@@ -432,6 +546,10 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
     annHits: annHitCount,
     coldStart,
     coldStartHits,
+    sessionHits,
+    opportunityHits,
+    trainedRanker: useTrained,
+    controlMutes,
   };
 
   // Fire-and-forget warehouse log + optional affinity refresh
@@ -706,6 +824,10 @@ async function logDecision(args: {
     annHits?: number;
     coldStart?: boolean;
     coldStartHits?: number;
+    sessionHits?: number;
+    opportunityHits?: number;
+    trainedRanker?: boolean;
+    controlMutes?: number;
   };
 }): Promise<void> {
   const uuidItems = args.items.filter((i) => isUuid(i.id));

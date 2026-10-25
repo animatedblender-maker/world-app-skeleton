@@ -7,7 +7,7 @@
  *   - public.recsys_item_stats (item popularity priors)
  *
  * Rank reads these in rank.service and reports featureHits on each decision.
- * Session vectors / trained embeddings remain Phase 2+.
+ * Phase 3b adds explicit controls, session short-TTL, and optional logistic.
  */
 
 export const MIND_INTEREST_SOURCES = [
@@ -28,5 +28,17 @@ export const MIND_INTEREST_SOURCES = [
     table: 'entity_personality',
     label: 'Personality bubbles',
     usedBy: 'knn.service · hub/country/creator bubbles + feature_vector',
+  },
+  {
+    id: 'interest_controls',
+    table: 'mind_user_interest_controls',
+    label: 'Explicit interest controls',
+    usedBy: 'MIND-019 · mute hubs/creators · boost topics · chrono',
+  },
+  {
+    id: 'session_features',
+    table: 'entity_engagement_events',
+    label: 'Session short-TTL features',
+    usedBy: 'MIND-017 · last ~90m session blend',
   },
 ] as const;

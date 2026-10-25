@@ -1,0 +1,19 @@
+{
+  "version": "logistic.v0-fit-stub",
+  "bias": -0.145,
+  "weights": {
+    "following": 1.4,
+    "affinity": 0.9,
+    "itemStats": 0.55,
+    "fresh": 0.45,
+    "bubble": 0.34,
+    "knn": 0.7,
+    "mediaTopic": 0.4,
+    "ann": 0.16997843595718543,
+    "coldStart": 0.2,
+    "opportunity": 0.35,
+    "session": 0.5,
+    "muted": -3
+  },
+  "trainedAt": "2026-10-25T18:55:20.617Z"
+}
