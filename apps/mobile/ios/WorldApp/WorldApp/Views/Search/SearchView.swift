@@ -497,32 +497,60 @@ struct SearchView: View {
     @ViewBuilder
     private func contentThumbnail(_ post: CountryPost) -> some View {
         let sparkLike = post.hasVideo && (post.isReel || PlayPlatformBridge.isSparkFeedCard(post))
-        let w: CGFloat = sparkLike ? 64 : (post.hasVideo ? 104 : 64)
-        let h: CGFloat = sparkLike ? 96 : 64
 
         Group {
-            if post.hasVideo {
+            if sparkLike {
+                // True 9:16 Spark portrait — never the Hubs 16:9 card frame.
+                Color.clear
+                    .frame(width: 72, height: 128)
+                    .overlay {
+                        VideoThumbnailView(
+                            post: post,
+                            maxPixelSize: 420,
+                            contentMode: .fill,
+                            showsPlayIcon: true,
+                            extractFrameIfNeeded: false,
+                            placeholder: AnyView(
+                                Theme.canvasDeep.overlay {
+                                    Image(systemName: "play.fill")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(.white.opacity(0.85))
+                                }
+                            )
+                        )
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(Theme.border.opacity(0.45), lineWidth: 0.5)
+                    )
+            } else if post.hasVideo {
                 YouTubeVideoThumbnail(
                     post: post,
                     maxPixelSize: 360,
                     showsPlayIcon: true,
                     frameStyle: .card,
+                    embedsFrame: false,
                     extractFrameIfNeeded: false,
                     showsHubBadge: false
                 )
+                .frame(width: 112, height: 63)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             } else if let url = post.feedImageURL ?? post.resolvedImageURL {
                 CachedAsyncImage(url: url, maxPixelSize: 160, contentMode: .fill)
+                    .frame(width: 64, height: 64)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             } else {
                 Theme.canvasMuted
+                    .frame(width: 64, height: 64)
                     .overlay {
                         Image(systemName: "text.alignleft")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(Theme.inkMuted)
                     }
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
         }
-        .frame(width: w, height: h)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private func loadMoreRow(title: String, busy: Bool, action: @escaping () -> Void) -> some View {
