@@ -32,6 +32,7 @@ Panels: overview, live ledger/seed, architecture wall, gap matrix, Masquerade ro
 | `anonymous/feed.ts` | Returns `mind` meta (`requestId`, `modelVersion`, `deliveryPolicy`) |
 | `remote-config.ts` | Exposes `mind_ledger_enabled` |
 | `scripts/mind-delivery-concurrency-check.ts` | MIND-008 concurrent reserve test |
+| `scripts/mind-offline-eval.ts` | §18 offline metrics over `recommendation_decisions` |
 
 ## Verification run locally
 
@@ -53,10 +54,11 @@ npx tsc -p tsconfig.json --noEmit
 - **phase1.v7** — Purpose / surface catalog on Overview (§1 shipped; Phase 1 matrix complete)
 - **phase2.v1** — §7 Media understanding Phase 2a: `mind_content_features` from `video_transcripts`, soft topic boost, `/mind` media panel
 - **phase2.v2** — §7 Phase 2b: Voyage `voyage-4-lite` title/body embeddings → `mind_content_embeddings` (pgvector), soft ANN lane `home_ann_title` / rank `ann` boost
+- **phase3.v1** — Phase 3a (MIND-015 light + §18 stub): cold-start prior blend in `rank.service` (`server.v5-cold-start`, eventsCounted &lt; 25 → country/hub/popular/fresh/ANN priors; lane `home_cold_start`); offline eval harness `scripts/mind-offline-eval.ts`; ADR 0004 (Phase 5 scale gate) + ADR 0005 (Phase 4 surfaces scaffold)
 
 ## Not in this pass
 
-Trained rankers, ads, GraphQL FeedItem, Guardian depth, full long-form STT catalog. Shown as roadmap on `/mind`.
+Trained rankers (MIND-016), session re-rank (017), ads, GraphQL FeedItem, Guardian depth (024), hybrid search (020), full long-form STT catalog. Phase 4–5 scaffolded as ADRs; shown as roadmap on `/mind`.
 
 ## Production
 

@@ -58,10 +58,18 @@ export type RankResponse = {
     transcriptReady?: number;
     topicHits?: number;
     annHits?: number;
+    /** MIND-015 light: viewer had <25 interest events. */
+    coldStart?: boolean;
+    /** Items that received an explicit cold-start prior boost. */
+    coldStartHits?: number;
   };
 };
 
-const POLICY_VERSION = 'server.v4-social-mmr';
+/** Phase 3a cold-start + social MMR (MIND-015 light). */
+const POLICY_VERSION = 'server.v5-cold-start';
+
+/** Interest events below this → cold-start prior blend (country/hub/popular/ANN). */
+export const COLD_START_EVENT_THRESHOLD = 25;
 
 /** Short-lived rank cache — same candidate set within ~20s reuses work (feed soft-rerank). */
 const RANK_CACHE_TTL_MS = 20_000;
@@ -144,6 +152,8 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
         transcriptReady: 0,
         topicHits: 0,
         annHits: 0,
+        coldStart: true,
+        coldStartHits: 0,
       },
     };
   }
@@ -171,30 +181,39 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
   );
   const uuidCandidates = candidateIds.filter(isUuid);
 
-  // Parallel feature reads (affinity + KNN bubbles + neighbor collab + media §7)
+  // Parallel feature reads (affinity + KNN bubbles + neighbor collab + media §7 + profile country)
   const publicSurface =
     surface === 'home_for_you' ||
     surface === 'hubs_for_you' ||
     surface === 'sparks' ||
     surface === 'explore' ||
     surface === 'home_following';
-  const [affinityMap, itemStats, postMeta, hidden, bubbles, neighborBoosts, mediaFeatures] =
-    await Promise.all([
-      loadCreatorAffinity(entityId),
-      loadItemStats(uuidCandidates),
-      loadPostMeta(uuidCandidates),
-      loadHiddenContent(entityId),
-      loadInterestBubbles(entityId),
-      loadNeighborEngagementBoosts(entityId),
-      publicSurface
-        ? loadMediaFeaturesForPosts(uuidCandidates)
-        : Promise.resolve(
-            new Map<
-              string,
-              { topics: string[]; transcriptReady: boolean; language: string | null }
-            >()
-          ),
-    ]);
+  const [
+    affinityMap,
+    itemStats,
+    postMeta,
+    hidden,
+    bubbles,
+    neighborBoosts,
+    mediaFeatures,
+    viewerCountry,
+  ] = await Promise.all([
+    loadCreatorAffinity(entityId),
+    loadItemStats(uuidCandidates),
+    loadPostMeta(uuidCandidates),
+    loadHiddenContent(entityId),
+    loadInterestBubbles(entityId),
+    loadNeighborEngagementBoosts(entityId),
+    publicSurface
+      ? loadMediaFeaturesForPosts(uuidCandidates)
+      : Promise.resolve(
+          new Map<
+            string,
+            { topics: string[]; transcriptReady: boolean; language: string | null }
+          >()
+        ),
+    loadViewerCountry(entityId),
+  ]);
 
   // Phase 2b ANN — after bubbles so we can bias the query; never blocks ranking hard.
   let annIdSet = new Set<string>();
@@ -230,11 +249,13 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
   };
 
   const scored: Scored[] = [];
-  const coldStart = !bubbles || bubbles.eventsCounted < 25;
+  const coldStart =
+    !bubbles || bubbles.eventsCounted < COLD_START_EVENT_THRESHOLD;
   const viewerTopics = bubbles?.hubs ? [...bubbles.hubs.keys()] : [];
   let transcriptReadyHits = 0;
   let topicHitCount = 0;
   let annHitCount = 0;
+  let coldStartHits = 0;
   for (const id of scorePool) {
     if (hidden.has(id)) continue;
 
@@ -242,6 +263,7 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
     const authorId = meta?.authorId ?? null;
     const sources: string[] = [];
     let score = 0.01;
+    let gotColdPrior = false;
 
     // Following relationship
     if (authorId && following.has(authorId)) {
@@ -249,32 +271,40 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
       sources.push('following');
     }
 
-    // Personalized creator affinity
+    // Personalized creator affinity (sparse for cold-start users — still apply when present)
     if (authorId && affinityMap.has(authorId)) {
       const a = affinityMap.get(authorId)!;
-      score += Math.max(-2, Math.min(4, a * 2.2));
+      const weight = coldStart ? 1.4 : 2.2;
+      score += Math.max(-2, Math.min(4, a * weight));
       sources.push('affinity');
     }
 
-    // Global item quality (cold start / social proof)
+    // Global item quality (cold start / social proof) — heavier when cold
     const st = itemStats.get(id);
     if (st) {
-      score += Math.max(-1.5, Math.min(3.2, st * 1.15));
-      sources.push('item_stats');
+      const weight = coldStart ? 1.55 : 1.15;
+      score += Math.max(-1.5, Math.min(3.6, st * weight));
+      sources.push(coldStart ? 'cold_prior_quality' : 'item_stats');
+      if (coldStart) gotColdPrior = true;
     }
 
-    // Freshness from feed_at
+    // Freshness from feed_at — cold users lean newer editorial inventory
     if (meta?.createdAt) {
       const ageH = (Date.now() - meta.createdAt.getTime()) / 3_600_000;
       if (ageH < 24) {
-        score += 1.2 - ageH / 24;
-        sources.push('fresh');
+        score += (coldStart ? 1.8 : 1.2) - ageH / 24;
+        sources.push(coldStart ? 'cold_prior_fresh' : 'fresh');
+        if (coldStart) gotColdPrior = true;
       } else if (ageH < 168) {
-        score += 0.3;
+        score += coldStart ? 0.55 : 0.3;
+        if (coldStart) {
+          sources.push('cold_prior_fresh');
+          gotColdPrior = true;
+        }
       }
     }
 
-    // Interest bubbles — soft boost in-bubble; soft demote outside (never hard-drop).
+    // Interest bubbles — warm: soft boost/demote. Cold: country/hub priors only (no outside demote).
     const bubble = bubbleMatchScore(bubbles, {
       authorId,
       countryCode: meta?.countryCode,
@@ -290,14 +320,33 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
         score -= 1.15; // exploration still possible after demote
         sources.push('outside_bubble');
       }
+    } else {
+      // MIND-015 light: profile country + any sparse hub keys as soft priors.
+      const postCc = (meta?.countryCode ?? '').trim().toLowerCase();
+      if (viewerCountry && postCc && postCc === viewerCountry) {
+        score += 1.1;
+        sources.push('cold_prior_country');
+        gotColdPrior = true;
+      }
+      const hub = (meta?.hubSlug ?? '').trim().toLowerCase();
+      if (hub && bubbles?.hubs.has(hub)) {
+        score += 0.85;
+        sources.push('cold_prior_hub');
+        gotColdPrior = true;
+      } else if (bubble.reasons.includes('country_bubble') || bubble.reasons.includes('hub_bubble')) {
+        score += bubble.score * 1.2;
+        sources.push('cold_prior_bubble');
+        gotColdPrior = true;
+      }
+      sources.push('cold_start');
     }
 
-    // KNN collaborative: content / creators neighbors liked
+    // KNN collaborative: content / creators neighbors liked (skip hard rely when cold)
     const knnContent = neighborBoosts.content.get(id);
-    if (knnContent) {
+    if (knnContent && !coldStart) {
       score += Math.min(2.5, knnContent * 0.85);
       sources.push('knn');
-    } else if (authorId && neighborBoosts.creators.has(authorId)) {
+    } else if (authorId && neighborBoosts.creators.has(authorId) && !coldStart) {
       score += Math.min(1.8, (neighborBoosts.creators.get(authorId) ?? 0) * 0.55);
       sources.push('knn_creator');
     }
@@ -318,11 +367,12 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
       }
     }
 
-    // Phase 2b — soft ANN boost when candidate is near viewer interest embedding.
+    // Phase 2b — soft ANN boost; Phase 3a cold-start leans harder on ANN exploration.
     if (annIdSet.has(id)) {
-      score += 1.35;
-      sources.push('ann');
+      score += coldStart ? 1.85 : 1.35;
+      sources.push(coldStart ? 'cold_prior_ann' : 'ann');
       annHitCount += 1;
+      if (coldStart) gotColdPrior = true;
     }
 
     // Surface policy tweaks
@@ -345,6 +395,7 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
     }
 
     if (sources.length === 0) sources.push('explore');
+    if (gotColdPrior) coldStartHits += 1;
 
     scored.push({ id, score, sources, authorId });
   }
@@ -379,6 +430,8 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
     transcriptReady: transcriptReadyHits,
     topicHits: topicHitCount,
     annHits: annHitCount,
+    coldStart,
+    coldStartHits,
   };
 
   // Fire-and-forget warehouse log + optional affinity refresh
@@ -419,6 +472,25 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
   }
 
   return response;
+}
+
+/** Profile country for cold-start geographic prior (MIND-015 light). */
+async function loadViewerCountry(entityId: string): Promise<string | null> {
+  if (!isUuid(entityId)) return null;
+  try {
+    const { rows } = await pool.query<{ country_code: string | null }>(
+      `
+      select lower(nullif(trim(country_code), '')) as country_code
+      from public.profiles
+      where user_id = $1::uuid
+      limit 1
+      `,
+      [entityId]
+    );
+    return rows[0]?.country_code ?? null;
+  } catch {
+    return null;
+  }
 }
 
 async function loadCreatorAffinity(entityId: string): Promise<Map<string, number>> {
@@ -632,6 +704,8 @@ async function logDecision(args: {
     transcriptReady?: number;
     topicHits?: number;
     annHits?: number;
+    coldStart?: boolean;
+    coldStartHits?: number;
   };
 }): Promise<void> {
   const uuidItems = args.items.filter((i) => isUuid(i.id));

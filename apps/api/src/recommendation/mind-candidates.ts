@@ -1,9 +1,9 @@
 /**
  * MIND §9 — Candidate generation lanes (Phase 1).
  *
- * Handbook wants many retrieval sources; Matterya Phase 1 ships explicit
- * multi-lane retrieval per surface with documented budgets. ANN / collab
- * remain Phase 2+.
+ * Handbook wants many retrieval sources; Matterya ships explicit multi-lane
+ * retrieval per surface with documented budgets. Phase 2b adds ANN;
+ * Phase 3a adds cold-start prior blend (MIND-015 light).
  */
 
 export type CandidateLaneId =
@@ -12,6 +12,7 @@ export type CandidateLaneId =
   | 'home_hub'
   | 'home_image'
   | 'home_ann_title'
+  | 'home_cold_start'
   | 'hubs_slug_rotate'
   | 'masquerade_fresh'
   | 'masquerade_soft_recycle'
@@ -55,6 +56,13 @@ export const MIND_CANDIDATE_LANES: CandidateLaneDef[] = [
     surface: 'home_for_you',
     label: 'Home · ANN title/body',
     description: 'Phase 2b pgvector nearest neighbors (Voyage voyage-4-lite).',
+  },
+  {
+    id: 'home_cold_start',
+    surface: 'home_for_you',
+    label: 'Home · Cold-start priors',
+    description:
+      'Phase 3a (MIND-015 light): country/hub priors + popular recent + ANN when eventsCounted < 25.',
   },
   {
     id: 'hubs_slug_rotate',

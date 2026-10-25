@@ -8,9 +8,10 @@ Human twin: `docs/matterya/for-humans/08-phases-3-4-5.md`.
 |---|---|---|
 | 0–1 | Reliable feed | shipped (`mind.phase1.*`) |
 | 2 | Content intelligence | 2a+2b shipped (`mind.phase2.v2`) |
-| 3 | Adaptive intelligence | **not built** |
-| 4 | Other surfaces | **not built** (partial search/Guardian exist outside MIND tickets) |
-| 5 | Scale | **not built** — wait for measured need |
+| 3a | Cold-start + eval | **shipped** (`mind.phase3.v1` / `server.v5-cold-start`) |
+| 3b | Trained ranker · session · controls | **not built** (MIND-016–019) |
+| 4 | Other surfaces | **scaffold** (ADR 0005); search/Guardian partial outside tickets |
+| 5 | Scale | **gated** (ADR 0004) — wait for measured need |
 
 ## Phase 3 tickets → code touchpoints
 | ID | Likely modules |
@@ -34,5 +35,12 @@ Human twin: `docs/matterya/for-humans/08-phases-3-4-5.md`.
 ## Phase 5
 ADR-required: feature store, ANN cluster, serving autoscaling. Do not start without p95/QPS evidence.
 
-## Recommended first PR for Phase 3
-**MIND-015 light + §18 eval stub:** cold-start candidate blend documented + offline metric script against logged `recommendation_decisions`. No trained model yet.
+## Phase 3a shipped (this pass)
+**MIND-015 light + §18 eval stub**
+- Rank: `apps/api/src/recommendation/rank.service.ts` — cold-start priors when `eventsCounted < 25` (country/hub/popular/fresh/ANN); `featureHits.coldStart` / `coldStartHits` logged on decisions.
+- Lane catalog: `home_cold_start` in `mind-candidates.ts`.
+- Eval: `cd apps/api && npx tsx scripts/mind-offline-eval.ts` (optional `LOOKBACK_HOURS`, `SURFACE`).
+- Policy: `MIND_POLICY_VERSION=mind.phase3.v1`, rank `server.v5-cold-start`.
+- ADRs: `docs/mind/adr/0004-phase5-scale-after-measured-need.md`, `0005-phase4-surfaces-scaffold.md`.
+
+Next Phase 3 work: MIND-019 interest-control hooks → MIND-016 trained ranker behind a flag (after offline lift).

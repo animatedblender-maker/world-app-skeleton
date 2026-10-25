@@ -12,19 +12,19 @@ Status legend: **shipped** · **partial** · **missing** (roadmap)
 | 6 | Masquerade isolation | shipped | Live proofs + surface namespace guards |
 | 7 | Media understanding | shipped | Phase 2a features + Phase 2b Voyage/`pgvector` title embeddings + ANN |
 | 8 | Interest memory / features | shipped | Personality + creator affinity + featureHits on decisions |
-| 9 | Candidate generation | shipped | Multi-lane retrieval + mix meta + inventory |
-| 10 | Rank + diversity | shipped | MMR + family caps on Home/Hubs/Masquerade |
+| 9 | Candidate generation | shipped | Multi-lane retrieval + mix meta + inventory + `home_cold_start` |
+| 10 | Rank + diversity | shipped | MMR + family caps; Phase 3a cold-start priors (`server.v5-cold-start`) |
 | 11 | Exposure ledger | shipped | `feed_video_delivery` on all For You surfaces |
-| 12 | Search / world / rooms | partial | Search exists; world map later |
-| 13 | Guardian | partial | Reports / moderation queues |
-| 14 | Ads / economy | missing | Phase 4+ |
+| 12 | Search / world / rooms | partial | Search exists; Phase 4 MIND-020 hybrid (ADR 0005) |
+| 13 | Guardian | partial | Reports / moderation queues; Phase 4 MIND-024 deepen |
+| 14 | Ads / economy | missing | Phase 4+ product gate |
 | 15 | GraphQL FeedItem | missing | REST instead (ADR 0002); MIND-006 metadata |
 | 16 | Schema | partial | Delivery migration applied |
 | 17 | Workers | partial | Pipeline + frame0; not full MIND workers |
-| 18 | ML eval | missing | Phase 2–3 |
+| 18 | ML eval | partial | Phase 3a stub `scripts/mind-offline-eval.ts`; trained ranker later |
 | 19 | Observability | shipped | `/mind` events, decisions, ledger, seed |
 | 20 | Tests | partial | MIND-008 concurrency |
-| 21 | Roadmap | shipped | Documented on admin page |
+| 21 | Roadmap | shipped | Documented on admin page; ADR 0004 Phase 5 gate |
 
 ## Phase 1 tickets
 

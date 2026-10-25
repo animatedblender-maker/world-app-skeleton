@@ -1,7 +1,7 @@
 # MIND Phases 3 → 4 → 5 (handbook plan)
 
-**Where we are:** Phase 0–1 and Phase 2a/2b are built.  
-**Next:** Phase 3 → 4 → 5 from the Matterya MIND Engineering Handbook (§21).  
+**Where we are:** Phase 0–1, Phase 2a/2b, and **Phase 3a** (cold-start + offline eval) are built.  
+**Next:** Phase 3b (trained ranker / interest controls) → Phase 4 slices → Phase 5 only after measured need.  
 **Rule:** finish each phase’s **gate** before jumping ahead. Phase 5 only after measured need.
 
 ---
@@ -20,11 +20,12 @@
 
 **Gate (handbook):** generalization, fairness, satisfaction, and cost proven — not just “model exists.”
 
-**Practical first slice (recommended start):**
-1. Cold-start policy using country/hub priors + Voyage ANN (MIND-015 light)  
-2. Offline eval harness (§18) so we can measure wins (MIND-014 leftover → 3)  
-3. Expand People dossier → interest controls / explainability hooks (MIND-019 light)  
-4. Only then a trained ranker (MIND-016) behind a flag  
+**Phase 3a done:** cold-start priors + offline eval script.  
+
+**Practical next slices:**
+1. Expand People dossier → interest controls / explainability hooks (MIND-019 light)  
+2. Trained ranker (MIND-016) behind a flag after offline lift  
+3. Session features / creator diversification (MIND-017 / 018) when traffic supports them  
 
 ---
 

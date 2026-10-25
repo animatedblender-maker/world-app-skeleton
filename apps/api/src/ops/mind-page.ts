@@ -257,7 +257,7 @@ function mindHtml(): string {
             <h3>Phase 1 + 2a</h3>
             <ul class="help">
               <li>Gap matrix §1–§6, §7 media (2a), §8–§11, §19 are <strong>shipped</strong>.</li>
-              <li>§14 ads, §15 GraphQL, §18 ML eval remain roadmap; pgvector ANN is Phase 2b.</li>
+              <li>§14 ads / §15 GraphQL remain roadmap. §18 eval stub + Phase 3a cold-start shipped; Phase 4–5 ADRs 0004/0005.</li>
             </ul>
           </div>
         </div>
@@ -433,9 +433,10 @@ function mindHtml(): string {
           <div class="stat"><div class="n" style="font-size:1rem">Phase 0+1</div><div class="l">Audit · ledger · admin · REST meta</div><span class="pill ok">shipped</span></div>
           <div class="stat"><div class="n" style="font-size:1rem">Phase 2a</div><div class="l">Transcript features live</div><span class="pill ok">shipped</span></div>
           <div class="stat"><div class="n" style="font-size:1rem">Phase 2b</div><div class="l">Voyage title embeddings · pgvector ANN</div><span class="pill ok">phase2.v2</span></div>
-          <div class="stat"><div class="n" style="font-size:1rem">Phase 3</div><div class="l">Trained ranker · experiments</div><span class="pill">not built</span></div>
-          <div class="stat"><div class="n" style="font-size:1rem">Phase 4</div><div class="l">Search · world · Guardian depth</div><span class="pill">not built</span></div>
-          <div class="stat"><div class="n" style="font-size:1rem">Phase 5</div><div class="l">Scale only after measured need</div><span class="pill">not built</span></div>
+          <div class="stat"><div class="n" style="font-size:1rem">Phase 3a</div><div class="l">Cold-start priors · offline eval</div><span class="pill ok">phase3.v1</span></div>
+          <div class="stat"><div class="n" style="font-size:1rem">Phase 3b</div><div class="l">Trained ranker · session · controls</div><span class="pill">not built</span></div>
+          <div class="stat"><div class="n" style="font-size:1rem">Phase 4</div><div class="l">Search hybrid · Guardian (ADR 0005)</div><span class="pill">scaffold</span></div>
+          <div class="stat"><div class="n" style="font-size:1rem">Phase 5</div><div class="l">Scale after measured need (ADR 0004)</div><span class="pill">gated</span></div>
         </div>
       </div>
     </section>
@@ -450,12 +451,12 @@ const GAPS = [
   ['6','Masquerade isolation','shipped','Live proofs + surface namespace guards'],
   ['7','Media understanding','shipped','2a features + 2b Voyage/pgvector title embeddings'],
   ['8','Interest features','shipped','Personality + creator affinity + featureHits'],
-  ['9','Candidates','shipped','Multi-lane retrieval + mix meta + inventory'],
-  ['10','Rank + diversity','shipped','MMR + family caps (Home/Hubs/Masquerade)'],
+  ['9','Candidates','shipped','Multi-lane + home_cold_start (Phase 3a)'],
+  ['10','Rank + diversity','shipped','MMR + cold-start priors (server.v5-cold-start)'],
   ['11','Exposure ledger','shipped','feed_video_delivery on all For You surfaces'],
-  ['14','Ads / economy','missing','Phase 4+'],
+  ['14','Ads / economy','missing','Phase 4+ product gate'],
   ['15','GraphQL FeedItem','missing','REST (ADR 0002)'],
-  ['18','ML evaluation','missing','Phase 2–3'],
+  ['18','ML evaluation','partial','mind-offline-eval.ts stub; trained ranker later'],
   ['19','Observability','shipped','Live events, decisions, ledger, seed'],
 ];
 
