@@ -514,12 +514,11 @@ actor WhisperKitEngine {
 
     func transcribe(audioPath: String) async throws -> [TranscriptionResult] {
         let pipe = try await ensureReady()
-        let decode = liveDecodeOptions()
-        let input = AudioInputOptions(audioLoadingMode: .incremental)
+        // Use the decodeOptions-only overload — works across WhisperKit 0.12–0.18
+        // (audioInputOptions was added later; default is full-file load).
         return try await pipe.transcribe(
             audioPath: audioPath,
-            audioInputOptions: input,
-            decodeOptions: decode,
+            decodeOptions: liveDecodeOptions(),
             callback: nil
         )
     }
