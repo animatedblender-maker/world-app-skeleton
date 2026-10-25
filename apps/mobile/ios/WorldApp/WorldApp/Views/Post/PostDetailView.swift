@@ -104,13 +104,25 @@ struct PostDetailView: View {
             edgeToEdge: true,
             showsAuthorHeader: false,
             showsAuthorInJournal: true,
+            // Search → Post leaves navigationPath non-empty; home autoplay is off there.
+            autoplaySurface: .postDetail,
             commentsInitiallyExpanded: true,
             onLikeToggle: { Task { await toggleLike(currentPost) } },
             onOpenPost: {},
-            onOpenVideo: currentPost.hasVideo && !currentPost.isReel
-                ? { appState.openPost(currentPost) }
+            onOpenVideo: currentPost.hasVideo && !currentPost.isReel && !PlayPlatformBridge.isSparkFeedCard(currentPost)
+                ? {
+                    if PlayPlatformBridge.isHubFeedCardVideo(currentPost)
+                        || PlayPlatformBridge.isHubOriginShare(currentPost)
+                        || PlayPlatformBridge.isHubCatalogContent(currentPost) {
+                        appState.startHubPlayback(currentPost, expanded: true)
+                    } else {
+                        // Stay on detail — autoplay surface already owns inline play; tap re-asserts.
+                        FeedVideoFocus.shared.resetAll()
+                        NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
+                    }
+                }
                 : nil,
-            onOpenReel: currentPost.isReel
+            onOpenReel: (currentPost.isReel || PlayPlatformBridge.isSparkFeedCard(currentPost))
                 ? { appState.openReelsViewer(startingPost: currentPost) }
                 : nil,
             onPostDeleted: { _ in handlePostDeleted() },

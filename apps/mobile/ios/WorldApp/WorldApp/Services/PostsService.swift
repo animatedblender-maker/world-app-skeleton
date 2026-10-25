@@ -1486,9 +1486,27 @@ final class PostsService {
         return false
     }
 
+    /// Short-lived seeds from Search / deep links so PostDetail paints before network.
+    private var detailSeedByID: [String: CountryPost] = [:]
+
+    func seedDetailPost(_ post: CountryPost) {
+        let id = post.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return }
+        detailSeedByID[id] = post
+        if detailSeedByID.count > 64 {
+            let drop = detailSeedByID.count - 48
+            for key in detailSeedByID.keys.prefix(drop) {
+                detailSeedByID.removeValue(forKey: key)
+            }
+        }
+    }
+
     private func cachedPost(id: String) -> CountryPost? {
         let needle = id.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !needle.isEmpty else { return nil }
+        if let seeded = detailSeedByID[needle] {
+            return seeded
+        }
         // Live feed / hubs / sparks first — ContentCache alone misses deep rows + thin poison.
         if let hit = HomeFeedStore.shared.posts.first(where: {
             $0.id == needle || $0.sharedPostID == needle

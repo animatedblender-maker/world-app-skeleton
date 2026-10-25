@@ -6,23 +6,38 @@ struct SearchView: View {
     @State private var query = ""
     @State private var profiles: [Profile] = []
     @State private var content: [CountryPost] = []
-    @State private var isSearching = false
+    @State private var isSearchingPeople = false
+    @State private var isSearchingContent = false
     @State private var searchError: String?
     @State private var searchGeneration = 0
+    @State private var history = SearchHistoryStore.shared
 
     private var normalizedQuery: String {
         query.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var isSearching: Bool { isSearchingPeople || isSearchingContent }
+
+    private var historySuggestions: [String] {
+        history.suggestions(matching: normalizedQuery)
     }
 
     var body: some View {
         VStack(spacing: 0) {
             searchField
 
-            if isSearching {
-                ProgressView().tint(Theme.accentBright).padding()
+            if normalizedQuery.isEmpty {
+                if history.recent.isEmpty {
+                    emptyPrompt
+                } else {
+                    historyList(title: "Recent", queries: history.recent, showsClearAll: true)
+                }
+            } else if isSearching && profiles.isEmpty && content.isEmpty {
+                if !historySuggestions.isEmpty {
+                    historyList(title: "Recent", queries: historySuggestions, showsClearAll: false)
+                }
+                ProgressView().tint(Theme.ink).padding()
                 Spacer()
-            } else if normalizedQuery.isEmpty {
-                emptyPrompt
             } else {
                 resultsList
             }
@@ -38,6 +53,10 @@ struct SearchView: View {
         .task {
             appState.searchPrefersCountries = false
         }
+        .onAppear {
+            // Returning to Search after a result open — quiet orphan Sparks / paused Hubs mini.
+            appState.silencePlaybackForSearchBrowse()
+        }
     }
 
     private var searchField: some View {
@@ -48,17 +67,24 @@ struct SearchView: View {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .foregroundStyle(Theme.ink)
-                .onSubmit { Task { await runSearch() } }
+                .submitLabel(.search)
+                .onSubmit {
+                    recordHistoryIfNeeded()
+                    Task { await runSearch(immediate: true) }
+                }
             if !query.isEmpty {
                 Button {
-                    query = ""
-                    profiles = []
-                    content = []
-                    searchError = nil
+                    clearQuery()
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(Theme.inkMuted)
                 }
+                .accessibilityLabel("Clear search")
+            }
+            if isSearching {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(Theme.inkMuted)
             }
         }
         .padding(14)
@@ -69,18 +95,8 @@ struct SearchView: View {
         )
         .shadow(color: Theme.ink.opacity(0.04), radius: 12, y: 4)
         .padding(Theme.pagePadding)
-        .onChange(of: query) { _, newValue in
-            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else {
-                profiles = []
-                content = []
-                searchError = nil
-                return
-            }
-            Task {
-                try? await Task.sleep(nanoseconds: 350_000_000)
-                if query == newValue { await runSearch() }
-            }
+        .onChange(of: query) { _, _ in
+            Task { await runSearch(immediate: false) }
         }
     }
 
@@ -93,18 +109,119 @@ struct SearchView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    private func historyList(title: String, queries: [String], showsClearAll: Bool) -> some View {
+        List {
+            Section {
+                ForEach(queries, id: \.self) { item in
+                    HStack(spacing: 12) {
+                        Button {
+                            applyHistoryQuery(item)
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "clock.arrow.circlepath")
+                                    .font(.subheadline)
+                                    .foregroundStyle(Theme.inkMuted)
+                                    .frame(width: 22)
+                                Text(item)
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundStyle(Theme.ink)
+                                    .lineLimit(1)
+                                Spacer(minLength: 0)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+
+                        Button {
+                            history.remove(item)
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(Theme.inkMuted)
+                                .frame(width: 28, height: 28)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Remove \(item) from search history")
+                    }
+                }
+            } header: {
+                HStack {
+                    Text(title)
+                    Spacer()
+                    if showsClearAll, !history.recent.isEmpty {
+                        Button("Clear") {
+                            history.clear()
+                        }
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.inkMuted)
+                        .textCase(nil)
+                    }
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(Theme.canvas)
+    }
+
     private var resultsList: some View {
         Group {
             if let searchError, profiles.isEmpty && content.isEmpty {
                 ContentUnavailableView("Search failed", systemImage: "magnifyingglass", description: Text(searchError))
-            } else if profiles.isEmpty && content.isEmpty {
-                ContentUnavailableView(
-                    "No results",
-                    systemImage: "text.magnifyingglass",
-                    description: Text("Try another person or keyword.")
-                )
+            } else if profiles.isEmpty && content.isEmpty && !isSearching {
+                VStack(spacing: 0) {
+                    if !historySuggestions.isEmpty {
+                        historyList(title: "Recent", queries: historySuggestions, showsClearAll: false)
+                            .frame(maxHeight: 220)
+                    }
+                    ContentUnavailableView(
+                        "No results",
+                        systemImage: "text.magnifyingglass",
+                        description: Text("Try another person or keyword.")
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             } else {
                 List {
+                    if !historySuggestions.isEmpty, normalizedQuery.count < 24 {
+                        Section("Recent") {
+                            ForEach(historySuggestions.prefix(5), id: \.self) { item in
+                                HStack(spacing: 12) {
+                                    Button {
+                                        applyHistoryQuery(item)
+                                    } label: {
+                                        HStack(spacing: 12) {
+                                            Image(systemName: "clock.arrow.circlepath")
+                                                .font(.subheadline)
+                                                .foregroundStyle(Theme.inkMuted)
+                                                .frame(width: 22)
+                                            Text(item)
+                                                .font(.subheadline.weight(.medium))
+                                                .foregroundStyle(Theme.ink)
+                                                .lineLimit(1)
+                                            Spacer(minLength: 0)
+                                        }
+                                        .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+
+                                    Button {
+                                        history.remove(item)
+                                    } label: {
+                                        Image(systemName: "xmark")
+                                            .font(.caption.weight(.bold))
+                                            .foregroundStyle(Theme.inkMuted)
+                                            .frame(width: 28, height: 28)
+                                            .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel("Remove \(item) from search history")
+                                }
+                            }
+                        }
+                    }
+
                     if !profiles.isEmpty {
                         Section("People") {
                             ForEach(profiles) { profile in
@@ -136,7 +253,8 @@ struct SearchView: View {
 
     private func contentRow(_ post: CountryPost) -> some View {
         Button {
-            appState.openPost(post)
+            recordHistoryIfNeeded()
+            appState.openSearchResult(post)
         } label: {
             HStack(alignment: .center, spacing: 12) {
                 contentThumbnail(post)
@@ -146,18 +264,11 @@ struct SearchView: View {
                         .font(.caption.weight(.bold))
                         .foregroundStyle(Theme.ink)
 
-                    if let headline = post.displayHeadline {
-                        Text(headline)
+                    let excerpt = post.displayExcerpt
+                    if !excerpt.isEmpty {
+                        Text(excerpt)
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(Theme.ink)
-                            .lineLimit(2)
-                    }
-
-                    let excerpt = post.displayExcerpt
-                    if !excerpt.isEmpty, !post.hasVideo {
-                        Text(excerpt)
-                            .font(.caption)
-                            .foregroundStyle(Theme.inkSecondary)
                             .lineLimit(2)
                     }
 
@@ -171,7 +282,7 @@ struct SearchView: View {
                             .font(.caption2)
                             .foregroundStyle(Theme.inkMuted)
                         if post.hasVideo {
-                            Text(post.isReel ? MatteryaCopy.spark : "Video")
+                            Text(post.isReel || PlayPlatformBridge.isSparkFeedCard(post) ? MatteryaCopy.spark : "Video")
                                 .font(.caption2.weight(.semibold))
                                 .foregroundStyle(Theme.inkMuted)
                         } else if post.hasImage {
@@ -190,10 +301,10 @@ struct SearchView: View {
 
     @ViewBuilder
     private func contentThumbnail(_ post: CountryPost) -> some View {
-        // Videos: eye-friendly 16:9 preview. Text/photo: compact square.
         if post.hasVideo {
-            let w: CGFloat = post.isReel ? 72 : 128
-            let h: CGFloat = post.isReel ? 128 : 72
+            let sparkLike = post.isReel || PlayPlatformBridge.isSparkFeedCard(post)
+            let w: CGFloat = sparkLike ? 72 : 128
+            let h: CGFloat = sparkLike ? 128 : 72
             YouTubeVideoThumbnail(
                 post: post,
                 maxPixelSize: 360,
@@ -223,6 +334,7 @@ struct SearchView: View {
     private func profileRow(_ profile: Profile) -> some View {
         HStack(spacing: 12) {
             Button {
+                recordHistoryIfNeeded()
                 appState.openPublicProfile(username: profile.username, userID: profile.userID)
             } label: {
                 HStack(spacing: 12) {
@@ -264,69 +376,95 @@ struct SearchView: View {
         }
     }
 
-    private func runSearch() async {
+    private func applyHistoryQuery(_ item: String) {
+        query = item
+        recordHistoryIfNeeded()
+        Task { await runSearch(immediate: true) }
+    }
+
+    private func clearQuery() {
+        query = ""
+        profiles = []
+        content = []
+        searchError = nil
+        searchGeneration += 1
+        isSearchingPeople = false
+        isSearchingContent = false
+        appState.silencePlaybackForSearchBrowse()
+    }
+
+    private func recordHistoryIfNeeded() {
         let trimmed = normalizedQuery
         guard !trimmed.isEmpty else { return }
+        history.record(trimmed)
+    }
+
+    private func runSearch(immediate: Bool) async {
+        let trimmed = normalizedQuery
+        guard !trimmed.isEmpty else {
+            profiles = []
+            content = []
+            searchError = nil
+            isSearchingPeople = false
+            isSearchingContent = false
+            return
+        }
+
+        if !immediate {
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            guard !Task.isCancelled else { return }
+            guard normalizedQuery == trimmed else { return }
+        } else {
+            history.record(trimmed)
+        }
 
         let generation = searchGeneration + 1
         searchGeneration = generation
-        isSearching = true
         searchError = nil
-        defer {
+        isSearchingPeople = true
+        isSearchingContent = true
+
+        // Progressive: paint People as soon as they arrive; Content follows.
+        async let peopleTask: Void = {
+            do {
+                let loaded = try await ProfileService.shared.searchProfiles(
+                    trimmed,
+                    limit: MatteryaSearchEngine.peopleLimit
+                )
+                guard searchGeneration == generation else { return }
+                profiles = loaded
+            } catch {
+                guard searchGeneration == generation else { return }
+                if profiles.isEmpty && content.isEmpty {
+                    searchError = error.localizedDescription
+                }
+                profiles = []
+            }
             if searchGeneration == generation {
-                isSearching = false
-            }
-        }
-
-        // Return values from concurrent tasks (do not mutate captured vars — Swift 6).
-        async let peopleOutcome: Result<[Profile], Error> = {
-            do {
-                return .success(
-                    try await ProfileService.shared.searchProfiles(
-                        trimmed,
-                        limit: MatteryaSearchEngine.peopleLimit
-                    )
-                )
-            } catch {
-                return .failure(error)
+                isSearchingPeople = false
             }
         }()
 
-        async let contentOutcome: Result<[CountryPost], Error> = {
+        async let contentTask: Void = {
             do {
-                return .success(
-                    try await PostsService.shared.searchPosts(
-                        trimmed,
-                        limit: MatteryaSearchEngine.contentLimit
-                    )
+                let loaded = try await PostsService.shared.searchPosts(
+                    trimmed,
+                    limit: MatteryaSearchEngine.contentLimit
                 )
+                guard searchGeneration == generation else { return }
+                content = loaded
             } catch {
-                return .failure(error)
+                guard searchGeneration == generation else { return }
+                content = []
+                if profiles.isEmpty {
+                    searchError = searchError ?? error.localizedDescription
+                }
+            }
+            if searchGeneration == generation {
+                isSearchingContent = false
             }
         }()
 
-        let peopleResult = await peopleOutcome
-        let contentResult = await contentOutcome
-        guard searchGeneration == generation else { return }
-
-        var errors: [String] = []
-        switch peopleResult {
-        case .success(let loaded):
-            profiles = loaded
-        case .failure(let error):
-            profiles = []
-            errors.append(error.localizedDescription)
-        }
-        switch contentResult {
-        case .success(let loaded):
-            content = loaded
-        case .failure(let error):
-            content = []
-            errors.append(error.localizedDescription)
-        }
-
-        if profiles.isEmpty && content.isEmpty, !errors.isEmpty {
-            searchError = errors.first
-        }
+        _ = await (peopleTask, contentTask)
     }
 }

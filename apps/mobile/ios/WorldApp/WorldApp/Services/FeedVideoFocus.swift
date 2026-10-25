@@ -6,6 +6,8 @@ import UIKit
 enum FeedAutoplaySurface: String, Equatable, Sendable {
     case home
     case profile
+    /// Pushed post detail (e.g. Search → Post) — autoplay the card video when visible.
+    case postDetail
 
     /// Whether this surface should elect an autoplay winner right now.
     @MainActor
@@ -32,6 +34,13 @@ enum FeedAutoplaySurface: String, Equatable, Sendable {
                     return false
                 }
             }
+        case .postDetail:
+            // Post pushed on Feed (Search / deep link) — path must include .post.
+            guard appState.selectedTab == .feed else { return false }
+            return appState.navigationPath.contains { destination in
+                if case .post = destination { return true }
+                return false
+            }
         }
     }
 }
@@ -48,6 +57,10 @@ final class FeedVideoFocus {
     private(set) var activeID: String?
     /// Token bumped whenever the winner changes so SwiftUI views can observe cheaply.
     private(set) var generation: Int = 0
+    /// Cold open: shell mounts under splash and elects a winner before UI settles —
+    /// AV audio kept playing while the main thread was frozen. Hold until unlock.
+    private(set) var autoplayUnlocked = false
+    private var unlockTask: Task<Void, Never>?
 
     private var ratios: [String: CGFloat] = [:]
     /// Last non-zero ratio per id — used to ignore single-frame 0 glitches from GeometryReader.
@@ -66,6 +79,32 @@ final class FeedVideoFocus {
     private let zeroGlitchTolerance = 6
 
     private init() {}
+
+    /// Call at process start / before splash dismiss — no audible feed autoplay yet.
+    func lockAutoplayForColdOpen() {
+        unlockTask?.cancel()
+        unlockTask = nil
+        autoplayUnlocked = false
+        // Always hard-silence — warm-pool players can exist before any election.
+        publish(winner: nil, previous: activeID, silenceImmediately: true)
+        MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
+    }
+
+    /// After splash dismissed + Feed painted: allow election after a short layout settle.
+    /// Prefer this over a fixed timer from splash start — unlock must not race a frozen MainActor.
+    func unlockAutoplayAfterFirstPaint(delayMs: UInt64 = 280) {
+        unlockTask?.cancel()
+        unlockTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
+            guard !Task.isCancelled else { return }
+            autoplayUnlocked = true
+            PerformanceTelemetry.milestoneFromLaunch("feed_autoplay_unlock", surface: "app")
+            scheduleRecompute()
+        }
+    }
+
+    /// True when Feed may create/warm AVPlayers (splash gone + unlock fired).
+    var allowsFeedAVWarm: Bool { autoplayUnlocked }
 
     /// Report geometry for a candidate. `ratio` is 0…1 (share of the player height on screen).
     private var recomputeScheduled = false
@@ -126,14 +165,29 @@ final class FeedVideoFocus {
     }
 
     /// Drop every candidate (tab switch / push). Cards re-report when their surface is live.
+    /// Always hard-silences AV — even when the map was already empty. Feed stays mounted
+    /// under Masquerade/Profile (opacity 0); an early return here left feed audio playing.
     func resetAll() {
+        clearElectionOnly()
+        MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
+    }
+
+    /// Clear the elected feed card without touching AV (continuous Hubs mini stays untouched).
+    /// Use on tab hops while hubs film is playing — `resetAll` was the hitch storm.
+    func clearElectionOnly() {
         silenceWhenEmptyTask?.cancel()
         silenceWhenEmptyTask = nil
-        guard !ratios.isEmpty || activeID != nil else { return }
+        let previous = activeID
         ratios.removeAll(keepingCapacity: true)
         stickyRatios.removeAll(keepingCapacity: true)
         zeroStreak.removeAll(keepingCapacity: true)
-        publish(winner: nil, previous: activeID, silenceImmediately: true)
+        if previous != nil {
+            activeID = nil
+            generation &+= 1
+            NotificationCenter.default.post(name: .feedVideoFocusDidChange, object: nil as String?)
+        } else {
+            activeID = nil
+        }
     }
 
     func isActive(id: String) -> Bool {
@@ -142,6 +196,14 @@ final class FeedVideoFocus {
 
     private func recompute() {
         let previous = activeID
+
+        // Cold open / splash: never elect — audio would run while UI is still settling.
+        guard autoplayUnlocked else {
+            if previous != nil {
+                publish(winner: nil, previous: previous, silenceImmediately: true)
+            }
+            return
+        }
 
         // Current winner holds while still ≥ keep band; yield when a challenger
         // has a quarter+ on screen and is clearly more visible.

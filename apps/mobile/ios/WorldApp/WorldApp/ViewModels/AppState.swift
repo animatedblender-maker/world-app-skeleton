@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Observation
 import SwiftUI
@@ -13,6 +14,13 @@ final class AppState {
     /// True when the main shell may appear. Returning users get this in `init`
     /// so they land on Feed immediately; bootstrap only warms data in background.
     var isSessionReady = false
+    /// Outer Matterya splash still covering the shell — suppress RootView's second splash.
+    var isLaunchSplashVisible = true
+    /// Masquerade pushed a Space/thread — hide the custom BottomTabBar so composers aren't covered.
+    var masqueradeHidesTabBar = false
+    /// Masquerade DMs: handle-only bubbles (no avatars) except the official @matterya account.
+    /// Set when opening chat from Masquerade Inbox; cleared for normal Messages opens.
+    var masqueradeChatChrome = false
     var contentLoadGeneration = 0
     var needsProfileSetup = false
     var currentProfile: Profile?
@@ -25,6 +33,10 @@ final class AppState {
     private var feedLeftAt: Date?
     /// Away from feed longer than this → reload a new mix on return (hide watched).
     private let feedStaleAwayInterval: TimeInterval = 5 * 60
+    private var hubsLeftAt: Date?
+    /// Away from Hubs longer than this → reshuffle For you. Match Feed (5m) so tab hops
+    /// and short leaves never kick thin-reload + Frame0 storms.
+    private let hubsStaleAwayInterval: TimeInterval = 5 * 60
     var selectedCountry: Country?
     var countryTab: CountryTab = .posts
     var globePanel: GlobePanel?
@@ -52,6 +64,11 @@ final class AppState {
     var searchPrefersCountries = false
     var openComposerOnCountryFeed = false
     var showCreateMenu = false
+    /// Masquerade (Anonymous mode) create sheet — Spaces / posts, separate from Matterya create.
+    var showMasqueradeCreateMenu = false
+    var showMasqueradeCreateSpace = false
+    /// Pick a Space, join if needed, then open the post composer.
+    var showMasqueradeCreatePost = false
     var activeCreateSheet: CreateContentSheet?
     var composerCountry: Country?
     var storyGroups: [StoryGroup] = []
@@ -101,10 +118,15 @@ final class AppState {
     // MARK: - Global hub continuous playback (survives tabs + minimize)
     /// Active long-form hubs video. Owned by `GlobalHubPlaybackLayer` (single AVPlayer).
     var hubPlaybackPost: CountryPost?
+    /// Continue watching: absolute seconds to seek once the continuous player is ready.
+    /// Cleared after a successful resume seek. Survives warm-pool claim races.
+    var hubPlaybackForcedResumeSeconds: Double = 0
     /// `true` = full watch stage on Hubs; `false` = mini player above the tab bar (any tab).
     var hubPlaybackExpanded = false
     var hubPlaybackPlaying = true
     var hubPlaybackMuted = false
+    /// YouTube-style playback speed for the continuous Hubs player (0.5x…2x).
+    var hubPlaybackRate: Float = 1.0
     /// 0…1 while user is pulling the continuous player down to mini.
     /// Watch page chrome (title, comments, related) hides instantly when > 0.
     var hubPlaybackPullProgress: CGFloat = 0
@@ -334,7 +356,9 @@ final class AppState {
             feedLeftAt = Date()
             // Lock this open's head so the next cold reshape demotes it.
             HomeFeedStore.shared.noteSessionPaused()
-            return
+        }
+        if old == .hubs, new != .hubs {
+            hubsLeftAt = Date()
         }
         if new == .feed, old != .feed {
             // Only reshuffle after a real away — quick tab hops were starving/reloading the feed.
@@ -353,10 +377,17 @@ final class AppState {
             }
             feedLeftAt = nil
         }
-        // Every Hubs tab open → new For you mix (server session + client rank).
+        // Hubs: reshuffle only after a real away — every-hop reload froze tab navigation.
         // Skip while a hubs video is open/minimized so expand/morph stays smooth.
         if new == .hubs, old != .hubs, hubPlaybackPost == nil {
-            hubsFreshSessionToken += 1
+            let away = hubsLeftAt.map { Date().timeIntervalSince($0) } ?? hubsStaleAwayInterval
+            if away >= hubsStaleAwayInterval {
+                #if DEBUG
+                print("[Hubs] away \(Int(away))s ≥ \(Int(hubsStaleAwayInterval))s → fresh session")
+                #endif
+                hubsFreshSessionToken += 1
+            }
+            hubsLeftAt = nil
         }
     }
 
@@ -395,12 +426,11 @@ final class AppState {
 
     private func registerPushInBackground() {
         Task {
+            // Single pass — duplicate ensureToken/sync stampeded “Registered voip/alert” on open.
             VoIPPushService.shared.bootstrap()
             await VoIPPushService.shared.ensureToken()
-            await PushNotificationService.shared.syncWithServer(force: true)
             await PushNotificationService.shared.registerForRemoteNotificationsIfAuthorized()
-            await VoIPPushService.shared.ensureToken()
-            await PushNotificationService.shared.syncWithServer(force: true)
+            await PushNotificationService.shared.syncWithServer(force: false)
         }
     }
 
@@ -423,25 +453,7 @@ final class AppState {
             async let stories: Void = { await refreshStories() }()
             _ = await (stats, saved, stories)
         }
-        // Warm a *light* Hubs catalog long after open — never compete with feed first paint.
-        Task(priority: .background) {
-            try? await Task.sleep(nanoseconds: 6_000_000_000)
-            guard currentProfile != nil else { return }
-            if PostsService.shared.hubsSessionIsWarm(minLongForm: 12) { return }
-            if ContentCache.shared.isFresh(.livingVideos),
-               let cached = ContentCache.shared.posts(for: .livingVideos),
-               cached.filter({ !$0.isReel }).count >= 8 {
-                PostsService.shared.rememberHubsSessionCatalog(cached)
-                return
-            }
-            _ = await PostsService.shared.loadPlayCatalog(
-                globalLimit: 16,
-                forceRefresh: false,
-                viewerCountry: currentProfile?.countryCode,
-                followingIDs: followingIDs,
-                fast: true
-            )
-        }
+        // Hubs catalog warms only when the Hubs tab is opened — never on Feed cold open.
     }
 
     func refreshProfile() async {
@@ -1147,10 +1159,13 @@ final class AppState {
 
     /// Open a chat **instantly**. Optional `seed` avoids any network wait / "Opening chat…".
     /// Hubs mini player keeps running (only collapses expanded → mini).
-    func openConversation(id: String, seed: Conversation? = nil) {
+    /// - Parameter masqueradeChrome: Masquerade Inbox opens — handle-only bubbles, avatar only for @matterya.
+    func openConversation(id: String, seed: Conversation? = nil, masqueradeChrome: Bool = false) {
         pendingConversationID = nil
         let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+
+        masqueradeChatChrome = masqueradeChrome
 
         // Seed cache so ConversationRouteView paints on the same frame (no spinner).
         if let seed {
@@ -1309,13 +1324,26 @@ final class AppState {
         // Feed card → hubs: sync-export live buffer mid-clip, then claim in the same runloop.
         let presentation = PlayPlatformBridge.hubWatchPresentation(for: watchPost)
         let handoffIDs = [watchPost.id, presentation.id]
-        markContinuePlayback(for: handoffIDs)
+        // Ask any live surface to export. Preview players at t≈0 park normally (not
+        // "continuing"), so Continue watching can still seek to the saved playhead.
         PerformanceTelemetry.mark("hubs_feed_handoff_start")
         NotificationCenter.default.post(
             name: .matteryaExportPlaybackForHandoff,
             object: nil,
             userInfo: ["postIDs": Array(Set(handoffIDs))]
         )
+        // Only mark continue when a mid-clip buffer actually exists for these ids.
+        let hasMidClip = handoffIDs.contains { id in
+            if SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: id) { return true }
+            if let parked = SparkWarmPool.shared.parkedPlayer(for: id) {
+                let t = parked.currentTime().seconds
+                return t.isFinite && t > 0.45
+            }
+            return false
+        }
+        if hasMidClip {
+            markContinuePlayback(for: handoffIDs)
+        }
         if presentation.id != watchPost.id {
             SparkWarmPool.shared.rekey(from: watchPost.id, to: presentation.id)
             syncPlaybackPosition(from: watchPost.id, to: presentation.id)
@@ -1338,6 +1366,26 @@ final class AppState {
             hubPlaybackExpanded = false
         }
 
+        // Furthest saved playhead across share/origin ids — Continue watching source of truth.
+        let resumeIDs = Array(Set([
+            watchPost.id,
+            presentation.id,
+            watchPost.sharedPostID,
+            presentation.sharedPostID,
+        ].compactMap { $0 }.filter { !$0.isEmpty }))
+        let storedResume = resumeIDs
+            .map { YouTubeCatalogService.shared.playbackPosition(for: $0) }
+            .max() ?? 0
+        // Stamp every related id so the player surface (keyed by whichever id mounts) finds it.
+        if storedResume >= 0.5 {
+            for id in resumeIDs {
+                YouTubeCatalogService.shared.notePlaybackPosition(storedResume, for: id, duration: nil)
+            }
+            hubPlaybackForcedResumeSeconds = storedResume
+        } else {
+            hubPlaybackForcedResumeSeconds = 0
+        }
+
         let switchingVideo = hubPlaybackPost?.id != watchPost.id
         if switchingVideo {
             // Soft page silence only — never pauseAll/silenceAllBuffered (wipes feed handoff).
@@ -1351,6 +1399,19 @@ final class AppState {
             hubPlaybackPost = watchPost
         } else if hubPlaybackPost == nil {
             hubPlaybackPost = watchPost
+        }
+
+        // Same clip already mounted (mini → Continue watching): seek now.
+        // Fresh / switched mounts also get hubPlaybackForcedResumeSeconds → startTime + onReady seek.
+        if storedResume > 1 {
+            let live = MediaPlaybackCoordinator.shared.continuousHubPlayer?.currentTime().seconds ?? 0
+            if !(live.isFinite && live + 1.5 >= storedResume) {
+                MediaPlaybackCoordinator.shared.continuousHubPlayer?.seek(
+                    to: CMTime(seconds: storedResume, preferredTimescale: 600),
+                    toleranceBefore: .zero,
+                    toleranceAfter: .zero
+                )
+            }
         }
 
         // Continuous Hubs player (mini or full) owns audio — kill feed/profile autoplay.
@@ -1407,21 +1468,38 @@ final class AppState {
     /// behind the shrinking video.
     func minimizeHubPlayback(returnToChat: Bool = true, animated: Bool = true) {
         guard hubPlaybackPost != nil else { return }
+        // Already mini — tab hops must be a no-op (re-running finishMinimize was the lag storm).
+        if !hubPlaybackExpanded, !hubPlaybackLandscapeFullscreen {
+            if hubPlaybackPlaying != true {
+                hubPlaybackPlaying = true
+            }
+            if returnToChat, let conversationID = hubPlaybackReturnConversationID {
+                selectedTab = .messages
+                navigationPath = [.conversation(conversationID)]
+            }
+            return
+        }
         // Landscape FS → portrait before shrinking to mini.
         if hubPlaybackLandscapeFullscreen {
             exitHubLandscapeFullscreen()
         }
         // Never stop/pause mini — GlobalHubPlaybackLayer only resizes the stage.
-        hubPlaybackPlaying = true
+        if !hubPlaybackPlaying {
+            hubPlaybackPlaying = true
+        }
 
-        // Instant chrome clear — animated ink/canvas→clear interpolates as a grey slab.
+        // Only bump pull if needed — avoid a redundant AppState write when the finger
+        // already drove progress (each write was re-entering the Hubs tree mid-morph).
         var clearChrome = Transaction()
         clearChrome.disablesAnimations = true
         withTransaction(clearChrome) {
-            hubPlaybackPullProgress = 1
+            if hubPlaybackPullProgress < 0.99 {
+                hubPlaybackPullProgress = 1
+            }
             hubFullscreenPullProgress = 0
         }
 
+        // Tab leave uses animated:false — snap mini without morph Task (feather leave).
         if animated, hubPlaybackExpanded {
             hubMinimizeReturnToChat = returnToChat
             hubMinimizeMorphToken &+= 1
@@ -1442,38 +1520,43 @@ final class AppState {
     /// Called by `GlobalHubPlaybackLayer` after the film has landed in the mini strip.
     func finishMinimizeHubPlayback(returnToChat: Bool) {
         guard hubPlaybackPost != nil else { return }
-        hubPlaybackPlaying = true
+        if !hubPlaybackPlaying {
+            hubPlaybackPlaying = true
+        }
         hubWatchScrollCollapse = 0
         hubPlaybackPullProgress = 1
         // Never leave immersive FS pull stuck — that hid mini chrome (play/mute/close).
         hubFullscreenPullProgress = 0
         // Layer already at mini frame — flip with zero animation to avoid a second jump.
-        var t = Transaction()
-        t.disablesAnimations = true
-        withTransaction(t) {
-            hubPlaybackExpanded = false
+        if hubPlaybackExpanded {
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) {
+                hubPlaybackExpanded = false
+            }
         }
-        // Immediate audio re-assert (tab auto-mini used to lose sound here).
-        MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(userMuted: hubPlaybackMuted)
-        NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
+        // Reassert only if AV actually paused — never storm a healthy continuous player
+        // on the morph-land frame (that hitch felt like a mid-screen stop).
+        let continuousRate = MediaPlaybackCoordinator.shared.continuousHubPlayer?.rate ?? 0
+        if continuousRate < 0.05 {
+            MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
+                userMuted: hubPlaybackMuted,
+                rate: hubPlaybackRate
+            )
+        }
 
-        // Defer side-effects so they never hitch the release / morph frame.
         let shouldReturn = returnToChat
         let conversationID = hubPlaybackReturnConversationID
         Task { @MainActor in
-            // Clear pull once mini chrome is up so home isn’t stuck in “grabbing”.
-            try? await Task.sleep(nanoseconds: 40_000_000)
+            // Let the morph paint settle before any tab/nav/focus work.
+            try? await Task.sleep(nanoseconds: 120_000_000)
             if !hubPlaybackExpanded {
                 hubPlaybackPullProgress = 0
             }
-            FeedVideoFocus.shared.resetAll()
-            // Feed focus reset may silence others — keep continuous solo.
-            if hubPlaybackPost != nil, hubPlaybackPlaying {
-                MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(userMuted: hubPlaybackMuted)
-            }
+            // Soft-clear feed focus without pausing continuous hubs.
+            FeedVideoFocus.shared.clearElectionOnly()
             syncHubPlaybackChatReturnWithPath()
             if shouldReturn, let conversationID {
-                try? await Task.sleep(nanoseconds: 40_000_000)
                 guard hubPlaybackPost != nil, !hubPlaybackExpanded else { return }
                 selectedTab = .messages
                 navigationPath = [.conversation(conversationID)]
@@ -1554,11 +1637,23 @@ final class AppState {
     }
 
     func stopHubPlayback() {
+        // Persist playhead BEFORE tearing the continuous player down (Continue watching).
+        if let post = hubPlaybackPost {
+            let live = MediaPlaybackCoordinator.shared.continuousHubPlayer?.currentTime().seconds ?? 0
+            if live.isFinite, live >= 0.5 {
+                let ids = [post.id, post.sharedPostID].compactMap { $0 }
+                for id in ids where !id.isEmpty {
+                    YouTubeCatalogService.shared.notePlaybackPosition(live, for: id, duration: nil)
+                    YouTubeCatalogService.shared.savePlaybackPosition(live, for: id, duration: nil)
+                }
+            }
+        }
         if hubPlaybackLandscapeFullscreen {
             hubPlaybackLandscapeFullscreen = false
             AppOrientation.lock(.portrait, prefer: .portrait)
         }
         hubPlaybackPost = nil
+        hubPlaybackForcedResumeSeconds = 0
         hubPlaybackExpanded = false
         hubPlaybackPlaying = false
         hubPlaybackPullProgress = 0
@@ -1697,7 +1792,9 @@ final class AppState {
     }
 
     func openPost(_ post: CountryPost) {
-        if post.isReel {
+        // Sparks identity includes catalog short-form (media_type=video + ShortForm markers),
+        // not only explicit reel/spark types — Search often returns those thin rows.
+        if post.isReel || PlayPlatformBridge.isSparkFeedCard(post) {
             openReelsViewer(startingPost: post)
         } else if PlayPlatformBridge.isHubFeedCardVideo(post)
             || PlayPlatformBridge.isHubOriginShare(post)
@@ -1723,6 +1820,67 @@ final class AppState {
             navigationPath.removeAll()
             navigate(to: .post(post.id))
         }
+    }
+
+    /// Search result tap — kill orphan audio from a prior search open, resolve thin rows, then open.
+    func openSearchResult(_ post: CountryPost) {
+        Task { @MainActor in
+            await openSearchResultAsync(post)
+        }
+    }
+
+    @MainActor
+    func openSearchResultAsync(_ post: CountryPost) async {
+        var resolved = post
+        // Thin GraphQL search rows sometimes lack a playable URL or Spark/Hub markers.
+        if post.hasVideo, post.playableVideoURL == nil {
+            if let full = try? await PostsService.shared.getPostByID(post.id), full.playableVideoURL != nil {
+                resolved = full
+            }
+        } else if post.hasVideo,
+                  !post.isReel,
+                  !PlayPlatformBridge.isSparkFeedCard(post),
+                  !PlayPlatformBridge.isHubFeedCardVideo(post),
+                  !PlayPlatformBridge.isHubCatalogContent(post) {
+            // Re-fetch so ShortForm / LongForm markers classify correctly.
+            if let full = try? await PostsService.shared.getPostByID(post.id) {
+                resolved = full
+            }
+        }
+
+        // Silence after resolve so Spark vs Hubs handoff matches the row we actually open.
+        preparePlaybackForSearchOpen(opening: resolved)
+        PostsService.shared.seedDetailPost(resolved)
+        openPost(resolved)
+    }
+
+    /// Stop leftover Sparks / feed audio before a new Search open so a failed second tap
+    /// cannot leave the first clip’s sound running under the Search UI.
+    @MainActor
+    private func preparePlaybackForSearchOpen(opening post: CountryPost) {
+        if reelsViewerContext != nil {
+            closeReelsViewer()
+        }
+        FeedVideoFocus.shared.resetAll()
+        MediaPlaybackCoordinator.shared.silenceForSparkPageChange()
+
+        let opensHub = PlayPlatformBridge.isHubFeedCardVideo(post)
+            || PlayPlatformBridge.isHubOriginShare(post)
+            || (PlayPlatformBridge.isHubCatalogContent(post) && post.hasVideo)
+        // Opening Sparks or a plain post from Search must not leave a prior Hubs mini audible.
+        if !opensHub, hubPlaybackPost != nil {
+            stopHubPlayback()
+        }
+    }
+
+    /// Browse Search again — drop orphan Sparks / feed audio.
+    /// Hubs mini stays continuous across tab hops (product policy).
+    func silencePlaybackForSearchBrowse() {
+        if reelsViewerContext != nil {
+            closeReelsViewer()
+        }
+        FeedVideoFocus.shared.resetAll()
+        MediaPlaybackCoordinator.shared.silenceForSparkPageChange()
     }
 
     func openPost(id: String) async {
@@ -1806,13 +1964,13 @@ final class AppState {
     func resumeHubPlaybackAfterSparks() {
         guard hubPlaybackPost != nil else { return }
         hubPlaybackPlaying = true
-        MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(userMuted: hubPlaybackMuted)
+        MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(userMuted: hubPlaybackMuted, rate: hubPlaybackRate)
         NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
         // Second kick after the cover dismiss animation settles.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
             guard let self, self.hubPlaybackPost != nil else { return }
             self.hubPlaybackPlaying = true
-            MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(userMuted: self.hubPlaybackMuted)
+            MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(userMuted: self.hubPlaybackMuted, rate: self.hubPlaybackRate)
             NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
         }
     }
