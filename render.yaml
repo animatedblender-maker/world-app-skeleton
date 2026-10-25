@@ -92,6 +92,11 @@ services:
       # Cron hits POST /cron/content-pipeline with x-cron-secret
       - key: CONTENT_CRON_SECRET
         sync: false
+      # Voyage MIND Phase 2b (title/body embeds + ANN). Required for /cron/mind-embeddings.
+      - key: VOYAGE_API_KEY
+        sync: false
+      - key: MIND_EMBEDDINGS_ENABLED
+        value: "true"
       - key: R2_ACCOUNT_ID
         sync: false
       - key: R2_ACCESS_KEY_ID
@@ -130,3 +135,22 @@ services:
         sync: false
       - key: CONTENT_PIPELINE_URL
         value: https://api.matterya.com/cron/content-pipeline
+
+  # Hourly: catch-up Voyage embeds for posts that missed inline scheduleEmbeddingForPost.
+  - type: cron
+    name: matterya-mind-embeddings
+    runtime: node
+    branch: ios-native
+    rootDir: apps/api
+    schedule: "15 * * * *"
+    buildCommand: "true"
+    startCommand: node scripts/run-mind-embeddings-cron.mjs
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: CONTENT_CRON_SECRET
+        sync: false
+      - key: INSIGHTS_CRON_SECRET
+        sync: false
+      - key: MIND_EMBEDDINGS_CRON_URL
+        value: https://api.matterya.com/cron/mind-embeddings?limit=400

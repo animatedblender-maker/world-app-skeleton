@@ -55,6 +55,7 @@ import {
   refreshUserFeatures,
 } from './recommendation/rank.service.js';
 import { rebuildNeighborsForEntity } from './recommendation/knn.service.js';
+import { backfillEmbeddings } from './recommendation/mind-embeddings.js';
 import {
   fetchForYouPage,
   fetchHomeFeedPage,
@@ -1300,6 +1301,37 @@ app.post('/insights/run-daily', async (req: Request, res: Response) => {
  * Cron:  POST https://api.matterya.com/cron/content-pipeline
  *        Header: x-cron-secret: <you choose this secret>
  */
+/**
+ * Catch-up: embed Public posts missing voyage-4-lite vectors.
+ * Auth: CONTENT_CRON_SECRET or INSIGHTS_CRON_SECRET (same as content-pipeline).
+ * Cron: POST /cron/mind-embeddings?limit=400
+ *        Header: x-cron-secret: …
+ * New uploads/seeds also schedule embeds inline — this only fills gaps.
+ */
+app.post('/cron/mind-embeddings', async (req: Request, res: Response) => {
+  const secret = req.headers['x-cron-secret'] || req.query.secret;
+  const expected =
+    process.env.CONTENT_CRON_SECRET?.trim() ||
+    process.env.INSIGHTS_CRON_SECRET?.trim() ||
+    INSIGHTS_CRON_SECRET;
+  if (!expected || String(secret ?? '') !== expected) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  try {
+    const rawLimit = Number(req.query.limit ?? req.body?.limit ?? 400);
+    const rawBatch = Number(req.query.batchSize ?? req.body?.batchSize ?? 64);
+    const limit =
+      Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 5000) : 400;
+    const batchSize =
+      Number.isFinite(rawBatch) && rawBatch > 0 ? Math.min(rawBatch, 128) : 64;
+    const out = await backfillEmbeddings({ limit, batchSize });
+    return res.json({ ok: true, ...out, limit, batchSize });
+  } catch (err: any) {
+    console.error('[cron/mind-embeddings]', err?.message ?? err);
+    return res.status(500).json({ error: err?.message ?? 'embed_catchup_failed' });
+  }
+});
+
 app.post('/cron/content-pipeline', async (req: Request, res: Response) => {
   const secret = req.headers['x-cron-secret'] || req.query.secret;
   const expected =

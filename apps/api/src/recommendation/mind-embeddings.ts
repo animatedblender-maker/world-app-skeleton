@@ -149,6 +149,43 @@ export async function upsertEmbeddingForPost(postId: string): Promise<boolean> {
   }
 }
 
+/** Fire-and-forget queue so floods (pipeline) don't stampede Voyage. */
+const embedQueue: string[] = [];
+const embedQueued = new Set<string>();
+let embedPumping = false;
+
+/**
+ * Schedule a title/body embed for a newly created/updated Public post.
+ * Safe to call from request handlers and pipeline — never throws to the caller.
+ * Catch-up cron (`POST /cron/mind-embeddings`) covers anything that missed.
+ */
+export function scheduleEmbeddingForPost(postId: string | null | undefined): void {
+  if (!mindEmbeddingsEnabled()) return;
+  const id = String(postId ?? '').trim();
+  if (!id) return;
+  if (embedQueued.has(id)) return;
+  embedQueued.add(id);
+  embedQueue.push(id);
+  void pumpEmbedQueue();
+}
+
+async function pumpEmbedQueue(): Promise<void> {
+  if (embedPumping) return;
+  embedPumping = true;
+  try {
+    while (embedQueue.length) {
+      const id = embedQueue.shift()!;
+      embedQueued.delete(id);
+      await upsertEmbeddingForPost(id);
+      // Polite pacing — catch-up cron still fills gaps if Voyage 429s.
+      await new Promise((r) => setTimeout(r, 400));
+    }
+  } finally {
+    embedPumping = false;
+    if (embedQueue.length) void pumpEmbedQueue();
+  }
+}
+
 /** Batch upsert title/body embeddings. Disk-IO friendly pauses between Voyage calls. */
 export async function backfillEmbeddings(opts?: {
   limit?: number;

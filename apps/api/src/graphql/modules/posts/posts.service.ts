@@ -1288,6 +1288,15 @@ export class PostsService {
         .catch(() => {});
     }
 
+    // MIND Phase 2b — Voyage title/body embed (best-effort; catch-up cron fills gaps).
+    if (visibility === 'public' && !isMoment) {
+      void import('../../../recommendation/mind-embeddings.js')
+        .then(({ scheduleEmbeddingForPost }) => {
+          scheduleEmbeddingForPost(String(createdId));
+        })
+        .catch(() => {});
+    }
+
     // Immediate platform sync → Kafka + Uploads report (feed / Spark / Hubs / share).
     void this.emitUploadEvent({
       actorId,
@@ -1509,6 +1518,19 @@ export class PostsService {
     if (!updatedId) throw new Error('POST_UPDATE_NOT_FOUND');
     const post = await this.postByIdForViewer(updatedId, authorId);
     if (!post) throw new Error('Updated post not found.');
+
+    // Re-embed when title/body may have changed (public posts only).
+    if (
+      post.visibility === 'public' &&
+      (input.title !== undefined || input.body !== undefined)
+    ) {
+      void import('../../../recommendation/mind-embeddings.js')
+        .then(({ scheduleEmbeddingForPost }) => {
+          scheduleEmbeddingForPost(String(updatedId));
+        })
+        .catch(() => {});
+    }
+
     return post;
   }
 

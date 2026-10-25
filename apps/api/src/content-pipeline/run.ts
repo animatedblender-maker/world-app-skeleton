@@ -495,6 +495,11 @@ async function ingestOriginal(
   }
   if (!postId) return 'skip';
 
+  // MIND Phase 2b — queue Voyage title/body embed (catch-up cron covers misses).
+  void import('../recommendation/mind-embeddings.js')
+    .then(({ scheduleEmbeddingForPost }) => scheduleEmbeddingForPost(postId))
+    .catch(() => undefined);
+
   // Optional media_caption table (used by insights / web) — best-effort.
   try {
     await pool.query(
@@ -766,6 +771,10 @@ async function createHubOriginShare(opts: {
   const shareId = rows[0]?.id;
   if (!shareId) return false;
 
+  void import('../recommendation/mind-embeddings.js')
+    .then(({ scheduleEmbeddingForPost }) => scheduleEmbeddingForPost(shareId))
+    .catch(() => undefined);
+
   try {
     if (caption) {
       await pool.query(
@@ -913,6 +922,10 @@ async function createSparkShare(opts: {
 
   const shareId = rows[0]?.id;
   if (!shareId) return false;
+
+  void import('../recommendation/mind-embeddings.js')
+    .then(({ scheduleEmbeddingForPost }) => scheduleEmbeddingForPost(shareId))
+    .catch(() => undefined);
 
   try {
     if (caption) {
