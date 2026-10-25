@@ -46,4 +46,13 @@ else
   exit 1
 fi
 
+# Bundle WhisperKit Small into Resources before xcodebuild copies them.
+FETCH_SCRIPT="$(dirname "$PBXPROJ")/scripts/fetch_whisperkit_model.sh"
+if [ -x "$FETCH_SCRIPT" ]; then
+  echo "==> Fetching WhisperKit Small model for app bundle"
+  "$FETCH_SCRIPT"
+else
+  echo "WARNING: WhisperKit fetch script missing at $FETCH_SCRIPT"
+fi
+
 echo "==> Pre-build checks complete."

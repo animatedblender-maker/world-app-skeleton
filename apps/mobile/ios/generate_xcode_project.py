@@ -43,6 +43,11 @@ swift_files = []
 resource_files = []
 entitlements_files = []
 for dirpath, _, filenames in os.walk(APP_DIR):
+    # Bundled WhisperKit model is a folder reference (not individual json/mlmodelc files).
+    if f"{os.sep}Resources{os.sep}WhisperKit{os.sep}" in (dirpath + os.sep) or dirpath.endswith(
+        f"{os.sep}Resources{os.sep}WhisperKit"
+    ):
+        continue
     for filename in sorted(filenames):
         full = os.path.join(dirpath, filename)
         rel = os.path.relpath(full, PROJECT_ROOT)
@@ -97,6 +102,14 @@ livekit_product_dep = "6CE3AE4D8AEE4D45B7480F73"
 livekit_framework_build = "291608D8C6D74F6D9DF4745F"
 musickit_framework_ref = "792ED54A55F04B7690F71846"
 musickit_framework_build = "8B0B3052FE104EC58CA22C2F"
+# SPM WhisperKit + bundled Small model folder (stable IDs across regenerates)
+whisperkit_package_ref = "C3D4E5F60718293A4B5C6D7E"
+whisperkit_product_dep = "B2C3D4E5F60718293A4B5C6D"
+whisperkit_framework_build = "A1B2C3D4E5F60718293A4B5C"
+whisper_model_ref = "E5F60718293A4B5C6D7E8F90"
+whisper_model_build = "D4E5F60718293A4B5C6D7E8F"
+whisper_fetch_phase = "F60718293A4B5C6D7E8F9012"
+whisper_model_rel = "WorldApp/Resources/WhisperKit/openai_whisper-small"
 
 file_refs = {}
 build_files = {}
@@ -119,6 +132,9 @@ add(
     f"\t\t{livekit_framework_build} /* LiveKit in Frameworks */ = {{isa = PBXBuildFile; productRef = {livekit_product_dep} /* LiveKit */; }};"
 )
 add(
+    f"\t\t{whisperkit_framework_build} /* WhisperKit in Frameworks */ = {{isa = PBXBuildFile; productRef = {whisperkit_product_dep} /* WhisperKit */; }};"
+)
+add(
     f"\t\t{musickit_framework_build} /* MusicKit.framework in Frameworks */ = {{isa = PBXBuildFile; fileRef = {musickit_framework_ref} /* MusicKit.framework */; }};"
 )
 for rel in swift_files:
@@ -127,6 +143,9 @@ for rel in swift_files:
     )
 add(
     f"\t\t{assets_build} /* Assets.xcassets in Resources */ = {{isa = PBXBuildFile; fileRef = {assets_ref} /* Assets.xcassets */; }};"
+)
+add(
+    f"\t\t{whisper_model_build} /* openai_whisper-small in Resources */ = {{isa = PBXBuildFile; fileRef = {whisper_model_ref} /* openai_whisper-small */; }};"
 )
 for rel in resource_files:
     add(
@@ -157,6 +176,9 @@ for rel in resource_files:
 add(
     f"\t\t{assets_ref} /* Assets.xcassets */ = {{isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = WorldApp/Assets.xcassets; sourceTree = \"<group>\"; }};"
 )
+add(
+    f"\t\t{whisper_model_ref} /* openai_whisper-small */ = {{isa = PBXFileReference; lastKnownFileType = folder; path = \"{whisper_model_rel}\"; sourceTree = \"<group>\"; }};"
+)
 for entitlements_rel, entitlements_ref in (
     (debug_entitlements_rel, debug_entitlements_ref),
     (release_entitlements_rel, release_entitlements_ref),
@@ -176,6 +198,7 @@ add("\t\t\tisa = PBXFrameworksBuildPhase;")
 add("\t\t\tbuildActionMask = 2147483647;")
 add("\t\t\tfiles = (")
 add(f"\t\t\t\t{livekit_framework_build} /* LiveKit in Frameworks */,")
+add(f"\t\t\t\t{whisperkit_framework_build} /* WhisperKit in Frameworks */,")
 add(f"\t\t\t\t{musickit_framework_build} /* MusicKit.framework in Frameworks */,")
 add("\t\t\t);")
 add("\t\t\trunOnlyForDeploymentPostprocessing = 0;")
@@ -184,6 +207,7 @@ add("/* End PBXFrameworksBuildPhase section */")
 add("")
 add("/* Begin PBXGroup section */")
 children = [f"{file_refs[rel]} /* {os.path.basename(rel)} */" for rel in swift_files + resource_files]
+children.append(f"{whisper_model_ref} /* openai_whisper-small */")
 children.append(f"{assets_ref} /* Assets.xcassets */")
 for entitlements_rel, entitlements_ref in (
     (debug_entitlements_rel, debug_entitlements_ref),
@@ -207,6 +231,7 @@ add(f"\t\t{target_id} /* WorldApp */ = {{")
 add("\t\t\tisa = PBXNativeTarget;")
 add(f"\t\t\tbuildConfigurationList = {target_config_list} /* Build configuration list for PBXNativeTarget \"WorldApp\" */;")
 add("\t\t\tbuildPhases = (")
+add(f"\t\t\t\t{whisper_fetch_phase} /* Fetch WhisperKit Model */,")
 add(f"\t\t\t\t{sources_phase} /* Sources */,")
 add(f"\t\t\t\t{frameworks_phase} /* Frameworks */,")
 add(f"\t\t\t\t{resources_phase} /* Resources */,")
@@ -217,6 +242,7 @@ add("\t\t\tdependencies = (")
 add("\t\t\t);")
 add("\t\t\tpackageProductDependencies = (")
 add(f"\t\t\t\t{livekit_product_dep} /* LiveKit */,")
+add(f"\t\t\t\t{whisperkit_product_dep} /* WhisperKit */,")
 add("\t\t\t);")
 add("\t\t\tname = WorldApp;")
 add(f"\t\t\tproductName = WorldApp;")
@@ -262,6 +288,7 @@ add("\t\t\tprojectDirPath = \"\";")
 add("\t\t\tprojectRoot = \"\";")
 add("\t\t\tpackageReferences = (")
 add(f"\t\t\t\t{livekit_package_ref} /* XCRemoteSwiftPackageReference \"client-sdk-swift\" */,")
+add(f"\t\t\t\t{whisperkit_package_ref} /* XCRemoteSwiftPackageReference \"WhisperKit\" */,")
 add("\t\t\t);")
 add("\t\t\ttargets = (")
 add(f"\t\t\t\t{target_id} /* WorldApp */,")
@@ -275,12 +302,37 @@ add("\t\t\tisa = PBXResourcesBuildPhase;")
 add("\t\t\tbuildActionMask = 2147483647;")
 add("\t\t\tfiles = (")
 add(f"\t\t\t\t{assets_build} /* Assets.xcassets in Resources */,")
+add(f"\t\t\t\t{whisper_model_build} /* openai_whisper-small in Resources */,")
 for rel in resource_files:
     add(f"\t\t\t\t{build_files[rel]} /* {os.path.basename(rel)} in Resources */,")
 add("\t\t\t);")
 add("\t\t\trunOnlyForDeploymentPostprocessing = 0;")
 add("\t\t};")
 add("/* End PBXResourcesBuildPhase section */")
+add("")
+add("/* Begin PBXShellScriptBuildPhase section */")
+add(f"\t\t{whisper_fetch_phase} /* Fetch WhisperKit Model */ = {{")
+add("\t\t\tisa = PBXShellScriptBuildPhase;")
+add("\t\t\talwaysOutOfDate = 1;")
+add("\t\t\tbuildActionMask = 2147483647;")
+add("\t\t\tfiles = (")
+add("\t\t\t);")
+add("\t\t\tinputFileListPaths = (")
+add("\t\t\t);")
+add("\t\t\tinputPaths = (")
+add('\t\t\t\t"$(SRCROOT)/scripts/fetch_whisperkit_model.sh",')
+add("\t\t\t);")
+add('\t\t\tname = "Fetch WhisperKit Model";')
+add("\t\t\toutputFileListPaths = (")
+add("\t\t\t);")
+add("\t\t\toutputPaths = (")
+add('\t\t\t\t"$(SRCROOT)/WorldApp/Resources/WhisperKit/openai_whisper-small/.matterya_model_ready",')
+add("\t\t\t);")
+add("\t\t\trunOnlyForDeploymentPostprocessing = 0;")
+add("\t\t\tshellPath = /bin/sh;")
+add('\t\t\tshellScript = "set -e\\n\\"${SRCROOT}/scripts/fetch_whisperkit_model.sh\\"\\n";')
+add("\t\t};")
+add("/* End PBXShellScriptBuildPhase section */")
 add("")
 add("/* Begin PBXSourcesBuildPhase section */")
 add(f"\t\t{sources_phase} /* Sources */ = {{")
@@ -303,6 +355,14 @@ add("\t\t\t\tkind = upToNextMajorVersion;")
 add("\t\t\t\tminimumVersion = 2.5.0;")
 add("\t\t\t};")
 add("\t\t};")
+add(f"\t\t{whisperkit_package_ref} /* XCRemoteSwiftPackageReference \"WhisperKit\" */ = {{")
+add("\t\t\tisa = XCRemoteSwiftPackageReference;")
+add("\t\t\trepositoryURL = \"https://github.com/argmaxinc/WhisperKit.git\";")
+add("\t\t\trequirement = {")
+add("\t\t\t\tkind = upToNextMajorVersion;")
+add("\t\t\t\tminimumVersion = 1.1.0;")
+add("\t\t\t};")
+add("\t\t};")
 add("/* End XCRemoteSwiftPackageReference section */")
 add("")
 add("/* Begin XCSwiftPackageProductDependency section */")
@@ -310,6 +370,11 @@ add(f"\t\t{livekit_product_dep} /* LiveKit */ = {{")
 add("\t\t\tisa = XCSwiftPackageProductDependency;")
 add(f"\t\t\tpackage = {livekit_package_ref} /* XCRemoteSwiftPackageReference \"client-sdk-swift\" */;")
 add("\t\t\tproductName = LiveKit;")
+add("\t\t};")
+add(f"\t\t{whisperkit_product_dep} /* WhisperKit */ = {{")
+add("\t\t\tisa = XCSwiftPackageProductDependency;")
+add(f"\t\t\tpackage = {whisperkit_package_ref} /* XCRemoteSwiftPackageReference \"WhisperKit\" */;")
+add("\t\t\tproductName = WhisperKit;")
 add("\t\t};")
 add("/* End XCSwiftPackageProductDependency section */")
 add("")
@@ -369,7 +434,8 @@ for config_id, name, is_target in [
         add("\t\t\t\tALWAYS_SEARCH_USER_PATHS = NO;")
         add("\t\t\t\tCLANG_ENABLE_MODULES = YES;")
         add("\t\t\t\tDEAD_CODE_STRIPPING = YES;")
-        add("\t\t\t\tENABLE_USER_SCRIPT_SANDBOXING = YES;")
+        # Fetch WhisperKit Model script needs network + write outside the sandbox.
+        add("\t\t\t\tENABLE_USER_SCRIPT_SANDBOXING = NO;")
         add("\t\t\t\tCOPY_PHASE_STRIP = NO;")
         add("\t\t\t\tDEBUG_INFORMATION_FORMAT = dwarf;")
         add("\t\t\t\tENABLE_TESTABILITY = YES;")
