@@ -17,7 +17,8 @@ struct SearchView: View {
     @State private var contentNextOffset = 0
     @State private var searchError: String?
     @State private var searchGeneration = 0
-    @State private var history = SearchHistoryStore.shared
+    /// Local mirror of SearchHistoryStore so SwiftUI always repaints (List-in-VStack + Observable were flaky).
+    @State private var recentQueries: [String] = SearchHistoryStore.shared.recent
 
     private var normalizedQuery: String {
         query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -26,7 +27,15 @@ struct SearchView: View {
     private var isSearching: Bool { isSearchingPeople || isSearchingContent }
 
     private var historySuggestions: [String] {
-        history.suggestions(matching: normalizedQuery)
+        let q = normalizedQuery.lowercased()
+        guard !q.isEmpty else { return Array(recentQueries.prefix(8)) }
+        return recentQueries
+            .filter {
+                let n = $0.lowercased()
+                return n.contains(q) || n.hasPrefix(q)
+            }
+            .prefix(8)
+            .map { $0 }
     }
 
     var body: some View {
@@ -34,14 +43,15 @@ struct SearchView: View {
             searchField
 
             if normalizedQuery.isEmpty {
-                if history.recent.isEmpty {
+                if recentQueries.isEmpty {
                     emptyPrompt
                 } else {
-                    historyList(title: "Recent", queries: history.recent, showsClearAll: true)
+                    recentPanel(title: "Recent", queries: recentQueries, showsClearAll: true)
                 }
             } else if isSearching && profiles.isEmpty && content.isEmpty {
                 if !historySuggestions.isEmpty {
-                    historyList(title: "Recent", queries: historySuggestions, showsClearAll: false)
+                    recentPanel(title: "Recent", queries: historySuggestions, showsClearAll: false)
+                        .frame(maxHeight: 220)
                 }
                 ProgressView().tint(Theme.ink).padding()
                 Spacer()
@@ -59,9 +69,10 @@ struct SearchView: View {
         }
         .task {
             appState.searchPrefersCountries = false
+            reloadRecent()
         }
         .onAppear {
-            // Returning to Search after a result open — quiet orphan Sparks / paused Hubs mini.
+            reloadRecent()
             appState.silencePlaybackForSearchBrowse()
         }
     }
@@ -76,7 +87,7 @@ struct SearchView: View {
                 .foregroundStyle(Theme.ink)
                 .submitLabel(.search)
                 .onSubmit {
-                    recordHistoryIfNeeded()
+                    recordHistory(normalizedQuery)
                     Task { await runSearch(immediate: true) }
                 }
             if !query.isEmpty {
@@ -111,64 +122,82 @@ struct SearchView: View {
         ContentUnavailableView(
             "Search Matterya",
             systemImage: "magnifyingglass",
-            description: Text("Find people and posts, Sparks, and videos.")
+            description: Text("Find people and posts, Sparks, and videos. Recent searches will show up here.")
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func historyList(title: String, queries: [String], showsClearAll: Bool) -> some View {
-        List {
-            Section {
-                ForEach(queries, id: \.self) { item in
-                    HStack(spacing: 12) {
-                        Button {
-                            applyHistoryQuery(item)
-                        } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: "clock.arrow.circlepath")
-                                    .font(.subheadline)
-                                    .foregroundStyle(Theme.inkMuted)
-                                    .frame(width: 22)
-                                Text(item)
-                                    .font(.subheadline.weight(.medium))
-                                    .foregroundStyle(Theme.ink)
-                                    .lineLimit(1)
-                                Spacer(minLength: 0)
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-
-                        Button {
-                            history.remove(item)
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.caption.weight(.bold))
-                                .foregroundStyle(Theme.inkMuted)
-                                .frame(width: 28, height: 28)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Remove \(item) from search history")
+    /// ScrollView (not List-in-VStack) so Recent actually gets height under the field.
+    private func recentPanel(title: String, queries: [String], showsClearAll: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.inkMuted)
+                Spacer()
+                if showsClearAll, !recentQueries.isEmpty {
+                    Button("Clear") {
+                        SearchHistoryStore.shared.clear()
+                        reloadRecent()
                     }
-                }
-            } header: {
-                HStack {
-                    Text(title)
-                    Spacer()
-                    if showsClearAll, !history.recent.isEmpty {
-                        Button("Clear") {
-                            history.clear()
-                        }
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Theme.inkMuted)
-                        .textCase(nil)
-                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.inkMuted)
                 }
             }
+            .padding(.horizontal, Theme.pagePadding)
+            .padding(.top, 4)
+            .padding(.bottom, 8)
+
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(queries, id: \.self) { item in
+                        HStack(spacing: 12) {
+                            Button {
+                                applyHistoryQuery(item)
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "clock.arrow.circlepath")
+                                        .font(.subheadline)
+                                        .foregroundStyle(Theme.inkMuted)
+                                        .frame(width: 22)
+                                    Text(item)
+                                        .font(.subheadline.weight(.medium))
+                                        .foregroundStyle(Theme.ink)
+                                        .lineLimit(1)
+                                    Spacer(minLength: 0)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+
+                            Button {
+                                SearchHistoryStore.shared.remove(item)
+                                reloadRecent()
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.caption.weight(.bold))
+                                    .foregroundStyle(Theme.inkMuted)
+                                    .frame(width: 32, height: 32)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Remove \(item) from search history")
+                        }
+                        .padding(.horizontal, Theme.pagePadding)
+                        .padding(.vertical, 12)
+                        .background(Theme.surface)
+                        Divider()
+                            .padding(.leading, Theme.pagePadding + 34)
+                    }
+                }
+                .background(Theme.surface)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous))
+                .padding(.horizontal, Theme.pagePadding)
+                .padding(.bottom, Theme.pagePadding)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.canvas)
     }
 
@@ -179,8 +208,8 @@ struct SearchView: View {
             } else if profiles.isEmpty && content.isEmpty && !isSearching {
                 VStack(spacing: 0) {
                     if !historySuggestions.isEmpty {
-                        historyList(title: "Recent", queries: historySuggestions, showsClearAll: false)
-                            .frame(maxHeight: 220)
+                        recentPanel(title: "Recent", queries: historySuggestions, showsClearAll: false)
+                            .frame(maxHeight: 240)
                     }
                     ContentUnavailableView(
                         "No results",
@@ -214,7 +243,8 @@ struct SearchView: View {
                                     .buttonStyle(.plain)
 
                                     Button {
-                                        history.remove(item)
+                                        SearchHistoryStore.shared.remove(item)
+                                        reloadRecent()
                                     } label: {
                                         Image(systemName: "xmark")
                                             .font(.caption.weight(.bold))
@@ -276,7 +306,7 @@ struct SearchView: View {
 
     private func contentRow(_ post: CountryPost) -> some View {
         Button {
-            recordHistoryIfNeeded()
+            recordHistory(normalizedQuery)
             appState.openSearchResult(post)
         } label: {
             HStack(alignment: .center, spacing: 12) {
@@ -357,7 +387,7 @@ struct SearchView: View {
     private func profileRow(_ profile: Profile) -> some View {
         HStack(spacing: 12) {
             Button {
-                recordHistoryIfNeeded()
+                recordHistory(normalizedQuery)
                 appState.openPublicProfile(username: profile.username, userID: profile.userID)
             } label: {
                 HStack(spacing: 12) {
@@ -401,7 +431,7 @@ struct SearchView: View {
 
     private func applyHistoryQuery(_ item: String) {
         query = item
-        recordHistoryIfNeeded()
+        recordHistory(item)
         Task { await runSearch(immediate: true) }
     }
 
@@ -419,13 +449,19 @@ struct SearchView: View {
         contentHasMore = false
         peopleNextOffset = 0
         contentNextOffset = 0
+        reloadRecent()
         appState.silencePlaybackForSearchBrowse()
     }
 
-    private func recordHistoryIfNeeded() {
-        let trimmed = normalizedQuery
+    private func reloadRecent() {
+        recentQueries = SearchHistoryStore.shared.recent
+    }
+
+    private func recordHistory(_ raw: String) {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        history.record(trimmed)
+        SearchHistoryStore.shared.record(trimmed)
+        reloadRecent()
     }
 
     private func loadMoreRow(title: String, busy: Bool, action: @escaping () -> Void) -> some View {
@@ -468,9 +504,10 @@ struct SearchView: View {
             try? await Task.sleep(nanoseconds: 120_000_000)
             guard !Task.isCancelled else { return }
             guard normalizedQuery == trimmed else { return }
-        } else {
-            history.record(trimmed)
         }
+
+        // Record as soon as a real search starts (do not wait for network).
+        recordHistory(trimmed)
 
         let generation = searchGeneration + 1
         searchGeneration = generation
@@ -484,7 +521,6 @@ struct SearchView: View {
         peopleNextOffset = 0
         contentNextOffset = 0
 
-        // Progressive: paint People as soon as they arrive; Content follows.
         async let peopleTask: Void = {
             do {
                 let loaded = try await ProfileService.shared.searchProfiles(
@@ -497,10 +533,6 @@ struct SearchView: View {
                 peopleNextOffset = MatteryaSearchEngine.peoplePageSize
                 peopleHasMore = loaded.count >= MatteryaSearchEngine.peoplePageSize
                     && peopleNextOffset < MatteryaSearchEngine.maxPeopleTotal
-                // Record once results land (typing debounce or submit) so Recent fills without Return.
-                if !loaded.isEmpty || !content.isEmpty {
-                    history.record(trimmed)
-                }
             } catch {
                 guard searchGeneration == generation else { return }
                 if profiles.isEmpty && content.isEmpty {
@@ -526,9 +558,6 @@ struct SearchView: View {
                 contentNextOffset = MatteryaSearchEngine.contentPageSize
                 contentHasMore = loaded.count >= MatteryaSearchEngine.contentPageSize
                     && contentNextOffset < MatteryaSearchEngine.maxContentTotal
-                if !loaded.isEmpty || !profiles.isEmpty {
-                    history.record(trimmed)
-                }
             } catch {
                 guard searchGeneration == generation else { return }
                 content = []
