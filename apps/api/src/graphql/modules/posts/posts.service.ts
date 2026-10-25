@@ -863,17 +863,24 @@ export class PostsService {
     return await withoutMoments(rows as PostRow[]);
   }
 
-  async searchPosts(query: string, limit: number, viewerId: string | null): Promise<PostRow[]> {
+  async searchPosts(
+    query: string,
+    limit: number,
+    viewerId: string | null,
+    offset = 0
+  ): Promise<PostRow[]> {
     const term = String(query ?? '').trim().replace(/^@+/, '');
     if (!term) return [];
-    // Typeahead — small pages. Prefer MIND-020 hybrid (keyword + Voyage) when enabled.
-    const max = Math.max(1, Math.min(40, limit || 16));
+    // Full Search pages — hybrid (keyword + Voyage) when enabled.
+    const max = Math.max(1, Math.min(100, limit || 60));
+    const start = Math.max(0, Math.min(400, offset || 0));
 
     try {
       const { hybridSearch } = await import('../../../recommendation/mind-search.js');
       const hybrid = await hybridSearch({
         query: term,
         limit: max,
+        offset: start,
         viewerId,
       });
       if (hybrid.items.length) {
@@ -888,14 +895,15 @@ export class PostsService {
       /* fall through to lexical */
     }
 
-    return await this.lexicalSearchPosts(term, max, viewerId);
+    return await this.lexicalSearchPosts(term, max, viewerId, start);
   }
 
   /** Lexical-only fallback used when hybrid is off or fails. */
   private async lexicalSearchPosts(
     term: string,
     max: number,
-    viewerId: string | null
+    viewerId: string | null,
+    offset = 0
   ): Promise<PostRow[]> {
     const q = term.toLowerCase();
     const escaped = q.replace(/[%_\\]/g, '\\$&');
@@ -903,6 +911,7 @@ export class PostsService {
     const contains = `%${escaped}%`;
     const privacySql = await this.privateAuthorVisibleSql('$4::uuid');
     const hubSlugSelect = await this.hubSlugSelectSql('p');
+    const start = Math.max(0, Math.min(400, offset || 0));
 
     const { rows } = await pool.query(
       `
@@ -964,8 +973,9 @@ export class PostsService {
         p.created_at desc,
         p.id desc
       limit $6
+      offset $7
       `,
-      [contains, prefix, q, viewerId, q.length, max]
+      [contains, prefix, q, viewerId, q.length, max, start]
     );
 
     return await withoutMoments(rows as PostRow[]);

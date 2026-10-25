@@ -1012,11 +1012,13 @@ app.get('/v1/recommendation/why', async (req: Request, res: Response) => {
 app.get('/v1/search', async (req: Request, res: Response) => {
   const user = await getUserFromRequest(req);
   const q = String(req.query.q ?? req.query.query ?? '').trim();
-  const limit = Number(req.query.limit) || 20;
+  const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
+  const offset = Math.min(Math.max(Number(req.query.offset) || 0, 0), 400);
   try {
     const result = await hybridSearch({
       query: q,
       limit,
+      offset,
       viewerId: user?.id ?? null,
     });
     return res.json({ ok: true, ...result });

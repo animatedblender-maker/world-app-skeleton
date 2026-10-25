@@ -82,8 +82,9 @@ export const postsResolvers = {
     },
     searchPosts: async (_: any, args: any, ctx: any) => {
       const limit = typeof args.limit === 'number' ? args.limit : 25;
+      const offset = typeof args.offset === 'number' ? args.offset : 0;
       try {
-        return await svc().searchPosts(args.query ?? '', limit, ctx.user?.id ?? null);
+        return await svc().searchPosts(args.query ?? '', limit, ctx.user?.id ?? null, offset);
       } catch (err: any) {
         // Empty beats GraphQL 500 — SearchView already paints People in parallel.
         console.warn('[searchPosts]', err?.message ?? err);

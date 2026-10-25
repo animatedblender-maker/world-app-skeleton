@@ -466,15 +466,20 @@ export class ProfilesService {
     }
   }
 
-  async searchProfiles(query: string, limit: number, viewerId: string | null = null): Promise<ProfileRow[]> {
+  async searchProfiles(
+    query: string,
+    limit: number,
+    viewerId: string | null = null,
+    offset = 0
+  ): Promise<ProfileRow[]> {
     const raw = (query || '').trim().replace(/^@+/, '');
     if (!raw) return [];
     const q = raw.toLowerCase();
     const escaped = q.replace(/[%_\\]/g, '\\$&');
     const prefix = `${escaped}%`;
     const contains = `%${escaped}%`;
-    // Search typeahead — keep the first page small and prefix-first.
-    const max = Math.max(1, Math.min(40, limit));
+    const max = Math.max(1, Math.min(100, limit));
+    const start = Math.max(0, Math.min(400, offset || 0));
 
     const { rows } = await pool.query(
       `
@@ -499,8 +504,9 @@ export class ProfilesService {
         end,
         username nulls last
       limit $5
+      offset $6
       `,
-      [q, prefix, contains, q.length, max]
+      [q, prefix, contains, q.length, max, start]
     );
 
     return (rows as ProfileRow[])

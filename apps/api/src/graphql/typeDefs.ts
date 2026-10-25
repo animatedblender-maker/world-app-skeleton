@@ -572,7 +572,7 @@ export const typeDefs = `#graphql
     meProfile: Profile
     profileById(user_id: ID!): Profile
     profileByUsername(username: String!): Profile
-    searchProfiles(query: String!, limit: Int): [Profile!]!
+    searchProfiles(query: String!, limit: Int, offset: Int): [Profile!]!
     browseProfiles(limit: Int, offset: Int): [Profile!]!
 
     # Presence stats
@@ -596,7 +596,7 @@ export const typeDefs = `#graphql
     """
     discoverSparks(limit: Int, exclude_ids: [ID!]): [Post!]!
     savedPosts(limit: Int): [Post!]!
-    searchPosts(query: String!, limit: Int): [Post!]!
+    searchPosts(query: String!, limit: Int, offset: Int): [Post!]!
     postById(post_id: ID!): Post
     """On-demand live playback URL for R2 (and other) video posts — never use a stale signed link."""
     playbackMedia(post_id: ID!): PlaybackMedia

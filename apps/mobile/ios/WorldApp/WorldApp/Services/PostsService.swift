@@ -1437,32 +1437,37 @@ final class PostsService {
     author { user_id display_name username avatar_url country_name country_code is_verified }
     """
 
-    func searchPosts(_ query: String, limit: Int = 16) async throws -> [CountryPost] {
+    func searchPosts(_ query: String, limit: Int = 60, offset: Int = 0) async throws -> [CountryPost] {
         struct Response: Decodable { let searchPosts: [GraphQLPost] }
-        let capped = min(max(limit, 1), 40)
+        let capped = min(max(limit, 1), 100)
+        let start = max(0, min(offset, 400))
         let gqlQuery = """
-        query SearchPosts($query: String!, $limit: Int) {
-          searchPosts(query: $query, limit: $limit) { \(searchPostFields) }
+        query SearchPosts($query: String!, $limit: Int, $offset: Int) {
+          searchPosts(query: $query, limit: $limit, offset: $offset) { \(searchPostFields) }
         }
         """
         let real: [CountryPost]
         do {
             let result: Response = try await gql.authenticatedRequest(
                 query: gqlQuery,
-                variables: ["query": query, "limit": capped]
+                variables: ["query": query, "limit": capped, "offset": start]
             )
             real = result.searchPosts.map(\.toModel)
         } catch { real = [] }
 
         if AppConfig.useDemoDataset {
-            let demoPosts = await demo.searchPosts(query, limit: capped)
-            let merged = mergePosts(real: real, demo: demoPosts, limit: capped)
+            let demoPosts = await demo.searchPosts(query, limit: capped + start)
+            let merged = mergePosts(real: real, demo: demoPosts, limit: capped + start)
             // Search includes Sparks + posts + videos (Home feed still uses excludingSparks elsewhere).
-            return MatteryaSearchEngine.rankContent(merged, query: query, limit: capped)
-                .excludingMoments()
+            return Array(
+                MatteryaSearchEngine.rankContent(merged, query: query, limit: capped + start)
+                    .excludingMoments()
+                    .dropFirst(start)
+                    .prefix(capped)
+            )
         }
-        return MatteryaSearchEngine.rankContent(real, query: query, limit: capped)
-            .excludingMoments()
+        // Server hybrid/lexical order is the source of truth — do not re-rank (breaks Load more).
+        return real.excludingMoments()
     }
 
     func getPostByID(_ postID: String) async throws -> CountryPost? {

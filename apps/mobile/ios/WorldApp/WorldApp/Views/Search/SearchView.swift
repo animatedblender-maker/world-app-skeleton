@@ -8,6 +8,13 @@ struct SearchView: View {
     @State private var content: [CountryPost] = []
     @State private var isSearchingPeople = false
     @State private var isSearchingContent = false
+    @State private var isLoadingMorePeople = false
+    @State private var isLoadingMoreContent = false
+    @State private var peopleHasMore = false
+    @State private var contentHasMore = false
+    /// Next server offset (page-size steps — not result.count, which drifts when rows filter out).
+    @State private var peopleNextOffset = 0
+    @State private var contentNextOffset = 0
     @State private var searchError: String?
     @State private var searchGeneration = 0
     @State private var history = SearchHistoryStore.shared
@@ -223,7 +230,7 @@ struct SearchView: View {
                     }
 
                     if !profiles.isEmpty {
-                        Section("People") {
+                        Section("People · \(profiles.count)") {
                             ForEach(profiles) { profile in
                                 HStack {
                                     profileRow(profile)
@@ -233,13 +240,29 @@ struct SearchView: View {
                                     }
                                 }
                             }
+                            if peopleHasMore {
+                                loadMoreRow(
+                                    title: "Load more people",
+                                    busy: isLoadingMorePeople
+                                ) {
+                                    Task { await loadMorePeople() }
+                                }
+                            }
                         }
                     }
 
                     if !content.isEmpty {
-                        Section("Content") {
+                        Section("Content · \(content.count)") {
                             ForEach(content) { post in
                                 contentRow(post)
+                            }
+                            if contentHasMore {
+                                loadMoreRow(
+                                    title: "Load more content",
+                                    busy: isLoadingMoreContent
+                                ) {
+                                    Task { await loadMoreContent() }
+                                }
                             }
                         }
                     }
@@ -390,6 +413,12 @@ struct SearchView: View {
         searchGeneration += 1
         isSearchingPeople = false
         isSearchingContent = false
+        isLoadingMorePeople = false
+        isLoadingMoreContent = false
+        peopleHasMore = false
+        contentHasMore = false
+        peopleNextOffset = 0
+        contentNextOffset = 0
         appState.silencePlaybackForSearchBrowse()
     }
 
@@ -397,6 +426,27 @@ struct SearchView: View {
         let trimmed = normalizedQuery
         guard !trimmed.isEmpty else { return }
         history.record(trimmed)
+    }
+
+    private func loadMoreRow(title: String, busy: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                Spacer()
+                if busy {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(Theme.ink)
+                } else {
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.ink)
+                }
+                Spacer()
+            }
+            .padding(.vertical, 6)
+        }
+        .buttonStyle(.plain)
+        .disabled(busy)
     }
 
     private func runSearch(immediate: Bool) async {
@@ -407,6 +457,10 @@ struct SearchView: View {
             searchError = nil
             isSearchingPeople = false
             isSearchingContent = false
+            peopleHasMore = false
+            contentHasMore = false
+            peopleNextOffset = 0
+            contentNextOffset = 0
             return
         }
 
@@ -423,22 +477,33 @@ struct SearchView: View {
         searchError = nil
         isSearchingPeople = true
         isSearchingContent = true
+        isLoadingMorePeople = false
+        isLoadingMoreContent = false
+        peopleHasMore = false
+        contentHasMore = false
+        peopleNextOffset = 0
+        contentNextOffset = 0
 
         // Progressive: paint People as soon as they arrive; Content follows.
         async let peopleTask: Void = {
             do {
                 let loaded = try await ProfileService.shared.searchProfiles(
                     trimmed,
-                    limit: MatteryaSearchEngine.peopleLimit
+                    limit: MatteryaSearchEngine.peoplePageSize,
+                    offset: 0
                 )
                 guard searchGeneration == generation else { return }
                 profiles = loaded
+                peopleNextOffset = MatteryaSearchEngine.peoplePageSize
+                peopleHasMore = loaded.count >= MatteryaSearchEngine.peoplePageSize
+                    && peopleNextOffset < MatteryaSearchEngine.maxPeopleTotal
             } catch {
                 guard searchGeneration == generation else { return }
                 if profiles.isEmpty && content.isEmpty {
                     searchError = error.localizedDescription
                 }
                 profiles = []
+                peopleHasMore = false
             }
             if searchGeneration == generation {
                 isSearchingPeople = false
@@ -449,13 +514,18 @@ struct SearchView: View {
             do {
                 let loaded = try await PostsService.shared.searchPosts(
                     trimmed,
-                    limit: MatteryaSearchEngine.contentLimit
+                    limit: MatteryaSearchEngine.contentPageSize,
+                    offset: 0
                 )
                 guard searchGeneration == generation else { return }
                 content = loaded
+                contentNextOffset = MatteryaSearchEngine.contentPageSize
+                contentHasMore = loaded.count >= MatteryaSearchEngine.contentPageSize
+                    && contentNextOffset < MatteryaSearchEngine.maxContentTotal
             } catch {
                 guard searchGeneration == generation else { return }
                 content = []
+                contentHasMore = false
                 if profiles.isEmpty {
                     searchError = searchError ?? error.localizedDescription
                 }
@@ -466,5 +536,65 @@ struct SearchView: View {
         }()
 
         _ = await (peopleTask, contentTask)
+    }
+
+    private func loadMorePeople() async {
+        let trimmed = normalizedQuery
+        guard !trimmed.isEmpty, peopleHasMore, !isLoadingMorePeople else { return }
+        guard peopleNextOffset < MatteryaSearchEngine.maxPeopleTotal else {
+            peopleHasMore = false
+            return
+        }
+        let generation = searchGeneration
+        let offset = peopleNextOffset
+        isLoadingMorePeople = true
+        defer { if searchGeneration == generation { isLoadingMorePeople = false } }
+        do {
+            let loaded = try await ProfileService.shared.searchProfiles(
+                trimmed,
+                limit: MatteryaSearchEngine.peoplePageSize,
+                offset: offset
+            )
+            guard searchGeneration == generation else { return }
+            let existing = Set(profiles.map(\.userID))
+            let appended = loaded.filter { !existing.contains($0.userID) }
+            profiles.append(contentsOf: appended)
+            peopleNextOffset = offset + MatteryaSearchEngine.peoplePageSize
+            peopleHasMore = loaded.count >= MatteryaSearchEngine.peoplePageSize
+                && peopleNextOffset < MatteryaSearchEngine.maxPeopleTotal
+        } catch {
+            guard searchGeneration == generation else { return }
+            peopleHasMore = false
+        }
+    }
+
+    private func loadMoreContent() async {
+        let trimmed = normalizedQuery
+        guard !trimmed.isEmpty, contentHasMore, !isLoadingMoreContent else { return }
+        guard contentNextOffset < MatteryaSearchEngine.maxContentTotal else {
+            contentHasMore = false
+            return
+        }
+        let generation = searchGeneration
+        let offset = contentNextOffset
+        isLoadingMoreContent = true
+        defer { if searchGeneration == generation { isLoadingMoreContent = false } }
+        do {
+            let loaded = try await PostsService.shared.searchPosts(
+                trimmed,
+                limit: MatteryaSearchEngine.contentPageSize,
+                offset: offset
+            )
+            guard searchGeneration == generation else { return }
+            let existing = Set(content.map(\.id))
+            let appended = loaded.filter { !existing.contains($0.id) }
+            content.append(contentsOf: appended)
+            contentNextOffset = offset + MatteryaSearchEngine.contentPageSize
+            contentHasMore = loaded.count >= MatteryaSearchEngine.contentPageSize
+                && contentNextOffset < MatteryaSearchEngine.maxContentTotal
+        } catch {
+            guard searchGeneration == generation else { return }
+            contentHasMore = false
+        }
     }
 }

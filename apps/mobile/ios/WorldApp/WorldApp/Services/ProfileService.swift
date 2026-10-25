@@ -94,7 +94,7 @@ final class ProfileService {
         let query = """
         query MeProfile {
           meProfile {
-            user_id email display_name username avatar_url
+            user_id email display_name username avatar_url is_verified
             country_name country_code city_name bio\(birthField)
             message_privacy
             account_status deactivated_at deleted_at
@@ -262,7 +262,7 @@ final class ProfileService {
         let mutation = """
         mutation UpdateProfile($input: UpdateProfileInput!) {
           updateProfile(input: $input) {
-            user_id email display_name username avatar_url
+            user_id email display_name username avatar_url is_verified
             country_name country_code city_name bio\(birthField)
             message_privacy
             account_status
@@ -286,7 +286,7 @@ final class ProfileService {
         let query = """
         query ProfileByUsername($username: String!) {
           profileByUsername(username: $username) {
-            user_id email display_name username avatar_url
+            user_id email display_name username avatar_url is_verified
             country_name country_code city_name bio created_at updated_at
           }
         }
@@ -306,19 +306,24 @@ final class ProfileService {
         return result.profileByUsername?.toModel
     }
 
-    func searchProfiles(_ query: String, limit: Int = 20) async throws -> [Profile] {
+    func searchProfiles(_ query: String, limit: Int = 40, offset: Int = 0) async throws -> [Profile] {
         struct Response: Decodable { let searchProfiles: [GraphQLProfile] }
+        let capped = min(max(limit, 1), 100)
+        let start = max(0, min(offset, 400))
         let gqlQuery = """
-        query SearchProfiles($query: String!, $limit: Int) {
-          searchProfiles(query: $query, limit: $limit) {
-            user_id email display_name username avatar_url
-            country_name country_code city_name bio created_at updated_at
+        query SearchProfiles($query: String!, $limit: Int, $offset: Int) {
+          searchProfiles(query: $query, limit: $limit, offset: $offset) {
+            user_id display_name username avatar_url is_verified
+            country_name country_code city_name
           }
         }
         """
-        let result: Response = try await gql.authenticatedRequest(query: gqlQuery, variables: ["query": query, "limit": limit])
-        let profiles = result.searchProfiles.map(\.toModel)
-        return MatteryaSearchEngine.rankProfiles(profiles, query: query, limit: limit)
+        let result: Response = try await gql.authenticatedRequest(
+            query: gqlQuery,
+            variables: ["query": query, "limit": capped, "offset": start]
+        )
+        // Server prefix ranking is authoritative — keep order stable for Load more pages.
+        return Array(result.searchProfiles.map(\.toModel).prefix(capped))
     }
 
     func browseProfiles(limit: Int = 30, offset: Int = 0) async throws -> [Profile] {
@@ -326,7 +331,7 @@ final class ProfileService {
         let query = """
         query BrowseProfiles($limit: Int, $offset: Int) {
           browseProfiles(limit: $limit, offset: $offset) {
-            user_id email display_name username avatar_url
+            user_id email display_name username avatar_url is_verified
             country_name country_code city_name bio created_at updated_at
           }
         }
@@ -340,7 +345,7 @@ final class ProfileService {
         let query = """
         query ProfileById($user_id: ID!) {
           profileById(user_id: $user_id) {
-            user_id email display_name username avatar_url
+            user_id email display_name username avatar_url is_verified
             country_name country_code city_name bio created_at updated_at
           }
         }

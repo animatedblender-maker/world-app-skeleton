@@ -48,10 +48,19 @@ export const profilesResolvers = {
       if (!args?.username) return null;
       return await svc().getProfileByUsername(args.username, ctx.user?.id ?? null);
     },
-    searchProfiles: async (_: any, args: { query: string; limit?: number }, ctx: Context) => {
+    searchProfiles: async (
+      _: any,
+      args: { query: string; limit?: number; offset?: number },
+      ctx: Context
+    ) => {
       const raw = (args?.query ?? '').trim();
       if (!raw) return [];
-      return await svc().searchProfiles(raw, args?.limit ?? 6, ctx.user?.id ?? null);
+      return await svc().searchProfiles(
+        raw,
+        args?.limit ?? 40,
+        ctx.user?.id ?? null,
+        args?.offset ?? 0
+      );
     },
     browseProfiles: async (_: any, args: { limit?: number; offset?: number }, ctx: Context) => {
       return await svc().browseProfiles(args?.limit ?? 80, args?.offset ?? 0, ctx.user?.id ?? null);

@@ -2,8 +2,13 @@ import Foundation
 
 enum MatteryaSearchEngine {
     static let countryLimit = 12
-    static let peopleLimit = 20
-    static let contentLimit = 40
+    /// First page + Load more page sizes (server max page is 100).
+    static let peopleLimit = 40
+    static let contentLimit = 60
+    static let peoplePageSize = 40
+    static let contentPageSize = 60
+    static let maxPeopleTotal = 200
+    static let maxContentTotal = 300
 
     static func normalizeName(_ value: String) -> String {
         value

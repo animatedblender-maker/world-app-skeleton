@@ -39,7 +39,7 @@ async function lexicalSearch(
   const escaped = q.replace(/[%_\\]/g, '\\$&');
   const prefix = `${escaped}%`;
   const contains = `%${escaped}%`;
-  const max = Math.max(1, Math.min(40, limit));
+  const max = Math.max(1, Math.min(500, limit));
 
   try {
     const { rows } = await pool.query<{
@@ -136,12 +136,16 @@ function rrfMerge(
 export async function hybridSearch(opts: {
   query: string;
   limit?: number;
+  offset?: number;
   viewerId?: string | null;
 }): Promise<HybridSearchResult> {
   const started = Date.now();
   const query = String(opts.query ?? '').trim().slice(0, 200);
-  const limit = Math.min(Math.max(opts.limit ?? 20, 1), 40);
+  const limit = Math.min(Math.max(opts.limit ?? 20, 1), 100);
+  const offset = Math.max(0, Math.min(400, opts.offset ?? 0));
   const viewerId = opts.viewerId ?? null;
+  // Fetch enough ranked hits to satisfy this page (offset + limit), capped.
+  const fetchCount = Math.min(500, offset + limit);
 
   if (!query) {
     return {
@@ -155,13 +159,13 @@ export async function hybridSearch(opts: {
   }
 
   const useHybrid = mindHybridSearchEnabled() && mindEmbeddingsEnabled();
-  const lexical = await lexicalSearch(query, limit, viewerId);
+  const lexical = await lexicalSearch(query, fetchCount, viewerId);
   let semanticIds: string[] = [];
   if (useHybrid) {
     try {
       semanticIds = await annCandidates({
         queryText: query,
-        limit: Math.min(limit * 2, 48),
+        limit: Math.min(Math.max(fetchCount * 2, 48), 120),
         excludeIds: [],
       });
     } catch {
@@ -169,9 +173,10 @@ export async function hybridSearch(opts: {
     }
   }
 
-  const items = useHybrid && semanticIds.length
-    ? rrfMerge(lexical, semanticIds).slice(0, limit)
-    : lexical.slice(0, limit);
+  const ranked = useHybrid && semanticIds.length
+    ? rrfMerge(lexical, semanticIds)
+    : lexical;
+  const items = ranked.slice(offset, offset + limit);
 
   // Fill title/author for semantic-only hits
   const missing = items.filter((i) => !i.title).map((i) => i.id);
