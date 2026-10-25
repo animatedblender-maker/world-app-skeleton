@@ -421,7 +421,7 @@ struct SearchView: View {
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(Theme.ink)
                                 .lineLimit(1)
-                            if profile.isVerified {
+                            if profile.isVerified == true {
                                 Image(systemName: "checkmark.seal.fill")
                                     .font(.caption2)
                                     .foregroundStyle(Theme.ink)
