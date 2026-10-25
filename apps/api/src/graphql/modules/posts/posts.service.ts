@@ -837,8 +837,37 @@ export class PostsService {
   async searchPosts(query: string, limit: number, viewerId: string | null): Promise<PostRow[]> {
     const term = String(query ?? '').trim().replace(/^@+/, '');
     if (!term) return [];
-    // Typeahead — small pages, prefix-first, no correlated counts / shared_post tree.
+    // Typeahead — small pages. Prefer MIND-020 hybrid (keyword + Voyage) when enabled.
     const max = Math.max(1, Math.min(40, limit || 16));
+
+    try {
+      const { hybridSearch } = await import('../../../recommendation/mind-search.js');
+      const hybrid = await hybridSearch({
+        query: term,
+        limit: max,
+        viewerId,
+      });
+      if (hybrid.items.length) {
+        const ids = hybrid.items.map((i) => i.id).filter(Boolean);
+        const byId = await this.loadSearchPostRowsByIds(ids, viewerId);
+        const ordered = ids
+          .map((id) => byId.get(id))
+          .filter((p): p is PostRow => !!p);
+        if (ordered.length) return await withoutMoments(ordered);
+      }
+    } catch {
+      /* fall through to lexical */
+    }
+
+    return await this.lexicalSearchPosts(term, max, viewerId);
+  }
+
+  /** Lexical-only fallback used when hybrid is off or fails. */
+  private async lexicalSearchPosts(
+    term: string,
+    max: number,
+    viewerId: string | null
+  ): Promise<PostRow[]> {
     const q = term.toLowerCase();
     const escaped = q.replace(/[%_\\]/g, '\\$&');
     const prefix = `${escaped}%`;
@@ -910,6 +939,63 @@ export class PostsService {
     );
 
     return await withoutMoments(rows as PostRow[]);
+  }
+
+  private async loadSearchPostRowsByIds(
+    ids: string[],
+    viewerId: string | null
+  ): Promise<Map<string, PostRow>> {
+    const map = new Map<string, PostRow>();
+    if (!ids.length) return map;
+    const privacySql = await this.privateAuthorVisibleSql('$2::uuid');
+    try {
+      const { rows } = await pool.query(
+        `
+        select
+          p.id, p.author_id, p.category_id, p.country_name, p.country_code, p.city_name,
+          p.title, p.body, p.media_type, p.media_url, p.thumb_url, p.visibility,
+          p.shared_post_id, p.hub_slug, p.moderation_status,
+          p.created_at, p.updated_at,
+          coalesce(p.like_count, 0)::int as like_count,
+          coalesce(p.comment_count, 0)::int as comment_count,
+          false as liked_by_me,
+          false as saved_by_me,
+          jsonb_build_object(
+            'user_id', pr.user_id,
+            'display_name', pr.display_name,
+            'username', pr.username,
+            'avatar_url', pr.avatar_url,
+            'country_name', pr.country_name,
+            'country_code', pr.country_code,
+            'is_verified', coalesce(pr.is_verified, false)
+          ) as author,
+          null::jsonb as shared_post
+        from public.posts p
+        left join public.profiles pr on pr.user_id = p.author_id
+        where p.id = any($1::uuid[])
+          and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted', 'sensitive')
+          ${EXCLUDE_MOMENTS_SQL}
+          and (
+            p.visibility = 'public'
+            or ($2::uuid is not null and p.author_id = $2::uuid)
+            or (
+              p.visibility = 'followers'
+              and $2::uuid is not null
+              and exists (
+                select 1 from public.user_follows f
+                where f.follower_id = $2::uuid and f.following_id = p.author_id
+              )
+            )
+          )
+          ${privacySql}
+        `,
+        [ids, viewerId]
+      );
+      for (const r of rows as PostRow[]) map.set(String((r as any).id), r);
+    } catch {
+      /* ignore */
+    }
+    return map;
   }
 
   /**
