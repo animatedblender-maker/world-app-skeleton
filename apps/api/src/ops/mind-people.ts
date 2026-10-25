@@ -1,6 +1,9 @@
 /**
  * MIND Ops — per-user interest dossier (real Public profiles only).
  * Search + full “what we know” payload for /mind People tab.
+ *
+ * Pipeline seed owners use `@seed.matterya.internal` (see content-pipeline/owners.ts).
+ * Those — plus harness/test Matterya emails — are excluded from People.
  */
 import { pool } from '../db.js';
 import { loadInterestBubbles } from '../recommendation/knn.service.js';
@@ -8,8 +11,38 @@ import { loadInterestBubbles } from '../recommendation/knn.service.js';
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+/** SQL fragment: profile alias `p` is a real human (not pipeline seed / harness). */
+const REAL_USER_SQL = `
+  coalesce(p.deleted_at, null) is null
+  and coalesce(p.account_status, 'active') not in ('deleted', 'banned')
+  and coalesce(p.email, '') not ilike '%@seed.matterya.internal'
+  and coalesce(p.email, '') not ilike '%@matterya.dev'
+  and coalesce(p.email, '') not ilike 'ios.test%@gmail.com'
+  and coalesce(p.email, '') not ilike 'flutter_test%@%'
+  and coalesce(p.email, '') not ilike 'android_crash_test%@%'
+  and coalesce(p.email, '') not ilike 'iostester@%'
+  and coalesce(p.bio, '') is distinct from 'Matterya seed profile'
+`;
+
 function isUuid(s: string): boolean {
   return UUID_RE.test(s);
+}
+
+/** True when this email/bio marks a seed or automated test account. */
+export function isSeedOrHarnessProfile(opts: {
+  email?: string | null;
+  bio?: string | null;
+}): boolean {
+  const email = String(opts.email || '').toLowerCase();
+  const bio = String(opts.bio || '');
+  if (email.endsWith('@seed.matterya.internal')) return true;
+  if (email.endsWith('@matterya.dev')) return true;
+  if (email.startsWith('ios.test') && email.endsWith('@gmail.com')) return true;
+  if (email.startsWith('flutter_test')) return true;
+  if (email.startsWith('android_crash_test')) return true;
+  if (email.startsWith('iostester@')) return true;
+  if (bio === 'Matterya seed profile') return true;
+  return false;
 }
 
 function topMap(
@@ -41,7 +74,7 @@ export type PeopleSearchHit = {
   affinityCreators: number;
 };
 
-/** Search real profiles by name / username / uuid (excludes deleted). */
+/** Search real profiles by name / username / uuid (excludes seeds + harness). */
 export async function searchPeople(
   query: string,
   limit = 20
@@ -49,7 +82,8 @@ export async function searchPeople(
   const q = String(query || '').trim();
   const lim = Math.min(Math.max(limit, 1), 40);
   if (!q) {
-    // Default: most active real users (7d engagement).
+    // Default: most active *real* users (7d engagement). Scan a wider eng pool
+    // then filter seeds — otherwise top-N engagers are almost all seed owners.
     const { rows } = await pool.query<{
       user_id: string;
       display_name: string | null;
@@ -66,8 +100,6 @@ export async function searchPeople(
         from public.entity_engagement_events
         where occurred_at > now() - interval '7 days'
         group by entity_id
-        order by n desc
-        limit 80
       )
       select
         p.user_id::text,
@@ -83,8 +115,7 @@ export async function searchPeople(
         ), 0)::text as affinity_creators
       from public.profiles p
       join eng e on e.entity_id = p.user_id
-      where coalesce(p.deleted_at, null) is null
-        and coalesce(p.account_status, 'active') not in ('deleted', 'banned')
+      where ${REAL_USER_SQL}
       order by e.n desc
       limit $1
       `,
@@ -110,11 +141,15 @@ export async function searchPeople(
       avatar_url: string | null;
       country_code: string | null;
       country_name: string | null;
+      email: string | null;
+      bio: string | null;
     }>(
       `
-      select user_id::text, display_name, username, avatar_url, country_code, country_name
-      from public.profiles
-      where user_id = $1::uuid
+      select p.user_id::text, p.display_name, p.username, p.avatar_url,
+             p.country_code, p.country_name, p.email, p.bio
+      from public.profiles p
+      where p.user_id = $1::uuid
+        and ${REAL_USER_SQL}
       limit 1
       `,
       [q]
@@ -163,13 +198,13 @@ export async function searchPeople(
         where a.entity_id = p.user_id
       ), 0)::text as affinity_creators
     from public.profiles p
-    where coalesce(p.deleted_at, null) is null
+    where ${REAL_USER_SQL}
       and (
         p.display_name ilike $1
         or p.username ilike $1
         or p.email ilike $1
       )
-    order by events7d::int desc nulls last, p.display_name asc nulls last
+    order by 7 desc nulls last, p.display_name asc nulls last
     limit $2
     `,
     [like, lim]
@@ -406,6 +441,10 @@ export async function getUserDossier(userId: string): Promise<Record<string, unk
 
   const profile = profileRes.rows[0];
   if (!profile) return null;
+  // Never serve pipeline seed / harness accounts as “real user” dossiers.
+  if (isSeedOrHarnessProfile({ email: profile.email, bio: profile.bio })) {
+    return null;
+  }
 
   const personality = personalityRes.rows[0] || null;
 

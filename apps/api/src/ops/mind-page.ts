@@ -299,7 +299,7 @@ function mindHtml(): string {
     <section class="panel" id="panel-people">
       <div class="card">
         <h2>People — interest dossier</h2>
-        <p class="muted">Ops-only. Search any <strong>real</strong> Matterya user by name, @username, email, or UUID. Shows everything MIND knows: profile, hub/country interests, creator affinity, engagement, deliveries, neighbors, recent rank decisions (incl. ANN hits when present).</p>
+        <p class="muted">Ops-only. <strong>Real humans only</strong> — pipeline seeds (<code>@seed.matterya.internal</code>) and test harness accounts are hidden. Search by name, @username, email, or UUID. Dossier: profile, hub/country interests, creator affinity, engagement, deliveries, neighbors, recent rank decisions (incl. ANN hits when present).</p>
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;align-items:center">
           <input id="peopleQ" type="search" placeholder="Search name, @username, email, or uuid…"
             style="flex:1;min-width:220px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--ink);font-size:15px"/>
