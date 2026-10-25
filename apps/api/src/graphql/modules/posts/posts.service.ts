@@ -289,6 +289,8 @@ export class PostsService {
   private privacyColumnExists: boolean | null = null;
   /** public.post_comment_likes — comment likes migration may lag behind deploy. */
   private commentLikesTableExists: boolean | null = null;
+  /** posts.hub_slug — migration 20260817120000 may lag behind deploy. */
+  private hubSlugColumnExists: boolean | null = null;
 
   private async bookmarksEnabled(): Promise<boolean> {
     if (this.bookmarksTableExists !== null) return this.bookmarksTableExists;
@@ -327,6 +329,33 @@ export class PostsService {
       );
     }
     return this.privacyColumnExists;
+  }
+
+  private async hubSlugEnabled(): Promise<boolean> {
+    if (this.hubSlugColumnExists !== null) return this.hubSlugColumnExists;
+    try {
+      const { rows } = await pool.query<{ exists: boolean }>(
+        `
+        select exists (
+          select 1
+          from information_schema.columns
+          where table_schema = 'public'
+            and table_name = 'posts'
+            and column_name = 'hub_slug'
+        ) as exists
+        `
+      );
+      this.hubSlugColumnExists = !!rows?.[0]?.exists;
+    } catch {
+      this.hubSlugColumnExists = false;
+    }
+    return this.hubSlugColumnExists;
+  }
+
+  /** Select hub_slug when the column exists; otherwise null (search must not 500). */
+  private async hubSlugSelectSql(alias = 'p'): Promise<string> {
+    if (await this.hubSlugEnabled()) return `${alias}.hub_slug`;
+    return 'null::text as hub_slug';
   }
 
   private async commentLikesEnabled(): Promise<boolean> {
@@ -873,13 +902,14 @@ export class PostsService {
     const prefix = `${escaped}%`;
     const contains = `%${escaped}%`;
     const privacySql = await this.privateAuthorVisibleSql('$4::uuid');
+    const hubSlugSelect = await this.hubSlugSelectSql('p');
 
     const { rows } = await pool.query(
       `
       select
         p.id, p.author_id, p.category_id, p.country_name, p.country_code, p.city_name,
         p.title, p.body, p.media_type, p.media_url, p.thumb_url, p.visibility,
-        p.shared_post_id, p.hub_slug, p.moderation_status,
+        p.shared_post_id, ${hubSlugSelect}, p.moderation_status,
         p.created_at, p.updated_at,
         coalesce(p.like_count, 0)::int as like_count,
         coalesce(p.comment_count, 0)::int as comment_count,
@@ -948,13 +978,14 @@ export class PostsService {
     const map = new Map<string, PostRow>();
     if (!ids.length) return map;
     const privacySql = await this.privateAuthorVisibleSql('$2::uuid');
+    const hubSlugSelect = await this.hubSlugSelectSql('p');
     try {
       const { rows } = await pool.query(
         `
         select
           p.id, p.author_id, p.category_id, p.country_name, p.country_code, p.city_name,
           p.title, p.body, p.media_type, p.media_url, p.thumb_url, p.visibility,
-          p.shared_post_id, p.hub_slug, p.moderation_status,
+          p.shared_post_id, ${hubSlugSelect}, p.moderation_status,
           p.created_at, p.updated_at,
           coalesce(p.like_count, 0)::int as like_count,
           coalesce(p.comment_count, 0)::int as comment_count,

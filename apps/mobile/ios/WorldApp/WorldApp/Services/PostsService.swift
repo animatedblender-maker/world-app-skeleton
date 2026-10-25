@@ -16,11 +16,11 @@ final class PostsService {
     shared_post {
       id title body media_type media_url thumb_url author_id
       like_count comment_count
-      author { user_id display_name username avatar_url country_name country_code }
+      author { user_id display_name username avatar_url country_name country_code is_verified }
     }
     visibility like_count comment_count liked_by_me
     created_at updated_at author_id country_name country_code city_name
-    author { user_id display_name username avatar_url country_name country_code }
+    author { user_id display_name username avatar_url country_name country_code is_verified }
     """
 
     private let postFieldsWithBookmarks = """
@@ -28,11 +28,11 @@ final class PostsService {
     shared_post {
       id title body media_type media_url thumb_url author_id
       like_count comment_count
-      author { user_id display_name username avatar_url country_name country_code }
+      author { user_id display_name username avatar_url country_name country_code is_verified }
     }
     visibility like_count comment_count liked_by_me saved_by_me
     created_at updated_at author_id country_name country_code city_name
-    author { user_id display_name username avatar_url country_name country_code }
+    author { user_id display_name username avatar_url country_name country_code is_verified }
     """
 
     func listByCountry(_ countryCode: String, limit: Int = 25) async throws -> [CountryPost] {
@@ -781,6 +781,11 @@ final class PostsService {
             if out.count >= limit { return out }
         }
 
+        // Cold open / splash: surface page is enough — GraphQL discover stampeded -1001.
+        guard FeedVideoFocus.shared.allowsFeedAVWarm, out.count < max(limit / 2, 8) else {
+            return out
+        }
+
         let remote = await fetchDiscoverSparks(
             limit: max(limit * 2, 40),
             excluding: Array(seen.prefix(800))
@@ -1424,27 +1429,40 @@ final class PostsService {
         return merged
     }
 
-    func searchPosts(_ query: String, limit: Int = 20) async throws -> [CountryPost] {
+    /// Lighter field set for typeahead — no nested shared_post tree.
+    private let searchPostFields = """
+    id title body media_type media_url thumb_url shared_post_id hub_slug
+    visibility like_count comment_count liked_by_me
+    created_at updated_at author_id country_name country_code city_name
+    author { user_id display_name username avatar_url country_name country_code is_verified }
+    """
+
+    func searchPosts(_ query: String, limit: Int = 16) async throws -> [CountryPost] {
         struct Response: Decodable { let searchPosts: [GraphQLPost] }
+        let capped = min(max(limit, 1), 40)
         let gqlQuery = """
         query SearchPosts($query: String!, $limit: Int) {
-          searchPosts(query: $query, limit: $limit) { \(postFields) }
+          searchPosts(query: $query, limit: $limit) { \(searchPostFields) }
         }
         """
         let real: [CountryPost]
         do {
-            let result: Response = try await gql.authenticatedRequest(query: gqlQuery, variables: ["query": query, "limit": limit])
+            let result: Response = try await gql.authenticatedRequest(
+                query: gqlQuery,
+                variables: ["query": query, "limit": capped]
+            )
             real = result.searchPosts.map(\.toModel)
         } catch { real = [] }
 
         if AppConfig.useDemoDataset {
-            let demoPosts = await demo.searchPosts(query, limit: limit)
-            let merged = mergePosts(real: real, demo: demoPosts, limit: limit)
-            return MatteryaSearchEngine.rankContent(merged, query: query, limit: limit)
-                .excludingSparks()
+            let demoPosts = await demo.searchPosts(query, limit: capped)
+            let merged = mergePosts(real: real, demo: demoPosts, limit: capped)
+            // Search includes Sparks + posts + videos (Home feed still uses excludingSparks elsewhere).
+            return MatteryaSearchEngine.rankContent(merged, query: query, limit: capped)
+                .excludingMoments()
         }
-        return MatteryaSearchEngine.rankContent(real, query: query, limit: limit)
-            .excludingSparks()
+        return MatteryaSearchEngine.rankContent(real, query: query, limit: capped)
+            .excludingMoments()
     }
 
     func getPostByID(_ postID: String) async throws -> CountryPost? {
@@ -1611,7 +1629,7 @@ final class PostsService {
         query($post_id: ID!, $limit: Int) {
           commentsByPost(post_id: $post_id, limit: $limit) {
             id post_id parent_id author_id body like_count liked_by_me created_at updated_at
-            author { user_id display_name username avatar_url country_name country_code }
+            author { user_id display_name username avatar_url country_name country_code is_verified }
           }
         }
         """
@@ -1642,7 +1660,7 @@ final class PostsService {
         mutation($post_id: ID!, $body: String!, $parent_id: ID) {
           addComment(post_id: $post_id, body: $body, parent_id: $parent_id) {
             id post_id parent_id author_id body like_count liked_by_me created_at updated_at
-            author { user_id display_name username avatar_url country_name country_code }
+            author { user_id display_name username avatar_url country_name country_code is_verified }
           }
         }
         """
@@ -2592,7 +2610,7 @@ final class PostsService {
         mutation($commentId: ID!) {
           likeComment(comment_id: $commentId) {
             id post_id parent_id author_id body like_count liked_by_me created_at updated_at
-            author { user_id display_name username avatar_url country_name country_code }
+            author { user_id display_name username avatar_url country_name country_code is_verified }
           }
         }
         """
@@ -2616,7 +2634,7 @@ final class PostsService {
         mutation($commentId: ID!) {
           unlikeComment(comment_id: $commentId) {
             id post_id parent_id author_id body like_count liked_by_me created_at updated_at
-            author { user_id display_name username avatar_url country_name country_code }
+            author { user_id display_name username avatar_url country_name country_code is_verified }
           }
         }
         """
@@ -2979,10 +2997,13 @@ enum SparkDiscoveryEngine {
         } else if hk.hasPrefix("r2:") {
             add(String(hk.dropFirst("r2:".count)))
             add(hk)
+        } else if hk.hasPrefix("pack:") {
+            add(hk)
+            add(String(hk.dropFirst("pack:".count)))
         } else if hk.hasPrefix("clip:") {
             add(String(hk.dropFirst("clip:".count)))
             add(hk)
-        } else if hk.hasPrefix("media:") {
+        } else if hk.hasPrefix("media:") || hk.hasPrefix("imgcap:") {
             add(hk)
         }
         return keys
@@ -3142,8 +3163,9 @@ enum SparkDiscoveryEngine {
         lock.unlock()
 
         for p in unique {
-            // Written/text cards are not video “watches” — keep them eligible on Home.
-            if isViewed(p), !PlayPlatformBridge.isWrittenHomePost(p) {
+            // Pure text/written can stay eligible; Home image cards follow once-seen like video.
+            if isViewed(p),
+               !(PlayPlatformBridge.isWrittenHomePost(p) && !PlayPlatformBridge.isHomeImageCard(p)) {
                 let keys = discoveryKeys(for: p)
                 let t = keys.compactMap { impSnap[$0] }.min() ?? now
                 viewedPool.append((p, t))
