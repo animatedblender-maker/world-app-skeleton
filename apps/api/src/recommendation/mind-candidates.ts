@@ -11,6 +11,7 @@ export type CandidateLaneId =
   | 'home_tiktok'
   | 'home_hub'
   | 'home_image'
+  | 'home_ann_title'
   | 'hubs_slug_rotate'
   | 'masquerade_fresh'
   | 'masquerade_soft_recycle'
@@ -48,6 +49,12 @@ export const MIND_CANDIDATE_LANES: CandidateLaneDef[] = [
     surface: 'home_for_you',
     label: 'Home · Images',
     description: 'Image posts as a capped lane (not full-page takeover).',
+  },
+  {
+    id: 'home_ann_title',
+    surface: 'home_for_you',
+    label: 'Home · ANN title/body',
+    description: 'Phase 2b pgvector nearest neighbors (Voyage voyage-4-lite).',
   },
   {
     id: 'hubs_slug_rotate',

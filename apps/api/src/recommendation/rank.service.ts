@@ -21,6 +21,7 @@ import {
 } from './knn.service.js';
 import { mmrPick } from './social-score.js';
 import { loadMediaFeaturesForPosts } from './mind-media.js';
+import { annCandidates, mindEmbeddingsEnabled } from './mind-embeddings.js';
 
 export type RankSurface =
   | 'home_for_you'
@@ -56,6 +57,7 @@ export type RankResponse = {
     personality: boolean;
     transcriptReady?: number;
     topicHits?: number;
+    annHits?: number;
   };
 };
 
@@ -141,6 +143,7 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
         personality: false,
         transcriptReady: 0,
         topicHits: 0,
+        annHits: 0,
       },
     };
   }
@@ -193,6 +196,32 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
           ),
     ]);
 
+  // Phase 2b ANN — after bubbles so we can bias the query; never blocks ranking hard.
+  let annIdSet = new Set<string>();
+  if (publicSurface && mindEmbeddingsEnabled()) {
+    const annQueryText =
+      [...(bubbles?.hubs ? bubbles.hubs.keys() : [])].slice(0, 6).join(' ') ||
+      'matterya hubs travel music comedy food';
+    try {
+      const annIds = await annCandidates({
+        queryText: annQueryText,
+        limit: 24,
+        excludeIds: [],
+      });
+      annIdSet = new Set(annIds);
+      // Pull ANN hits into the score pool (and load meta for any new ids).
+      const missing = annIds.filter((id) => !postMeta.has(id) && isUuid(id));
+      if (missing.length) {
+        const extraMeta = await loadPostMeta(missing);
+        for (const [k, v] of extraMeta) postMeta.set(k, v);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const scorePool = [...new Set([...candidateIds, ...annIdSet])];
+
   type Scored = {
     id: string;
     score: number;
@@ -205,7 +234,8 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
   const viewerTopics = bubbles?.hubs ? [...bubbles.hubs.keys()] : [];
   let transcriptReadyHits = 0;
   let topicHitCount = 0;
-  for (const id of candidateIds) {
+  let annHitCount = 0;
+  for (const id of scorePool) {
     if (hidden.has(id)) continue;
 
     const meta = postMeta.get(id);
@@ -288,6 +318,13 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
       }
     }
 
+    // Phase 2b — soft ANN boost when candidate is near viewer interest embedding.
+    if (annIdSet.has(id)) {
+      score += 1.35;
+      sources.push('ann');
+      annHitCount += 1;
+    }
+
     // Surface policy tweaks
     if (surface === 'home_following') {
       if (!(authorId && following.has(authorId))) {
@@ -341,6 +378,7 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
     personality: !!bubbles && bubbles.eventsCounted > 0,
     transcriptReady: transcriptReadyHits,
     topicHits: topicHitCount,
+    annHits: annHitCount,
   };
 
   // Fire-and-forget warehouse log + optional affinity refresh
@@ -593,6 +631,7 @@ async function logDecision(args: {
     personality: boolean;
     transcriptReady?: number;
     topicHits?: number;
+    annHits?: number;
   };
 }): Promise<void> {
   const uuidItems = args.items.filter((i) => isUuid(i.id));

@@ -381,8 +381,8 @@ function mindHtml(): string {
         <h2>Roadmap</h2>
         <div class="grid">
           <div class="stat"><div class="n" style="font-size:1rem">Phase 0+1</div><div class="l">Audit · ledger · admin · REST meta</div><span class="pill ok">shipped</span></div>
-          <div class="stat"><div class="n" style="font-size:1rem">Phase 2a</div><div class="l">Transcript features live · embeddings next</div><span class="pill ok">phase2.v1</span></div>
-          <div class="stat"><div class="n" style="font-size:1rem">Phase 2b</div><div class="l">pgvector ANN · content embeddings</div><span class="pill">not built</span></div>
+          <div class="stat"><div class="n" style="font-size:1rem">Phase 2a</div><div class="l">Transcript features live</div><span class="pill ok">shipped</span></div>
+          <div class="stat"><div class="n" style="font-size:1rem">Phase 2b</div><div class="l">Voyage title embeddings · pgvector ANN</div><span class="pill ok">phase2.v2</span></div>
           <div class="stat"><div class="n" style="font-size:1rem">Phase 3</div><div class="l">Trained ranker · experiments</div><span class="pill">not built</span></div>
           <div class="stat"><div class="n" style="font-size:1rem">Phase 4</div><div class="l">Search · world · Guardian depth</div><span class="pill">not built</span></div>
           <div class="stat"><div class="n" style="font-size:1rem">Phase 5</div><div class="l">Scale only after measured need</div><span class="pill">not built</span></div>
@@ -398,7 +398,7 @@ const GAPS = [
   ['3','Architecture','shipped','This Architecture tab'],
   ['5','Events','shipped','Allowlist ingest + meta scrub + Kafka/PG'],
   ['6','Masquerade isolation','shipped','Live proofs + surface namespace guards'],
-  ['7','Media understanding','shipped','Transcripts + mind_content_features (Phase 2a; pgvector later)'],
+  ['7','Media understanding','shipped','2a features + 2b Voyage/pgvector title embeddings'],
   ['8','Interest features','shipped','Personality + creator affinity + featureHits'],
   ['9','Candidates','shipped','Multi-lane retrieval + mix meta + inventory'],
   ['10','Rank + diversity','shipped','MMR + family caps (Home/Hubs/Masquerade)'],
@@ -574,6 +574,16 @@ async function refresh(){
       + ' · features ' + (media.enabled ? 'ON' : 'OFF')
       + ' · Groq ' + (media.groqConfigured ? 'configured' : 'missing key')
       + ' · missing transcript = UNKNOWN (never demoted)';
+
+    const emb = s.embeddings || {};
+    $('mediaStats').innerHTML += [
+      ['Embed rows', emb.rows],
+      ['Embed dims', emb.dims],
+    ].map(([l,n]) => '<div class="stat"><div class="n">'+fmt(n)+'</div><div class="l">'+l+'</div></div>').join('');
+    $('mediaNote').textContent +=
+      ' · Voyage ' + (emb.configured ? (emb.model||'ok') : 'missing key')
+      + ' · embed rows ' + fmt(emb.rows)
+      + ' · ' + (emb.enabled ? 'ANN ON' : 'ANN OFF');
 
     if (!$('docNav').dataset.ready) {
       $('docNav').dataset.ready = '1';

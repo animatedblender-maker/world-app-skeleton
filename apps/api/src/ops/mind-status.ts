@@ -33,6 +33,10 @@ import {
   MIND_MEDIA_FEATURE_CATALOG,
   type MediaUnderstandingStatus,
 } from '../recommendation/mind-media.js';
+import {
+  getEmbeddingsStatus,
+  type EmbeddingsStatus,
+} from '../recommendation/mind-embeddings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 function resolveDocsMind(): string {
@@ -110,6 +114,7 @@ export type MindStatus = {
     surfaces: MindSurfaceCatalogEntry[];
   };
   mediaUnderstanding: MediaUnderstandingStatus;
+  embeddings: EmbeddingsStatus;
   masquerade: {
     rooms: { slug: string; title: string; posts: number }[];
     posts: number;
@@ -613,6 +618,22 @@ async function buildMindStatus(): Promise<MindStatus> {
     console.warn('[mind-status] mediaUnderstanding', err?.message ?? err);
   }
 
+  let embeddings: EmbeddingsStatus;
+  try {
+    embeddings = await getEmbeddingsStatus();
+  } catch (err: any) {
+    embeddings = {
+      enabled: false,
+      configured: !!process.env.VOYAGE_API_KEY?.trim(),
+      model: 'voyage-4-lite',
+      modelVersion: 'voyage:voyage-4-lite',
+      dims: 1024,
+      rows: 0,
+      source: 'title_body',
+    };
+    console.warn('[mind-status] embeddings', err?.message ?? err);
+  }
+
   return {
     ok: true,
     at: new Date().toISOString(),
@@ -622,7 +643,7 @@ async function buildMindStatus(): Promise<MindStatus> {
     engagement,
     masquerade,
     seed: readSeedProgress(),
-    // Phase 2a: §7 media shipped; remaining missing = §14/15/18 (+ handbook partials outside console table)
+    // Phase 2b: embeddings + ANN; remaining missing = §14/15/18
     gapSummary: { shipped: 14, partial: 3, missing: 5 },
     docs: listDocs(),
     recent,
@@ -631,5 +652,6 @@ async function buildMindStatus(): Promise<MindStatus> {
     interest,
     purpose,
     mediaUnderstanding,
+    embeddings,
   };
 }
