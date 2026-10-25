@@ -13,10 +13,17 @@ Open the live console (same Ops password as Pipeline / Reports / Frame 0):
 
 The page illustrates architecture, live ledger/seed health, gap status vs the handbook, and the full handbook text.
 
+## Session pack (humans + developers)
+
+Broader Matterya write-up of recent work (MIND Phase 2b, Voyage, Archive name fix, checklists):
+
+→ **[../matterya/](../matterya/)** — also mirrored at `/Volumes/MatteryaSSD/Development/docs/matterya/`
+
 ## Documents
 
 | Doc | Purpose |
 |-----|---------|
+| [MIND_FOR_HUMANS.md](./MIND_FOR_HUMANS.md) | Plain-language MIND story |
 | [Matterya_MIND_Engineering_Handbook.md](./Matterya_MIND_Engineering_Handbook.md) | Target specification (v1.0) |
 | [00-audit.md](./00-audit.md) | Phase 0: what exists in this repo today |
 | [01-gap-matrix.md](./01-gap-matrix.md) | Handbook § → code map + tickets |

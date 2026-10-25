@@ -3,6 +3,10 @@
 This is a plain-language story of **what MIND is**, **what we built**, and **what we did not finish yet**.  
 No assumed jargon. If a technical name appears, it gets a one-line meaning.
 
+> **Full session pack (checklists, Voyage, Archive name fix, developer twin):**  
+> [`docs/matterya/for-humans/00-START-HERE.md`](../matterya/for-humans/00-START-HERE.md)  
+> SSD mirror: `/Volumes/MatteryaSSD/Development/docs/matterya/`
+
 ---
 
 ## What is MIND?
