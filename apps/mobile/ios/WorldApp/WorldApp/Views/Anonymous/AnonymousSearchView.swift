@@ -425,10 +425,10 @@ struct AnonymousSearchView: View {
         recentQueries = SearchHistoryStore.recent(for: .masquerade)
     }
 
-    /// Only on Return / result tap / Recent pick — never while typing.
+    /// Only on Return / result tap / Recent pick — never on typing pause.
     private func commitHistory() {
         let q = queryDebounceKey
-        guard !q.isEmpty else { return }
+        guard q.count >= 2 else { return }
         SearchHistoryStore.record(q, surface: .masquerade)
         reloadRecent()
     }

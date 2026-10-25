@@ -85,7 +85,8 @@ struct SearchView: View {
                     .submitLabel(.search)
                     .focused($fieldFocused)
                     .onSubmit {
-                        recordHistory(normalizedQuery)
+                        // Keyboard Search / Return — the only type-to-commit path.
+                        commitSearchToHistory()
                         Task { await runSearch(immediate: true) }
                     }
                 if !query.isEmpty {
@@ -166,6 +167,11 @@ struct SearchView: View {
                         .font(.subheadline)
                         .foregroundStyle(Theme.inkMuted)
                         .multilineTextAlignment(.center)
+                    Text("Recent appears after Search on the keyboard or opening a result.")
+                        .font(.caption)
+                        .foregroundStyle(Theme.inkMuted.opacity(0.9))
+                        .multilineTextAlignment(.center)
+                        .padding(.top, 4)
                     Spacer()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -402,7 +408,7 @@ struct SearchView: View {
     private func peopleRow(_ profile: Profile) -> some View {
         HStack(spacing: 12) {
             Button {
-                recordHistory(normalizedQuery)
+                commitSearchToHistory()
                 appState.openPublicProfile(username: profile.username, userID: profile.userID)
             } label: {
                 HStack(spacing: 12) {
@@ -446,7 +452,7 @@ struct SearchView: View {
 
     private func contentRow(_ post: CountryPost) -> some View {
         Button {
-            recordHistory(normalizedQuery)
+            commitSearchToHistory()
             appState.openSearchResult(post)
         } label: {
             HStack(alignment: .center, spacing: 12) {
@@ -577,7 +583,7 @@ struct SearchView: View {
     private func applyHistoryQuery(_ item: String) {
         query = item
         scope = .top
-        recordHistory(item)
+        commitSearchToHistory(explicit: item)
         Task { await runSearch(immediate: true) }
     }
 
@@ -605,9 +611,10 @@ struct SearchView: View {
         recentQueries = SearchHistoryStore.recent(for: .main)
     }
 
-    private func recordHistory(_ raw: String) {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+    /// History commit — Return / result tap / Recent pick only. Never from debounce.
+    private func commitSearchToHistory(explicit: String? = nil) {
+        let trimmed = (explicit ?? normalizedQuery).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 2 else { return }
         SearchHistoryStore.record(trimmed, surface: .main)
         reloadRecent()
     }
@@ -624,16 +631,18 @@ struct SearchView: View {
             contentHasMore = false
             peopleNextOffset = 0
             contentNextOffset = 0
+            // Empty field → show Recent (idle). Refresh so commits from result taps appear.
+            reloadRecent()
             return
         }
 
         if !immediate {
+            // Live results only — never write Recent on this path (mid-word pause).
             try? await Task.sleep(nanoseconds: 120_000_000)
             guard !Task.isCancelled else { return }
             guard normalizedQuery == trimmed else { return }
         }
 
-        // Do NOT record here — typing debounce must not pollute Recent.
         let generation = searchGeneration + 1
         searchGeneration = generation
         searchError = nil

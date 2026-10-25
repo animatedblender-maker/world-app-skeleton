@@ -401,10 +401,10 @@ struct YouTubeSearchSheet: View {
         recentQueries = SearchHistoryStore.recent(for: .hubs)
     }
 
-    /// Only on Return / result tap / Recent pick — never while typing.
+    /// Only on Return / result tap / Recent pick — never on typing pause.
     private func commitHistory() {
         let trimmed = normalizedQuery
-        guard !trimmed.isEmpty else { return }
+        guard trimmed.count >= 2 else { return }
         SearchHistoryStore.record(trimmed, surface: .hubs)
         reloadRecent()
     }

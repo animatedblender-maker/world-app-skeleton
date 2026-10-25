@@ -1,7 +1,9 @@
 import Foundation
 
-/// Recent Search queries (device-local), like other engines — tap to re-run, X to remove one.
-/// Surfaces keep **separate** histories (main / hubs / masquerade).
+/// Recent Search queries (device-local). Surfaces keep **separate** histories.
+///
+/// Record **only** on keyboard Search/Return or opening a result — never while typing
+/// or after a short pause mid-word.
 @MainActor
 enum SearchHistoryStore {
     enum Surface: String {
@@ -19,13 +21,15 @@ enum SearchHistoryStore {
     }
 
     private static let maxEntries = 24
+    /// Ignore 1-character noise from older debounce bugs.
+    private static let minLength = 2
 
     static func recent(for surface: Surface) -> [String] {
-        let stored = UserDefaults.standard.stringArray(forKey: surface.defaultsKey) ?? []
-        return normalizeList(stored)
+        normalizeList(UserDefaults.standard.stringArray(forKey: surface.defaultsKey) ?? [])
     }
 
-    /// Matching history while typing. Never includes the exact in-progress query.
+    /// Completions while typing — longer history rows that start with the query.
+    /// Never returns the exact in-progress string (that felt like “saving while typing”).
     static func suggestions(matching raw: String, surface: Surface, limit: Int = 8) -> [String] {
         let q = normalize(raw)
         let all = recent(for: surface)
@@ -33,18 +37,18 @@ enum SearchHistoryStore {
         return all
             .filter {
                 let n = normalize($0)
-                // Do not show the word currently being typed as if it were already history.
-                if n == q { return false }
-                return n.contains(q) || n.hasPrefix(q)
+                guard n != q else { return false }
+                // Completions only (easy when typing ea) — not every contains-match.
+                return n.hasPrefix(q) && n.count > q.count
             }
             .prefix(limit)
             .map { $0 }
     }
 
-    /// Call only on Return, result tap, or picking a Recent row — never on every keystroke.
+    /// Call only from Return / result tap / Recent pick.
     static func record(_ raw: String, surface: Surface) {
         let value = normalizeDisplay(raw)
-        guard !value.isEmpty else { return }
+        guard value.count >= minLength else { return }
         var next = recent(for: surface).filter { normalize($0) != normalize(value) }
         next.insert(value, at: 0)
         if next.count > maxEntries {
@@ -78,7 +82,7 @@ enum SearchHistoryStore {
         for raw in values {
             let display = normalizeDisplay(raw)
             let key = normalize(display)
-            guard !key.isEmpty, !seen.contains(key) else { continue }
+            guard key.count >= minLength, !seen.contains(key) else { continue }
             seen.insert(key)
             out.append(display)
             if out.count >= maxEntries { break }
