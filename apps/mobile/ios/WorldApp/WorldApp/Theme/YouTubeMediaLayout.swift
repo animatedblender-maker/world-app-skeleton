@@ -280,7 +280,8 @@ struct YouTubeVideoListRow: View {
             onAppearRow?()
         }
         .task(id: post.id) {
-            // Every Browse-all / list row must mint a poster — never stay black.
+            // LongForm rails already have YouTube hqdefault — skip Frame0 storms that 404.
+            if MediaURLResolver.r2LongformYouTubePosterURL(for: post) != nil { return }
             let usable = MediaURLResolver.hubsListPosterURL(for: post)
                 .map { MediaURLResolver.isUsablePosterURL($0) } ?? false
             if !usable {
@@ -314,8 +315,9 @@ struct YouTubeVideoMetadataRow: View {
             .buttonStyle(.plain)
 
             VStack(alignment: .leading, spacing: 5) {
-                if let headline = post.displayHeadline {
-                    Text(headline)
+                // One caption: body when present; headline only when body empty.
+                if !post.displayExcerpt.isEmpty {
+                    Text(post.displayExcerpt)
                         .font(.system(.subheadline, design: .serif))
                         .fontWeight(.medium)
                         .foregroundStyle(Theme.ink)
@@ -414,6 +416,8 @@ struct PlayFeedLinkCard: View {
     var forceHubsBadge: Bool = false
     /// Home feed vs profile — same ≥25% (quarter) autoplay rules on both.
     var autoplaySurface: FeedAutoplaySurface = .home
+    /// Live Frame 0 after mint — upgrades expired/missing feed thumbs without remount.
+    @State private var liveFrame0URL: URL?
 
     private var horizontalPadding: CGFloat {
         edgeToEdge ? Theme.feedGutter : Theme.pagePadding
@@ -441,6 +445,16 @@ struct PlayFeedLinkCard: View {
         .padding(.top, edgeToEdge ? 0 : 8)
         .onAppear {
             YouTubeCatalogService.shared.recordWatch(post.id)
+            applyFrame0CacheIfNeeded()
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .frame0PostersDidUpdate)
+                .receive(on: DispatchQueue.main)
+        ) { note in
+            let ids = note.userInfo?["postIDs"] as? [String]
+            let playID = PlayPlatformBridge.hubWatchPresentation(for: post).id
+            if let ids, !ids.isEmpty, !ids.contains(post.id), !ids.contains(playID) { return }
+            applyFrame0CacheIfNeeded()
         }
     }
 
@@ -455,11 +469,9 @@ struct PlayFeedLinkCard: View {
                 shared.asCountryPost.playableVideoURL
                     ?? MediaURLResolver.videoURL(for: shared.asCountryPost)
             }) {
-            // Same resolve as Sparks: Frame 0 / thumb_url before YouTube hqdefault fallback.
-            let poster = MediaURLResolver.posterURL(for: playPost)
-                ?? MediaURLResolver.posterURL(for: post)
-                ?? playPost.posterImageURL
-                ?? post.posterImageURL
+            // Same order as Hubs list thumbs: usable Frame0 → LongForm YouTube hqdefault →
+            // resolver. Expired signed webps must not win or the card stays black.
+            let poster = resolveHubFeedPoster(for: playPost)
             // Feed: only Archive CDN needs the UIKit archive path. R2 long-form uses the
             // light VideoPlayerView path — mounting MatteryaHubPlayer on every hub share
             // froze the feed (AV + warm storms).
@@ -481,7 +493,8 @@ struct PlayFeedLinkCard: View {
                         postID: playPost.id,
                         videoURL: url,
                         fillsFrame: false,
-                        allowClientExtract: false
+                        allowClientExtract: false,
+                        seedPosterURL: liveFrame0URL ?? Frame0PosterCache.url(for: playPost.id)
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .allowsHitTesting(false)
@@ -507,6 +520,8 @@ struct PlayFeedLinkCard: View {
                     autoplaySurface: autoplaySurface,
                     tapToRevealControls: true,
                     allowsFullscreen: true,
+                    // Hubs surfaces only — Sparks never set allowsCaptions.
+                    allowsCaptions: true,
                     onFullscreenRequest: {
                         appState.startHubPlayback(post, expanded: true)
                         appState.requestHubFullscreen()
@@ -517,6 +532,21 @@ struct PlayFeedLinkCard: View {
             .id("hub-feed-\(playPost.id)")
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.black)
+            .task(id: playPost.id) {
+                // Mint Frame0 when cache/YouTube still leave a gap — never sit on black.
+                let usable = resolveHubFeedPoster(for: playPost) != nil
+                if !usable {
+                    if let signed = await Frame0PosterResolver.shared.posterURL(postID: playPost.id),
+                       MediaURLResolver.isUsablePosterURL(signed) {
+                        liveFrame0URL = signed
+                    }
+                } else if liveFrame0URL == nil,
+                          Frame0PosterCache.url(for: playPost.id) == nil {
+                    // Upgrade YouTube hqdefault → Frame0 when pack path is ready.
+                    _ = await Frame0PosterResolver.shared.prefetch(postIDs: [playPost.id])
+                    applyFrame0CacheIfNeeded()
+                }
+            }
             // Open Hubs via badge; taps on film toggle chrome inside the player.
         } else {
             YouTubeVideoThumbnail(
@@ -528,6 +558,40 @@ struct PlayFeedLinkCard: View {
             )
             .contentShape(Rectangle())
             .onTapGesture { onOpen() }
+        }
+    }
+
+    /// Prefer usable Frame0, then instant LongForm YouTube, then resolver thumbs.
+    /// Dead/expired R2 must not block hqdefault or feed hubs stay black at start.
+    private func resolveHubFeedPoster(for playPost: CountryPost) -> URL? {
+        let yt = MediaURLResolver.r2LongformYouTubePosterURL(for: playPost)
+            ?? MediaURLResolver.r2LongformYouTubePosterURL(for: post)
+        let candidates: [URL?] = [
+            liveFrame0URL,
+            Frame0PosterCache.url(for: playPost.id),
+            Frame0PosterCache.url(for: post.id),
+            yt,
+            MediaURLResolver.posterURL(for: playPost),
+            MediaURLResolver.posterURL(for: post),
+            playPost.sharedPost.flatMap { MediaURLResolver.posterURL(for: $0.asCountryPost) },
+            post.sharedPost.flatMap { MediaURLResolver.posterURL(for: $0.asCountryPost) },
+        ]
+        for candidate in candidates {
+            guard let url = candidate, MediaURLResolver.isUsablePosterURL(url) else { continue }
+            return url
+        }
+        return nil
+    }
+
+    @MainActor
+    private func applyFrame0CacheIfNeeded() {
+        let playID = PlayPlatformBridge.hubWatchPresentation(for: post).id
+        for id in [playID, post.id] {
+            if let cached = Frame0PosterCache.url(for: id),
+               MediaURLResolver.isUsablePosterURL(cached) {
+                liveFrame0URL = cached
+                return
+            }
         }
     }
 }
@@ -550,7 +614,19 @@ struct YouTubeFeedVideoCard: View {
         VStack(alignment: .leading, spacing: 12) {
             YouTubeVideoFrame(style: .feed) {
                 if let url = post.playableVideoURL {
-                    let poster = MediaURLResolver.posterURL(for: post) ?? post.posterImageURL
+                    // Usable Frame0 / YouTube hqdefault only — expired thumbs stay black.
+                    let posterCandidates: [URL?] = [
+                        Frame0PosterCache.url(for: post.id),
+                        MediaURLResolver.r2LongformYouTubePosterURL(for: post),
+                        MediaURLResolver.posterURL(for: post),
+                    ]
+                    let poster: URL? = {
+                        for candidate in posterCandidates {
+                            guard let u = candidate, MediaURLResolver.isUsablePosterURL(u) else { continue }
+                            return u
+                        }
+                        return nil
+                    }()
                     // Same fit gravity as Hubs watch (not fill/zoom).
                     ZStack {
                         Color.black
@@ -564,6 +640,16 @@ struct YouTubeFeedVideoCard: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .clipped()
                             .allowsHitTesting(false)
+                        } else {
+                            FrameZeroFallbackPoster(
+                                postID: post.id,
+                                videoURL: url,
+                                fillsFrame: false,
+                                allowClientExtract: false,
+                                seedPosterURL: Frame0PosterCache.url(for: post.id)
+                            )
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .allowsHitTesting(false)
                         }
                         InFrameVideoPlayer(
                             url: url,
@@ -572,9 +658,13 @@ struct YouTubeFeedVideoCard: View {
                             contentCountryCode: post.countryCode,
                             postID: post.id,
                             muted: true,
+                            showsControls: true,
                             fillsFrame: false,
                             bottomChromeReserve: 0,
+                            sharesFeedMute: true,
+                            tapToRevealControls: true,
                             allowsFullscreen: true,
+                            allowsCaptions: true,
                             onFullscreenRequest: {
                                 appState.startHubPlayback(post, expanded: true)
                                 appState.requestHubFullscreen()
@@ -597,14 +687,6 @@ struct YouTubeFeedVideoCard: View {
 
             YouTubeVideoMetadataRow(post: post)
                 .padding(.horizontal, Theme.pagePadding)
-
-            if !post.displayExcerpt.isEmpty {
-                Text(post.displayExcerpt)
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.inkSecondary)
-                    .lineLimit(3)
-                    .padding(.horizontal, Theme.pagePadding)
-            }
 
             HStack(spacing: 22) {
                 Button { onLikeToggle?() } label: {
@@ -640,6 +722,92 @@ struct YouTubeWatchPlayer<Content: View>: View {
         .padding(.horizontal, Theme.pagePadding)
         .padding(.top, 8)
         .frame(maxWidth: .infinity)
+    }
+}
+
+/// Endless Netflix-style horizontal rail — ~N ranked cards that wrap forever while swiping.
+/// Renders 3 copies; starts on the middle copy and silently jumps by one copy at the edges
+/// so the finger never hits a hard stop.
+struct HubsLoopingHorizontalRail<Content: View>: View {
+    let posts: [CountryPost]
+    var spacing: CGFloat = 12
+    var horizontalPadding: CGFloat = Theme.pagePadding
+    /// Fired when the logical (mod N) index nears the end of the ranked set.
+    var onNearEnd: (() -> Void)? = nil
+    @ViewBuilder var content: (_ post: CountryPost, _ logicalIndex: Int) -> Content
+
+    /// Need a few cards before looping is meaningful; short rails stay finite.
+    private var shouldLoop: Bool { posts.count >= 3 }
+    private let copies = 3
+    @State private var wrapArmed = false
+
+    var body: some View {
+        let n = posts.count
+        let total = shouldLoop ? n * copies : n
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(alignment: .top, spacing: spacing) {
+                    ForEach(0..<max(total, 0), id: \.self) { index in
+                        let logical = n > 0 ? index % n : 0
+                        let post = posts[logical]
+                        content(post, logical)
+                            .id(index)
+                            .onAppear {
+                                if logical >= max(0, n - 3) {
+                                    onNearEnd?()
+                                }
+                                guard shouldLoop, wrapArmed, n > 0 else { return }
+                                // Third copy → jump back one copy (same visual cards).
+                                if index >= n * 2 {
+                                    var t = Transaction()
+                                    t.disablesAnimations = true
+                                    withTransaction(t) {
+                                        proxy.scrollTo(index - n, anchor: .leading)
+                                    }
+                                } else if index < n {
+                                    // First copy (scrolled backward) → jump forward one copy.
+                                    var t = Transaction()
+                                    t.disablesAnimations = true
+                                    withTransaction(t) {
+                                        proxy.scrollTo(index + n, anchor: .leading)
+                                    }
+                                }
+                            }
+                    }
+                }
+                .padding(.horizontal, horizontalPadding)
+            }
+            .onAppear {
+                guard shouldLoop, n > 0 else {
+                    wrapArmed = true
+                    return
+                }
+                // Land on the middle copy so left/right both have runway.
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) {
+                    proxy.scrollTo(n, anchor: .leading)
+                }
+                DispatchQueue.main.async {
+                    wrapArmed = true
+                }
+            }
+            .onChange(of: posts.map(\.id)) { _, _ in
+                wrapArmed = false
+                guard shouldLoop, n > 0 else {
+                    wrapArmed = true
+                    return
+                }
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) {
+                    proxy.scrollTo(n, anchor: .leading)
+                }
+                DispatchQueue.main.async {
+                    wrapArmed = true
+                }
+            }
+        }
     }
 }
 
@@ -682,6 +850,13 @@ struct HubsShelfThumbCard: View {
                         .stroke(Theme.border.opacity(0.6), lineWidth: 0.5)
                 )
                 .task(id: post.id) {
+                    // Wait out fling — per-cell Frame0 mid-scroll froze Hubs everywhere.
+                    for _ in 0..<6 {
+                        if Task.isCancelled { return }
+                        if !ScrollBudget.isFlinging { break }
+                        try? await Task.sleep(nanoseconds: 220_000_000)
+                    }
+                    if Task.isCancelled || ScrollBudget.isFlinging { return }
                     // Strip tiles must never stay black — mint Frame 0 if thumb is missing/expired.
                     let usable = MediaURLResolver.hubsListPosterURL(for: post)
                         .map { MediaURLResolver.isUsablePosterURL($0) } ?? false

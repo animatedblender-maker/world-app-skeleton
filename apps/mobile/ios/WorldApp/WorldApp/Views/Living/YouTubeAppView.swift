@@ -64,8 +64,8 @@ struct YouTubeAppView: View {
     private static let hubsCatalogMemoryCap = 2200
     /// Rank sample on the navigate hop — larger samples freeze first open.
     private static let hubsFirstPaintRankCap = 96
-    /// Cards per horizontal Netflix rail (Continue / vibe / more).
-    private static let hubsRailCardCount = 24
+    /// Cards per horizontal Netflix rail (Continue / vibe / more) — loop forever at ~15.
+    private static let hubsRailCardCount = 15
     /// First-hop vibe rows (expanded after paint).
     private static let hubsVibeRailCountFirstPaint = 3
     /// Full Netflix vibe rows after deferred densify.
@@ -507,8 +507,17 @@ struct YouTubeAppView: View {
     }
 
     private func rebuildContinueAndFollowingShuffled() {
-        let history = catalog.historyVideos(from: allVideos).filter { !$0.isReel }
-        stableContinueWatching = Array(Self.pureShuffle(history).prefix(Self.hubsRailCardCount))
+        let history = catalog.historyVideos(from: allVideos)
+            .filter { !$0.isReel && PlayPlatformBridge.isHubsForYouLongForm($0) }
+        // Keep history order (most recent resume first), then pad to ~15 from ranked pool.
+        let pool = hubsForYouPool.isEmpty ? allVideos : hubsForYouPool
+        let continueSeed = Array(history.prefix(Self.hubsRailCardCount))
+        stableContinueWatching = Self.padHubsRail(
+            continueSeed.isEmpty ? Array(Self.pureShuffle(history).prefix(Self.hubsRailCardCount)) : continueSeed,
+            target: Self.hubsRailCardCount,
+            from: pool,
+            excluding: []
+        )
         warmContinueWatchingThumbnails()
 
         let following = catalog.subscriptionFeed(
@@ -516,7 +525,7 @@ struct YouTubeAppView: View {
             channels: channels,
             followingIDs: appState.followingIDs
         ).filter { PlayPlatformBridge.isHubsForYouLongForm($0) }
-        stableFollowingVideos = Array(Self.pureShuffle(following).prefix(6))
+        stableFollowingVideos = Array(Self.pureShuffle(following).prefix(Self.hubsRailCardCount))
 
         let ch = catalog.subscriptionChannels(channels, followingIDs: appState.followingIDs)
         stableFollowingChannels = Self.pureShuffle(ch)
@@ -952,11 +961,17 @@ struct YouTubeAppView: View {
 
                             if !stableDiscoverVideos.isEmpty {
                                 let heroID = hubsHeroPost?.id
-                                // Dense Netflix rail — sample enough cards to fill a long swipe.
-                                let peopleRail = Array(
-                                    stableDiscoverVideos
-                                        .filter { $0.id != heroID }
-                                        .prefix(Self.hubsRailCardCount)
+                                let pool = hubsForYouPool.isEmpty ? allVideos : hubsForYouPool
+                                // Ranked For-you stream → ~15 cards that loop forever sideways.
+                                let peopleRail = Self.padHubsRail(
+                                    Array(
+                                        stableDiscoverVideos
+                                            .filter { $0.id != heroID }
+                                            .prefix(Self.hubsRailCardCount)
+                                    ),
+                                    target: Self.hubsRailCardCount,
+                                    from: pool,
+                                    excluding: Set([heroID].compactMap { $0 })
                                 )
                                 if !peopleRail.isEmpty {
                                     hubsNetflixRail(
@@ -1063,15 +1078,18 @@ struct YouTubeAppView: View {
 
     private func rebuildCachedHubsRails() {
         let heroID = hubsHeroPost?.id
+        // Ranked For-you pool is the algorithm source of truth for every rail.
         let pool = hubsForYouPool.isEmpty ? allVideos : hubsForYouPool
         let railN = Self.hubsRailCardCount
         let vibeCount = hubsRailsDense ? Self.hubsVibeRailCount : Self.hubsVibeRailCountFirstPaint
         let moreRows = hubsRailsDense ? Self.hubsMoreRailRows : Self.hubsMoreRailRowsFirstPaint
-        // One pass → slug buckets (repeated pool.filter froze first Hubs hop).
+        let heroSkip = Set([heroID].compactMap { $0 })
+
+        // One pass → slug buckets in ranked order (unviewed already ahead in `pool`).
         var buckets: [String: [CountryPost]] = [:]
         buckets.reserveCapacity(16)
         for post in pool {
-            guard post.id != heroID, PlayPlatformBridge.isHubsForYouLongForm(post) else { continue }
+            guard !heroSkip.contains(post.id), PlayPlatformBridge.isHubsForYouLongForm(post) else { continue }
             let slug = YouTubeCatalogService.parentHubSlug(for: post)
             var list = buckets[slug] ?? []
             if list.count < railN {
@@ -1082,7 +1100,8 @@ struct YouTubeAppView: View {
         var vibe: [HubsVibeRail] = []
         // First hop: few rows. After densify: fuller Netflix catalog.
         for slug in HubVideoSeedService.hubOrder.prefix(vibeCount) {
-            let capped = buckets[slug] ?? []
+            let seed = buckets[slug] ?? []
+            let capped = Self.padHubsRail(seed, target: railN, from: pool, excluding: heroSkip)
             guard capped.count >= 2 else { continue }
             let title = YouTubeHomeFilter(rawValue: slug)?.title ?? slug.capitalized
             vibe.append(HubsVibeRail(slug: slug, title: title, posts: capped))
@@ -1094,7 +1113,8 @@ struct YouTubeAppView: View {
                 + buckets.keys.filter { !used.contains($0) }.sorted()
             for slug in extras {
                 guard vibe.count < vibeCount else { break }
-                let capped = buckets[slug] ?? []
+                let seed = buckets[slug] ?? []
+                let capped = Self.padHubsRail(seed, target: railN, from: pool, excluding: heroSkip)
                 guard capped.count >= 2 else { continue }
                 let title = YouTubeHomeFilter(rawValue: slug)?.title ?? slug.capitalized
                 vibe.append(HubsVibeRail(slug: slug, title: title, posts: capped))
@@ -1103,12 +1123,19 @@ struct YouTubeAppView: View {
         cachedVibeRails = vibe
 
         let vibeIDs = Set(vibe.flatMap { $0.posts.map(\.id) })
-        let peopleIDs = Set(
+        let peopleSeed = Array(
             stableDiscoverVideos
                 .filter { $0.id != heroID }
                 .prefix(railN)
-                .map(\.id)
         )
+        // People rail also targets ~15 from the ranked discover stream.
+        let peopleRail = Self.padHubsRail(
+            peopleSeed,
+            target: railN,
+            from: pool,
+            excluding: heroSkip.union(vibeIDs)
+        )
+        let peopleIDs = Set(peopleRail.map(\.id))
         let continueIDs = Set(continueWatching.prefix(railN).map(\.id))
 
         // Because you watched — skip on first hop (relatedVideos over allVideos froze navigate).
@@ -1123,21 +1150,27 @@ struct YouTubeAppView: View {
             if let seed = becauseSeed {
                 var related = catalog.relatedVideos(to: seed, from: allVideos, limit: railN)
                     .filter { $0.id != seed.id && $0.id != heroID }
-                if related.count < 6 {
+                if related.count < railN {
                     let slug = YouTubeCatalogService.parentHubSlug(for: seed)
                     let fallback = buckets[slug] ?? []
                     var seen = Set(related.map(\.id))
-                    for post in fallback where post.id != seed.id && post.id != heroID {
+                    for post in fallback + pool where post.id != seed.id && post.id != heroID {
                         guard seen.insert(post.id).inserted else { continue }
                         related.append(post)
                         if related.count >= railN { break }
                     }
                 }
-                if related.count >= 2 {
+                let becausePosts = Self.padHubsRail(
+                    related,
+                    target: railN,
+                    from: pool,
+                    excluding: heroSkip.union([seed.id])
+                )
+                if becausePosts.count >= 2 {
                     cachedBecauseYouWatched = HubsMoreRail(
                         id: "because-\(seed.id)",
                         title: Self.becauseYouWatchedTitle(for: seed),
-                        posts: Array(related.prefix(railN))
+                        posts: becausePosts
                     )
                 } else {
                     cachedBecauseYouWatched = nil
@@ -1153,7 +1186,7 @@ struct YouTubeAppView: View {
         var skip = vibeIDs
             .union(peopleIDs)
             .union(continueIDs)
-            .union(Set([heroID].compactMap { $0 }))
+            .union(heroSkip)
             .union(Set(cachedBecauseYouWatched?.posts.map(\.id) ?? []))
         if let seed = becauseSeed { skip.insert(seed.id) }
 
@@ -1167,10 +1200,17 @@ struct YouTubeAppView: View {
             "Still more", "Worth another look", "Deep cuts", "Browse all",
         ]
         while offset < rest.count {
-            let slice = Array(rest[offset..<min(offset + chunk, rest.count)])
+            let sliceSeed = Array(rest[offset..<min(offset + chunk, rest.count)])
+            let slice = Self.padHubsRail(
+                sliceSeed,
+                target: railN,
+                from: pool,
+                excluding: skip.union(Set(sliceSeed.map(\.id)))
+            )
             guard slice.count >= 4 else { break }
             let title = fillerTitles[min(row, fillerTitles.count - 1)]
             more.append(HubsMoreRail(id: "more-\(row)", title: title, posts: slice))
+            skip.formUnion(slice.map(\.id))
             offset += chunk
             row += 1
             if row >= moreRows { break }
@@ -1315,7 +1355,9 @@ struct YouTubeAppView: View {
         cardWidth: CGFloat,
         onNearEnd: (() -> Void)? = nil
     ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        // Algorithm target: ~15 ranked long-form cards; rail loops so swipe never dead-ends.
+        let railPosts = Array(posts.prefix(Self.hubsRailCardCount))
+        return VStack(alignment: .leading, spacing: 10) {
             if !title.isEmpty {
                 Text(title)
                     .font(.title3.weight(.bold))
@@ -1325,32 +1367,46 @@ struct YouTubeAppView: View {
                     .padding(.horizontal, Theme.pagePadding)
             }
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .top, spacing: 12) {
-                    // Offset identity — same post can appear across rails; element.id alone
-                    // collides inside a single LazyHStack when the pool has duplicates.
-                    ForEach(Array(posts.enumerated()), id: \.offset) { index, post in
-                        HubsShelfThumbCard(
-                            post: post,
-                            width: cardWidth,
-                            showsMetadata: true,
-                            titleFont: .caption.weight(.semibold),
-                            // Poster/Frame0 only — mid-clip extract during rail scroll froze Hubs.
-                            extractFrameIfNeeded: false,
-                            onTap: { openVideo(post) }
-                        )
-                        .onAppear {
-                            if index >= posts.count - 3 {
-                                onNearEnd?()
-                                ensureMoreForYou(around: min(index, max(0, stableDiscoverVideos.count - 1)))
-                            }
-                            // Card `.task` mints Frame0 when needed — no per-cell prefetch storm.
-                        }
-                    }
+            HubsLoopingHorizontalRail(
+                posts: railPosts,
+                spacing: 12,
+                onNearEnd: {
+                    onNearEnd?()
+                    ensureMoreForYou(around: max(0, stableDiscoverVideos.count - 1))
                 }
-                .padding(.horizontal, Theme.pagePadding)
+            ) { post, _ in
+                HubsShelfThumbCard(
+                    post: post,
+                    width: cardWidth,
+                    showsMetadata: true,
+                    titleFont: .caption.weight(.semibold),
+                    // Poster/Frame0 only — mid-clip extract during rail scroll froze Hubs.
+                    extractFrameIfNeeded: false,
+                    onTap: { openVideo(post) }
+                )
             }
         }
+    }
+
+    /// Grow a rail toward `hubsRailCardCount` from the ranked For-you pool (unviewed first).
+    private static func padHubsRail(
+        _ seed: [CountryPost],
+        target: Int,
+        from rankedPool: [CountryPost],
+        excluding: Set<String>
+    ) -> [CountryPost] {
+        var out = Array(seed.prefix(target))
+        var seen = Set(out.map(\.id)).union(excluding)
+        guard out.count < target else { return out }
+        let fresh = rankedPool.filter { !SparkDiscoveryEngine.isViewed($0) }
+        let viewed = rankedPool.filter { SparkDiscoveryEngine.isViewed($0) }
+        for post in fresh + viewed {
+            guard PlayPlatformBridge.isHubsForYouLongForm(post) else { continue }
+            guard seen.insert(post.id).inserted else { continue }
+            out.append(post)
+            if out.count >= target { break }
+        }
+        return out
     }
 
     private var followingNetflixSection: some View {
