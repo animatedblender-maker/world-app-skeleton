@@ -270,12 +270,74 @@ enum AnonymousService {
     static func notifications(
         cursor: String? = nil,
         limit: Int = 40
-    ) async throws -> AnonymousPage<AnonymousNotification> {
+    ) async throws -> AnonymousNotificationsPage {
         var q: [String: String] = [
             "limit": "\(min(max(limit, 1), 80))",
         ]
         if let cursor, !cursor.isEmpty { q["cursor"] = cursor }
-        return try await getPage("/v1/anonymous/notifications", query: q, itemType: AnonymousNotification.self)
+        let req = try await makeRequest(
+            path: "/v1/anonymous/notifications",
+            method: "GET",
+            query: q,
+            body: nil
+        )
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await UncancellableHTTP.data(for: req)
+        } catch {
+            throw AnonymousError.network(error.localizedDescription)
+        }
+        guard let http = response as? HTTPURLResponse else {
+            throw AnonymousError.network("Bad response.")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw AnonymousError.from(code: nil, message: "HTTP \(http.statusCode)")
+        }
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw AnonymousError.decoding
+        }
+        let payload = (json["data"] as? [String: Any]) ?? json
+        let rawItems = (payload["notifications"] as? [[String: Any]])
+            ?? (payload["items"] as? [[String: Any]])
+            ?? []
+        let itemsData = try JSONSerialization.data(withJSONObject: rawItems)
+        let items = try JSONDecoder().decode([AnonymousNotification].self, from: itemsData)
+        let cursorOut = payload["nextCursor"] as? String ?? payload["next_cursor"] as? String
+        let unread = (payload["unread_count"] as? Int)
+            ?? (payload["unreadCount"] as? Int)
+            ?? items.filter(\.isUnread).count
+        return AnonymousNotificationsPage(
+            items: items,
+            nextCursor: cursorOut,
+            unreadCount: unread
+        )
+    }
+
+    @discardableResult
+    static func markNotificationRead(id: String) async throws -> Bool {
+        struct Resp: Decodable { let ok: Bool?; let updated: Bool? }
+        let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let resp: Resp = try await post(
+            "/v1/anonymous/notifications/\(trimmed)/read",
+            body: [:],
+            as: Resp.self,
+            allowEmpty: true
+        )
+        return resp.updated ?? resp.ok ?? true
+    }
+
+    @discardableResult
+    static func markAllNotificationsRead() async throws -> Int {
+        struct Resp: Decodable { let ok: Bool?; let updated: Int? }
+        let resp: Resp = try await post(
+            "/v1/anonymous/notifications/read-all",
+            body: [:],
+            as: Resp.self,
+            allowEmpty: true
+        )
+        return resp.updated ?? 0
     }
 
     static func search(query: String, limit: Int = 12) async throws -> AnonymousSearchResults {

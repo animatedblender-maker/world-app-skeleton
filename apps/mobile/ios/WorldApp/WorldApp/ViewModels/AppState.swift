@@ -45,6 +45,8 @@ final class AppState {
     var messagesUnreadCount = 0
     var notificationsUnreadCount = 0
     var notifications: [NotificationItem] = []
+    /// Masquerade alerts + Masquerade Inbox DMs — drives the Masquerade tab red dot.
+    var masqueradeUnreadCount = 0
 
     var effectiveNotificationsUnreadCount: Int {
         let socialUnread = notifications.filter { !$0.isMessageType && $0.isUnread }.count
@@ -1225,12 +1227,19 @@ final class AppState {
 
     /// Keep the home-screen badge in sync after clearing chat notifications.
     func syncAppIconBadge() async {
-        let total = messagesUnreadCount + effectiveNotificationsUnreadCount
+        let total = messagesUnreadCount + effectiveNotificationsUnreadCount + masqueradeUnreadCount
         if #available(iOS 16.0, *) {
             try? await UNUserNotificationCenter.current().setBadgeCount(total)
         } else {
             UIApplication.shared.applicationIconBadgeNumber = total
         }
+    }
+
+    func applyMasqueradeUnreadCount(_ count: Int) {
+        let next = max(0, count)
+        guard masqueradeUnreadCount != next else { return }
+        masqueradeUnreadCount = next
+        Task { await syncAppIconBadge() }
     }
 
     func closeConversation(id: String) {

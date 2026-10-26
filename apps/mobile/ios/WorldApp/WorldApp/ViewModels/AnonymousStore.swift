@@ -63,6 +63,14 @@ final class AnonymousStore {
     var inbox: [AnonymousNotification] = []
     var inboxCursor: String?
     var inboxLoading = false
+    /// Server unread for Masquerade alerts (bell + tab badge).
+    var notificationUnreadCount = 0
+    /// Masquerade Inbox DM threads with unread inbound messages.
+    var masqueradeMessageUnreadCount = 0
+
+    var totalMasqueradeUnread: Int {
+        notificationUnreadCount + masqueradeMessageUnreadCount
+    }
 
     var currentSpace: AnonymousSpace?
     var spacePosts: [AnonymousPost] = []
@@ -851,7 +859,11 @@ final class AnonymousStore {
     }
 
     func loadInbox(force: Bool = false) async {
-        if !force, !inbox.isEmpty { return }
+        if !force, !inbox.isEmpty {
+            await refreshMasqueradeMessageUnread()
+            syncMasqueradeBadge()
+            return
+        }
         inboxLoading = true
         defer { inboxLoading = false }
         do {
@@ -859,18 +871,79 @@ final class AnonymousStore {
             withAnimation(MatteryaMotion.insert) {
                 inbox = page.items
                 inboxCursor = page.nextCursor
+                notificationUnreadCount = max(page.unreadCount, page.items.filter(\.isUnread).count)
             }
+            await refreshMasqueradeMessageUnread()
+            syncMasqueradeBadge()
         } catch let err as AnonymousError {
             lastError = err.errorDescription
             if inbox.isEmpty { inbox = [] }
+            await refreshMasqueradeMessageUnread()
+            syncMasqueradeBadge()
         } catch {
             lastError = error.localizedDescription
             if inbox.isEmpty { inbox = [] }
+            await refreshMasqueradeMessageUnread()
+            syncMasqueradeBadge()
         }
     }
 
     func refreshInbox() async {
         await loadInbox(force: true)
+    }
+
+    func markNotificationRead(_ item: AnonymousNotification) async {
+        guard item.isUnread else { return }
+        if let idx = inbox.firstIndex(where: { $0.id == item.id }) {
+            var updated = inbox[idx]
+            updated.readAt = ISO8601DateFormatter().string(from: Date())
+            inbox[idx] = updated
+            notificationUnreadCount = max(0, inbox.filter(\.isUnread).count)
+            syncMasqueradeBadge()
+        }
+        _ = try? await AnonymousService.markNotificationRead(id: item.id)
+        await loadInbox(force: true)
+    }
+
+    func markAllNotificationsRead() async {
+        inbox = inbox.map { item in
+            var copy = item
+            if copy.readAt == nil {
+                copy.readAt = ISO8601DateFormatter().string(from: Date())
+            }
+            return copy
+        }
+        notificationUnreadCount = 0
+        syncMasqueradeBadge()
+        _ = try? await AnonymousService.markAllNotificationsRead()
+    }
+
+    func refreshMasqueradeMessageUnread() async {
+        do {
+            let page = try await MessagesService.shared.listConversations(
+                limit: 40,
+                forceNetwork: true,
+                inbox: "masquerade"
+            )
+            let me = AuthService.shared.currentUser?.id
+            let unread = page.reduce(0) { partial, conversation in
+                guard let me else { return partial }
+                return partial + (conversation.hasUnread(for: me) ? 1 : 0)
+            }
+            masqueradeMessageUnreadCount = unread
+            syncMasqueradeBadge()
+        } catch {
+            // Keep last known count — badge must not clear on a flaky inbox probe.
+        }
+    }
+
+    private func syncMasqueradeBadge() {
+        // AppState owns the bottom-tab red dot; keep it in sync whenever Masquerade unread changes.
+        NotificationCenter.default.post(
+            name: .masqueradeUnreadDidChange,
+            object: nil,
+            userInfo: ["count": totalMasqueradeUnread]
+        )
     }
 
     func publishPost(

@@ -27,6 +27,11 @@ import { getFeed } from './feed.js';
 import { blockProfile, createReport } from './moderation.js';
 import { checkoutStart, creatorEarnings } from './billing-scaffold.js';
 import { isPaidEnabled } from './policy.js';
+import {
+  listAnonymousNotifications,
+  markAllAnonymousNotificationsRead,
+  markAnonymousNotificationRead,
+} from './notifications.js';
 
 type AuthedReq = Request & { user?: AuthedUser | null };
 
@@ -793,9 +798,53 @@ export function createAnonymousRouter(): Router {
     try {
       const session = await requireReady(req, res);
       if (!session) return;
-      return res.json({ ok: true, notifications: [], next_cursor: null });
+      const result = await listAnonymousNotifications({
+        profileId: session.profile!.id,
+        cursor: req.query.cursor ? String(req.query.cursor) : null,
+        limit: Number(req.query.limit ?? 40),
+      });
+      return res.json({
+        ok: true,
+        notifications: result.notifications,
+        next_cursor: result.next_cursor,
+        unread_count: result.unread_count,
+      });
     } catch (err: any) {
+      console.error('[anonymous/notifications]', err?.message ?? err);
       return res.status(500).json({ ok: false, error: 'notifications_failed' });
+    }
+  });
+
+  router.post('/notifications/:id/read', async (req: AuthedReq, res: Response) => {
+    try {
+      const session = await requireReady(req, res);
+      if (!session) return;
+      const id = String(req.params.id || '').trim();
+      if (!id) {
+        return res.status(400).json({ ok: false, error: 'invalid_id' });
+      }
+      const ok = await markAnonymousNotificationRead({
+        profileId: session.profile!.id,
+        notificationId: id,
+      });
+      return res.json({ ok: true, updated: ok });
+    } catch (err: any) {
+      console.error('[anonymous/notifications/read]', err?.message ?? err);
+      return res.status(500).json({ ok: false, error: 'notifications_read_failed' });
+    }
+  });
+
+  router.post('/notifications/read-all', async (req: AuthedReq, res: Response) => {
+    try {
+      const session = await requireReady(req, res);
+      if (!session) return;
+      const updated = await markAllAnonymousNotificationsRead({
+        profileId: session.profile!.id,
+      });
+      return res.json({ ok: true, updated });
+    } catch (err: any) {
+      console.error('[anonymous/notifications/read-all]', err?.message ?? err);
+      return res.status(500).json({ ok: false, error: 'notifications_read_all_failed' });
     }
   });
 

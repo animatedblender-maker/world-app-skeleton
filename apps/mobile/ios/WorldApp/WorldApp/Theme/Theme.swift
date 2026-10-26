@@ -371,7 +371,7 @@ Just remember, not everything hidden is meant to be feared.
     static let anonymousFeedWakeTitle = "Still waking up"
     static let anonymousFeedWakeBody =
         "Masquerade timed out on the first try. Pull to refresh — posts are already live."
-    static let anonymousNoComments = "No comments yet — start the thread."
+    static let anonymousNoComments = "No comments yet."
     static let anonymousComposerPrivacyNudge =
         "Don’t share real names, contact info, or anything that links to your Matterya profile."
     static let anonymousMeHint =

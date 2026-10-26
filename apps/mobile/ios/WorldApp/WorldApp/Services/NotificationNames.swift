@@ -17,4 +17,6 @@ extension Notification.Name {
     static let frame0PostersDidUpdate = Notification.Name("frame0PostersDidUpdate")
     /// ScrollBudget cleared fling — Home feed drains queued load-more that skipped mid-fling.
     static let scrollBudgetDidSettle = Notification.Name("matterya.scrollBudget.didSettle")
+    /// Masquerade alert + Inbox unread total changed — userInfo: `count` (Int).
+    static let masqueradeUnreadDidChange = Notification.Name("matterya.masquerade.unreadDidChange")
 }

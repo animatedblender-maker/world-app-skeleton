@@ -3,6 +3,7 @@ import { canAccess } from './policy.js';
 import { getSpaceById } from './spaces.js';
 import type { AnonymousProfilePublic } from './identity.js';
 import { withResolvedMedia, withResolvedMediaMany } from './media.js';
+import { createAnonymousNotification } from './notifications.js';
 
 export type PostPublic = {
   id: string;
@@ -551,6 +552,17 @@ export async function createComment(opts: {
     );
     await client.query('commit');
     const r = rows[0];
+
+    // Fan-out Masquerade alerts (best-effort; never block the comment).
+    void notifyCommentRecipients({
+      actor: opts.profile,
+      postId: opts.postId,
+      spaceId: postRes.post.space_id,
+      commentId: String(r.id),
+      parentId,
+      preview: body,
+    });
+
     return {
       ok: true,
       comment: {
@@ -579,6 +591,82 @@ export async function createComment(opts: {
     throw err;
   } finally {
     client.release();
+  }
+}
+
+async function notifyCommentRecipients(opts: {
+  actor: AnonymousProfilePublic;
+  postId: string;
+  spaceId: string;
+  commentId: string;
+  parentId: string | null;
+  preview: string;
+}): Promise<void> {
+  const snippet = opts.preview.slice(0, 140);
+  const actorName = opts.actor.username || 'someone';
+
+  try {
+    if (opts.parentId) {
+      const { rows } = await pool.query<{ author_profile_id: string }>(
+        `select author_profile_id from anonymous.comments where id = $1::uuid limit 1`,
+        [opts.parentId]
+      );
+      const parentAuthor = rows[0]?.author_profile_id;
+      if (parentAuthor) {
+        await createAnonymousNotification({
+          recipientProfileId: String(parentAuthor),
+          actorProfileId: opts.actor.id,
+          kind: 'reply',
+          title: 'New reply',
+          body: `@${actorName}: ${snippet}`,
+          spaceId: opts.spaceId,
+          postId: opts.postId,
+          commentId: opts.commentId,
+        });
+      }
+    }
+
+    const { rows: postRows } = await pool.query<{ author_profile_id: string }>(
+      `select author_profile_id from anonymous.posts where id = $1::uuid limit 1`,
+      [opts.postId]
+    );
+    const postAuthor = postRows[0]?.author_profile_id;
+    // Skip duplicate when replying to the post author's own comment, or self-comment.
+    if (postAuthor && String(postAuthor) !== String(opts.actor.id)) {
+      if (!opts.parentId) {
+        await createAnonymousNotification({
+          recipientProfileId: String(postAuthor),
+          actorProfileId: opts.actor.id,
+          kind: 'comment',
+          title: 'New comment on your post',
+          body: `@${actorName}: ${snippet}`,
+          spaceId: opts.spaceId,
+          postId: opts.postId,
+          commentId: opts.commentId,
+        });
+      } else {
+        // Parent reply already notified parent author; also ping post author if different.
+        const { rows: parentRows } = await pool.query<{ author_profile_id: string }>(
+          `select author_profile_id from anonymous.comments where id = $1::uuid limit 1`,
+          [opts.parentId]
+        );
+        const parentAuthor = parentRows[0]?.author_profile_id;
+        if (parentAuthor && String(parentAuthor) !== String(postAuthor)) {
+          await createAnonymousNotification({
+            recipientProfileId: String(postAuthor),
+            actorProfileId: opts.actor.id,
+            kind: 'comment',
+            title: 'New activity on your post',
+            body: `@${actorName}: ${snippet}`,
+            spaceId: opts.spaceId,
+            postId: opts.postId,
+            commentId: opts.commentId,
+          });
+        }
+      }
+    }
+  } catch (err: any) {
+    console.warn('[anonymous/comment-notify]', err?.message ?? err);
   }
 }
 

@@ -26,6 +26,11 @@ struct PostAuthor: Codable, Identifiable, Hashable, Sendable {
         case lastReadAt = "last_read_at"
         case isVerified = "is_verified"
     }
+
+    var showsVerifiedBadge: Bool {
+        if isVerified == true { return true }
+        return username?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "matterya"
+    }
 }
 
 struct PostMediaPayload: Sendable {
@@ -247,7 +252,7 @@ enum HubChannelPostMarker {
     }
 
     static func strip(_ body: String) -> String {
-        ContentSanitizer.clean(body) ?? ContentSanitizer.stripInternalMarkers(body)
+        ContentSanitizer.displayText(body)
     }
 
     static func isMarked(_ body: String?) -> Bool {
@@ -290,7 +295,7 @@ enum SparkShareMarker {
     }
 
     static func strip(_ body: String) -> String {
-        ContentSanitizer.clean(body) ?? ContentSanitizer.stripInternalMarkers(body)
+        ContentSanitizer.displayText(body)
     }
 
     /// Original spark id when this post is a feed re-share of a Spark.
@@ -372,7 +377,7 @@ enum HubOriginShareMarker {
 
     static func strip(_ body: String) -> String {
         // Must kill bare `sid=…|aid=…` lines — prefix-only filter left stamps in UI.
-        ContentSanitizer.clean(body) ?? ContentSanitizer.stripInternalMarkers(body)
+        ContentSanitizer.displayText(body)
     }
 
     /// Rebuild a presentation post for Hubs watch: same media as the share, original channel author.
@@ -923,7 +928,7 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
 
     var displayTitle: String? { ContentSanitizer.clean(title) }
 
-    var displayBody: String { ContentSanitizer.clean(body) ?? "" }
+    var displayBody: String { ContentSanitizer.displayText(body) }
 
     var displayCaption: String? {
         // Sparks / spark shares: prefer body (R2 meta text after markers) over AI media_caption.
@@ -1021,6 +1026,9 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased(),
            !r2.isEmpty {
+            if let pack = Self.r2PackFolderID(from: "/\(r2)/") {
+                return "pack:\(pack)"
+            }
             return "r2:\(r2)"
         }
         if let raw = mediaURL,
@@ -1028,7 +1036,12 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
            let m = regex.firstMatch(in: raw, range: NSRange(raw.startIndex..., in: raw)),
            let r = Range(m.range(at: 1), in: raw) {
             let key = String(raw[r]).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            if !key.isEmpty { return "r2:\(key)" }
+            if !key.isEmpty {
+                if let pack = Self.r2PackFolderID(from: "/\(key)/") {
+                    return "pack:\(pack)"
+                }
+                return "r2:\(key)"
+            }
         }
         if let shared = sharedPostID?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1037,13 +1050,20 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
            isSparkFeedShare || isReel || isSpark || hasVideo || hasImage {
             return "clip:\(shared)"
         }
-        // Same media file (strip signed query).
+        // Same media file (strip signed query). Prefer pack folder for Reddit/R2 stills
+        // so resign URL churn and 01.jpg vs thumb do not fork the identity.
         if let media = playableVideoURL?.absoluteString
             ?? feedImageURL?.absoluteString
             ?? primaryMediaURL
             ?? mediaPayload?.primaryURL {
             let bare = media.split(separator: "?").first.map(String.init) ?? media
             let lower = bare.lowercased()
+            if let pack = Self.r2PackFolderID(from: lower) {
+                return "pack:\(pack)"
+            }
+            if let objectKey = Self.r2ObjectKey(from: lower) {
+                return "r2:\(objectKey)"
+            }
             if lower.contains("r2")
                 || lower.contains("mp4")
                 || lower.contains("video")
@@ -1075,21 +1095,38 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
         return "id:\(id.lowercased())"
     }
 
-    /// Subtle location line for post cards (country name or ISO).
-    var authorLocationLabel: String? {
-        let name = (author?.countryName ?? countryName)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let code = (author?.countryCode ?? countryCode)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .uppercased()
-        if let name, !name.isEmpty, name.uppercased() != "XX" {
-            return name
-        }
-        if let code, !code.isEmpty, code != "XX" {
-            return code
-        }
-        return nil
+    /// `au_` / `fy_` / `ss_` / … pack folder from an R2 path or signed URL.
+    private static func r2PackFolderID(from lowercasedURLOrKey: String) -> String? {
+        let pattern = #"/((?:ss|fy|om|pn|au)_[a-z0-9]+)(?:/|$)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+              let match = regex.firstMatch(
+                in: lowercasedURLOrKey,
+                range: NSRange(lowercasedURLOrKey.startIndex..., in: lowercasedURLOrKey)
+              ),
+              let range = Range(match.range(at: 1), in: lowercasedURLOrKey)
+        else { return nil }
+        return String(lowercasedURLOrKey[range]).lowercased()
     }
+
+    /// Object key after bucket for `…r2.cloudflarestorage.com/matterya-sparks/<key>`.
+    private static func r2ObjectKey(from lowercasedURL: String) -> String? {
+        guard lowercasedURL.contains("r2.cloudflarestorage.com")
+            || lowercasedURL.contains("r2.dev")
+            || lowercasedURL.contains("matterya-sparks")
+        else { return nil }
+        let marker = "matterya-sparks/"
+        guard let range = lowercasedURL.range(of: marker) else { return nil }
+        let key = String(lowercasedURL[range.upperBound...])
+            .split(separator: "?")
+            .first
+            .map(String.init)?
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let key, !key.isEmpty else { return nil }
+        return key
+    }
+
+    /// Location under the author name on post cards — intentionally unused (no country on posts).
+    var authorLocationLabel: String? { nil }
 
     /// ISO regional-indicator flag for the post author location (nil if unknown).
     var authorLocationFlag: String? {
@@ -1364,6 +1401,8 @@ struct Profile: Identifiable, Hashable, Sendable, Codable {
     let deletedAt: String?
     let createdAt: String
     let updatedAt: String
+    /// Official / admin accounts (Matterya).
+    var isVerified: Bool? = nil
 
     enum CodingKeys: String, CodingKey {
         case userID = "user_id"
@@ -1384,6 +1423,13 @@ struct Profile: Identifiable, Hashable, Sendable, Codable {
         case deletedAt = "deleted_at"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+        case isVerified = "is_verified"
+    }
+
+    /// Off-white verified seal — official Matterya and other flagged accounts.
+    var showsVerifiedBadge: Bool {
+        if isVerified == true { return true }
+        return username?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "matterya"
     }
 
     var resolvedMessagePrivacy: MessagePrivacy {
@@ -1529,7 +1575,10 @@ struct Message: Identifiable, Hashable, Sendable {
             case .post: return share.isVideo ? "Shared a video" : "Shared a post"
             }
         }
-        if let text = displayText, !text.isEmpty { return text }
+        if let text = displayText, !text.isEmpty {
+            // Inbox preview: show bold content without `**` markers.
+            return MatteryaMarkdown.plain(text)
+        }
         if hasImage { return "Photo" }
         if hasVideoMedia || (mediaType ?? "").lowercased() == "video" { return "Video" }
         return "Media message"
@@ -2112,15 +2161,57 @@ struct Conversation: Identifiable, Hashable, Sendable {
     /// Viewer-side pending message request.
     let isRequest: Bool
     let requestStatus: String?
+    /// `primary` = Messages inbox; `masquerade` = Masquerade Inbox only (never mixed).
+    let surface: String
     let members: [PostAuthor]
     let lastMessage: Message?
+
+    init(
+        id: String,
+        isDirect: Bool,
+        createdAt: String,
+        updatedAt: String,
+        lastMessageAt: String?,
+        isRequest: Bool,
+        requestStatus: String?,
+        surface: String = "primary",
+        members: [PostAuthor],
+        lastMessage: Message?
+    ) {
+        self.id = id
+        self.isDirect = isDirect
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.lastMessageAt = lastMessageAt
+        self.isRequest = isRequest
+        self.requestStatus = requestStatus
+        let s = surface.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        self.surface = (s == "masquerade") ? "masquerade" : "primary"
+        self.members = members
+        self.lastMessage = lastMessage
+    }
 
     var isPendingRequest: Bool {
         isRequest && (requestStatus ?? "pending").lowercased() == "pending"
     }
 
+    var isMasqueradeSurface: Bool { surface == "masquerade" }
+
     func otherMember(currentUserID: String) -> PostAuthor? {
         members.first { $0.userID != currentUserID }
+    }
+
+    /// Viewer still has unread inbound messages in this thread.
+    func hasUnread(for currentUserID: String) -> Bool {
+        guard let last = lastMessage, last.senderID != currentUserID else { return false }
+        guard let me = members.first(where: { $0.userID == currentUserID }) else { return true }
+        guard let readAt = me.lastReadAt,
+              let readDate = RelativeTime.parseDate(readAt),
+              let msgDate = RelativeTime.parseDate(last.createdAt)
+        else {
+            return me.lastReadAt == nil || me.lastReadAt?.isEmpty == true
+        }
+        return msgDate > readDate
     }
 }
 

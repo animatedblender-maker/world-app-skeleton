@@ -311,7 +311,7 @@ struct AnonymousSpaceDetailView: View {
     }
 }
 
-/// Full-width Reddit-scale post card — Matterya paper/serif, no upvote chrome.
+/// Full-width Reddit-scale post card — Matterya paper/serif + heart engagement.
 struct AnonymousPostCard: View {
     enum Style {
         /// Feed / Space list — full-bleed with hairline separator.
@@ -329,12 +329,13 @@ struct AnonymousPostCard: View {
     /// Opens the full post (See more / comments / media). Trailing closure target.
     var onOpenPost: (() -> Void)? = nil
 
-    /// Longer feed preview; full body lives on the thread.
-    private static let feedLineLimit = 12
+    /// Short tease on feed — intrigue pulls the tap into the thread.
+    private static let feedLineLimit = 6
     @Environment(AppState.self) private var appState
     @State private var videoMuted = false
     @State private var showFeedVideoPlayer = false
     @State private var showReport = false
+    @State private var teasedComment: AnonymousComment?
     private var store: AnonymousStore { AnonymousStore.shared }
 
     private var bodyText: String {
@@ -343,8 +344,15 @@ struct AnonymousPostCard: View {
 
     private var showsSeeMore: Bool {
         guard style == .feed, onOpenPost != nil else { return false }
-        // Rough truncation signal — enough that 12 lines likely clips.
-        return bodyText.count > 280 || bodyText.split(whereSeparator: \.isNewline).count > 8
+        return bodyText.count > 160 || bodyText.split(whereSeparator: \.isNewline).count > 4
+    }
+
+    private var commentCount: Int { max(0, post.commentCount ?? 0) }
+
+    private var commentsLabel: String {
+        if commentCount == 0 { return "Add a comment" }
+        if commentCount == 1 { return "1 comment" }
+        return "\(commentCount) comments"
     }
 
     private var spaceLabel: String? {
@@ -453,20 +461,29 @@ struct AnonymousPostCard: View {
                 .onAppear {
                     // Prefetch first page so opening the post never shows a comments spinner.
                     AnonymousCommentsWarmCache.shared.warm(post.id)
+                    refreshCommentTease()
                 }
 
-            // Like · comments → full post thread (not an in-feed expand).
-            HStack(spacing: 16) {
+            // Heart · comments — tactile, score-forward (Matterya hearts, Reddit rhythm).
+            HStack(spacing: 14) {
                 Button {
                     onToggleLike?()
                 } label: {
                     let liked = (post.myVote ?? 0) > 0
-                    Label(
-                        "\((post.score ?? 0))",
-                        systemImage: liked ? "heart.fill" : "heart"
+                    HStack(spacing: 6) {
+                        Image(systemName: liked ? "heart.fill" : "heart")
+                            .font(.system(size: 18, weight: .semibold))
+                        Text("\((post.score ?? 0))")
+                            .font(.subheadline.weight(.bold))
+                            .monospacedDigit()
+                    }
+                    .foregroundStyle(liked ? Theme.danger : Theme.ink)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(
+                        (liked ? Theme.danger.opacity(0.12) : Theme.canvasMuted),
+                        in: Capsule()
                     )
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(liked ? Theme.danger : Theme.inkMuted)
                 }
                 .buttonStyle(.plain)
                 .disabled(onToggleLike == nil)
@@ -475,30 +492,61 @@ struct AnonymousPostCard: View {
                 Button {
                     onOpenPost?()
                 } label: {
-                    Label("\(post.commentCount ?? 0) comments", systemImage: "bubble.left")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Theme.inkMuted)
+                    HStack(spacing: 6) {
+                        Image(systemName: "bubble.left")
+                            .font(.system(size: 15, weight: .semibold))
+                        Text(commentsLabel)
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .foregroundStyle(commentCount > 0 ? Theme.ink : Theme.inkMuted)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Theme.canvasMuted, in: Capsule())
                 }
                 .buttonStyle(.plain)
                 .disabled(onOpenPost == nil)
 
                 Spacer(minLength: 0)
-                if post.hasImage, post.mediaURLValue != nil {
-                    Label("Photo", systemImage: "photo")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Theme.inkMuted)
-                } else if post.hasVideo {
-                    Label("Video", systemImage: "play.rectangle")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Theme.inkMuted)
-                }
             }
             .padding(.horizontal, Theme.pagePadding)
+
+            if style == .feed, let tease = teasedComment {
+                Button {
+                    onOpenPost?()
+                } label: {
+                    HStack(alignment: .top, spacing: 8) {
+                        RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                            .fill(Theme.ink.opacity(0.18))
+                            .frame(width: 3)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("@\(tease.authorUsername)")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Theme.inkMuted)
+                            Text(tease.displayBody)
+                                .font(.subheadline)
+                                .foregroundStyle(Theme.inkSecondary)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Theme.canvasMuted.opacity(0.85), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, Theme.pagePadding)
+                .padding(.top, -2)
+            }
         }
-        .padding(.vertical, 18)
+        .padding(.vertical, 16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.surface)
         .clipped()
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if style == .feed { onOpenPost?() }
+        }
         .overlay(alignment: .bottom) {
             if style == .feed {
                 Theme.divider.frame(height: 0.5)
@@ -510,6 +558,25 @@ struct AnonymousPostCard: View {
             Button("Doxxing / identity", role: .destructive) { Task { await reportPost("doxxing") } }
             Button("Cancel", role: .cancel) {}
         }
+    }
+
+    private func refreshCommentTease() {
+        guard style == .feed, commentCount > 0 else {
+            teasedComment = nil
+            return
+        }
+        guard let warm = AnonymousCommentsWarmCache.shared.cached(post.id), !warm.isEmpty else {
+            teasedComment = nil
+            // Warm may still be in flight — peek again shortly.
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 700_000_000)
+                if let later = AnonymousCommentsWarmCache.shared.cached(post.id)?.first {
+                    teasedComment = later
+                }
+            }
+            return
+        }
+        teasedComment = warm.max(by: { ($0.score ?? 0) < ($1.score ?? 0) }) ?? warm.first
     }
 
     private var postOverflowMenu: some View {

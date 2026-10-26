@@ -38,8 +38,12 @@ struct AnonymousRootView: View {
     /// True while a Space or thread is pushed — collapse Masquerade shell chrome only.
     private var isPushed: Bool { !store.navigationPath.isEmpty }
 
-    private var masqueradeUnreadCount: Int {
-        store.inbox.filter(\.isUnread).count
+    private var masqueradeAlertUnread: Int {
+        max(store.notificationUnreadCount, store.inbox.filter(\.isUnread).count)
+    }
+
+    private var masqueradeInboxChipUnread: Int {
+        store.notificationUnreadCount + store.masqueradeMessageUnreadCount
     }
 
     var body: some View {
@@ -223,10 +227,8 @@ struct AnonymousRootView: View {
                             Image(systemName: "bell")
                                 .font(.system(size: 20, weight: .medium))
                                 .foregroundStyle(showNotificationsMenu ? Theme.ink : Theme.inkMuted)
-                            if masqueradeUnreadCount > 0 {
-                                Circle()
-                                    .fill(Theme.danger)
-                                    .frame(width: 7, height: 7)
+                            if masqueradeAlertUnread > 0 {
+                                UnreadDot(size: 8)
                                     .offset(x: 4, y: -2)
                             }
                         }
@@ -355,6 +357,7 @@ struct AnonymousRootView: View {
     }
 
     private func openMasqueradeNotification(_ item: AnonymousNotification) {
+        Task { await store.markNotificationRead(item) }
         if let postId = item.postId, !postId.isEmpty {
             store.pushPostId(postId)
             return
@@ -381,11 +384,27 @@ struct AnonymousRootView: View {
                             store.resetNavigation()
                             shellTab = tab
                         }
+                        if tab == .inbox {
+                            Task {
+                                await store.refreshInbox()
+                                await store.refreshMasqueradeMessageUnread()
+                            }
+                        }
                     } label: {
-                        Text(tab.title)
-                            .pillTab(isSelected: shellTab == tab && !searchFieldFocused)
+                        HStack(spacing: 6) {
+                            Text(tab.title)
+                            if tab == .inbox, masqueradeInboxChipUnread > 0 {
+                                UnreadDot(size: 7)
+                            }
+                        }
+                        .pillTab(isSelected: shellTab == tab && !searchFieldFocused)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel(
+                        tab == .inbox && masqueradeInboxChipUnread > 0
+                            ? "Inbox, \(masqueradeInboxChipUnread) unread"
+                            : tab.title
+                    )
                 }
             }
             .padding(.horizontal, Theme.pagePadding)

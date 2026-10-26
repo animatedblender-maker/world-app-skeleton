@@ -41,6 +41,8 @@ struct AnonymousPostDetailView: View {
                     }
                 )
 
+                commentsSectionHeader
+
                 if let commentsError {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(commentsError)
@@ -55,11 +57,19 @@ struct AnonymousPostDetailView: View {
                     .padding(.horizontal, Theme.pagePadding)
                 } else if comments.isEmpty {
                     if hasCompletedInitialLoad {
-                        Text(MatteryaCopy.anonymousNoComments)
-                            .font(.subheadline)
-                            .foregroundStyle(Theme.inkMuted)
-                            .padding(.horizontal, Theme.pagePadding)
-                            .padding(.bottom, 8)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(MatteryaCopy.anonymousNoComments)
+                                .font(.system(size: 17, weight: .regular, design: .serif))
+                                .foregroundStyle(Theme.ink)
+                            Text("Say the thing everyone else is thinking.")
+                                .font(.subheadline)
+                                .foregroundStyle(Theme.inkMuted)
+                        }
+                        .padding(.horizontal, Theme.pagePadding)
+                        .padding(.vertical, 18)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .onTapGesture { composerFocused = true }
                     }
                 } else {
                     LazyVStack(spacing: 0) {
@@ -121,12 +131,40 @@ struct AnonymousPostDetailView: View {
         return out
     }
 
+    private var commentsSectionHeader: some View {
+        let count = max(localPost.commentCount ?? 0, flattenedComments.count)
+        return HStack(spacing: 8) {
+            Text(count == 0 ? "Comments" : "Comments · \(count)")
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(Theme.ink)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Theme.pagePadding)
+        .padding(.top, 14)
+        .padding(.bottom, 6)
+        .overlay(alignment: .top) {
+            Theme.divider.frame(height: 0.5)
+        }
+    }
+
+    private var replyTargetUsername: String? {
+        guard let replyParentId else { return nil }
+        func find(_ items: [AnonymousComment]) -> String? {
+            for item in items {
+                if item.id == replyParentId { return item.authorUsername }
+                if let nested = item.replies, let hit = find(nested) { return hit }
+            }
+            return nil
+        }
+        return find(comments)
+    }
+
     private var composerBar: some View {
         VStack(spacing: 8) {
             if replyParentId != nil {
                 HStack {
-                    Text("Replying…")
-                        .font(.caption)
+                    Text(replyTargetUsername.map { "Replying to @\($0)" } ?? "Replying…")
+                        .font(.caption.weight(.semibold))
                         .foregroundStyle(Theme.inkMuted)
                     Spacer()
                     Button("Cancel") {
@@ -138,11 +176,15 @@ struct AnonymousPostDetailView: View {
                 .padding(.horizontal, Theme.pagePadding)
             }
             HStack(alignment: .bottom, spacing: 10) {
-                TextField("Add a comment", text: $replyBody, axis: .vertical)
-                    .lineLimit(1...4)
+                TextField(
+                    replyParentId == nil ? "Join the thread…" : "Write your reply…",
+                    text: $replyBody,
+                    axis: .vertical
+                )
+                    .lineLimit(1...5)
                     .focused($composerFocused)
                     .padding(10)
-                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.controlRadius))
+                    .background(Theme.canvasMuted, in: RoundedRectangle(cornerRadius: Theme.controlRadius))
                     .overlay(
                         RoundedRectangle(cornerRadius: Theme.controlRadius)
                             .stroke(Theme.border, lineWidth: 0.5)
@@ -288,24 +330,34 @@ private struct AnonymousCommentRowView: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            if isOfficialMatterya {
-                AvatarView(url: nil, seed: "matterya", size: 28)
+        HStack(alignment: .top, spacing: 0) {
+            // Thread rails — Reddit nesting, Matterya paper.
+            if depth > 0 {
+                HStack(spacing: 0) {
+                    ForEach(0..<min(depth, 5), id: \.self) { _ in
+                        Rectangle()
+                            .fill(Theme.ink.opacity(0.10))
+                            .frame(width: 2)
+                            .padding(.trailing, 10)
+                    }
+                }
+                .padding(.top, 4)
             }
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
                     if isOfficialMatterya {
+                        AvatarView(url: nil, seed: "matterya", size: 18)
                         Text("Matterya")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(Theme.ink)
-                        MatteryaVerifiedBadge(size: 12)
+                        MatteryaVerifiedBadge(size: 11)
                     } else {
                         Button {
                             AnonymousStore.shared.pushProfile(username: comment.authorUsername)
                         } label: {
                             Text("@\(comment.authorUsername)")
-                                .font(.caption)
+                                .font(.caption.weight(.semibold))
                                 .foregroundStyle(Theme.inkMuted)
                         }
                         .buttonStyle(.plain)
@@ -315,37 +367,47 @@ private struct AnonymousCommentRowView: View {
                         Text("Author")
                             .font(.caption2.weight(.bold))
                             .foregroundStyle(Theme.ink)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 3)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
                             .background(Theme.matteDeep, in: Capsule())
                             .accessibilityLabel("Post author")
                     }
-                    Spacer()
+                    Text("·")
+                        .font(.caption2)
+                        .foregroundStyle(Theme.inkMuted)
                     Text(RelativeTime.format(comment.createdAt))
                         .font(.caption2)
                         .foregroundStyle(Theme.inkMuted)
+                    Spacer(minLength: 0)
                 }
+
                 MatteryaRichText(
                     text: comment.displayBody,
                     font: .body,
                     color: Theme.ink
                 )
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Theme.canvasMuted, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                HStack(spacing: 16) {
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                HStack(spacing: 14) {
                     Button {
                         onToggleLike?()
                     } label: {
                         let liked = (comment.myVote ?? 0) > 0
-                        Label(
-                            "\((comment.score ?? 0))",
-                            systemImage: liked ? "heart.fill" : "heart"
-                        )
-                        .font(.caption.weight(.semibold))
+                        HStack(spacing: 4) {
+                            Image(systemName: liked ? "heart.fill" : "heart")
+                                .font(.system(size: 12, weight: .semibold))
+                            Text("\((comment.score ?? 0))")
+                                .font(.caption.weight(.bold))
+                                .monospacedDigit()
+                        }
                         .foregroundStyle(liked ? Theme.danger : Theme.inkMuted)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(
+                            (liked ? Theme.danger.opacity(0.10) : Color.clear),
+                            in: Capsule()
+                        )
                     }
                     .buttonStyle(.plain)
                     .disabled(onToggleLike == nil)
@@ -353,16 +415,16 @@ private struct AnonymousCommentRowView: View {
 
                     Button(action: onReply) {
                         Text("Reply")
-                            .font(.caption.weight(.semibold))
+                            .font(.caption.weight(.bold))
                             .foregroundStyle(Theme.inkMuted)
                     }
                     .buttonStyle(.plain)
                 }
+                .padding(.top, 2)
             }
         }
         .padding(.horizontal, Theme.pagePadding)
-        .padding(.vertical, 14)
-        .padding(.leading, CGFloat(min(depth, 4)) * 16)
+        .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.surface)
         .overlay(alignment: .bottom) {

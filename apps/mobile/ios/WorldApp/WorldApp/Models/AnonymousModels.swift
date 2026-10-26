@@ -700,6 +700,12 @@ struct AnonymousPage<T: Codable & Sendable>: Codable, Sendable {
     var nextCursor: String?
 }
 
+struct AnonymousNotificationsPage: Sendable {
+    var items: [AnonymousNotification]
+    var nextCursor: String?
+    var unreadCount: Int
+}
+
 struct AnonymousFeedPage: Codable, Sendable {
     var items: [AnonymousPost]
     var nextCursor: String?

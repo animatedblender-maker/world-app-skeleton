@@ -5,6 +5,11 @@ struct MainTabView: View {
     @State private var postToOpenAfterCreate: CountryPost?
     /// Chat mini video hole (global) — continuous hubs player docks here without remounting.
     @State private var hubContinuousDockSlotGlobal: CGRect?
+    /// Hubs catalog kept mounted briefly after leave so teardown doesn't hitch the mini morph.
+    @State private var hubsShellMounted = false
+    @State private var hubsDismountTask: Task<Void, Never>?
+    /// Masquerade stays mounted after first visit — remount + bootstrap on every hop froze the UI.
+    @State private var anonymousShellMounted = false
 
     var body: some View {
         // Mini player lives OUTSIDE NavigationStack so chat / search / profile pushes
@@ -15,16 +20,21 @@ struct MainTabView: View {
                 set: { appState.navigationPath = $0 }
             )) {
                 ZStack(alignment: .bottom) {
-                    // Feed + Hubs stay mounted so strips / continuous watch survive tab switches.
+                    // Feed always mounted. Hubs catalog: mount on Hubs tab; **defer dismount**
+                    // after leave so catalog dealloc doesn't hitch the mini (IG/YouTube pattern:
+                    // player stays, heavy UI tears down on the next beat).
                     persistentTab(.feed) { FeedView() }
-                    persistentTab(.hubs) { MatteryaHubsView() }
+                    if hubsShellMounted || appState.selectedTab == .hubs {
+                        persistentTab(.hubs) { MatteryaHubsView() }
+                    }
+                    if anonymousShellMounted || appState.selectedTab == .anonymous {
+                        persistentTab(.anonymous) { AnonymousRootView() }
+                    }
 
-                    // Other tabs remount (lighter than keeping Anonymous live off-screen).
-                    if appState.selectedTab != .feed && appState.selectedTab != .hubs {
+                    // Messages / Profile remount (lighter than keeping them live off-screen).
+                    if appState.selectedTab == .messages || appState.selectedTab == .profile {
                         Group {
                             switch appState.selectedTab {
-                            case .anonymous:
-                                AnonymousRootView()
                             case .messages:
                                 MessagesView()
                             case .profile:
@@ -89,7 +99,9 @@ struct MainTabView: View {
                         .allowsHitTesting(false)
                     }
                     // Spacer matching tab bar height so mini stays flush above it when tab is shown.
-                    if appState.navigationPath.isEmpty {
+                    // Skip while Masquerade hides the tab bar (Space/post) — otherwise a dead gap
+                    // sits under the thread comment composer.
+                    if appState.navigationPath.isEmpty, !appState.masqueradeHidesTabBar {
                         Color.clear
                             .frame(height: Theme.tabBarHeight)
                             .allowsHitTesting(false)
@@ -107,7 +119,10 @@ struct MainTabView: View {
             // Tab bar pinned to the physical bottom of the ZStack.
             // Hide while the in-app share sheet is open — otherwise the custom tab
             // paints over the sheet and covers the last rows (e.g. Copy link).
+            // Masquerade hides this on Space/post pushes so thread composers are not covered
+            // (Back is explicit on those screens; shell Feed keeps the bar).
             if appState.navigationPath.isEmpty,
+               !appState.masqueradeHidesTabBar,
                !appState.hubPlaybackLandscapeFullscreen,
                appState.sharePostSheet == nil {
                 BottomTabBar()
@@ -151,33 +166,77 @@ struct MainTabView: View {
             appState.ensureHubPlaybackMinimizedIfNeeded()
             EngagementTracker.shared.screenOpened(appState.selectedTab.rawValue)
             if appState.selectedTab == .hubs {
+                hubsShellMounted = true
                 EngagementTracker.shared.hubsOpened()
             }
+            // Hubs mounts on first Hubs visit (or continuous playback) — no timed auto-mount
+            // that storms thumbs/Frame0 right after cold open.
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .masqueradeUnreadDidChange)) { note in
+            let count = (note.userInfo?["count"] as? Int) ?? 0
+            appState.applyMasqueradeUnreadCount(count)
         }
         .onChange(of: appState.selectedTab) { oldTab, tab in
-            // Off Hubs → mini player; do not force-return to a chat (only pull-down / minimize does).
-            if tab != .hubs {
-                appState.minimizeHubPlayback(returnToChat: false)
-                EngagementTracker.shared.hubsLeft()
-            } else {
-                EngagementTracker.shared.hubsOpened()
+            if tab == .hubs {
+                hubsDismountTask?.cancel()
+                hubsDismountTask = nil
+                hubsShellMounted = true
+            } else if oldTab == .hubs {
+                // YouTube-style: smooth morph to mini on leave. Catalog stays mounted (opacity 0)
+                // until the morph finishes — tearing it down on the same frame was the hitch.
+                if appState.hubPlaybackPost != nil,
+                   appState.hubPlaybackExpanded || appState.hubPlaybackLandscapeFullscreen {
+                    appState.minimizeHubPlayback(returnToChat: false, animated: true)
+                }
+                hubsDismountTask?.cancel()
+                hubsDismountTask = Task { @MainActor in
+                    // After ytMorph easeOut (~0.22s) + settle — then drop the heavy Hubs tree.
+                    // Never tear down on the morph frame (that hitch parked the film mid-screen).
+                    try? await Task.sleep(nanoseconds: 320_000_000)
+                    guard !Task.isCancelled, appState.selectedTab != .hubs else { return }
+                    hubsShellMounted = false
+                }
             }
-            EngagementTracker.shared.screenOpened(tab.rawValue)
-            // Feed stays mounted under Profile — clear focus so profile can elect its own winner.
-            FeedVideoFocus.shared.resetAll()
-            // 3+ min off feed → new feed mix; Hubs open → new For you order.
-            appState.noteSelectedTabChanged(from: oldTab, to: tab)
+            if tab == .anonymous {
+                anonymousShellMounted = true
+            }
+            // Continuous hubs owns AV — election clear only (no silence/reassert).
+            if appState.hubPlaybackPost != nil {
+                FeedVideoFocus.shared.clearElectionOnly()
+            } else if tab != .feed {
+                // Only reset feed election when leaving a surface that might have been playing.
+                FeedVideoFocus.shared.clearElectionOnly()
+            } else {
+                FeedVideoFocus.shared.resetAll()
+            }
+            // Tracking / stale-away reshuffle off the leave frame.
+            let leftHubs = oldTab == .hubs
+            let openedHubs = tab == .hubs
+            Task(priority: .utility) { @MainActor in
+                if leftHubs { EngagementTracker.shared.hubsLeft() }
+                if openedHubs { EngagementTracker.shared.hubsOpened() }
+                EngagementTracker.shared.screenOpened(tab.rawValue)
+                appState.noteSelectedTabChanged(from: oldTab, to: tab)
+            }
+        }
+        .onDisappear {
+            hubsDismountTask?.cancel()
+            hubsDismountTask = nil
         }
         .onChange(of: appState.navigationPath.count) { _, count in
             // Opening chat (or any push) while expanded → collapse to mini, keep playing.
             // returnToChat: false — path already has the destination (including chat).
-            if count > 0, appState.hubPlaybackExpanded {
+            if count > 0, appState.hubPlaybackExpanded || appState.hubPlaybackLandscapeFullscreen {
                 appState.minimizeHubPlayback(returnToChat: false)
             }
             // Left the pinned chat while mini → never force-return there on next minimize.
             appState.syncHubPlaybackChatReturnWithPath()
-            // Push/pop (e.g. public profile over feed) — re-elect autoplay on the live surface.
-            FeedVideoFocus.shared.resetAll()
+            // Push/pop — don't nuke continuous hubs audio while mini is up.
+            if appState.hubPlaybackPost != nil {
+                FeedVideoFocus.shared.clearElectionOnly()
+            } else {
+                FeedVideoFocus.shared.resetAll()
+            }
         }
         .onChange(of: appState.navigationPath) { _, _ in
             appState.syncHubPlaybackChatReturnWithPath()
@@ -262,17 +321,20 @@ struct MainTabView: View {
     }
 
     /// Floating mini above the tab bar (not docked into chat).
-    /// Also mount during morph-to-mini (pull ≥ 0.5 / chrome cleared) so the continuous
-    /// film has a real dock hole — avoids parking mid-screen then snapping.
+    /// Mount only after the session is actually mini. Mounting at pull ≥ 0.5
+    /// (old path) reflowed tab safe-area + PreferenceKey dock mid-morph while the
+    /// film was still on the top-half watch stage — that was the fixed-place lag.
     private var showsFloatingMiniBar: Bool {
         guard appState.hubPlaybackPost != nil, !appState.hubPlaybackDockInChat else { return false }
-        if !appState.hubPlaybackExpanded { return true }
-        return appState.hubPlaybackPullProgress >= 0.5
+        return !appState.hubPlaybackExpanded
     }
 
     private var tabContentBottomInset: CGFloat {
         // Tab bar + mini strip flush on top of it (no gap).
-        Theme.tabBarHeight + (showsFloatingMiniBar ? YouTubeMiniPlayerBar.barHeight : 0)
+        // Masquerade Space/post hide the tab bar — drop that reservation so the comment
+        // composer sits flush (no empty band under "Add a comment").
+        let tab = appState.masqueradeHidesTabBar ? 0 : Theme.tabBarHeight
+        return tab + (showsFloatingMiniBar ? YouTubeMiniPlayerBar.barHeight : 0)
     }
 
     /// Extra bottom space on pushed screens. Chat docks mini under its own composer — no float inset.

@@ -111,9 +111,10 @@ struct BottomTabBar: View {
         .frame(width: size, height: size, alignment: .center)
         .overlay(alignment: .topTrailing) {
             if tab == .messages, appState.messagesUnreadCount > 0 {
-                Circle()
-                    .fill(Theme.danger)
-                    .frame(width: 9, height: 9)
+                UnreadDot(size: 9)
+                    .offset(x: 5, y: -2)
+            } else if tab == .anonymous, appState.masqueradeUnreadCount > 0 {
+                UnreadDot(size: 9)
                     .offset(x: 5, y: -2)
             }
         }
