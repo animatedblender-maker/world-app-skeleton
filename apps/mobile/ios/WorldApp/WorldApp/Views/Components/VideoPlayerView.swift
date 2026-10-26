@@ -21,6 +21,8 @@ struct VideoPlayerView: View {
     var allowsFullscreen: Bool = false
     /// When set (Hubs feed), FS hands off to continuous player instead of remounting a cover.
     var onFullscreenRequest: (() -> Void)? = nil
+    /// Hubs long-form only — never Sparks. Shows CC + caption overlay on the light AV path.
+    var allowsCaptions: Bool = false
     var startTime: Double? = nil
     /// When false, teardown won't write a lower position over an existing resume point (mini player).
     var persistsPositionOnTeardown: Bool = true
@@ -87,6 +89,17 @@ struct VideoPlayerView: View {
     /// Debounce loop restarts (DidPlayToEnd + near-end time observer can both fire).
     @State private var lastLoopRestartAt: Date = .distantPast
     @State private var isLoopRestarting = false
+    /// Always start off — never inherit CC from a previous video / UserDefaults.
+    @State private var captionsEnabled = false
+    @State private var transcript: TranscriptService.Transcript?
+    @State private var activeCaption: String?
+    @State private var captionsHint: String?
+    @State private var liveCaptionHandle: LiveCaptionHandle?
+    @State private var captionClock = CaptionPlayheadClock()
+
+    private var captionsAvailable: Bool {
+        allowsCaptions && TranscriptService.isTranscriptablePostID(postID)
+    }
 
     private var shouldShowAd: Bool {
         adsEnabled && isActive && !adFinished && placement != nil
@@ -113,340 +126,298 @@ struct VideoPlayerView: View {
     }
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            softVideoFloor
+        playerStage
+            .fullScreenCover(isPresented: $showFullscreen) {
+                fullscreenCover
+            }
+    }
 
-            // Top mute strip + uncropped film + bottom timeline strip.
-            VStack(spacing: 0) {
-                if topChromeReserve > 0 {
-                    Color.black
-                        .frame(height: topChromeReserve)
-                        .allowsHitTesting(false)
-                }
+    private var fullscreenCover: some View {
+        MatteryaFullscreenPlayer(
+            url: url,
+            posterURL: posterURL,
+            startTime: currentSeconds,
+            initialMuted: isMuted,
+            onViewed: onViewed
+        )
+    }
 
-                ZStack {
-                    if let posterURL {
-                        CachedAsyncImage(
-                            url: posterURL,
-                            maxPixelSize: 900,
-                            contentMode: fillsFrame ? .fill : .fit,
-                            placeholder: AnyView(softVideoFloor)
-                        )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .clipped()
-                        .allowsHitTesting(false)
-                    }
-
-                    if shouldShowAd, let placement {
-                        AdPrerollView(
-                            placement: placement,
-                            countryCode: countryCode,
-                            contentCountryCode: contentCountryCode,
-                            postID: postID,
-                            onComplete: { adFinished = true }
-                        )
-                    } else if let player {
-                        MatteryaVideoSurface(player: player, fillsFrame: fillsFrame)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .clipped()
-                            .opacity(shouldShowPosterCover ? 0.01 : 1)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                guard showsControls else { return }
-                                toggleChromeFromTap()
-                            }
-                    } else if loadFailed {
-                        unavailableState
-                    } else if posterURL == nil {
-                        ProgressView().tint(Theme.accentBright)
-                    }
-
-                    if shouldShowPosterCover {
-                        ZStack {
-                            softVideoFloor
-                            if let posterURL {
-                                CachedAsyncImage(
-                                    url: posterURL,
-                                    maxPixelSize: 900,
-                                    contentMode: fillsFrame ? .fill : .fit,
-                                    placeholder: AnyView(Color.clear)
-                                )
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                .clipped()
-                                .allowsHitTesting(false)
-                            } else if let postID {
-                                FrameZeroFallbackPoster(
-                                    postID: postID,
-                                    videoURL: url,
-                                    fillsFrame: fillsFrame,
-                                    allowClientExtract: false,
-                                    seedPosterURL: Frame0PosterCache.url(for: postID)
-                                )
-                                .allowsHitTesting(false)
-                            }
-                        }
-                        .allowsHitTesting(false)
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                if bottomChromeReserve > 0 {
-                    Color.black
-                        .frame(height: bottomChromeReserve)
-                        .allowsHitTesting(false)
+    /// Split from `body` so the type checker stays under the complexity limit.
+    private var playerStage: some View {
+        playerLifecycleCore
+            .onChange(of: isActive) { _, active in
+                handleIsActiveChange(active)
+            }
+            .onChange(of: isPausedByUser) { _, paused in
+                handleIsPausedByUserChange(paused)
+            }
+            .onChange(of: restartFromBeginningToken) { _, token in
+                handleRestartTokenChange(token)
+            }
+            .onChange(of: muted) { _, newValue in
+                guard !sharesFeedMute else { return }
+                isMuted = newValue
+                liveGate.isMuted = newValue
+                player?.isMuted = newValue
+            }
+            .onChange(of: appState.feedVideosMuted) { _, globalMuted in
+                guard sharesFeedMute else { return }
+                isMuted = globalMuted
+                liveGate.isMuted = globalMuted
+                player?.isMuted = globalMuted
+            }
+            .onChange(of: userWantsPause) { _, paused in
+                liveGate.userWantsPause = paused
+            }
+            .onChange(of: isMuted) { _, mutedNow in
+                liveGate.isMuted = mutedNow
+            }
+            .onChange(of: adFinished) { _, finished in
+                if finished {
+                    Task { await ensurePlayer(forceRebuild: true) }
                 }
             }
-
-            // Transport overlays the film band — pad bottom reserve so play stays centered on picture
-            // (not shifted into the timeline strip / off to one side).
-            if shouldShowChrome {
-                ZStack {
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            // Second tap (or tap empty film) dismisses before the 3s timer.
-                            toggleChromeFromTap()
-                        }
-                    MatteryaVideoControls(
-                        isPlaying: isPlaying,
-                        isMuted: isMuted,
-                        currentSeconds: currentSeconds,
-                        durationSeconds: durationSeconds,
-                        showsFullscreen: allowsFullscreen,
-                        isFullscreen: false,
-                        topInset: max(8, topChromeReserve > 0 ? 10 : 12),
-                        onPlayPause: { togglePlayback() },
-                        onMuteToggle: { toggleMute() },
-                        onSeek: { seek(to: $0) },
-                        onFullscreen: allowsFullscreen ? {
-                            if let onFullscreenRequest {
-                                onFullscreenRequest()
-                            } else {
-                                openFullscreen()
-                            }
-                        } : nil,
-                        onExitFullscreen: nil
-                    )
-                }
-                .padding(.top, topChromeReserve)
-                .padding(.bottom, bottomChromeReserve)
-                .transition(.opacity)
-            }
-        }
-        .background(Color.black)
-        .onAppear {
-            liveGate.isActive = isActive
-            liveGate.userWantsPause = userWantsPause
-            liveGate.onProgress = onProgress
-            // Feed hubs: start hidden until tap. Other surfaces keep chrome when enabled.
-            if showsControls, !tapToRevealControls {
-                showChrome = true
-            } else {
-                showChrome = false
-            }
-            // Feed→Sparks continue: never start covered — claim already has painted frames.
-            let handoffContinue = postID.map {
-                SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: $0)
-                    || appState.shouldContinuePlayback(for: $0)
-                    || SparkWarmPool.shared.hasContinuingParked
-            } ?? SparkWarmPool.shared.hasContinuingParked
-            showPosterCover = !handoffContinue
-            if isActive {
-                liveGate.pageEpoch = MediaPlaybackCoordinator.shared.sparkPageEpoch
-            }
-            isMuted = sharesFeedMute ? appState.feedVideosMuted : muted
-            liveGate.isMuted = isMuted
-            configureAudioSession()
-            // Buffer the moment the cell mounts (feed + Sparks) — don't wait for focus.
-            handleActivationOrMount(forceRebuild: player?.currentItem == nil)
-            if !handoffContinue, let player, liveGate.isActive, !liveGate.userWantsPause {
-                revealPlayerWhenFramesReady(player)
-            }
-            // Chrome starts hidden — only a tap reveals transport (no scroll noise).
-            reportVideoSizeIfNeeded(from: player?.currentItem)
-        }
-        // Screenshot / Control Center must not leave video paused.
-        .onReceive(NotificationCenter.default.publisher(for: .matteryaResumePlaybackAfterInterrupt)) { _ in
-            // liveGate + solo only — never resume an off-screen / non-solo Spark
-            // (comments overlay used to wake “older” pages that still had isActive=true).
-            guard liveGate.isActive, !liveGate.userWantsPause, let player, player.currentItem != nil else { return }
-            // Must already be solo — do not claim solo here (that stole audio from the current Spark).
-            guard MediaPlaybackCoordinator.shared.isSolo(player) else {
-                player.pause()
-                player.isMuted = true
-                player.volume = 0
-                return
-            }
-            if player.rate < 0.01 {
-                kickAudiblePlayback(on: player)
-            }
-        }
-        // Same-runloop handoff: park live buffer mid-playhead before Sparks/Hubs claim.
-        .onReceive(NotificationCenter.default.publisher(for: .matteryaExportPlaybackForHandoff)) { note in
-            guard let ids = note.userInfo?["postIDs"] as? [String],
-                  let postID,
-                  ids.contains(postID),
-                  let player,
-                  player.currentItem != nil,
-                  player.status != .failed
-            else { return }
-            persistPlaybackPosition()
-            // Stamp the same playhead on every handoff id (share → origin).
-            let sec = SafeNumeric.nonNegativeSeconds(currentSeconds)
-            if sec >= 0.05 {
-                for id in ids where id != postID {
-                    YouTubeCatalogService.shared.notePlaybackPosition(sec, for: id, duration: nil)
-                }
-            }
-            SparkWarmPool.shared.parkContinuing(postID: postID, player: player)
-            // Detach without destroying the item (pool owns it now).
-            removeTimeObserver()
-            teardownPlayerObservers()
-            self.player = nil
-            isPlaying = false
-            showPosterCover = true
-        }
-        .onChange(of: isActive) { _, active in
-            liveGate.isActive = active
-            liveGate.onProgress = onProgress
-            if active {
-                // Bind to the current page epoch so late observers from prior pages cannot re-solo.
-                liveGate.pageEpoch = MediaPlaybackCoordinator.shared.sparkPageEpoch
-                // Respect user pause if they paused then we re-entered the same page.
-                userWantsPause = isPausedByUser
-                liveGate.userWantsPause = isPausedByUser
-                if isPausedByUser {
-                    // Stay on frozen frame — no poster swap, no restart seek.
-                    player?.pause()
-                    isPlaying = false
-                    showPosterCover = false
-                    return
-                }
-                // IG/YT: readyToPlay ≠ first painted frame. Keep poster until rate/frames.
-                if let player, playerHasPaintedFrames(player) {
-                    markPosterCoverReady()
-                } else if let player {
-                    revealPlayerWhenFramesReady(player)
-                }
-                // Re-bind progress + ensure observer is alive after focus (preload path).
-                if let player {
-                    attachTimeObserver(to: player)
-                    // Push one immediate tick so the rail isn't stuck at 0 until the next interval.
-                    let t = player.currentTime().seconds
-                    let cur = t.isFinite ? max(0, t) : 0
-                    currentSeconds = cur
-                    if let item = player.currentItem {
-                        updateDuration(from: item)
-                        reportVideoSizeIfNeeded(from: item)
-                    }
-                    liveGate.onProgress?(cur, durationSeconds)
-                }
-                handleActivationOrMount(forceRebuild: false)
-            } else {
-                // Page left the viewport — not a user pause.
-                if restartFromBeginningToken == 0 {
-                    persistPlaybackPosition()
-                }
-                player?.pause()
-                player?.isMuted = true
-                player?.volume = 0
-                isPlaying = false
-                // Keep last decoded frame under the next page; don't force poster swap.
+            .onChange(of: url) { _, _ in
+                showPosterCover = true
                 isRestartSeeking = false
-                userWantsPause = false
-                liveGate.userWantsPause = false
-                // Pre-seek to 0 while OFF-SCREEN so next focus can play without a seek flash.
-                if restartFromBeginningToken > 0 {
-                    softSeekToBeginning(playAfter: false)
-                }
-            }
-        }
-        .onChange(of: isPausedByUser) { _, paused in
-            liveGate.userWantsPause = paused
-            userWantsPause = paused
-            guard liveGate.isActive, let player, player.currentItem != nil else { return }
-            if paused {
-                // Freeze current frame — keep AVPlayer layer visible (no poster / black).
-                player.pause()
-                isPlaying = false
-                showPosterCover = false
-                isRestartSeeking = false
-            } else {
-                kickAudiblePlayback(on: player)
-            }
-        }
-        .onChange(of: restartFromBeginningToken) { _, token in
-            guard token > 0, token != lastHandledRestartToken else { return }
-            guard !isPausedByUser else {
-                lastHandledRestartToken = token
-                return
-            }
-            // Keep poster until frames paint after restart (readyToPlay ≠ pixels).
-            showPosterCover = true
-            guard isActive || liveGate.isActive else {
-                softSeekToBeginning(playAfter: false)
-                return
-            }
-            handleActivationOrMount(forceRebuild: false)
-        }
-        .onChange(of: muted) { _, newValue in
-            guard !sharesFeedMute else { return }
-            isMuted = newValue
-            liveGate.isMuted = newValue
-            player?.isMuted = newValue
-        }
-        .onChange(of: appState.feedVideosMuted) { _, globalMuted in
-            guard sharesFeedMute else { return }
-            isMuted = globalMuted
-            liveGate.isMuted = globalMuted
-            player?.isMuted = globalMuted
-        }
-        .onChange(of: userWantsPause) { _, paused in
-            liveGate.userWantsPause = paused
-        }
-        .onChange(of: isMuted) { _, mutedNow in
-            liveGate.isMuted = mutedNow
-        }
-        .onChange(of: adFinished) { _, finished in
-            if finished {
+                teardownPlayer(park: false)
                 Task { await ensurePlayer(forceRebuild: true) }
             }
-        }
-        .onChange(of: url) { _, _ in
-            // Drop the old surface immediately — never paint one Spark’s frame on another.
-            showPosterCover = true
-            isRestartSeeking = false
-            teardownPlayer(park: false)
-            Task { await ensurePlayer(forceRebuild: true) }
-        }
-        .onChange(of: postID) { _, _ in
-            showPosterCover = true
-            isRestartSeeking = false
-            teardownPlayer(park: false)
-            Task { await ensurePlayer(forceRebuild: true) }
-        }
-        .onChange(of: seekToSeconds) { _, target in
-            guard let target else { return }
-            seek(to: target)
-            currentSeconds = target
-            if isActive, !userWantsPause {
-                player?.play()
-                player?.safePlayImmediately(atRate: 1.0)
-                isPlaying = true
+            .onChange(of: postID) { _, _ in
+                showPosterCover = true
+                isRestartSeeking = false
+                // New clip → CC off (do not keep captions from the previous video).
+                liveCaptionHandle?.cancel()
+                liveCaptionHandle = nil
+                captionsEnabled = false
+                activeCaption = nil
+                captionsHint = nil
+                transcript = nil
+                teardownPlayer(park: false)
+                Task { await ensurePlayer(forceRebuild: true) }
             }
-            onSeekConsumed?()
+            .onChange(of: seekToSeconds) { _, target in
+                handleSeekToSecondsChange(target)
+            }
+            .onDisappear {
+                teardownPlayer()
+            }
+    }
+
+    private var playerLifecycleCore: some View {
+        playerRoot
+            .background(Color.black)
+            .onAppear { handlePlayerAppear() }
+            .task(id: postID) {
+                // Every new post starts with CC off.
+                liveCaptionHandle?.cancel()
+                liveCaptionHandle = nil
+                captionsEnabled = false
+                activeCaption = nil
+                captionsHint = nil
+                guard captionsAvailable else { return }
+                await loadLightPathTranscriptIfNeeded()
+            }
+            .onChange(of: currentSeconds) { _, seconds in
+                refreshLightPathCaption(at: seconds)
+            }
+            .onChange(of: captionsEnabled) { _, enabled in
+                handleCaptionsEnabledChange(enabled)
+            }
+            .onChange(of: showsControls) { _, visible in
+                handleShowsControlsChange(visible)
+            }
+            .onChange(of: tapToRevealControls) { _, tapToReveal in
+                handleTapToRevealChange(tapToReveal)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .matteryaResumePlaybackAfterInterrupt)) { _ in
+                handleResumeAfterInterrupt()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .matteryaExportPlaybackForHandoff)) { note in
+                handleExportPlaybackForHandoff(note)
+            }
+    }
+
+    @ViewBuilder
+    private var playerRoot: some View {
+        ZStack(alignment: .bottom) {
+            softVideoFloor
+            filmBand
+            transportChromeOverlay
+            filmCaptionOverlay
+            captionsHintOverlay
         }
-        .onDisappear {
-            teardownPlayer()
+    }
+
+    /// Top mute strip + uncropped film + bottom timeline strip.
+    private var filmBand: some View {
+        VStack(spacing: 0) {
+            if topChromeReserve > 0 {
+                Color.black
+                    .frame(height: topChromeReserve)
+                    .allowsHitTesting(false)
+            }
+            filmSurface
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if bottomChromeReserve > 0 {
+                Color.black
+                    .frame(height: bottomChromeReserve)
+                    .allowsHitTesting(false)
+            }
         }
-        .fullScreenCover(isPresented: $showFullscreen) {
-            MatteryaFullscreenPlayer(
-                url: url,
-                posterURL: posterURL,
-                startTime: currentSeconds,
-                initialMuted: isMuted,
-                onViewed: onViewed
+    }
+
+    @ViewBuilder
+    private var filmSurface: some View {
+        ZStack {
+            if let posterURL {
+                CachedAsyncImage(
+                    url: posterURL,
+                    maxPixelSize: 900,
+                    contentMode: fillsFrame ? .fill : .fit,
+                    placeholder: AnyView(softVideoFloor)
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+                .allowsHitTesting(false)
+            }
+
+            filmPlaybackLayer
+
+            if shouldShowPosterCover {
+                posterCoverLayer
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var filmPlaybackLayer: some View {
+        if shouldShowAd, let placement {
+            AdPrerollView(
+                placement: placement,
+                countryCode: countryCode,
+                contentCountryCode: contentCountryCode,
+                postID: postID,
+                onComplete: { adFinished = true }
             )
+        } else if let player {
+            MatteryaVideoSurface(player: player, fillsFrame: fillsFrame)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+                .opacity(shouldShowPosterCover ? 0.01 : 1)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    guard showsControls else { return }
+                    toggleChromeFromTap()
+                }
+        } else if loadFailed {
+            unavailableState
+        } else if posterURL == nil {
+            ProgressView().tint(Theme.accentBright)
+        }
+    }
+
+    private var posterCoverLayer: some View {
+        ZStack {
+            softVideoFloor
+            if let posterURL {
+                CachedAsyncImage(
+                    url: posterURL,
+                    maxPixelSize: 900,
+                    contentMode: fillsFrame ? .fill : .fit,
+                    placeholder: AnyView(Color.clear)
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+                .allowsHitTesting(false)
+            } else if let postID {
+                FrameZeroFallbackPoster(
+                    postID: postID,
+                    videoURL: url,
+                    fillsFrame: fillsFrame,
+                    allowClientExtract: false,
+                    seedPosterURL: Frame0PosterCache.url(for: postID)
+                )
+                .allowsHitTesting(false)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    @ViewBuilder
+    private var transportChromeOverlay: some View {
+        if shouldShowChrome {
+            ZStack {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        toggleChromeFromTap()
+                    }
+                lightPathTransportControls
+            }
+            .padding(.top, topChromeReserve)
+            .padding(.bottom, bottomChromeReserve)
+            .transition(.opacity)
+        }
+    }
+
+    private var lightPathTransportControls: some View {
+        MatteryaVideoControls(
+            isPlaying: isPlaying,
+            isMuted: isMuted,
+            currentSeconds: currentSeconds,
+            durationSeconds: durationSeconds,
+            showsFullscreen: allowsFullscreen,
+            isFullscreen: false,
+            topInset: 12,
+            captionsEnabled: captionsEnabled,
+            showsCaptionsToggle: captionsAvailable,
+            onCaptionsToggle: { Task { await toggleLightPathCaptions() } },
+            onPlayPause: { togglePlayback() },
+            onMuteToggle: { toggleMute() },
+            onSeek: { seek(to: $0) },
+            onFullscreen: allowsFullscreen ? { handleFullscreenTap() } : nil,
+            onExitFullscreen: nil
+        )
+    }
+
+    private func handleFullscreenTap() {
+        if let onFullscreenRequest {
+            onFullscreenRequest()
+        } else {
+            openFullscreen()
+        }
+    }
+
+    @ViewBuilder
+    private var filmCaptionOverlay: some View {
+        if captionsEnabled, let line = activeCaption, !line.isEmpty {
+            MatteryaFilmCaption(
+                text: line,
+                maxWidthPadding: 36,
+                bottomPadding: (shouldShowChrome ? 58 : 28) + bottomChromeReserve
+            )
+            .zIndex(40)
+            .transition(.opacity)
+        }
+    }
+
+    @ViewBuilder
+    private var captionsHintOverlay: some View {
+        if let captionsHint, !captionsHint.isEmpty {
+            VStack {
+                Spacer(minLength: 0)
+                Text(captionsHint)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.paper)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(Theme.ink.opacity(0.7), in: Capsule())
+                    .padding(.bottom, 88)
+            }
+            .allowsHitTesting(false)
+            .zIndex(45)
+            .transition(.opacity)
         }
     }
 
@@ -504,6 +475,15 @@ struct VideoPlayerView: View {
             isPlaying = false
             return
         }
+        // Cold open / splash: never audible (and skip play) until Feed autoplay unlocks.
+        if sharesFeedMute, !FeedVideoFocus.shared.autoplayUnlocked {
+            player.pause()
+            player.isMuted = true
+            player.volume = 0
+            player.rate = 0
+            isPlaying = false
+            return
+        }
         // Re-sync epoch so feed Sparks keep looping after a prior full-screen Sparks session.
         liveGate.pageEpoch = MediaPlaybackCoordinator.shared.sparkPageEpoch
         let epoch = liveGate.pageEpoch
@@ -515,8 +495,10 @@ struct VideoPlayerView: View {
             isPlaying = false
             return
         }
-        player.isMuted = liveGate.isMuted
-        player.volume = liveGate.isMuted ? 0 : 1
+        // Stay silent until frames paint — cold open unmuted under a frozen poster while UI stalled.
+        let holdSilentUntilFrames = showPosterCover || (sharesFeedMute && !FeedVideoFocus.shared.autoplayUnlocked)
+        player.isMuted = holdSilentUntilFrames || liveGate.isMuted
+        player.volume = (holdSilentUntilFrames || liveGate.isMuted) ? 0 : 1
         // Ensure end-of-item still notifies so loop restarts (pool may have set .pause).
         if loops {
             player.actionAtItemEnd = .none
@@ -530,6 +512,7 @@ struct VideoPlayerView: View {
         let t = player.currentTime().seconds
         if t.isFinite, t >= 0.25 {
             showPosterCover = false
+            applyLiveMuteAfterFrames(on: player)
             onFramesReady?()
             return
         }
@@ -538,6 +521,15 @@ struct VideoPlayerView: View {
             markPosterCoverReady()
         } else {
             revealPlayerWhenFramesReady(player)
+        }
+    }
+
+    @MainActor
+    private func applyLiveMuteAfterFrames(on player: AVPlayer) {
+        player.isMuted = liveGate.isMuted
+        player.volume = liveGate.isMuted ? 0 : 1
+        if !liveGate.isMuted {
+            MediaPlaybackCoordinator.shared.ensurePlaybackAudioSession()
         }
     }
 
@@ -557,6 +549,7 @@ struct VideoPlayerView: View {
         // Mid-clip: no settle delay.
         if let player, player.currentTime().seconds.isFinite, player.currentTime().seconds >= 0.25 {
             showPosterCover = false
+            applyLiveMuteAfterFrames(on: player)
             onFramesReady?()
             return
         }
@@ -569,6 +562,9 @@ struct VideoPlayerView: View {
             guard liveGate.isActive, !liveGate.userWantsPause else { return }
             if let player, !playerHasPaintedFrames(player) { return }
             showPosterCover = false
+            if let player {
+                applyLiveMuteAfterFrames(on: player)
+            }
             onFramesReady?()
         }
     }
@@ -753,6 +749,219 @@ struct VideoPlayerView: View {
         scheduleChromeHide()
     }
 
+    private func applyInitialChromeVisibility() {
+        if showsControls, !tapToRevealControls {
+            showChrome = true
+        } else {
+            showChrome = false
+        }
+    }
+
+    private func handlePlayerAppear() {
+        liveGate.isActive = isActive
+        liveGate.userWantsPause = userWantsPause
+        liveGate.onProgress = onProgress
+        // Feed hubs: start hidden until tap (CC rides with chrome). Other surfaces keep chrome on.
+        applyInitialChromeVisibility()
+        // Feed→Sparks continue: never start covered — claim already has painted frames.
+        let handoffContinue = postID.map {
+            SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: $0)
+                || appState.shouldContinuePlayback(for: $0)
+                || SparkWarmPool.shared.hasContinuingParked
+        } ?? SparkWarmPool.shared.hasContinuingParked
+        showPosterCover = !handoffContinue
+        if isActive {
+            liveGate.pageEpoch = MediaPlaybackCoordinator.shared.sparkPageEpoch
+        }
+        isMuted = sharesFeedMute ? appState.feedVideosMuted : muted
+        liveGate.isMuted = isMuted
+        configureAudioSession()
+        // Buffer the moment the cell mounts (feed + Sparks) — don't wait for focus.
+        handleActivationOrMount(forceRebuild: player?.currentItem == nil)
+        if !handoffContinue, let player, liveGate.isActive, !liveGate.userWantsPause {
+            revealPlayerWhenFramesReady(player)
+        }
+        reportVideoSizeIfNeeded(from: player?.currentItem)
+        if captionsAvailable {
+            Task { await loadLightPathTranscriptIfNeeded() }
+        }
+    }
+
+    private func handleCaptionsEnabledChange(_ enabled: Bool) {
+        if enabled {
+            refreshLightPathCaption(at: currentSeconds)
+        } else {
+            activeCaption = nil
+            captionsHint = nil
+        }
+    }
+
+    private func handleShowsControlsChange(_ visible: Bool) {
+        // Focus win must not auto-pop CC/chrome on feed hubs (tap-to-reveal only).
+        if visible, !tapToRevealControls {
+            showChrome = true
+            scheduleChromeHide()
+        } else if !visible {
+            chromeTask?.cancel()
+            chromeTask = nil
+            showChrome = false
+        }
+    }
+
+    private func handleTapToRevealChange(_ tapToReveal: Bool) {
+        if tapToReveal {
+            showChrome = false
+            chromeTask?.cancel()
+            chromeTask = nil
+        } else if showsControls {
+            showChrome = true
+        }
+    }
+
+    private func handleResumeAfterInterrupt() {
+        // liveGate + solo only — never resume an off-screen / non-solo Spark
+        // (comments overlay used to wake “older” pages that still had isActive=true).
+        guard liveGate.isActive, !liveGate.userWantsPause, let player, player.currentItem != nil else { return }
+        // Must already be solo — do not claim solo here (that stole audio from the current Spark).
+        guard MediaPlaybackCoordinator.shared.isSolo(player) else {
+            player.pause()
+            player.isMuted = true
+            player.volume = 0
+            return
+        }
+        if player.rate < 0.01 {
+            kickAudiblePlayback(on: player)
+        }
+    }
+
+    private func handleExportPlaybackForHandoff(_ note: Notification) {
+        guard let ids = note.userInfo?["postIDs"] as? [String],
+              let postID,
+              ids.contains(postID),
+              let player,
+              player.currentItem != nil,
+              player.status != .failed
+        else { return }
+        persistPlaybackPosition()
+        // Stamp the same playhead on every handoff id (share → origin).
+        let sec = SafeNumeric.nonNegativeSeconds(currentSeconds)
+        if sec >= 0.05 {
+            for id in ids where id != postID {
+                YouTubeCatalogService.shared.notePlaybackPosition(sec, for: id, duration: nil)
+            }
+        }
+        // Only mid-clip is a continuing handoff. t≈0 previews must not block resume seek.
+        if sec > 0.45 {
+            SparkWarmPool.shared.parkContinuing(postID: postID, player: player)
+        } else {
+            SparkWarmPool.shared.park(postID: postID, player: player)
+        }
+        // Detach without destroying the item (pool owns it now).
+        removeTimeObserver()
+        teardownPlayerObservers()
+        self.player = nil
+        isPlaying = false
+        showPosterCover = true
+    }
+
+    private func handleIsActiveChange(_ active: Bool) {
+        liveGate.isActive = active
+        liveGate.onProgress = onProgress
+        if active {
+            // Bind to the current page epoch so late observers from prior pages cannot re-solo.
+            liveGate.pageEpoch = MediaPlaybackCoordinator.shared.sparkPageEpoch
+            // Respect user pause if they paused then we re-entered the same page.
+            userWantsPause = isPausedByUser
+            liveGate.userWantsPause = isPausedByUser
+            if isPausedByUser {
+                // Stay on frozen frame — no poster swap, no restart seek.
+                player?.pause()
+                isPlaying = false
+                showPosterCover = false
+                return
+            }
+            // IG/YT: readyToPlay ≠ first painted frame. Keep poster until rate/frames.
+            if let player, playerHasPaintedFrames(player) {
+                markPosterCoverReady()
+            } else if let player {
+                revealPlayerWhenFramesReady(player)
+            }
+            // Re-bind progress + ensure observer is alive after focus (preload path).
+            if let player {
+                attachTimeObserver(to: player)
+                // Push one immediate tick so the rail isn't stuck at 0 until the next interval.
+                let t = player.currentTime().seconds
+                let cur = t.isFinite ? max(0, t) : 0
+                currentSeconds = cur
+                if let item = player.currentItem {
+                    updateDuration(from: item)
+                    reportVideoSizeIfNeeded(from: item)
+                }
+                liveGate.onProgress?(cur, durationSeconds)
+            }
+            handleActivationOrMount(forceRebuild: false)
+        } else {
+            // Page left the viewport — not a user pause.
+            if restartFromBeginningToken == 0 {
+                persistPlaybackPosition()
+            }
+            player?.pause()
+            player?.isMuted = true
+            player?.volume = 0
+            isPlaying = false
+            // Keep last decoded frame under the next page; don't force poster swap.
+            isRestartSeeking = false
+            userWantsPause = false
+            liveGate.userWantsPause = false
+            // Pre-seek to 0 while OFF-SCREEN so next focus can play without a seek flash.
+            if restartFromBeginningToken > 0 {
+                softSeekToBeginning(playAfter: false)
+            }
+        }
+    }
+
+    private func handleIsPausedByUserChange(_ paused: Bool) {
+        liveGate.userWantsPause = paused
+        userWantsPause = paused
+        guard liveGate.isActive, let player, player.currentItem != nil else { return }
+        if paused {
+            // Freeze current frame — keep AVPlayer layer visible (no poster / black).
+            player.pause()
+            isPlaying = false
+            showPosterCover = false
+            isRestartSeeking = false
+        } else {
+            kickAudiblePlayback(on: player)
+        }
+    }
+
+    private func handleRestartTokenChange(_ token: UInt) {
+        guard token > 0, token != lastHandledRestartToken else { return }
+        guard !isPausedByUser else {
+            lastHandledRestartToken = token
+            return
+        }
+        // Keep poster until frames paint after restart (readyToPlay ≠ pixels).
+        showPosterCover = true
+        guard isActive || liveGate.isActive else {
+            softSeekToBeginning(playAfter: false)
+            return
+        }
+        handleActivationOrMount(forceRebuild: false)
+    }
+
+    private func handleSeekToSecondsChange(_ target: Double?) {
+        guard let target else { return }
+        seek(to: target)
+        currentSeconds = target
+        if isActive, !userWantsPause {
+            player?.play()
+            player?.safePlayImmediately(atRate: 1.0)
+            isPlaying = true
+        }
+        onSeekConsumed?()
+    }
+
     private func toggleChromeFromTap() {
         guard showsControls else { return }
         let next = !showChrome
@@ -764,6 +973,111 @@ struct VideoPlayerView: View {
         } else {
             chromeTask?.cancel()
             chromeTask = nil
+        }
+    }
+
+    @MainActor
+    private func toggleLightPathCaptions() async {
+        scheduleChromeHide()
+        let next = !captionsEnabled
+        guard next else {
+            liveCaptionHandle?.cancel()
+            liveCaptionHandle = nil
+            captionsEnabled = false
+            activeCaption = nil
+            captionsHint = nil
+            return
+        }
+        guard let postID, TranscriptService.isTranscriptablePostID(postID) else {
+            setLightPathCaptionsHint("Captions unavailable")
+            return
+        }
+        captionsEnabled = true
+        captionsHint = nil
+
+        if let cached = TranscriptService.cached(postID), cached.isReady,
+           !TranscriptService.looksTruncated(cached, videoDuration: durationSeconds) {
+            transcript = cached
+            refreshLightPathCaption(at: currentSeconds)
+            return
+        }
+
+        liveCaptionHandle?.cancel()
+        captionClock.seconds = currentSeconds
+        captionClock.duration = durationSeconds
+        let mediaURL = url
+        let clock = captionClock
+        liveCaptionHandle = LiveCaptionEngine.start(
+            postID: postID,
+            mediaURL: mediaURL,
+            playhead: { clock.seconds },
+            duration: { clock.duration }
+        ) { updated in
+            transcript = updated
+            if updated.status == "failed" {
+                captionsEnabled = false
+                setLightPathCaptionsHint(lightPathCaptionsUnavailableHint(for: updated))
+                liveCaptionHandle?.cancel()
+                liveCaptionHandle = nil
+                return
+            }
+            refreshLightPathCaption(at: currentSeconds)
+        }
+    }
+
+    @MainActor
+    private func loadLightPathTranscriptIfNeeded(force: Bool = false) async {
+        guard captionsAvailable, let postID else {
+            transcript = nil
+            activeCaption = nil
+            return
+        }
+        if !force, let cached = TranscriptService.cached(postID) {
+            transcript = cached
+            if captionsEnabled { refreshLightPathCaption(at: currentSeconds) }
+            if cached.isReady { return }
+        }
+        if let fetched = await TranscriptService.fetch(postID: postID, force: force) {
+            transcript = fetched
+            if captionsEnabled { refreshLightPathCaption(at: currentSeconds) }
+        }
+    }
+
+    private func refreshLightPathCaption(at seconds: Double) {
+        guard captionsEnabled, let transcript else {
+            activeCaption = nil
+            return
+        }
+        let next = TranscriptService.textAt(time: seconds, in: transcript)
+        if next != activeCaption {
+            activeCaption = next
+        }
+    }
+
+    private func lightPathCaptionsUnavailableHint(for transcript: TranscriptService.Transcript?) -> String {
+        let err = transcript?.error?.lowercased() ?? ""
+        if err.contains("audio_missing") || err.contains("audio_export") || err.contains("export")
+            || err.contains("operation stopped") || err.contains("cannot open")
+            || err.contains("audio_download") {
+            return "Couldn’t extract audio — tap CC to retry"
+        }
+        if err.contains("captions_model_missing") || err.contains("modelsunavailable") {
+            return "Captions model missing — rebuild the app"
+        }
+        if err.contains("empty_transcript") {
+            return "No speech detected"
+        }
+        if let raw = transcript?.error?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !raw.isEmpty {
+            let short = raw.count > 72 ? String(raw.prefix(69)) + "…" : raw
+            return "Captions unavailable — \(short)"
+        }
+        return "Captions unavailable"
+    }
+
+    private func setLightPathCaptionsHint(_ message: String) {
+        withAnimation(.easeInOut(duration: 0.15)) {
+            captionsHint = message
         }
     }
 
@@ -872,14 +1186,19 @@ struct VideoPlayerView: View {
         let alreadyAtStart = SparkWarmPool.isAtStart(claimed)
 
         // Feed → Sparks/Hubs handoff FIRST — never pause/poster over a live mid-clip buffer.
+        // Require midClipHead so a t≈0 "continuing" park cannot skip Continue watching resume.
         let claimWasContinuing = SparkWarmPool.shared.takeLastClaimWasContinuing()
         let t0 = claimed.currentTime().seconds
         let midClipHead = t0.isFinite && t0 > 0.45
-        let continueMid = claimWasContinuing
-            || midClipHead
+        let handoffFlag = claimWasContinuing
             || (postID.map { SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: $0) } ?? false)
             || (postID.map { appState.shouldContinuePlayback(for: $0) } ?? false)
             || SparkWarmPool.shared.hasContinuingParked
+        let resumeAt = resolvedStartTime()
+        let savedAhead = resumeAt >= 0.5
+            && !(t0.isFinite && abs(t0 - resumeAt) < 1.0)
+            && !(t0.isFinite && t0 + 1.5 >= resumeAt)
+        let continueMid = midClipHead && handoffFlag && !savedAhead
         if continueMid {
             if let postID {
                 SparkWarmPool.shared.clearContinueFlag(postID: postID)
@@ -901,6 +1220,49 @@ struct VideoPlayerView: View {
                     pageEpoch: liveGate.pageEpoch
                 )
                 kickAudiblePlayback(on: claimed)
+            }
+            return
+        }
+
+        if let postID {
+            SparkWarmPool.shared.clearContinueFlag(postID: postID)
+            appState.clearContinuePlayback(for: postID)
+        }
+
+        // Continue watching / saved playhead: seek before first audible frame.
+        if savedAhead {
+            claimed.pause()
+            claimed.rate = 0
+            claimed.isMuted = true
+            claimed.volume = 0
+            if let item = claimed.currentItem {
+                item.preferredForwardBufferDuration = 8
+                updateDuration(from: item)
+                reportVideoSizeIfNeeded(from: item)
+                attachLoopObserver(for: item, player: claimed, gate: gate)
+            }
+            attachTimeObserver(to: claimed)
+            player = claimed
+            claimed.actionAtItemEnd = loops ? .none : .pause
+            showPosterCover = true
+            currentSeconds = resumeAt
+            Task { @MainActor in
+                guard self.player === claimed else { return }
+                _ = await claimed.seek(
+                    to: CMTime(seconds: resumeAt, preferredTimescale: 600),
+                    toleranceBefore: .zero,
+                    toleranceAfter: .zero
+                )
+                guard self.player === claimed else { return }
+                self.currentSeconds = resumeAt
+                self.showPosterCover = false
+                if self.liveGate.isActive, !self.liveGate.userWantsPause {
+                    self.kickAudiblePlayback(on: claimed)
+                } else {
+                    claimed.pause()
+                    claimed.isMuted = true
+                    claimed.volume = 0
+                }
             }
             return
         }
@@ -1130,9 +1492,11 @@ struct VideoPlayerView: View {
             Task { @MainActor in
                 let cur = SafeNumeric.nonNegativeSeconds(time.seconds)
                 currentSeconds = cur
+                captionClock.seconds = cur
                 if let item = player.currentItem {
                     updateDuration(from: item)
                 }
+                captionClock.duration = durationSeconds
                 isPlaying = player.rate > 0.01
                 // First real paint (rate + advanced time) — never drop on rate alone (blink).
                 if gate.isActive, !gate.userWantsPause, showPosterCover,
@@ -1283,15 +1647,14 @@ struct VideoPlayerView: View {
         if restartFromBeginningToken > 0 {
             return 0
         }
-        // Feed→Sparks/Hubs handoff (continue flag) or explicit startTime.
+        // Explicit startTime (Continue watching / hubs) wins.
         if let startTime, startTime > 0.2 {
             return startTime
         }
         guard let postID else { return 0 }
-        if SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: postID) {
-            let stored = YouTubeCatalogService.shared.playbackPosition(for: postID)
-            return stored > 0.2 ? stored : 0
-        }
+        // Always honor the furthest saved playhead for this id (and live handoff).
+        let stored = YouTubeCatalogService.shared.playbackPosition(for: postID)
+        if stored > 0.2 { return stored }
         return 0
     }
 
@@ -1735,6 +2098,9 @@ private struct MatteryaVideoControls: View {
     let showsFullscreen: Bool
     let isFullscreen: Bool
     var topInset: CGFloat = 10
+    var captionsEnabled: Bool = false
+    var showsCaptionsToggle: Bool = false
+    var onCaptionsToggle: (() -> Void)? = nil
     let onPlayPause: () -> Void
     let onMuteToggle: () -> Void
     let onSeek: (Double) -> Void
@@ -1744,11 +2110,30 @@ private struct MatteryaVideoControls: View {
     var body: some View {
         ZStack {
             VStack(spacing: 0) {
-                HStack {
+                HStack(spacing: 10) {
                     if isFullscreen, let onExitFullscreen {
                         controlIconButton(systemName: "xmark", action: onExitFullscreen)
                     }
-                    Spacer()
+                    Spacer(minLength: 0)
+                    // Same top-trailing order as Matterya Hubs: CC · mute · fullscreen.
+                    if showsCaptionsToggle, let onCaptionsToggle {
+                        Button(action: onCaptionsToggle) {
+                            Text("CC")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(captionsEnabled ? Theme.ink : Theme.paper)
+                                .frame(width: 36, height: 36)
+                                .background(
+                                    captionsEnabled ? Theme.matte : Theme.ink.opacity(0.48),
+                                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .stroke(Theme.paper.opacity(captionsEnabled ? 0 : 0.12), lineWidth: 0.5)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(captionsEnabled ? "Captions on" : "Captions off")
+                    }
                     controlIconButton(
                         systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill",
                         action: onMuteToggle
@@ -1760,8 +2145,8 @@ private struct MatteryaVideoControls: View {
                         )
                     }
                 }
-                .padding(.horizontal, 12)
-                // Keep mute fully on-film (not zoomed/cropped by outer chrome strips).
+                // Match MatteryaHubPlayerView top-trailing cluster (14pt / 12pt).
+                .padding(.horizontal, 14)
                 .padding(.top, isFullscreen ? 0 : max(12, topInset))
                 .safeAreaPadding(.top, isFullscreen ? 6 : 0)
 
@@ -1971,6 +2356,8 @@ struct InFrameVideoPlayer: View {
     /// Hubs feed: show FS control and hand off to continuous landscape player.
     var allowsFullscreen: Bool = false
     var onFullscreenRequest: (() -> Void)? = nil
+    /// Hubs long-form only (Home feed + Hubs). Never Sparks.
+    var allowsCaptions: Bool = false
     var onViewed: (() -> Void)? = nil
     /// Natural video size — Spark feed cards use this for SparksStageLayout fill vs fit.
     var onVideoSize: ((CGSize) -> Void)? = nil
@@ -2006,6 +2393,7 @@ struct InFrameVideoPlayer: View {
         autoplaySurface: FeedAutoplaySurface = .home,
         tapToRevealControls: Bool = false,
         allowsFullscreen: Bool = false,
+        allowsCaptions: Bool = false,
         onFullscreenRequest: (() -> Void)? = nil,
         onViewed: (() -> Void)? = nil,
         onVideoSize: ((CGSize) -> Void)? = nil
@@ -2028,6 +2416,7 @@ struct InFrameVideoPlayer: View {
         self.autoplaySurface = autoplaySurface
         self.tapToRevealControls = tapToRevealControls
         self.allowsFullscreen = allowsFullscreen
+        self.allowsCaptions = allowsCaptions
         self.onFullscreenRequest = onFullscreenRequest
         self.onViewed = onViewed
         self.onVideoSize = onVideoSize
@@ -2129,12 +2518,15 @@ struct InFrameVideoPlayer: View {
                             // Continue mid-clip when feed→hubs/sparks handoff parked this buffer.
                             startTime: continueStartTime,
                             postID: postID,
+                            // Same as other feed videos: chrome only while this slot is the focus winner.
+                            // tapToReveal keeps CC/mute/FS/scrubber hidden until the user taps.
                             showsControls: transportChrome,
                             loops: loops,
                             fillsFrame: fillsFrame,
                             topChromeReserve: topChromeReserve,
                             bottomChromeReserve: bottomChromeReserve,
                             tapToRevealControls: tapToRevealControls,
+                            allowsCaptions: allowsCaptions && !muteOnlyControls,
                             isMuted: Binding(
                                 get: { isMuted },
                                 set: { newValue in
@@ -2181,6 +2573,8 @@ struct InFrameVideoPlayer: View {
                             tapToRevealControls: tapToRevealControls,
                             allowsFullscreen: allowsFullscreen,
                             onFullscreenRequest: onFullscreenRequest,
+                            // Sparks use muteOnlyControls — never forward captions there.
+                            allowsCaptions: allowsCaptions && !muteOnlyControls,
                             sharesFeedMute: sharesFeedMute,
                             fillsFrame: fillsFrame,
                             topChromeReserve: topChromeReserve,
@@ -2243,29 +2637,29 @@ struct InFrameVideoPlayer: View {
         .background(visibilityProbe)
         .onAppear {
             if sharesFeedMute {
-                isMuted = appState.feedVideosMuted
+                // Stay silent until frames paint — cold open used to unmute under a frozen poster.
+                isMuted = true
             } else {
                 isMuted = muted
             }
-            // Kick deep-warm + Frame0 so first paint never sits on bare black.
-            if let postID {
-                SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: true)
-                let needsPoster = posterURL.map { !MediaURLResolver.isUsablePosterURL($0) } ?? true
-                if needsPoster {
-                    Task {
-                        await Frame0PosterResolver.shared.prefetch(postIDs: [postID])
+            // Deep AV + Frame0 only after autoplay unlock — every-cell prefetch on cold open froze UI.
+            if FeedVideoFocus.shared.autoplayUnlocked {
+                if let postID {
+                    SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: true)
+                    let needsPoster = posterURL.map { !MediaURLResolver.isUsablePosterURL($0) } ?? true
+                    if needsPoster {
+                        Task(priority: .utility) {
+                            await Frame0PosterResolver.shared.prefetch(postIDs: [postID])
+                        }
                     }
                 }
-            }
-            if usesArchivePath {
-                ArchiveVideoPlayback.warmResolve(url)
+                if usesArchivePath {
+                    ArchiveVideoPlayback.warmResolve(url)
+                }
             }
             framesReady = false
             refreshFocusWinner()
             syncPlayGate(immediate: true)
-            if playGate, !isMuted {
-                activatePlaybackAudioIfNeeded(unmuted: true)
-            }
         }
         .onChange(of: appState.feedVideosMuted) { _, globalMuted in
             guard sharesFeedMute else { return }
@@ -2357,12 +2751,22 @@ struct InFrameVideoPlayer: View {
     }
 
     /// Lift outer poster only after paint proof + a short settle (decoder still blacks 1–2 frames).
+    /// Hub fit (long-form) needs a longer settle — R2 often paints black for ~100ms after "playing".
     private func markInFrameFramesReady() {
         guard playGate, !framesReady else { return }
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 64_000_000)
+            let settleNs: UInt64 = fillsFrame ? 64_000_000 : 140_000_000
+            try? await Task.sleep(nanoseconds: settleNs)
             guard playGate, !framesReady else { return }
             framesReady = true
+            // Unmute only after frames are visible (respect global feed mute).
+            if sharesFeedMute {
+                let wantMute = appState.feedVideosMuted
+                isMuted = wantMute
+                if !wantMute {
+                    activatePlaybackAudioIfNeeded(unmuted: true)
+                }
+            }
         }
     }
 
@@ -2375,7 +2779,7 @@ struct InFrameVideoPlayer: View {
             // Keep framesReady false until onFramesReady / playing (no black flash).
             playGate = true
             // Enter-frame: kick warm + audio the same tick we become winner (don't wait onChange).
-            if wasOff {
+            if wasOff, FeedVideoFocus.shared.allowsFeedAVWarm {
                 if let postID {
                     SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: true)
                 }
@@ -2450,7 +2854,8 @@ struct InFrameVideoPlayer: View {
 
         let ratio = FeedVideoFocus.visibleRatio(for: frame)
         // Early deep-warm + silent preload so focus win is already buffered.
-        if ratio >= 0.05 {
+        // Skip until cold-open unlock — otherwise AV storms under splash freeze the UI.
+        if ratio >= 0.05, FeedVideoFocus.shared.autoplayUnlocked {
             if let postID, !SparkWarmPool.shared.hasWarmOrInflight(postID: postID) {
                 SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: true)
             }
@@ -2464,9 +2869,10 @@ struct InFrameVideoPlayer: View {
             preloadGate = false
         }
         // Always report when crossing the play threshold; skip only tiny noise otherwise.
+        // Keep in sync with FeedVideoFocus minVisibleToPlay / minVisibleToKeep (instant autoplay).
         let crossedPlay =
-            (lastReportedRatio < 0.20 && ratio >= 0.20)
-            || (lastReportedRatio >= 0.20 && ratio < 0.16)
+            (lastReportedRatio < 0.12 && ratio >= 0.12)
+            || (lastReportedRatio >= 0.12 && ratio < 0.08)
         if !crossedPlay, abs(ratio - lastReportedRatio) < 0.025, lastReportedRatio >= 0 {
             refreshFocusWinner()
             return

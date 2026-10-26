@@ -1618,6 +1618,29 @@ final class HomeFeedStore {
         }
     }
 
+    /// Called the instant autoplay unlocks — warm the on-screen video queue so the first
+    /// Feed Spark/video claims a ready buffer instead of cold-starting after splash.
+    func warmVideosAfterAutoplayUnlock() {
+        guard FeedVideoFocus.shared.allowsFeedAVWarm else { return }
+        let videos = Self.feedWarmVideoQueue(
+            from: Array(displayedPosts.prefix(max(windowLimit, firstWindow)))
+        )
+        guard !videos.isEmpty else { return }
+        let around: Int
+        if let id = lastVisiblePostID,
+           let idx = Self.feedWarmIndex(
+            for: displayedPosts.first(where: { $0.id == id }) ?? videos[0],
+            in: videos,
+            feedIndex: lastVisibleIndex,
+            feed: displayedPosts
+           ) {
+            around = idx
+        } else {
+            around = 0
+        }
+        SparkWarmPool.shared.prepareFeedWindow(posts: videos, around: around)
+    }
+
     /// Open / after-paint: thumbs (+ Frame0 after settle). Lite skips Frame0 + AV entirely.
     /// Cold open Frame0×N + AV under splash froze the main thread while audio kept playing.
     private func warmHead(lite: Bool = false) async {

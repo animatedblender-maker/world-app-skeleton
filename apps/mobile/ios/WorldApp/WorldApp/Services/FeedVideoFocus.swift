@@ -69,10 +69,10 @@ final class FeedVideoFocus {
     /// Debounced silence when no winner — layout flaps used to kill in-frame hubs audio.
     private var silenceWhenEmptyTask: Task<Void, Never>?
 
-    /// Start autoplay once ~20% is on-screen (warm already running from ~5–10%).
-    private let minVisibleToPlay: CGFloat = 0.20
+    /// Start autoplay once ~12% is on-screen (warm already running from ~5%).
+    private let minVisibleToPlay: CGFloat = 0.12
     /// Keep current winner until it drops below this.
-    private let minVisibleToKeep: CGFloat = 0.16
+    private let minVisibleToKeep: CGFloat = 0.08
     /// Challenger must beat the current winner by this much to steal focus.
     private let stealEpsilon: CGFloat = 0.015
     /// Ignore this many consecutive near-zero layout reports before clearing a candidate.
@@ -92,7 +92,7 @@ final class FeedVideoFocus {
 
     /// After splash dismissed + Feed painted: allow election after a short layout settle.
     /// Prefer this over a fixed timer from splash start — unlock must not race a frozen MainActor.
-    func unlockAutoplayAfterFirstPaint(delayMs: UInt64 = 280) {
+    func unlockAutoplayAfterFirstPaint(delayMs: UInt64 = 100) {
         unlockTask?.cancel()
         unlockTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
@@ -100,6 +100,8 @@ final class FeedVideoFocus {
             autoplayUnlocked = true
             PerformanceTelemetry.milestoneFromLaunch("feed_autoplay_unlock", surface: "app")
             scheduleRecompute()
+            // Kick Feed AV warm immediately — rows that appeared under splash skipped prepare.
+            HomeFeedStore.shared.warmVideosAfterAutoplayUnlock()
         }
     }
 

@@ -25,22 +25,23 @@ final class SparkWarmPool {
         static var isConstrained: Bool { physicalGB < 3.6 }
         static var isMid: Bool { physicalGB < 5.6 }
 
-        /// Sparks swipe — Balanced light (whole-app weight). Ahead 3 / deep 2.
+        /// Sparks swipe — Balanced light +1 for Feed→player instant (still below Max 5/4).
         static var playerAhead: Int { playerAheadSparks }
-        /// Home feed: focus + ahead deep-warm so autoplay claims a ready buffer (instant play).
-        static var playerAheadFeed: Int { isConstrained ? 1 : 2 }
-        static var playerAheadSparks: Int { isConstrained ? 2 : 3 }
-        static var playerAheadHubs: Int { 2 }
+        /// Home feed: deep-warm focus + ahead so autoplay / tap-open claim a ready buffer.
+        static var playerAheadFeed: Int { isConstrained ? 2 : 3 }
+        static var playerAheadSparks: Int { isConstrained ? 3 : 4 }
+        /// Hubs watch/related — 1 ahead only (list is posters; dual-mount with Feed/Masquerade).
+        static var playerAheadHubs: Int { 1 }
         /// Thumbs / Frame 0 ahead of focus (Sparks player + shelves).
-        static var thumbAhead: Int { isConstrained ? 5 : 6 }
+        static var thumbAhead: Int { isConstrained ? 3 : 5 }
         /// Deep-preroll next N (first-frame ready); rest of window light-buffer.
-        static var deepPrerollFeed: Int { isConstrained ? 1 : 2 }
-        static var deepPrerollSparks: Int { 2 }
+        static var deepPrerollFeed: Int { isConstrained ? 2 : 3 }
+        static var deepPrerollSparks: Int { isConstrained ? 2 : 3 }
         static var deepPrerollHubs: Int { 1 }
-        /// current + behind + ahead + spare — room for feed + sparks dual use.
-        static var maxSlots: Int { isConstrained ? 6 : 7 }
+        /// current + behind + ahead + spare — room for Feed ahead + mid-clip handoff.
+        static var maxSlots: Int { isConstrained ? 5 : 7 }
         static var playerBehind: Int { 1 }
-        /// Parallel R2 warms — fill feed ahead window quickly.
+        /// Parallel R2 warms — Feed/Sparks instant without restoring Max-instant storms.
         static var maxConcurrentWarms: Int { isConstrained ? 2 : 3 }
         static var forwardBufferDeep: Double { isConstrained ? 4 : 6 }
         static var forwardBufferLight: Double { isConstrained ? 2 : 3 }
@@ -140,17 +141,19 @@ final class SparkWarmPool {
         }
     }
 
-    /// Home feed: warm focus + 1–2 ahead on the video queue so autoplay claims a ready buffer.
+    /// Home feed: warm focus + ahead on the video queue so autoplay / tap-open claim a ready buffer.
     func prepareFeedWindow(posts: [CountryPost], around index: Int) {
         guard !posts.isEmpty else { return }
-        // Mid-fling: still deep-warm the next clip so landing is instant.
+        // Cold open / splash: never spin AV under a frozen MainActor (ghost audio).
+        guard FeedVideoFocus.shared.allowsFeedAVWarm else { return }
+        // Mid-fling: still deep-warm the next 2 so landing + tap-open stay instant.
         if ScrollBudget.isFlinging {
             prepare(
                 posts: posts,
                 around: index,
-                ahead: 1,
+                ahead: min(2, MediaBudget.playerAheadFeed),
                 behind: 0,
-                deepPrerollLimit: 1,
+                deepPrerollLimit: min(2, MediaBudget.deepPrerollFeed),
                 skipThumbWarm: true,
                 allowNewWarms: true
             )
@@ -526,19 +529,28 @@ final class SparkWarmPool {
     }
 
     /// Hard-silence every buffered player (page change / open). Keeps items for instant claim.
+    /// Mid-clip Feed→Sparks handoff slots stay muted but keep decoding (never pause).
     func silenceAllBuffered() {
-        for slot in slots.values {
-            slot.player.pause()
-            slot.player.isMuted = true
-            slot.player.volume = 0
-            slot.player.rate = 0
+        for (id, slot) in slots {
+            let p = slot.player
+            p.isMuted = true
+            p.volume = 0
+            if continuingIDs.contains(id) {
+                if p.rate < 0.05 {
+                    p.safePlayImmediately(atRate: 1.0)
+                }
+                continue
+            }
+            p.pause()
+            p.rate = 0
         }
     }
 
     /// Pause only warm slots that are still producing rate (page-change ghost audio).
-    /// Leaves silent t≈0 buffers untouched so claim keeps the first frame.
+    /// Leaves silent t≈0 buffers and mid-clip handoff slots untouched.
     func silencePlayingBuffered() {
-        for slot in slots.values {
+        for (id, slot) in slots {
+            if continuingIDs.contains(id) { continue }
             let p = slot.player
             if p.rate > 0.01
                 || p.timeControlStatus == .playing
@@ -556,6 +568,8 @@ final class SparkWarmPool {
     /// Default **light** — deep preroll is reserved for the focus window (memory).
     func warmSingle(postID: String, url: URL, deep: Bool = false) {
         guard slots[postID] == nil, !inUse.contains(postID) else { return }
+        // Feed cold-open gate — Sparks fullscreen still warms (caller is already interactive).
+        // Home feed paths check allowsFeedAVWarm before calling; keep a soft guard anyway.
         Task { await warm(postID: postID, sourceURL: url, deepPreroll: deep) }
     }
 

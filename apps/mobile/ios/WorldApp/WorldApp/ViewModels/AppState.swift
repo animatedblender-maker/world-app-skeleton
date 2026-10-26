@@ -1917,12 +1917,19 @@ final class AppState {
     }
 
     func openReelsViewer(startingPost: CountryPost, seedPosts: [CountryPost] = []) {
-        // Soft handoff: clear feed focus, but do NOT pauseAll / silenceAllBuffered —
-        // that wiped the warm first-frame the feed card already decoded (slow open).
-        FeedVideoFocus.shared.resetAll()
+        // Detect continue BEFORE clearing feed focus — resetAll would hard-silence the
+        // mid-clip handoff buffer and force a cold Sparks open from Feed.
         let continuing = shouldContinuePlayback(for: startingPost.id)
             || SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: startingPost.id)
             || SparkWarmPool.shared.hasContinuingParked
+        if continuing {
+            // Keep the parked/decoding feed player — only drop the election map.
+            FeedVideoFocus.shared.clearElectionOnly()
+        } else {
+            // Soft handoff: clear feed focus, but do NOT pauseAll / silenceAllBuffered —
+            // that wiped the warm first-frame the feed card already decoded (slow open).
+            FeedVideoFocus.shared.resetAll()
+        }
         // Fresh open mark every present (consumed on first-frame emit).
         PerformanceTelemetry.mark("sparks_open_start")
         // Continuing handoff: skip page-silence (would hitch the live buffer) + skip cover anim.
@@ -2123,16 +2130,16 @@ final class AppState {
         return out
     }
 
-    /// Deep-warm focus + next 1–2 before Sparks overlay paints (Balanced light budget).
+    /// Deep-warm focus + next ahead before Sparks overlay paints (Feed→player instant).
     private static func warmSparksOpenHandoff(seeds: [CountryPost], focusIndex: Int) {
         guard seeds.indices.contains(focusIndex) else { return }
         let focus = seeds[focusIndex]
         if let url = focus.playableVideoURL ?? MediaURLResolver.videoURL(for: focus) {
             SparkWarmPool.shared.warmSingle(postID: focus.id, url: url, deep: true)
         }
-        // Next 1–2 only — matches deepPrerollSparks (2); no Feed-list storm.
         let deepLimit = SparkWarmPool.MediaBudget.deepPrerollSparks
-        let hi = min(seeds.count, focusIndex + deepLimit + 1)
+        let ahead = SparkWarmPool.MediaBudget.playerAheadSparks
+        let hi = min(seeds.count, focusIndex + ahead + 1)
         guard focusIndex + 1 < hi else { return }
         for i in (focusIndex + 1)..<hi {
             let post = seeds[i]
